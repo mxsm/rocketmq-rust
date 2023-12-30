@@ -24,8 +24,7 @@ use crate::protocol::{
     RemotingSerializable,
 };
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[derive(Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct RegisterBrokerBody {
     #[serde(rename = "topicConfigSerializeWrapper")]
     topic_config_serialize_wrapper: TopicConfigAndMappingSerializeWrapper,
@@ -51,7 +50,6 @@ impl RegisterBrokerBody {
         &self.filter_server_list
     }
 }
-
 
 impl RegisterBrokerBody {
     pub fn decode(

@@ -24,8 +24,7 @@ use crate::protocol::{DataVersion, RemotingSerializable};
 
 pub mod topic_config_wrapper;
 
-#[derive(Debug, Deserialize, Serialize)]
-#[derive(Default)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 pub struct TopicConfigSerializeWrapper {
     #[serde(rename = "topicConfigTable")]
     topic_config_table: Option<HashMap<String, TopicConfig>>,
@@ -33,8 +32,6 @@ pub struct TopicConfigSerializeWrapper {
     #[serde(rename = "dataVersion")]
     data_version: Option<DataVersion>,
 }
-
-
 
 impl RemotingSerializable for TopicConfigSerializeWrapper {
     type Output = Self;
