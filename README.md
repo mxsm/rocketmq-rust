@@ -2,6 +2,12 @@
 
 Unofficial Rust implementation of RocketMQ.
 
+![Alt](https://repobeats.axiom.co/api/embed/6ca125de92b36e1f78c6681d0a1296b8958adea1.svg "Repobeats analytics image")
+
+<a href="https://github.com/mxsm/rocketmq-rust/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=mxsm/rocketmq-rust&anon=1" />
+</a>
+
 ## Modules
 
 The existing RocketMQ has the following functional modules:
