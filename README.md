@@ -20,7 +20,8 @@ The specific functions of each module can be referred to in the [official Rocket
 
 ### Broker Management
 
-- [ ] **[WIP] Broker registration**
+- [ ] **Broker registration(request code: 103)**
+- [ ] **Retrieve cluster information(request code: 106)**
 - [ ] **Heartbeat message processing**
 
 TODO
