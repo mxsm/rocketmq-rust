@@ -20,8 +20,8 @@ Rocketmq非官方的Rust实现
 
 ### Broker管理
 
-- [ ] **Broker注册(请求码：103)**
-- [ ] **获取集群信息(请求码：106)**
+- [x] **Broker注册(请求码：103)-暂时只支持基本的Broker注册，对于Controller模式待支持**
+- [x] **获取集群信息(请求码：106)**
 - [ ] **HeartBeat消息处理**
 
 TODO
