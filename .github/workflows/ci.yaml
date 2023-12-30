@@ -25,7 +25,6 @@ jobs:
       - name: Set up Rust
         uses: actions-rs/toolchain@v1
         with:
-          profile: ${{ matrix.rust }}
           override: true
           toolchain: ${{ matrix.rust }}
 
