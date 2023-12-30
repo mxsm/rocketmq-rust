@@ -1,12 +1,10 @@
 # rocketmq-rust
 
-Unofficial Rust implementation of RocketMQ.
+Unofficial Rust implementation of [Apache Rocketmq](https://github.com/apache/rocketmq).
 
-![Alt](https://repobeats.axiom.co/api/embed/6ca125de92b36e1f78c6681d0a1296b8958adea1.svg "Repobeats analytics image")
-
-<a href="https://github.com/mxsm/rocketmq-rust/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=mxsm/rocketmq-rust&anon=1" />
-</a>
+|                   **Stargazers Over Time**                   |                  **Contributors Over Time**                  |
+| :----------------------------------------------------------: | :----------------------------------------------------------: |
+| [![Stargazers over time](https://api.star-history.com/svg?repos=mxsm/rocketmq-rust&type=Date)](https://api.star-history.com/svg?repos=mxsm/rocketmq-rust&type=Date) | [![GitHub Contributor Over Time](https://contributor-overtime-api.git-contributor.com/contributors-svg?chart=contributorOverTime&repo=mxsm/rocketmq-rust)](https://git-contributor.com?chart=contributorOverTime&repo=mxsm/rocketmq-rust) |
 
 ## Modules
 
@@ -33,3 +31,11 @@ The specific functions of each module can be referred to in the [official Rocket
 TODO
 
 Other module implementations will be done subsequently, starting with the Rust implementation of the Name Server. The goal is to achieve functionality similar to the Java version.
+
+## Contributing
+
+![Alt](https://repobeats.axiom.co/api/embed/6ca125de92b36e1f78c6681d0a1296b8958adea1.svg "Repobeats analytics image")
+
+<a href="https://github.com/mxsm/rocketmq-rust/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=mxsm/rocketmq-rust&anon=1" />
+</a>
