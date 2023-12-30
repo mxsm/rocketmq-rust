@@ -31,6 +31,7 @@ jobs:
       - name: Install dependencies
         run: |
           rustup component add rustfmt
+          rustup component add clippy
 
       - name: Format check
         run: cargo fmt -- --check
