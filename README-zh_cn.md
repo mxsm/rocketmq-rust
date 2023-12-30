@@ -20,8 +20,9 @@ Rocketmq非官方的Rust实现
 
 ### Broker管理
 
-- [ ] [WIP]Broker注册
-- [ ] HeartBeat消息处理
+- [ ] **Broker注册(请求码：103)**
+- [ ] **获取集群信息(请求码：106)**
+- [ ] **HeartBeat消息处理**
 
 TODO
 
