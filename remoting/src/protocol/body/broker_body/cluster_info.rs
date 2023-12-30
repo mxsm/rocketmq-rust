@@ -37,7 +37,7 @@ impl RemotingSerializable for ClusterInfo {
         serde_json::from_slice::<Self::Output>(bytes).unwrap()
     }
 
-    fn encode(&self, compress: bool) -> Vec<u8> {
+    fn encode(&self, _compress: bool) -> Vec<u8> {
         serde_json::to_vec(self).unwrap()
     }
 }

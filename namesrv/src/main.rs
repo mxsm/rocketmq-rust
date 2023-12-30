@@ -15,6 +15,8 @@
  * limitations under the License.
  */
 
+#![allow(dead_code)]
+
 mod namesrv_bootstrap;
 mod processor;
 mod route;

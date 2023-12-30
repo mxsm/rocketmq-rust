@@ -25,6 +25,7 @@ use crate::protocol::{DataVersion, RemotingSerializable};
 pub mod topic_config_wrapper;
 
 #[derive(Debug, Deserialize, Serialize)]
+#[derive(Default)]
 pub struct TopicConfigSerializeWrapper {
     #[serde(rename = "topicConfigTable")]
     topic_config_table: Option<HashMap<String, TopicConfig>>,
@@ -33,14 +34,7 @@ pub struct TopicConfigSerializeWrapper {
     data_version: Option<DataVersion>,
 }
 
-impl Default for TopicConfigSerializeWrapper {
-    fn default() -> Self {
-        Self {
-            topic_config_table: None,
-            data_version: None,
-        }
-    }
-}
+
 
 impl RemotingSerializable for TopicConfigSerializeWrapper {
     type Output = Self;
@@ -49,7 +43,7 @@ impl RemotingSerializable for TopicConfigSerializeWrapper {
         serde_json::from_slice::<Self::Output>(bytes).unwrap()
     }
 
-    fn encode(&self, compress: bool) -> Vec<u8> {
+    fn encode(&self, _compress: bool) -> Vec<u8> {
         todo!()
     }
 }

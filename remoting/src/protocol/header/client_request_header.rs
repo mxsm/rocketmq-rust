@@ -42,7 +42,7 @@ impl GetRouteInfoRequestHeader {
 impl FromMap for GetRouteInfoRequestHeader {
     type Target = GetRouteInfoRequestHeader;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(_map: &HashMap<String, String>) -> Option<Self::Target> {
         todo!()
     }
 }

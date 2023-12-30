@@ -25,6 +25,7 @@ use crate::protocol::{
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Default)]
 pub struct RegisterBrokerBody {
     #[serde(rename = "topicConfigSerializeWrapper")]
     topic_config_serialize_wrapper: TopicConfigAndMappingSerializeWrapper,
@@ -50,20 +51,13 @@ impl RegisterBrokerBody {
         &self.filter_server_list
     }
 }
-impl Default for RegisterBrokerBody {
-    fn default() -> Self {
-        RegisterBrokerBody {
-            topic_config_serialize_wrapper: TopicConfigAndMappingSerializeWrapper::default(),
-            filter_server_list: vec![],
-        }
-    }
-}
+
 
 impl RegisterBrokerBody {
     pub fn decode(
         bytes: &Bytes,
         compressed: bool,
-        broker_version: RocketMqVersion,
+        _broker_version: RocketMqVersion,
     ) -> RegisterBrokerBody {
         if !compressed {
             return <RegisterBrokerBody as RemotingSerializable>::decode(bytes.iter().as_slice());
@@ -79,7 +73,7 @@ impl RemotingSerializable for RegisterBrokerBody {
         serde_json::from_slice::<Self::Output>(bytes).unwrap()
     }
 
-    fn encode(&self, compress: bool) -> Vec<u8> {
+    fn encode(&self, _compress: bool) -> Vec<u8> {
         todo!()
     }
 }

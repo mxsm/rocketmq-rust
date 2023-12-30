@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-use std::{collections::HashMap, fmt::Debug};
+use std::collections::HashMap;
 
 pub trait CommandCustomHeader {
     /// Checks the fields of the implementing type.  
