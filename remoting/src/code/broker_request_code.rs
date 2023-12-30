@@ -19,9 +19,7 @@ impl BrokerRequestCode {
     }
 
     pub fn get_code(&self) -> i32 {
-        match self {
-            _ => *self as i32,
-        }
+        *self as i32
     }
 
     pub fn get_type_from_name(name: &str) -> Option<Self> {

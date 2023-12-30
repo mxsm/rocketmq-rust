@@ -71,12 +71,12 @@ impl RouteInfoManager {
         broker_id: i64,
         ha_server_addr: String,
         zone_name: Option<String>,
-        timeout_millis: Option<i64>,
+        _timeout_millis: Option<i64>,
         enable_acting_master: Option<bool>,
         topic_config_serialize_wrapper: TopicConfigAndMappingSerializeWrapper,
         filter_server_list: Vec<String>,
     ) -> Option<RegisterBrokerResult> {
-        let mut result = RegisterBrokerResult::default();
+        let result = RegisterBrokerResult::default();
         //update cluster broker addr table
         if !self.cluster_addr_table.contains_key(&cluster_name) {
             self.cluster_addr_table
@@ -92,7 +92,7 @@ impl RouteInfoManager {
         } else {
             false
         };
-        let mut register_first =
+        let mut _register_first =
             if let Some(broker_data) = self.broker_addr_table.get_mut(&broker_name) {
                 broker_data.set_enable_acting_master(is_old_version_broker);
                 broker_data.set_zone_name(zone_name.clone());
@@ -110,13 +110,13 @@ impl RouteInfoManager {
                 true
             };
         let broker_data_inner = self.broker_addr_table.get_mut(&broker_name).unwrap();
-        let mut is_min_broker_id_changed = false;
+        let mut _is_min_broker_id_changed = false;
         let mut prev_min_broker_id = 0i64;
         if !broker_data_inner.broker_addrs().is_empty() {
             prev_min_broker_id = *broker_data_inner.broker_addrs().keys().min().unwrap();
         }
         if broker_id < prev_min_broker_id {
-            is_min_broker_id_changed = true;
+            _is_min_broker_id_changed = true;
         }
 
         broker_data_inner.remove_broker_by_addr(broker_id, &broker_addr);
@@ -156,14 +156,14 @@ impl RouteInfoManager {
             .broker_addrs()
             .insert(broker_id, broker_addr.clone());
 
-        register_first = register_first | old_addr.is_none();
+        _register_first |= old_addr.is_none();
         let is_master = mix_all::MASTER_ID == broker_id as u64;
 
         let is_prime_slave = !is_old_version_broker
             && !is_master
             && broker_id == *broker_data_inner.broker_addrs().keys().min().unwrap();
         if is_master || is_prime_slave {
-            if let Some(v) = topic_config_serialize_wrapper.topic_config_table() {}
+            if let Some(_v) = topic_config_serialize_wrapper.topic_config_table() {}
         }
 
         let broker_addr_info = BrokerAddrInfo::new(cluster_name.clone(), broker_addr.clone());
@@ -186,21 +186,14 @@ impl RouteInfoManager {
         );
         if filter_server_list.is_empty() {
             self.filter_server_table.remove(&broker_addr_info);
-        } else {
-        }
+        } /*else {
+          }*/
 
         Some(result)
     }
 }
 
 impl RouteInfoManager {
-    pub(crate) fn update_broker_info_update_timestamp(
-        &mut self,
-        cluster_name: String,
-        broker_addr: String,
-    ) {
-    }
-
     pub(crate) fn get_all_cluster_info(&mut self) -> ClusterInfo {
         ClusterInfo::new(
             Some(self.broker_addr_table.clone()),

@@ -65,7 +65,7 @@ impl PutKVConfigRequestHeader {
 impl FromMap for PutKVConfigRequestHeader {
     type Target = PutKVConfigRequestHeader;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(_map: &HashMap<String, String>) -> Option<Self::Target> {
         todo!()
     }
 }

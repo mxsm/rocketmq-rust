@@ -24,10 +24,7 @@ use std::{
 
 use bytes::Bytes;
 use lazy_static::lazy_static;
-use serde::{
-    de::{MapAccess, Visitor},
-    Deserialize, Deserializer, Serialize,
-};
+use serde::{Deserialize, Serialize};
 
 use super::SerializeType;
 use crate::{
@@ -142,7 +139,7 @@ impl Default for RemotingCommand {
 
 impl RemotingCommand {
     pub fn create_remoting_command(code: i32) -> Self {
-        let mut command = Self::default();
+        let command = Self::default();
         command.set_code(code)
     }
 
@@ -150,7 +147,7 @@ impl RemotingCommand {
         OPAQUE_COUNTER.fetch_add(1, Ordering::SeqCst)
     }
 
-    pub fn set_cmd_version(mut self) -> Self {
+    pub fn set_cmd_version(self) -> Self {
         self
     }
 
@@ -244,14 +241,11 @@ impl RemotingCommand {
     }
 
     pub fn header_encode(&self) -> Option<Bytes> {
-        //default support json encode
-        match &self.command_custom_header {
-            None => None,
-            Some(cch) => match &cch.to_map() {
-                None => None,
-                Some(val) => Some(Bytes::from(serde_json::to_vec(val).unwrap())),
-            },
-        }
+        self.command_custom_header.as_ref().and_then(|cch| {
+            cch.to_map()
+                .as_ref()
+                .map(|val| Bytes::from(serde_json::to_vec(val).unwrap()))
+        })
     }
 
     pub fn fast_header_encode(&self) -> Option<Bytes> {
@@ -260,14 +254,11 @@ impl RemotingCommand {
     }
 
     pub fn get_body(&self) -> Option<Bytes> {
-        match &self.body {
-            None => None,
-            Some(bytes) => Some(bytes.clone()),
-        }
+        self.body.as_ref().cloned()
     }
 
     pub fn mark_serialize_type(header_length: i32, protocol_type: SerializeType) -> i32 {
-        return (protocol_type.get_code() as i32) << 24 | (header_length & 0x00FFFFFF);
+        (protocol_type.get_code() as i32) << 24 | (header_length & 0x00FFFFFF)
     }
 
     pub fn get_header_length(size: usize) -> usize {

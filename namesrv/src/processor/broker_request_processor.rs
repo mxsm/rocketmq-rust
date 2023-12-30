@@ -77,11 +77,11 @@ impl BrokerRequestProcessor {
             .set_opaque(opaque);
         }
 
-        let mut response_command = RemotingCommand::create_response_command().set_opaque(opaque);
+        let response_command = RemotingCommand::create_response_command().set_opaque(opaque);
         let broker_version = RocketMqVersion::try_from(request.version()).unwrap();
-        let mut topic_config_wrapper;
+        let topic_config_wrapper;
         let mut filter_server_list = Vec::<String>::new();
-        if RocketMqVersion::from(broker_version) as usize >= RocketMqVersion::V3_0_11 as usize {
+        if broker_version as usize >= RocketMqVersion::V3011 as usize {
             let register_broker_body =
                 extract_register_broker_body_from_request(&request, &request_header);
             topic_config_wrapper = register_broker_body
@@ -103,9 +103,7 @@ impl BrokerRequestProcessor {
             request_header.broker_id,
             request_header.ha_server_addr.clone(),
             match request.ext_fields() {
-                Some(map) => map
-                    .get(mix_all::ZONE_NAME)
-                    .and_then(|value| Option::Some(value.to_string())),
+                Some(map) => map.get(mix_all::ZONE_NAME).map(|value| value.to_string()),
                 None => None,
             },
             request_header.heartbeat_timeout_millis,
@@ -113,7 +111,7 @@ impl BrokerRequestProcessor {
             topic_config_wrapper,
             filter_server_list,
         );
-        if let None = result {
+        if result.is_none() {
             return response_command
                 .set_code(RemotingSysResponseCode::SystemError as i32)
                 .set_remark(Some(String::from("register broker failed")));
@@ -123,7 +121,7 @@ impl BrokerRequestProcessor {
 }
 
 impl BrokerRequestProcessor {
-    fn process_broker_heartbeat(&mut self, request: RemotingCommand) -> RemotingCommand {
+    fn process_broker_heartbeat(&mut self, _request: RemotingCommand) -> RemotingCommand {
         RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::Success as i32)
     }
 }
@@ -150,7 +148,7 @@ fn extract_register_broker_body_from_request(
     request: &RemotingCommand,
     request_header: &RegisterBrokerRequestHeader,
 ) -> RegisterBrokerBody {
-    if let Some(body_inner) = request.body() {
+    if let Some(_body_inner) = request.body() {
         let version = RocketMqVersion::try_from(request.version()).unwrap();
         return RegisterBrokerBody::decode(
             request.body().as_ref().unwrap(),

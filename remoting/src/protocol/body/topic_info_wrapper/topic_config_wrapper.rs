@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::{collections::HashMap, hash::Hash};
+use std::collections::HashMap;
 
 use rocketmq_common::common::config::TopicConfig;
 use serde::{Deserialize, Serialize};
@@ -80,7 +80,7 @@ impl RemotingSerializable for TopicConfigAndMappingSerializeWrapper {
         serde_json::from_slice::<Self::Output>(bytes).unwrap()
     }
 
-    fn encode(&self, compress: bool) -> Vec<u8> {
+    fn encode(&self, _compress: bool) -> Vec<u8> {
         todo!()
     }
 }

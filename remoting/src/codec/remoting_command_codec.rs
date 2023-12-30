@@ -21,32 +21,21 @@ use tokio_util::codec::{Decoder, Encoder};
 
 use crate::{
     error::{RemotingError, RemotingError::RemotingCommandDecoderError},
-    protocol::{command_custom_header::CommandCustomHeader, remoting_command::RemotingCommand},
+    protocol::remoting_command::RemotingCommand,
 };
 
 #[derive(Debug, Clone)]
-pub struct RemotingCommandCodec {
-    next_read_index: usize,
-    max_length: usize,
-    is_discarding: bool,
+pub struct RemotingCommandCodec;
+
+impl Default for RemotingCommandCodec {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl RemotingCommandCodec {
-    const FRAME_MAX_LENGTH: usize = 16777216;
-
     pub fn new() -> Self {
-        Self {
-            next_read_index: 0,
-            max_length: RemotingCommandCodec::FRAME_MAX_LENGTH,
-            is_discarding: false,
-        }
-    }
-
-    pub fn new_with_max_length(max_length: usize) -> Self {
-        Self {
-            max_length,
-            ..RemotingCommandCodec::new()
-        }
+        Self {}
     }
 }
 
@@ -55,44 +44,41 @@ impl Decoder for RemotingCommandCodec {
     type Error = RemotingError;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        loop {
-            let read_to = src.len();
-            if read_to < 4 {
-                // Wait for more data when there are less than 4 bytes.
-                return Ok(None);
-            }
-            //Read the total size as a big-endian i32 from the first 4 bytes.
-            let total_size = i32::from_be_bytes([src[0], src[1], src[2], src[3]]) as usize;
-
-            if read_to < total_size + 4 {
-                // Wait for more data when the available data is less than the total size.
-                return Ok(None);
-            }
-            // Split the BytesMut to get the command data including the total size.
-            let mut cmd_data = src.split_to(total_size + 4);
-            // Discard the first i32 (total size).
-            let _ = cmd_data.get_i32();
-
-            // Read the header length as a big-endian i32.
-            let header_length = cmd_data.get_i32() as usize;
-
-            // Assume the header is of i32 type and directly get it from the data.
-            let header_data = cmd_data.split_to(header_length);
-
-            let mut cmd =
-                serde_json::from_slice::<RemotingCommand>(&header_data).map_err(|error| {
-                    // Handle deserialization error gracefully
-                    RemotingCommandDecoderError(format!("Deserialization error: {}", error))
-                })?;
-
-            let body_length = total_size - 4 - header_length;
-            return Ok(Some(if body_length > 0 {
-                let body_data = cmd_data.split_to(body_length).to_vec();
-                cmd.set_body(Some(Bytes::from(body_data)))
-            } else {
-                cmd
-            }));
+        let read_to = src.len();
+        if read_to < 4 {
+            // Wait for more data when there are less than 4 bytes.
+            return Ok(None);
         }
+        //Read the total size as a big-endian i32 from the first 4 bytes.
+        let total_size = i32::from_be_bytes([src[0], src[1], src[2], src[3]]) as usize;
+
+        if read_to < total_size + 4 {
+            // Wait for more data when the available data is less than the total size.
+            return Ok(None);
+        }
+        // Split the BytesMut to get the command data including the total size.
+        let mut cmd_data = src.split_to(total_size + 4);
+        // Discard the first i32 (total size).
+        let _ = cmd_data.get_i32();
+
+        // Read the header length as a big-endian i32.
+        let header_length = cmd_data.get_i32() as usize;
+
+        // Assume the header is of i32 type and directly get it from the data.
+        let header_data = cmd_data.split_to(header_length);
+
+        let cmd = serde_json::from_slice::<RemotingCommand>(&header_data).map_err(|error| {
+            // Handle deserialization error gracefully
+            RemotingCommandDecoderError(format!("Deserialization error: {}", error))
+        })?;
+
+        let body_length = total_size - 4 - header_length;
+        Ok(Some(if body_length > 0 {
+            let body_data = cmd_data.split_to(body_length).to_vec();
+            cmd.set_body(Some(Bytes::from(body_data)))
+        } else {
+            cmd
+        }))
     }
 }
 
@@ -152,7 +138,7 @@ mod tests {
         let mut encoder = RemotingCommandCodec::new();
         let _ = encoder.encode(command, &mut dst);
 
-        let expected_length = 8 + "header".len() as i32 + "body".len() as i32;
+        let _expected_length = 8 + "header".len() as i32 + "body".len() as i32;
         let result = encoder.decode(&mut dst);
         println!("{:?}", result.unwrap().unwrap().get_serialize_type());
     }
@@ -160,10 +146,10 @@ mod tests {
     #[test]
     fn tsts() {
         let mut bytes1 = bytes::BytesMut::from("122222");
-        let bytes2 = bytes1.split_to(1);
+        let _bytes2 = bytes1.split_to(1);
         println!("{}", bytes1.len());
         bytes1.reserve(1);
-        let bytes2 = bytes1.split_to(1);
+        let _bytes2 = bytes1.split_to(1);
         println!("{}", bytes1.len());
     }
 }
