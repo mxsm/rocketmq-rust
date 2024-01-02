@@ -16,7 +16,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        rust: [nightly]
+        rust: [stable,nightly]
 
     steps:
       - name: Checkout code
