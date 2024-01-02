@@ -15,6 +15,8 @@
  * limitations under the License.
  */
 use bytes::Bytes;
+use tracing::warn;
+
 use rocketmq_common::{
     common::{mix_all, mq_version::RocketMqVersion},
     utils::crc32_utils::crc32,
@@ -31,7 +33,6 @@ use rocketmq_remoting::{
         RemotingSerializable,
     },
 };
-use tracing::{info, warn};
 
 use crate::route::route_info_manager::RouteInfoManager;
 
