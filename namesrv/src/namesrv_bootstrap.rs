@@ -117,8 +117,10 @@ impl Shared {
 
     async fn process(&mut self, client_addr: SocketAddr, cmd: RemotingCommand) {
         if let Some(tx) = self.peers.get_mut(&client_addr) {
+            let opaque = cmd.opaque();
             let result = self.broker_request_processor.process_request(cmd);
-            let _ = tx.send(result);
+            //Broker handling compatible with the Java platform.
+            let _ = tx.send(result.set_opaque(opaque));
         }
     }
 }

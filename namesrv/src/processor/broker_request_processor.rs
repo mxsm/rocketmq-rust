@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 use bytes::Bytes;
 use rocketmq_common::{
     common::{mix_all, mq_version::RocketMqVersion},
@@ -31,7 +32,7 @@ use rocketmq_remoting::{
         RemotingSerializable,
     },
 };
-use tracing::{info, warn};
+use tracing::warn;
 
 use crate::route::route_info_manager::RouteInfoManager;
 
@@ -67,17 +68,14 @@ impl BrokerRequestProcessor {
         let request_header = request
             .decode_command_custom_header::<RegisterBrokerRequestHeader>()
             .unwrap();
-        let opaque = request.opaque();
-
         if !check_sum_crc32(&request, &request_header) {
             return RemotingCommand::create_response_command_with_code(
                 RemotingSysResponseCode::SystemError as i32,
             )
-            .set_remark(Some(String::from("crc32 not match")))
-            .set_opaque(opaque);
+            .set_remark(Some(String::from("crc32 not match")));
         }
 
-        let response_command = RemotingCommand::create_response_command().set_opaque(opaque);
+        let response_command = RemotingCommand::create_response_command();
         let broker_version = RocketMqVersion::try_from(request.version()).unwrap();
         let topic_config_wrapper;
         let mut filter_server_list = Vec::<String>::new();
@@ -127,11 +125,10 @@ impl BrokerRequestProcessor {
 }
 
 impl BrokerRequestProcessor {
-    fn process_get_broker_cluster_info(&mut self, request: RemotingCommand) -> RemotingCommand {
+    fn process_get_broker_cluster_info(&mut self, _request: RemotingCommand) -> RemotingCommand {
         let vec = self.route_info_manager.get_all_cluster_info().encode(false);
         RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::Success as i32)
             .set_body(Some(Bytes::from(vec)))
-            .set_opaque(request.opaque())
     }
 }
 
@@ -168,10 +165,6 @@ fn check_sum_crc32(
     }
     if let Some(bytes) = &request.get_body() {
         let crc_32 = crc32(bytes.iter().as_ref());
-        info!(
-            "Rec request body crc32:{}-{}",
-            request_header.body_crc32, crc_32
-        );
         if crc_32 != request_header.body_crc32 {
             warn!(
                 "receive registerBroker request,crc32 not match,origin:{}, cal:{}",
