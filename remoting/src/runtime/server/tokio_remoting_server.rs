@@ -15,19 +15,28 @@
  * limitations under the License.
  */
 
-#![allow(dead_code)]
-#![allow(unused_imports)]
+use crate::runtime::{
+    remoting_service::RemotingService, server::remoting_server::RemotingServer, RPCHook,
+};
 
-/// Re-export rocketmq main.
-pub use rocketmq::main;
-/// Re-export tokio module.
-pub use tokio as rocketmq;
+pub struct TokioRemotingServer {}
 
-pub mod common;
-pub mod log;
-mod thread_pool;
-pub use crate::thread_pool::ThreadPool;
-pub mod utils;
+impl RemotingService for TokioRemotingServer {
+    fn start(&self) {
+        todo!()
+    }
 
-#[cfg(test)]
-mod tests {}
+    fn shutdown(&self) {
+        todo!()
+    }
+
+    fn register_rpc_hook(&self, rpc_hook: Box<dyn RPCHook>) {
+        todo!()
+    }
+
+    fn clear_rpc_hook(&self) {
+        todo!()
+    }
+}
+
+impl RemotingServer for TokioRemotingServer {}

@@ -19,6 +19,7 @@ pub mod code;
 pub mod codec;
 pub mod error;
 pub mod protocol;
+mod runtime;
 
 pub fn add(left: usize, right: usize) -> usize {
     left + right

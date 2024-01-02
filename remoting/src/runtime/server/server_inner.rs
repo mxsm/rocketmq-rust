@@ -15,19 +15,30 @@
  * limitations under the License.
  */
 
-#![allow(dead_code)]
-#![allow(unused_imports)]
+use std::{collections::HashMap, net::SocketAddr};
 
-/// Re-export rocketmq main.
-pub use rocketmq::main;
-/// Re-export tokio module.
-pub use tokio as rocketmq;
+use tokio::{net::TcpStream, sync::mpsc};
+use tokio_util::codec::Framed;
 
-pub mod common;
-pub mod log;
-mod thread_pool;
-pub use crate::thread_pool::ThreadPool;
-pub mod utils;
+use crate::{
+    code::request_code::RequestCode, codec::remoting_command_codec::RemotingCommandCodec,
+    protocol::remoting_command::RemotingCommand,
+};
 
-#[cfg(test)]
-mod tests {}
+/// Shorthand for the transmit half of the message channel.
+type Tx = mpsc::UnboundedSender<RemotingCommand>;
+
+/// Shorthand for the receive half of the message channel.
+type Rx = mpsc::UnboundedReceiver<RemotingCommand>;
+
+struct Shared<RP> {
+    peers: HashMap<SocketAddr, Tx>,
+    processor_table: HashMap<RequestCode, (RP, rocketmq_common::ThreadPool)>,
+}
+
+struct Connection {
+    rx: Rx,
+    framed: Framed<TcpStream, RemotingCommandCodec>,
+}
+
+struct ServerBootstrap {}

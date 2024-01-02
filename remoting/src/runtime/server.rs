@@ -15,19 +15,7 @@
  * limitations under the License.
  */
 
-#![allow(dead_code)]
-#![allow(unused_imports)]
-
-/// Re-export rocketmq main.
-pub use rocketmq::main;
-/// Re-export tokio module.
-pub use tokio as rocketmq;
-
-pub mod common;
-pub mod log;
-mod thread_pool;
-pub use crate::thread_pool::ThreadPool;
-pub mod utils;
-
-#[cfg(test)]
-mod tests {}
+mod processor;
+pub mod remoting_server;
+mod server_inner;
+pub mod tokio_remoting_server;

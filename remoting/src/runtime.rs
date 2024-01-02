@@ -15,19 +15,19 @@
  * limitations under the License.
  */
 
-#![allow(dead_code)]
-#![allow(unused_imports)]
+pub mod processor;
+pub mod remoting_service;
+pub mod server;
 
-/// Re-export rocketmq main.
-pub use rocketmq::main;
-/// Re-export tokio module.
-pub use tokio as rocketmq;
+use crate::protocol::remoting_command::RemotingCommand;
 
-pub mod common;
-pub mod log;
-mod thread_pool;
-pub use crate::thread_pool::ThreadPool;
-pub mod utils;
+pub trait RPCHook {
+    fn do_before_request(&self, remote_addr: &str, request: &RemotingCommand);
 
-#[cfg(test)]
-mod tests {}
+    fn do_after_response(
+        &self,
+        remote_addr: &str,
+        request: &RemotingCommand,
+        response: &RemotingCommand,
+    );
+}
