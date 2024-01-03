@@ -15,20 +15,6 @@
  * limitations under the License.
  */
 
-mod config;
-pub mod processor;
-pub mod remoting_service;
-pub mod server;
-
-use crate::protocol::remoting_command::RemotingCommand;
-
-pub trait RPCHook {
-    fn do_before_request(&self, remote_addr: &str, request: &RemotingCommand);
-
-    fn do_after_response(
-        &self,
-        remote_addr: &str,
-        request: &RemotingCommand,
-        response: &RemotingCommand,
-    );
-}
+mod client_config;
+mod net_system_config;
+mod server_config;

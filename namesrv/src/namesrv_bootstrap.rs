@@ -17,7 +17,9 @@
 
 use std::{collections::HashMap, env, net::SocketAddr, sync::Arc};
 
+use config::Config;
 use futures::SinkExt;
+use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_remoting::{
     codec::remoting_command_codec::RemotingCommandCodec,
     protocol::remoting_command::RemotingCommand,
@@ -34,8 +36,8 @@ use crate::processor::broker_request_processor::BrokerRequestProcessor;
 
 pub async fn boot() -> anyhow::Result<()> {
     info!("Starting rocketmq name server (Rust)");
-
-    let state = Arc::new(Mutex::new(Shared::new()));
+    let _ = parse_command_and_config_file();
+    /*    let state = Arc::new(Mutex::new(Shared::new()));
 
     let addr = env::args()
         .nth(1)
@@ -52,7 +54,25 @@ pub async fn boot() -> anyhow::Result<()> {
                 tracing::error!("an error occurred; error = {:?}", e)
             }
         });
-    }
+    }*/
+    Ok(())
+}
+
+fn parse_command_and_config_file() -> anyhow::Result<(), anyhow::Error> {
+    let namesrv_config = Config::builder()
+        .add_source(config::File::with_name(
+            format!(
+                "namesrv{}resource{}namesrv.toml",
+                std::path::MAIN_SEPARATOR,
+                std::path::MAIN_SEPARATOR
+            )
+            .as_str(),
+        ))
+        .build()
+        .unwrap();
+    let result = namesrv_config.try_deserialize::<NamesrvConfig>().unwrap();
+    info!("namesrv config: {:?}", result);
+    Ok(())
 }
 
 async fn process_connection(

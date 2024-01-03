@@ -39,6 +39,7 @@ futures-core = "0.3"
 futures-sink = "0.3"
 futures-io = "0.3"
 
+num_cpus.workspace = true
 
 [dev-dependencies]
 bytes = "1.5.0"
