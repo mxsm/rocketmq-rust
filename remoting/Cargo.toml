@@ -14,9 +14,12 @@ rocketmq-common = { version = "*",path = "../common" }
 
 anyhow.workspace = true
 bytes.workspace = true
+thiserror.workspace = true
+
+#tokio
 tokio.workspace = true
 tokio-util.workspace = true
-thiserror.workspace = true
+tokio-stream.workspace = true
 
 #log
 tracing.workspace = true

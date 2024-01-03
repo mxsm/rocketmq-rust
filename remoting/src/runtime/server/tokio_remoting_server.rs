@@ -15,11 +15,21 @@
  * limitations under the License.
  */
 
-use crate::runtime::{
-    remoting_service::RemotingService, server::remoting_server::RemotingServer, RPCHook,
+ use crate::runtime::{
+    remoting_service::RemotingService,
+    server::{remoting_server::RemotingServer, server_inner::ServerBootstrap},
+    RPCHook,
 };
 
-pub struct TokioRemotingServer {}
+pub struct TokioRemotingServer {
+    boot_strap: ServerBootstrap,
+}
+impl TokioRemotingServer {
+    pub fn new(port: u32) -> TokioRemotingServer {
+        let boot_strap = ServerBootstrap::new("", port);
+        TokioRemotingServer { boot_strap }
+    }
+}
 
 impl RemotingService for TokioRemotingServer {
     fn start(&self) {

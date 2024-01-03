@@ -15,22 +15,53 @@
  * limitations under the License.
  */
 
- use std::cmp;
+ use std::{cmp, future::Future};
 
- pub struct ThreadPool {
-     inner: futures::executor::ThreadPool,
-     rt: tokio::runtime::Runtime,
+ pub struct TokioExecutorService {
+     inner: tokio::runtime::Runtime,
  }
  
- pub struct ThreadPoolBuilder {
+ impl TokioExecutorService {
+     pub fn new() -> TokioExecutorService {
+         TokioExecutorService {
+             inner: tokio::runtime::Builder::new_current_thread()
+                 .enable_all()
+                 .build()
+                 .unwrap(),
+         }
+     }
+ }
+ 
+ impl TokioExecutorService {
+     pub fn spawn<F>(&self, future: F)
+     where
+         F: Future<Output = ()> + Send + 'static,
+     {
+         self.inner.spawn(future);
+     }
+ }
+ 
+ pub struct FuturesExecutorService {
+     inner: futures::executor::ThreadPool,
+ }
+ impl FuturesExecutorService {
+     pub fn spawn<F>(&self, future: F)
+     where
+         F: Future<Output = ()> + Send + 'static,
+     {
+         self.inner.spawn_ok(future);
+     }
+ }
+ 
+ pub struct FuturesExecutorServiceBuilder {
      pool_size: usize,
      stack_size: usize,
      thread_name_prefix: Option<String>,
  }
  
- impl ThreadPoolBuilder {
-     pub fn new() -> ThreadPoolBuilder {
-         ThreadPoolBuilder {
+ impl FuturesExecutorServiceBuilder {
+     pub fn new() -> FuturesExecutorServiceBuilder {
+         FuturesExecutorServiceBuilder {
              pool_size: cmp::max(1, num_cpus::get()),
              stack_size: 0,
              thread_name_prefix: None,
@@ -47,8 +78,18 @@
          self
      }
  
-     pub fn create(&mut self) -> anyhow::Result<ThreadPool> {
-         Err(anyhow::anyhow!("not implemented"))
+     pub fn create(&mut self) -> anyhow::Result<FuturesExecutorService> {
+         let thread_pool = futures::executor::ThreadPool::builder()
+             .stack_size(self.stack_size)
+             .pool_size(self.pool_size)
+             .name_prefix(
+                 self.thread_name_prefix
+                     .as_ref()
+                     .unwrap_or(&String::from("Default-Executor")),
+             )
+             .create()
+             .unwrap();
+         Ok(FuturesExecutorService { inner: thread_pool })
      }
  }
  
