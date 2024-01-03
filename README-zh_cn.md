@@ -6,6 +6,22 @@
 | :----------------------------------------------------------: | :----------------------------------------------------------: |
 | [![Stargazers over time](https://api.star-history.com/svg?repos=mxsm/rocketmq-rust&type=Date)](https://api.star-history.com/svg?repos=mxsm/rocketmq-rust&type=Date) | [![GitHub Contributor Over Time](https://contributor-overtime-api.git-contributor.com/contributors-svg?chart=contributorOverTime&repo=mxsm/rocketmq-rust)](https://git-contributor.com?chart=contributorOverTime&repo=mxsm/rocketmq-rust) |
 
+## 快速开始
+
+### 配置要求
+
+1.  Rust的msrv版本1.75.0(stable,nightly)
+
+### 运行NameServer
+
+根据下面的命令运行NameServer
+
+```shell
+cargo run --bin namesrv
+```
+
+
+
 ## 模块
 
 现有的Rocketmq主要有如下几个功能模块：

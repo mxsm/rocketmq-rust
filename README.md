@@ -6,6 +6,20 @@ Unofficial Rust implementation of [Apache Rocketmq](https://github.com/apache/ro
 | :----------------------------------------------------------: | :----------------------------------------------------------: |
 | [![Stargazers over time](https://api.star-history.com/svg?repos=mxsm/rocketmq-rust&type=Date)](https://api.star-history.com/svg?repos=mxsm/rocketmq-rust&type=Date) | [![GitHub Contributor Over Time](https://contributor-overtime-api.git-contributor.com/contributors-svg?chart=contributorOverTime&repo=mxsm/rocketmq-rust)](https://git-contributor.com?chart=contributorOverTime&repo=mxsm/rocketmq-rust) |
 
+## Getting Started
+
+### Requirements
+
+1. rust toolchain MSRV is 1.75.(stable,nightly)
+
+### Run name server
+
+Run the following command to start the name server
+
+```shell
+cargo run --bin namesrv
+```
+
 ## Modules
 
 The existing RocketMQ has the following functional modules:
