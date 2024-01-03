@@ -15,7 +15,6 @@
  * limitations under the License.
  */
 
-mod processor;
 pub mod remoting_server;
 mod server_inner;
 pub mod tokio_remoting_server;

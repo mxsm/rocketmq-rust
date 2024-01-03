@@ -15,4 +15,40 @@
  * limitations under the License.
  */
 
-pub struct ThreadPool {}
+ use std::cmp;
+
+ pub struct ThreadPool {
+     inner: futures::executor::ThreadPool,
+     rt: tokio::runtime::Runtime,
+ }
+ 
+ pub struct ThreadPoolBuilder {
+     pool_size: usize,
+     stack_size: usize,
+     thread_name_prefix: Option<String>,
+ }
+ 
+ impl ThreadPoolBuilder {
+     pub fn new() -> ThreadPoolBuilder {
+         ThreadPoolBuilder {
+             pool_size: cmp::max(1, num_cpus::get()),
+             stack_size: 0,
+             thread_name_prefix: None,
+         }
+     }
+ 
+     pub fn pool_size(mut self, pool_size: usize) -> Self {
+         self.pool_size = pool_size;
+         self
+     }
+ 
+     pub fn stack_size(mut self, stack_size: usize) -> Self {
+         self.stack_size = stack_size;
+         self
+     }
+ 
+     pub fn create(&mut self) -> anyhow::Result<ThreadPool> {
+         Err(anyhow::anyhow!("not implemented"))
+     }
+ }
+ 
