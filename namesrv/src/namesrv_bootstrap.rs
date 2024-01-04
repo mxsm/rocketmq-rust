@@ -24,7 +24,8 @@
      codec::remoting_command_codec::RemotingCommandCodec,
      protocol::remoting_command::RemotingCommand,
      runtime::{
-         remoting_service::RemotingService, server::tokio_remoting_server::TokioRemotingServer,
+         remoting_service::RemotingService,
+         server::{remoting_server::RemotingServer, tokio_remoting_server::TokioRemotingServer},
      },
  };
  use tokio::{
@@ -35,14 +36,21 @@
  use tokio_util::codec::Framed;
  use tracing::{info, warn};
  
- use crate::processor::broker_request_processor::BrokerRequestProcessor;
+ use crate::processor::{
+     broker_request_processor::BrokerRequestProcessor,
+     default_request_processor::DefaultRequestProcessor,
+ };
  
  pub async fn boot() -> anyhow::Result<()> {
      info!("Starting rocketmq name server (Rust)");
      //let _ = parse_command_and_config_file();
-     let server = TokioRemotingServer::new(9876, "127.0.0.1");
+     let mut server = TokioRemotingServer::new(9876, "127.0.0.1");
      let config = NamesrvConfig::new();
      let services = ExecutorServices::new(&config);
+     server.register_default_processor(
+         DefaultRequestProcessor::new(),
+         services.default_executor.clone(),
+     );
      server.start();
      /*    let state = Arc::new(Mutex::new(Shared::new()));
  

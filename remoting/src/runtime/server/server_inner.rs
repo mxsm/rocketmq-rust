@@ -133,7 +133,7 @@
                  // broadcast this message to the other users.
                  Some(Ok(msg)) => {
                      let mut state_conn = state.lock().await;
-                     let (processor, executor) = state_conn.processor_table.get(&msg.code()).unwrap();
+                     let (processor, executor) = state_conn.processor_table.get_mut(&msg.code()).unwrap();
                      let  _ = processor.process_request(msg);
                  }
                  // An error occurred.

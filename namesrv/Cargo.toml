@@ -35,3 +35,4 @@ futures-util = { version = "0.3.0"}
 futures = "0.3.29"
 bytes = "1.5.0"
 config.workspace = true
+parking_lot.workspace = true

@@ -15,9 +15,13 @@
  * limitations under the License.
  */
 
- use tracing::info;
+ use std::{collections::HashMap, sync::Arc};
 
+ use rocketmq_common::TokioExecutorService;
+ use tracing::info;
+ 
  use crate::runtime::{
+     processor::RequestProcessor,
      remoting_service::RemotingService,
      server::{remoting_server::RemotingServer, server_inner::ServerBootstrap},
      RPCHook,
@@ -27,6 +31,17 @@
      boot_strap: ServerBootstrap,
      ip: String,
      port: u32,
+     processor_table: HashMap<
+         i32,
+         (
+             Box<dyn RequestProcessor + Send + 'static>,
+             Arc<TokioExecutorService>,
+         ),
+     >,
+     default_request_processor: Option<(
+         Box<dyn RequestProcessor + Send + 'static>,
+         Arc<TokioExecutorService>,
+     )>,
  }
  impl TokioRemotingServer {
      pub fn new(port: u32, ip: impl Into<String>) -> TokioRemotingServer {
@@ -36,6 +51,8 @@
              boot_strap,
              ip: address,
              port,
+             processor_table: Default::default(),
+             default_request_processor: None,
          }
      }
  }
@@ -59,5 +76,23 @@
      }
  }
  
- impl RemotingServer for TokioRemotingServer {}
+ impl RemotingServer for TokioRemotingServer {
+     fn register_processor(
+         &mut self,
+         request_code: i32,
+         processor: impl RequestProcessor + Send + 'static,
+         executor: Arc<TokioExecutorService>,
+     ) {
+         self.processor_table
+             .insert(request_code, (Box::new(processor), executor));
+     }
+ 
+     fn register_default_processor(
+         &mut self,
+         processor: impl RequestProcessor + Send + 'static,
+         executor: Arc<TokioExecutorService>,
+     ) {
+         self.default_request_processor = Some((Box::new(processor), executor));
+     }
+ }
  

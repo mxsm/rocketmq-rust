@@ -15,8 +15,9 @@
  * limitations under the License.
  */
 
-use crate::protocol::remoting_command::RemotingCommand;
+ use crate::protocol::remoting_command::RemotingCommand;
 
-pub trait RequestProcessor {
-    fn process_request(&self, request: RemotingCommand) -> anyhow::Result<RemotingCommand>;
-}
+ pub trait RequestProcessor {
+     fn process_request(&mut self, request: RemotingCommand) -> RemotingCommand;
+ }
+ 

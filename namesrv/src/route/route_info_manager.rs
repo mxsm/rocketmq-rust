@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-use std::{
+ use std::{
     collections::{HashMap, HashSet},
     time::SystemTime,
 };
@@ -194,7 +194,7 @@ impl RouteInfoManager {
 }
 
 impl RouteInfoManager {
-    pub(crate) fn get_all_cluster_info(&mut self) -> ClusterInfo {
+    pub(crate) fn get_all_cluster_info(&self) -> ClusterInfo {
         ClusterInfo::new(
             Some(self.broker_addr_table.clone()),
             Some(self.cluster_addr_table.clone()),
