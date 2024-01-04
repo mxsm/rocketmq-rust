@@ -15,11 +15,11 @@
  * limitations under the License.
  */
 
- use std::{collections::HashMap, env, net::SocketAddr, sync::Arc};
+ use std::{collections::HashMap, env, net::SocketAddr, sync::Arc, time::Duration};
 
  use config::Config;
  use futures::SinkExt;
- use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
+ use rocketmq_common::{common::namesrv::namesrv_config::NamesrvConfig, TokioExecutorService};
  use rocketmq_remoting::{
      codec::remoting_command_codec::RemotingCommandCodec,
      protocol::remoting_command::RemotingCommand,
@@ -41,6 +41,8 @@
      info!("Starting rocketmq name server (Rust)");
      //let _ = parse_command_and_config_file();
      let server = TokioRemotingServer::new(9876, "127.0.0.1");
+     let config = NamesrvConfig::new();
+     let services = ExecutorServices::new(&config);
      server.start();
      /*    let state = Arc::new(Mutex::new(Shared::new()));
  
@@ -80,6 +82,31 @@
      Ok(())
  }
  
+ struct ExecutorServices {
+     default_executor: Arc<TokioExecutorService>,
+     client_request_executor: Arc<TokioExecutorService>,
+ }
+ 
+ impl ExecutorServices {
+     pub fn new(namesrv_config: &NamesrvConfig) -> Self {
+         Self {
+             default_executor: Arc::new(TokioExecutorService::new_with_config(
+                 namesrv_config.default_thread_pool_nums as usize,
+                 "RemotingExecutorThread_",
+                 Duration::from_secs(60),
+                 namesrv_config.default_thread_pool_queue_capacity as usize,
+             )),
+             client_request_executor: Arc::new(TokioExecutorService::new_with_config(
+                 namesrv_config.client_request_thread_pool_nums as usize,
+                 "ClientRequestExecutorThread_",
+                 Duration::from_secs(60),
+                 namesrv_config.client_request_thread_pool_queue_capacity as usize,
+             )),
+         }
+     }
+ }
+ 
+ //----------------------------------------------------------
  async fn process_connection(
      state: Arc<Mutex<Shared>>,
      stream: TcpStream,
