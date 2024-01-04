@@ -71,6 +71,15 @@
  }
  
  impl ServerBootstrap {
+     pub fn address(&self) -> &str {
+         &self.address
+     }
+     pub fn bind_port(&self) -> u32 {
+         self.bind_port
+     }
+ }
+ 
+ impl ServerBootstrap {
      pub fn new(address: impl Into<String>, bind_port: u32) -> ServerBootstrap {
          Self {
              conn_handle_executor: rocketmq_common::FuturesExecutorServiceBuilder::new()
@@ -86,7 +95,7 @@
      }
  
      pub async fn start(&self) -> anyhow::Result<()> {
-         let listener = TcpListener::bind(&self.address).await?;
+         let listener = TcpListener::bind(&format!("{}:{}", self.address, self.bind_port)).await?;
          loop {
              //wait for a connection
              let (tcp_stream, addr) = listener.accept().await?;

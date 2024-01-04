@@ -15,38 +15,49 @@
  * limitations under the License.
  */
 
+ use tracing::info;
+
  use crate::runtime::{
-    remoting_service::RemotingService,
-    server::{remoting_server::RemotingServer, server_inner::ServerBootstrap},
-    RPCHook,
-};
-
-pub struct TokioRemotingServer {
-    boot_strap: ServerBootstrap,
-}
-impl TokioRemotingServer {
-    pub fn new(port: u32) -> TokioRemotingServer {
-        let boot_strap = ServerBootstrap::new("", port);
-        TokioRemotingServer { boot_strap }
-    }
-}
-
-impl RemotingService for TokioRemotingServer {
-    fn start(&self) {
-        todo!()
-    }
-
-    fn shutdown(&self) {
-        todo!()
-    }
-
-    fn register_rpc_hook(&self, rpc_hook: Box<dyn RPCHook>) {
-        todo!()
-    }
-
-    fn clear_rpc_hook(&self) {
-        todo!()
-    }
-}
-
-impl RemotingServer for TokioRemotingServer {}
+     remoting_service::RemotingService,
+     server::{remoting_server::RemotingServer, server_inner::ServerBootstrap},
+     RPCHook,
+ };
+ 
+ pub struct TokioRemotingServer {
+     boot_strap: ServerBootstrap,
+     ip: String,
+     port: u32,
+ }
+ impl TokioRemotingServer {
+     pub fn new(port: u32, ip: impl Into<String>) -> TokioRemotingServer {
+         let address = ip.into();
+         let boot_strap = ServerBootstrap::new(address.clone(), port);
+         TokioRemotingServer {
+             boot_strap,
+             ip: address,
+             port,
+         }
+     }
+ }
+ 
+ impl RemotingService for TokioRemotingServer {
+     fn start(&self) {
+         info!("Start name server(Rust) at {}:{}", self.ip, self.port);
+         let _ = futures::executor::block_on(self.boot_strap.start());
+     }
+ 
+     fn shutdown(&self) {
+         todo!()
+     }
+ 
+     fn register_rpc_hook(&self, rpc_hook: Box<dyn RPCHook>) {
+         todo!()
+     }
+ 
+     fn clear_rpc_hook(&self) {
+         todo!()
+     }
+ }
+ 
+ impl RemotingServer for TokioRemotingServer {}
+ 
