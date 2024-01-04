@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
- use std::{
+use std::{
     cmp,
     future::Future,
     sync::atomic::{AtomicUsize, Ordering},
@@ -31,7 +31,8 @@ pub struct TokioExecutorService {
 impl TokioExecutorService {
     pub fn new() -> TokioExecutorService {
         TokioExecutorService {
-            inner: tokio::runtime::Builder::new_current_thread()
+            inner: tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(num_cpus::get())
                 .enable_all()
                 .build()
                 .unwrap(),
@@ -63,10 +64,10 @@ impl TokioExecutorService {
 }
 
 impl TokioExecutorService {
-    pub fn spawn<F, OT>(&self, future: F) -> JoinHandle<F::Output>
+    pub fn spawn<F>(&self, future: F) -> JoinHandle<F::Output>
     where
-        F: Future<Output = OT> + Send + 'static,
-        OT: Send + 'static,
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
     {
         self.inner.spawn(future)
     }
