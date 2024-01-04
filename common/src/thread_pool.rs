@@ -22,6 +22,8 @@
     time::Duration,
 };
 
+use tokio::task::JoinHandle;
+
 pub struct TokioExecutorService {
     inner: tokio::runtime::Runtime,
 }
@@ -61,11 +63,12 @@ impl TokioExecutorService {
 }
 
 impl TokioExecutorService {
-    pub fn spawn<F>(&self, future: F)
+    pub fn spawn<F, OT>(&self, future: F) -> JoinHandle<F::Output>
     where
-        F: Future<Output = ()> + Send + 'static,
+        F: Future<Output = OT> + Send + 'static,
+        OT: Send + 'static,
     {
-        self.inner.spawn(future);
+        self.inner.spawn(future)
     }
 }
 

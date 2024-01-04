@@ -36,19 +36,33 @@
  use tokio_util::codec::Framed;
  use tracing::{info, warn};
  
- use crate::processor::{
-     broker_request_processor::BrokerRequestProcessor,
-     default_request_processor::DefaultRequestProcessor,
+ use crate::{
+     processor::{
+         broker_request_processor::BrokerRequestProcessor,
+         default_request_processor::DefaultRequestProcessor,
+     },
+     route::route_info_manager::RouteInfoManager,
  };
  
  pub async fn boot() -> anyhow::Result<()> {
      info!("Starting rocketmq name server (Rust)");
      //let _ = parse_command_and_config_file();
-     let mut server = TokioRemotingServer::new(9876, "127.0.0.1");
      let config = NamesrvConfig::new();
+     let mut server = TokioRemotingServer::new(
+         9876,
+         "127.0.0.1",
+         TokioExecutorService::new_with_config(
+             config.default_thread_pool_nums as usize,
+             "RemotingExecutorThread_",
+             Duration::from_secs(60),
+             config.default_thread_pool_queue_capacity as usize,
+         ),
+     );
+ 
      let services = ExecutorServices::new(&config);
+     let manager = Arc::new(parking_lot::RwLock::new(RouteInfoManager::new()));
      server.register_default_processor(
-         DefaultRequestProcessor::new(),
+         DefaultRequestProcessor::new_with_route_info_manager(manager.clone()),
          services.default_executor.clone(),
      );
      server.start();

@@ -41,7 +41,7 @@
  
  #[derive(Debug, Clone)]
  pub(crate) struct DefaultRequestProcessor {
-     route_info_manager: Arc<parking_lot::Mutex<RouteInfoManager>>,
+     route_info_manager: Arc<parking_lot::RwLock<RouteInfoManager>>,
  }
  
  impl RequestProcessor for DefaultRequestProcessor {
@@ -64,11 +64,11 @@
  impl DefaultRequestProcessor {
      pub fn new() -> Self {
          Self {
-             route_info_manager: Arc::new(parking_lot::Mutex::new(RouteInfoManager::new())),
+             route_info_manager: Arc::new(parking_lot::RwLock::new(RouteInfoManager::new())),
          }
      }
      pub fn new_with_route_info_manager(
-         route_info_manager: Arc<parking_lot::Mutex<RouteInfoManager>>,
+         route_info_manager: Arc<parking_lot::RwLock<RouteInfoManager>>,
      ) -> Self {
          Self { route_info_manager }
      }
@@ -104,7 +104,7 @@
          } else {
              topic_config_wrapper = extract_register_topic_config_from_request(&request);
          }
-         let result = self.route_info_manager.lock().register_broker(
+         let result = self.route_info_manager.write().register_broker(
              request_header.cluster_name.clone(),
              request_header.broker_addr.clone(),
              request_header.broker_name.clone(),
@@ -138,7 +138,7 @@
      fn process_get_broker_cluster_info(&mut self, _request: RemotingCommand) -> RemotingCommand {
          let vec = self
              .route_info_manager
-             .lock()
+             .write()
              .get_all_cluster_info()
              .encode(false);
          RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::Success as i32)

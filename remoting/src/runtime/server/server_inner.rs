@@ -29,7 +29,8 @@
  
  use crate::{
      codec::remoting_command_codec::RemotingCommandCodec,
-     protocol::remoting_command::RemotingCommand, runtime::processor::RequestProcessor,
+     protocol::remoting_command::RemotingCommand,
+     runtime::{processor::RequestProcessor, server::tokio_remoting_server::TokioRemotingServer},
  };
  
  /// Shorthand for the transmit half of the message channel.
@@ -64,6 +65,7 @@
  
  pub(crate) struct ServerBootstrap {
      conn_handle_executor: FuturesExecutorService,
+     remoting_executor: Arc<TokioExecutorService>,
      state_conn:
          Arc<tokio::sync::Mutex<Shared<Box<dyn RequestProcessor + std::marker::Send + 'static>>>>,
      address: String,
@@ -80,11 +82,16 @@
  }
  
  impl ServerBootstrap {
-     pub fn new(address: impl Into<String>, bind_port: u32) -> ServerBootstrap {
+     pub fn new(
+         address: impl Into<String>,
+         bind_port: u32,
+         remoting_executor: TokioExecutorService,
+     ) -> ServerBootstrap {
          Self {
              conn_handle_executor: rocketmq_common::FuturesExecutorServiceBuilder::new()
                  .create()
                  .unwrap(),
+             remoting_executor: Arc::new(remoting_executor),
              state_conn: Arc::new(tokio::sync::Mutex::new(Shared {
                  peers: HashMap::new(),
                  processor_table: HashMap::new(),
@@ -100,9 +107,10 @@
              //wait for a connection
              let (tcp_stream, addr) = listener.accept().await?;
              let arc = self.state_conn.clone();
+             let re = self.remoting_executor.clone();
              self.conn_handle_executor.spawn(async move {
                  info!("name server accepted connection, client ip:{}", addr);
-                 if let Err(e) = process_connection(arc, tcp_stream, addr).await {
+                 if let Err(e) = process_connection(re, arc, tcp_stream, addr).await {
                      tracing::error!("an error occurred; error = {:?}", e)
                  }
              });
@@ -111,12 +119,13 @@
  }
  
  async fn process_connection(
+     executor: Arc<TokioExecutorService>,
      state: Arc<tokio::sync::Mutex<Shared<Box<dyn RequestProcessor + std::marker::Send + 'static>>>>,
      stream: TcpStream,
      addr: SocketAddr,
  ) -> anyhow::Result<(), anyhow::Error> {
      let framed = Framed::new(stream, RemotingCommandCodec::new());
-     tokio::spawn(async move { process_request(state, framed, addr) });
+     executor.spawn::<_, RemotingCommand>(async move { process_request(state, framed, addr) });
      Ok(())
  }
  
@@ -132,9 +141,13 @@
                  // A message was received from the current user, we should
                  // broadcast this message to the other users.
                  Some(Ok(msg)) => {
-                     let mut state_conn = state.lock().await;
-                     let (processor, executor) = state_conn.processor_table.get_mut(&msg.code()).unwrap();
-                     let  _ = processor.process_request(msg);
+                     let state_conn = state.lock().await;
+                     let (processor, executor) = &mut state_conn.processor_table.get_mut(&msg.code()).unwrap();
+ 
+                     let handle = executor.spawn(async move {
+                         processor.process_request(msg)
+                     }).await?;
+                     let  _ = state_conn.peers.get_mut(&addr).unwrap().send(handle);
                  }
                  // An error occurred.
                  Some(Err(e)) => {

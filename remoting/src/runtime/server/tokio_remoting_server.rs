@@ -44,9 +44,13 @@
      )>,
  }
  impl TokioRemotingServer {
-     pub fn new(port: u32, ip: impl Into<String>) -> TokioRemotingServer {
+     pub fn new(
+         port: u32,
+         ip: impl Into<String>,
+         remoting_executor: TokioExecutorService,
+     ) -> TokioRemotingServer {
          let address = ip.into();
-         let boot_strap = ServerBootstrap::new(address.clone(), port);
+         let boot_strap = ServerBootstrap::new(address.clone(), port, remoting_executor);
          TokioRemotingServer {
              boot_strap,
              ip: address,
