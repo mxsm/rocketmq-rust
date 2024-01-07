@@ -14,24 +14,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#![allow(dead_code)]
-pub mod code;
-pub mod codec;
-pub mod error;
-pub mod protocol;
-pub mod runtime;
 
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
-}
+use crate::runtime::RPCHook;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub trait RemotingService {
+    fn start(&self);
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
+    fn shutdown(&self);
+
+    fn register_rpc_hook(&self, rpc_hook: Box<dyn RPCHook>);
+
+    fn clear_rpc_hook(&self);
 }

@@ -14,24 +14,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#![allow(dead_code)]
-pub mod code;
-pub mod codec;
-pub mod error;
-pub mod protocol;
-pub mod runtime;
 
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
-}
+mod config;
+pub mod processor;
+pub mod remoting_service;
+pub mod server;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+use crate::protocol::remoting_command::RemotingCommand;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
+pub trait RPCHook {
+    fn do_before_request(&self, remote_addr: &str, request: &RemotingCommand);
+
+    fn do_after_response(
+        &self,
+        remote_addr: &str,
+        request: &RemotingCommand,
+        response: &RemotingCommand,
+    );
 }

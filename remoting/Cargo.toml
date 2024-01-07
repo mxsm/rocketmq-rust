@@ -14,9 +14,12 @@ rocketmq-common = { version = "*",path = "../common" }
 
 anyhow.workspace = true
 bytes.workspace = true
+thiserror.workspace = true
+
+#tokio
 tokio.workspace = true
 tokio-util.workspace = true
-thiserror.workspace = true
+tokio-stream.workspace = true
 
 #log
 tracing.workspace = true
@@ -29,6 +32,14 @@ serde_json.workspace = true
 rand.workspace = true
 lazy_static.workspace = true
 
+#futures
+futures = "0.3"
+futures-util = "0.3"
+futures-core = "0.3"
+futures-sink = "0.3"
+futures-io = "0.3"
+
+num_cpus.workspace = true
 
 [dev-dependencies]
 bytes = "1.5.0"

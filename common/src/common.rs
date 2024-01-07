@@ -23,6 +23,7 @@ pub mod config;
 pub mod constant;
 pub mod mix_all;
 pub mod mq_version;
+pub mod namesrv;
 
 #[derive(Debug, Clone)]
 pub enum TopicFilterType {

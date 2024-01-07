@@ -25,6 +25,10 @@ pub use tokio as rocketmq;
 
 pub mod common;
 pub mod log;
+mod thread_pool;
+pub use crate::thread_pool::{
+    FuturesExecutorService, FuturesExecutorServiceBuilder, TokioExecutorService,
+};
 pub mod utils;
 
 #[cfg(test)]
