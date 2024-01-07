@@ -47,7 +47,7 @@ impl Shared {
     async fn process(&mut self, client_addr: SocketAddr, cmd: RemotingCommand) {
         if let Some(tx) = self.peers.get_mut(&client_addr) {
             let opaque = cmd.opaque();
-            let mut result = self
+            let result = self
                 .processor_table
                 .get_mut(&cmd.code())
                 .unwrap()

@@ -28,6 +28,12 @@ pub struct TokioExecutorService {
     inner: tokio::runtime::Runtime,
 }
 
+impl Default for TokioExecutorService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TokioExecutorService {
     pub fn new() -> TokioExecutorService {
         TokioExecutorService {
@@ -47,14 +53,14 @@ impl TokioExecutorService {
     ) -> TokioExecutorService {
         let thread_prefix_inner = thread_prefix.into();
         TokioExecutorService {
-            inner: tokio::runtime::Builder::new_current_thread()
+            inner: tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(thread_num)
                 .thread_keep_alive(keep_alive)
                 .max_blocking_threads(max_blocking_threads)
                 .thread_name_fn(move || {
                     static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
                     let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
-                    format!("{}-{}", thread_prefix_inner, id)
+                    format!("{}{}", thread_prefix_inner, id)
                 })
                 .enable_all()
                 .build()
@@ -85,6 +91,7 @@ impl FuturesExecutorService {
     }
 }
 
+#[derive(Debug, Default)]
 pub struct FuturesExecutorServiceBuilder {
     pool_size: usize,
     stack_size: usize,

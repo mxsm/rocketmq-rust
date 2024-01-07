@@ -15,23 +15,22 @@
  * limitations under the License.
  */
 
- use std::sync::Arc;
+use std::sync::Arc;
 
- use rocketmq_common::TokioExecutorService;
- 
- use crate::runtime::{processor::RequestProcessor, remoting_service::RemotingService};
- 
- pub trait RemotingServer: RemotingService {
-     fn register_processor(
-         &mut self,
-         request_code: i32,
-         processor: impl RequestProcessor + Send + 'static,
-         executor: Arc<TokioExecutorService>,
-     );
-     fn register_default_processor(
-         &mut self,
-         processor: impl RequestProcessor + Send + 'static,
-         executor: Arc<TokioExecutorService>,
-     );
- }
- 
+use rocketmq_common::TokioExecutorService;
+
+use crate::runtime::{processor::RequestProcessor, remoting_service::RemotingService};
+
+pub trait RemotingServer: RemotingService {
+    fn register_processor(
+        &mut self,
+        request_code: i32,
+        processor: impl RequestProcessor + Send + Sync + 'static,
+        executor: Arc<TokioExecutorService>,
+    );
+    fn register_default_processor(
+        &mut self,
+        processor: impl RequestProcessor + Send + Sync + 'static,
+        executor: Arc<TokioExecutorService>,
+    );
+}
