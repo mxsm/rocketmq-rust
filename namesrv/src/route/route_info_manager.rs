@@ -36,16 +36,23 @@ use crate::route_info::broker_addr_info::{BrokerAddrInfo, BrokerLiveInfo};
 
 const DEFAULT_BROKER_CHANNEL_EXPIRED_TIME: i64 = 1000 * 60 * 2;
 
+type TopicQueueTable = HashMap<String /* topic */, HashMap<String, QueueData>>;
+type BrokerAddrTable = HashMap<String /* brokerName */, BrokerData>;
+type ClusterAddrTable = HashMap<String /* clusterName */, HashSet<String /* brokerName */>>;
+type BrokerLiveTable = HashMap<BrokerAddrInfo /* brokerAddr */, BrokerLiveInfo>;
+type FilterServerTable =
+    HashMap<BrokerAddrInfo /* brokerAddr */, Vec<String> /* Filter Server */>;
+type TopicQueueMappingInfoTable =
+    HashMap<String /* topic */, HashMap<String /* brokerName */, TopicQueueMappingInfo>>;
+
 #[derive(Debug, Clone)]
 pub(crate) struct RouteInfoManager {
-    topic_queue_table: HashMap<String /* topic */, HashMap<String, QueueData>>,
-    broker_addr_table: HashMap<String /* brokerName */, BrokerData>,
-    cluster_addr_table: HashMap<String /* clusterName */, HashSet<String /* brokerName */>>,
-    broker_live_table: HashMap<BrokerAddrInfo /* brokerAddr */, BrokerLiveInfo>,
-    filter_server_table:
-        HashMap<BrokerAddrInfo /* brokerAddr */, Vec<String> /* Filter Server */>,
-    topic_queue_mapping_info_table:
-        HashMap<String /* topic */, HashMap<String /* brokerName */, TopicQueueMappingInfo>>,
+    topic_queue_table: TopicQueueTable,
+    broker_addr_table: BrokerAddrTable,
+    cluster_addr_table: ClusterAddrTable,
+    broker_live_table: BrokerLiveTable,
+    filter_server_table: FilterServerTable,
+    topic_queue_mapping_info_table: TopicQueueMappingInfoTable,
 }
 
 impl RouteInfoManager {
