@@ -229,7 +229,7 @@ impl RouteInfoManager {
                     .data_version()
                     .as_ref()
                     .unwrap();
-                for (topic, topic_config) in tc_table {
+                for (_topic, topic_config) in tc_table {
                     if register_first
                         || self.is_topic_config_changed(
                             &cluster_name,
@@ -371,10 +371,10 @@ impl RouteInfoManager {
 
     fn query_broker_topic_config(
         &mut self,
-        clusterName: &str,
-        brokerAddr: &str,
+        cluster_name: &str,
+        broker_addr: &str,
     ) -> Option<&DataVersion> {
-        let info = BrokerAddrInfo::new(clusterName.to_string(), brokerAddr.to_string());
+        let info = BrokerAddrInfo::new(cluster_name.to_string(), broker_addr.to_string());
         let pre = self.broker_live_table.get(info.as_ref());
         if let Some(live_info) = pre {
             return Some(live_info.data_version());
