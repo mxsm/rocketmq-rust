@@ -183,6 +183,14 @@ impl Clone for DataVersion {
     }
 }
 
+impl PartialEq for DataVersion {
+    fn eq(&self, other: &Self) -> bool {
+        self.state_version == other.state_version
+            && self.timestamp == other.timestamp
+            && self.counter == other.counter
+    }
+}
+
 impl Default for DataVersion {
     fn default() -> Self {
         DataVersion::new()
