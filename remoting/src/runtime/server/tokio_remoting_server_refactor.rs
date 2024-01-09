@@ -69,7 +69,12 @@ impl TokioRemotingServer {
         let listener = TcpListener::bind(&addr).await?;
         loop {
             let (tcp_stream, addr) = listener.accept().await?;
-            self.connect_runtime.spawn(async move {});
+            let holder_clone = holder.clone();
+            self.connect_runtime.spawn(async move {
+                if let Err(e) = process_connection(holder_clone, tcp_stream, addr).await {
+                    tracing::error!("an error occurred; error = {:?}", e)
+                }
+            });
         }
     }
 }
@@ -81,7 +86,6 @@ async fn process_connection(
 ) -> anyhow::Result<(), anyhow::Error> {
     let framed = Framed::new(tcp_stream, RemotingCommandCodec::new());
     let mut conn = Connection::new(holder.clone(), framed).await?;
-
     loop {
         tokio::select! {
             result = conn.framed.next() => match result {
