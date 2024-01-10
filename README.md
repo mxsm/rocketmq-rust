@@ -1,10 +1,10 @@
 # rocketmq-rust
 
- Welcome to [Apache Rocketmq](https://github.com/apache/rocketmq) Rust implementation (Unofficial ). RocketMQ-Rust is a client library for Apache RocketMQ message middleware, rewritten in the Rust programming language. This project aims to provide Rust developers with a high-performance and reliable message queuing service while leveraging the unique features of the Rust language.
+ Welcome to [Apache Rocketmq](https://github.com/apache/rocketmq) Rust implementation (Unofficial ). **RocketMQ-Rust** is a reimplementation of the Apache RocketMQ message middleware in the Rust language. This project aims to provide Rust developers with a high-performance and reliable message queue service, making full use of the features of the Rust language..
 
 ### RocketMQ-Rust Features
 
-- **Rust Language Advantages:** Leveraging the benefits of Rust, such as memory safety, zero-cost abstractions, and high concurrency performance, RocketMQ-Rust offers an efficient and reliable client library for message middleware.
+- **Rust Language Advantages:** Leveraging the benefits of Rust, such as memory safety, zero-cost abstractions, and high concurrency performance, RocketMQ-Rust offers an efficient and reliable message middleware.
 - **Asynchronous and Non-blocking Design:** RocketMQ-Rust takes full advantage of Rust's asynchronous programming capabilities, adopting a non-blocking design that supports high-concurrency message processing.
 - **Ecosystem Integration:** As part of the Rust ecosystem, RocketMQ-Rust integrates well with other libraries and frameworks within the Rust ecosystem, providing flexible integration options for developers.
 - **Cross-platform Support:** RocketMQ-Rust supports multiple platforms, including Linux, Windows, macOS, making it convenient for use in different environments.
