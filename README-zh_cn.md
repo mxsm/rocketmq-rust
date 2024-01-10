@@ -1,10 +1,10 @@
 # rocketmq-rust
 
-[Apache Rocketmq](https://github.com/apache/rocketmq)非官方的Rust实现。RocketMQ-Rust 是基于 Rust 语言重新实现的 Apache RocketMQ 消息中间件的客户端库。该项目旨在为 Rust 开发者提供高性能、可靠的消息队列服务，并充分利用 Rust 语言的特性。
+[Apache Rocketmq](https://github.com/apache/rocketmq)非官方的Rust实现。RocketMQ-Rust 是基于 Rust 语言重新实现的 Apache RocketMQ 消息中间件。该项目旨在为 Rust 开发者提供高性能、可靠的消息队列服务，并充分利用 Rust 语言的特性。
 
 ### RocketMQ-Rust 的特点
 
-- **Rust 语言优势：** 利用 Rust 语言的内存安全性、零成本抽象、并发性能等特性，提供高效、可靠的消息中间件客户端。
+- **Rust 语言优势：** 利用 Rust 语言的内存安全性、零成本抽象、并发性能等特性，提供高效、可靠的消息中间件。
 - **异步和非阻塞设计：** RocketMQ-Rust 充分利用 Rust 异步编程的能力，采用非阻塞设计，支持高并发消息处理。
 - **生态整合：** 作为 Rust 生态系统的一部分，RocketMQ-Rust 与 Rust 生态中其他库和框架的兼容性良好，为开发者提供灵活的集成选项。
 - **跨平台支持：** RocketMQ-Rust 支持多种平台，包括 Linux、Windows、macOS 等，方便在不同环境下使用。
