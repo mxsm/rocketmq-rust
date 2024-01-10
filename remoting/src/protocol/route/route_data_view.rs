@@ -27,7 +27,7 @@ pub struct BrokerData {
     #[serde(rename = "brokerName")]
     broker_name: String,
     #[serde(rename = "brokerAddrs")]
-    broker_addrs: HashMap<i64, String>,
+    broker_addrs: HashMap<i64 /* broker id */, String /* broker ip */>,
     #[serde(rename = "zoneName")]
     zone_name: Option<String>,
     #[serde(rename = "enableActingMaster")]
@@ -87,7 +87,7 @@ impl BrokerData {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct QueueData {
     #[serde(rename = "brokerName")]
     broker_name: String,

@@ -20,7 +20,9 @@ use std::{
     time::SystemTime,
 };
 
-use rocketmq_common::common::mix_all;
+use rocketmq_common::common::{
+    config::TopicConfig, constant::PermName, mix_all, namesrv::namesrv_config::NamesrvConfig,
+};
 use rocketmq_remoting::protocol::{
     body::{
         broker_body::cluster_info::ClusterInfo,
@@ -31,21 +33,30 @@ use rocketmq_remoting::protocol::{
     static_topic::topic_queue_info::TopicQueueMappingInfo,
     DataVersion,
 };
+use tracing::{info, warn};
 
 use crate::route_info::broker_addr_info::{BrokerAddrInfo, BrokerLiveInfo};
 
 const DEFAULT_BROKER_CHANNEL_EXPIRED_TIME: i64 = 1000 * 60 * 2;
 
+type TopicQueueTable = HashMap<String /* topic */, HashMap<String, QueueData>>;
+type BrokerAddrTable = HashMap<String /* brokerName */, BrokerData>;
+type ClusterAddrTable = HashMap<String /* clusterName */, HashSet<String /* brokerName */>>;
+type BrokerLiveTable = HashMap<BrokerAddrInfo /* brokerAddr */, BrokerLiveInfo>;
+type FilterServerTable =
+    HashMap<BrokerAddrInfo /* brokerAddr */, Vec<String> /* Filter Server */>;
+type TopicQueueMappingInfoTable =
+    HashMap<String /* topic */, HashMap<String /* brokerName */, TopicQueueMappingInfo>>;
+
 #[derive(Debug, Clone)]
 pub(crate) struct RouteInfoManager {
-    topic_queue_table: HashMap<String /* topic */, HashMap<String, QueueData>>,
-    broker_addr_table: HashMap<String /* brokerName */, BrokerData>,
-    cluster_addr_table: HashMap<String /* clusterName */, HashSet<String /* brokerName */>>,
-    broker_live_table: HashMap<BrokerAddrInfo /* brokerAddr */, BrokerLiveInfo>,
-    filter_server_table:
-        HashMap<BrokerAddrInfo /* brokerAddr */, Vec<String> /* Filter Server */>,
-    topic_queue_mapping_info_table:
-        HashMap<String /* topic */, HashMap<String /* brokerName */, TopicQueueMappingInfo>>,
+    topic_queue_table: TopicQueueTable,
+    broker_addr_table: BrokerAddrTable,
+    cluster_addr_table: ClusterAddrTable,
+    broker_live_table: BrokerLiveTable,
+    filter_server_table: FilterServerTable,
+    topic_queue_mapping_info_table: TopicQueueMappingInfoTable,
+    namesrv_config: NamesrvConfig,
 }
 
 impl RouteInfoManager {
@@ -57,6 +68,7 @@ impl RouteInfoManager {
             broker_live_table: HashMap::new(),
             filter_server_table: HashMap::new(),
             topic_queue_mapping_info_table: HashMap::new(),
+            namesrv_config: NamesrvConfig::default(),
         }
     }
 }
@@ -76,8 +88,8 @@ impl RouteInfoManager {
         topic_config_serialize_wrapper: TopicConfigAndMappingSerializeWrapper,
         filter_server_list: Vec<String>,
     ) -> Option<RegisterBrokerResult> {
-        let result = RegisterBrokerResult::default();
-        //update cluster broker addr table
+        let mut result = RegisterBrokerResult::default();
+        //init or update cluster information
         if !self.cluster_addr_table.contains_key(&cluster_name) {
             self.cluster_addr_table
                 .insert(cluster_name.to_string(), HashSet::new());
@@ -92,7 +104,7 @@ impl RouteInfoManager {
         } else {
             false
         };
-        let mut _register_first =
+        let mut register_first =
             if let Some(broker_data) = self.broker_addr_table.get_mut(&broker_name) {
                 broker_data.set_enable_acting_master(is_old_version_broker);
                 broker_data.set_zone_name(zone_name.clone());
@@ -109,25 +121,30 @@ impl RouteInfoManager {
                 );
                 true
             };
-        let broker_data_inner = self.broker_addr_table.get_mut(&broker_name).unwrap();
-        let mut _is_min_broker_id_changed = false;
+        let broker_data = self.broker_addr_table.get_mut(&broker_name).unwrap();
         let mut prev_min_broker_id = 0i64;
-        if !broker_data_inner.broker_addrs().is_empty() {
-            prev_min_broker_id = *broker_data_inner.broker_addrs().keys().min().unwrap();
+        if !broker_data.broker_addrs().is_empty() {
+            prev_min_broker_id = broker_data
+                .broker_addrs()
+                .keys()
+                .min()
+                .map(|x| x.clone())
+                .unwrap();
         }
+        let mut is_min_broker_id_changed = false;
         if broker_id < prev_min_broker_id {
-            _is_min_broker_id_changed = true;
+            is_min_broker_id_changed = true;
         }
 
-        broker_data_inner.remove_broker_by_addr(broker_id, &broker_addr);
-        let old_broker_addr = broker_data_inner.broker_addrs().get(&broker_id);
+        //Switch slave to master: first remove <1, IP:PORT> in namesrv, then add <0, IP:PORT>
+        //The same IP:PORT must only have one record in brokerAddrTable
+        broker_data.remove_broker_by_addr(broker_id, &broker_addr);
 
-        if let Some(old_broker_addr) = old_broker_addr {
+        if let Some(old_broker_addr) = broker_data.broker_addrs().get(&broker_id) {
             if old_broker_addr != &broker_addr {
                 let addr_info =
                     BrokerAddrInfo::new(cluster_name.clone(), old_broker_addr.to_string());
-                let old_broker_info = self.broker_live_table.get(&addr_info);
-                if let Some(val) = old_broker_info {
+                if let Some(val) = self.broker_live_table.get(&addr_info) {
                     let old_state_version = val.data_version().state_version();
                     let new_state_version = topic_config_serialize_wrapper
                         .data_version()
@@ -148,22 +165,105 @@ impl RouteInfoManager {
         } else {
             0
         };
-        if !broker_data_inner.broker_addrs().contains_key(&broker_id) && size == 1 {
+        if !broker_data.broker_addrs().contains_key(&broker_id) && size == 1 {
+            warn!(
+                "Can't register topicConfigWrapper={:?} because broker[{}]={} has not registered.",
+                topic_config_serialize_wrapper.topic_config_table(),
+                broker_id,
+                broker_addr
+            );
             return None;
         }
 
-        let old_addr = broker_data_inner
+        let old_addr = broker_data
             .broker_addrs()
             .insert(broker_id, broker_addr.clone());
 
-        _register_first |= old_addr.is_none();
+        register_first |= old_addr.is_none();
         let is_master = mix_all::MASTER_ID == broker_id as u64;
 
         let is_prime_slave = !is_old_version_broker
             && !is_master
-            && broker_id == *broker_data_inner.broker_addrs().keys().min().unwrap();
+            && broker_id
+                == broker_data
+                    .broker_addrs()
+                    .keys()
+                    .min()
+                    .map(|x| x.clone())
+                    .unwrap();
+        let mut broker_data = broker_data.clone();
         if is_master || is_prime_slave {
-            if let Some(_v) = topic_config_serialize_wrapper.topic_config_table() {}
+            if let Some(tc_table) = topic_config_serialize_wrapper.topic_config_table() {
+                let topic_queue_mapping_info_map =
+                    topic_config_serialize_wrapper.topic_queue_mapping_info_map();
+                if self.namesrv_config.delete_topic_with_broker_registration
+                    && topic_queue_mapping_info_map.is_empty()
+                {
+                    let old_topic_set = self.topic_set_of_broker_name(&broker_name);
+                    let new_topic_set = tc_table
+                        .keys()
+                        .map(|item| item.to_string())
+                        .collect::<HashSet<String>>();
+                    let to_delete_topics = new_topic_set
+                        .difference(&old_topic_set)
+                        .map(|item| item.to_string())
+                        .collect::<HashSet<String>>();
+                    for to_delete_topic in to_delete_topics {
+                        let queue_data_map = self.topic_queue_table.get_mut(&to_delete_topic);
+                        if let Some(queue_data) = queue_data_map {
+                            let removed_qd = queue_data.remove(&broker_name);
+                            if let Some(ref removed_qd_inner) = removed_qd {
+                                info!(
+                                    "broker[{}] delete topic[{}] queue[{:?}] because of master \
+                                     change",
+                                    broker_name, to_delete_topic, removed_qd_inner
+                                );
+                            }
+                            if queue_data.is_empty() {
+                                self.topic_queue_table.remove(&to_delete_topic);
+                            }
+                        }
+                    }
+                }
+                let data_version = topic_config_serialize_wrapper
+                    .data_version()
+                    .as_ref()
+                    .unwrap();
+                for (_topic, topic_config) in tc_table {
+                    if register_first
+                        || self.is_topic_config_changed(
+                            &cluster_name,
+                            &broker_addr,
+                            data_version,
+                            &broker_name,
+                            &topic_config.topic_name,
+                        )
+                    {
+                        let mut config = topic_config.clone();
+                        if is_prime_slave && broker_data.enable_acting_master() {
+                            config.perm &= !(PermName::PERM_WRITE as u32);
+                        }
+                        self.create_and_update_queue_data(&broker_name, config);
+                    }
+                }
+                if self.is_broker_topic_config_changed(&cluster_name, &broker_addr, data_version)
+                    || register_first
+                {
+                    for (topic, vtq_info) in topic_queue_mapping_info_map {
+                        if !self.topic_queue_mapping_info_table.contains_key(topic) {
+                            self.topic_queue_mapping_info_table
+                                .insert(topic.to_string(), HashMap::new());
+                        }
+                        self.topic_queue_mapping_info_table
+                            .get_mut(topic)
+                            .unwrap()
+                            .insert(
+                                vtq_info.bname.as_ref().unwrap().to_string(),
+                                vtq_info.clone(),
+                            );
+                    }
+                }
+            }
         }
 
         let broker_addr_info = BrokerAddrInfo::new(cluster_name.clone(), broker_addr.clone());
@@ -186,9 +286,26 @@ impl RouteInfoManager {
         );
         if filter_server_list.is_empty() {
             self.filter_server_table.remove(&broker_addr_info);
-        } /*else {
-          }*/
+        } else {
+            self.filter_server_table
+                .insert(broker_addr_info, filter_server_list);
+        }
 
+        if mix_all::MASTER_ID != broker_id as u64 {
+            let master_address = broker_data.broker_addrs().get(&(mix_all::MASTER_ID as i64));
+            if let Some(master_addr) = master_address {
+                let master_livie_info = self
+                    .broker_live_table
+                    .get(BrokerAddrInfo::new(cluster_name.clone(), master_addr.clone()).as_ref());
+                if let Some(info) = master_livie_info {
+                    result.ha_server_addr = info.ha_server_addr().to_string();
+                    result.master_addr = info.ha_server_addr().to_string();
+                }
+            }
+        }
+        if is_min_broker_id_changed && self.namesrv_config.notify_min_broker_id_changed {
+            todo!()
+        }
         Some(result)
     }
 }
@@ -199,5 +316,105 @@ impl RouteInfoManager {
             Some(self.broker_addr_table.clone()),
             Some(self.cluster_addr_table.clone()),
         )
+    }
+}
+
+impl RouteInfoManager {
+    fn topic_set_of_broker_name(&mut self, broker_name: &str) -> HashSet<String> {
+        let mut topic_of_broker = HashSet::new();
+        for (key, value) in self.topic_queue_table.iter() {
+            if value.contains_key(broker_name) {
+                topic_of_broker.insert(key.to_string());
+            }
+        }
+        topic_of_broker
+    }
+
+    fn is_topic_config_changed(
+        &mut self,
+        cluster_name: &str,
+        broker_addr: &str,
+        data_version: &DataVersion,
+        broker_name: &str,
+        topic: &str,
+    ) -> bool {
+        let is_change =
+            self.is_broker_topic_config_changed(cluster_name, broker_addr, data_version);
+        if is_change {
+            return true;
+        }
+        let queue_data_map = self.topic_queue_table.get(topic);
+        if let Some(queue_data) = queue_data_map {
+            if queue_data.is_empty() {
+                return true;
+            }
+            return !queue_data.contains_key(broker_name);
+        } else {
+            return true;
+        }
+    }
+
+    fn is_broker_topic_config_changed(
+        &mut self,
+        cluster_name: &str,
+        broker_addr: &str,
+        data_version: &DataVersion,
+    ) -> bool {
+        let option = self.query_broker_topic_config(cluster_name, broker_addr);
+        if let Some(pre) = option {
+            if !(pre == data_version) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn query_broker_topic_config(
+        &mut self,
+        cluster_name: &str,
+        broker_addr: &str,
+    ) -> Option<&DataVersion> {
+        let info = BrokerAddrInfo::new(cluster_name.to_string(), broker_addr.to_string());
+        let pre = self.broker_live_table.get(info.as_ref());
+        if let Some(live_info) = pre {
+            return Some(live_info.data_version());
+        }
+        None
+    }
+
+    fn create_and_update_queue_data(&mut self, broker_name: &str, topic_config: TopicConfig) {
+        let queue_data = QueueData::new(
+            broker_name.to_string(),
+            topic_config.write_queue_nums,
+            topic_config.read_queue_nums,
+            topic_config.perm,
+            topic_config.topic_sys_flag,
+        );
+
+        let queue_data_map = self.topic_queue_table.get_mut(&topic_config.topic_name);
+        if let Some(queue_data_map_inner) = queue_data_map {
+            let existed_qd = queue_data_map_inner.get(broker_name);
+            if existed_qd.is_none() {
+                queue_data_map_inner.insert(broker_name.to_string(), queue_data);
+            } else {
+                let unwrap = existed_qd.unwrap();
+                if unwrap != &queue_data {
+                    info!(
+                        "topic changed, {} OLD: {:?} NEW: {:?}",
+                        &topic_config.topic_name, unwrap, queue_data
+                    );
+                    queue_data_map_inner.insert(broker_name.to_string(), queue_data);
+                }
+            }
+        } else {
+            let mut queue_data_map_inner = HashMap::new();
+            info!(
+                "new topic registered, {} {:?}",
+                &topic_config.topic_name, &queue_data
+            );
+            queue_data_map_inner.insert(broker_name.to_string(), queue_data);
+            self.topic_queue_table
+                .insert(broker_name.to_string(), queue_data_map_inner);
+        }
     }
 }
