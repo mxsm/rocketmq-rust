@@ -3,7 +3,7 @@ members = [
     "common",
     "namesrv",
     "remoting"
-]
+, "rocketmq"]
 resolver = "2"
 
 [workspace.package]

@@ -15,15 +15,8 @@
  * limitations under the License.
  */
 
-#![allow(dead_code)]
+use std::future::Future;
 
-mod namesrv_bootstrap;
-mod processor;
-mod route;
-mod route_info;
+use tokio::net::TcpListener;
 
-#[rocketmq::main]
-async fn main() -> anyhow::Result<()> {
-    rocketmq_common::log::init_logger();
-    namesrv_bootstrap::boot().await
-}
+pub async fn run(listener: TcpListener, shutdown: impl Future) {}

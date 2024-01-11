@@ -15,15 +15,7 @@
  * limitations under the License.
  */
 
-#![allow(dead_code)]
-
-mod namesrv_bootstrap;
-mod processor;
-mod route;
-mod route_info;
-
-#[rocketmq::main]
-async fn main() -> anyhow::Result<()> {
-    rocketmq_common::log::init_logger();
-    namesrv_bootstrap::boot().await
-}
+/// Re-export rocketmq main.
+pub use rocketmq::main;
+/// Re-export tokio module.
+pub use tokio as rocketmq;
