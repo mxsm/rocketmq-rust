@@ -121,4 +121,14 @@ impl BrokerLiveInfo {
     pub fn data_version(&self) -> &DataVersion {
         &self.data_version
     }
+
+    pub fn last_update_timestamp(&self) -> i64 {
+        self.last_update_timestamp
+    }
+    pub fn heartbeat_timeout_millis(&self) -> i64 {
+        self.heartbeat_timeout_millis
+    }
+    pub fn ha_server_addr(&self) -> &str {
+        &self.ha_server_addr
+    }
 }

@@ -19,15 +19,15 @@ use std::ops::Deref;
 
 pub struct PermName;
 impl PermName {
-    const INDEX_PERM_PRIORITY: i8 = 3;
-    const INDEX_PERM_READ: i8 = 2;
-    const INDEX_PERM_WRITE: i8 = 1;
-    const INDEX_PERM_INHERIT: i8 = 0;
+    pub const INDEX_PERM_PRIORITY: i8 = 3;
+    pub const INDEX_PERM_READ: i8 = 2;
+    pub const INDEX_PERM_WRITE: i8 = 1;
+    pub const INDEX_PERM_INHERIT: i8 = 0;
 
-    const PERM_PRIORITY: i8 = 0x1 << PermName::INDEX_PERM_PRIORITY;
-    const PERM_READ: i8 = 0x1 << PermName::INDEX_PERM_READ;
-    const PERM_WRITE: i8 = 0x1 << PermName::INDEX_PERM_WRITE;
-    const PERM_INHERIT: i8 = 0x1 << PermName::INDEX_PERM_INHERIT;
+    pub const PERM_PRIORITY: i8 = 0x1 << PermName::INDEX_PERM_PRIORITY;
+    pub const PERM_READ: i8 = 0x1 << PermName::INDEX_PERM_READ;
+    pub const PERM_WRITE: i8 = 0x1 << PermName::INDEX_PERM_WRITE;
+    pub const PERM_INHERIT: i8 = 0x1 << PermName::INDEX_PERM_INHERIT;
 
     pub fn perm_2_string(perm: i8) -> String {
         let mut simple = String::from("---");
