@@ -124,12 +124,7 @@ impl RouteInfoManager {
         let broker_data = self.broker_addr_table.get_mut(&broker_name).unwrap();
         let mut prev_min_broker_id = 0i64;
         if !broker_data.broker_addrs().is_empty() {
-            prev_min_broker_id = broker_data
-                .broker_addrs()
-                .keys()
-                .min()
-                .map(|x| x.clone())
-                .unwrap();
+            prev_min_broker_id = broker_data.broker_addrs().keys().min().copied().unwrap();
         }
         let mut is_min_broker_id_changed = false;
         if broker_id < prev_min_broker_id {
@@ -184,13 +179,7 @@ impl RouteInfoManager {
 
         let is_prime_slave = !is_old_version_broker
             && !is_master
-            && broker_id
-                == broker_data
-                    .broker_addrs()
-                    .keys()
-                    .min()
-                    .map(|x| x.clone())
-                    .unwrap();
+            && broker_id == broker_data.broker_addrs().keys().min().copied().unwrap();
         let mut broker_data = broker_data.clone();
         if is_master || is_prime_slave {
             if let Some(tc_table) = topic_config_serialize_wrapper.topic_config_table() {
@@ -229,7 +218,7 @@ impl RouteInfoManager {
                     .data_version()
                     .as_ref()
                     .unwrap();
-                for (_topic, topic_config) in tc_table {
+                for topic_config in tc_table.values() {
                     if register_first
                         || self.is_topic_config_changed(
                             &cluster_name,
@@ -348,9 +337,9 @@ impl RouteInfoManager {
             if queue_data.is_empty() {
                 return true;
             }
-            return !queue_data.contains_key(broker_name);
+            !queue_data.contains_key(broker_name)
         } else {
-            return true;
+            true
         }
     }
 
