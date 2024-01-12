@@ -20,7 +20,7 @@
 Run the following command to start the name server
 
 ```shell
-cargo run --bin namesrv
+cargo run --bin rocketmq-namesrv
 ```
 
 ## Modules

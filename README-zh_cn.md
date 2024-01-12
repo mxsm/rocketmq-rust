@@ -20,7 +20,7 @@
 根据下面的命令运行NameServer
 
 ```shell
-cargo run --bin namesrv
+cargo run --bin rocketmq-namesrv
 ```
 
 
