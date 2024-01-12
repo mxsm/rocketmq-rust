@@ -17,7 +17,7 @@
 
 #![allow(dead_code)]
 
-mod namesrv_bootstrap;
+/*mod namesrv_bootstrap;
 mod processor;
 mod route;
 mod route_info;
@@ -27,3 +27,4 @@ async fn main() -> anyhow::Result<()> {
     rocketmq_common::log::init_logger();
     namesrv_bootstrap::boot().await
 }
+*/

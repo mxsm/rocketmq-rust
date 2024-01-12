@@ -15,9 +15,12 @@
  * limitations under the License.
  */
 
-use std::{path::PathBuf, process::exit};
+use std::{collections::HashMap, path::PathBuf, process::exit};
 
 use clap::Parser;
+use namesrv::processor::default_request_processor::DefaultRequestProcessor;
+use rocketmq_remoting::server;
+use tokio::net::{TcpListener, TcpSocket};
 use tracing::{error, info};
 
 #[rocketmq::main]
@@ -36,6 +39,17 @@ async fn main() -> anyhow::Result<()> {
         "Rocketmq name server(Rust) running on {}:{}",
         args.ip, args.port
     );
+    let listener = TcpListener::bind(&format!("{}:{}", args.ip, args.port)).await?;
+    let default_request_processor = DefaultRequestProcessor::new();
+    //run server
+    server::run(
+        listener,
+        tokio::signal::ctrl_c(),
+        default_request_processor,
+        HashMap::new(),
+    )
+    .await;
+
     Ok(())
 }
 
@@ -47,14 +61,26 @@ async fn main() -> anyhow::Result<()> {
 )]
 struct Args {
     /// rocketmq name server port
-    #[arg(short, long, value_name = "PORT", default_missing_value = "9876")]
+    #[arg(
+        short,
+        long,
+        value_name = "PORT",
+        default_missing_value = "9876",
+        default_value = "9876",
+        required = false
+    )]
     port: u32,
 
     /// rocketmq name server ip
-    #[arg(short, long, value_name = "IP", default_missing_value = "127.0.0.1")]
+    #[arg(
+        short,
+        long,
+        value_name = "IP",
+        default_value = "127.0.0.1",
+        required = false
+    )]
     ip: String,
-
-    /// rocketmq name server config file
+    /* /// rocketmq name server config file
     #[arg(short, long, value_name = "FILE")]
-    config: Option<PathBuf>,
+    config: Option<PathBuf>,*/
 }

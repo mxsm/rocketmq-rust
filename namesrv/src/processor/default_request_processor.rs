@@ -40,7 +40,7 @@ use tracing::warn;
 use crate::route::route_info_manager::RouteInfoManager;
 
 #[derive(Debug, Clone)]
-pub(crate) struct DefaultRequestProcessor {
+pub struct DefaultRequestProcessor {
     route_info_manager: Arc<parking_lot::RwLock<RouteInfoManager>>,
 }
 
