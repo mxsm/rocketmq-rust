@@ -17,10 +17,44 @@
 
 ### Run name server
 
+**Run the following command to see usage：**
+
+- **windows platform**
+
+  ```cmd
+  cargo run --bin rocketmq-namesrv-rust -- --help
+  
+  RocketMQ Name server(Rust)
+  
+  Usage: rocketmq-namesrv-rust.exe [OPTIONS]
+  
+  Options:
+    -p, --port <PORT>  rocketmq name server port [default: 9876]
+    -i, --ip <IP>      rocketmq name server ip [default: 127.0.0.1]
+    -h, --help         Print help
+    -V, --version      Print version
+  ```
+
+- **Linux platform**
+
+  ```shell
+  $ cargo run --bin rocketmq-namesrv-rust -- --help
+  
+  RocketMQ Name server(Rust)
+  
+  Usage: rocketmq-namesrv-rust [OPTIONS]
+  
+  Options:
+    -p, --port <PORT>  rocketmq name server port [default: 9876]
+    -i, --ip <IP>      rocketmq name server ip [default: 127.0.0.1]
+    -h, --help         Print help
+    -V, --version      Print version
+  ```
+
 Run the following command to start the name server
 
 ```shell
-cargo run --bin rocketmq-namesrv
+cargo run --bin rocketmq-namesrv-rust
 ```
 
 ## Modules

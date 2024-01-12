@@ -17,13 +17,45 @@
 
 ### 运行NameServer
 
-根据下面的命令运行NameServer
+**运行下面命令查看使用**：
+
+- **windows 平台**
+
+  ```cmd
+  cargo run --bin rocketmq-namesrv-rust -- --help
+  
+  RocketMQ Name server(Rust)
+  
+  Usage: rocketmq-namesrv-rust.exe [OPTIONS]
+  
+  Options:
+    -p, --port <PORT>  rocketmq name server port [default: 9876]
+    -i, --ip <IP>      rocketmq name server ip [default: 127.0.0.1]
+    -h, --help         Print help
+    -V, --version      Print version
+  ```
+
+- **Linux 平台**
+
+  ```shell
+  $ cargo run --bin rocketmq-namesrv-rust -- --help
+  
+  RocketMQ Name server(Rust)
+  
+  Usage: rocketmq-namesrv-rust [OPTIONS]
+  
+  Options:
+    -p, --port <PORT>  rocketmq name server port [default: 9876]
+    -i, --ip <IP>      rocketmq name server ip [default: 127.0.0.1]
+    -h, --help         Print help
+    -V, --version      Print version
+  ```
+
+**根据下面的命令运行NameServer**
 
 ```shell
-cargo run --bin rocketmq-namesrv
+cargo run --bin rocketmq-namesrv-rust
 ```
-
-
 
 ## 模块
 
