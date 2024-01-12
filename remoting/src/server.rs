@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-use std::{
+ use std::{
     collections::HashMap, future::Future, hash::Hash, net::SocketAddr, sync::Arc, time::Duration,
 };
 
@@ -27,7 +27,7 @@ use tokio::{
 };
 use tokio_stream::StreamExt;
 use tokio_util::codec::Framed;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::{
     codec::remoting_command_codec::RemotingCommandCodec, error::RemotingError,
@@ -67,16 +67,18 @@ impl ConnectionHandler {
             let cmd = match frame {
                 Some(frame) => match frame {
                     Ok(cmd) => cmd,
-                    Err(_) => return Ok(()),
+                    Err(err) => {
+                        error!("read frame failed: {}", err);
+                        return Ok(());
+                    }
                 },
                 None => {
                     //If the frame is None, it means the connection is closed.
                     return Ok(());
                 }
             };
-            cmd.code();
             let opaque = cmd.opaque();
-            let mut response = match self.processor_table.write().await.get_mut(&opaque) {
+            let mut response = match self.processor_table.write().await.get_mut(&cmd.code()) {
                 None => self
                     .default_request_processor
                     .write()
@@ -85,8 +87,12 @@ impl ConnectionHandler {
                 Some(pr) => pr.process_request(cmd),
             };
             tokio::select! {
-                result = self.connection.framed.send(response) => {
-
+                result = self.connection.framed.send(response.set_opaque(opaque)) => match result{
+                    Ok(_) =>{},
+                    Err(err) => {
+                        error!("send response failed: {}", err);
+                        return Ok(())
+                    },
                 },
             };
         }
@@ -161,6 +167,10 @@ impl ConnectionListener {
                 if let Err(err) = handler.handle().await {
                     error!(cause = ?err, "connection error");
                 }
+                warn!(
+                    "The client[IP={}] disconnected from the server.",
+                    remote_addr
+                );
             });
         }
     }
