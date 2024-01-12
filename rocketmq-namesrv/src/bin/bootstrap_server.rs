@@ -15,26 +15,26 @@
  * limitations under the License.
  */
 
-use std::{collections::HashMap, process::exit};
+use std::{collections::HashMap, path::PathBuf};
 
 use clap::Parser;
 use namesrv::processor::default_request_processor::DefaultRequestProcessor;
 use rocketmq_remoting::runtime::server;
 use tokio::net::TcpListener;
-use tracing::{error, info};
+use tracing::info;
 
 #[rocketmq::main]
 async fn main() -> anyhow::Result<()> {
     rocketmq_common::log::init_logger();
-    let home = std::env::var("ROCKETMQ_HOME");
-    if home.is_err() {
-        error!(
-            "Please set the ROCKETMQ_HOME variable in your environment to match the location of \
-             the RocketMQ installation"
-        );
-        exit(0);
-    }
     let args = Args::parse();
+    let home = std::env::var("ROCKETMQ_HOME").unwrap_or(
+        std::env::current_dir()
+            .unwrap()
+            .into_os_string()
+            .to_string_lossy()
+            .to_string(),
+    );
+    info!("rocketmq home: {}", home);
     info!(
         "Rocketmq name server(Rust) running on {}:{}",
         args.ip, args.port
@@ -80,7 +80,7 @@ struct Args {
         required = false
     )]
     ip: String,
-    /* /// rocketmq name server config file
-    #[arg(short, long, value_name = "FILE")]
-    config: Option<PathBuf>,*/
+    /// rocketmq name server config file
+    #[arg(short, long, value_name = "FILE", default_missing_value = "None")]
+    config: Option<PathBuf>,
 }
