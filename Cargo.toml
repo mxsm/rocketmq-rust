@@ -1,9 +1,10 @@
 [workspace]
 members = [
-    "common",
-    "namesrv",
-    "remoting"
-, "rocketmq"]
+    "rocketmq-common",
+    "rocketmq-namesrv",
+    "rocketmq-remoting",
+    "rocketmq"
+]
 resolver = "2"
 
 [workspace.package]

@@ -1,0 +1,45 @@
+[package]
+name = "rocketmq-remoting"
+version = "0.1.0"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+rocketmq-common = { version = "*",path = "../rocketmq-common" }
+
+anyhow.workspace = true
+bytes.workspace = true
+thiserror.workspace = true
+
+#tokio
+tokio.workspace = true
+tokio-util.workspace = true
+tokio-stream.workspace = true
+
+#log
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+#json spupport
+serde.workspace = true
+serde_json.workspace = true
+
+rand.workspace = true
+lazy_static.workspace = true
+
+#futures
+futures = "0.3"
+futures-util = "0.3"
+futures-core = "0.3"
+futures-sink = "0.3"
+futures-io = "0.3"
+
+num_cpus.workspace = true
+
+[dev-dependencies]
+bytes = "1.5.0"
