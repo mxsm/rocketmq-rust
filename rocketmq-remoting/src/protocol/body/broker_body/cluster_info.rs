@@ -33,13 +33,13 @@ pub struct ClusterInfo {
 impl RemotingSerializable for ClusterInfo {
     type Output = ClusterInfo;
 
-    fn decode(bytes: &[u8]) -> ClusterInfo {
+    /*fn decode(bytes: &[u8]) -> ClusterInfo {
         serde_json::from_slice::<Self::Output>(bytes).unwrap()
     }
 
     fn encode(&self, _compress: bool) -> Vec<u8> {
         serde_json::to_vec(self).unwrap()
-    }
+    }*/
 }
 
 impl ClusterInfo {

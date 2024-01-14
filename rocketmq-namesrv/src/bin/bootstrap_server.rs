@@ -15,11 +15,18 @@
  * limitations under the License.
  */
 
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use clap::Parser;
-use namesrv::processor::default_request_processor::DefaultRequestProcessor;
-use rocketmq_remoting::runtime::server;
+use namesrv::{
+    processor::{default_request_processor::DefaultRequestProcessor, ClientRequestProcessor},
+    KVConfigManager, RouteInfoManager,
+};
+use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
+use rocketmq_remoting::{
+    code::request_code::RequestCode,
+    runtime::{processor::RequestProcessor, server},
+};
 use tokio::net::TcpListener;
 use tracing::info;
 
@@ -40,17 +47,44 @@ async fn main() -> anyhow::Result<()> {
         args.ip, args.port
     );
     let listener = TcpListener::bind(&format!("{}:{}", args.ip, args.port)).await?;
-    let default_request_processor = DefaultRequestProcessor::new();
+    let config = NamesrvConfig::new();
+    let route_info_manager = RouteInfoManager::new_with_config(config.clone());
+    let kvconfig_manager = KVConfigManager::new(config.clone());
+    let (processor_table, default_request_processor) =
+        init_processors(route_info_manager, config, kvconfig_manager);
     //run server
     server::run(
         listener,
         tokio::signal::ctrl_c(),
         default_request_processor,
-        HashMap::new(),
+        processor_table,
     )
     .await;
 
     Ok(())
+}
+
+fn init_processors(
+    route_info_manager: RouteInfoManager,
+    namesrv_config: NamesrvConfig,
+    kvconfig_manager: KVConfigManager,
+) -> (
+    HashMap<i32, Box<dyn RequestProcessor + Send + Sync + 'static>>,
+    DefaultRequestProcessor,
+) {
+    let route_info_manager_inner = Arc::new(parking_lot::RwLock::new(route_info_manager));
+    let kvconfig_manager_inner = Arc::new(parking_lot::RwLock::new(kvconfig_manager));
+    let mut processors: HashMap<i32, Box<dyn RequestProcessor + Send + Sync + 'static>> =
+        HashMap::new();
+    processors.insert(
+        RequestCode::GetRouteinfoByTopic.to_i32(),
+        Box::new(ClientRequestProcessor::new(
+            route_info_manager_inner.clone(),
+            namesrv_config,
+            kvconfig_manager_inner.clone(),
+        )),
+    );
+    (processors, DefaultRequestProcessor::new())
 }
 
 #[derive(Parser, Debug)]

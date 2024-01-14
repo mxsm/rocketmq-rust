@@ -20,7 +20,7 @@ use std::{
     time::SystemTime,
 };
 
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Serialize};
 
 pub mod body;
 pub mod command_custom_header;
@@ -267,9 +267,19 @@ pub trait RemotingSerializable {
     /// # Returns
     ///
     /// The deserialized output of type `Self::Output`.
-    fn decode(bytes: &[u8]) -> Self::Output;
+    fn decode<'a>(bytes: &'a [u8]) -> Self::Output
+    where
+        Self::Output: de::Deserialize<'a>,
+    {
+        serde_json::from_slice::<Self::Output>(bytes).unwrap()
+    }
 
-    fn encode(&self, compress: bool) -> Vec<u8>;
+    fn encode(&self) -> Vec<u8>
+    where
+        Self: Serialize,
+    {
+        serde_json::to_vec(self).unwrap()
+    }
 }
 
 #[cfg(test)]

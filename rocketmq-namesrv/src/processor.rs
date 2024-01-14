@@ -15,5 +15,6 @@
  * limitations under the License.
  */
 
-pub mod broker_request_processor;
+mod client_request_processor;
+pub use self::client_request_processor::ClientRequestProcessor;
 pub mod default_request_processor;

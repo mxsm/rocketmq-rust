@@ -20,4 +20,7 @@
 mod namesrv_config_parse;
 pub mod processor;
 mod route;
+pub use self::route::route_info_manager::RouteInfoManager;
+mod kvconfig;
+pub use self::kvconfig::kvconfig_mananger::KVConfigManager;
 mod route_info;
