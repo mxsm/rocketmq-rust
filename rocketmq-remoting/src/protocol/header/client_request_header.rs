@@ -24,10 +24,10 @@ use crate::protocol::command_custom_header::{CommandCustomHeader, FromMap};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GetRouteInfoRequestHeader {
-    topic: String,
+    pub topic: String,
 
     #[serde(rename = "acceptStandardJsonOnly")]
-    accept_standard_json_only: Option<bool>,
+    pub accept_standard_json_only: Option<bool>,
 }
 
 impl GetRouteInfoRequestHeader {

@@ -76,11 +76,11 @@ impl Default for TopicConfigAndMappingSerializeWrapper {
 impl RemotingSerializable for TopicConfigAndMappingSerializeWrapper {
     type Output = TopicConfigAndMappingSerializeWrapper;
 
-    fn decode(bytes: &[u8]) -> Self::Output {
+    /*fn decode(bytes: &[u8]) -> Self::Output {
         serde_json::from_slice::<Self::Output>(bytes).unwrap()
     }
 
     fn encode(&self, _compress: bool) -> Vec<u8> {
         todo!()
-    }
+    }*/
 }

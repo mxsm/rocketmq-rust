@@ -21,9 +21,12 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub mod config;
 pub mod constant;
+mod faq;
+pub use faq::FAQUrl;
 pub mod mix_all;
 pub mod mq_version;
 pub mod namesrv;
+pub mod topic;
 
 #[derive(Debug, Clone)]
 pub enum TopicFilterType {

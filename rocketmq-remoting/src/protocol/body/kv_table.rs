@@ -23,17 +23,17 @@ use crate::protocol::RemotingSerializable;
 
 #[derive(Deserialize, Serialize, Debug, Clone, Default)]
 pub struct KVTable {
-    table: HashMap<String, String>,
+    pub table: HashMap<String, String>,
 }
 
 impl RemotingSerializable for KVTable {
     type Output = Self;
 
-    fn decode(bytes: &[u8]) -> Self::Output {
+    /* fn decode(bytes: &[u8]) -> Self::Output {
         serde_json::from_slice::<Self::Output>(bytes).unwrap()
     }
 
     fn encode(&self, _compress: bool) -> Vec<u8> {
         todo!()
-    }
+    }*/
 }

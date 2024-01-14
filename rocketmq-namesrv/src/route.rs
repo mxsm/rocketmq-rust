@@ -15,4 +15,4 @@
  * limitations under the License.
  */
 
-pub(crate) mod route_info_manager;
+pub mod route_info_manager;

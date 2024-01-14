@@ -19,7 +19,9 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
+use crate::protocol::{
+    static_topic::topic_queue_info::TopicQueueMappingInfo, RemotingSerializable,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrokerData {
@@ -68,10 +70,13 @@ impl BrokerData {
     pub fn cluster(&self) -> &str {
         &self.cluster
     }
-    pub fn broker_name(&self) -> &str {
+    pub fn broker_name(&mut self) -> &str {
         &self.broker_name
     }
-    pub fn broker_addrs(&mut self) -> &mut HashMap<i64, String> {
+    pub fn broker_addrs(&self) -> &HashMap<i64, String> {
+        &self.broker_addrs
+    }
+    pub fn broker_addrs_mut(&mut self) -> &mut HashMap<i64, String> {
         &mut self.broker_addrs
     }
 
@@ -116,18 +121,37 @@ impl QueueData {
             topic_sys_flag,
         }
     }
+    pub fn broker_name(&self) -> &str {
+        &self.broker_name
+    }
+    pub fn read_queue_nums(&self) -> u32 {
+        self.read_queue_nums
+    }
+    pub fn write_queue_nums(&self) -> u32 {
+        self.write_queue_nums
+    }
+    pub fn perm(&self) -> u32 {
+        self.perm
+    }
+    pub fn topic_sys_flag(&self) -> u32 {
+        self.topic_sys_flag
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct TopicRouteData {
     #[serde(rename = "orderTopicConf")]
-    order_topic_conf: String,
-    #[serde(rename = "queueData")]
-    queue_data: Vec<QueueData>,
-    #[serde(rename = "brokerData")]
-    broker_data: Vec<BrokerData>,
+    pub order_topic_conf: Option<String>,
+    #[serde(rename = "queueDatas")]
+    pub queue_datas: Vec<QueueData>,
+    #[serde(rename = "brokerDatas")]
+    pub broker_datas: Vec<BrokerData>,
     #[serde(rename = "filterServerTable")]
-    filter_server_table: HashMap<String, Vec<String>>,
+    pub filter_server_table: HashMap<String, Vec<String>>,
     #[serde(rename = "TopicQueueMappingInfo")]
-    topic_queue_mapping_by_broker: Option<HashMap<String, TopicQueueMappingInfo>>,
+    pub topic_queue_mapping_by_broker: Option<HashMap<String, TopicQueueMappingInfo>>,
+}
+
+impl RemotingSerializable for TopicRouteData {
+    type Output = Self;
 }

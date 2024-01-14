@@ -15,32 +15,36 @@
  * limitations under the License.
  */
 
+pub mod kvconfig_mananger;
+
 use std::collections::HashMap;
 
-use rocketmq_common::common::config::TopicConfig;
+use rocketmq_remoting::protocol::RemotingSerializable;
 use serde::{Deserialize, Serialize};
 
-use crate::protocol::{DataVersion, RemotingSerializable};
-
-pub mod topic_config_wrapper;
-
-#[derive(Debug, Deserialize, Serialize, Default)]
-pub struct TopicConfigSerializeWrapper {
-    #[serde(rename = "topicConfigTable")]
-    topic_config_table: Option<HashMap<String, TopicConfig>>,
-
-    #[serde(rename = "dataVersion")]
-    data_version: Option<DataVersion>,
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct KVConfigSerializeWrapper {
+    #[serde(rename = "configTable")]
+    pub config_table:
+        Option<HashMap<String /* Namespace */, HashMap<String /* Key */, String /* Value */>>>,
 }
 
-impl RemotingSerializable for TopicConfigSerializeWrapper {
-    type Output = Self;
-
-    /*fn decode(bytes: &[u8]) -> Self::Output {
-        serde_json::from_slice::<Self::Output>(bytes).unwrap()
+impl KVConfigSerializeWrapper {
+    pub fn new_with_config_table(
+        config_table: HashMap<String, HashMap<String, String>>,
+    ) -> KVConfigSerializeWrapper {
+        KVConfigSerializeWrapper {
+            config_table: Some(config_table),
+        }
     }
 
-    fn encode(&self, _compress: bool) -> Vec<u8> {
-        todo!()
-    }*/
+    pub fn new() -> KVConfigSerializeWrapper {
+        KVConfigSerializeWrapper {
+            config_table: Some(HashMap::new()),
+        }
+    }
+}
+
+impl RemotingSerializable for KVConfigSerializeWrapper {
+    type Output = Self;
 }

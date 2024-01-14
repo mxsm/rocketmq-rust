@@ -34,7 +34,7 @@ impl PermName {
         if Self::is_readable(perm) {
             simple.replace_range(0..1, "R");
         }
-        if Self::is_writable(perm) {
+        if Self::is_writeable(perm) {
             simple.replace_range(1..2, "W");
         }
         if Self::is_inherit(perm) {
@@ -46,7 +46,7 @@ impl PermName {
         perm & PermName::PERM_READ == PermName::PERM_READ
     }
 
-    pub fn is_writable(perm: i8) -> bool {
+    pub fn is_writeable(perm: i8) -> bool {
         perm & PermName::PERM_WRITE == PermName::PERM_WRITE
     }
     pub fn is_priority(perm: i8) -> bool {
@@ -98,15 +98,15 @@ mod tests {
 
     #[test]
     fn test_is_writable() {
-        assert!(!PermName::is_writable(0));
-        assert!(PermName::is_writable(PermName::PERM_WRITE));
-        assert!(PermName::is_writable(
+        assert!(!PermName::is_writeable(0));
+        assert!(PermName::is_writeable(PermName::PERM_WRITE));
+        assert!(PermName::is_writeable(
             PermName::PERM_READ | PermName::PERM_WRITE
         ));
-        assert!(PermName::is_writable(
+        assert!(PermName::is_writeable(
             PermName::PERM_READ | PermName::PERM_WRITE | PermName::PERM_PRIORITY
         ));
-        assert!(PermName::is_writable(
+        assert!(PermName::is_writeable(
             PermName::PERM_READ
                 | PermName::PERM_WRITE
                 | PermName::PERM_PRIORITY

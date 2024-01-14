@@ -146,6 +146,18 @@ pub enum RequestCode {
     SetCommitlogReadMode = 2004,
 }
 
+impl From<RequestCode> for i32 {
+    fn from(value: RequestCode) -> Self {
+        value as i32
+    }
+}
+
+impl RequestCode {
+    pub fn to_i32(self) -> i32 {
+        self.into()
+    }
+}
+
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ControllerRequestCode {
     ControllerAlterSyncStateSet = 1001,

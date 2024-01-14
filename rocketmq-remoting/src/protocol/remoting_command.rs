@@ -45,6 +45,12 @@ pub struct RemotingCommand {
     language: LanguageCode,
     version: i32,
     opaque: i32,
+
+    ///flag -> bit: 00
+    /// The lowest bit of the flag indicates whether it is a response command.
+    /// Non-zero indicates a response command, while 0 indicates a request command.
+    /// The second bit indicates whether it is a one-way request.
+    /// Non-zero indicates a one-way request.
     flag: i32,
     remark: Option<String>,
 
@@ -81,9 +87,9 @@ impl Default for RemotingCommand {
 }
 
 impl RemotingCommand {
-    pub fn create_remoting_command(code: i32) -> Self {
+    pub fn create_remoting_command(code: impl Into<i32>) -> Self {
         let command = Self::default();
-        command.set_code(code)
+        command.set_code(code.into())
     }
 
     pub fn get_and_add() -> i32 {
@@ -94,23 +100,23 @@ impl RemotingCommand {
         self
     }
 
-    pub fn create_response_command_with_code(code: i32) -> Self {
-        Self::default().set_code(code).set_flag(0x01)
+    pub fn create_response_command_with_code(code: impl Into<i32>) -> Self {
+        Self::default().set_code(code).mark_response_type()
     }
 
     pub fn create_response_command() -> Self {
         Self::default()
-            .set_code(RemotingSysResponseCode::Success as i32)
-            .set_flag(0x01)
+            .set_code(RemotingSysResponseCode::Success)
+            .mark_response_type()
     }
 
     pub fn create_response_command_with_header(
         header: impl CommandCustomHeader + Send + 'static,
     ) -> Self {
         Self::default()
-            .set_code(RemotingSysResponseCode::Success as i32)
+            .set_code(RemotingSysResponseCode::Success)
             .set_command_custom_header(Some(Box::new(header)))
-            .set_flag(0x01)
+            .mark_response_type()
     }
 
     pub fn set_command_custom_header(
@@ -137,8 +143,8 @@ impl RemotingCommand {
         self
     }
 
-    pub fn set_code(mut self, code: i32) -> Self {
-        self.code = code;
+    pub fn set_code(mut self, code: impl Into<i32>) -> Self {
+        self.code = code.into();
         self
     }
     pub fn set_language(mut self, language: LanguageCode) -> Self {
@@ -176,6 +182,18 @@ impl RemotingCommand {
     }
     pub fn set_serialize_type(mut self, serialize_type: SerializeType) -> Self {
         self.serialize_type = serialize_type;
+        self
+    }
+
+    pub fn mark_response_type(mut self) -> Self {
+        let mark = 1 << 0;
+        self.flag |= mark;
+        self
+    }
+
+    pub fn mark_oneway_rpc(mut self) -> Self {
+        let mark = 1 << 1;
+        self.flag |= mark;
         self
     }
 

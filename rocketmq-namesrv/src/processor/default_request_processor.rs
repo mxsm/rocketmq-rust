@@ -20,7 +20,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use rocketmq_common::{
     common::{mix_all, mq_version::RocketMqVersion},
-    utils::crc32_utils::crc32,
+    CRC32Utils,
 };
 use rocketmq_remoting::{
     code::{broker_request_code::BrokerRequestCode, response_code::RemotingSysResponseCode},
@@ -56,7 +56,9 @@ impl RequestProcessor for DefaultRequestProcessor {
             Some(BrokerRequestCode::GetBrokerClusterInfo) => {
                 self.process_get_broker_cluster_info(request)
             }
-            _ => RemotingCommand::create_response_command_with_code(1),
+            _ => RemotingCommand::create_response_command_with_code(
+                RemotingSysResponseCode::SystemError,
+            ),
         }
     }
 }
@@ -82,7 +84,7 @@ impl DefaultRequestProcessor {
             .unwrap();
         if !check_sum_crc32(&request, &request_header) {
             return RemotingCommand::create_response_command_with_code(
-                RemotingSysResponseCode::SystemError as i32,
+                RemotingSysResponseCode::SystemError,
             )
             .set_remark(Some(String::from("crc32 not match")));
         }
@@ -126,13 +128,13 @@ impl DefaultRequestProcessor {
                 .set_code(RemotingSysResponseCode::SystemError as i32)
                 .set_remark(Some(String::from("register broker failed")));
         }
-        response_command.set_code(RemotingSysResponseCode::Success as i32)
+        response_command.set_code(RemotingSysResponseCode::Success)
     }
 }
 
 impl DefaultRequestProcessor {
     fn process_broker_heartbeat(&mut self, _request: RemotingCommand) -> RemotingCommand {
-        RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::Success as i32)
+        RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::Success)
     }
 }
 
@@ -142,8 +144,8 @@ impl DefaultRequestProcessor {
             .route_info_manager
             .write()
             .get_all_cluster_info()
-            .encode(false);
-        RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::Success as i32)
+            .encode();
+        RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::Success)
             .set_body(Some(Bytes::from(vec)))
     }
 }
@@ -180,7 +182,7 @@ fn check_sum_crc32(
         return true;
     }
     if let Some(bytes) = &request.get_body() {
-        let crc_32 = crc32(bytes.iter().as_ref());
+        let crc_32 = CRC32Utils::crc32(bytes.iter().as_ref());
         if crc_32 != request_header.body_crc32 {
             warn!(
                 "receive registerBroker request,crc32 not match,origin:{}, cal:{}",

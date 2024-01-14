@@ -91,7 +91,7 @@ impl ConnectionHandler {
                         return Ok(())
                     },
                 },
-            };
+            }
         }
         Ok(())
     }

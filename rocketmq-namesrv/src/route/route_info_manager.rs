@@ -22,6 +22,7 @@ use std::{
 
 use rocketmq_common::common::{
     config::TopicConfig, constant::PermName, mix_all, namesrv::namesrv_config::NamesrvConfig,
+    topic::TopicValidator,
 };
 use rocketmq_remoting::protocol::{
     body::{
@@ -29,17 +30,18 @@ use rocketmq_remoting::protocol::{
         topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper,
     },
     namesrv::RegisterBrokerResult,
-    route::route_data_view::{BrokerData, QueueData},
+    route::route_data_view::{BrokerData, QueueData, TopicRouteData},
     static_topic::topic_queue_info::TopicQueueMappingInfo,
     DataVersion,
 };
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::route_info::broker_addr_info::{BrokerAddrInfo, BrokerLiveInfo};
 
 const DEFAULT_BROKER_CHANNEL_EXPIRED_TIME: i64 = 1000 * 60 * 2;
 
-type TopicQueueTable = HashMap<String /* topic */, HashMap<String, QueueData>>;
+type TopicQueueTable =
+    HashMap<String /* topic */, HashMap<String /* broker name */, QueueData>>;
 type BrokerAddrTable = HashMap<String /* brokerName */, BrokerData>;
 type ClusterAddrTable = HashMap<String /* clusterName */, HashSet<String /* brokerName */>>;
 type BrokerLiveTable = HashMap<BrokerAddrInfo /* brokerAddr */, BrokerLiveInfo>;
@@ -48,8 +50,8 @@ type FilterServerTable =
 type TopicQueueMappingInfoTable =
     HashMap<String /* topic */, HashMap<String /* brokerName */, TopicQueueMappingInfo>>;
 
-#[derive(Debug, Clone)]
-pub(crate) struct RouteInfoManager {
+#[derive(Debug, Clone, Default)]
+pub struct RouteInfoManager {
     topic_queue_table: TopicQueueTable,
     broker_addr_table: BrokerAddrTable,
     cluster_addr_table: ClusterAddrTable,
@@ -61,7 +63,11 @@ pub(crate) struct RouteInfoManager {
 
 #[allow(private_interfaces)]
 impl RouteInfoManager {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn new_with_config(namesrv_config: NamesrvConfig) -> Self {
         RouteInfoManager {
             topic_queue_table: HashMap::new(),
             broker_addr_table: HashMap::new(),
@@ -69,7 +75,7 @@ impl RouteInfoManager {
             broker_live_table: HashMap::new(),
             filter_server_table: HashMap::new(),
             topic_queue_mapping_info_table: HashMap::new(),
-            namesrv_config: NamesrvConfig::default(),
+            namesrv_config,
         }
     }
 }
@@ -172,7 +178,7 @@ impl RouteInfoManager {
         }
 
         let old_addr = broker_data
-            .broker_addrs()
+            .broker_addrs_mut()
             .insert(broker_id, broker_addr.clone());
 
         register_first |= old_addr.is_none();
@@ -181,7 +187,7 @@ impl RouteInfoManager {
         let is_prime_slave = !is_old_version_broker
             && !is_master
             && broker_id == broker_data.broker_addrs().keys().min().copied().unwrap();
-        let mut broker_data = broker_data.clone();
+        let broker_data = broker_data.clone();
         if is_master || is_prime_slave {
             if let Some(tc_table) = topic_config_serialize_wrapper.topic_config_table() {
                 let topic_queue_mapping_info_map =
@@ -220,21 +226,21 @@ impl RouteInfoManager {
                     .as_ref()
                     .unwrap();
                 for topic_config in tc_table.values() {
-                    if register_first
+                    let mut config = topic_config.clone();
+                    if (register_first
                         || self.is_topic_config_changed(
                             &cluster_name,
                             &broker_addr,
                             data_version,
                             &broker_name,
                             &topic_config.topic_name,
-                        )
+                        ))
+                        && is_prime_slave
+                        && broker_data.enable_acting_master()
                     {
-                        let mut config = topic_config.clone();
-                        if is_prime_slave && broker_data.enable_acting_master() {
-                            config.perm &= !(PermName::PERM_WRITE as u32);
-                        }
-                        self.create_and_update_queue_data(&broker_name, config);
+                        config.perm &= !(PermName::PERM_WRITE as u32);
                     }
+                    self.create_and_update_queue_data(&broker_name, config);
                 }
                 if self.is_broker_topic_config_changed(&cluster_name, &broker_addr, data_version)
                     || register_first
@@ -306,6 +312,119 @@ impl RouteInfoManager {
             Some(self.broker_addr_table.clone()),
             Some(self.cluster_addr_table.clone()),
         )
+    }
+
+    pub(crate) fn pickup_topic_route_data(&self, topic: &str) -> Option<TopicRouteData> {
+        let mut topic_route_data = TopicRouteData {
+            order_topic_conf: None,
+            broker_datas: Vec::new(),
+            queue_datas: Vec::new(),
+            filter_server_table: HashMap::new(),
+            topic_queue_mapping_by_broker: None,
+        };
+
+        let mut found_queue_data = false;
+        let mut found_broker_data = false;
+
+        // Acquire read lock
+
+        if let Some(queue_data_map) = self.topic_queue_table.get(topic) {
+            topic_route_data.queue_datas = queue_data_map.values().cloned().collect();
+            found_queue_data = true;
+
+            let broker_name_set: HashSet<&String> = queue_data_map.keys().collect();
+
+            for broker_name in broker_name_set {
+                if let Some(broker_data) = self.broker_addr_table.get(broker_name) {
+                    let broker_data_clone = broker_data.clone();
+                    topic_route_data.broker_datas.push(broker_data_clone);
+                    found_broker_data = true;
+
+                    if !self.filter_server_table.is_empty() {
+                        for broker_addr in broker_data.broker_addrs().values() {
+                            let broker_addr_info =
+                                BrokerAddrInfo::new(broker_data.cluster(), broker_addr.clone());
+                            if let Some(filter_server_list) =
+                                self.filter_server_table.get(&broker_addr_info)
+                            {
+                                topic_route_data
+                                    .filter_server_table
+                                    .insert(broker_addr.clone(), filter_server_list.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        debug!("pickup_topic_route_data {:?} {:?}", topic, topic_route_data);
+
+        if found_broker_data && found_queue_data {
+            topic_route_data.topic_queue_mapping_by_broker = Some(
+                self.topic_queue_mapping_info_table
+                    .get(topic)
+                    .cloned()
+                    .unwrap_or_default(),
+            );
+
+            if !self.namesrv_config.support_acting_master {
+                return Some(topic_route_data);
+            }
+
+            if topic.starts_with(TopicValidator::SYNC_BROKER_MEMBER_GROUP_PREFIX) {
+                return Some(topic_route_data);
+            }
+
+            if topic_route_data.broker_datas.is_empty() || topic_route_data.queue_datas.is_empty() {
+                return Some(topic_route_data);
+            }
+
+            let need_acting_master = topic_route_data.broker_datas.iter().any(|broker_data| {
+                !broker_data.broker_addrs().is_empty()
+                    && !broker_data
+                        .broker_addrs()
+                        .contains_key(&(mix_all::MASTER_ID as i64))
+            });
+
+            if !need_acting_master {
+                return Some(topic_route_data);
+            }
+
+            for broker_data in &mut topic_route_data.broker_datas {
+                if broker_data.broker_addrs().is_empty()
+                    || broker_data
+                        .broker_addrs()
+                        .contains_key(&(mix_all::MASTER_ID as i64))
+                    || !broker_data.enable_acting_master()
+                {
+                    continue;
+                }
+
+                // No master
+                for queue_data in &topic_route_data.queue_datas {
+                    if queue_data.broker_name() == broker_data.broker_name() {
+                        if !PermName::is_writeable(queue_data.perm() as i8) {
+                            if let Some(min_broker_id) =
+                                broker_data.broker_addrs().keys().cloned().min()
+                            {
+                                if let Some(acting_master_addr) =
+                                    broker_data.broker_addrs_mut().remove(&min_broker_id)
+                                {
+                                    broker_data
+                                        .broker_addrs_mut()
+                                        .insert(mix_all::MASTER_ID as i64, acting_master_addr);
+                                }
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+
+            return Some(topic_route_data);
+        }
+
+        None
     }
 }
 
@@ -404,7 +523,7 @@ impl RouteInfoManager {
             );
             queue_data_map_inner.insert(broker_name.to_string(), queue_data);
             self.topic_queue_table
-                .insert(broker_name.to_string(), queue_data_map_inner);
+                .insert(topic_config.topic_name.clone(), queue_data_map_inner);
         }
     }
 }
