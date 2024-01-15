@@ -77,9 +77,9 @@ Feature list:
 
 > Not support: :broken_heart:
 >
-> Base support::heart:
+> Base support: :heart:
 >
-> Perfect support::sparkling_heart:
+> Perfect support: :sparkling_heart:
 
 | Feature                                | request code | Support        | remark |
 | -------------------------------------- | ------------ | -------------- | ------ |
