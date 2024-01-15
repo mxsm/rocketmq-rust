@@ -23,7 +23,7 @@ use rocketmq_common::{
     CRC32Utils,
 };
 use rocketmq_remoting::{
-    code::{broker_request_code::BrokerRequestCode, response_code::RemotingSysResponseCode},
+    code::{request_code::RequestCode, response_code::RemotingSysResponseCode},
     protocol::{
         body::{
             broker_body::register_broker_body::RegisterBrokerBody,
@@ -47,13 +47,13 @@ pub struct DefaultRequestProcessor {
 impl RequestProcessor for DefaultRequestProcessor {
     fn process_request(&mut self, request: RemotingCommand) -> RemotingCommand {
         let code = request.code();
-        let broker_request_code = BrokerRequestCode::value_of(code);
+        let broker_request_code = RequestCode::value_of(code);
         match broker_request_code {
             //handle register broker
-            Some(BrokerRequestCode::RegisterBroker) => self.process_register_broker(request),
-            Some(BrokerRequestCode::BrokerHeartbeat) => self.process_broker_heartbeat(request),
+            Some(RequestCode::RegisterBroker) => self.process_register_broker(request),
+            Some(RequestCode::BrokerHeartbeat) => self.process_broker_heartbeat(request),
             //handle get broker cluster info
-            Some(BrokerRequestCode::GetBrokerClusterInfo) => {
+            Some(RequestCode::GetBrokerClusterInfo) => {
                 self.process_get_broker_cluster_info(request)
             }
             _ => RemotingCommand::create_response_command_with_code(
