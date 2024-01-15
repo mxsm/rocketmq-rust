@@ -73,13 +73,38 @@ The specific functions of each module can be referred to in the [official Rocket
 
 ## Name Server
 
-### Broker Management
+Feature list:
 
-- [x] **Broker registration(request code: 103)-Currently, only basic Broker registration is supported. Support for the Controller mode is pending.**
-- [x] **Retrieve cluster information(request code: 106)**
-- [ ] **Heartbeat message processing**
+> Not support: :broken_heart:
+>
+> Base support: :heart:
+>
+> Perfect support: :sparkling_heart:
 
-TODO
+| Feature                                | request code | Support        | remark |
+| -------------------------------------- | ------------ | -------------- | ------ |
+| Put KV Config                          | 100          | :broken_heart: |        |
+| Get KV Config                          | 101          | :broken_heart: |        |
+| Delete KV Config                       | 102          | :broken_heart: |        |
+| Get kv list by namespace               | 219          | :broken_heart: |        |
+| Query Data Version                     | 322          | :broken_heart: |        |
+| Register Broker                        | 103          | :heart:        |        |
+| Unregister Broker                      | 104          | :broken_heart: |        |
+| Broker Heartbeat                       | 904          | :broken_heart: |        |
+| Get broker member_group                | 901          | :broken_heart: |        |
+| Get broker cluster info                | 106          | :broken_heart: |        |
+| Wipe write perm of boker               | 205          | :broken_heart: |        |
+| Add write perm of brober               | 327          | :broken_heart: |        |
+| Get all topic list from name server    | 206          | :broken_heart: |        |
+| Delete topic in name server            | 216          | :broken_heart: |        |
+| Register topic in name server          | 217          | :broken_heart: |        |
+| Get topics by cluster                  | 224          | :broken_heart: |        |
+| Get system topic list from name server | 304          | :broken_heart: |        |
+| Get unit topic list                    | 311          | :broken_heart: |        |
+| Get has unit sub topic list            | 312          | :broken_heart: |        |
+| Get has unit sub ununit topic list     | 313          | :broken_heart: |        |
+| Update name server config              | 318          | :broken_heart: |        |
+| Get name server config                 | 318          | :broken_heart: |        |
 
 Other module implementations will be done subsequently, starting with the Rust implementation of the Name Server. The goal is to achieve functionality similar to the Java version.
 
