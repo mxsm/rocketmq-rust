@@ -10,18 +10,18 @@ Feature list:
 
 - **Not support**: :broken_heart:
 
-- **Base support**: :heart:
+- **Base support**: :heart: :white_check_mark:
 
-- **Perfect support**: :sparkling_heart:
+- **Perfect support**: :sparkling_heart: :white_check_mark:
 
 | Feature                                | request code | Support        | remark |
 | -------------------------------------- | ------------ | -------------- | ------ |
-| Put KV Config                          | 100          | :broken_heart: |        |
+| Put KV Config                          | 100          | :heart: :white_check_mark: |  |
 | Get KV Config                          | 101          | :broken_heart: |        |
 | Delete KV Config                       | 102          | :broken_heart: |        |
 | Get kv list by namespace               | 219          | :broken_heart: |        |
 | Query Data Version                     | 322          | :broken_heart: |        |
-| Register Broker                        | 103          | :heart:        |        |
+| Register Broker                        | 103          | :heart: :white_check_mark: |        |
 | Unregister Broker                      | 104          | :broken_heart: |        |
 | Broker Heartbeat                       | 904          | :broken_heart: |        |
 | Get broker member_group                | 901          | :broken_heart: |        |
