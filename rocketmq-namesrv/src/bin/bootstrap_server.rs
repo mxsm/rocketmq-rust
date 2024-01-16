@@ -18,11 +18,11 @@
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use clap::Parser;
-use namesrv::{
+use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
+use rocketmq_namesrv::{
     processor::{default_request_processor::DefaultRequestProcessor, ClientRequestProcessor},
     KVConfigManager, RouteInfoManager,
 };
-use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_remoting::{
     code::request_code::RequestCode,
     runtime::{processor::RequestProcessor, server},
@@ -80,11 +80,14 @@ fn init_processors(
         RequestCode::GetRouteinfoByTopic.to_i32(),
         Box::new(ClientRequestProcessor::new(
             route_info_manager_inner.clone(),
-            namesrv_config,
+            namesrv_config.clone(),
             kvconfig_manager_inner.clone(),
         )),
     );
-    (processors, DefaultRequestProcessor::new())
+    (
+        processors,
+        DefaultRequestProcessor::new(namesrv_config.clone()),
+    )
 }
 
 #[derive(Parser, Debug)]

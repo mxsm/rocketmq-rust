@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use rocketmq_common::{
-    common::{mix_all, mq_version::RocketMqVersion},
+    common::{mix_all, mq_version::RocketMqVersion, namesrv::namesrv_config::NamesrvConfig},
     CRC32Utils,
 };
 use rocketmq_remoting::{
@@ -29,7 +29,10 @@ use rocketmq_remoting::{
             broker_body::register_broker_body::RegisterBrokerBody,
             topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper,
         },
-        header::broker_request_header::RegisterBrokerRequestHeader,
+        header::{
+            broker_request_header::RegisterBrokerRequestHeader,
+            namesrv::kv_config_request_header::PutKVConfigRequestHeader,
+        },
         remoting_command::RemotingCommand,
         RemotingSerializable,
     },
@@ -37,11 +40,12 @@ use rocketmq_remoting::{
 };
 use tracing::warn;
 
-use crate::route::route_info_manager::RouteInfoManager;
+use crate::{route::route_info_manager::RouteInfoManager, KVConfigManager};
 
 #[derive(Debug, Clone)]
 pub struct DefaultRequestProcessor {
     route_info_manager: Arc<parking_lot::RwLock<RouteInfoManager>>,
+    kvconfig_manager: Arc<parking_lot::RwLock<KVConfigManager>>,
 }
 
 impl RequestProcessor for DefaultRequestProcessor {
@@ -56,6 +60,7 @@ impl RequestProcessor for DefaultRequestProcessor {
             Some(RequestCode::GetBrokerClusterInfo) => {
                 self.process_get_broker_cluster_info(request)
             }
+            Some(RequestCode::PutKvConfig) => self.put_kv_config(request),
             _ => RemotingCommand::create_response_command_with_code(
                 RemotingSysResponseCode::SystemError,
             ),
@@ -63,18 +68,47 @@ impl RequestProcessor for DefaultRequestProcessor {
     }
 }
 
+///implementation put KV config
+impl DefaultRequestProcessor {
+    fn put_kv_config(&mut self, request: RemotingCommand) -> RemotingCommand {
+        let request_header = request
+            .decode_command_custom_header::<PutKVConfigRequestHeader>()
+            .unwrap();
+        //check namespace and key, need?
+        if request_header.namespace.is_empty() || request_header.key.is_empty() {
+            return RemotingCommand::create_response_command_with_code(
+                RemotingSysResponseCode::SystemError,
+            )
+            .set_remark(Some(String::from("namespace or key is empty")));
+        }
+        self.kvconfig_manager.write().put_kv_config(
+            request_header.namespace.as_str(),
+            request_header.key.as_str(),
+            request_header.value.as_str(),
+        );
+        RemotingCommand::create_response_command()
+    }
+}
+
 #[allow(clippy::new_without_default)]
 impl DefaultRequestProcessor {
-    pub fn new() -> Self {
+    pub fn new(namesrv_config: NamesrvConfig) -> Self {
         Self {
             route_info_manager: Arc::new(parking_lot::RwLock::new(RouteInfoManager::new())),
+            kvconfig_manager: Arc::new(parking_lot::RwLock::new(KVConfigManager::new(
+                namesrv_config,
+            ))),
         }
     }
 
     pub(crate) fn new_with_route_info_manager(
         route_info_manager: Arc<parking_lot::RwLock<RouteInfoManager>>,
+        kvconfig_manager: Arc<parking_lot::RwLock<KVConfigManager>>,
     ) -> Self {
-        Self { route_info_manager }
+        Self {
+            route_info_manager,
+            kvconfig_manager,
+        }
     }
 }
 impl DefaultRequestProcessor {

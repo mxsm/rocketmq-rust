@@ -23,7 +23,9 @@ pub trait CommandCustomHeader {
     /// Returns a `Result` indicating whether the fields are valid or not.  
     /// If the fields are valid, the `Ok` variant is returned with an empty `()` value.  
     /// If the fields are invalid, an `Err` variant is returned with an associated `Error` value.  
-    fn check_fields(&self) -> anyhow::Result<(), anyhow::Error>;
+    fn check_fields(&self) -> anyhow::Result<(), anyhow::Error> {
+        Ok(())
+    }
 
     /// Converts the implementing type to a map.  
     ///  
