@@ -29,9 +29,9 @@ use rocketmq_remoting::{
             broker_body::register_broker_body::RegisterBrokerBody,
             topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper,
         },
-        header::{
-            broker_request_header::RegisterBrokerRequestHeader,
-            namesrv::kv_config_request_header::PutKVConfigRequestHeader,
+        header::namesrv::{
+            kv_config_request_header::PutKVConfigRequestHeader,
+            register_broker_header::{RegisterBrokerRequestHeader, RegisterBrokerResponseHeader},
         },
         remoting_command::RemotingCommand,
         RemotingSerializable,
@@ -123,7 +123,7 @@ impl DefaultRequestProcessor {
             .set_remark(Some(String::from("crc32 not match")));
         }
 
-        let response_command = RemotingCommand::create_response_command();
+        let mut response_command = RemotingCommand::create_response_command();
         let broker_version = RocketMqVersion::try_from(request.version()).unwrap();
         let topic_config_wrapper;
         let mut filter_server_list = Vec::<String>::new();
@@ -159,10 +159,30 @@ impl DefaultRequestProcessor {
         );
         if result.is_none() {
             return response_command
-                .set_code(RemotingSysResponseCode::SystemError as i32)
+                .set_code(RemotingSysResponseCode::SystemError)
                 .set_remark(Some(String::from("register broker failed")));
         }
-        response_command.set_code(RemotingSysResponseCode::Success)
+        if self
+            .kvconfig_manager
+            .read()
+            .namesrv_config
+            .return_order_topic_config_to_broker
+        {
+            if let Some(value) = self
+                .kvconfig_manager
+                .write()
+                .get_kv_list_by_namespace("ORDER_TOPIC_CONFIG")
+            {
+                response_command = response_command.set_body(Some(Bytes::from(value)));
+            }
+        }
+        let register_broker_result = result.unwrap();
+        response_command
+            .set_code(RemotingSysResponseCode::Success)
+            .set_command_custom_header(Some(Box::new(RegisterBrokerResponseHeader::new(
+                Some(register_broker_result.ha_server_addr),
+                Some(register_broker_result.master_addr),
+            ))))
     }
 }
 

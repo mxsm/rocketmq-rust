@@ -22,7 +22,7 @@ use tracing::info;
 
 use crate::kvconfig::KVConfigSerializeWrapper;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct KVConfigManager {
     pub(crate) config_table:
         HashMap<String /* Namespace */, HashMap<String /* Key */, String /* Value */>>,

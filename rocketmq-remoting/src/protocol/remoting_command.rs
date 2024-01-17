@@ -18,7 +18,7 @@ use std::{
     collections::HashMap,
     sync::{
         atomic::{AtomicI32, Ordering},
-        Arc,
+        Arc, Once, RwLock,
     },
 };
 
@@ -37,6 +37,29 @@ use crate::{
 
 lazy_static! {
     static ref OPAQUE_COUNTER: Arc<AtomicI32> = Arc::new(AtomicI32::new(0));
+    static ref CONFIG_VERSION: RwLock<i32> = RwLock::new(-1);
+    static ref INIT: Once = Once::new();
+}
+
+fn set_cmd_version(cmd: &mut RemotingCommand) {
+    INIT.call_once(|| {
+        let v = match std::env::var("REMOTING_VERSION_KEY") {
+            Ok(value) => value.parse::<i32>().unwrap_or(-1),
+            Err(_) => -1,
+        };
+        *CONFIG_VERSION.write().unwrap() = v;
+    });
+
+    let config_version = *CONFIG_VERSION.read().unwrap();
+
+    if config_version >= 0 {
+        cmd.set_version(config_version);
+    } else if let Ok(v) = std::env::var("rocketmq.remoting.version") {
+        if let Ok(value) = v.parse::<i32>() {
+            cmd.set_version(value);
+            *CONFIG_VERSION.write().unwrap() = value;
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -87,6 +110,17 @@ impl Default for RemotingCommand {
 }
 
 impl RemotingCommand {
+    pub fn create_request_command(
+        code: impl Into<i32>,
+        header: impl CommandCustomHeader + Send + 'static,
+    ) -> Self {
+        let mut command = Self::default()
+            .set_code(code.into())
+            .set_command_custom_header(Some(Box::new(header)));
+        set_cmd_version(&mut command);
+        command
+    }
+
     pub fn create_remoting_command(code: impl Into<i32>) -> Self {
         let command = Self::default();
         command.set_code(code.into())
@@ -151,9 +185,8 @@ impl RemotingCommand {
         self.language = language;
         self
     }
-    pub fn set_version(mut self, version: i32) -> Self {
+    pub fn set_version(&mut self, version: i32) {
         self.version = version;
-        self
     }
     pub fn set_opaque(mut self, opaque: i32) -> Self {
         self.opaque = opaque;
@@ -280,14 +313,13 @@ mod tests {
         let command = RemotingCommand::create_remoting_command(1)
             .set_code(1)
             .set_language(LanguageCode::JAVA)
-            .set_version(1)
             .set_opaque(1)
             .set_flag(1)
             .set_ext_fields(HashMap::new())
             .set_remark(Some("remark".to_string()));
 
         assert_eq!(
-            "{\"code\":1,\"language\":\"JAVA\",\"version\":1,\"opaque\":1,\"flag\":1,\"remark\":\"\
+            "{\"code\":1,\"language\":\"JAVA\",\"version\":0,\"opaque\":1,\"flag\":1,\"remark\":\"\
              remark\",\"extFields\":{},\"serializeTypeCurrentRPC\":\"JSON\"}",
             serde_json::to_string(&command).unwrap()
         );
