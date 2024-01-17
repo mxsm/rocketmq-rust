@@ -77,13 +77,13 @@ Feature list:
 
 > Not support: :broken_heart:
 >
-> Base support: :heart:
+> Base support: :heart: :white_check_mark:
 >
-> Perfect support: :sparkling_heart:
+> Perfect support: :sparkling_heart: :white_check_mark:
 
 | Feature                                | request code | Support        | remark |
 | -------------------------------------- | ------------ | -------------- | ------ |
-| Put KV Config                          | 100          | :broken_heart: |        |
+| Put KV Config                          | 100          | :heart: :white_check_mark: |        |
 | Get KV Config                          | 101          | :broken_heart: |        |
 | Delete KV Config                       | 102          | :broken_heart: |        |
 | Get kv list by namespace               | 219          | :broken_heart: |        |
