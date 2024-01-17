@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 #![allow(dead_code)]
-mod clients;
+pub mod clients;
 pub mod code;
 pub mod codec;
 pub mod connection;

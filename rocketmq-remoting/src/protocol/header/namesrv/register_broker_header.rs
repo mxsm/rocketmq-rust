@@ -213,3 +213,66 @@ impl CommandCustomHeader for RegisterBrokerRequestHeader {
         Some(map)
     }
 }
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisterBrokerResponseHeader {
+    pub ha_server_addr: Option<String>,
+    pub master_addr: Option<String>,
+}
+
+impl RegisterBrokerResponseHeader {
+    const HA_SERVER_ADDR: &'static str = "haServerAddr";
+    const MASTER_ADDR: &'static str = "masterAddr";
+
+    pub fn new(ha_server_addr: Option<String>, master_addr: Option<String>) -> Self {
+        RegisterBrokerResponseHeader {
+            ha_server_addr,
+            master_addr,
+        }
+    }
+}
+
+impl CommandCustomHeader for RegisterBrokerResponseHeader {
+    fn check_fields(&self) -> anyhow::Result<(), Error> {
+        Ok(())
+    }
+
+    fn to_map(&self) -> Option<HashMap<String, String>> {
+        let mut map = HashMap::<String, String>::new();
+
+        if let Some(ref ha_server_addr) = self.ha_server_addr {
+            map.insert(
+                RegisterBrokerResponseHeader::HA_SERVER_ADDR.to_string(),
+                ha_server_addr.clone(),
+            );
+        }
+        if let Some(ref master_addr) = self.master_addr {
+            map.insert(
+                RegisterBrokerResponseHeader::MASTER_ADDR.to_string(),
+                master_addr.clone(),
+            );
+        }
+
+        Some(map)
+    }
+}
+
+impl FromMap for RegisterBrokerResponseHeader {
+    type Target = Self;
+
+    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+        Some(RegisterBrokerResponseHeader {
+            ha_server_addr: Some(
+                map.get(RegisterBrokerResponseHeader::HA_SERVER_ADDR)
+                    .map(|s| s.to_string())
+                    .unwrap_or_default(),
+            ),
+            master_addr: Some(
+                map.get(RegisterBrokerResponseHeader::MASTER_ADDR)
+                    .map(|s| s.to_string())
+                    .unwrap_or_default(),
+            ),
+        })
+    }
+}

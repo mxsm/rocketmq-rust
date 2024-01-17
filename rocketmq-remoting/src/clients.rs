@@ -15,5 +15,58 @@
  * limitations under the License.
  */
 
+use std::{
+    collections::HashMap,
+    fmt::{Debug, Formatter},
+    time::Duration,
+};
+
+pub use blocking_client::BlockingClient;
+pub use client::Client;
+
+use crate::protocol::remoting_command::RemotingCommand;
+
 mod async_client;
+mod blocking_client;
+
 mod client;
+
+#[derive(Default)]
+pub struct RemoteClient {
+    inner: HashMap<String, BlockingClient>,
+}
+
+impl Clone for RemoteClient {
+    fn clone(&self) -> Self {
+        Self {
+            inner: HashMap::new(),
+        }
+    }
+}
+
+impl Debug for RemoteClient {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RemoteClient")
+    }
+}
+
+impl RemoteClient {
+    /// Create a new `RemoteClient` instance.
+    pub fn new() -> Self {
+        Self {
+            inner: HashMap::new(),
+        }
+    }
+
+    pub fn invoke_oneway(
+        &mut self,
+        addr: String,
+        request: RemotingCommand,
+        timeout: Duration,
+    ) -> anyhow::Result<()> {
+        self.inner
+            .entry(addr.clone())
+            .or_insert_with(|| BlockingClient::connect(addr).unwrap())
+            .invoke_oneway(request, timeout)
+    }
+}

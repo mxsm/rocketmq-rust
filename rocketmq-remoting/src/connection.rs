@@ -32,6 +32,7 @@ use crate::codec::remoting_command_codec::RemotingCommandCodec;
 ///
 /// When sending frames, the frame is first encoded into the write buffer.
 /// The contents of the write buffer are then written to the socket.
+
 pub struct Connection {
     pub(crate) framed: Framed<TcpStream, RemotingCommandCodec>,
 }

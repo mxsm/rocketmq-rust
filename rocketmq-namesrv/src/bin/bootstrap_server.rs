@@ -84,10 +84,7 @@ fn init_processors(
             kvconfig_manager_inner.clone(),
         )),
     );
-    (
-        processors,
-        DefaultRequestProcessor::new(namesrv_config.clone()),
-    )
+    (processors, DefaultRequestProcessor::new(namesrv_config))
 }
 
 #[derive(Parser, Debug)]

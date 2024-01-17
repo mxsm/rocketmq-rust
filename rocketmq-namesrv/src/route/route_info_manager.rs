@@ -17,22 +17,28 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 
 use rocketmq_common::common::{
     config::TopicConfig, constant::PermName, mix_all, namesrv::namesrv_config::NamesrvConfig,
     topic::TopicValidator,
 };
-use rocketmq_remoting::protocol::{
-    body::{
-        broker_body::cluster_info::ClusterInfo,
-        topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper,
+use rocketmq_remoting::{
+    clients::RemoteClient,
+    code::request_code::RequestCode,
+    protocol::{
+        body::{
+            broker_body::cluster_info::ClusterInfo,
+            topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper,
+        },
+        header::namesrv::brokerid_change_request_header::NotifyMinBrokerIdChangeRequestHeader,
+        namesrv::RegisterBrokerResult,
+        remoting_command::RemotingCommand,
+        route::route_data_view::{BrokerData, QueueData, TopicRouteData},
+        static_topic::topic_queue_info::TopicQueueMappingInfo,
+        DataVersion,
     },
-    namesrv::RegisterBrokerResult,
-    route::route_data_view::{BrokerData, QueueData, TopicRouteData},
-    static_topic::topic_queue_info::TopicQueueMappingInfo,
-    DataVersion,
 };
 use tracing::{debug, info, warn};
 
@@ -52,13 +58,14 @@ type TopicQueueMappingInfoTable =
 
 #[derive(Debug, Clone, Default)]
 pub struct RouteInfoManager {
-    topic_queue_table: TopicQueueTable,
-    broker_addr_table: BrokerAddrTable,
-    cluster_addr_table: ClusterAddrTable,
-    broker_live_table: BrokerLiveTable,
-    filter_server_table: FilterServerTable,
-    topic_queue_mapping_info_table: TopicQueueMappingInfoTable,
-    namesrv_config: NamesrvConfig,
+    pub(crate) topic_queue_table: TopicQueueTable,
+    pub(crate) broker_addr_table: BrokerAddrTable,
+    pub(crate) cluster_addr_table: ClusterAddrTable,
+    pub(crate) broker_live_table: BrokerLiveTable,
+    pub(crate) filter_server_table: FilterServerTable,
+    pub(crate) topic_queue_mapping_info_table: TopicQueueMappingInfoTable,
+    pub(crate) namesrv_config: NamesrvConfig,
+    pub(crate) remote_client: RemoteClient,
 }
 
 #[allow(private_interfaces)]
@@ -76,6 +83,7 @@ impl RouteInfoManager {
             filter_server_table: HashMap::new(),
             topic_queue_mapping_info_table: HashMap::new(),
             namesrv_config,
+            remote_client: RemoteClient::new(),
         }
     }
 }
@@ -106,26 +114,26 @@ impl RouteInfoManager {
             .unwrap()
             .insert(broker_name.clone());
 
-        let is_old_version_broker = if let Some(value) = enable_acting_master {
+        let enable_acting_master_inner = if let Some(value) = enable_acting_master {
             value
         } else {
             false
         };
         let mut register_first =
             if let Some(broker_data) = self.broker_addr_table.get_mut(&broker_name) {
-                broker_data.set_enable_acting_master(is_old_version_broker);
+                broker_data.set_enable_acting_master(enable_acting_master_inner);
                 broker_data.set_zone_name(zone_name.clone());
                 false
             } else {
-                self.broker_addr_table.insert(
+                let mut broker_data = BrokerData::new(
+                    cluster_name.clone(),
                     broker_name.clone(),
-                    BrokerData::new(
-                        cluster_name.clone(),
-                        broker_name.clone(),
-                        HashMap::new(),
-                        zone_name,
-                    ),
+                    HashMap::new(),
+                    zone_name,
                 );
+                broker_data.set_enable_acting_master(enable_acting_master_inner);
+                self.broker_addr_table
+                    .insert(broker_name.clone(), broker_data);
                 true
             };
         let broker_data = self.broker_addr_table.get_mut(&broker_name).unwrap();
@@ -142,11 +150,12 @@ impl RouteInfoManager {
         // IP:PORT> The same IP:PORT must only have one record in brokerAddrTable
         broker_data.remove_broker_by_addr(broker_id, &broker_addr);
 
+        //If Local brokerId stateVersion bigger than the registering one
         if let Some(old_broker_addr) = broker_data.broker_addrs().get(&broker_id) {
             if old_broker_addr != &broker_addr {
-                let addr_info =
+                let addr_info_old =
                     BrokerAddrInfo::new(cluster_name.clone(), old_broker_addr.to_string());
-                if let Some(val) = self.broker_live_table.get(&addr_info) {
+                if let Some(val) = self.broker_live_table.get(&addr_info_old) {
                     let old_state_version = val.data_version().state_version();
                     let new_state_version = topic_config_serialize_wrapper
                         .data_version()
@@ -154,6 +163,18 @@ impl RouteInfoManager {
                         .unwrap()
                         .state_version();
                     if old_state_version > new_state_version {
+                        warn!(
+                            "Registered Broker conflicts with the existed one, just ignore.:  \
+                             Cluster:{}, BrokerName:{}, BrokerId:{},Old BrokerAddr:{}, Old \
+                             Version:{}, New BrokerAddr:{}, New Version:{}.",
+                            &cluster_name,
+                            &broker_name,
+                            broker_id,
+                            old_broker_addr,
+                            old_state_version,
+                            &broker_addr,
+                            new_state_version
+                        );
                         self.broker_live_table.remove(
                             BrokerAddrInfo::new(cluster_name.clone(), broker_addr.clone()).as_ref(),
                         );
@@ -184,14 +205,18 @@ impl RouteInfoManager {
         register_first |= old_addr.is_none();
         let is_master = mix_all::MASTER_ID == broker_id as u64;
 
-        let is_prime_slave = !is_old_version_broker
+        let is_prime_slave = enable_acting_master.is_some()
             && !is_master
             && broker_id == broker_data.broker_addrs().keys().min().copied().unwrap();
         let broker_data = broker_data.clone();
+        //handle master or prime slave topic config update
         if is_master || is_prime_slave {
             if let Some(tc_table) = topic_config_serialize_wrapper.topic_config_table() {
                 let topic_queue_mapping_info_map =
                     topic_config_serialize_wrapper.topic_queue_mapping_info_map();
+
+                // Delete the topics that don't exist in tcTable from the current broker
+                // Static topic is not supported currently
                 if self.namesrv_config.delete_topic_with_broker_registration
                     && topic_queue_mapping_info_map.is_empty()
                 {
@@ -284,7 +309,7 @@ impl RouteInfoManager {
             self.filter_server_table.remove(&broker_addr_info);
         } else {
             self.filter_server_table
-                .insert(broker_addr_info, filter_server_list);
+                .insert(broker_addr_info.clone(), filter_server_list);
         }
 
         if mix_all::MASTER_ID != broker_id as u64 {
@@ -300,7 +325,17 @@ impl RouteInfoManager {
             }
         }
         if is_min_broker_id_changed && self.namesrv_config.notify_min_broker_id_changed {
-            todo!()
+            self.notify_min_broker_id_changed(
+                broker_data.broker_addrs(),
+                None,
+                Some(
+                    self.broker_live_table
+                        .get(&broker_addr_info)
+                        .unwrap()
+                        .ha_server_addr()
+                        .to_string(),
+                ),
+            )
         }
         Some(result)
     }
@@ -525,5 +560,57 @@ impl RouteInfoManager {
             self.topic_queue_table
                 .insert(topic_config.topic_name.clone(), queue_data_map_inner);
         }
+    }
+
+    fn notify_min_broker_id_changed(
+        &mut self,
+        broker_addr_map: &HashMap<i64, String>,
+        offline_broker_addr: Option<String>,
+        ha_broker_addr: Option<String>,
+    ) {
+        if broker_addr_map.is_empty() {
+            return;
+        }
+        let min_broker_id = broker_addr_map.keys().min().copied().unwrap();
+        // notify master
+        let request_header = NotifyMinBrokerIdChangeRequestHeader::new(
+            Some(min_broker_id),
+            None,
+            broker_addr_map.get(&min_broker_id).cloned(),
+            offline_broker_addr.clone(),
+            ha_broker_addr,
+        );
+
+        if let Some(broker_addrs_notify) =
+            self.choose_broker_addrs_to_notify(broker_addr_map, offline_broker_addr)
+        {
+            for broker_addr in broker_addrs_notify {
+                let _ = self.remote_client.invoke_oneway(
+                    broker_addr,
+                    RemotingCommand::create_request_command(
+                        RequestCode::NotifyMinBrokerIdChange,
+                        request_header.clone(),
+                    ),
+                    Duration::from_millis(3000),
+                );
+            }
+        }
+    }
+
+    fn choose_broker_addrs_to_notify(
+        &mut self,
+        broker_addr_map: &HashMap<i64, String>,
+        offline_broker_addr: Option<String>,
+    ) -> Option<Vec<String>> {
+        if broker_addr_map.len() == 1 || offline_broker_addr.is_some() {
+            return Some(broker_addr_map.values().cloned().collect());
+        }
+        let min_broker_id = broker_addr_map.keys().min().copied().unwrap();
+        let broker_addr_vec = broker_addr_map
+            .iter()
+            .filter(|(key, _value)| **key != min_broker_id)
+            .map(|(_, value)| value.clone())
+            .collect();
+        Some(broker_addr_vec)
     }
 }

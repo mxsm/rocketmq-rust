@@ -125,7 +125,6 @@ mod tests {
         let command = RemotingCommand::create_remoting_command(1)
             .set_code(1)
             .set_language(LanguageCode::JAVA)
-            .set_version(1)
             .set_opaque(1)
             .set_flag(1)
             .set_body(Some(Bytes::from("body")))
