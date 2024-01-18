@@ -47,3 +47,4 @@ num_cpus = "1.16"
 config = "0.13"
 
 parking_lot = "0.12"
+dirs = "5.0"

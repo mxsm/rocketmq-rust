@@ -18,7 +18,7 @@ use std::collections::HashMap;
 
 use rocketmq_common::{common::namesrv::namesrv_config::NamesrvConfig, FileUtils};
 use rocketmq_remoting::protocol::{body::kv_table::KVTable, RemotingSerializable};
-use tracing::info;
+use tracing::{info, error};
 
 use crate::kvconfig::KVConfigSerializeWrapper;
 
@@ -87,11 +87,11 @@ impl KVConfigManager {
         let content = serde_json::to_string(&wrapper).unwrap();
 
         let result = FileUtils::string_to_file(
-            self.namesrv_config.kv_config_path.as_str(),
             content.as_str(),
+            self.namesrv_config.kv_config_path.as_str(),
         );
         if let Err(err) = result {
-            info!("persist KV config failed: {}", err);
+            error!("persist KV config failed: {}", err);
         }
     }
 
