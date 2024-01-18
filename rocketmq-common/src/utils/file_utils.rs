@@ -55,7 +55,6 @@ pub fn string_to_file(str_content: &str, file_name: &str) -> io::Result<()> {
 }
 
 fn string_to_file_not_safe(str_content: &str, file_name: &str) -> io::Result<()> {
-
     // Create parent directories if they don't exist
     if let Some(parent) = Path::new(file_name).parent() {
         std::fs::create_dir_all(parent)?;

@@ -30,7 +30,6 @@ pub struct GetRouteInfoRequestHeader {
 }
 
 impl GetRouteInfoRequestHeader {
-
     const TOPIC: &'static str = "topic";
     const ACCEPT_STANDARD_JSON_ONLY: &'static str = "acceptStandardJsonOnly";
 
@@ -59,7 +58,6 @@ impl FromMap for GetRouteInfoRequestHeader {
 }
 
 impl CommandCustomHeader for GetRouteInfoRequestHeader {
-
     fn to_map(&self) -> Option<HashMap<String, String>> {
         let mut map = HashMap::with_capacity(2);
         map.insert(String::from("topic"), String::from(&self.topic));
