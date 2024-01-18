@@ -55,12 +55,11 @@ pub fn string_to_file(str_content: &str, file_name: &str) -> io::Result<()> {
 }
 
 fn string_to_file_not_safe(str_content: &str, file_name: &str) -> io::Result<()> {
-    let file = File::create(file_name)?;
-
     // Create parent directories if they don't exist
     if let Some(parent) = Path::new(file_name).parent() {
         std::fs::create_dir_all(parent)?;
     }
+    let file = File::create(file_name)?;
 
     write_string_to_file(&file, str_content, "UTF-8")
 }

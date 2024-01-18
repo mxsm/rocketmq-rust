@@ -27,3 +27,6 @@ futures-util = "0.3"
 futures-core = "0.3"
 futures-executor = "0.3"
 futures-task = "0.3"
+
+#tools
+dirs.workspace = true

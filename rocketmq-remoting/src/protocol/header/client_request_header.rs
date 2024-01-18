@@ -17,7 +17,6 @@
 
 use std::collections::HashMap;
 
-use anyhow::Error;
 use serde::{Deserialize, Serialize};
 
 use crate::protocol::command_custom_header::{CommandCustomHeader, FromMap};
@@ -31,6 +30,9 @@ pub struct GetRouteInfoRequestHeader {
 }
 
 impl GetRouteInfoRequestHeader {
+    const TOPIC: &'static str = "topic";
+    const ACCEPT_STANDARD_JSON_ONLY: &'static str = "acceptStandardJsonOnly";
+
     pub fn new(topic: impl Into<String>, accept_standard_json_only: Option<bool>) -> Self {
         GetRouteInfoRequestHeader {
             topic: topic.into(),
@@ -42,17 +44,20 @@ impl GetRouteInfoRequestHeader {
 impl FromMap for GetRouteInfoRequestHeader {
     type Target = GetRouteInfoRequestHeader;
 
-    fn from(_map: &HashMap<String, String>) -> Option<Self::Target> {
-        todo!()
+    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+        Some(GetRouteInfoRequestHeader {
+            topic: map
+                .get(GetRouteInfoRequestHeader::TOPIC)
+                .cloned()
+                .unwrap_or_default(),
+            accept_standard_json_only: map
+                .get(GetRouteInfoRequestHeader::ACCEPT_STANDARD_JSON_ONLY)
+                .and_then(|s| s.parse::<bool>().ok()),
+        })
     }
 }
 
 impl CommandCustomHeader for GetRouteInfoRequestHeader {
-    fn check_fields(&self) -> anyhow::Result<(), Error> {
-        //nothing needs to do.
-        Ok(())
-    }
-
     fn to_map(&self) -> Option<HashMap<String, String>> {
         let mut map = HashMap::with_capacity(2);
         map.insert(String::from("topic"), String::from(&self.topic));

@@ -96,7 +96,7 @@ impl NamesrvConfig {
             .unwrap_or_else(|_| env::var(ROCKETMQ_HOME_ENV).unwrap_or_default());
         let kv_config_path = format!(
             "{}{}{}{}{}",
-            env::var("user.home").unwrap_or_default(),
+            dirs::home_dir().unwrap().to_str().unwrap(),
             std::path::MAIN_SEPARATOR,
             "rocketmq-namesrv",
             std::path::MAIN_SEPARATOR,
@@ -105,7 +105,7 @@ impl NamesrvConfig {
 
         let config_store_path = format!(
             "{}{}{}{}{}",
-            env::var("user.home").unwrap_or_default(),
+            dirs::home_dir().unwrap().to_str().unwrap(),
             std::path::MAIN_SEPARATOR,
             "rocketmq-namesrv",
             std::path::MAIN_SEPARATOR,
@@ -159,7 +159,7 @@ mod tests {
             config.kv_config_path,
             format!(
                 "{}{}rocketmq-namesrv{}kvConfig.json",
-                env::var("user.home").unwrap_or_default(),
+                dirs::home_dir().unwrap().to_str().unwrap(),
                 std::path::MAIN_SEPARATOR,
                 std::path::MAIN_SEPARATOR
             )
@@ -168,7 +168,7 @@ mod tests {
             config.config_store_path,
             format!(
                 "{}{}rocketmq-namesrv{}rocketmq-namesrv.properties",
-                env::var("user.home").unwrap_or_default(),
+                dirs::home_dir().unwrap().to_str().unwrap(),
                 std::path::MAIN_SEPARATOR,
                 std::path::MAIN_SEPARATOR
             )
