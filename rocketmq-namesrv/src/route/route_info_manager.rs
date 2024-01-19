@@ -20,9 +20,12 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use rocketmq_common::common::{
-    config::TopicConfig, constant::PermName, mix_all, namesrv::namesrv_config::NamesrvConfig,
-    topic::TopicValidator,
+use rocketmq_common::{
+    common::{
+        config::TopicConfig, constant::PermName, mix_all, namesrv::namesrv_config::NamesrvConfig,
+        topic::TopicValidator,
+    },
+    TimeUtils,
 };
 use rocketmq_remoting::{
     clients::RemoteClient,
@@ -474,7 +477,7 @@ impl RouteInfoManager {
         topic_of_broker
     }
 
-    fn is_topic_config_changed(
+    pub(crate) fn is_topic_config_changed(
         &mut self,
         cluster_name: &str,
         broker_addr: &str,
@@ -498,8 +501,8 @@ impl RouteInfoManager {
         }
     }
 
-    fn is_broker_topic_config_changed(
-        &mut self,
+    pub(crate) fn is_broker_topic_config_changed(
+        &self,
         cluster_name: &str,
         broker_addr: &str,
         data_version: &DataVersion,
@@ -513,8 +516,8 @@ impl RouteInfoManager {
         false
     }
 
-    fn query_broker_topic_config(
-        &mut self,
+    pub(crate) fn query_broker_topic_config(
+        &self,
         cluster_name: &str,
         broker_addr: &str,
     ) -> Option<&DataVersion> {
@@ -612,5 +615,16 @@ impl RouteInfoManager {
             .map(|(_, value)| value.clone())
             .collect();
         Some(broker_addr_vec)
+    }
+
+    pub(crate) fn update_broker_info_update_timestamp(
+        &mut self,
+        cluster_name: impl Into<String>,
+        broker_addr: impl Into<String>,
+    ) {
+        let broker_addr_info = BrokerAddrInfo::new(cluster_name, broker_addr);
+        if let Some(value) = self.broker_live_table.get_mut(broker_addr_info.as_ref()) {
+            value.last_update_timestamp = TimeUtils::get_current_millis() as i64;
+        }
     }
 }

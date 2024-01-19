@@ -98,10 +98,10 @@ impl Display for BrokerStatusChangeInfo {
 
 #[derive(Clone, Debug)]
 pub(crate) struct BrokerLiveInfo {
-    last_update_timestamp: i64,
-    heartbeat_timeout_millis: i64,
-    data_version: DataVersion,
-    ha_server_addr: String,
+    pub last_update_timestamp: i64,
+    pub heartbeat_timeout_millis: i64,
+    pub data_version: DataVersion,
+    pub ha_server_addr: String,
 }
 
 impl BrokerLiveInfo {
