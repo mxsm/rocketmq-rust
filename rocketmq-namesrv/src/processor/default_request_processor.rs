@@ -31,7 +31,8 @@ use rocketmq_remoting::{
         },
         header::namesrv::{
             kv_config_request_header::{
-                GetKVConfigRequestHeader, GetKVConfigResponseHeader, PutKVConfigRequestHeader,
+                DeleteKVConfigRequestHeader, GetKVConfigRequestHeader, GetKVConfigResponseHeader,
+                PutKVConfigRequestHeader,
             },
             register_broker_header::{RegisterBrokerRequestHeader, RegisterBrokerResponseHeader},
         },
@@ -57,6 +58,7 @@ impl RequestProcessor for DefaultRequestProcessor {
         match broker_request_code {
             Some(RequestCode::PutKvConfig) => self.put_kv_config(request),
             Some(RequestCode::GetKvConfig) => self.get_kv_config(request),
+            Some(RequestCode::DeleteKvConfig) => self.delete_kv_config(request),
             //handle register broker
             Some(RequestCode::RegisterBroker) => self.process_register_broker(request),
             Some(RequestCode::BrokerHeartbeat) => self.process_broker_heartbeat(request),
@@ -113,6 +115,18 @@ impl DefaultRequestProcessor {
                 request_header.namespace.as_str(),
                 request_header.key.as_str()
             )))
+    }
+
+    fn delete_kv_config(&mut self, request: RemotingCommand) -> RemotingCommand {
+        let request_header = request
+            .decode_command_custom_header::<DeleteKVConfigRequestHeader>()
+            .unwrap();
+
+        self.kvconfig_manager.write().delete_kv_config(
+            request_header.namespace.as_str(),
+            request_header.key.as_str(),
+        );
+        RemotingCommand::create_response_command()
     }
 }
 

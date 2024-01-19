@@ -156,3 +156,47 @@ impl FromMap for GetKVConfigResponseHeader {
         })
     }
 }
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct DeleteKVConfigRequestHeader {
+    pub namespace: String,
+    pub key: String,
+}
+
+impl DeleteKVConfigRequestHeader {
+    const NAMESPACE: &'static str = "namespace";
+    const KEY: &'static str = "key";
+
+    pub fn new(namespace: impl Into<String>, key: impl Into<String>) -> Self {
+        Self {
+            namespace: namespace.into(),
+            key: key.into(),
+        }
+    }
+}
+
+impl CommandCustomHeader for DeleteKVConfigRequestHeader {
+    fn to_map(&self) -> Option<HashMap<String, String>> {
+        Some(HashMap::from([
+            (
+                DeleteKVConfigRequestHeader::NAMESPACE.to_string(),
+                self.namespace.clone(),
+            ),
+            (
+                DeleteKVConfigRequestHeader::KEY.to_string(),
+                self.key.clone(),
+            ),
+        ]))
+    }
+}
+
+impl FromMap for DeleteKVConfigRequestHeader {
+    type Target = DeleteKVConfigRequestHeader;
+
+    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+        Some(DeleteKVConfigRequestHeader {
+            namespace: map.get(DeleteKVConfigRequestHeader::NAMESPACE).cloned()?,
+            key: map.get(DeleteKVConfigRequestHeader::KEY).cloned()?,
+        })
+    }
+}
