@@ -12,4 +12,10 @@ description.workspace = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[lib]
+proc-macro = true
+
 [dependencies]
+syn = "2.0"
+quote = "1.0"
+proc-macro2 = "1.0"

@@ -11,6 +11,7 @@ license.workspace = true
 
 [dependencies]
 rocketmq-common = { version = "*",path = "../rocketmq-common" }
+rocketmq-macros = { version = "*",path = "../rocketmq-macros" }
 
 anyhow.workspace = true
 bytes.workspace = true

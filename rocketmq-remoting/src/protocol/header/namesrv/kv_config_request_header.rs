@@ -80,3 +80,79 @@ impl FromMap for PutKVConfigRequestHeader {
         })
     }
 }
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct GetKVConfigRequestHeader {
+    pub namespace: String,
+    pub key: String,
+}
+
+impl GetKVConfigRequestHeader {
+    const NAMESPACE: &'static str = "namespace";
+    const KEY: &'static str = "key";
+
+    pub fn new(namespace: impl Into<String>, key: impl Into<String>) -> Self {
+        Self {
+            namespace: namespace.into(),
+            key: key.into(),
+        }
+    }
+}
+
+impl CommandCustomHeader for GetKVConfigRequestHeader {
+    fn to_map(&self) -> Option<HashMap<String, String>> {
+        Some(HashMap::from([
+            (
+                GetKVConfigRequestHeader::NAMESPACE.to_string(),
+                self.namespace.clone(),
+            ),
+            (GetKVConfigRequestHeader::KEY.to_string(), self.key.clone()),
+        ]))
+    }
+}
+
+impl FromMap for GetKVConfigRequestHeader {
+    type Target = GetKVConfigRequestHeader;
+
+    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+        Some(GetKVConfigRequestHeader {
+            namespace: map.get(GetKVConfigRequestHeader::NAMESPACE).cloned()?,
+            key: map.get(GetKVConfigRequestHeader::KEY).cloned()?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct GetKVConfigResponseHeader {
+    pub value: Option<String>,
+}
+
+impl GetKVConfigResponseHeader {
+    const VALUE: &'static str = "value";
+
+    pub fn new(value: Option<String>) -> Self {
+        Self { value }
+    }
+}
+
+impl CommandCustomHeader for GetKVConfigResponseHeader {
+    fn to_map(&self) -> Option<HashMap<String, String>> {
+        if let Some(ref value) = self.value {
+            return Some(HashMap::from([(
+                GetKVConfigResponseHeader::VALUE.to_string(),
+                value.clone(),
+            )]));
+        }
+        None
+    }
+}
+
+impl FromMap for GetKVConfigResponseHeader {
+    type Target = GetKVConfigResponseHeader;
+
+    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+        Some(GetKVConfigResponseHeader {
+            value: map.get(GetKVConfigResponseHeader::VALUE).cloned(),
+        })
+    }
+}
