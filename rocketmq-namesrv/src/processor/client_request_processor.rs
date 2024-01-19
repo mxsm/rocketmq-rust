@@ -69,11 +69,11 @@ impl ClientRequestProcessor {
         let request_header = request
             .decode_command_custom_header::<GetRouteInfoRequestHeader>()
             .unwrap();
-        if self.need_check_namesrv_ready.load(Ordering::Relaxed)
-            && (TimeUtils::get_current_millis() - self.startup_time_millis
+        let namesrv_ready = self.need_check_namesrv_ready.load(Ordering::Relaxed)
+            && TimeUtils::get_current_millis() - self.startup_time_millis
                 >= Duration::from_secs(self.namesrv_config.wait_seconds_for_service as u64)
-                    .as_millis() as u64)
-        {
+                    .as_millis() as u64;
+        if self.namesrv_config.need_wait_for_service && !namesrv_ready {
             warn!("name server not ready. request code {} ", request.code());
             return RemotingCommand::create_response_command_with_code(
                 RemotingSysResponseCode::SystemError,

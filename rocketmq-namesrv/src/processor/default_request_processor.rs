@@ -30,7 +30,9 @@ use rocketmq_remoting::{
             topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper,
         },
         header::namesrv::{
-            kv_config_request_header::PutKVConfigRequestHeader,
+            kv_config_request_header::{
+                GetKVConfigRequestHeader, GetKVConfigResponseHeader, PutKVConfigRequestHeader,
+            },
             register_broker_header::{RegisterBrokerRequestHeader, RegisterBrokerResponseHeader},
         },
         remoting_command::RemotingCommand,
@@ -53,6 +55,8 @@ impl RequestProcessor for DefaultRequestProcessor {
         let code = request.code();
         let broker_request_code = RequestCode::value_of(code);
         match broker_request_code {
+            Some(RequestCode::PutKvConfig) => self.put_kv_config(request),
+            Some(RequestCode::GetKvConfig) => self.get_kv_config(request),
             //handle register broker
             Some(RequestCode::RegisterBroker) => self.process_register_broker(request),
             Some(RequestCode::BrokerHeartbeat) => self.process_broker_heartbeat(request),
@@ -60,7 +64,7 @@ impl RequestProcessor for DefaultRequestProcessor {
             Some(RequestCode::GetBrokerClusterInfo) => {
                 self.process_get_broker_cluster_info(request)
             }
-            Some(RequestCode::PutKvConfig) => self.put_kv_config(request),
+
             _ => RemotingCommand::create_response_command_with_code(
                 RemotingSysResponseCode::SystemError,
             ),
@@ -87,6 +91,28 @@ impl DefaultRequestProcessor {
             request_header.value.as_str(),
         );
         RemotingCommand::create_response_command()
+    }
+
+    fn get_kv_config(&mut self, request: RemotingCommand) -> RemotingCommand {
+        let request_header = request
+            .decode_command_custom_header::<GetKVConfigRequestHeader>()
+            .unwrap();
+
+        let value = self.kvconfig_manager.read().get_kvconfig(
+            request_header.namespace.as_str(),
+            request_header.key.as_str(),
+        );
+
+        if value.is_some() {
+            return RemotingCommand::create_response_command()
+                .set_command_custom_header(Some(Box::new(GetKVConfigResponseHeader::new(value))));
+        }
+        RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::SystemError)
+            .set_remark(Some(format!(
+                "No config item, Namespace: {} Key: {}",
+                request_header.namespace.as_str(),
+                request_header.key.as_str()
+            )))
     }
 }
 
