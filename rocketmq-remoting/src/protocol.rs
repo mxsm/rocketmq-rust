@@ -172,6 +172,10 @@ pub struct DataVersion {
     counter_inner: AtomicI64,
 }
 
+impl RemotingSerializable for DataVersion {
+    type Output = DataVersion;
+}
+
 impl Clone for DataVersion {
     fn clone(&self) -> Self {
         DataVersion {

@@ -30,14 +30,17 @@ use rocketmq_remoting::{
             topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper,
         },
         header::namesrv::{
-            kv_config_request_header::{
+            kv_config_header::{
                 DeleteKVConfigRequestHeader, GetKVConfigRequestHeader, GetKVConfigResponseHeader,
                 PutKVConfigRequestHeader,
+            },
+            query_data_version_header::{
+                QueryDataVersionRequestHeader, QueryDataVersionResponseHeader,
             },
             register_broker_header::{RegisterBrokerRequestHeader, RegisterBrokerResponseHeader},
         },
         remoting_command::RemotingCommand,
-        RemotingSerializable,
+        DataVersion, RemotingSerializable,
     },
     runtime::processor::RequestProcessor,
 };
@@ -59,6 +62,7 @@ impl RequestProcessor for DefaultRequestProcessor {
             Some(RequestCode::PutKvConfig) => self.put_kv_config(request),
             Some(RequestCode::GetKvConfig) => self.get_kv_config(request),
             Some(RequestCode::DeleteKvConfig) => self.delete_kv_config(request),
+            Some(RequestCode::QueryDataVersion) => self.query_broker_topic_config(request),
             //handle register broker
             Some(RequestCode::RegisterBroker) => self.process_register_broker(request),
             Some(RequestCode::BrokerHeartbeat) => self.process_broker_heartbeat(request),
@@ -127,6 +131,34 @@ impl DefaultRequestProcessor {
             request_header.key.as_str(),
         );
         RemotingCommand::create_response_command()
+    }
+
+    fn query_broker_topic_config(&mut self, request: RemotingCommand) -> RemotingCommand {
+        let request_header = request
+            .decode_command_custom_header::<QueryDataVersionRequestHeader>()
+            .unwrap();
+        let data_version =
+            DataVersion::decode(request.body().as_ref().map(|v| v.as_ref()).unwrap());
+        let changed = self
+            .route_info_manager
+            .read()
+            .is_broker_topic_config_changed(
+                &request_header.cluster_name,
+                &request_header.broker_addr,
+                &data_version,
+            );
+
+        let mut command = RemotingCommand::create_response_command().set_command_custom_header(
+            Some(Box::new(QueryDataVersionResponseHeader::new(changed))),
+        );
+        if let Some(value) = self.route_info_manager.write().query_broker_topic_config(
+            request_header.cluster_name.as_str(),
+            request_header.broker_addr.as_str(),
+        ) {
+            command = command.set_body(Some(Bytes::from(value.encode())));
+        }
+
+        command
     }
 }
 
