@@ -8,7 +8,7 @@ Here is the rust implementation of the **name server** for [Apache RocketMQ](htt
 
 Feature list:
 
-- **Not support**: :broken_heart:
+- **Not support**: :broken_heart: :x: 
 
 - **Base support**: :heart: :white_check_mark:
 
@@ -16,28 +16,28 @@ Feature list:
 
 | Feature                                | request code | Support        | remark |
 | -------------------------------------- | ------------ | -------------- | ------ |
-| Put KV Config                          | 100          | :heart: :white_check_mark: |  |
-| Get KV Config                          | 101          | :broken_heart: |        |
-| Delete KV Config                       | 102          | :broken_heart: |        |
-| Get kv list by namespace               | 219          | :broken_heart: |        |
+| Put KV Config                          | 100          | :sparkling_heart: :white_check_mark: |  |
+| Get KV Config                          | 101          | :sparkling_heart: :white_check_mark: |        |
+| Delete KV Config                       | 102          | :sparkling_heart: :white_check_mark: |        |
+| Get kv list by namespace               | 219          | :broken_heart: :x: |        |
 | Query Data Version                     | 322          | :broken_heart: |        |
 | Register Broker                        | 103          | :heart: :white_check_mark: |        |
-| Unregister Broker                      | 104          | :broken_heart: |        |
-| Broker Heartbeat                       | 904          | :broken_heart: |        |
-| Get broker member_group                | 901          | :broken_heart: |        |
-| Get broker cluster info                | 106          | :broken_heart: |        |
-| Wipe write perm of boker               | 205          | :broken_heart: |        |
-| Add write perm of brober               | 327          | :broken_heart: |        |
-| Get all topic list from name server    | 206          | :broken_heart: |        |
-| Delete topic in name server            | 216          | :broken_heart: |        |
-| Register topic in name server          | 217          | :broken_heart: |        |
-| Get topics by cluster                  | 224          | :broken_heart: |        |
-| Get system topic list from name server | 304          | :broken_heart: |        |
-| Get unit topic list                    | 311          | :broken_heart: |        |
-| Get has unit sub topic list            | 312          | :broken_heart: |        |
-| Get has unit sub ununit topic list     | 313          | :broken_heart: |        |
-| Update name server config              | 318          | :broken_heart: |        |
-| Get name server config                 | 318          | :broken_heart: |        |
+| Unregister Broker                      | 104          | :broken_heart: :x: |        |
+| Broker Heartbeat                       | 904          | :broken_heart: :x: |        |
+| Get broker member_group                | 901          | :broken_heart: :x: |        |
+| Get broker cluster info                | 106          | :broken_heart: :x: |        |
+| Wipe write perm of boker               | 205          | :broken_heart: :x: |        |
+| Add write perm of brober               | 327          | :broken_heart: :x: |        |
+| Get all topic list from name server    | 206          | :broken_heart: :x: |        |
+| Delete topic in name server            | 216          | :broken_heart: :x: |        |
+| Register topic in name server          | 217          | :broken_heart: :x: |        |
+| Get topics by cluster                  | 224          | :broken_heart: :x: |        |
+| Get system topic list from name server | 304          | :broken_heart: :x: |        |
+| Get unit topic list                    | 311          | :broken_heart: :x: |        |
+| Get has unit sub topic list            | 312          | :broken_heart: :x: |        |
+| Get has unit sub ununit topic list     | 313          | :broken_heart: :x: |        |
+| Update name server config              | 318          | :broken_heart: :x: |        |
+| Get name server config                 | 318          | :broken_heart: :x: |        |
 
 ## Getting Started
 
