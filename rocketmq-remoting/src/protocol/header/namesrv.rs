@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 
+pub mod broker_request;
 pub mod brokerid_change_request_header;
 pub mod kv_config_header;
 pub mod query_data_version_header;

@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #[derive(Debug, PartialEq, Clone, Copy, Hash)]
 pub enum RequestCode {
     SendMessage = 10,

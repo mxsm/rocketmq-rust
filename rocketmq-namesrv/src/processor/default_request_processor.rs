@@ -30,6 +30,7 @@ use rocketmq_remoting::{
             topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper,
         },
         header::namesrv::{
+            broker_request::{BrokerHeartbeatRequestHeader, UnRegisterBrokerRequestHeader},
             kv_config_header::{
                 DeleteKVConfigRequestHeader, GetKVConfigRequestHeader, GetKVConfigResponseHeader,
                 PutKVConfigRequestHeader,
@@ -65,6 +66,7 @@ impl RequestProcessor for DefaultRequestProcessor {
             Some(RequestCode::QueryDataVersion) => self.query_broker_topic_config(request),
             //handle register broker
             Some(RequestCode::RegisterBroker) => self.process_register_broker(request),
+            Some(RequestCode::UnregisterBroker) => self.process_unregister_broker(request),
             Some(RequestCode::BrokerHeartbeat) => self.process_broker_heartbeat(request),
             //handle get broker cluster info
             Some(RequestCode::GetBrokerClusterInfo) => {
@@ -147,16 +149,21 @@ impl DefaultRequestProcessor {
                 &request_header.broker_addr,
                 &data_version,
             );
-
+        let mut rim_write = self.route_info_manager.write();
+        rim_write.update_broker_info_update_timestamp(
+            &request_header.cluster_name,
+            &request_header.broker_addr,
+        );
         let mut command = RemotingCommand::create_response_command().set_command_custom_header(
             Some(Box::new(QueryDataVersionResponseHeader::new(changed))),
         );
-        if let Some(value) = self.route_info_manager.write().query_broker_topic_config(
+        if let Some(value) = rim_write.query_broker_topic_config(
             request_header.cluster_name.as_str(),
             request_header.broker_addr.as_str(),
         ) {
             command = command.set_body(Some(Bytes::from(value.encode())));
         }
+        drop(rim_write);
 
         command
     }
@@ -256,11 +263,28 @@ impl DefaultRequestProcessor {
                 Some(register_broker_result.master_addr),
             ))))
     }
+
+    fn process_unregister_broker(&mut self, request: RemotingCommand) -> RemotingCommand {
+        let _request_header = request
+            .decode_command_custom_header::<UnRegisterBrokerRequestHeader>()
+            .unwrap();
+        //todo
+        RemotingCommand::create_response_command()
+    }
 }
 
 impl DefaultRequestProcessor {
-    fn process_broker_heartbeat(&mut self, _request: RemotingCommand) -> RemotingCommand {
-        RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::Success)
+    fn process_broker_heartbeat(&mut self, request: RemotingCommand) -> RemotingCommand {
+        let request_header = request
+            .decode_command_custom_header::<BrokerHeartbeatRequestHeader>()
+            .unwrap();
+        self.route_info_manager
+            .write()
+            .update_broker_info_update_timestamp(
+                request_header.cluster_name.as_str(),
+                request_header.broker_addr.as_str(),
+            );
+        RemotingCommand::create_response_command()
     }
 }
 
