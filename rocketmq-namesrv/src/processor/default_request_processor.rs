@@ -76,9 +76,7 @@ impl RequestProcessor for DefaultRequestProcessor {
             Some(RequestCode::BrokerHeartbeat) => self.process_broker_heartbeat(request),
             Some(RequestCode::GetBrokerMemberGroup) => self.get_broker_member_group(request),
             //handle get broker cluster info
-            Some(RequestCode::GetBrokerClusterInfo) => {
-                self.process_get_broker_cluster_info(request)
-            }
+            Some(RequestCode::GetBrokerClusterInfo) => self.get_broker_cluster_info(request),
 
             _ => RemotingCommand::create_response_command_with_code(
                 RemotingSysResponseCode::SystemError,
@@ -308,10 +306,8 @@ impl DefaultRequestProcessor {
         };
         RemotingCommand::create_response_command().set_body(Some(response_body.encode()))
     }
-}
 
-impl DefaultRequestProcessor {
-    fn process_get_broker_cluster_info(&mut self, _request: RemotingCommand) -> RemotingCommand {
+    fn get_broker_cluster_info(&mut self, _request: RemotingCommand) -> RemotingCommand {
         let vec = self
             .route_info_manager
             .write()

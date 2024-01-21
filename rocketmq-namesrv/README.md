@@ -20,12 +20,12 @@ Feature list:
 | Get KV Config                          | 101          | :sparkling_heart: :white_check_mark: |        |
 | Delete KV Config                       | 102          | :sparkling_heart: :white_check_mark: |        |
 | Get kv list by namespace               | 219          | :broken_heart: :x: |        |
-| Query Data Version                     | 322          | :broken_heart: |        |
+| Query Data Version                     | 322          | :sparkling_heart: :white_check_mark:|        |
 | Register Broker                        | 103          | :heart: :white_check_mark: |        |
 | Unregister Broker                      | 104          | :broken_heart: :x: |        |
 | Broker Heartbeat                       | 904          | :sparkling_heart: :white_check_mark: |        |
 | Get broker member_group                | 901          | :sparkling_heart: :white_check_mark: |        |
-| Get broker cluster info                | 106          | :broken_heart: :x: |        |
+| Get broker cluster info                | 106          | :sparkling_heart: :white_check_mark: |        |
 | Wipe write perm of boker               | 205          | :broken_heart: :x: |        |
 | Add write perm of brober               | 327          | :broken_heart: :x: |        |
 | Get all topic list from name server    | 206          | :broken_heart: :x: |        |
