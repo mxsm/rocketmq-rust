@@ -100,7 +100,7 @@ pub struct QueueData {
     read_queue_nums: u32,
     #[serde(rename = "writeQueueNums")]
     write_queue_nums: u32,
-    perm: u32,
+    pub perm: u32,
     #[serde(rename = "topicSysFlag")]
     topic_sys_flag: u32,
 }

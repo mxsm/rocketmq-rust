@@ -41,6 +41,9 @@ use rocketmq_remoting::{
                 DeleteKVConfigRequestHeader, GetKVConfigRequestHeader, GetKVConfigResponseHeader,
                 PutKVConfigRequestHeader,
             },
+            perm_broker_header::{
+                WipeWritePermOfBrokerRequestHeader, WipeWritePermOfBrokerResponseHeader,
+            },
             query_data_version_header::{
                 QueryDataVersionRequestHeader, QueryDataVersionResponseHeader,
             },
@@ -77,6 +80,7 @@ impl RequestProcessor for DefaultRequestProcessor {
             Some(RequestCode::GetBrokerMemberGroup) => self.get_broker_member_group(request),
             //handle get broker cluster info
             Some(RequestCode::GetBrokerClusterInfo) => self.get_broker_cluster_info(request),
+            Some(RequestCode::WipeWritePermOfBroker) => self.wipe_write_perm_of_broker(request),
 
             _ => RemotingCommand::create_response_command_with_code(
                 RemotingSysResponseCode::SystemError,
@@ -315,6 +319,19 @@ impl DefaultRequestProcessor {
             .encode();
         RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::Success)
             .set_body(Some(Bytes::from(vec)))
+    }
+
+    fn wipe_write_perm_of_broker(&mut self, request: RemotingCommand) -> RemotingCommand {
+        let request_header = request
+            .decode_command_custom_header::<WipeWritePermOfBrokerRequestHeader>()
+            .unwrap();
+        let wipe_topic_cnt = self
+            .route_info_manager
+            .write()
+            .wipe_write_perm_of_broker_by_lock(request_header.broker_name.as_str());
+        RemotingCommand::create_response_command().set_command_custom_header(Some(Box::new(
+            WipeWritePermOfBrokerResponseHeader::new(wipe_topic_cnt),
+        )))
     }
 }
 
