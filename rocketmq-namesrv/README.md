@@ -24,7 +24,7 @@ Feature list:
 | Register Broker                        | 103          | :heart: :white_check_mark: |        |
 | Unregister Broker                      | 104          | :broken_heart: :x: |        |
 | Broker Heartbeat                       | 904          | :sparkling_heart: :white_check_mark: |        |
-| Get broker member_group                | 901          | :broken_heart: :x: |        |
+| Get broker member_group                | 901          | :sparkling_heart: :white_check_mark: |        |
 | Get broker cluster info                | 106          | :broken_heart: :x: |        |
 | Wipe write perm of boker               | 205          | :broken_heart: :x: |        |
 | Add write perm of brober               | 327          | :broken_heart: :x: |        |

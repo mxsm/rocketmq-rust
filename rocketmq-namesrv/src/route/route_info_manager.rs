@@ -32,7 +32,7 @@ use rocketmq_remoting::{
     code::request_code::RequestCode,
     protocol::{
         body::{
-            broker_body::cluster_info::ClusterInfo,
+            broker_body::{broker_member_group::BrokerMemberGroup, cluster_info::ClusterInfo},
             topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper,
         },
         header::namesrv::brokerid_change_request_header::NotifyMinBrokerIdChangeRequestHeader,
@@ -626,5 +626,21 @@ impl RouteInfoManager {
         if let Some(value) = self.broker_live_table.get_mut(broker_addr_info.as_ref()) {
             value.last_update_timestamp = TimeUtils::get_current_millis() as i64;
         }
+    }
+
+    pub(crate) fn get_broker_member_group(
+        &mut self,
+        cluster_name: &str,
+        broker_name: &str,
+    ) -> Option<BrokerMemberGroup> {
+        if let Some(broker_data) = self.broker_addr_table.get(broker_name) {
+            let map = broker_data.broker_addrs().clone();
+            return Some(BrokerMemberGroup::new(
+                Some(cluster_name.to_string()),
+                Some(broker_name.to_string()),
+                Some(map),
+            ));
+        }
+        None
     }
 }
