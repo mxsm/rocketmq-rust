@@ -94,7 +94,7 @@ Feature list:
 | Get broker member_group                | 901          | :sparkling_heart: :white_check_mark: |        |
 | Get broker cluster info                | 106          | :sparkling_heart: :white_check_mark: |        |
 | Wipe write perm of boker               | 205          | :sparkling_heart: :white_check_mark: |        |
-| Add write perm of brober               | 327          | :broken_heart: :x: |        |
+| Add write perm of brober               | 327          | :sparkling_heart: :white_check_mark: |        |
 | Get all topic list from name server    | 206          | :broken_heart: :x: |        |
 | Delete topic in name server            | 216          | :broken_heart: :x: |        |
 | Register topic in name server          | 217          | :broken_heart: :x: |        |

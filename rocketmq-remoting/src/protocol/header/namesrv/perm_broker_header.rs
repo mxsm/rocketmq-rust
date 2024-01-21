@@ -92,3 +92,76 @@ impl FromMap for WipeWritePermOfBrokerResponseHeader {
         })
     }
 }
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AddWritePermOfBrokerRequestHeader {
+    pub broker_name: String,
+}
+
+impl AddWritePermOfBrokerRequestHeader {
+    const BROKER_NAME: &'static str = "brokerName";
+    pub fn new(broker_name: impl Into<String>) -> Self {
+        Self {
+            broker_name: broker_name.into(),
+        }
+    }
+}
+
+impl CommandCustomHeader for AddWritePermOfBrokerRequestHeader {
+    fn to_map(&self) -> Option<HashMap<String, String>> {
+        Some(HashMap::from([(
+            Self::BROKER_NAME.to_string(),
+            self.broker_name.clone(),
+        )]))
+    }
+}
+
+impl FromMap for AddWritePermOfBrokerRequestHeader {
+    type Target = Self;
+
+    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+        Some(AddWritePermOfBrokerRequestHeader {
+            broker_name: map
+                .get(AddWritePermOfBrokerRequestHeader::BROKER_NAME)
+                .cloned()
+                .unwrap_or_default(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AddWritePermOfBrokerResponseHeader {
+    pub add_topic_count: i32,
+}
+
+impl AddWritePermOfBrokerResponseHeader {
+    const ADD_TOPIC_COUNT: &'static str = "addTopicCount";
+
+    pub fn new(add_topic_count: i32) -> Self {
+        Self { add_topic_count }
+    }
+}
+
+impl CommandCustomHeader for AddWritePermOfBrokerResponseHeader {
+    fn to_map(&self) -> Option<HashMap<String, String>> {
+        Some(HashMap::from([(
+            Self::ADD_TOPIC_COUNT.to_string(),
+            self.add_topic_count.to_string(),
+        )]))
+    }
+}
+
+impl FromMap for AddWritePermOfBrokerResponseHeader {
+    type Target = Self;
+
+    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+        Some(AddWritePermOfBrokerResponseHeader {
+            add_topic_count: map
+                .get(AddWritePermOfBrokerResponseHeader::ADD_TOPIC_COUNT)
+                .and_then(|s| s.parse::<i32>().ok())
+                .unwrap_or(0),
+        })
+    }
+}
