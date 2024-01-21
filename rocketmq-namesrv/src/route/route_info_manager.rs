@@ -689,4 +689,31 @@ impl RouteInfoManager {
             broker_addr: None,
         }
     }
+
+    pub(crate) fn delete_topic(
+        &mut self,
+        topic: impl Into<String>,
+        cluster_name: Option<impl Into<String>>,
+    ) {
+        let topic_inner = topic.into();
+        if cluster_name.is_some() {
+            let cluster_name_inner = cluster_name.map(|s| s.into()).unwrap();
+            let broker_names = self.cluster_addr_table.get(cluster_name_inner.as_str());
+            if broker_names.is_none() || broker_names.unwrap().is_empty() {
+                return;
+            }
+            if let Some(queue_data_map) = self.topic_queue_table.get_mut(topic_inner.as_str()) {
+                for broker_name in broker_names.unwrap() {
+                    if let Some(remove_qd) = queue_data_map.remove(broker_name) {
+                        info!(
+                            "deleteTopic, remove one broker's topic {} {} {:?}",
+                            broker_name, &topic_inner, remove_qd
+                        )
+                    }
+                }
+            }
+        } else {
+            self.topic_queue_table.remove(topic_inner.as_str());
+        }
+    }
 }
