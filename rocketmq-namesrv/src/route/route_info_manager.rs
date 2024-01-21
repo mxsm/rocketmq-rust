@@ -648,6 +648,10 @@ impl RouteInfoManager {
         self.operate_write_perm_of_broker(broker_name, RequestCode::WipeWritePermOfBroker)
     }
 
+    pub(crate) fn add_write_perm_of_broker_by_lock(&mut self, broker_name: &str) -> i32 {
+        self.operate_write_perm_of_broker(broker_name, RequestCode::AddWritePermOfBroker)
+    }
+
     fn operate_write_perm_of_broker(
         &mut self,
         broker_name: &str,
