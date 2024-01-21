@@ -26,11 +26,17 @@ use rocketmq_remoting::{
     code::{request_code::RequestCode, response_code::RemotingSysResponseCode},
     protocol::{
         body::{
-            broker_body::register_broker_body::RegisterBrokerBody,
+            broker_body::{
+                broker_member_group::GetBrokerMemberGroupResponseBody,
+                register_broker_body::RegisterBrokerBody,
+            },
             topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper,
         },
         header::namesrv::{
-            broker_request::{BrokerHeartbeatRequestHeader, UnRegisterBrokerRequestHeader},
+            broker_request::{
+                BrokerHeartbeatRequestHeader, GetBrokerMemberGroupRequestHeader,
+                UnRegisterBrokerRequestHeader,
+            },
             kv_config_header::{
                 DeleteKVConfigRequestHeader, GetKVConfigRequestHeader, GetKVConfigResponseHeader,
                 PutKVConfigRequestHeader,
@@ -68,6 +74,7 @@ impl RequestProcessor for DefaultRequestProcessor {
             Some(RequestCode::RegisterBroker) => self.process_register_broker(request),
             Some(RequestCode::UnregisterBroker) => self.process_unregister_broker(request),
             Some(RequestCode::BrokerHeartbeat) => self.process_broker_heartbeat(request),
+            Some(RequestCode::GetBrokerMemberGroup) => self.get_broker_member_group(request),
             //handle get broker cluster info
             Some(RequestCode::GetBrokerClusterInfo) => {
                 self.process_get_broker_cluster_info(request)
@@ -285,6 +292,21 @@ impl DefaultRequestProcessor {
                 request_header.broker_addr.as_str(),
             );
         RemotingCommand::create_response_command()
+    }
+
+    fn get_broker_member_group(&mut self, request: RemotingCommand) -> RemotingCommand {
+        let request_header = request
+            .decode_command_custom_header::<GetBrokerMemberGroupRequestHeader>()
+            .unwrap();
+
+        let broker_member_group = self.route_info_manager.write().get_broker_member_group(
+            request_header.cluster_name.as_str(),
+            request_header.broker_name.as_str(),
+        );
+        let response_body = GetBrokerMemberGroupResponseBody {
+            broker_member_group,
+        };
+        RemotingCommand::create_response_command().set_body(Some(response_body.encode()))
     }
 }
 

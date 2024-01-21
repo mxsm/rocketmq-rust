@@ -15,5 +15,6 @@
  * limitations under the License.
  */
 
+pub mod broker_member_group;
 pub mod cluster_info;
 pub mod register_broker_body;

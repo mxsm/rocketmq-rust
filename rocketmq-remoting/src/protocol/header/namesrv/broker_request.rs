@@ -188,3 +188,45 @@ impl FromMap for BrokerHeartbeatRequestHeader {
         })
     }
 }
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GetBrokerMemberGroupRequestHeader {
+    pub cluster_name: String,
+    pub broker_name: String,
+}
+
+impl GetBrokerMemberGroupRequestHeader {
+    const CLUSTER_NAME: &'static str = "clusterName";
+
+    const BROKER_NAME: &'static str = "brokerName";
+
+    pub fn new(cluster_name: impl Into<String>, broker_name: impl Into<String>) -> Self {
+        Self {
+            cluster_name: cluster_name.into(),
+
+            broker_name: broker_name.into(),
+        }
+    }
+}
+
+impl CommandCustomHeader for GetBrokerMemberGroupRequestHeader {
+    fn to_map(&self) -> Option<HashMap<String, String>> {
+        Some(HashMap::from([
+            (Self::CLUSTER_NAME.to_string(), self.cluster_name.clone()),
+            (Self::BROKER_NAME.to_string(), self.broker_name.clone()),
+        ]))
+    }
+}
+
+impl FromMap for GetBrokerMemberGroupRequestHeader {
+    type Target = Self;
+
+    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+        Some(GetBrokerMemberGroupRequestHeader {
+            cluster_name: map.get(Self::CLUSTER_NAME).cloned().unwrap_or_default(),
+
+            broker_name: map.get(Self::BROKER_NAME).cloned().unwrap_or_default(),
+        })
+    }
+}
