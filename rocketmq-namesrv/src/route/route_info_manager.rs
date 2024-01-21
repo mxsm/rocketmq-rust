@@ -643,4 +643,32 @@ impl RouteInfoManager {
         }
         None
     }
+
+    pub(crate) fn wipe_write_perm_of_broker_by_lock(&mut self, broker_name: &str) -> i32 {
+        self.operate_write_perm_of_broker(broker_name, RequestCode::WipeWritePermOfBroker)
+    }
+
+    fn operate_write_perm_of_broker(
+        &mut self,
+        broker_name: &str,
+        request_code: RequestCode,
+    ) -> i32 {
+        let mut topic_cnt = 0;
+        for (_topic, qd_map) in self.topic_queue_table.iter_mut() {
+            let qd = qd_map.get_mut(broker_name).unwrap();
+            let mut perm = qd.perm;
+            match request_code {
+                RequestCode::WipeWritePermOfBroker => {
+                    perm &= !PermName::PERM_WRITE as u32;
+                }
+                RequestCode::AddWritePermOfBroker => {
+                    perm = (PermName::PERM_READ | PermName::PERM_WRITE) as u32;
+                }
+                _ => {}
+            }
+            qd.perm = perm;
+            topic_cnt += 1;
+        }
+        topic_cnt
+    }
 }
