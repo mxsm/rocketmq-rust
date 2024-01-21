@@ -49,6 +49,7 @@ use rocketmq_remoting::{
                 QueryDataVersionRequestHeader, QueryDataVersionResponseHeader,
             },
             register_broker_header::{RegisterBrokerRequestHeader, RegisterBrokerResponseHeader},
+            topic_operation_header::DeleteTopicFromNamesrvRequestHeader,
         },
         remoting_command::RemotingCommand,
         DataVersion, RemotingSerializable,
@@ -86,7 +87,7 @@ impl RequestProcessor for DefaultRequestProcessor {
             Some(RequestCode::GetAllTopicListFromNameserver) => {
                 self.get_all_topic_list_from_nameserver(request)
             }
-
+            Some(RequestCode::DeleteTopicInNamesrv) => self.delete_topic_in_name_srv(request),
             _ => RemotingCommand::create_response_command_with_code(
                 RemotingSysResponseCode::SystemError,
             ),
@@ -362,6 +363,17 @@ impl DefaultRequestProcessor {
         }
         RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::SystemError)
             .set_remark(Some(String::from("disable")))
+    }
+
+    fn delete_topic_in_name_srv(&mut self, request: RemotingCommand) -> RemotingCommand {
+        let request_header = request
+            .decode_command_custom_header::<DeleteTopicFromNamesrvRequestHeader>()
+            .unwrap();
+        self.route_info_manager.write().delete_topic(
+            request_header.topic.as_str(),
+            request_header.cluster_name.clone(),
+        );
+        RemotingCommand::create_response_command()
     }
 }
 
