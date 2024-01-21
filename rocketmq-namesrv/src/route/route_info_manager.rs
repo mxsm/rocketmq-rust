@@ -33,6 +33,7 @@ use rocketmq_remoting::{
     protocol::{
         body::{
             broker_body::{broker_member_group::BrokerMemberGroup, cluster_info::ClusterInfo},
+            topic::topic_list::TopicList,
             topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper,
         },
         header::namesrv::brokerid_change_request_header::NotifyMinBrokerIdChangeRequestHeader,
@@ -674,5 +675,18 @@ impl RouteInfoManager {
             topic_cnt += 1;
         }
         topic_cnt
+    }
+
+    pub(crate) fn get_all_topic_list(&self) -> TopicList {
+        let topics = self
+            .topic_queue_table
+            .keys()
+            .cloned()
+            .collect::<Vec<String>>();
+
+        TopicList {
+            topic_list: topics,
+            broker_addr: None,
+        }
     }
 }

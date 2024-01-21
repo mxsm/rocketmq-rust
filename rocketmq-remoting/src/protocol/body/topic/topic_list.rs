@@ -14,8 +14,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use serde::{Deserialize, Serialize};
 
-pub mod broker_body;
-pub mod kv_table;
-pub mod topic;
-pub mod topic_info_wrapper;
+use crate::protocol::RemotingSerializable;
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TopicList {
+    pub topic_list: Vec<String>,
+    pub broker_addr: Option<String>,
+}
+
+impl RemotingSerializable for TopicList {
+    type Output = TopicList;
+}
