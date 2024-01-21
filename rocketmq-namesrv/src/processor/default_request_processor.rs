@@ -83,6 +83,9 @@ impl RequestProcessor for DefaultRequestProcessor {
             Some(RequestCode::GetBrokerClusterInfo) => self.get_broker_cluster_info(request),
             Some(RequestCode::WipeWritePermOfBroker) => self.wipe_write_perm_of_broker(request),
             Some(RequestCode::AddWritePermOfBroker) => self.add_write_perm_of_broker(request),
+            Some(RequestCode::GetAllTopicListFromNameserver) => {
+                self.get_all_topic_list_from_nameserver(request)
+            }
 
             _ => RemotingCommand::create_response_command_with_code(
                 RemotingSysResponseCode::SystemError,
@@ -347,6 +350,18 @@ impl DefaultRequestProcessor {
         RemotingCommand::create_response_command().set_command_custom_header(Some(Box::new(
             AddWritePermOfBrokerResponseHeader::new(add_topic_cnt),
         )))
+    }
+
+    fn get_all_topic_list_from_nameserver(&mut self, _request: RemotingCommand) -> RemotingCommand {
+        let rd_lock = self.route_info_manager.read();
+        if rd_lock.namesrv_config.enable_all_topic_list {
+            let topics = rd_lock.get_all_topic_list();
+            drop(rd_lock); //release lock
+            return RemotingCommand::create_response_command()
+                .set_body(Some(Bytes::from(topics.encode())));
+        }
+        RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::SystemError)
+            .set_remark(Some(String::from("disable")))
     }
 }
 
