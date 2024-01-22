@@ -759,4 +759,21 @@ impl RouteInfoManager {
             )
         }
     }
+
+    pub(crate) fn get_topics_by_cluster(&self, cluster: &str) -> TopicList {
+        let mut topic_list = Vec::new();
+        if let Some(broker_name_set) = self.cluster_addr_table.get(cluster) {
+            for broker_name in broker_name_set {
+                for (topic, queue_data_map) in self.topic_queue_table.iter() {
+                    if let Some(_queue_data) = queue_data_map.get(broker_name) {
+                        topic_list.push(topic.to_string());
+                    }
+                }
+            }
+        }
+        TopicList {
+            topic_list,
+            broker_addr: None,
+        }
+    }
 }

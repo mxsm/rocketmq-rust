@@ -89,3 +89,34 @@ impl FromMap for RegisterTopicRequestHeader {
         })
     }
 }
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct GetTopicsByClusterRequestHeader {
+    pub cluster: String,
+}
+
+impl GetTopicsByClusterRequestHeader {
+    const CLUSTER: &'static str = "cluster";
+    pub fn new(cluster: impl Into<String>) -> Self {
+        Self {
+            cluster: cluster.into(),
+        }
+    }
+}
+
+impl CommandCustomHeader for GetTopicsByClusterRequestHeader {
+    fn to_map(&self) -> Option<HashMap<String, String>> {
+        let map = HashMap::from([(Self::CLUSTER.to_string(), self.cluster.clone())]);
+        Some(map)
+    }
+}
+
+impl FromMap for GetTopicsByClusterRequestHeader {
+    type Target = Self;
+
+    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+        Some(GetTopicsByClusterRequestHeader {
+            cluster: map.get(Self::CLUSTER).cloned().unwrap_or_default(),
+        })
+    }
+}

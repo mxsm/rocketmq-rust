@@ -53,7 +53,8 @@ use rocketmq_remoting::{
             },
             register_broker_header::{RegisterBrokerRequestHeader, RegisterBrokerResponseHeader},
             topic_operation_header::{
-                DeleteTopicFromNamesrvRequestHeader, RegisterTopicRequestHeader,
+                DeleteTopicFromNamesrvRequestHeader, GetTopicsByClusterRequestHeader,
+                RegisterTopicRequestHeader,
             },
         },
         remoting_command::RemotingCommand,
@@ -96,6 +97,7 @@ impl RequestProcessor for DefaultRequestProcessor {
             Some(RequestCode::DeleteTopicInNamesrv) => self.delete_topic_in_name_srv(request),
             Some(RequestCode::RegisterTopicInNamesrv) => self.register_topic_to_name_srv(request),
             Some(RequestCode::GetKvlistByNamespace) => self.get_kv_list_by_namespace(request),
+            Some(RequestCode::GetTopicsByCluster) => self.get_topics_by_cluster(request),
             _ => RemotingCommand::create_response_command_with_code(
                 RemotingSysResponseCode::SystemError,
             ),
@@ -416,6 +418,29 @@ impl DefaultRequestProcessor {
                 request_header.namespace.as_str()
             )),
         )
+    }
+
+    fn get_topics_by_cluster(&mut self, request: RemotingCommand) -> RemotingCommand {
+        if !self
+            .route_info_manager
+            .read()
+            .namesrv_config
+            .enable_topic_list
+        {
+            return RemotingCommand::create_response_command_with_code(
+                RemotingSysResponseCode::SystemError,
+            )
+            .set_remark(Some(String::from("disable")));
+        }
+
+        let request_header = request
+            .decode_command_custom_header::<GetTopicsByClusterRequestHeader>()
+            .unwrap();
+        let topics_by_cluster = self
+            .route_info_manager
+            .read()
+            .get_topics_by_cluster(request_header.cluster.as_str());
+        RemotingCommand::create_response_command().set_body(Some(topics_by_cluster.encode()))
     }
 }
 

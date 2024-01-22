@@ -201,6 +201,7 @@ impl FromMap for DeleteKVConfigRequestHeader {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct GetKVListByNamespaceRequestHeader {
     pub namespace: String,
 }
