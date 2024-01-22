@@ -200,3 +200,38 @@ impl FromMap for DeleteKVConfigRequestHeader {
         })
     }
 }
+
+pub struct GetKVListByNamespaceRequestHeader {
+    pub namespace: String,
+}
+
+impl GetKVListByNamespaceRequestHeader {
+    const NAMESPACE: &'static str = "namespace";
+
+    pub fn new(namespace: impl Into<String>) -> Self {
+        Self {
+            namespace: namespace.into(),
+        }
+    }
+}
+
+impl CommandCustomHeader for GetKVListByNamespaceRequestHeader {
+    fn to_map(&self) -> Option<HashMap<String, String>> {
+        Some(HashMap::from([(
+            GetKVListByNamespaceRequestHeader::NAMESPACE.to_string(),
+            self.namespace.clone(),
+        )]))
+    }
+}
+
+impl FromMap for GetKVListByNamespaceRequestHeader {
+    type Target = GetKVListByNamespaceRequestHeader;
+
+    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+        Some(GetKVListByNamespaceRequestHeader {
+            namespace: map
+                .get(GetKVListByNamespaceRequestHeader::NAMESPACE)
+                .cloned()?,
+        })
+    }
+}

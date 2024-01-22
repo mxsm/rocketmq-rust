@@ -23,7 +23,10 @@ use rocketmq_common::{
     CRC32Utils,
 };
 use rocketmq_remoting::{
-    code::{request_code::RequestCode, response_code::RemotingSysResponseCode},
+    code::{
+        request_code::RequestCode,
+        response_code::{RemotingSysResponseCode, ResponseCode},
+    },
     protocol::{
         body::{
             broker_body::{
@@ -39,7 +42,7 @@ use rocketmq_remoting::{
             },
             kv_config_header::{
                 DeleteKVConfigRequestHeader, GetKVConfigRequestHeader, GetKVConfigResponseHeader,
-                PutKVConfigRequestHeader,
+                GetKVListByNamespaceRequestHeader, PutKVConfigRequestHeader,
             },
             perm_broker_header::{
                 AddWritePermOfBrokerRequestHeader, AddWritePermOfBrokerResponseHeader,
@@ -92,6 +95,7 @@ impl RequestProcessor for DefaultRequestProcessor {
             }
             Some(RequestCode::DeleteTopicInNamesrv) => self.delete_topic_in_name_srv(request),
             Some(RequestCode::RegisterTopicInNamesrv) => self.register_topic_to_name_srv(request),
+            Some(RequestCode::GetKvlistByNamespace) => self.get_kv_list_by_namespace(request),
             _ => RemotingCommand::create_response_command_with_code(
                 RemotingSysResponseCode::SystemError,
             ),
@@ -393,6 +397,25 @@ impl DefaultRequestProcessor {
             }
         }
         RemotingCommand::create_response_command()
+    }
+
+    fn get_kv_list_by_namespace(&mut self, request: RemotingCommand) -> RemotingCommand {
+        let request_header = request
+            .decode_command_custom_header::<GetKVListByNamespaceRequestHeader>()
+            .unwrap();
+        let value = self
+            .kvconfig_manager
+            .write()
+            .get_kv_list_by_namespace(request_header.namespace.as_str());
+        if value.is_some() {
+            return RemotingCommand::create_response_command().set_body(value);
+        }
+        RemotingCommand::create_response_command_with_code(ResponseCode::QueryNotFound).set_remark(
+            Some(format!(
+                "No config item, Namespace: {}",
+                request_header.namespace.as_str()
+            )),
+        )
     }
 }
 
