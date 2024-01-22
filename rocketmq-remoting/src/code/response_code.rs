@@ -23,18 +23,6 @@ pub enum RemotingSysResponseCode {
     TransactionFailed = 4,
 }
 
-/*impl Into<i32> for RemotingSysResponseCode {
-    fn into(self) -> i32 {
-        match self {
-            RemotingSysResponseCode::Success => 0,
-            RemotingSysResponseCode::SystemError => 1,
-            RemotingSysResponseCode::SystemBusy => 2,
-            RemotingSysResponseCode::RequestCodeNotSupported => 3,
-            RemotingSysResponseCode::TransactionFailed => 4,
-        }
-    }
-}*/
-
 impl From<RemotingSysResponseCode> for i32 {
     fn from(value: RemotingSysResponseCode) -> Self {
         value as i32

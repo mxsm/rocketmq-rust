@@ -86,7 +86,7 @@ Feature list:
 | Put KV Config                          | 100          | :sparkling_heart: :white_check_mark: |        |
 | Get KV Config                          | 101          | :sparkling_heart: :white_check_mark: |        |
 | Delete KV Config                       | 102          | :sparkling_heart: :white_check_mark: |        |
-| Get kv list by namespace               | 219          | :broken_heart: :x: |        |
+| Get kv list by namespace               | 219          | :sparkling_heart: :white_check_mark: |        |
 | Query Data Version                     | 322          | :sparkling_heart: :white_check_mark: |        |
 | Register Broker                        | 103          | :heart:        |        |
 | Unregister Broker                      | 104          | :broken_heart: :x: |        |
@@ -97,7 +97,7 @@ Feature list:
 | Add write perm of brober               | 327          | :sparkling_heart: :white_check_mark: |        |
 | Get all topic list from name server    | 206          | :sparkling_heart: :white_check_mark: |        |
 | Delete topic in name server            | 216          | :sparkling_heart: :white_check_mark: |        |
-| Register topic in name server          | 217          | :broken_heart: :x: |        |
+| Register topic in name server          | 217          | :sparkling_heart: :white_check_mark: |        |
 | Get topics by cluster                  | 224          | :broken_heart: :x: |        |
 | Get system topic list from name server | 304          | :broken_heart: :x: |        |
 | Get unit topic list                    | 311          | :broken_heart: :x: |        |
