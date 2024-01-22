@@ -59,3 +59,33 @@ impl FromMap for DeleteTopicFromNamesrvRequestHeader {
         })
     }
 }
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct RegisterTopicRequestHeader {
+    pub topic: String,
+}
+
+impl RegisterTopicRequestHeader {
+    const TOPIC: &'static str = "topic";
+    pub fn new(topic: impl Into<String>) -> Self {
+        Self {
+            topic: topic.into(),
+        }
+    }
+}
+
+impl CommandCustomHeader for RegisterTopicRequestHeader {
+    fn to_map(&self) -> Option<HashMap<String, String>> {
+        let map = HashMap::from([(Self::TOPIC.to_string(), self.topic.clone())]);
+        Some(map)
+    }
+}
+impl FromMap for RegisterTopicRequestHeader {
+    type Target = Self;
+
+    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+        Some(RegisterTopicRequestHeader {
+            topic: map.get(Self::TOPIC).cloned().unwrap_or_default(),
+        })
+    }
+}

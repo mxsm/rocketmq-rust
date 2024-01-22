@@ -49,9 +49,12 @@ use rocketmq_remoting::{
                 QueryDataVersionRequestHeader, QueryDataVersionResponseHeader,
             },
             register_broker_header::{RegisterBrokerRequestHeader, RegisterBrokerResponseHeader},
-            topic_operation_header::DeleteTopicFromNamesrvRequestHeader,
+            topic_operation_header::{
+                DeleteTopicFromNamesrvRequestHeader, RegisterTopicRequestHeader,
+            },
         },
         remoting_command::RemotingCommand,
+        route::route_data_view::TopicRouteData,
         DataVersion, RemotingSerializable,
     },
     runtime::processor::RequestProcessor,
@@ -88,6 +91,7 @@ impl RequestProcessor for DefaultRequestProcessor {
                 self.get_all_topic_list_from_nameserver(request)
             }
             Some(RequestCode::DeleteTopicInNamesrv) => self.delete_topic_in_name_srv(request),
+            Some(RequestCode::RegisterTopicInNamesrv) => self.register_topic_to_name_srv(request),
             _ => RemotingCommand::create_response_command_with_code(
                 RemotingSysResponseCode::SystemError,
             ),
@@ -373,6 +377,21 @@ impl DefaultRequestProcessor {
             request_header.topic.as_str(),
             request_header.cluster_name.clone(),
         );
+        RemotingCommand::create_response_command()
+    }
+
+    fn register_topic_to_name_srv(&mut self, request: RemotingCommand) -> RemotingCommand {
+        let request_header = request
+            .decode_command_custom_header::<RegisterTopicRequestHeader>()
+            .unwrap();
+        if let Some(ref body) = request.body() {
+            let topic_route_data = TopicRouteData::decode(body);
+            if !topic_route_data.queue_datas.is_empty() {
+                self.route_info_manager
+                    .write()
+                    .register_topic(request_header.topic.as_str(), topic_route_data.queue_datas)
+            }
+        }
         RemotingCommand::create_response_command()
     }
 }
