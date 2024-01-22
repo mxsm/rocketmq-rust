@@ -49,10 +49,13 @@ use rocketmq_remoting::{
                 QueryDataVersionRequestHeader, QueryDataVersionResponseHeader,
             },
             register_broker_header::{RegisterBrokerRequestHeader, RegisterBrokerResponseHeader},
-            topic_operation_header::{DeleteTopicFromNamesrvRequestHeader, RegisterTopicRequestHeader},
+            topic_operation_header::{
+                DeleteTopicFromNamesrvRequestHeader, RegisterTopicRequestHeader,
+            },
         },
         remoting_command::RemotingCommand,
-        DataVersion, RemotingSerializable, route::route_data_view::TopicRouteData,
+        route::route_data_view::TopicRouteData,
+        DataVersion, RemotingSerializable,
     },
     runtime::processor::RequestProcessor,
 };
