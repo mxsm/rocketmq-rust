@@ -716,4 +716,47 @@ impl RouteInfoManager {
             self.topic_queue_table.remove(topic_inner.as_str());
         }
     }
+
+    pub(crate) fn register_topic(
+        &mut self,
+        topic: impl Into<String>,
+        queue_data_vec: Vec<QueueData>,
+    ) {
+        if queue_data_vec.is_empty() {
+            return;
+        }
+        let topic_inner = topic.into();
+
+        if self.topic_queue_table.get(&topic_inner).is_none() {
+            self.topic_queue_table
+                .insert(topic_inner.clone(), HashMap::new());
+        }
+        let queue_data_map = self.topic_queue_table.get_mut(&topic_inner).unwrap();
+        let vec_length = queue_data_vec.len();
+        for queue_data in queue_data_vec {
+            if !self
+                .broker_addr_table
+                .contains_key(queue_data.broker_name())
+            {
+                warn!(
+                    "Register topic contains illegal broker, {}, {:?}",
+                    topic_inner, queue_data
+                );
+                return;
+            }
+            queue_data_map.insert(queue_data.broker_name().to_string(), queue_data);
+        }
+
+        if queue_data_map.len() > vec_length {
+            info!(
+                "Topic route already exist.{}, {:?}",
+                &topic_inner, queue_data_map
+            )
+        } else {
+            info!(
+                "Register topic route:{}, {:?}",
+                &topic_inner, queue_data_map
+            )
+        }
+    }
 }
