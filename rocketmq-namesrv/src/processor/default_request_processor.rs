@@ -103,6 +103,9 @@ impl RequestProcessor for DefaultRequestProcessor {
             }
             Some(RequestCode::GetUnitTopicList) => self.get_unit_topic_list(request),
             Some(RequestCode::GetHasUnitSubTopicList) => self.get_has_unit_sub_topic_list(request),
+            Some(RequestCode::GetHasUnitSubUnunitTopicList) => {
+                self.get_has_unit_sub_un_unit_topic_list(request)
+            }
             _ => RemotingCommand::create_response_command_with_code(
                 RemotingSysResponseCode::SystemError,
             ),
@@ -454,7 +457,7 @@ impl DefaultRequestProcessor {
     }
 
     fn get_unit_topic_list(&mut self, _request: RemotingCommand) -> RemotingCommand {
-        if !self
+        if self
             .route_info_manager
             .read()
             .namesrv_config
@@ -475,6 +478,26 @@ impl DefaultRequestProcessor {
             .enable_topic_list
         {
             let topic_list = self.route_info_manager.read().get_has_unit_sub_topic_list();
+            return RemotingCommand::create_response_command().set_body(Some(topic_list.encode()));
+        }
+        RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::SystemError)
+            .set_remark(Some(String::from("disable")))
+    }
+
+    fn get_has_unit_sub_un_unit_topic_list(
+        &mut self,
+        _request: RemotingCommand,
+    ) -> RemotingCommand {
+        if self
+            .route_info_manager
+            .read()
+            .namesrv_config
+            .enable_topic_list
+        {
+            let topic_list = self
+                .route_info_manager
+                .read()
+                .get_has_unit_sub_un_unit_topic_list();
             return RemotingCommand::create_response_command().set_body(Some(topic_list.encode()));
         }
         RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::SystemError)
