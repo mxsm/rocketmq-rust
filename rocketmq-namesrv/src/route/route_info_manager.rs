@@ -776,4 +776,26 @@ impl RouteInfoManager {
             broker_addr: None,
         }
     }
+
+    pub(crate) fn get_system_topic_list(&self) -> TopicList {
+        let mut topic_list = Vec::new();
+        let mut broker_addr_out = String::new();
+        for (cluster_name, broker_set) in self.cluster_addr_table.iter() {
+            topic_list.push(cluster_name.clone());
+            broker_set.iter().for_each(|broker_name| {
+                topic_list.push(broker_name.clone());
+            });
+        }
+        if !self.broker_addr_table.is_empty() {
+            for broker_addr in self.broker_addr_table.values() {
+                for ip in broker_addr.broker_addrs().values() {
+                    broker_addr_out = ip.clone();
+                }
+            }
+        }
+        TopicList {
+            topic_list,
+            broker_addr: Some(broker_addr_out),
+        }
+    }
 }

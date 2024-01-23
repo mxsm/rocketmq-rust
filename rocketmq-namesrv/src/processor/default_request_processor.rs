@@ -98,6 +98,9 @@ impl RequestProcessor for DefaultRequestProcessor {
             Some(RequestCode::RegisterTopicInNamesrv) => self.register_topic_to_name_srv(request),
             Some(RequestCode::GetKvlistByNamespace) => self.get_kv_list_by_namespace(request),
             Some(RequestCode::GetTopicsByCluster) => self.get_topics_by_cluster(request),
+            Some(RequestCode::GetSystemTopicListFromNs) => {
+                self.get_system_topic_list_from_ns(request)
+            }
             _ => RemotingCommand::create_response_command_with_code(
                 RemotingSysResponseCode::SystemError,
             ),
@@ -441,6 +444,11 @@ impl DefaultRequestProcessor {
             .read()
             .get_topics_by_cluster(request_header.cluster.as_str());
         RemotingCommand::create_response_command().set_body(Some(topics_by_cluster.encode()))
+    }
+
+    fn get_system_topic_list_from_ns(&mut self, _request: RemotingCommand) -> RemotingCommand {
+        let topic_list = self.route_info_manager.read().get_system_topic_list();
+        RemotingCommand::create_response_command().set_body(Some(topic_list.encode()))
     }
 }
 
