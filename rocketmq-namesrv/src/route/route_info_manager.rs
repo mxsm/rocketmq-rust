@@ -23,7 +23,7 @@ use std::{
 use rocketmq_common::{
     common::{
         config::TopicConfig, constant::PermName, mix_all, namesrv::namesrv_config::NamesrvConfig,
-        topic::TopicValidator,
+        topic::TopicValidator, TopicSysFlag,
     },
     TimeUtils,
 };
@@ -796,6 +796,21 @@ impl RouteInfoManager {
         TopicList {
             topic_list,
             broker_addr: Some(broker_addr_out),
+        }
+    }
+
+    pub(crate) fn get_unit_topics(&self) -> TopicList {
+        let mut topic_list = Vec::new();
+        for (topic, entry) in self.topic_queue_table.iter() {
+            if !entry.is_empty()
+                && TopicSysFlag::has_unit_flag(entry.values().next().unwrap().topic_sys_flag())
+            {
+                topic_list.push(topic.clone());
+            }
+        }
+        TopicList {
+            topic_list,
+            broker_addr: None,
         }
     }
 }
