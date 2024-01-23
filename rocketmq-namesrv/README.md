@@ -32,7 +32,7 @@ Feature list:
 | Delete topic in name server            | 216          | :sparkling_heart: :white_check_mark: |        |
 | Register topic in name server          | 217          | :sparkling_heart: :white_check_mark: |        |
 | Get topics by cluster                  | 224          | :sparkling_heart: :white_check_mark: |        |
-| Get system topic list from name server | 304          | :broken_heart: :x:                   |        |
+| Get system topic list from name server | 304          | :sparkling_heart: :white_check_mark: |        |
 | Get unit topic list                    | 311          | :broken_heart: :x:                   |        |
 | Get has unit sub topic list            | 312          | :broken_heart: :x:                   |        |
 | Get has unit sub ununit topic list     | 313          | :broken_heart: :x:                   |        |
