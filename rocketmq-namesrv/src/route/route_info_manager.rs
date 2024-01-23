@@ -813,4 +813,19 @@ impl RouteInfoManager {
             broker_addr: None,
         }
     }
+
+    pub(crate) fn get_has_unit_sub_topic_list(&self) -> TopicList {
+        let mut topic_list = Vec::new();
+        for (topic, entry) in self.topic_queue_table.iter() {
+            if !entry.is_empty()
+                && TopicSysFlag::has_unit_sub_flag(entry.values().next().unwrap().topic_sys_flag())
+            {
+                topic_list.push(topic.clone());
+            }
+        }
+        TopicList {
+            topic_list,
+            broker_addr: None,
+        }
+    }
 }
