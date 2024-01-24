@@ -196,7 +196,7 @@ pub async fn run(
     let (notify_shutdown, _) = broadcast::channel(1);
     let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::channel(1);
     // Initialize the connection listener state
-    let mut server = ConnectionListener {
+    let mut listener = ConnectionListener {
         listener,
         notify_shutdown,
         default_request_processor: Arc::new(tokio::sync::RwLock::new(Box::new(
@@ -208,7 +208,7 @@ pub async fn run(
     };
 
     tokio::select! {
-        res = server.run() => {
+        res = listener.run() => {
             // If an error is received here, accepting connections from the TCP
             // listener failed multiple times and the server is giving up and
             // shutting down.
@@ -228,7 +228,7 @@ pub async fn run(
         shutdown_complete_tx,
         notify_shutdown,
         ..
-    } = server;
+    } = listener;
     drop(notify_shutdown);
     drop(shutdown_complete_tx);
 

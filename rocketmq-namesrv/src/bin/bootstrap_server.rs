@@ -46,6 +46,8 @@ async fn main() -> anyhow::Result<()> {
         "Rocketmq name server(Rust) running on {}:{}",
         args.ip, args.port
     );
+
+    //bind local host and port, start tcp listen
     let listener = TcpListener::bind(&format!("{}:{}", args.ip, args.port)).await?;
     let config = NamesrvConfig::new();
     let route_info_manager = RouteInfoManager::new_with_config(config.clone());
