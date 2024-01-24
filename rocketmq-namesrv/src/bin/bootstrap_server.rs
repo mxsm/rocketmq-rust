@@ -27,7 +27,7 @@ use rocketmq_remoting::{
     code::request_code::RequestCode,
     runtime::{processor::RequestProcessor, server},
 };
-use tokio::net::TcpListener;
+use tokio::{net::TcpListener, sync::broadcast};
 use tracing::info;
 
 #[rocketmq::main]
@@ -50,7 +50,8 @@ async fn main() -> anyhow::Result<()> {
     //bind local host and port, start tcp listen
     let listener = TcpListener::bind(&format!("{}:{}", args.ip, args.port)).await?;
     let config = NamesrvConfig::new();
-    let route_info_manager = RouteInfoManager::new_with_config(config.clone());
+    let (notify_conn_disconnect, _) = broadcast::channel(1);
+    let route_info_manager = RouteInfoManager::new_with_config(config.clone(),Some(notify_conn_disconnect.subscribe()));
     let kvconfig_manager = KVConfigManager::new(config.clone());
     let (processor_table, default_request_processor) =
         init_processors(route_info_manager, config, kvconfig_manager);
@@ -60,6 +61,7 @@ async fn main() -> anyhow::Result<()> {
         tokio::signal::ctrl_c(),
         default_request_processor,
         processor_table,
+        Some(notify_conn_disconnect)
     )
     .await;
 

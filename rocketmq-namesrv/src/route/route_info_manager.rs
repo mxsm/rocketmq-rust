@@ -44,6 +44,7 @@ use rocketmq_remoting::{
         DataVersion,
     },
 };
+use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 
 use crate::route_info::broker_addr_info::{BrokerAddrInfo, BrokerLiveInfo};
@@ -60,7 +61,7 @@ type FilterServerTable =
 type TopicQueueMappingInfoTable =
     HashMap<String /* topic */, HashMap<String /* brokerName */, TopicQueueMappingInfo>>;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct RouteInfoManager {
     pub(crate) topic_queue_table: TopicQueueTable,
     pub(crate) broker_addr_table: BrokerAddrTable,
@@ -70,6 +71,7 @@ pub struct RouteInfoManager {
     pub(crate) topic_queue_mapping_info_table: TopicQueueMappingInfoTable,
     pub(crate) namesrv_config: NamesrvConfig,
     pub(crate) remote_client: RemoteClient,
+    pub(crate) connect_disconnected_rx: Option<broadcast::Receiver<()>>,
 }
 
 #[allow(private_interfaces)]
@@ -78,7 +80,10 @@ impl RouteInfoManager {
         Self::default()
     }
 
-    pub fn new_with_config(namesrv_config: NamesrvConfig) -> Self {
+    pub fn new_with_config(
+        namesrv_config: NamesrvConfig,
+        connect_disconnected_rx: Option<broadcast::Receiver<()>>,
+    ) -> Self {
         RouteInfoManager {
             topic_queue_table: HashMap::new(),
             broker_addr_table: HashMap::new(),
@@ -88,10 +93,10 @@ impl RouteInfoManager {
             topic_queue_mapping_info_table: HashMap::new(),
             namesrv_config,
             remote_client: RemoteClient::new(),
+            connect_disconnected_rx,
         }
     }
 }
-
 //impl register broker
 impl RouteInfoManager {
     pub fn register_broker(

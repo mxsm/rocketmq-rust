@@ -48,6 +48,7 @@ pub struct ConnectionHandler {
     connection: Connection,
     shutdown: Shutdown,
     _shutdown_complete: mpsc::Sender<()>,
+    conn_disconnect_notify: Option<broadcast::Sender<()>>,
 }
 
 impl ConnectionHandler {
@@ -117,6 +118,8 @@ struct ConnectionListener {
 
     shutdown_complete_tx: mpsc::Sender<()>,
 
+    conn_disconnect_notify: Option<broadcast::Sender<()>>,
+
     default_request_processor:
         Arc<tokio::sync::RwLock<Box<dyn RequestProcessor + Send + Sync + 'static>>>,
     processor_table:
@@ -146,6 +149,7 @@ impl ConnectionListener {
                 connection: Connection::new(socket),
                 shutdown: Shutdown::new(self.notify_shutdown.subscribe()),
                 _shutdown_complete: self.shutdown_complete_tx.clone(),
+                conn_disconnect_notify: self.conn_disconnect_notify.clone(),
             };
 
             tokio::spawn(async move {
@@ -156,7 +160,11 @@ impl ConnectionListener {
                     "The client[IP={}] disconnected from the server.",
                     remote_addr
                 );
+                if let Some(ref sender) = handler.conn_disconnect_notify {
+                    let _ = sender.send(());
+                }
                 drop(permit);
+                drop(handler);
             });
         }
     }
@@ -192,6 +200,7 @@ pub async fn run(
     shutdown: impl Future,
     default_request_processor: impl RequestProcessor + Sync + Send + 'static,
     processor_table: HashMap<i32, Box<dyn RequestProcessor + Sync + Send + 'static>>,
+    conn_disconnect_notify: Option<broadcast::Sender<()>>,
 ) {
     let (notify_shutdown, _) = broadcast::channel(1);
     let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::channel(1);
@@ -203,6 +212,7 @@ pub async fn run(
             default_request_processor,
         ))),
         shutdown_complete_tx,
+        conn_disconnect_notify,
         processor_table: Arc::new(tokio::sync::RwLock::new(processor_table)),
         limit_connections: Arc::new(Semaphore::new(DEFAULT_MAX_CONNECTIONS)),
     };
