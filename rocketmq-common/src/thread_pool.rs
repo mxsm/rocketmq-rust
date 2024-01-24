@@ -47,11 +47,15 @@ impl TokioExecutorService {
 
     pub fn new_with_config(
         thread_num: usize,
-        thread_prefix: impl Into<String>,
+        thread_prefix: Option<impl Into<String>>,
         keep_alive: Duration,
         max_blocking_threads: usize,
     ) -> TokioExecutorService {
-        let thread_prefix_inner = thread_prefix.into();
+        let thread_prefix_inner = if let Some(thread_prefix) = thread_prefix {
+            thread_prefix.into()
+        } else {
+            "rocketmq-thread-".to_string()
+        };
         TokioExecutorService {
             inner: tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(thread_num)
@@ -129,5 +133,81 @@ impl FuturesExecutorServiceBuilder {
             .create()
             .unwrap();
         Ok(FuturesExecutorService { inner: thread_pool })
+    }
+}
+
+pub struct ScheduledExecutorService {
+    inner: tokio::runtime::Runtime,
+}
+
+impl Default for ScheduledExecutorService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl ScheduledExecutorService {
+    pub fn new() -> ScheduledExecutorService {
+        ScheduledExecutorService {
+            inner: tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(num_cpus::get())
+                .enable_all()
+                .build()
+                .unwrap(),
+        }
+    }
+
+    pub fn new_with_config(
+        thread_num: usize,
+        thread_prefix: Option<impl Into<String>>,
+        keep_alive: Duration,
+        max_blocking_threads: usize,
+    ) -> ScheduledExecutorService {
+        let thread_prefix_inner = if let Some(thread_prefix) = thread_prefix {
+            thread_prefix.into()
+        } else {
+            "rocketmq-thread-".to_string()
+        };
+        ScheduledExecutorService {
+            inner: tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(thread_num)
+                .thread_keep_alive(keep_alive)
+                .max_blocking_threads(max_blocking_threads)
+                .thread_name_fn(move || {
+                    static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
+                    let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
+                    format!("{}{}", thread_prefix_inner, id)
+                })
+                .enable_all()
+                .build()
+                .unwrap(),
+        }
+    }
+
+    pub fn schedule_at_fixed_rate<F>(&self, mut task: F, initial_delay: Duration, period: Duration)
+    where
+        F: FnMut() + Send + 'static,
+    {
+        self.inner.spawn(async move {
+            // initial delay
+
+            tokio::time::sleep(initial_delay).await;
+
+            let mut last_execution_time = tokio::time::Instant::now();
+
+            loop {
+                // record current execution time
+                let current_execution_time = tokio::time::Instant::now();
+                // execute task
+                task();
+                // Calculate the time of the next execution
+                let next_execution_time = last_execution_time + period;
+                last_execution_time = current_execution_time;
+
+                // Wait until the next execution
+                let delay =
+                    next_execution_time.saturating_duration_since(tokio::time::Instant::now());
+                tokio::time::sleep(delay).await;
+            }
+        });
     }
 }
