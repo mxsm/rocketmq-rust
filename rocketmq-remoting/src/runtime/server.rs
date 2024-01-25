@@ -48,11 +48,12 @@ pub struct ConnectionHandler {
     connection: Connection,
     shutdown: Shutdown,
     _shutdown_complete: mpsc::Sender<()>,
-    conn_disconnect_notify: Option<broadcast::Sender<()>>,
+    conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
 }
 
 impl ConnectionHandler {
     async fn handle(&mut self) -> anyhow::Result<()> {
+        let remote_addr = self.connection.remote_addr;
         while !self.shutdown.is_shutdown {
             let frame = tokio::select! {
                 res = self.connection.framed.next() => res,
@@ -81,8 +82,8 @@ impl ConnectionHandler {
                     .default_request_processor
                     .write()
                     .await
-                    .process_request(cmd),
-                Some(pr) => pr.process_request(cmd),
+                    .process_request(remote_addr, cmd),
+                Some(pr) => pr.process_request(remote_addr, cmd),
             };
             tokio::select! {
                 result = self.connection.framed.send(response.set_opaque(opaque)) => match result{
@@ -118,7 +119,7 @@ struct ConnectionListener {
 
     shutdown_complete_tx: mpsc::Sender<()>,
 
-    conn_disconnect_notify: Option<broadcast::Sender<()>>,
+    conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
 
     default_request_processor:
         Arc<tokio::sync::RwLock<Box<dyn RequestProcessor + Send + Sync + 'static>>>,
@@ -146,7 +147,7 @@ impl ConnectionListener {
             let mut handler = ConnectionHandler {
                 default_request_processor: self.default_request_processor.clone(),
                 processor_table: self.processor_table.clone(),
-                connection: Connection::new(socket),
+                connection: Connection::new(socket, remote_addr),
                 shutdown: Shutdown::new(self.notify_shutdown.subscribe()),
                 _shutdown_complete: self.shutdown_complete_tx.clone(),
                 conn_disconnect_notify: self.conn_disconnect_notify.clone(),
@@ -161,7 +162,7 @@ impl ConnectionListener {
                     remote_addr
                 );
                 if let Some(ref sender) = handler.conn_disconnect_notify {
-                    let _ = sender.send(());
+                    let _ = sender.send(remote_addr);
                 }
                 drop(permit);
                 drop(handler);
@@ -200,7 +201,7 @@ pub async fn run(
     shutdown: impl Future,
     default_request_processor: impl RequestProcessor + Sync + Send + 'static,
     processor_table: HashMap<i32, Box<dyn RequestProcessor + Sync + Send + 'static>>,
-    conn_disconnect_notify: Option<broadcast::Sender<()>>,
+    conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
 ) {
     let (notify_shutdown, _) = broadcast::channel(1);
     let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::channel(1);

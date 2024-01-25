@@ -70,7 +70,10 @@ impl BrokerData {
     pub fn cluster(&self) -> &str {
         &self.cluster
     }
-    pub fn broker_name(&mut self) -> &str {
+    pub fn broker_name(&self) -> &str {
+        &self.broker_name
+    }
+    pub fn broker_name_mut(&mut self) -> &str {
         &self.broker_name
     }
     pub fn broker_addrs(&self) -> &HashMap<i64, String> {

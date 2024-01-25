@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     fmt::{Display, Formatter},
+    net::SocketAddr,
 };
 
 use rocketmq_remoting::protocol::DataVersion;
@@ -43,9 +44,9 @@ impl Display for BrokerAddrInfo {
 
 #[derive(Clone, Debug)]
 pub(crate) struct BrokerStatusChangeInfo {
-    broker_addrs: HashMap<i64, String>,
-    offline_broker_addr: String,
-    ha_broker_addr: String,
+    pub(crate) broker_addrs: HashMap<i64, String>,
+    pub(crate) offline_broker_addr: String,
+    pub(crate) ha_broker_addr: String,
 }
 
 impl BrokerStatusChangeInfo {
@@ -102,6 +103,7 @@ pub(crate) struct BrokerLiveInfo {
     pub heartbeat_timeout_millis: i64,
     pub data_version: DataVersion,
     pub ha_server_addr: String,
+    pub remote_addr: SocketAddr,
 }
 
 impl BrokerLiveInfo {
@@ -110,12 +112,14 @@ impl BrokerLiveInfo {
         heartbeat_timeout_millis: i64,
         data_version: DataVersion,
         ha_server_addr: String,
+        remote_addr: SocketAddr,
     ) -> Self {
         Self {
             last_update_timestamp,
             heartbeat_timeout_millis,
             data_version,
             ha_server_addr,
+            remote_addr,
         }
     }
     pub fn data_version(&self) -> &DataVersion {

@@ -16,6 +16,7 @@
  */
 
 use std::{
+    net::SocketAddr,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -120,7 +121,11 @@ impl ClientRequestProcessor {
 }
 
 impl RequestProcessor for ClientRequestProcessor {
-    fn process_request(&mut self, request: RemotingCommand) -> RemotingCommand {
+    fn process_request(
+        &mut self,
+        _remote_addr: SocketAddr,
+        request: RemotingCommand,
+    ) -> RemotingCommand {
         self.get_route_info_by_topic(request)
     }
 }

@@ -17,6 +17,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    net::SocketAddr,
     time::{Duration, SystemTime},
 };
 
@@ -36,7 +37,10 @@ use rocketmq_remoting::{
             topic::topic_list::TopicList,
             topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper,
         },
-        header::namesrv::brokerid_change_request_header::NotifyMinBrokerIdChangeRequestHeader,
+        header::namesrv::{
+            broker_request::UnRegisterBrokerRequestHeader,
+            brokerid_change_request_header::NotifyMinBrokerIdChangeRequestHeader,
+        },
         namesrv::RegisterBrokerResult,
         remoting_command::RemotingCommand,
         route::route_data_view::{BrokerData, QueueData, TopicRouteData},
@@ -47,7 +51,7 @@ use rocketmq_remoting::{
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 
-use crate::route_info::broker_addr_info::{BrokerAddrInfo, BrokerLiveInfo};
+use crate::route_info::broker_addr_info::{BrokerAddrInfo, BrokerLiveInfo, BrokerStatusChangeInfo};
 
 const DEFAULT_BROKER_CHANNEL_EXPIRED_TIME: i64 = 1000 * 60 * 2;
 
@@ -71,7 +75,7 @@ pub struct RouteInfoManager {
     pub(crate) topic_queue_mapping_info_table: TopicQueueMappingInfoTable,
     pub(crate) namesrv_config: NamesrvConfig,
     pub(crate) remote_client: RemoteClient,
-    pub(crate) connect_disconnected_rx: Option<broadcast::Receiver<()>>,
+    pub(crate) connect_disconnected_rx: Option<broadcast::Receiver<SocketAddr>>,
 }
 
 #[allow(private_interfaces)]
@@ -82,7 +86,7 @@ impl RouteInfoManager {
 
     pub fn new_with_config(
         namesrv_config: NamesrvConfig,
-        connect_disconnected_rx: Option<broadcast::Receiver<()>>,
+        connect_disconnected_rx: Option<broadcast::Receiver<SocketAddr>>,
     ) -> Self {
         RouteInfoManager {
             topic_queue_table: HashMap::new(),
@@ -111,6 +115,7 @@ impl RouteInfoManager {
         enable_acting_master: Option<bool>,
         topic_config_serialize_wrapper: TopicConfigAndMappingSerializeWrapper,
         filter_server_list: Vec<String>,
+        remote_addr: SocketAddr,
     ) -> Option<RegisterBrokerResult> {
         let mut result = RegisterBrokerResult::default();
         //init or update cluster information
@@ -312,6 +317,7 @@ impl RouteInfoManager {
                     DataVersion::default()
                 },
                 ha_server_addr.clone(),
+                remote_addr,
             ),
         );
         if filter_server_list.is_empty() {
@@ -848,5 +854,233 @@ impl RouteInfoManager {
             topic_list,
             broker_addr: None,
         }
+    }
+
+    pub fn scan_not_active_broker(&mut self) {
+        for (broker_addr_info, broker_live_info) in self.broker_live_table.clone().iter() {
+            if broker_live_info.heartbeat_timeout_millis + broker_live_info.last_update_timestamp
+                < TimeUtils::get_current_millis() as i64
+            {
+                self.on_connection_disconnected(broker_addr_info);
+            }
+        }
+    }
+    fn on_connection_disconnected(&mut self, broker_addr_info: &BrokerAddrInfo) {
+        let mut request_header = UnRegisterBrokerRequestHeader::default();
+        let need_un_register =
+            self.setup_un_register_request(&mut request_header, broker_addr_info);
+        if need_un_register {
+            self.un_register_broker(vec![request_header]);
+        }
+    }
+
+    fn setup_un_register_request(
+        &self,
+        un_register_request: &mut UnRegisterBrokerRequestHeader,
+        broker_addr_info: &BrokerAddrInfo,
+    ) -> bool {
+        un_register_request.cluster_name = broker_addr_info.cluster_name.clone();
+        un_register_request.broker_addr = broker_addr_info.broker_addr.clone();
+
+        for (_broker_addr, broker_data) in self.broker_addr_table.iter() {
+            if broker_addr_info.cluster_name != broker_data.cluster() {
+                continue;
+            }
+            for (broker_id, ip) in broker_data.broker_addrs().iter() {
+                if &broker_addr_info.broker_addr == ip {
+                    un_register_request.broker_name = broker_data.broker_name().to_string();
+                    un_register_request.broker_id = *broker_id as u64;
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    pub(crate) fn un_register_broker(
+        &mut self,
+        un_register_requests: Vec<UnRegisterBrokerRequestHeader>,
+    ) {
+        let mut remove_broker = HashSet::<String>::new();
+        let mut reduced_broker = HashSet::<String>::new();
+        let mut need_notify_broker_map = HashMap::<String, BrokerStatusChangeInfo>::new();
+
+        for un_register_request in un_register_requests {
+            let broker_name = &un_register_request.broker_name;
+            let cluster_name = &un_register_request.cluster_name;
+            let broker_addr = &un_register_request.broker_addr;
+
+            let broker_addr_info = BrokerAddrInfo::new(cluster_name.clone(), broker_addr.clone());
+            let pre = self.broker_live_table.remove(&broker_addr_info);
+            info!(
+                "unregisterBroker, remove from brokerLiveTable {}, {}",
+                if pre.is_some() { "OK" } else { "Fail" },
+                &broker_addr_info
+            );
+
+            self.filter_server_table.remove(&broker_addr_info);
+
+            let mut remove_broker_name = false;
+            let mut is_min_broker_id_changed = false;
+
+            if let Some(broker_data) = self.broker_addr_table.get_mut(broker_name) {
+                if !broker_data.broker_addrs().is_empty()
+                    && un_register_request.broker_id as i64
+                        == broker_data
+                            .broker_addrs()
+                            .iter()
+                            .map(|(broker_id, _)| broker_id)
+                            .cloned()
+                            .min()
+                            .unwrap()
+                {
+                    is_min_broker_id_changed = true;
+                }
+                let mut remove_broker_id_set = HashSet::new();
+                for (broker_id, broker_addr_inner) in broker_data.broker_addrs().iter() {
+                    if broker_addr == broker_addr_inner {
+                        remove_broker_id_set.insert(*broker_id);
+                    }
+                }
+                let _removed = if remove_broker_id_set.is_empty() {
+                    for broker_id in remove_broker_id_set {
+                        broker_data.broker_addrs_mut().remove(&broker_id);
+                    }
+                    true
+                } else {
+                    false
+                };
+
+                if broker_data.broker_addrs_mut().is_empty() {
+                    self.broker_addr_table.remove(broker_name);
+                    remove_broker_name = true;
+                } else if is_min_broker_id_changed {
+                    need_notify_broker_map.insert(
+                        broker_name.clone(),
+                        BrokerStatusChangeInfo {
+                            broker_addrs: broker_data.broker_addrs().clone(),
+                            offline_broker_addr: broker_addr.clone(),
+                            ha_broker_addr: String::from(""),
+                        },
+                    );
+                }
+            }
+
+            if remove_broker_name {
+                let name_set = self.cluster_addr_table.get_mut(cluster_name);
+                if let Some(name_set_inner) = name_set {
+                    name_set_inner.remove(broker_name);
+                    if name_set_inner.is_empty() {
+                        self.cluster_addr_table.remove(cluster_name);
+                    }
+                }
+                remove_broker.insert(broker_name.clone());
+            } else {
+                reduced_broker.insert(broker_name.clone());
+            }
+        }
+        self.clean_topic_by_un_register_requests(remove_broker, reduced_broker);
+        if !need_notify_broker_map.is_empty() && self.namesrv_config.notify_min_broker_id_changed {
+            for (broker_name, broker_status_change_info) in need_notify_broker_map {
+                let broker_data = self.broker_addr_table.get(&broker_name);
+                if let Some(broker_data) = broker_data {
+                    if !broker_data.enable_acting_master() {
+                        continue;
+                    }
+                    let broker_addrs = broker_status_change_info.broker_addrs.clone();
+                    let offline_broker_addr = broker_status_change_info.offline_broker_addr.clone();
+                    self.notify_min_broker_id_changed(
+                        &broker_addrs,
+                        Some(offline_broker_addr),
+                        None,
+                    );
+                }
+            }
+        }
+    }
+
+    fn clean_topic_by_un_register_requests(
+        &mut self,
+        removed_broker: HashSet<String>,
+        reduced_broker: HashSet<String>,
+    ) {
+        let mut delete_topic = HashSet::new();
+        while let Some((topic, queue_data_map)) = self.topic_queue_table.iter_mut().next() {
+            for broker_name in &removed_broker {
+                if let Some(removed_qd) = queue_data_map.remove(broker_name) {
+                    println!(
+                        "removeTopicByBrokerName, remove one broker's topic {} {:?}",
+                        topic, removed_qd
+                    );
+                }
+            }
+
+            if queue_data_map.is_empty() {
+                println!(
+                    "removeTopicByBrokerName, remove the topic all queue {}",
+                    topic
+                );
+                delete_topic.insert(topic.clone());
+            }
+
+            for broker_name in &reduced_broker {
+                if let Some(queue_data) = queue_data_map.get_mut(broker_name) {
+                    if self
+                        .broker_addr_table
+                        .get(broker_name)
+                        .map_or(false, |b| b.enable_acting_master())
+                    {
+                        // Master has been unregistered, wipe the write perm
+                        let flag = {
+                            let broker_data = self.broker_addr_table.get(broker_name);
+                            if broker_data.is_none() {
+                                true
+                            } else {
+                                let broker_data_unwrap = broker_data.unwrap();
+                                if broker_data_unwrap.broker_addrs().is_empty() {
+                                    true
+                                } else {
+                                    broker_data_unwrap
+                                        .broker_addrs()
+                                        .keys()
+                                        .cloned()
+                                        .min()
+                                        .unwrap()
+                                        > 0
+                                }
+                            }
+                        };
+                        //if self.is_no_master_exists(broker_name.as_str()) {
+                        if flag {
+                            // Update the queue data's permission, assuming PermName is an enum
+                            // For simplicity, I'm using 0 as PERM_WRITE value, please replace it
+                            // with the actual value
+                            queue_data.perm &= !PermName::PERM_WRITE as u32
+                        }
+                    }
+                }
+            }
+        }
+        for topic in delete_topic {
+            self.topic_queue_table.remove(topic.as_str());
+        }
+    }
+
+    fn is_no_master_exists(&self, broker_name: &str) -> bool {
+        let broker_data = self.broker_addr_table.get(broker_name);
+        if broker_data.is_none() {
+            return true;
+        }
+        let broker_data_unwrap = broker_data.unwrap();
+        if broker_data_unwrap.broker_addrs().is_empty() {
+            return true;
+        }
+        broker_data_unwrap
+            .broker_addrs()
+            .keys()
+            .cloned()
+            .min()
+            .unwrap()
+            > 0
     }
 }
