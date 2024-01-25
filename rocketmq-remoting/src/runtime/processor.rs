@@ -15,8 +15,14 @@
  * limitations under the License.
  */
 
+use std::net::SocketAddr;
+
 use crate::protocol::remoting_command::RemotingCommand;
 
 pub trait RequestProcessor {
-    fn process_request(&mut self, request: RemotingCommand) -> RemotingCommand;
+    fn process_request(
+        &mut self,
+        remote_addr: SocketAddr,
+        request: RemotingCommand,
+    ) -> RemotingCommand;
 }

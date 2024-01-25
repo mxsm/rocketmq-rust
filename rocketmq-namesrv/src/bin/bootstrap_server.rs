@@ -15,10 +15,10 @@
  * limitations under the License.
  */
 
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use clap::Parser;
-use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
+use rocketmq_common::{common::namesrv::namesrv_config::NamesrvConfig, ScheduledExecutorService};
 use rocketmq_namesrv::{
     processor::{default_request_processor::DefaultRequestProcessor, ClientRequestProcessor},
     KVConfigManager, RouteInfoManager,
@@ -27,7 +27,7 @@ use rocketmq_remoting::{
     code::request_code::RequestCode,
     runtime::{processor::RequestProcessor, server},
 };
-use tokio::net::TcpListener;
+use tokio::{net::TcpListener, sync::broadcast};
 use tracing::info;
 
 #[rocketmq::main]
@@ -46,11 +46,15 @@ async fn main() -> anyhow::Result<()> {
         "Rocketmq name server(Rust) running on {}:{}",
         args.ip, args.port
     );
+
+    //bind local host and port, start tcp listen
     let listener = TcpListener::bind(&format!("{}:{}", args.ip, args.port)).await?;
     let config = NamesrvConfig::new();
-    let route_info_manager = RouteInfoManager::new_with_config(config.clone());
+    let (notify_conn_disconnect, _) = broadcast::channel::<SocketAddr>(1);
+    let route_info_manager =
+        RouteInfoManager::new_with_config(config.clone(), Some(notify_conn_disconnect.subscribe()));
     let kvconfig_manager = KVConfigManager::new(config.clone());
-    let (processor_table, default_request_processor) =
+    let (processor_table, default_request_processor, _scheduled_executor_service) =
         init_processors(route_info_manager, config, kvconfig_manager);
     //run server
     server::run(
@@ -58,6 +62,7 @@ async fn main() -> anyhow::Result<()> {
         tokio::signal::ctrl_c(),
         default_request_processor,
         processor_table,
+        Some(notify_conn_disconnect),
     )
     .await;
 
@@ -71,6 +76,7 @@ fn init_processors(
 ) -> (
     HashMap<i32, Box<dyn RequestProcessor + Send + Sync + 'static>>,
     DefaultRequestProcessor,
+    ScheduledExecutorService,
 ) {
     let route_info_manager_inner = Arc::new(parking_lot::RwLock::new(route_info_manager));
     let kvconfig_manager_inner = Arc::new(parking_lot::RwLock::new(kvconfig_manager));
@@ -84,7 +90,23 @@ fn init_processors(
             kvconfig_manager_inner.clone(),
         )),
     );
-    (processors, DefaultRequestProcessor::new(namesrv_config))
+    let scheduled_executor_service = ScheduledExecutorService::new_with_config(
+        1,
+        Some("Namesrv-"),
+        Duration::from_secs(60),
+        10000,
+    );
+    let arc = route_info_manager_inner.clone();
+    scheduled_executor_service.schedule_at_fixed_rate(
+        move || arc.write().scan_not_active_broker(),
+        Some(Duration::from_secs(5)),
+        Duration::from_millis(namesrv_config.scan_not_active_broker_interval),
+    );
+    (
+        processors,
+        DefaultRequestProcessor::new(namesrv_config),
+        scheduled_executor_service,
+    )
 }
 
 #[derive(Parser, Debug)]

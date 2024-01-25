@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-use std::sync::Arc;
+use std::{net::SocketAddr, sync::Arc};
 
 use bytes::Bytes;
 use rocketmq_common::{
@@ -74,7 +74,11 @@ pub struct DefaultRequestProcessor {
 }
 
 impl RequestProcessor for DefaultRequestProcessor {
-    fn process_request(&mut self, request: RemotingCommand) -> RemotingCommand {
+    fn process_request(
+        &mut self,
+        remote_addr: SocketAddr,
+        request: RemotingCommand,
+    ) -> RemotingCommand {
         let code = request.code();
         let broker_request_code = RequestCode::value_of(code);
         match broker_request_code {
@@ -83,7 +87,7 @@ impl RequestProcessor for DefaultRequestProcessor {
             Some(RequestCode::DeleteKvConfig) => self.delete_kv_config(request),
             Some(RequestCode::QueryDataVersion) => self.query_broker_topic_config(request),
             //handle register broker
-            Some(RequestCode::RegisterBroker) => self.process_register_broker(request),
+            Some(RequestCode::RegisterBroker) => self.process_register_broker(remote_addr, request),
             Some(RequestCode::UnregisterBroker) => self.process_unregister_broker(request),
             Some(RequestCode::BrokerHeartbeat) => self.process_broker_heartbeat(request),
             Some(RequestCode::GetBrokerMemberGroup) => self.get_broker_member_group(request),
@@ -224,7 +228,11 @@ impl DefaultRequestProcessor {
     }
 }
 impl DefaultRequestProcessor {
-    fn process_register_broker(&mut self, request: RemotingCommand) -> RemotingCommand {
+    fn process_register_broker(
+        &mut self,
+        remote_addr: SocketAddr,
+        request: RemotingCommand,
+    ) -> RemotingCommand {
         let request_header = request
             .decode_command_custom_header::<RegisterBrokerRequestHeader>()
             .unwrap();
@@ -268,6 +276,7 @@ impl DefaultRequestProcessor {
             request_header.enable_acting_master,
             topic_config_wrapper,
             filter_server_list,
+            remote_addr,
         );
         if result.is_none() {
             return response_command

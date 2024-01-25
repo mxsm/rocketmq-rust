@@ -24,7 +24,8 @@ pub use rocketmq::main;
 pub use tokio as rocketmq;
 
 pub use crate::thread_pool::{
-    FuturesExecutorService, FuturesExecutorServiceBuilder, TokioExecutorService,
+    FuturesExecutorService, FuturesExecutorServiceBuilder, ScheduledExecutorService,
+    TokioExecutorService,
 };
 
 pub mod common;

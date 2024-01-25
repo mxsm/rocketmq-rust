@@ -57,7 +57,7 @@ pub struct NamesrvConfig {
     pub default_thread_pool_queue_capacity: i32,
 
     #[serde(alias = "scanNotActiveBrokerInterval")]
-    pub scan_not_active_broker_interval: i64,
+    pub scan_not_active_broker_interval: u64,
 
     #[serde(alias = "unRegisterBrokerQueueCapacity")]
     pub unregister_broker_queue_capacity: i32,

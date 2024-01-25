@@ -15,6 +15,8 @@
  * limitations under the License.
  */
 
+use std::net::SocketAddr;
+
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
@@ -35,6 +37,7 @@ use crate::codec::remoting_command_codec::RemotingCommandCodec;
 
 pub struct Connection {
     pub(crate) framed: Framed<TcpStream, RemotingCommandCodec>,
+    pub(crate) remote_addr: SocketAddr,
 }
 
 impl Connection {
@@ -47,9 +50,10 @@ impl Connection {
     /// # Returns
     ///
     /// A new `Connection` instance.
-    pub fn new(tcp_stream: TcpStream) -> Connection {
+    pub fn new(tcp_stream: TcpStream, remote_addr: SocketAddr) -> Connection {
         Self {
             framed: Framed::new(tcp_stream, RemotingCommandCodec::new()),
+            remote_addr,
         }
     }
 }
