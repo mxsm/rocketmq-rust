@@ -88,8 +88,8 @@ Feature list:
 | Delete KV Config                       | 102          | :sparkling_heart: :white_check_mark: |        |
 | Get kv list by namespace               | 219          | :sparkling_heart: :white_check_mark: |        |
 | Query Data Version                     | 322          | :sparkling_heart: :white_check_mark: |        |
-| Register Broker                        | 103          | :heart:        |        |
-| Unregister Broker                      | 104          | :broken_heart: :x: |        |
+| Register Broker                        | 103          | :sparkling_heart: :white_check_mark: |        |
+| Unregister Broker                      | 104          | :sparkling_heart: :white_check_mark: |        |
 | Broker Heartbeat                       | 904          | :sparkling_heart: :white_check_mark: |        |
 | Get broker member_group                | 901          | :sparkling_heart: :white_check_mark: |        |
 | Get broker cluster info                | 106          | :sparkling_heart: :white_check_mark: |        |
