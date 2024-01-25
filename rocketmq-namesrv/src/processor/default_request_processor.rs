@@ -307,12 +307,10 @@ impl DefaultRequestProcessor {
     }
 
     fn process_unregister_broker(&mut self, request: RemotingCommand) -> RemotingCommand {
-        let request_header = request
+        let _request_header = request
             .decode_command_custom_header::<UnRegisterBrokerRequestHeader>()
             .unwrap();
-        self.route_info_manager
-            .write()
-            .un_register_broker(vec![request_header]);
+        //todo
         RemotingCommand::create_response_command()
     }
 }
