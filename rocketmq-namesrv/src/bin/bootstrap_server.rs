@@ -73,7 +73,7 @@ async fn main() -> anyhow::Result<()> {
         Some(notify_conn_disconnect),
     )
     .await;
-    drop(scheduled_executor_service);
+    scheduled_executor_service.shutdown();
     Ok(())
 }
 

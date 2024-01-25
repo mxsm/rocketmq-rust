@@ -214,3 +214,9 @@ impl ScheduledExecutorService {
         });
     }
 }
+
+impl ScheduledExecutorService {
+    pub fn shutdown(self) {
+        self.inner.shutdown_background();
+    }
+}
