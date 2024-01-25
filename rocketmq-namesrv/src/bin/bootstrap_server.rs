@@ -18,8 +18,12 @@
 use std::{collections::HashMap, net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use clap::Parser;
-use rocketmq_common::{common::namesrv::namesrv_config::NamesrvConfig, ScheduledExecutorService};
+use rocketmq_common::{
+    common::{mix_all::ROCKETMQ_HOME_ENV, namesrv::namesrv_config::NamesrvConfig},
+    ScheduledExecutorService,
+};
 use rocketmq_namesrv::{
+    parse_command_and_config_file,
     processor::{default_request_processor::DefaultRequestProcessor, ClientRequestProcessor},
     KVConfigManager, RouteInfoManager,
 };
@@ -34,13 +38,16 @@ use tracing::info;
 async fn main() -> anyhow::Result<()> {
     rocketmq_common::log::init_logger();
     let args = Args::parse();
-    let home = std::env::var("ROCKETMQ_HOME").unwrap_or(
-        std::env::current_dir()
+    let home = std::env::var(ROCKETMQ_HOME_ENV).unwrap_or_else(|_| {
+        let rocketmq_home_dir = std::env::current_dir()
             .unwrap()
             .into_os_string()
             .to_string_lossy()
-            .to_string(),
-    );
+            .to_string();
+        std::env::set_var(ROCKETMQ_HOME_ENV, rocketmq_home_dir.clone());
+        rocketmq_home_dir
+    });
+
     info!("rocketmq home: {}", home);
     info!(
         "Rocketmq name server(Rust) running on {}:{}",
@@ -49,12 +56,13 @@ async fn main() -> anyhow::Result<()> {
 
     //bind local host and port, start tcp listen
     let listener = TcpListener::bind(&format!("{}:{}", args.ip, args.port)).await?;
-    let config = NamesrvConfig::new();
+    let config_file = PathBuf::from(home).join("conf").join("namesrv.conf");
+    let config = parse_command_and_config_file(config_file)?;
     let (notify_conn_disconnect, _) = broadcast::channel::<SocketAddr>(1);
     let route_info_manager =
         RouteInfoManager::new_with_config(config.clone(), Some(notify_conn_disconnect.subscribe()));
     let kvconfig_manager = KVConfigManager::new(config.clone());
-    let (processor_table, default_request_processor, _scheduled_executor_service) =
+    let (processor_table, default_request_processor, scheduled_executor_service) =
         init_processors(route_info_manager, config, kvconfig_manager);
     //run server
     server::run(
@@ -65,7 +73,7 @@ async fn main() -> anyhow::Result<()> {
         Some(notify_conn_disconnect),
     )
     .await;
-
+    drop(scheduled_executor_service);
     Ok(())
 }
 

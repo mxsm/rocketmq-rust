@@ -15,23 +15,25 @@
  * limitations under the License.
  */
 
+use std::path::PathBuf;
+
 use config::Config;
 use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use tracing::info;
 
-fn parse_command_and_config_file() -> anyhow::Result<(), anyhow::Error> {
+pub fn parse_command_and_config_file(
+    config_file: PathBuf,
+) -> anyhow::Result<NamesrvConfig, anyhow::Error> {
     let namesrv_config = Config::builder()
         .add_source(config::File::with_name(
-            format!(
-                "rocketmq-namesrv{}resource{}rocketmq-namesrv.toml",
-                std::path::MAIN_SEPARATOR,
-                std::path::MAIN_SEPARATOR
-            )
-            .as_str(),
+            config_file.to_string_lossy().into_owned().as_str(),
         ))
         .build()
-        .unwrap();
-    let result = namesrv_config.try_deserialize::<NamesrvConfig>().unwrap();
-    info!("rocketmq-namesrv config: {:?}", result);
-    Ok(())
+        .map_or(NamesrvConfig::default(), |result| {
+            result
+                .try_deserialize::<NamesrvConfig>()
+                .unwrap_or_default()
+        });
+    info!("rocketmq-namesrv config: {:?}", namesrv_config);
+    Ok(namesrv_config)
 }
