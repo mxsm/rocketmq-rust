@@ -18,6 +18,7 @@
 #![allow(dead_code)]
 
 mod namesrv_config_parse;
+pub use self::namesrv_config_parse::parse_command_and_config_file;
 pub mod processor;
 mod route;
 pub use self::route::route_info_manager::RouteInfoManager;

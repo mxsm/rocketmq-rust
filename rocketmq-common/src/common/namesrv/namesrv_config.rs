@@ -21,7 +21,7 @@ use serde::Deserialize;
 
 use crate::common::mix_all::{ROCKETMQ_HOME_ENV, ROCKETMQ_HOME_PROPERTY};
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct NamesrvConfig {
     #[serde(alias = "rocketmqHome")]
     pub rocketmq_home: String,
@@ -90,8 +90,8 @@ pub struct NamesrvConfig {
     pub config_black_list: String,
 }
 
-impl NamesrvConfig {
-    pub fn new() -> NamesrvConfig {
+impl Default for NamesrvConfig {
+    fn default() -> Self {
         let rocketmq_home = env::var(ROCKETMQ_HOME_PROPERTY)
             .unwrap_or_else(|_| env::var(ROCKETMQ_HOME_ENV).unwrap_or_default());
         let kv_config_path = format!(
@@ -136,6 +136,12 @@ impl NamesrvConfig {
             delete_topic_with_broker_registration: false,
             config_black_list: "configBlackList;configStorePath;kvConfigPath".to_string(),
         }
+    }
+}
+
+impl NamesrvConfig {
+    pub fn new() -> NamesrvConfig {
+        Self::default()
     }
 }
 
