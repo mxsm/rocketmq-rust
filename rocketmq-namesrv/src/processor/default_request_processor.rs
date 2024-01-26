@@ -63,7 +63,7 @@ use rocketmq_remoting::{
     },
     runtime::processor::RequestProcessor,
 };
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::{route::route_info_manager::RouteInfoManager, KVConfigManager};
 
@@ -81,6 +81,11 @@ impl RequestProcessor for DefaultRequestProcessor {
     ) -> RemotingCommand {
         let code = request.code();
         let broker_request_code = RequestCode::value_of(code);
+        info!(
+            "Received request code:{}-{:?}",
+            code,
+            broker_request_code.as_ref()
+        );
         match broker_request_code {
             Some(RequestCode::PutKvConfig) => self.put_kv_config(request),
             Some(RequestCode::GetKvConfig) => self.get_kv_config(request),
