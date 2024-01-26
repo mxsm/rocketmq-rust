@@ -1005,7 +1005,7 @@ impl RouteInfoManager {
         reduced_broker: HashSet<String>,
     ) {
         let mut delete_topic = HashSet::new();
-        while let Some((topic, queue_data_map)) = self.topic_queue_table.iter_mut().next() {
+        for (topic, queue_data_map) in self.topic_queue_table.iter_mut() {
             for broker_name in &removed_broker {
                 if let Some(removed_qd) = queue_data_map.remove(broker_name) {
                     println!(
