@@ -18,6 +18,7 @@
 use std::{
     collections::{HashMap, HashSet},
     net::SocketAddr,
+    sync::Arc,
     time::{Duration, SystemTime},
 };
 
@@ -48,7 +49,7 @@ use rocketmq_remoting::{
         DataVersion,
     },
 };
-use tokio::sync::broadcast;
+use tokio::{sync::broadcast, task::JoinHandle};
 use tracing::{debug, info, warn};
 
 use crate::route_info::broker_addr_info::{BrokerAddrInfo, BrokerLiveInfo, BrokerStatusChangeInfo};
@@ -75,7 +76,6 @@ pub struct RouteInfoManager {
     pub(crate) topic_queue_mapping_info_table: TopicQueueMappingInfoTable,
     pub(crate) namesrv_config: NamesrvConfig,
     pub(crate) remote_client: RemoteClient,
-    pub(crate) connect_disconnected_rx: Option<broadcast::Receiver<SocketAddr>>,
 }
 
 #[allow(private_interfaces)]
@@ -84,10 +84,7 @@ impl RouteInfoManager {
         Self::default()
     }
 
-    pub fn new_with_config(
-        namesrv_config: NamesrvConfig,
-        connect_disconnected_rx: Option<broadcast::Receiver<SocketAddr>>,
-    ) -> Self {
+    pub fn new_with_config(namesrv_config: NamesrvConfig) -> Self {
         RouteInfoManager {
             topic_queue_table: HashMap::new(),
             broker_addr_table: HashMap::new(),
@@ -97,7 +94,6 @@ impl RouteInfoManager {
             topic_queue_mapping_info_table: HashMap::new(),
             namesrv_config,
             remote_client: RemoteClient::new(),
-            connect_disconnected_rx,
         }
     }
 }
@@ -1082,5 +1078,45 @@ impl RouteInfoManager {
             .min()
             .unwrap()
             > 0
+    }
+
+    pub fn connection_disconnected(&mut self, socket_addr: SocketAddr) {
+        let mut broker_addr_info = None;
+        for (bai, bli) in &self.broker_live_table {
+            if bli.remote_addr == socket_addr {
+                broker_addr_info = Some(bai.clone());
+                break;
+            }
+        }
+        if let Some(bai) = broker_addr_info {
+            let mut request_header = UnRegisterBrokerRequestHeader::default();
+            let need_un_register = self.setup_un_register_request(&mut request_header, &bai);
+            if need_un_register {
+                self.un_register_broker(vec![request_header]);
+            }
+        }
+    }
+}
+
+// Non-instance method implementations
+impl RouteInfoManager {
+    /// start client connection disconnected listener
+    pub fn start(
+        route_info_manager: Arc<parking_lot::RwLock<Self>>,
+        receiver: broadcast::Receiver<SocketAddr>,
+    ) -> JoinHandle<()> {
+        let mut receiver = receiver;
+        tokio::spawn(async move {
+            loop {
+                match receiver.recv().await {
+                    Ok(socket_addr) => {
+                        route_info_manager
+                            .write()
+                            .connection_disconnected(socket_addr);
+                    }
+                    Err(_err) => {}
+                }
+            }
+        })
     }
 }

@@ -31,7 +31,7 @@ use rocketmq_remoting::{
     code::request_code::RequestCode,
     runtime::{processor::RequestProcessor, server},
 };
-use tokio::{net::TcpListener, sync::broadcast};
+use tokio::{net::TcpListener, sync::broadcast, task::JoinHandle};
 use tracing::info;
 
 #[rocketmq::main]
@@ -58,12 +58,12 @@ async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind(&format!("{}:{}", args.ip, args.port)).await?;
     let config_file = PathBuf::from(home).join("conf").join("namesrv.conf");
     let config = parse_command_and_config_file(config_file)?;
-    let (notify_conn_disconnect, _) = broadcast::channel::<SocketAddr>(1);
-    let route_info_manager =
-        RouteInfoManager::new_with_config(config.clone(), Some(notify_conn_disconnect.subscribe()));
+    let (notify_conn_disconnect, _) = broadcast::channel::<SocketAddr>(100);
+    let receiver = notify_conn_disconnect.subscribe();
+    let route_info_manager = RouteInfoManager::new_with_config(config.clone());
     let kvconfig_manager = KVConfigManager::new(config.clone());
-    let (processor_table, default_request_processor, scheduled_executor_service) =
-        init_processors(route_info_manager, config, kvconfig_manager);
+    let (processor_table, default_request_processor, scheduled_executor_service, _handle) =
+        init_processors(route_info_manager, config, kvconfig_manager, receiver);
     //run server
     server::run(
         listener,
@@ -77,16 +77,21 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+type InitProcessorsReturn = (
+    HashMap<i32, Box<dyn RequestProcessor + Send + Sync + 'static>>,
+    DefaultRequestProcessor,
+    ScheduledExecutorService,
+    JoinHandle<()>,
+);
+
 fn init_processors(
     route_info_manager: RouteInfoManager,
     namesrv_config: NamesrvConfig,
     kvconfig_manager: KVConfigManager,
-) -> (
-    HashMap<i32, Box<dyn RequestProcessor + Send + Sync + 'static>>,
-    DefaultRequestProcessor,
-    ScheduledExecutorService,
-) {
+    receiver: broadcast::Receiver<SocketAddr>,
+) -> InitProcessorsReturn {
     let route_info_manager_inner = Arc::new(parking_lot::RwLock::new(route_info_manager));
+    let handle = RouteInfoManager::start(route_info_manager_inner.clone(), receiver);
     let kvconfig_manager_inner = Arc::new(parking_lot::RwLock::new(kvconfig_manager));
     let mut processors: HashMap<i32, Box<dyn RequestProcessor + Send + Sync + 'static>> =
         HashMap::new();
@@ -114,6 +119,7 @@ fn init_processors(
         processors,
         DefaultRequestProcessor::new(namesrv_config),
         scheduled_executor_service,
+        handle,
     )
 }
 

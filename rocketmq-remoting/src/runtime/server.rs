@@ -51,6 +51,19 @@ pub struct ConnectionHandler {
     conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
 }
 
+impl Drop for ConnectionHandler {
+    fn drop(&mut self) {
+        if let Some(ref sender) = self.conn_disconnect_notify {
+            let socket_addr = self.connection.remote_addr;
+            warn!(
+                "connection[{}] disconnected, Send notify message.",
+                socket_addr
+            );
+            let _ = sender.send(socket_addr);
+        }
+    }
+}
+
 impl ConnectionHandler {
     async fn handle(&mut self) -> anyhow::Result<()> {
         let remote_addr = self.connection.remote_addr;
@@ -161,9 +174,9 @@ impl ConnectionListener {
                     "The client[IP={}] disconnected from the server.",
                     remote_addr
                 );
-                if let Some(ref sender) = handler.conn_disconnect_notify {
+                /*  if let Some(ref sender) = handler.conn_disconnect_notify {
                     let _ = sender.send(remote_addr);
-                }
+                }*/
                 drop(permit);
                 drop(handler);
             });
