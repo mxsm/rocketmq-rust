@@ -6,7 +6,9 @@ edition.workspace = true
 homepage.workspace = true
 repository.workspace = true
 license.workspace = true
-
+description = "Rust implementation of Apache rocketmq name sever"
+keywords = ["rocketmq", "rust", "name-server"]
+readme = "README.md"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
