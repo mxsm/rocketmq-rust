@@ -18,11 +18,6 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
-/// Re-export rocketmq main.
-pub use rocketmq::main;
-/// Re-export tokio module.
-pub use tokio as rocketmq;
-
 pub use crate::thread_pool::{
     FuturesExecutorService, FuturesExecutorServiceBuilder, ScheduledExecutorService,
     TokioExecutorService,
