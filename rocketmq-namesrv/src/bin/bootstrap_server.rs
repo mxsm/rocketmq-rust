@@ -31,6 +31,7 @@ use rocketmq_remoting::{
     code::request_code::RequestCode,
     runtime::{processor::RequestProcessor, server},
 };
+use rocketmq_rust::rocketmq;
 use tokio::{net::TcpListener, sync::broadcast, task::JoinHandle};
 use tracing::info;
 
