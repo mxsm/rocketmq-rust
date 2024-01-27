@@ -26,7 +26,7 @@ use std::{
 
 use bytes::Bytes;
 use rocketmq_common::{
-    common::{mq_version::RocketMqVersion, namesrv::namesrv_config::NamesrvConfig, FAQUrl},
+    common::{namesrv::namesrv_config::NamesrvConfig, FAQUrl},
     TimeUtils,
 };
 use rocketmq_remoting::{
@@ -104,15 +104,16 @@ impl ClientRequestProcessor {
                         .get_kvconfig("ORDER_TOPIC_CONFIG", request_header.topic.clone());
                     topic_route_data.order_topic_conf = order_topic_config;
                 };
-                let standard_json_only = request_header.accept_standard_json_only.unwrap_or(false);
+                /*let standard_json_only = request_header.accept_standard_json_only.unwrap_or(false);
                 let content = if request.version() >= RocketMqVersion::into(RocketMqVersion::V494)
                     || standard_json_only
                 {
                     //topic_route_data.encode()
-                    todo!()
+                    topic_route_data.encode()
                 } else {
                     topic_route_data.encode()
-                };
+                };*/
+                let content = topic_route_data.encode();
                 RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::Success)
                     .set_body(Some(Bytes::from(content)))
             }

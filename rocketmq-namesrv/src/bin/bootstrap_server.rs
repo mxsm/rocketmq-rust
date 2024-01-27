@@ -117,7 +117,7 @@ fn init_processors(
     );
     (
         processors,
-        DefaultRequestProcessor::new(namesrv_config),
+        DefaultRequestProcessor::new_with(route_info_manager_inner, kvconfig_manager_inner),
         scheduled_executor_service,
         handle,
     )

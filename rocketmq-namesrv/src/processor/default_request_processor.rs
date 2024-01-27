@@ -222,7 +222,7 @@ impl DefaultRequestProcessor {
         }
     }
 
-    pub(crate) fn new_with_route_info_manager(
+    pub fn new_with(
         route_info_manager: Arc<parking_lot::RwLock<RouteInfoManager>>,
         kvconfig_manager: Arc<parking_lot::RwLock<KVConfigManager>>,
     ) -> Self {
