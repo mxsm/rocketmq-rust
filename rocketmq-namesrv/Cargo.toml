@@ -12,9 +12,9 @@ readme = "README.md"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-rocketmq-rust = { version = "*", path = "../rocketmq" }
-rocketmq-common = { version = "*", path = "../rocketmq-common" }
-rocketmq-remoting = { version = "*", path = "../rocketmq-remoting" }
+rocketmq-rust = { version = "0.1.0", path = "../rocketmq" }
+rocketmq-common = { version = "0.1.0", path = "../rocketmq-common" }
+rocketmq-remoting = { version = "0.1.0", path = "../rocketmq-remoting" }
 
 
 

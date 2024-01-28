@@ -11,8 +11,8 @@ description = "Rust implementation of Apache rocketmq remoting"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-rocketmq-common = { version = "*",path = "../rocketmq-common" }
-rocketmq-macros = { version = "*",path = "../rocketmq-macros" }
+rocketmq-common = { version = "0.1.0",path = "../rocketmq-common" }
+rocketmq-macros = { version = "0.1.0",path = "../rocketmq-macros" }
 
 anyhow.workspace = true
 bytes.workspace = true
