@@ -7,6 +7,7 @@ homepage.workspace = true
 repository.workspace = true
 license.workspace = true
 description = "Rust implementation of Apache rocketmq remoting"
+readme = "README.md"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
