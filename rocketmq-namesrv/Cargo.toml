@@ -1,6 +1,6 @@
 [package]
 name = "rocketmq-namesrv"
-version = "0.1.0"
+version.workspace = true
 authors.workspace = true
 edition.workspace = true
 homepage.workspace = true
@@ -12,9 +12,9 @@ readme = "README.md"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-rocketmq-rust = { version = "0.1.0", path = "../rocketmq" }
-rocketmq-common = { version = "0.1.0", path = "../rocketmq-common" }
-rocketmq-remoting = { version = "0.1.0", path = "../rocketmq-remoting" }
+rocketmq-rust = { version = "0.2.0", path = "../rocketmq" }
+rocketmq-common = { version = "0.2.0", path = "../rocketmq-common" }
+rocketmq-remoting = { version = "0.2.0", path = "../rocketmq-remoting" }
 
 
 
