@@ -14,6 +14,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#![allow(dead_code)]
-
-mod config;
+#[allow(dead_code)]
+#[derive(Debug, Copy, Clone)]
+pub enum FlushDiskType {
+    SyncFlush,
+    AsyncFlush,
+}
