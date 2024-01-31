@@ -14,6 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#![allow(dead_code)]
 
-mod config;
+mod broker_role;
+mod flush_disk_type;
+mod message_store_config;
+mod store_path_config_helper;
