@@ -30,5 +30,8 @@ futures-core = "0.3"
 futures-executor = "0.3"
 futures-task = "0.3"
 
+bytes.workspace = true
+lazy_static.workspace = true
+
 #tools
 dirs.workspace = true

@@ -28,6 +28,7 @@ pub mod mq_version;
 pub mod namesrv;
 mod sys_flag;
 pub use crate::common::sys_flag::topic_sys_flag as TopicSysFlag;
+pub mod message;
 pub mod topic;
 
 #[derive(Debug, Clone)]
