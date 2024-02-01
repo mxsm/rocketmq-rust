@@ -15,10 +15,10 @@
  * limitations under the License.
  */
 
-mod message_batch;
-mod message_id;
-mod message_queue;
-mod message_single;
+pub mod message_batch;
+pub mod message_id;
+pub mod message_queue;
+pub mod message_single;
 
 use std::collections::HashMap;
 
