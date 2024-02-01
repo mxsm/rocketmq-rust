@@ -14,10 +14,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#![allow(dead_code)]
 
-mod base;
-mod config;
-mod consume_queue;
-mod filter;
-mod log_file;
+use std::{cell::RefCell, sync::Arc};
+
+use crate::log_file::mapped_file::MappedFile;
+
+/// Represents the result of selecting a mapped buffer.
+pub struct SelectMappedBufferResult {
+    /// The start offset.
+    pub start_offset: i64,
+    /// The ByteBuffer.
+    pub byte_buffer: Vec<u8>, // Using Vec<u8> as a simplified representation of ByteBuffer in Rust
+    /// The size.
+    pub size: i32,
+    /// The mapped file.
+    pub mapped_file: Option<Arc<RefCell<dyn MappedFile>>>,
+    /// Indicates whether the buffer is in the cache.
+    pub is_in_cache: bool,
+}
