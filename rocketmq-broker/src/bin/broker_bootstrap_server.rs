@@ -15,4 +15,13 @@
  * limitations under the License.
  */
 
-pub mod command;
+use clap::Parser;
+use rocketmq_broker::command::Args;
+use rocketmq_rust::rocketmq;
+
+#[rocketmq::main]
+async fn main() -> anyhow::Result<()> {
+    rocketmq_common::log::init_logger();
+    let _args = Args::parse();
+    Ok(())
+}

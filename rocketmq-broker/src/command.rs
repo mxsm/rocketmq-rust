@@ -14,5 +14,36 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::path::PathBuf;
 
-pub mod command;
+use clap::Parser;
+
+#[derive(Parser, Debug)]
+#[command(
+    author = "mxsm",
+    version = "0.2.0",
+    about = "RocketMQ Broker Server(Rust)"
+)]
+pub struct Args {
+    /// Broker config properties file
+    #[arg(short, long, value_name = "FILE", default_missing_value = "None")]
+    config_file: Option<PathBuf>,
+
+    /// Print important config item
+    #[arg(short = 'm', long, required = false)]
+    print_important_config: bool,
+
+    /// Name server address list, eg: '192.168.0.1:9876;192.168.0.2:9876'
+    #[arg(
+        short,
+        long,
+        value_name = "IP",
+        default_value = "127.0.0.1:9876",
+        required = false
+    )]
+    namesrv_addr: String,
+
+    ///Print all config item
+    #[arg(short, long, required = false)]
+    print_config_item: bool,
+}
