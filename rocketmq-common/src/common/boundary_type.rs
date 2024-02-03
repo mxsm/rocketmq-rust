@@ -14,9 +14,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#[derive(Debug, PartialEq, Eq)]
+pub enum BoundaryType {
+    Lower,
+    Upper,
+}
 
-pub(crate) mod dispatch_request;
-pub mod message_result;
-pub mod message_status_enum;
-pub mod select_result;
-pub mod swappable;
+impl BoundaryType {
+    pub fn get_name(&self) -> &'static str {
+        match self {
+            BoundaryType::Lower => "lower",
+            BoundaryType::Upper => "upper",
+        }
+    }
+
+    pub fn get_type(name: &str) -> Option<BoundaryType> {
+        match name.to_lowercase().as_str() {
+            "lower" => Some(BoundaryType::Lower),
+            "upper" => Some(BoundaryType::Upper),
+            _ => None,
+        }
+    }
+}

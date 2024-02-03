@@ -16,3 +16,4 @@
  */
 
 pub(crate) mod consume_queue_ext;
+pub(crate) mod mapped_file_queue;

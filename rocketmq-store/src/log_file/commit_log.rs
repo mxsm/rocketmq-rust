@@ -15,8 +15,29 @@
  * limitations under the License.
  */
 
-pub(crate) mod dispatch_request;
-pub mod message_result;
-pub mod message_status_enum;
-pub mod select_result;
-pub mod swappable;
+use crate::{base::swappable::Swappable, consume_queue::mapped_file_queue::MappedFileQueue};
+
+pub struct CommitLog {
+    pub(crate) mapped_file_queue: MappedFileQueue,
+}
+
+impl CommitLog {
+    pub fn load(&mut self) -> bool {
+        self.mapped_file_queue.load()
+    }
+}
+
+impl Swappable for CommitLog {
+    fn swap_map(
+        &self,
+        _reserve_num: i32,
+        _force_swap_interval_ms: i64,
+        _normal_swap_interval_ms: i64,
+    ) {
+        todo!()
+    }
+
+    fn clean_swapped_map(&self, _force_clean_swap_interval_ms: i64) {
+        todo!()
+    }
+}

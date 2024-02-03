@@ -15,8 +15,17 @@
  * limitations under the License.
  */
 
-pub(crate) mod dispatch_request;
-pub mod message_result;
-pub mod message_status_enum;
-pub mod select_result;
-pub mod swappable;
+/// Clean up page-table on super large disk.
+pub trait Swappable {
+    /// Swap map with specified parameters.
+    ///
+    /// `reserve_num`: Number of reserved items.
+    /// `force_swap_interval_ms`: Force swap interval in milliseconds.
+    /// `normal_swap_interval_ms`: Normal swap interval in milliseconds.
+    fn swap_map(&self, reserve_num: i32, force_swap_interval_ms: i64, normal_swap_interval_ms: i64);
+
+    /// Clean swapped map with specified force clean swap interval.
+    ///
+    /// `force_clean_swap_interval_ms`: Force clean swap interval in milliseconds.
+    fn clean_swapped_map(&self, force_clean_swap_interval_ms: i64);
+}

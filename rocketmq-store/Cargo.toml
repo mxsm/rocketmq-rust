@@ -11,15 +11,45 @@ readme.workspace = true
 description.workspace = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[features]
+default = ["local_file_store"]
+local_file_store = []
+data_store = ["local_file_store"]
+
 
 [dependencies]
 rocketmq-common = {version = "0.2.0", path = "../rocketmq-common"}
 
-lazy_static.workspace = true
-
 #tools
 dirs.workspace = true
+
+parking_lot.workspace = true
+
+anyhow.workspace = true
+bytes.workspace = true
+thiserror.workspace = true
+
+#tokio
+tokio.workspace = true
+tokio-util.workspace = true
+tokio-stream.workspace = true
+
+#log
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 #json spupport
 serde.workspace = true
 serde_json.workspace = true
+
+rand.workspace = true
+lazy_static.workspace = true
+
+#futures
+futures = "0.3"
+futures-util = "0.3"
+futures-core = "0.3"
+futures-sink = "0.3"
+futures-io = "0.3"
+
+num_cpus.workspace = true

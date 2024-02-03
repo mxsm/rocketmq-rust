@@ -15,8 +15,10 @@
  * limitations under the License.
  */
 #[allow(dead_code)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Default)]
 pub enum FlushDiskType {
     SyncFlush,
+
+    #[default]
     AsyncFlush,
 }
