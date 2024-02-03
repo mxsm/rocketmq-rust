@@ -1,5 +1,3 @@
-use std::default;
-
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
@@ -16,11 +14,25 @@ use std::default;
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#[allow(dead_code)]
-#[derive(Debug, Copy, Clone, Default)]
-pub enum BrokerRole {
-    #[default]
-    AsyncMaster,
-    SyncMaster,
-    Slave,
+#[derive(Debug, PartialEq, Eq)]
+pub enum BoundaryType {
+    Lower,
+    Upper,
+}
+
+impl BoundaryType {
+    pub fn get_name(&self) -> &'static str {
+        match self {
+            BoundaryType::Lower => "lower",
+            BoundaryType::Upper => "upper",
+        }
+    }
+
+    pub fn get_type(name: &str) -> Option<BoundaryType> {
+        match name.to_lowercase().as_str() {
+            "lower" => Some(BoundaryType::Lower),
+            "upper" => Some(BoundaryType::Upper),
+            _ => None,
+        }
+    }
 }

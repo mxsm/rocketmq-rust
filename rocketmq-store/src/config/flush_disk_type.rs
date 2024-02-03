@@ -1,3 +1,5 @@
+use std::default;
+
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
@@ -15,8 +17,10 @@
  * limitations under the License.
  */
 #[allow(dead_code)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Default)]
 pub enum FlushDiskType {
     SyncFlush,
+
+    #[default]
     AsyncFlush,
 }

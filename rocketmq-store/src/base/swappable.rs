@@ -1,5 +1,3 @@
-use std::default;
-
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
@@ -16,11 +14,18 @@ use std::default;
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#[allow(dead_code)]
-#[derive(Debug, Copy, Clone, Default)]
-pub enum BrokerRole {
-    #[default]
-    AsyncMaster,
-    SyncMaster,
-    Slave,
+
+/// Clean up page-table on super large disk.
+pub trait Swappable {
+    /// Swap map with specified parameters.
+    ///
+    /// `reserve_num`: Number of reserved items.
+    /// `force_swap_interval_ms`: Force swap interval in milliseconds.
+    /// `normal_swap_interval_ms`: Normal swap interval in milliseconds.
+    fn swap_map(&self, reserve_num: i32, force_swap_interval_ms: i64, normal_swap_interval_ms: i64);
+
+    /// Clean swapped map with specified force clean swap interval.
+    ///
+    /// `force_clean_swap_interval_ms`: Force clean swap interval in milliseconds.
+    fn clean_swapped_map(&self, force_clean_swap_interval_ms: i64);
 }

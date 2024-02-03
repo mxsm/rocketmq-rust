@@ -14,39 +14,28 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+mod commit_log;
 pub(crate) mod mapped_file;
-
-use std::future::Future;
-
-use rocketmq_common::common::message::{
-    message_batch::MessageExtBatch, message_single::MessageExtBrokerInner,
-};
-
-use crate::{
-    base::message_result::{GetMessageResult, PutMessageResult},
-    filter::MessageFilter,
-};
 
 pub trait MessageStore {
     /// Load previously stored messages.
     ///
     /// Returns `true` if success; `false` otherwise.
-    fn load(&self) -> bool;
+    fn load(&mut self) -> bool;
 
     /// Launch this message store.
     ///
     /// # Throws
     ///
     /// Throws an `Exception` if there is any error.
-    fn start(&self) -> Result<(), Box<dyn std::error::Error>>;
+    // fn start(&self) -> Result<(), Box<dyn std::error::Error>>;
 
     /// Shutdown this message store.
-    fn shutdown(&self);
+    //fn shutdown(&self);
 
     /// Destroy this message store. Generally, all persistent files should be removed after
     /// invocation.
-    fn destroy(&self);
+    // fn destroy(&self);
 
     /// Store a message into the store in an async manner. The processor can process the next
     /// request rather than wait for the result. When the result is completed, notify the client
@@ -59,10 +48,10 @@ pub trait MessageStore {
     /// # Returns
     ///
     /// A `Future` for the result of the store operation.
-    fn async_put_message(
+    /* fn async_put_message(
         &self,
         msg: MessageExtBrokerInner,
-    ) -> impl Future<Output = PutMessageResult>;
+    ) -> impl Future<Output = PutMessageResult>;*/
 
     /// Store a batch of messages in an async manner.
     ///
@@ -73,10 +62,10 @@ pub trait MessageStore {
     /// # Returns
     ///
     /// A `Future` for the result of the store operation.
-    fn async_put_messages(
+    /*fn async_put_messages(
         &self,
         message_ext_batch: MessageExtBatch,
-    ) -> impl Future<Output = PutMessageResult>;
+    ) -> impl Future<Output = PutMessageResult>;*/
 
     /// Store a message into the store.
     ///
@@ -87,7 +76,7 @@ pub trait MessageStore {
     /// # Returns
     ///
     /// Result of the store operation.
-    fn put_message(&self, msg: MessageExtBrokerInner) -> PutMessageResult;
+    /* fn put_message(&self, msg: MessageExtBrokerInner) -> PutMessageResult; */
 
     /// Store a batch of messages.
     ///
@@ -98,7 +87,7 @@ pub trait MessageStore {
     /// # Returns
     ///
     /// Result of storing batch messages.
-    fn put_messages(&self, message_ext_batch: MessageExtBatch) -> PutMessageResult;
+    // fn put_messages(&self, message_ext_batch: MessageExtBatch) -> PutMessageResult;
 
     /// Query at most `max_msg_nums` messages belonging to `topic` at `queue_id` starting
     /// from given `offset`. Resulting messages will further be screened using provided message
@@ -116,7 +105,7 @@ pub trait MessageStore {
     /// # Returns
     ///
     /// Matched messages.
-    fn get_message(
+    /*fn get_message(
         &self,
         group: &str,
         topic: &str,
@@ -124,7 +113,7 @@ pub trait MessageStore {
         offset: i64,
         max_msg_nums: i32,
         message_filter: impl MessageFilter,
-    ) -> GetMessageResult;
+    ) -> GetMessageResult;*/
 
     /// Asynchronous get message.
     ///
@@ -144,7 +133,7 @@ pub trait MessageStore {
     /// # Returns
     ///
     /// Matched messages.
-    fn get_message_async(
+    /* fn get_message_async(
         &self,
         group: &str,
         topic: &str,
@@ -152,7 +141,7 @@ pub trait MessageStore {
         offset: i64,
         max_msg_nums: i32,
         message_filter: impl MessageFilter,
-    ) -> impl Future<Output = GetMessageResult>;
+    ) -> impl Future<Output = GetMessageResult>;*/
 
     /// Query at most `max_msg_nums` messages belonging to `topic` at `queue_id` starting
     /// from given `offset`. Resulting messages will further be screened using provided message
@@ -171,7 +160,7 @@ pub trait MessageStore {
     /// # Returns
     ///
     /// Matched messages.
-    fn get_message_with_size(
+    /*fn get_message_with_size(
         &self,
         group: &str,
         topic: &str,
@@ -180,7 +169,7 @@ pub trait MessageStore {
         max_msg_nums: i32,
         max_total_msg_size: i32,
         message_filter: impl MessageFilter,
-    ) -> GetMessageResult;
+    ) -> GetMessageResult;*/
 
     /// Asynchronous get message.
     ///
@@ -201,7 +190,7 @@ pub trait MessageStore {
     /// # Returns
     ///
     /// Matched messages.
-    fn get_message_with_size_async(
+    /*fn get_message_with_size_async(
         &self,
         group: &str,
         topic: &str,
@@ -210,7 +199,7 @@ pub trait MessageStore {
         max_msg_nums: i32,
         max_total_msg_size: i32,
         message_filter: impl MessageFilter,
-    ) -> impl Future<Output = GetMessageResult>;
+    ) -> impl Future<Output = GetMessageResult>;*/
 
     /// Get the maximum offset of the topic queue.
     ///
@@ -222,7 +211,7 @@ pub trait MessageStore {
     /// # Returns
     ///
     /// Maximum offset at present.
-    fn get_max_offset_in_queue(&self, topic: &str, queue_id: i32) -> i64;
+    /* fn get_max_offset_in_queue(&self, topic: &str, queue_id: i32) -> i64; */
 
     /// Get the maximum offset of the topic queue.
     ///
@@ -236,6 +225,7 @@ pub trait MessageStore {
     /// # Returns
     ///
     /// Maximum offset at present.
+
     fn get_max_offset_in_queue_with_commit(
         &self,
         topic: &str,

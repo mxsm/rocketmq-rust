@@ -17,5 +17,5 @@
 
 mod broker_role;
 mod flush_disk_type;
-mod message_store_config;
-mod store_path_config_helper;
+pub mod message_store_config;
+pub(crate) mod store_path_config_helper;

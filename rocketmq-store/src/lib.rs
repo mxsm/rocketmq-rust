@@ -21,3 +21,5 @@ mod config;
 mod consume_queue;
 mod filter;
 mod log_file;
+mod message_store;
+mod queue;
