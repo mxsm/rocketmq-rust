@@ -14,6 +14,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::fmt;
+
+use serde::{Deserialize, Deserializer};
+
 #[allow(dead_code)]
 #[derive(Debug, Copy, Clone, Default)]
 pub enum FlushDiskType {
@@ -21,4 +25,37 @@ pub enum FlushDiskType {
 
     #[default]
     AsyncFlush,
+}
+
+impl<'de> Deserialize<'de> for FlushDiskType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct FlushDiskTypeVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for FlushDiskTypeVisitor {
+            type Value = FlushDiskType;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a string representing FlushDiskType")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "SYNC_FLUSH" => Ok(FlushDiskType::SyncFlush),
+                    "ASYNC_FLUSH" => Ok(FlushDiskType::AsyncFlush),
+                    _ => Err(serde::de::Error::unknown_variant(
+                        value,
+                        &["SyncFlush", "AsyncFlush"],
+                    )),
+                }
+            }
+        }
+
+        deserializer.deserialize_str(FlushDiskTypeVisitor)
+    }
 }

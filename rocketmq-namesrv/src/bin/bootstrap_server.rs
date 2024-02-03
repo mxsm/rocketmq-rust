@@ -19,11 +19,10 @@ use std::{collections::HashMap, net::SocketAddr, path::PathBuf, sync::Arc, time:
 
 use clap::Parser;
 use rocketmq_common::{
-    common::{mix_all::ROCKETMQ_HOME_ENV, namesrv::namesrv_config::NamesrvConfig},
+    common::namesrv::namesrv_config::NamesrvConfig, EnvUtils::EnvUtils, ParseConfigFile,
     ScheduledExecutorService,
 };
 use rocketmq_namesrv::{
-    parse_command_and_config_file,
     processor::{default_request_processor::DefaultRequestProcessor, ClientRequestProcessor},
     KVConfigManager, RouteInfoManager,
 };
@@ -39,17 +38,9 @@ use tracing::info;
 async fn main() -> anyhow::Result<()> {
     rocketmq_common::log::init_logger();
     let args = Args::parse();
-    let home = std::env::var(ROCKETMQ_HOME_ENV).unwrap_or_else(|_| {
-        let rocketmq_home_dir = std::env::current_dir()
-            .unwrap()
-            .into_os_string()
-            .to_string_lossy()
-            .to_string();
-        std::env::set_var(ROCKETMQ_HOME_ENV, rocketmq_home_dir.clone());
-        rocketmq_home_dir
-    });
+    let home = EnvUtils::get_rocketmq_home();
 
-    info!("rocketmq home: {}", home);
+    info!("Rocketmq(Rust) home: {}", home);
     info!(
         "Rocketmq name server(Rust) running on {}:{}",
         args.ip, args.port
@@ -57,8 +48,8 @@ async fn main() -> anyhow::Result<()> {
 
     //bind local host and port, start tcp listen
     let listener = TcpListener::bind(&format!("{}:{}", args.ip, args.port)).await?;
-    let config_file = PathBuf::from(home).join("conf").join("namesrv.conf");
-    let config = parse_command_and_config_file(config_file)?;
+    let config_file = PathBuf::from(home).join("conf").join("namesrv.toml");
+    let config = ParseConfigFile::parse_config_file::<NamesrvConfig>(config_file)?;
     let (notify_conn_disconnect, _) = broadcast::channel::<SocketAddr>(100);
     let receiver = notify_conn_disconnect.subscribe();
     let route_info_manager = RouteInfoManager::new_with_config(config.clone());

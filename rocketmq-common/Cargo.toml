@@ -33,5 +33,7 @@ futures-task = "0.3"
 bytes.workspace = true
 lazy_static.workspace = true
 
+config.workspace = true
+
 #tools
 dirs.workspace = true

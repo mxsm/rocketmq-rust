@@ -26,11 +26,10 @@ pub use crate::thread_pool::{
 pub mod common;
 pub mod log;
 mod thread_pool;
-mod utils;
+pub mod utils;
 pub use crate::utils::{
     crc32_utils as CRC32Utils, env_utils as EnvUtils, file_utils as FileUtils,
-    time_utils as TimeUtils,
+    parse_config_file as ParseConfigFile, time_utils as TimeUtils,
 };
-
 #[cfg(test)]
 mod tests {}

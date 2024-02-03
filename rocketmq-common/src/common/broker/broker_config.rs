@@ -15,15 +15,18 @@
  * limitations under the License.
  */
 
+use serde::Deserialize;
+
 use crate::common::mix_all;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BrokerIdentity {
-    broker_name: String,
-    broker_cluster_name: String,
-    broker_id: u64,
-    is_broker_container: bool,
-    is_in_broker_container: bool,
+    pub broker_name: String,
+    pub broker_cluster_name: String,
+    pub broker_id: u64,
+    pub is_broker_container: bool,
+    pub is_in_broker_container: bool,
 }
 
 impl BrokerIdentity {
@@ -83,7 +86,8 @@ fn default_broker_name() -> String {
     String::from("DefaultBrokerName")
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BrokerConfig {
     pub broker_identity: BrokerIdentity,
 }

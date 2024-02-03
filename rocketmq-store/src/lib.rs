@@ -17,7 +17,7 @@
 #![allow(dead_code)]
 
 mod base;
-mod config;
+pub mod config;
 mod consume_queue;
 mod filter;
 mod log_file;

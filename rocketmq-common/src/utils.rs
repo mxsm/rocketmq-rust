@@ -17,4 +17,5 @@
 pub mod crc32_utils;
 pub mod env_utils;
 pub mod file_utils;
+pub mod parse_config_file;
 pub mod time_utils;

@@ -16,6 +16,7 @@
  */
 
 use lazy_static::lazy_static;
+use serde::Deserialize;
 
 use crate::config::{broker_role::BrokerRole, flush_disk_type::FlushDiskType};
 
@@ -23,7 +24,8 @@ lazy_static! {
     static ref USER_HOME: String = dirs::home_dir().unwrap().to_str().unwrap().to_string();
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MessageStoreConfig {
     pub store_path_root_dir: String,
     pub store_path_commit_log: Option<String>,

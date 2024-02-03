@@ -14,23 +14,27 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
 
-pub struct BrokerController {
-    pub(crate) broker_config: BrokerConfig,
-    pub(crate) store_config: MessageStoreConfig,
-}
+use std::{fmt::Debug, path::PathBuf};
 
-impl BrokerController {
-    pub fn new(broker_config: BrokerConfig, store_config: MessageStoreConfig) -> Self {
-        Self {
-            broker_config,
-            store_config,
-        }
-    }
-}
+use config::Config;
+use serde::Deserialize;
+use tracing::info;
 
-impl BrokerController {
-    pub fn start(&mut self) {}
+use crate::common::namesrv::namesrv_config::NamesrvConfig;
+
+pub fn parse_config_file<'de, C>(config_file: PathBuf) -> anyhow::Result<C, anyhow::Error>
+where
+    C: Default + Debug + Deserialize<'de>,
+{
+    let config_file = Config::builder()
+        .add_source(config::File::with_name(
+            config_file.to_string_lossy().into_owned().as_str(),
+        ))
+        .build()
+        .map_or(C::default(), |result| {
+            result.try_deserialize::<C>().unwrap_or_default()
+        });
+    info!("parse config: {:?}", config_file);
+    Ok(config_file)
 }
