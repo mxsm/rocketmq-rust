@@ -16,12 +16,25 @@
  */
 
 use clap::Parser;
-use rocketmq_broker::command::Args;
+use rocketmq_broker::{broker_controller::BrokerController, command::Args};
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_rust::rocketmq;
 
 #[rocketmq::main]
 async fn main() -> anyhow::Result<()> {
     rocketmq_common::log::init_logger();
+    let controller = create_broker_controller()?;
+    start_broker_controller(controller)?;
+    Ok(())
+}
+
+fn create_broker_controller() -> anyhow::Result<BrokerController> {
     let _args = Args::parse();
+    Ok(BrokerController::new(BrokerConfig::default()))
+}
+
+fn start_broker_controller(broker_controller: BrokerController) -> anyhow::Result<()> {
+    let mut broker_controller = broker_controller;
+    broker_controller.start();
     Ok(())
 }
