@@ -23,23 +23,21 @@ pub struct CommitLog {
 
 impl CommitLog {
     pub fn load(&mut self) -> bool {
-        let result = self.mapped_file_queue.load();
-
-        result
+        self.mapped_file_queue.load()
     }
 }
 
 impl Swappable for CommitLog {
     fn swap_map(
         &self,
-        reserve_num: i32,
-        force_swap_interval_ms: i64,
-        normal_swap_interval_ms: i64,
+        _reserve_num: i32,
+        _force_swap_interval_ms: i64,
+        _normal_swap_interval_ms: i64,
     ) {
         todo!()
     }
 
-    fn clean_swapped_map(&self, force_clean_swap_interval_ms: i64) {
+    fn clean_swapped_map(&self, _force_clean_swap_interval_ms: i64) {
         todo!()
     }
 }

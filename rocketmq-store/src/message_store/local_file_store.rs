@@ -28,7 +28,7 @@ pub struct LocalFileMessageStore {
 impl MessageStore for LocalFileMessageStore {
     fn load(&mut self) -> bool {
         //check abort file exists
-        let mut result = self.is_temp_file_exist();
+        self.is_temp_file_exist();
         //load commit log file
 
         // load consume queue file

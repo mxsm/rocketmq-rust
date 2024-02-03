@@ -1,4 +1,4 @@
-use std::{fs, fs::File, path::Path, vec};
+use std::{fs, vec};
 
 use tracing::{error, info};
 
@@ -25,14 +25,14 @@ pub struct MappedFileQueue {
 impl Swappable for MappedFileQueue {
     fn swap_map(
         &self,
-        reserve_num: i32,
-        force_swap_interval_ms: i64,
-        normal_swap_interval_ms: i64,
+        _reserve_num: i32,
+        _force_swap_interval_ms: i64,
+        _normal_swap_interval_ms: i64,
     ) {
         todo!()
     }
 
-    fn clean_swapped_map(&self, force_clean_swap_interval_ms: i64) {
+    fn clean_swapped_map(&self, _force_clean_swap_interval_ms: i64) {
         todo!()
     }
 }
@@ -57,8 +57,8 @@ impl MappedFileQueue {
 
     fn do_load(&mut self, files: Vec<fs::DirEntry>) -> anyhow::Result<bool> {
         // Ascending order sorting
-        let mut sorted_files: Vec<_> = files.into_iter().collect();
-        sorted_files.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+        let sorted_files: Vec<_> = files.into_iter().collect();
+        //sorted_files.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
 
         for (i, file) in sorted_files.iter().enumerate() {
             if file.path().is_dir() {
