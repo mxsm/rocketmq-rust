@@ -16,6 +16,7 @@ description.workspace = true
 rocketmq-rust = { version = "0.2.0", path = "../rocketmq" }
 rocketmq-common = { version = "0.2.0", path = "../rocketmq-common" }
 rocketmq-remoting = { version = "0.2.0", path = "../rocketmq-remoting" }
+rocketmq-store = { version = "0.2.0", path = "../rocketmq-store" }
 
 anyhow.workspace = true
 env_logger.workspace = true

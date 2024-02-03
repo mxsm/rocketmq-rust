@@ -14,7 +14,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
 
-#![allow(dead_code)]
-pub mod broker_controller;
-pub mod command;
+pub struct BrokerController {
+    pub(crate) broker_config: BrokerConfig,
+}
+
+impl BrokerController {
+    pub fn new(broker_config: BrokerConfig) -> Self {
+        Self { broker_config }
+    }
+}
+
+impl BrokerController {
+    pub fn start(&mut self) {}
+}
