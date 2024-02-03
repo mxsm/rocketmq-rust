@@ -15,13 +15,49 @@
  * limitations under the License.
  */
 
+use crate::common::mix_all::ROCKETMQ_HOME_ENV;
+
+/// Utility functions related to environment variables.
 pub struct EnvUtils;
 
 impl EnvUtils {
+    /// Gets the value of the specified environment variable.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The name of the environment variable to retrieve.
+    ///
+    /// # Returns
+    ///
+    /// An `Option` containing the value of the environment variable, or `None` if the variable is
+    /// not set.
     pub fn get_property(key: impl Into<String>) -> Option<String> {
         match std::env::var(key.into()) {
             Ok(value) => Some(value),
             Err(_error) => None,
         }
+    }
+
+    /// Gets the value of the ROCKETMQ_HOME environment variable.
+    ///
+    /// If ROCKETMQ_HOME is not set, it defaults to the current directory and sets ROCKETMQ_HOME
+    /// accordingly.
+    ///
+    /// # Returns
+    ///
+    /// The value of the ROCKETMQ_HOME environment variable as a `String`.
+    pub fn get_rocketmq_home() -> String {
+        std::env::var(ROCKETMQ_HOME_ENV).unwrap_or_else(|_| {
+            // If ROCKETMQ_HOME is not set, use the current directory as the default value
+            let rocketmq_home_dir = std::env::current_dir()
+                .unwrap()
+                .into_os_string()
+                .to_string_lossy()
+                .to_string();
+
+            // Set ROCKETMQ_HOME to the current directory
+            std::env::set_var(ROCKETMQ_HOME_ENV, rocketmq_home_dir.clone());
+            rocketmq_home_dir
+        })
     }
 }

@@ -27,11 +27,11 @@ use clap::Parser;
 pub struct Args {
     /// Broker config properties file
     #[arg(short, long, value_name = "FILE", default_missing_value = "None")]
-    config_file: Option<PathBuf>,
+    pub config_file: Option<PathBuf>,
 
     /// Print important config item
     #[arg(short = 'm', long, required = false)]
-    print_important_config: bool,
+    pub print_important_config: bool,
 
     /// Name server address list, eg: '192.168.0.1:9876;192.168.0.2:9876'
     #[arg(
@@ -41,9 +41,9 @@ pub struct Args {
         default_value = "127.0.0.1:9876",
         required = false
     )]
-    namesrv_addr: String,
+    pub namesrv_addr: String,
 
     ///Print all config item
     #[arg(short, long, required = false)]
-    print_config_item: bool,
+    pub print_config_item: bool,
 }

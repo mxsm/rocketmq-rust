@@ -14,6 +14,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::fmt;
+
+use serde::{Deserialize, Deserializer};
+
 #[allow(dead_code)]
 #[derive(Debug, Copy, Clone, Default)]
 pub enum BrokerRole {
@@ -21,4 +25,38 @@ pub enum BrokerRole {
     AsyncMaster,
     SyncMaster,
     Slave,
+}
+
+impl<'de> Deserialize<'de> for BrokerRole {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct BrokerRoleVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for BrokerRoleVisitor {
+            type Value = BrokerRole;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a string representing BrokerRole")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "ASYNC_MASTER" => Ok(BrokerRole::AsyncMaster),
+                    "SYNC_MASTER" => Ok(BrokerRole::SyncMaster),
+                    "SLAVE" => Ok(BrokerRole::Slave),
+                    _ => Err(serde::de::Error::unknown_variant(
+                        value,
+                        &["AsyncMaster", "SyncMaster", "Slave"],
+                    )),
+                }
+            }
+        }
+
+        deserializer.deserialize_str(BrokerRoleVisitor)
+    }
 }
