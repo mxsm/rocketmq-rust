@@ -41,7 +41,7 @@ body:
         OS: (e.g., "Ubuntu 20.04")
         OS: (e.g., "Windows Server 2019")
     validations:
-      required: true
+      required: false
 
   - type: textarea
     attributes:
@@ -52,7 +52,7 @@ body:
         version: (e.g. 0.1.0)
         Git commit id: (e.g. 37b9bfa7f4516b8da69e91ec0cb288b9724262a2)
     validations:
-      required: true
+      required: false
 
   - type: textarea
     attributes:
@@ -71,7 +71,7 @@ body:
       placeholder: >
         A clear and concise description of what the bug is.
     validations:
-      required: true
+      required: false
 
   - type: textarea
     attributes:
@@ -80,7 +80,7 @@ body:
       placeholder: >
         If possible, provide a recipe for reproducing the error.
     validations:
-      required: true
+      required: false
 
   - type: textarea
     attributes:
@@ -89,7 +89,7 @@ body:
       placeholder: >
         A clear and concise description of what you expected to see.
     validations:
-      required: true
+      required: false
 
   - type: textarea
     attributes:
@@ -98,7 +98,7 @@ body:
       placeholder: >
         A clear and concise description of what you saw instead.
     validations:
-      required: true
+      required: false
 
   - type: textarea
     attributes:

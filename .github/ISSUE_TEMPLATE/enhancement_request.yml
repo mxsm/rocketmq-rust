@@ -30,7 +30,7 @@ body:
       options:
         - label: >
             I have confirmed that this should be classified as an enhancement rather than a bug/feature.
-          required: true
+          required: false
 
   - type: textarea
     attributes:
@@ -38,7 +38,7 @@ body:
       placeholder: >
         A clear and concise description of the enhancement you would like to see in the project.
     validations:
-      required: true
+      required: false
 
   - type: textarea
     attributes:
@@ -47,7 +47,7 @@ body:
         Explain why you believe this enhancement is necessary, and how it benefits the project and community.
         Include any specific use cases that you have in mind.
     validations:
-      required: true
+      required: false
 
   - type: textarea
     attributes:
@@ -56,7 +56,7 @@ body:
         Describe the enhancement you propose, detailing the change and implementation steps involved.
         If you have multiple solutions, please list them separately.
     validations:
-      required: true
+      required: false
 
   - type: textarea
     attributes:
@@ -64,7 +64,7 @@ body:
       placeholder: >
         List any alternative enhancements or implementations you have considered, and explain why they may not be as effective or appropriate.
     validations:
-      required: true
+      required: false
 
   - type: textarea
     attributes:

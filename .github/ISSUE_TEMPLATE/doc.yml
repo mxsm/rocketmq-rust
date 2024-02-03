@@ -39,7 +39,7 @@ body:
       placeholder: >
         e.g There is a typo
     validations:
-      required: true
+      required: false
 
   - type: checkboxes
     attributes:
