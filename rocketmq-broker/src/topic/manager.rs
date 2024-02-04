@@ -15,8 +15,5 @@
  * limitations under the License.
  */
 
-#![allow(dead_code)]
-pub mod broker_controller;
-pub mod command;
-
-mod topic;
+pub(crate) mod topic_config_manager;
+pub(crate) mod topic_queue_mapping_manager;

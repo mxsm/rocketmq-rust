@@ -15,8 +15,5 @@
  * limitations under the License.
  */
 
-#![allow(dead_code)]
-pub mod broker_controller;
-pub mod command;
-
-mod topic;
+mod consumer_offset_manager;
+mod consumer_order_info_manager;

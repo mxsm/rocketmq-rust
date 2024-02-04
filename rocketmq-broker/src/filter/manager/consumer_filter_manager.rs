@@ -15,8 +15,34 @@
  * limitations under the License.
  */
 
-#![allow(dead_code)]
-pub mod broker_controller;
-pub mod command;
+use rocketmq_common::common::config_manager::ConfigManager;
 
-mod topic;
+pub(crate) struct ConsumerFilterManager {}
+
+//Fully implemented will be removed
+#[allow(unused_variables)]
+impl ConfigManager for ConsumerFilterManager {
+    fn decode0(&mut self, key: &[u8], body: &[u8]) {
+        todo!()
+    }
+
+    fn stop(&mut self) -> bool {
+        todo!()
+    }
+
+    fn config_file_path(&mut self) -> &str {
+        todo!()
+    }
+
+    fn encode(&mut self) -> String {
+        todo!()
+    }
+
+    fn encode_pretty(&mut self, pretty_format: bool) -> String {
+        todo!()
+    }
+
+    fn decode(&mut self, json_string: &str) {
+        todo!()
+    }
+}
