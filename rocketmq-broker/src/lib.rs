@@ -18,3 +18,5 @@
 #![allow(dead_code)]
 pub mod broker_controller;
 pub mod command;
+
+mod topic;
