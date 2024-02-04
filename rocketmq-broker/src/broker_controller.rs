@@ -32,5 +32,29 @@ impl BrokerController {
 }
 
 impl BrokerController {
-    pub fn start(&mut self) {}
+    pub async fn start(&mut self) {}
+
+    pub fn initialize(&mut self) -> bool {
+        let mut result = self.initialize_metadata();
+        if !result {
+            return false;
+        }
+        result = self.initialize_message_store();
+        if !result {
+            return false;
+        }
+        self.recover_and_init_service()
+    }
+
+    pub fn initialize_metadata(&mut self) -> bool {
+        true
+    }
+
+    pub fn initialize_message_store(&mut self) -> bool {
+        true
+    }
+
+    pub fn recover_and_init_service(&mut self) -> bool {
+        true
+    }
 }
