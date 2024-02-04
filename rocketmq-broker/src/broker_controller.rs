@@ -18,8 +18,8 @@ use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 
 pub struct BrokerController {
-    pub(crate) broker_config: BrokerConfig,
-    pub(crate) store_config: MessageStoreConfig,
+    pub broker_config: BrokerConfig,
+    pub store_config: MessageStoreConfig,
 }
 
 impl BrokerController {

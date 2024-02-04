@@ -61,6 +61,10 @@ async fn start_broker_controller(broker_controller: BrokerController) -> anyhow:
     if !broker_controller.initialize() {
         exit(0);
     }
+    info!(
+        "Rocketmq name server(Rust) running on {}:{}",
+        broker_controller.broker_config.broker_ip1, broker_controller.broker_config.listen_port,
+    );
     broker_controller.start().await;
     Ok(())
 }
