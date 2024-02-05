@@ -14,11 +14,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_common::common::{broker::broker_config::BrokerConfig, config_manager::ConfigManager};
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 
-use crate::topic::manager::{topic_config_manager::TopicConfigManager, topic_queue_mapping_manager::TopicQueueMappingManager};
-
+use crate::{
+    filter::manager::consumer_filter_manager::ConsumerFilterManager,
+    offset::manager::{
+        consumer_offset_manager::ConsumerOffsetManager,
+        consumer_order_info_manager::ConsumerOrderInfoManager,
+    },
+    subscription::manager::subscription_group_manager::SubscriptionGroupManager,
+    topic::manager::{
+        topic_config_manager::TopicConfigManager,
+        topic_queue_mapping_manager::TopicQueueMappingManager,
+    },
+};
 
 pub struct BrokerController {
     pub broker_config: BrokerConfig,
@@ -37,7 +47,11 @@ impl BrokerController {
             broker_config,
             store_config,
             topic_config_manager_inner: TopicConfigManager::default(),
-            topic_queue_mapping_manager: TopicQueueMappingManager::default()
+            topic_queue_mapping_manager: TopicQueueMappingManager::default(),
+            consumer_offset_manager: ConsumerOffsetManager::default(),
+            subscription_group_manager: SubscriptionGroupManager::default(),
+            consumer_filter_manager: ConsumerFilterManager::default(),
+            consumer_order_info_manager: ConsumerOrderInfoManager::default(),
         }
     }
 }
@@ -58,8 +72,12 @@ impl BrokerController {
     }
 
     pub fn initialize_metadata(&mut self) -> bool {
-
-        true
+        self.topic_config_manager_inner.load()
+            & self.topic_queue_mapping_manager.load()
+            & self.consumer_offset_manager.load()
+            & self.subscription_group_manager.load()
+            & self.consumer_filter_manager.load()
+            & self.consumer_order_info_manager.load()
     }
 
     pub fn initialize_message_store(&mut self) -> bool {
