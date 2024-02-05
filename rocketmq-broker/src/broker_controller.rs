@@ -17,9 +17,18 @@
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 
+use crate::topic::manager::{topic_config_manager::TopicConfigManager, topic_queue_mapping_manager::TopicQueueMappingManager};
+
+
 pub struct BrokerController {
     pub broker_config: BrokerConfig,
     pub store_config: MessageStoreConfig,
+    pub(crate) topic_config_manager_inner: TopicConfigManager,
+    pub(crate) topic_queue_mapping_manager: TopicQueueMappingManager,
+    pub(crate) consumer_offset_manager: ConsumerOffsetManager,
+    pub(crate) subscription_group_manager: SubscriptionGroupManager,
+    pub(crate) consumer_filter_manager: ConsumerFilterManager,
+    pub(crate) consumer_order_info_manager: ConsumerOrderInfoManager,
 }
 
 impl BrokerController {
@@ -27,6 +36,8 @@ impl BrokerController {
         Self {
             broker_config,
             store_config,
+            topic_config_manager_inner: TopicConfigManager::default(),
+            topic_queue_mapping_manager: TopicQueueMappingManager::default()
         }
     }
 }
@@ -47,6 +58,7 @@ impl BrokerController {
     }
 
     pub fn initialize_metadata(&mut self) -> bool {
+
         true
     }
 

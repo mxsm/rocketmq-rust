@@ -15,4 +15,4 @@
  * limitations under the License.
  */
 
-mod subscription_group_manager;
+pub(crate) mod subscription_group_manager;
