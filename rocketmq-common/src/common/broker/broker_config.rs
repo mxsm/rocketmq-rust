@@ -86,8 +86,28 @@ fn default_broker_name() -> String {
     String::from("DefaultBrokerName")
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrokerConfig {
     pub broker_identity: BrokerIdentity,
+
+    pub broker_ip1: String,
+    pub broker_ip2: Option<String>,
+    pub listen_port: u32,
+}
+
+impl Default for BrokerConfig {
+    fn default() -> Self {
+        let broker_identity = BrokerIdentity::new();
+        let broker_ip1 = String::from("127.0.0.1");
+        let broker_ip2 = None;
+        let listen_port = 10911;
+
+        BrokerConfig {
+            broker_identity,
+            broker_ip1,
+            broker_ip2,
+            listen_port,
+        }
+    }
 }

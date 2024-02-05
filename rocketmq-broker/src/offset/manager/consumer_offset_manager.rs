@@ -17,6 +17,7 @@
 
 use rocketmq_common::common::config_manager::ConfigManager;
 
+#[derive(Default)]
 pub(crate) struct ConsumerOffsetManager {}
 
 //Fully implemented will be removed

@@ -17,6 +17,7 @@
 
 use rocketmq_common::common::config_manager::ConfigManager;
 
+#[derive(Default)]
 pub(crate) struct ConsumerFilterManager {}
 
 //Fully implemented will be removed

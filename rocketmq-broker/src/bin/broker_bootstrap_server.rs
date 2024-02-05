@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-use std::path::PathBuf;
+use std::{path::PathBuf, process::exit};
 
 use clap::Parser;
 use rocketmq_broker::{broker_controller::BrokerController, command::Args};
@@ -30,7 +30,7 @@ use tracing::info;
 async fn main() -> anyhow::Result<()> {
     rocketmq_common::log::init_logger();
     let controller = create_broker_controller()?;
-    start_broker_controller(controller)?;
+    start_broker_controller(controller).await?;
     Ok(())
 }
 
@@ -56,8 +56,15 @@ fn create_broker_controller() -> anyhow::Result<BrokerController> {
     Ok(BrokerController::new(broker_config, message_store_config))
 }
 
-fn start_broker_controller(broker_controller: BrokerController) -> anyhow::Result<()> {
+async fn start_broker_controller(broker_controller: BrokerController) -> anyhow::Result<()> {
     let mut broker_controller = broker_controller;
-    broker_controller.start();
+    if !broker_controller.initialize() {
+        exit(0);
+    }
+    info!(
+        "Rocketmq name server(Rust) running on {}:{}",
+        broker_controller.broker_config.broker_ip1, broker_controller.broker_config.listen_port,
+    );
+    broker_controller.start().await;
     Ok(())
 }

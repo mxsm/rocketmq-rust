@@ -19,4 +19,7 @@
 pub mod broker_controller;
 pub mod command;
 
+mod filter;
+mod offset;
+mod subscription;
 mod topic;

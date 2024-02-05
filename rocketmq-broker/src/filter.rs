@@ -15,4 +15,4 @@
  * limitations under the License.
  */
 
-mod manager;
+pub(crate) mod manager;
