@@ -32,7 +32,7 @@ impl ConfigManager for ConsumerOrderInfoManager {
     }
 
     fn config_file_path(&mut self) -> &str {
-        todo!()
+        ""
     }
 
     fn encode(&mut self) -> String {
