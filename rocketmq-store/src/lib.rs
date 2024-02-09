@@ -23,3 +23,4 @@ mod filter;
 mod log_file;
 mod message_store;
 mod queue;
+pub mod status;

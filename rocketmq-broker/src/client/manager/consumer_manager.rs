@@ -14,18 +14,5 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-#![allow(dead_code)]
-pub mod broker_controller;
-pub mod command;
-
-mod broker_outer_api;
-mod client;
-mod coldctr;
-mod filter;
-mod longpolling;
-mod offset;
-mod processor;
-mod schedule;
-mod subscription;
-mod topic;
+#[derive(Default)]
+pub struct ConsumerManager {}

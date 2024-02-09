@@ -15,17 +15,5 @@
  * limitations under the License.
  */
 
-#![allow(dead_code)]
-pub mod broker_controller;
-pub mod command;
-
-mod broker_outer_api;
-mod client;
-mod coldctr;
-mod filter;
-mod longpolling;
-mod offset;
-mod processor;
-mod schedule;
-mod subscription;
-mod topic;
+pub(crate) mod longpolling_service;
+pub(crate) mod notify_message_arriving_listener;
