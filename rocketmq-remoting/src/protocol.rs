@@ -202,7 +202,7 @@ impl Default for DataVersion {
 }
 
 impl DataVersion {
-    fn new() -> Self {
+    pub fn new() -> Self {
         let timestamp = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .expect("Time went backwards")

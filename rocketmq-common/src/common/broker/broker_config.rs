@@ -17,7 +17,7 @@
 
 use serde::Deserialize;
 
-use crate::common::mix_all;
+use crate::common::{mix_all, topic::TopicValidator};
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -91,9 +91,14 @@ fn default_broker_name() -> String {
 pub struct BrokerConfig {
     pub broker_identity: BrokerIdentity,
 
+    pub topic_config: TopicConfig,
+    pub topic_queue_config: TopicQueueConfig,
+
     pub broker_ip1: String,
     pub broker_ip2: Option<String>,
     pub listen_port: u32,
+    pub trace_topic_enable: bool,
+    pub msg_trace_topic_name: String,
 }
 
 impl Default for BrokerConfig {
@@ -105,9 +110,45 @@ impl Default for BrokerConfig {
 
         BrokerConfig {
             broker_identity,
+            topic_config: TopicConfig::default(),
+            topic_queue_config: Default::default(),
             broker_ip1,
             broker_ip2,
             listen_port,
+            trace_topic_enable: false,
+            msg_trace_topic_name: TopicValidator::RMQ_SYS_TRACE_TOPIC.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopicConfig {
+    pub auto_create_topic_enable: bool,
+    pub cluster_topic_enable: bool,
+    pub broker_topic_enable: bool,
+}
+
+impl Default for TopicConfig {
+    fn default() -> Self {
+        TopicConfig {
+            auto_create_topic_enable: true,
+            cluster_topic_enable: true,
+            broker_topic_enable: true,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopicQueueConfig {
+    pub default_topic_queue_nums: u32,
+}
+
+impl Default for TopicQueueConfig {
+    fn default() -> Self {
+        TopicQueueConfig {
+            default_topic_queue_nums: 8,
         }
     }
 }

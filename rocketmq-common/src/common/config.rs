@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use super::TopicFilterType;
+use crate::common::constant::PermName;
 
 const SEPARATOR: &str = " ";
 const DEFAULT_READ_QUEUE_NUMS: u32 = 16;
@@ -48,17 +49,48 @@ impl Default for TopicConfig {
             topic_name: "".to_string(),
             read_queue_nums: DEFAULT_READ_QUEUE_NUMS,
             write_queue_nums: DEFAULT_WRITE_QUEUE_NUMS,
-            perm: Default::default(),
-            topic_filter_type: TopicFilterType::MultiTag,
-            topic_sys_flag: Default::default(),
-            order: Default::default(),
-            attributes: Default::default(),
+            perm: (PermName::PERM_READ | PermName::PERM_WRITE) as u32,
+            topic_filter_type: TopicFilterType::SingleTag,
+            topic_sys_flag: 0,
+            order: false,
+            attributes: HashMap::new(),
         }
     }
 }
 
 impl TopicConfig {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(topic_name: impl Into<String>) -> Self {
+        TopicConfig {
+            topic_name: topic_name.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn new_with(
+        topic_name: impl Into<String>,
+        read_queue_nums: u32,
+        write_queue_nums: u32,
+    ) -> Self {
+        TopicConfig {
+            topic_name: topic_name.into(),
+            read_queue_nums,
+            write_queue_nums,
+            ..Default::default()
+        }
+    }
+
+    pub fn new_with_perm(
+        topic_name: impl Into<String>,
+        read_queue_nums: u32,
+        write_queue_nums: u32,
+        perm: u32,
+    ) -> Self {
+        TopicConfig {
+            topic_name: topic_name.into(),
+            read_queue_nums,
+            write_queue_nums,
+            perm,
+            ..Default::default()
+        }
     }
 }
