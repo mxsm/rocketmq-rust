@@ -14,18 +14,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use rocketmq_remoting::runtime::processor::RequestProcessor;
 
-#![allow(dead_code)]
-pub mod broker_controller;
-pub mod command;
+#[derive(Default)]
+pub struct NotificationProcessor {}
 
-mod broker_outer_api;
-mod client;
-mod coldctr;
-mod filter;
-mod longpolling;
-mod offset;
-mod processor;
-mod schedule;
-mod subscription;
-mod topic;
+impl RequestProcessor for NotificationProcessor {
+    fn process_request(
+        &mut self,
+        _remote_addr: std::net::SocketAddr,
+        _request: rocketmq_remoting::protocol::remoting_command::RemotingCommand,
+    ) -> rocketmq_remoting::protocol::remoting_command::RemotingCommand {
+        todo!()
+    }
+}

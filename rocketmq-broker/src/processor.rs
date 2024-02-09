@@ -14,18 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-#![allow(dead_code)]
-pub mod broker_controller;
-pub mod command;
-
-mod broker_outer_api;
-mod client;
-mod coldctr;
-mod filter;
-mod longpolling;
-mod offset;
-mod processor;
-mod schedule;
-mod subscription;
-mod topic;
+pub(crate) mod ack_message_processor;
+pub(crate) mod change_invisible_time_processor;
+pub(crate) mod notification_processor;
+pub(crate) mod peek_message_processor;
+pub(crate) mod polling_info_processor;
+pub(crate) mod pop_message_processor;
+pub(crate) mod pull_message_processor;
+pub(crate) mod reply_message_processor;
+pub(crate) mod send_message_processor;
