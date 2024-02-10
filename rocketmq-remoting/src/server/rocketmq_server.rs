@@ -14,28 +14,4 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#![allow(dead_code)]
-pub mod clients;
-pub mod code;
-pub mod codec;
-pub mod connection;
-pub mod error;
-pub mod protocol;
-pub mod remoting;
-pub mod runtime;
-pub mod server;
-
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub struct RocketmqDefaultServer {}

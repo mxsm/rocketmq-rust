@@ -14,28 +14,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#![allow(dead_code)]
-pub mod clients;
-pub mod code;
-pub mod codec;
-pub mod connection;
-pub mod error;
-pub mod protocol;
-pub mod remoting;
-pub mod runtime;
-pub mod server;
 
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
+use crate::{protocol::remoting_command::RemotingCommand, runtime::RPCHook};
+
+pub trait RemotingService {
+    fn start(&mut self) -> impl std::future::Future<Output = ()> + Send;
+
+    fn shutdown(&mut self);
+
+    fn register_rpc_hook(&mut self, hook: impl RPCHook);
+
+    fn clear_rpc_hook(&mut self);
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub struct ResponseFuture;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
+pub trait InvokeCallback {
+    fn operation_complete(&self, response_future: ResponseFuture);
+    fn operation_succeed(&self, _response: RemotingCommand) {}
+    fn operation_fail(&self, _throwable: Box<dyn std::error::Error>) {}
 }
