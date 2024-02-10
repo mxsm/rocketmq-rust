@@ -18,13 +18,19 @@
 use std::{
     collections::HashMap,
     fmt::{Debug, Formatter},
+    sync::Arc,
     time::Duration,
 };
 
 pub use blocking_client::BlockingClient;
 pub use client::Client;
+use rocketmq_common::TokioExecutorService;
 
-use crate::protocol::remoting_command::RemotingCommand;
+use crate::{
+    protocol::remoting_command::RemotingCommand,
+    remoting::{InvokeCallback, RemotingService, ResponseFuture},
+    runtime::processor::RequestProcessor,
+};
 
 mod async_client;
 mod blocking_client;
@@ -69,4 +75,66 @@ impl RemoteClient {
             .or_insert_with(|| BlockingClient::connect(addr).unwrap())
             .invoke_oneway(request, timeout)
     }
+}
+
+trait RemotingClient: RemotingService {
+    fn update_name_server_address_list(&mut self, addrs: Vec<String>);
+
+    fn get_name_server_address_list(&self) -> Vec<String>;
+
+    fn get_available_name_srv_list(&self) -> Vec<String>;
+
+    fn invoke_sync(
+        &mut self,
+        addr: String,
+        request: RemotingCommand,
+        timeout_millis: u64,
+    ) -> Result<RemotingCommand, Box<dyn std::error::Error>>;
+    fn invoke_async(
+        &mut self,
+        addr: String,
+        request: RemotingCommand,
+        timeout_millis: u64,
+        invoke_callback: Arc<dyn InvokeCallback>,
+    ) -> Result<(), Box<dyn std::error::Error>>;
+    fn invoke_oneway(
+        &self,
+        addr: String,
+        request: RemotingCommand,
+        timeout_millis: u64,
+    ) -> Result<(), Box<dyn std::error::Error>>;
+
+    fn invoke(
+        &mut self,
+        addr: String,
+        request: RemotingCommand,
+        timeout_millis: u64,
+    ) -> Result<RemotingCommand, Box<dyn std::error::Error>> {
+        let future = Arc::new(DefaultInvokeCallback {});
+        match self.invoke_async(addr, request, timeout_millis, future) {
+            Ok(_) => Ok(RemotingCommand::default()),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn register_processor(
+        &mut self,
+        request_code: i32,
+        processor: impl RequestProcessor + Send + Sync + 'static,
+        executor: Arc<TokioExecutorService>,
+    );
+
+    fn set_callback_executor(&mut self, executor: Arc<TokioExecutorService>);
+
+    fn is_address_reachable(&mut self, addr: String);
+}
+
+struct DefaultInvokeCallback;
+
+impl InvokeCallback for DefaultInvokeCallback {
+    fn operation_complete(&self, _response_future: ResponseFuture) {}
+
+    fn operation_succeed(&self, _response: RemotingCommand) {}
+
+    fn operation_fail(&self, _throwable: Box<dyn std::error::Error>) {}
 }
