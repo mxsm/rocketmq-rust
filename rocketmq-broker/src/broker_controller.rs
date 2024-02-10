@@ -18,9 +18,12 @@ use std::net::SocketAddr;
 
 use rocketmq_common::common::{broker::broker_config::BrokerConfig, config_manager::ConfigManager};
 use rocketmq_store::{
-    config::message_store_config::MessageStoreConfig,
+    base::store_enum::StoreType, config::message_store_config::MessageStoreConfig,
+    log_file::MessageStore, message_store::local_file_store::LocalFileMessageStore,
     status::manager::broker_stats_manager::BrokerStatsManager,
+    timer::timer_message_store::TimerMessageStore,
 };
+use tracing::{info, warn};
 
 use crate::{
     broker_outer_api::BrokerOuterAPI,
@@ -91,6 +94,8 @@ pub struct BrokerController {
     pub(crate) cold_data_pull_request_hold_service: ColdDataPullRequestHoldService,
     pub(crate) cold_data_cg_ctr_service: ColdDataCgCtrService,
     pub(crate) broker_outer_api: BrokerOuterAPI,
+    pub(crate) message_store: Option<Box<dyn MessageStore>>,
+    pub(crate) timer_message_store: Option<TimerMessageStore>,
 }
 
 impl BrokerController {
@@ -130,6 +135,8 @@ impl BrokerController {
             cold_data_pull_request_hold_service: ColdDataPullRequestHoldService::default(),
             cold_data_cg_ctr_service: Default::default(),
             broker_outer_api: Default::default(),
+            message_store: None,
+            timer_message_store: None,
         }
     }
 }
@@ -159,10 +166,57 @@ impl BrokerController {
     }
 
     pub fn initialize_message_store(&mut self) -> bool {
+        if self.store_config.store_type == StoreType::LocalFile {
+            info!("Use local file as message store");
+            self.message_store = Some(Box::<LocalFileMessageStore>::default());
+        } else if self.store_config.store_type == StoreType::RocksDB {
+            info!("Use RocksDB as message store");
+        } else {
+            warn!("Unknown store type");
+            return false;
+        }
         true
     }
 
     pub fn recover_and_init_service(&mut self) -> bool {
-        true
+        let mut result = true;
+
+        if self.broker_config.enable_controller_mode {
+            info!("Start controller mode(Support for future versions)");
+            todo!()
+        }
+        if self.message_store.is_some() {
+            result = self.message_store.as_mut().unwrap().load();
+        }
+
+        if self.broker_config.timer_wheel_config.timer_wheel_enable {
+            result &= self.timer_message_store.as_mut().unwrap().load();
+        }
+        result &= self.schedule_message_service.load();
+
+        if result {
+            self.initialize_remoting_server();
+            self.initialize_resources();
+            self.register_processor();
+            self.initialize_scheduled_tasks();
+            self.initial_transaction();
+            self.initial_acl();
+            self.initial_rpc_hooks();
+        }
+        result
     }
+
+    fn initialize_remoting_server(&mut self) {}
+
+    fn initialize_resources(&mut self) {}
+
+    fn register_processor(&mut self) {}
+
+    fn initialize_scheduled_tasks(&mut self) {}
+
+    fn initial_transaction(&mut self) {}
+
+    fn initial_acl(&mut self) {}
+
+    fn initial_rpc_hooks(&mut self) {}
 }

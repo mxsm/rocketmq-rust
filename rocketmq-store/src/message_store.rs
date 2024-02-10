@@ -16,4 +16,4 @@
  */
 
 #[cfg(feature = "local_file_store")]
-mod local_file_store;
+pub mod local_file_store;

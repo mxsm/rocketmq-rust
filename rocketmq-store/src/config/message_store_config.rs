@@ -18,7 +18,10 @@
 use lazy_static::lazy_static;
 use serde::Deserialize;
 
-use crate::config::{broker_role::BrokerRole, flush_disk_type::FlushDiskType};
+use crate::{
+    base::store_enum::StoreType,
+    config::{broker_role::BrokerRole, flush_disk_type::FlushDiskType},
+};
 
 lazy_static! {
     static ref USER_HOME: String = dirs::home_dir().unwrap().to_str().unwrap().to_string();
@@ -60,7 +63,7 @@ pub struct MessageStoreConfig {
     pub timer_congest_num_each_slot: usize,
     pub timer_metric_small_threshold: usize,
     pub timer_progress_log_interval_ms: usize,
-    pub store_type: String,
+    pub store_type: StoreType,
     pub mapped_file_size_consume_queue: usize,
     pub enable_consume_queue_ext: bool,
     pub mapped_file_size_consume_queue_ext: usize,

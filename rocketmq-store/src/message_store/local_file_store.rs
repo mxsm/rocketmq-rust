@@ -21,6 +21,7 @@ use crate::{
 };
 
 ///Using local files to store message data, which is also the default method.
+#[derive(Default)]
 pub struct LocalFileMessageStore {
     pub message_store_config: MessageStoreConfig,
 }
