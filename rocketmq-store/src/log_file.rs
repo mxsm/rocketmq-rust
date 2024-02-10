@@ -14,8 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-mod commit_log;
-pub(crate) mod mapped_file;
+pub mod commit_log;
+pub mod mapped_file;
 
 pub trait MessageStore {
     /// Load previously stored messages.

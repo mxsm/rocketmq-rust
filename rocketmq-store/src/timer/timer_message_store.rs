@@ -14,14 +14,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#![allow(dead_code)]
+#[derive(Default)]
+pub struct TimerMessageStore {}
 
-pub mod base;
-pub mod config;
-mod consume_queue;
-mod filter;
-pub mod log_file;
-pub mod message_store;
-mod queue;
-pub mod status;
-pub mod timer;
+impl TimerMessageStore {
+    pub fn load(&mut self) -> bool {
+        true
+    }
+}

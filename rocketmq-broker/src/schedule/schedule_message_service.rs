@@ -15,5 +15,33 @@
  * limitations under the License.
  */
 
+use rocketmq_common::common::config_manager::ConfigManager;
+
 #[derive(Default)]
 pub struct ScheduleMessageService {}
+
+impl ConfigManager for ScheduleMessageService {
+    fn decode0(&mut self, _key: &[u8], _body: &[u8]) {
+        todo!()
+    }
+
+    fn stop(&mut self) -> bool {
+        todo!()
+    }
+
+    fn config_file_path(&mut self) -> &str {
+        todo!()
+    }
+
+    fn encode(&mut self) -> String {
+        todo!()
+    }
+
+    fn encode_pretty(&mut self, _pretty_format: bool) -> String {
+        todo!()
+    }
+
+    fn decode(&mut self, _json_string: &str) {
+        todo!()
+    }
+}

@@ -19,4 +19,5 @@ pub(crate) mod dispatch_request;
 pub mod message_result;
 pub mod message_status_enum;
 pub mod select_result;
+pub mod store_enum;
 pub mod swappable;
