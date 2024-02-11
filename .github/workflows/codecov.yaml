@@ -1,4 +1,8 @@
-name: Rust
+name: codecov
+
+env:
+  # It's really `--all-features`, but not adding the mutually exclusive features from rkyv
+  ALL_NON_EXCLUSIVE_FEATURES: --features "default unstable-locales rkyv-64 rkyv-validation rustc-serialize serde arbitrary"
 
 on:
   push:
