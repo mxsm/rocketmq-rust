@@ -1,5 +1,5 @@
 # rocketmq-rust
-[![Crates.io](https://img.shields.io/crates/v/rocketmq-rust.svg)](https://crates.io/crates/rocketmq-rust)[![Docs.rs](https://docs.rs/rocketmq-rust/badge.svg)](https://docs.rs/rocketmq-rust)[![CI](https://github.com/mxsm/rocketmq-rust/workflows/CI/badge.svg)](https://github.com/mxsm/rocketmq-rust/actions) 
+![GitHub last commit](https://img.shields.io/github/last-commit/mxsm/rocketmq-rust)[![Crates.io](https://img.shields.io/crates/v/rocketmq-rust.svg)](https://crates.io/crates/rocketmq-rust)[![Docs.rs](https://docs.rs/rocketmq-rust/badge.svg)](https://docs.rs/rocketmq-rust)[![CI](https://github.com/mxsm/rocketmq-rust/workflows/CI/badge.svg)](https://github.com/mxsm/rocketmq-rust/actions) ![Codecov](https://img.shields.io/codecov/c/github/mxsm/rocketmq-rust)![GitHub contributors](https://img.shields.io/github/contributors/mxsm/rocketmq-rust)![Crates.io License](https://img.shields.io/crates/l/rocketmq-rust)![GitHub repo size](https://img.shields.io/github/repo-size/mxsm/rocketmq-rust)![Static Badge](https://img.shields.io/badge/MSRV-1.75.0%2B-25b373)
 
 ![](resources/rocketmq-rust.jpg)
 
