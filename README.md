@@ -1,7 +1,8 @@
 # rocketmq-rust
-![GitHub last commit](https://img.shields.io/github/last-commit/mxsm/rocketmq-rust)[![Crates.io](https://img.shields.io/crates/v/rocketmq-rust.svg)](https://crates.io/crates/rocketmq-rust)[![Docs.rs](https://docs.rs/rocketmq-rust/badge.svg)](https://docs.rs/rocketmq-rust)[![CI](https://github.com/mxsm/rocketmq-rust/workflows/CI/badge.svg)](https://github.com/mxsm/rocketmq-rust/actions) ![Codecov](https://img.shields.io/codecov/c/github/mxsm/rocketmq-rust)![GitHub contributors](https://img.shields.io/github/contributors/mxsm/rocketmq-rust)![Crates.io License](https://img.shields.io/crates/l/rocketmq-rust)![GitHub repo size](https://img.shields.io/github/repo-size/mxsm/rocketmq-rust)![Static Badge](https://img.shields.io/badge/MSRV-1.75.0%2B-25b373)
 
-![](resources/rocketmq-rust.jpg)
+![GitHub last commit](https://img.shields.io/github/last-commit/mxsm/rocketmq-rust)[![Crates.io](https://img.shields.io/crates/v/rocketmq-rust.svg)](https://crates.io/crates/rocketmq-rust)[![Docs.rs](https://docs.rs/rocketmq-rust/badge.svg)](https://docs.rs/rocketmq-rust)[![CI](https://github.com/mxsm/rocketmq-rust/workflows/CI/badge.svg)](https://github.com/mxsm/rocketmq-rust/actions) [![CodeCov][codecov-image]][codecov-url]![GitHub contributors](https://img.shields.io/github/contributors/mxsm/rocketmq-rust)![Crates.io License](https://img.shields.io/crates/l/rocketmq-rust)![GitHub repo size](https://img.shields.io/github/repo-size/mxsm/rocketmq-rust)![Static Badge](https://img.shields.io/badge/MSRV-1.75.0%2B-25b373)
+
+![](D:\Develop\Rust\github\rocketmq-rust\resources\rocketmq-rust.jpg)
 
  Welcome to [Apache Rocketmq](https://github.com/apache/rocketmq) Rust implementation (Unofficial ). **RocketMQ-Rust** is a reimplementation of the Apache RocketMQ message middleware in the Rust language. This project aims to provide Rust developers with a high-performance and reliable message queue service, making full use of the features of the Rust language.
 
@@ -84,8 +85,8 @@ Feature list:
 >
 > Perfect support: :sparkling_heart: :white_check_mark:
 
-| Feature                                | request code | Support        | remark |
-| -------------------------------------- | ------------ | -------------- | ------ |
+| Feature                                | request code | Support                              | remark |
+| -------------------------------------- | ------------ | ------------------------------------ | ------ |
 | Put KV Config                          | 100          | :sparkling_heart: :white_check_mark: |        |
 | Get KV Config                          | 101          | :sparkling_heart: :white_check_mark: |        |
 | Delete KV Config                       | 102          | :sparkling_heart: :white_check_mark: |        |
@@ -106,8 +107,8 @@ Feature list:
 | Get unit topic list                    | 311          | :sparkling_heart: :white_check_mark: |        |
 | Get has unit sub topic list            | 312          | :sparkling_heart: :white_check_mark: |        |
 | Get has unit sub ununit topic list     | 313          | :sparkling_heart: :white_check_mark: |        |
-| Update name server config              | 318          | :broken_heart: :x: |        |
-| Get name server config                 | 318          | :broken_heart: :x: |        |
+| Update name server config              | 318          | :broken_heart: :x:                   |        |
+| Get name server config                 | 318          | :broken_heart: :x:                   |        |
 
 Other module implementations will be done subsequently, starting with the Rust implementation of the Name Server. The goal is to achieve functionality similar to the Java version.
 
@@ -129,3 +130,9 @@ Contributions to code, issue reporting, and suggestions are welcome. The develop
 ## License
 
 RocketMQ-Rust is licensed under the [Apache License 2.0](https://github.com/mxsm/rocketmq-rust/blob/main/LICENSE-APACHE) and [MIT license](https://github.com/mxsm/rocketmq-rust/blob/main/LICENSE-MIT)
+
+
+
+[codecov-image]: https://codecov.io/gh/mxsm/rocketmq-rust/branch/main/graph/badge.svg
+[codecov-url]: https://codecov.io/gh/mxsm/rocketmq-rust
+
