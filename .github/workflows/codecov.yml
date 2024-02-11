@@ -32,15 +32,8 @@ jobs:
       # You may pin to the exact commit or the version.
       # uses: actions-rs/grcov@bb47b1ed7883a1502fa6875d562727ace2511248
       uses: actions-rs/grcov@v0.1
-    - name: Codecov
-      # You may pin to the exact commit or the version.
-      # uses: codecov/codecov-action@81cd2dc8148241f03f5839d295e000b8f761e378
-      uses: codecov/codecov-action@v4-beta
+    - name: Upload coverage reports to Codecov
+      uses: codecov/codecov-action@v4.0.1
       env:
-        CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-      with:
-        # Repository upload token - get it from codecov.io. Required only for private repositories
-        # token: # optional
-        # Specify whether the Codecov output should be verbose
-        verbose: true
-        fail_ci_if_error: true
+        token: ${{ secrets.CODECOV_TOKEN }}
+        slug: mxsm/rocketmq-rust
