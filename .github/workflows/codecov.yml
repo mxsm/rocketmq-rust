@@ -36,4 +36,6 @@ jobs:
       uses: codecov/codecov-action@v4.0.1
       env:
         CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-        slug: mxsm/rocketmq-rust
+      with:
+        fail_ci_if_error: true
+        verbose: true
