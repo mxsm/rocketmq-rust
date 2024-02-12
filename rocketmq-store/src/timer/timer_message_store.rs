@@ -21,4 +21,6 @@ impl TimerMessageStore {
     pub fn load(&mut self) -> bool {
         true
     }
+
+    pub fn start(&mut self) {}
 }

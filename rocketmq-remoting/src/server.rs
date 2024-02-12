@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 
+pub mod config;
 pub mod rocketmq_server;
 
 use std::sync::Arc;

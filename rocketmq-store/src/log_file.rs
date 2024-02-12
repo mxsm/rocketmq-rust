@@ -28,7 +28,7 @@ pub trait MessageStore {
     /// # Throws
     ///
     /// Throws an `Exception` if there is any error.
-    // fn start(&self) -> Result<(), Box<dyn std::error::Error>>;
+    fn start(&mut self) -> Result<(), Box<dyn std::error::Error>>;
 
     /// Shutdown this message store.
     //fn shutdown(&self);

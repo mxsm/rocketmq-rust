@@ -31,3 +31,5 @@ pub trait RPCHook {
         response: &RemotingCommand,
     );
 }
+
+pub struct ServerInner {}
