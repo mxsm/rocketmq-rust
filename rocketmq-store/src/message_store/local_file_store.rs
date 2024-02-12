@@ -15,6 +15,8 @@
  * limitations under the License.
  */
 
+use std::error::Error;
+
 use crate::{
     config::{message_store_config::MessageStoreConfig, store_path_config_helper},
     log_file::MessageStore,
@@ -39,6 +41,10 @@ impl MessageStore for LocalFileMessageStore {
         // check point and confirm the max offset
 
         true
+    }
+
+    fn start(&mut self) -> Result<(), Box<dyn Error>> {
+        Ok(())
     }
 
     fn get_max_offset_in_queue_with_commit(

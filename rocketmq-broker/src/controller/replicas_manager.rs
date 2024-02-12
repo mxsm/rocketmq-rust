@@ -14,20 +14,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#[derive(Default)]
+pub struct ReplicasManager {}
 
-#![allow(dead_code)]
-pub mod broker_controller;
-pub mod command;
-
-pub mod broker_config;
-mod broker_outer_api;
-mod client;
-mod coldctr;
-mod controller;
-mod filter;
-mod longpolling;
-mod offset;
-mod processor;
-mod schedule;
-mod subscription;
-mod topic;
+impl ReplicasManager {
+    pub fn start(&mut self) {}
+}

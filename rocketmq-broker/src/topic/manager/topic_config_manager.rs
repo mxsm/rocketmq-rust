@@ -18,10 +18,12 @@
 use std::{collections::HashMap, sync::Arc};
 
 use rocketmq_common::common::{
-    broker::broker_config::BrokerConfig, config::TopicConfig, config_manager::ConfigManager,
-    constant::PermName, mix_all, topic::TopicValidator,
+    config::TopicConfig, config_manager::ConfigManager, constant::PermName, mix_all,
+    topic::TopicValidator,
 };
 use rocketmq_remoting::protocol::DataVersion;
+
+use crate::broker_config::BrokerConfig;
 
 #[derive(Default)]
 pub(crate) struct TopicConfigManager {

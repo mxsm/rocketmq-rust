@@ -16,7 +16,10 @@
  */
 use std::net::SocketAddr;
 
-use rocketmq_common::common::{broker::broker_config::BrokerConfig, config_manager::ConfigManager};
+use rocketmq_common::common::config_manager::ConfigManager;
+use rocketmq_remoting::{
+    remoting::RemotingService, server::rocketmq_server::RocketmqDefaultServer,
+};
 use rocketmq_store::{
     base::store_enum::StoreType, config::message_store_config::MessageStoreConfig,
     log_file::MessageStore, message_store::local_file_store::LocalFileMessageStore,
@@ -26,6 +29,7 @@ use rocketmq_store::{
 use tracing::{info, warn};
 
 use crate::{
+    broker_config::BrokerConfig,
     broker_outer_api::BrokerOuterAPI,
     client::{
         default_consumer_ids_change_listener::DefaultConsumerIdsChangeListener,
@@ -36,6 +40,7 @@ use crate::{
         cold_data_cg_ctr_service::ColdDataCgCtrService,
         cold_data_pull_request_hold_service::ColdDataPullRequestHoldService,
     },
+    controller::replicas_manager::ReplicasManager,
     filter::manager::consumer_filter_manager::ConsumerFilterManager,
     longpolling::{
         longpolling_service::pull_request_hold_service::PullRequestHoldService,
@@ -96,6 +101,9 @@ pub struct BrokerController {
     pub(crate) broker_outer_api: BrokerOuterAPI,
     pub(crate) message_store: Option<Box<dyn MessageStore>>,
     pub(crate) timer_message_store: Option<TimerMessageStore>,
+    pub(crate) replicas_manager: Option<ReplicasManager>,
+    pub(crate) broker_server: Option<RocketmqDefaultServer>,
+    pub(crate) fast_broker_server: Option<RocketmqDefaultServer>,
 }
 
 impl BrokerController {
@@ -137,12 +145,33 @@ impl BrokerController {
             broker_outer_api: Default::default(),
             message_store: None,
             timer_message_store: None,
+            replicas_manager: None,
+            broker_server: None,
+            fast_broker_server: None,
         }
     }
 }
 
 impl BrokerController {
-    pub async fn start(&mut self) {}
+    pub async fn start(&mut self) {
+        if self.message_store.is_some() {
+            let _ = self.message_store.as_mut().unwrap().start();
+        }
+
+        if let Some(ref mut timer_message_store) = self.timer_message_store {
+            timer_message_store.start();
+        }
+
+        if let Some(ref mut replicas_manager) = self.replicas_manager {
+            replicas_manager.start();
+        }
+
+        if let Some(ref mut broker_server) = self.broker_server {
+            broker_server.start().await;
+        }
+
+        //other service start
+    }
 
     pub fn initialize(&mut self) -> bool {
         let mut result = self.initialize_metadata();
@@ -206,7 +235,13 @@ impl BrokerController {
         result
     }
 
-    fn initialize_remoting_server(&mut self) {}
+    fn initialize_remoting_server(&mut self) {
+        let broker_server =
+            RocketmqDefaultServer::new(self.broker_config.broker_server_config.clone());
+        self.broker_server = Some(broker_server);
+
+        // fast broker server implementation in future versions
+    }
 
     fn initialize_resources(&mut self) {}
 
