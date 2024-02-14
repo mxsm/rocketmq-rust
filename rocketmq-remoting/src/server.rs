@@ -28,17 +28,18 @@ use crate::{
     runtime::processor::RequestProcessor,
 };
 
-trait RemotingServer: RemotingService {
+pub trait RemotingServer: RemotingService {
     fn register_processor(
         &mut self,
-        request_code: i32,
-        processor: impl RequestProcessor,
+        request_code: impl Into<i32>,
+        processor: Arc<dyn RequestProcessor + Send + Sync + 'static>,
         executor: Arc<TokioExecutorService>,
     );
+
     fn register_default_processor(
         &mut self,
-        processor: impl RequestProcessor,
-        executor: Arc<TokioExecutorService>,
+        processor: impl RequestProcessor + Send + Sync + 'static,
+        executor: TokioExecutorService,
     );
     fn local_listen_port(&mut self) -> i32;
     fn get_processor_pair(

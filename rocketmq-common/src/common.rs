@@ -17,22 +17,23 @@
 
 use std::fmt;
 
+pub use faq::FAQUrl;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+pub use crate::common::sys_flag::topic_sys_flag as TopicSysFlag;
+
+pub mod attribute;
+pub mod boundary_type;
+pub mod broker;
 pub mod config;
+pub mod config_manager;
 pub mod constant;
 mod faq;
-pub use faq::FAQUrl;
+pub mod message;
 pub mod mix_all;
 pub mod mq_version;
 pub mod namesrv;
 mod sys_flag;
-pub use crate::common::sys_flag::topic_sys_flag as TopicSysFlag;
-pub mod attribute;
-pub mod boundary_type;
-pub mod broker;
-pub mod config_manager;
-pub mod message;
 pub mod topic;
 
 #[derive(Debug, Clone)]
@@ -84,5 +85,16 @@ impl<'de> Deserialize<'de> for TopicFilterType {
         }
 
         deserializer.deserialize_str(TopicFilterTypeVisitor)
+    }
+}
+
+pub struct Pair<T, U> {
+    pub left: T,
+    pub right: U,
+}
+
+impl<T, U> Pair<T, U> {
+    pub fn new(left: T, right: U) -> Self {
+        Self { left, right }
     }
 }

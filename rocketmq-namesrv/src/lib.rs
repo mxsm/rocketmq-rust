@@ -17,11 +17,14 @@
 
 #![allow(dead_code)]
 
+pub use self::{
+    kvconfig::kvconfig_mananger::KVConfigManager,
+    namesrv_config_parse::parse_command_and_config_file,
+    route::route_info_manager::RouteInfoManager,
+};
+
+mod kvconfig;
 mod namesrv_config_parse;
-pub use self::namesrv_config_parse::parse_command_and_config_file;
 pub mod processor;
 mod route;
-pub use self::route::route_info_manager::RouteInfoManager;
-mod kvconfig;
-pub use self::kvconfig::kvconfig_mananger::KVConfigManager;
 mod route_info;

@@ -15,9 +15,9 @@
  * limitations under the License.
  */
 
-use crate::{protocol::remoting_command::RemotingCommand, runtime::RPCHook};
+use crate::{net::ResponseFuture, protocol::remoting_command::RemotingCommand, runtime::RPCHook};
 
-pub trait RemotingService {
+pub trait RemotingService: Send {
     fn start(&mut self) -> impl std::future::Future<Output = ()> + Send;
 
     fn shutdown(&mut self);
@@ -26,8 +26,6 @@ pub trait RemotingService {
 
     fn clear_rpc_hook(&mut self);
 }
-
-pub struct ResponseFuture;
 
 pub trait InvokeCallback {
     fn operation_complete(&self, response_future: ResponseFuture);

@@ -16,7 +16,6 @@
  */
 
 use std::{
-    net::SocketAddr,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -35,7 +34,7 @@ use rocketmq_remoting::{
         header::client_request_header::GetRouteInfoRequestHeader,
         remoting_command::RemotingCommand, RemotingSerializable,
     },
-    runtime::processor::RequestProcessor,
+    runtime::{processor::RequestProcessor, server::ConnectionHandlerContext},
 };
 use tracing::warn;
 
@@ -124,7 +123,7 @@ impl ClientRequestProcessor {
 impl RequestProcessor for ClientRequestProcessor {
     fn process_request(
         &mut self,
-        _remote_addr: SocketAddr,
+        _ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> RemotingCommand {
         self.get_route_info_by_topic(request)

@@ -61,7 +61,7 @@ use rocketmq_remoting::{
         route::route_data_view::TopicRouteData,
         DataVersion, RemotingSerializable,
     },
-    runtime::processor::RequestProcessor,
+    runtime::{processor::RequestProcessor, server::ConnectionHandlerContext},
 };
 use tracing::{info, warn};
 
@@ -76,7 +76,7 @@ pub struct DefaultRequestProcessor {
 impl RequestProcessor for DefaultRequestProcessor {
     fn process_request(
         &mut self,
-        remote_addr: SocketAddr,
+        ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> RemotingCommand {
         let code = request.code();
@@ -92,7 +92,9 @@ impl RequestProcessor for DefaultRequestProcessor {
             Some(RequestCode::DeleteKvConfig) => self.delete_kv_config(request),
             Some(RequestCode::QueryDataVersion) => self.query_broker_topic_config(request),
             //handle register broker
-            Some(RequestCode::RegisterBroker) => self.process_register_broker(remote_addr, request),
+            Some(RequestCode::RegisterBroker) => {
+                self.process_register_broker(ctx.remoting_address(), request)
+            }
             Some(RequestCode::UnregisterBroker) => self.process_unregister_broker(request),
             Some(RequestCode::BrokerHeartbeat) => self.process_broker_heartbeat(request),
             Some(RequestCode::GetBrokerMemberGroup) => self.get_broker_member_group(request),

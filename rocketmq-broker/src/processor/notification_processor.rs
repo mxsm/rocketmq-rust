@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use rocketmq_remoting::runtime::processor::RequestProcessor;
+use rocketmq_remoting::runtime::{processor::RequestProcessor, server::ConnectionHandlerContext};
 
 #[derive(Default)]
 pub struct NotificationProcessor {}
@@ -22,7 +22,7 @@ pub struct NotificationProcessor {}
 impl RequestProcessor for NotificationProcessor {
     fn process_request(
         &mut self,
-        _remote_addr: std::net::SocketAddr,
+        _ctx: ConnectionHandlerContext,
         _request: rocketmq_remoting::protocol::remoting_command::RemotingCommand,
     ) -> rocketmq_remoting::protocol::remoting_command::RemotingCommand {
         todo!()

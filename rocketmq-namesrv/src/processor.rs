@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 
-mod client_request_processor;
 pub use self::client_request_processor::ClientRequestProcessor;
+
+mod client_request_processor;
 pub mod default_request_processor;

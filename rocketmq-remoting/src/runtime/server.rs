@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-use std::{collections::HashMap, future::Future, net::SocketAddr, sync::Arc, time::Duration};
+use std::{future::Future, net::SocketAddr, sync::Arc, time::Duration};
 
 use futures::SinkExt;
 use tokio::{
@@ -27,8 +27,9 @@ use tokio_stream::StreamExt;
 use tracing::{error, info, warn};
 
 use crate::{
-    connection::Connection, protocol::remoting_command::RemotingCommand,
-    runtime::processor::RequestProcessor,
+    connection::Connection,
+    protocol::remoting_command::RemotingCommand,
+    runtime::{ArcDefaultRequestProcessor, ArcProcessorTable},
 };
 
 /// Default limit the max number of connections.
@@ -41,10 +42,8 @@ type Tx = mpsc::UnboundedSender<RemotingCommand>;
 type Rx = mpsc::UnboundedReceiver<RemotingCommand>;
 
 pub struct ConnectionHandler {
-    default_request_processor:
-        Arc<tokio::sync::RwLock<Box<dyn RequestProcessor + Send + Sync + 'static>>>,
-    processor_table:
-        Arc<tokio::sync::RwLock<HashMap<i32, Box<dyn RequestProcessor + Send + Sync + 'static>>>>,
+    default_request_processor: ArcDefaultRequestProcessor,
+    processor_table: ArcProcessorTable,
     connection: Connection,
     shutdown: Shutdown,
     _shutdown_complete: mpsc::Sender<()>,
@@ -66,7 +65,7 @@ impl Drop for ConnectionHandler {
 
 impl ConnectionHandler {
     async fn handle(&mut self) -> anyhow::Result<()> {
-        let remote_addr = self.connection.remote_addr;
+        let _remote_addr = self.connection.remote_addr;
         while !self.shutdown.is_shutdown {
             let frame = tokio::select! {
                 res = self.connection.framed.next() => res,
@@ -89,14 +88,16 @@ impl ConnectionHandler {
                     return Ok(());
                 }
             };
+            let ctx = ConnectionHandlerContext::new(&self.connection);
             let opaque = cmd.opaque();
             let response = match self.processor_table.write().await.get_mut(&cmd.code()) {
                 None => self
                     .default_request_processor
                     .write()
                     .await
-                    .process_request(remote_addr, cmd),
-                Some(pr) => pr.process_request(remote_addr, cmd),
+                    .left
+                    .process_request(ctx, cmd),
+                Some(pr) => pr.left.process_request(ctx, cmd),
             };
             tokio::select! {
                 result = self.connection.framed.send(response.set_opaque(opaque)) => match result{
@@ -134,10 +135,8 @@ struct ConnectionListener {
 
     conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
 
-    default_request_processor:
-        Arc<tokio::sync::RwLock<Box<dyn RequestProcessor + Send + Sync + 'static>>>,
-    processor_table:
-        Arc<tokio::sync::RwLock<HashMap<i32, Box<dyn RequestProcessor + Send + Sync + 'static>>>>,
+    default_request_processor: ArcDefaultRequestProcessor,
+    processor_table: ArcProcessorTable,
 }
 
 impl ConnectionListener {
@@ -212,8 +211,8 @@ impl ConnectionListener {
 pub async fn run(
     listener: TcpListener,
     shutdown: impl Future,
-    default_request_processor: impl RequestProcessor + Sync + Send + 'static,
-    processor_table: HashMap<i32, Box<dyn RequestProcessor + Sync + Send + 'static>>,
+    default_request_processor: ArcDefaultRequestProcessor,
+    processor_table: ArcProcessorTable,
     conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
 ) {
     let (notify_shutdown, _) = broadcast::channel(1);
@@ -222,12 +221,10 @@ pub async fn run(
     let mut listener = ConnectionListener {
         listener,
         notify_shutdown,
-        default_request_processor: Arc::new(tokio::sync::RwLock::new(Box::new(
-            default_request_processor,
-        ))),
+        default_request_processor,
         shutdown_complete_tx,
         conn_disconnect_notify,
-        processor_table: Arc::new(tokio::sync::RwLock::new(processor_table)),
+        processor_table,
         limit_connections: Arc::new(Semaphore::new(DEFAULT_MAX_CONNECTIONS)),
     };
 
@@ -295,5 +292,19 @@ impl Shutdown {
 
         // Remember that the signal has been received.
         self.is_shutdown = true;
+    }
+}
+
+pub struct ConnectionHandlerContext<'a> {
+    pub(crate) connection: &'a Connection,
+}
+
+impl<'a> ConnectionHandlerContext<'a> {
+    pub fn new(connection: &'a Connection) -> Self {
+        Self { connection }
+    }
+
+    pub fn remoting_address(&self) -> SocketAddr {
+        self.connection.remote_addr
     }
 }

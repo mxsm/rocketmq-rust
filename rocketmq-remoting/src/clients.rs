@@ -27,8 +27,9 @@ pub use client::Client;
 use rocketmq_common::TokioExecutorService;
 
 use crate::{
+    net::ResponseFuture,
     protocol::remoting_command::RemotingCommand,
-    remoting::{InvokeCallback, RemotingService, ResponseFuture},
+    remoting::{InvokeCallback, RemotingService},
     runtime::processor::RequestProcessor,
 };
 

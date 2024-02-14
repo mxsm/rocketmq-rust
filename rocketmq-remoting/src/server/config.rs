@@ -16,6 +16,18 @@
  */
 use serde::{Deserialize, Serialize};
 
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BrokerServerConfig {}
+pub struct BrokerServerConfig {
+    pub listen_port: u32,
+    pub bind_address: String,
+}
+
+impl Default for BrokerServerConfig {
+    fn default() -> Self {
+        BrokerServerConfig {
+            listen_port: 10911,
+            bind_address: "0.0.0.0".to_string(),
+        }
+    }
+}

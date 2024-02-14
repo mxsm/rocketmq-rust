@@ -19,8 +19,9 @@ use std::{collections::HashMap, net::SocketAddr, path::PathBuf, sync::Arc, time:
 
 use clap::Parser;
 use rocketmq_common::{
-    common::namesrv::namesrv_config::NamesrvConfig, EnvUtils::EnvUtils, ParseConfigFile,
-    ScheduledExecutorService,
+    common::{namesrv::namesrv_config::NamesrvConfig, Pair},
+    EnvUtils::EnvUtils,
+    ParseConfigFile, ScheduledExecutorService, TokioExecutorService,
 };
 use rocketmq_namesrv::{
     processor::{default_request_processor::DefaultRequestProcessor, ClientRequestProcessor},
@@ -54,14 +55,18 @@ async fn main() -> anyhow::Result<()> {
     let receiver = notify_conn_disconnect.subscribe();
     let route_info_manager = RouteInfoManager::new_with_config(config.clone());
     let kvconfig_manager = KVConfigManager::new(config.clone());
-    let (processor_table, default_request_processor, scheduled_executor_service, _handle) =
+    let (processor_table, default_request_processor, scheduled_executor_service, _handle, _service) =
         init_processors(route_info_manager, config, kvconfig_manager, receiver);
+
     //run server
     server::run(
         listener,
         tokio::signal::ctrl_c(),
-        default_request_processor,
-        processor_table,
+        Arc::new(tokio::sync::RwLock::new(Pair::new(
+            Box::new(default_request_processor),
+            TokioExecutorService::new(),
+        ))),
+        Arc::new(tokio::sync::RwLock::new(processor_table)),
         Some(notify_conn_disconnect),
     )
     .await;
@@ -70,10 +75,14 @@ async fn main() -> anyhow::Result<()> {
 }
 
 type InitProcessorsReturn = (
-    HashMap<i32, Box<dyn RequestProcessor + Send + Sync + 'static>>,
+    HashMap<
+        i32,
+        Pair<Box<dyn RequestProcessor + Send + Sync + 'static>, Arc<TokioExecutorService>>,
+    >,
     DefaultRequestProcessor,
     ScheduledExecutorService,
     JoinHandle<()>,
+    Arc<TokioExecutorService>,
 );
 
 fn init_processors(
@@ -85,15 +94,21 @@ fn init_processors(
     let route_info_manager_inner = Arc::new(parking_lot::RwLock::new(route_info_manager));
     let handle = RouteInfoManager::start(route_info_manager_inner.clone(), receiver);
     let kvconfig_manager_inner = Arc::new(parking_lot::RwLock::new(kvconfig_manager));
-    let mut processors: HashMap<i32, Box<dyn RequestProcessor + Send + Sync + 'static>> =
-        HashMap::new();
+    let mut processors: HashMap<
+        i32,
+        Pair<Box<dyn RequestProcessor + Send + Sync + 'static>, Arc<TokioExecutorService>>,
+    > = HashMap::new();
+    let service = Arc::new(TokioExecutorService::new());
     processors.insert(
         RequestCode::GetRouteinfoByTopic.to_i32(),
-        Box::new(ClientRequestProcessor::new(
-            route_info_manager_inner.clone(),
-            namesrv_config.clone(),
-            kvconfig_manager_inner.clone(),
-        )),
+        Pair::new(
+            Box::new(ClientRequestProcessor::new(
+                route_info_manager_inner.clone(),
+                namesrv_config.clone(),
+                kvconfig_manager_inner.clone(),
+            )),
+            service.clone(),
+        ),
     );
     let scheduled_executor_service = ScheduledExecutorService::new_with_config(
         1,
@@ -112,6 +127,7 @@ fn init_processors(
         DefaultRequestProcessor::new_with(route_info_manager_inner, kvconfig_manager_inner),
         scheduled_executor_service,
         handle,
+        service,
     )
 }
 

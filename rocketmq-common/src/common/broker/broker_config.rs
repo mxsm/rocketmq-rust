@@ -17,7 +17,7 @@
 
 use serde::Deserialize;
 
-use crate::common::{mix_all, topic::TopicValidator};
+use crate::common::mix_all;
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
