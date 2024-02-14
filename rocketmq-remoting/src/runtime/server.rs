@@ -26,8 +26,11 @@ use tokio::{
 use tokio_stream::StreamExt;
 use tracing::{error, info, warn};
 
-use crate::runtime::{ArcDefaultRequestProcessor, ArcProcessorTable};
-use crate::{connection::Connection, protocol::remoting_command::RemotingCommand};
+use crate::{
+    connection::Connection,
+    protocol::remoting_command::RemotingCommand,
+    runtime::{ArcDefaultRequestProcessor, ArcProcessorTable},
+};
 
 /// Default limit the max number of connections.
 const DEFAULT_MAX_CONNECTIONS: usize = 1000;

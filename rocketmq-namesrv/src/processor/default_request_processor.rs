@@ -22,7 +22,6 @@ use rocketmq_common::{
     common::{mix_all, mq_version::RocketMqVersion, namesrv::namesrv_config::NamesrvConfig},
     CRC32Utils,
 };
-use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
 use rocketmq_remoting::{
     code::{
         request_code::RequestCode,
@@ -62,7 +61,7 @@ use rocketmq_remoting::{
         route::route_data_view::TopicRouteData,
         DataVersion, RemotingSerializable,
     },
-    runtime::processor::RequestProcessor,
+    runtime::{processor::RequestProcessor, server::ConnectionHandlerContext},
 };
 use tracing::{info, warn};
 

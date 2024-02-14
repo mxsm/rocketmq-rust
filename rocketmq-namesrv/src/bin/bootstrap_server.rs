@@ -18,13 +18,10 @@
 use std::{collections::HashMap, net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use clap::Parser;
-use tokio::{net::TcpListener, sync::broadcast, task::JoinHandle};
-use tracing::info;
-
-use rocketmq_common::common::Pair;
 use rocketmq_common::{
-    common::namesrv::namesrv_config::NamesrvConfig, EnvUtils::EnvUtils, ParseConfigFile,
-    ScheduledExecutorService, TokioExecutorService,
+    common::{namesrv::namesrv_config::NamesrvConfig, Pair},
+    EnvUtils::EnvUtils,
+    ParseConfigFile, ScheduledExecutorService, TokioExecutorService,
 };
 use rocketmq_namesrv::{
     processor::{default_request_processor::DefaultRequestProcessor, ClientRequestProcessor},
@@ -35,6 +32,8 @@ use rocketmq_remoting::{
     runtime::{processor::RequestProcessor, server},
 };
 use rocketmq_rust::rocketmq;
+use tokio::{net::TcpListener, sync::broadcast, task::JoinHandle};
+use tracing::info;
 
 #[rocketmq::main]
 async fn main() -> anyhow::Result<()> {

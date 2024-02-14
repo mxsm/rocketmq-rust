@@ -14,8 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use rocketmq_remoting::runtime::processor::RequestProcessor;
-use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
+use rocketmq_remoting::runtime::{processor::RequestProcessor, server::ConnectionHandlerContext};
 
 #[derive(Default)]
 pub struct ChangeInvisibleTimeProcessor {}

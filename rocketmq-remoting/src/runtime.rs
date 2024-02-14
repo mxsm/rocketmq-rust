@@ -15,17 +15,15 @@
  * limitations under the License.
  */
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
-use rocketmq_common::common::Pair;
-use rocketmq_common::TokioExecutorService;
+use rocketmq_common::{common::Pair, TokioExecutorService};
 
-use crate::net::ResponseFuture;
-use crate::protocol::remoting_command::RemotingCommand;
-use crate::protocol::RemotingCommandType;
-use crate::runtime::processor::RequestProcessor;
-use crate::runtime::server::ConnectionHandlerContext;
+use crate::{
+    net::ResponseFuture,
+    protocol::{remoting_command::RemotingCommand, RemotingCommandType},
+    runtime::{processor::RequestProcessor, server::ConnectionHandlerContext},
+};
 
 mod config;
 pub mod processor;
@@ -66,14 +64,14 @@ pub struct ServerInner {
     pub(crate) response_table: HashMap<i32, ResponseFuture>,
 
     pub(crate) processor_table: HashMap<
-        i32, /*request code*/
+        i32, /* request code */
         Pair<Arc<dyn RequestProcessor + Send + Sync>, Arc<TokioExecutorService>>,
     >,
     pub(crate) default_request_processor_pair:
         Option<Pair<Box<dyn RequestProcessor + Send + Sync>, TokioExecutorService>>,
 
     pub(crate) processor_table1: HashMap<
-        i32, /*request code*/
+        i32, /* request code */
         Pair<Box<dyn RequestProcessor + Send + Sync>, TokioExecutorService>,
     >,
     pub(crate) default_request_processor_pair1:

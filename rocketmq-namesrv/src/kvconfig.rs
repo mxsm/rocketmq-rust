@@ -15,12 +15,12 @@
  * limitations under the License.
  */
 
-pub mod kvconfig_mananger;
-
 use std::collections::HashMap;
 
 use rocketmq_remoting::protocol::RemotingSerializable;
 use serde::{Deserialize, Serialize};
+
+pub mod kvconfig_mananger;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct KVConfigSerializeWrapper {

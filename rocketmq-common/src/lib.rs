@@ -18,18 +18,21 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
-pub use crate::thread_pool::{
-    FuturesExecutorService, FuturesExecutorServiceBuilder, ScheduledExecutorService,
-    TokioExecutorService,
+pub use crate::{
+    thread_pool::{
+        FuturesExecutorService, FuturesExecutorServiceBuilder, ScheduledExecutorService,
+        TokioExecutorService,
+    },
+    utils::{
+        crc32_utils as CRC32Utils, env_utils as EnvUtils, file_utils as FileUtils,
+        parse_config_file as ParseConfigFile, time_utils as TimeUtils,
+    },
 };
 
 pub mod common;
 pub mod log;
 mod thread_pool;
 pub mod utils;
-pub use crate::utils::{
-    crc32_utils as CRC32Utils, env_utils as EnvUtils, file_utils as FileUtils,
-    parse_config_file as ParseConfigFile, time_utils as TimeUtils,
-};
+
 #[cfg(test)]
 mod tests {}

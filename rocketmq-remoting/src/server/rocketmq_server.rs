@@ -16,19 +16,15 @@
  */
 #![allow(unused_variables)]
 
-use std::net::SocketAddr;
-use std::{error::Error, sync::Arc};
-
-use tokio::net::TcpListener;
-use tokio::sync::broadcast;
+use std::{error::Error, net::SocketAddr, sync::Arc};
 
 use rocketmq_common::TokioExecutorService;
+use tokio::{net::TcpListener, sync::broadcast};
 
-use crate::runtime::ServerInner;
 use crate::{
     protocol::remoting_command::RemotingCommand,
     remoting::{InvokeCallback, RemotingService},
-    runtime::{processor::RequestProcessor, RPCHook},
+    runtime::{processor::RequestProcessor, RPCHook, ServerInner},
     server::{config::BrokerServerConfig, RemotingServer},
 };
 

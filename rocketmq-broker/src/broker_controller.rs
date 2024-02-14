@@ -14,22 +14,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::net::SocketAddr;
-use std::sync::Arc;
+use std::{net::SocketAddr, sync::Arc};
 
-use tracing::{info, warn};
-
-use rocketmq_common::common::config_manager::ConfigManager;
-use rocketmq_common::TokioExecutorService;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::server::rocketmq_server::RocketmqDefaultServer;
-use rocketmq_remoting::server::RemotingServer;
+use rocketmq_common::{common::config_manager::ConfigManager, TokioExecutorService};
+use rocketmq_remoting::{
+    code::request_code::RequestCode,
+    server::{rocketmq_server::RocketmqDefaultServer, RemotingServer},
+};
 use rocketmq_store::{
     base::store_enum::StoreType, config::message_store_config::MessageStoreConfig,
     log_file::MessageStore, message_store::local_file_store::LocalFileMessageStore,
     status::manager::broker_stats_manager::BrokerStatsManager,
     timer::timer_message_store::TimerMessageStore,
 };
+use tracing::{info, warn};
 
 use crate::{
     broker_config::BrokerConfig,
