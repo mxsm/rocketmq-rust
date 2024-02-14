@@ -16,10 +16,15 @@
  */
 #![allow(unused_variables)]
 
+use std::net::SocketAddr;
 use std::{error::Error, sync::Arc};
+
+use tokio::net::TcpListener;
+use tokio::sync::broadcast;
 
 use rocketmq_common::TokioExecutorService;
 
+use crate::runtime::ServerInner;
 use crate::{
     protocol::remoting_command::RemotingCommand,
     remoting::{InvokeCallback, RemotingService},
@@ -29,19 +34,40 @@ use crate::{
 
 pub struct RocketmqDefaultServer {
     pub(crate) broker_server_config: BrokerServerConfig,
+    pub(crate) server_inner: ServerInner,
 }
 
 impl RocketmqDefaultServer {
     pub fn new(broker_server_config: BrokerServerConfig) -> Self {
         Self {
             broker_server_config,
+            server_inner: ServerInner::new(),
         }
     }
 }
 
 impl RemotingService for RocketmqDefaultServer {
     async fn start(&mut self) {
-        todo!()
+        let listener = TcpListener::bind(&format!(
+            "{}:{}",
+            self.broker_server_config.bind_address.as_str(),
+            self.broker_server_config.listen_port
+        ))
+        .await
+        .unwrap();
+        let (notify_conn_disconnect, _) = broadcast::channel::<SocketAddr>(100);
+        /*run(
+            listener,
+            tokio::signal::ctrl_c(),
+            self.server_inner
+                .default_request_processor_pair
+                .as_ref()
+                .unwrap()
+                .clone(),
+            self.server_inner.processor_table.as_ref().unwrap().clone(),
+            Some(notify_conn_disconnect),
+        )
+        .await;*/
     }
 
     fn shutdown(&mut self) {
@@ -60,19 +86,22 @@ impl RemotingService for RocketmqDefaultServer {
 impl RemotingServer for RocketmqDefaultServer {
     fn register_processor(
         &mut self,
-        request_code: i32,
-        processor: impl RequestProcessor,
+        request_code: impl Into<i32>,
+        processor: Arc<dyn RequestProcessor + Send + Sync + 'static>,
         executor: Arc<TokioExecutorService>,
     ) {
-        todo!()
+        /*self.server_inner
+        .processor_table
+        .insert(request_code.into(), Pair::new(processor, executor));*/
     }
 
     fn register_default_processor(
         &mut self,
-        processor: impl RequestProcessor,
-        executor: Arc<TokioExecutorService>,
+        processor: impl RequestProcessor + Send + Sync + 'static,
+        executor: TokioExecutorService,
     ) {
-        todo!()
+        /*self.server_inner.default_request_processor_pair =
+        Some(Pair::new(Box::new(processor), executor));*/
     }
 
     fn local_listen_port(&mut self) -> i32 {

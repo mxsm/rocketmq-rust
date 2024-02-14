@@ -26,7 +26,7 @@ use bytes::Bytes;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 
-use super::SerializeType;
+use super::{RemotingCommandType, SerializeType};
 use crate::{
     code::response_code::RemotingSysResponseCode,
     protocol::{
@@ -107,6 +107,11 @@ impl Default for RemotingCommand {
             serialize_type: SerializeType::JSON,
         }
     }
+}
+
+impl RemotingCommand {
+    pub(crate) const RPC_TYPE: i32 = 0;
+    pub(crate) const RPC_ONEWAY: i32 = 1;
 }
 
 impl RemotingCommand {
@@ -221,13 +226,13 @@ impl RemotingCommand {
     }
 
     pub fn mark_response_type(mut self) -> Self {
-        let mark = 1 << 0;
+        let mark = 1 << Self::RPC_TYPE;
         self.flag |= mark;
         self
     }
 
     pub fn mark_oneway_rpc(mut self) -> Self {
-        let mark = 1 << 1;
+        let mark = 1 << Self::RPC_ONEWAY;
         self.flag |= mark;
         self
     }
@@ -302,6 +307,24 @@ impl RemotingCommand {
         match self.ext_fields {
             None => None,
             Some(ref header) => T::from(header),
+        }
+    }
+
+    pub fn is_response_type(&self) -> bool {
+        let bits = 1 << Self::RPC_TYPE;
+        (self.flag & bits) == bits
+    }
+
+    pub fn is_oneway_rpc(&self) -> bool {
+        let bits = 1 << Self::RPC_ONEWAY;
+        (self.flag & bits) == bits
+    }
+
+    pub fn get_type(&self) -> RemotingCommandType {
+        if self.is_response_type() {
+            RemotingCommandType::RESPONSE
+        } else {
+            RemotingCommandType::REQUEST
         }
     }
 }

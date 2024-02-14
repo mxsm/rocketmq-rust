@@ -15,18 +15,21 @@
  * limitations under the License.
  */
 use std::net::SocketAddr;
+use std::sync::Arc;
+
+use tracing::{info, warn};
 
 use rocketmq_common::common::config_manager::ConfigManager;
-use rocketmq_remoting::{
-    remoting::RemotingService, server::rocketmq_server::RocketmqDefaultServer,
-};
+use rocketmq_common::TokioExecutorService;
+use rocketmq_remoting::code::request_code::RequestCode;
+use rocketmq_remoting::server::rocketmq_server::RocketmqDefaultServer;
+use rocketmq_remoting::server::RemotingServer;
 use rocketmq_store::{
     base::store_enum::StoreType, config::message_store_config::MessageStoreConfig,
     log_file::MessageStore, message_store::local_file_store::LocalFileMessageStore,
     status::manager::broker_stats_manager::BrokerStatsManager,
     timer::timer_message_store::TimerMessageStore,
 };
-use tracing::{info, warn};
 
 use crate::{
     broker_config::BrokerConfig,
@@ -104,6 +107,9 @@ pub struct BrokerController {
     pub(crate) replicas_manager: Option<ReplicasManager>,
     pub(crate) broker_server: Option<RocketmqDefaultServer>,
     pub(crate) fast_broker_server: Option<RocketmqDefaultServer>,
+
+    //executors
+    pub(crate) send_message_executor: Arc<TokioExecutorService>,
 }
 
 impl BrokerController {
@@ -148,6 +154,7 @@ impl BrokerController {
             replicas_manager: None,
             broker_server: None,
             fast_broker_server: None,
+            send_message_executor: Arc::new(Default::default()),
         }
     }
 }
@@ -166,9 +173,9 @@ impl BrokerController {
             replicas_manager.start();
         }
 
-        if let Some(ref mut broker_server) = self.broker_server {
-            broker_server.start().await;
-        }
+        /*        if let Some(ref mut broker_server) = self.broker_server {
+            //broker_server.start();
+        };*/
 
         //other service start
     }
@@ -245,7 +252,30 @@ impl BrokerController {
 
     fn initialize_resources(&mut self) {}
 
-    fn register_processor(&mut self) {}
+    fn register_processor(&mut self) {
+        let broker_server = self.broker_server.as_mut().unwrap();
+        let send_message_processor = Arc::new(SendMessageProcessor::default());
+        broker_server.register_processor(
+            RequestCode::SendMessage,
+            send_message_processor.clone(),
+            self.send_message_executor.clone(),
+        );
+        broker_server.register_processor(
+            RequestCode::SendMessageV2,
+            send_message_processor.clone(),
+            self.send_message_executor.clone(),
+        );
+        broker_server.register_processor(
+            RequestCode::SendBatchMessage,
+            send_message_processor.clone(),
+            self.send_message_executor.clone(),
+        );
+        broker_server.register_processor(
+            RequestCode::ConsumerSendMsgBack,
+            send_message_processor,
+            self.send_message_executor.clone(),
+        );
+    }
 
     fn initialize_scheduled_tasks(&mut self) {}
 

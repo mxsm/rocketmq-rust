@@ -22,6 +22,7 @@ use rocketmq_common::{
     common::{mix_all, mq_version::RocketMqVersion, namesrv::namesrv_config::NamesrvConfig},
     CRC32Utils,
 };
+use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
 use rocketmq_remoting::{
     code::{
         request_code::RequestCode,
@@ -76,7 +77,7 @@ pub struct DefaultRequestProcessor {
 impl RequestProcessor for DefaultRequestProcessor {
     fn process_request(
         &mut self,
-        remote_addr: SocketAddr,
+        ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> RemotingCommand {
         let code = request.code();
@@ -92,7 +93,9 @@ impl RequestProcessor for DefaultRequestProcessor {
             Some(RequestCode::DeleteKvConfig) => self.delete_kv_config(request),
             Some(RequestCode::QueryDataVersion) => self.query_broker_topic_config(request),
             //handle register broker
-            Some(RequestCode::RegisterBroker) => self.process_register_broker(remote_addr, request),
+            Some(RequestCode::RegisterBroker) => {
+                self.process_register_broker(ctx.remoting_address(), request)
+            }
             Some(RequestCode::UnregisterBroker) => self.process_unregister_broker(request),
             Some(RequestCode::BrokerHeartbeat) => self.process_broker_heartbeat(request),
             Some(RequestCode::GetBrokerMemberGroup) => self.get_broker_member_group(request),

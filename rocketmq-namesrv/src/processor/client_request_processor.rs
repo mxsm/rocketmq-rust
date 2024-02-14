@@ -16,7 +16,6 @@
  */
 
 use std::{
-    net::SocketAddr,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -25,10 +24,13 @@ use std::{
 };
 
 use bytes::Bytes;
+use tracing::warn;
+
 use rocketmq_common::{
     common::{namesrv::namesrv_config::NamesrvConfig, FAQUrl},
     TimeUtils,
 };
+use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
 use rocketmq_remoting::{
     code::response_code::{RemotingSysResponseCode, ResponseCode},
     protocol::{
@@ -37,7 +39,6 @@ use rocketmq_remoting::{
     },
     runtime::processor::RequestProcessor,
 };
-use tracing::warn;
 
 use crate::{
     kvconfig::kvconfig_mananger::KVConfigManager, route::route_info_manager::RouteInfoManager,
@@ -124,7 +125,7 @@ impl ClientRequestProcessor {
 impl RequestProcessor for ClientRequestProcessor {
     fn process_request(
         &mut self,
-        _remote_addr: SocketAddr,
+        _ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> RemotingCommand {
         self.get_route_info_by_topic(request)

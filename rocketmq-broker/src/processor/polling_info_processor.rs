@@ -14,8 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::net::SocketAddr;
-
+use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
 use rocketmq_remoting::{
     protocol::remoting_command::RemotingCommand, runtime::processor::RequestProcessor,
 };
@@ -26,7 +25,7 @@ pub struct PollingInfoProcessor {}
 impl RequestProcessor for PollingInfoProcessor {
     fn process_request(
         &mut self,
-        _remote_addr: SocketAddr,
+        _ctx: ConnectionHandlerContext,
         _request: RemotingCommand,
     ) -> RemotingCommand {
         todo!()

@@ -35,6 +35,12 @@ impl Default for TokioExecutorService {
 }
 
 impl TokioExecutorService {
+    pub fn shutdown(self) {
+        self.inner.shutdown_background();
+    }
+}
+
+impl TokioExecutorService {
     pub fn new() -> TokioExecutorService {
         TokioExecutorService {
             inner: tokio::runtime::Builder::new_multi_thread()

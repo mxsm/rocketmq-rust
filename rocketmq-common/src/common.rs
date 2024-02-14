@@ -86,3 +86,14 @@ impl<'de> Deserialize<'de> for TopicFilterType {
         deserializer.deserialize_str(TopicFilterTypeVisitor)
     }
 }
+
+pub struct Pair<T, U> {
+    pub left: T,
+    pub right: U,
+}
+
+impl<T, U> Pair<T, U> {
+    pub fn new(left: T, right: U) -> Self {
+        Self { left, right }
+    }
+}
