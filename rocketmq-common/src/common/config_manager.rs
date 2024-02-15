@@ -24,7 +24,8 @@ use crate::FileUtils;
 // Define the trait ConfigManager
 pub trait ConfigManager {
     fn load(&mut self) -> bool {
-        let file_name = self.config_file_path();
+        true
+        /*let file_name = self.config_file_path();
         let result = FileUtils::file_to_string(file_name);
         match result {
             Ok(ref content) => {
@@ -36,7 +37,7 @@ pub trait ConfigManager {
                 }
             }
             Err(_) => self.load_bak(),
-        }
+        }*/
     }
 
     fn load_bak(&mut self) -> bool {

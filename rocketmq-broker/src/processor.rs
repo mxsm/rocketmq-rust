@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 pub(crate) mod ack_message_processor;
+pub(crate) mod admin_broker_processor;
 pub(crate) mod change_invisible_time_processor;
 pub(crate) mod notification_processor;
 pub(crate) mod peek_message_processor;
