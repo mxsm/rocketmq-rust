@@ -29,20 +29,11 @@ mod config;
 pub mod processor;
 pub mod server;
 
-pub type ArcDefaultRequestProcessor = Arc<
-    tokio::sync::RwLock<
-        Pair<Box<dyn RequestProcessor + Send + Sync + 'static>, TokioExecutorService>,
-    >,
->;
+pub type ArcDefaultRequestProcessor =
+    Arc<tokio::sync::RwLock<Box<dyn RequestProcessor + Send + Sync + 'static>>>;
 
-pub type ArcProcessorTable = Arc<
-    tokio::sync::RwLock<
-        HashMap<
-            i32,
-            Pair<Box<dyn RequestProcessor + Sync + Send + 'static>, Arc<TokioExecutorService>>,
-        >,
-    >,
->;
+pub type ArcProcessorTable =
+    Arc<tokio::sync::RwLock<HashMap<i32, Box<dyn RequestProcessor + Sync + Send + 'static>>>>;
 
 pub trait RPCHook: Send + Sync + 'static {
     fn do_before_request(&self, remote_addr: &str, request: &RemotingCommand);
