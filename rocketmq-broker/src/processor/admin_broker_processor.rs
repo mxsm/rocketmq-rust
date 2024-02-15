@@ -14,34 +14,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-use rocketmq_common::common::config_manager::ConfigManager;
+use rocketmq_remoting::{
+    protocol::remoting_command::RemotingCommand,
+    runtime::{processor::RequestProcessor, server::ConnectionHandlerContext},
+};
 
 #[derive(Default)]
-pub struct ScheduleMessageService {}
+pub struct AdminBrokerProcessor {}
 
-impl ConfigManager for ScheduleMessageService {
-    fn decode0(&mut self, _key: &[u8], _body: &[u8]) {
-        todo!()
-    }
-
-    fn stop(&mut self) -> bool {
-        todo!()
-    }
-
-    fn config_file_path(&mut self) -> &str {
-        ""
-    }
-
-    fn encode(&mut self) -> String {
-        todo!()
-    }
-
-    fn encode_pretty(&mut self, _pretty_format: bool) -> String {
-        todo!()
-    }
-
-    fn decode(&mut self, _json_string: &str) {
+impl RequestProcessor for AdminBrokerProcessor {
+    fn process_request(
+        &mut self,
+        _ctx: ConnectionHandlerContext,
+        _request: RemotingCommand,
+    ) -> RemotingCommand {
         todo!()
     }
 }

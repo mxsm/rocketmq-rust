@@ -54,12 +54,8 @@ pub struct ServerInner {
     //Cache mapping between request unique code(opaque-request header) and ResponseFuture.
     pub(crate) response_table: HashMap<i32, ResponseFuture>,
 
-    pub(crate) processor_table: HashMap<
-        i32, /* request code */
-        Pair<Arc<dyn RequestProcessor + Send + Sync>, Arc<TokioExecutorService>>,
-    >,
-    pub(crate) default_request_processor_pair:
-        Option<Pair<Box<dyn RequestProcessor + Send + Sync>, TokioExecutorService>>,
+    pub(crate) processor_table: Option<ArcProcessorTable>,
+    pub(crate) default_request_processor_pair: Option<ArcDefaultRequestProcessor>,
 
     pub(crate) processor_table1: HashMap<
         i32, /* request code */
@@ -77,7 +73,7 @@ impl ServerInner {
             semaphore_oneway: tokio::sync::Semaphore::new(1000),
             semaphore_async: tokio::sync::Semaphore::new(1000),
             response_table: HashMap::new(),
-            processor_table: HashMap::new(),
+            processor_table: Some(Arc::new(tokio::sync::RwLock::new(HashMap::new()))),
             default_request_processor_pair: None,
             processor_table1: Default::default(),
             default_request_processor_pair1: None,
@@ -107,12 +103,8 @@ impl ServerInner {
     pub fn process_request_command(
         &mut self,
         _ctx: ConnectionHandlerContext,
-        msg: RemotingCommand,
+        _msg: RemotingCommand,
     ) {
-        let matched = self.processor_table.get(&msg.code());
-        if matched.is_none() && self.default_request_processor_pair.is_none() {
-            //TODO
-        }
     }
 
     pub fn process_response_command(

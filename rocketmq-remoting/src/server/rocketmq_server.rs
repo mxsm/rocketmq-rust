@@ -24,7 +24,7 @@ use tokio::{net::TcpListener, sync::broadcast};
 use crate::{
     protocol::remoting_command::RemotingCommand,
     remoting::{InvokeCallback, RemotingService},
-    runtime::{processor::RequestProcessor, RPCHook, ServerInner},
+    runtime::{processor::RequestProcessor, server::run, RPCHook, ServerInner},
     server::{config::BrokerServerConfig, RemotingServer},
 };
 
@@ -52,7 +52,7 @@ impl RemotingService for RocketmqDefaultServer {
         .await
         .unwrap();
         let (notify_conn_disconnect, _) = broadcast::channel::<SocketAddr>(100);
-        /*run(
+        run(
             listener,
             tokio::signal::ctrl_c(),
             self.server_inner
@@ -63,7 +63,7 @@ impl RemotingService for RocketmqDefaultServer {
             self.server_inner.processor_table.as_ref().unwrap().clone(),
             Some(notify_conn_disconnect),
         )
-        .await;*/
+        .await
     }
 
     fn shutdown(&mut self) {
@@ -84,7 +84,6 @@ impl RemotingServer for RocketmqDefaultServer {
         &mut self,
         request_code: impl Into<i32>,
         processor: Arc<dyn RequestProcessor + Send + Sync + 'static>,
-        executor: Arc<TokioExecutorService>,
     ) {
         /*self.server_inner
         .processor_table
@@ -94,10 +93,9 @@ impl RemotingServer for RocketmqDefaultServer {
     fn register_default_processor(
         &mut self,
         processor: impl RequestProcessor + Send + Sync + 'static,
-        executor: TokioExecutorService,
     ) {
-        /*self.server_inner.default_request_processor_pair =
-        Some(Pair::new(Box::new(processor), executor));*/
+        self.server_inner.default_request_processor_pair =
+            Some(Arc::new(tokio::sync::RwLock::new(Box::new(processor))));
     }
 
     fn local_listen_port(&mut self) -> i32 {

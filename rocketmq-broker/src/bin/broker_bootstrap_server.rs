@@ -25,7 +25,7 @@ use rocketmq_broker::{
 use rocketmq_common::{EnvUtils::EnvUtils, ParseConfigFile};
 use rocketmq_rust::rocketmq;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
-use tracing::info;
+use tracing::{info, warn};
 
 #[rocketmq::main]
 async fn main() -> anyhow::Result<()> {
@@ -60,13 +60,14 @@ fn create_broker_controller() -> anyhow::Result<BrokerController> {
 async fn start_broker_controller(broker_controller: BrokerController) -> anyhow::Result<()> {
     let mut broker_controller = broker_controller;
     if !broker_controller.initialize() {
+        warn!("Rocketmq(Rust) start failed, initialize failed");
         exit(0);
     }
     info!(
         "Rocketmq name server(Rust) running on {}:{}",
         broker_controller.broker_config.broker_ip1, broker_controller.broker_config.listen_port,
     );
-    let x = broker_controller.start();
-    join!(x);
+    let future = broker_controller.start();
+    join!(future);
     Ok(())
 }

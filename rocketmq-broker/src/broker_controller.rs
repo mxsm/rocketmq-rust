@@ -19,6 +19,7 @@ use std::{net::SocketAddr, sync::Arc};
 use rocketmq_common::{common::config_manager::ConfigManager, TokioExecutorService};
 use rocketmq_remoting::{
     code::request_code::RequestCode,
+    remoting::RemotingService,
     server::{rocketmq_server::RocketmqDefaultServer, RemotingServer},
 };
 use rocketmq_store::{
@@ -53,7 +54,7 @@ use crate::{
         consumer_order_info_manager::ConsumerOrderInfoManager,
     },
     processor::{
-        ack_message_processor::AckMessageProcessor,
+        ack_message_processor::AckMessageProcessor, admin_broker_processor::AdminBrokerProcessor,
         change_invisible_time_processor::ChangeInvisibleTimeProcessor,
         notification_processor::NotificationProcessor,
         peek_message_processor::PeekMessageProcessor, polling_info_processor::PollingInfoProcessor,
@@ -171,9 +172,9 @@ impl BrokerController {
             replicas_manager.start();
         }
 
-        /*        if let Some(ref mut broker_server) = self.broker_server {
-            //broker_server.start();
-        };*/
+        if let Some(ref mut broker_server) = self.broker_server {
+            broker_server.start().await;
+        };
 
         //other service start
     }
@@ -181,8 +182,10 @@ impl BrokerController {
     pub fn initialize(&mut self) -> bool {
         let mut result = self.initialize_metadata();
         if !result {
+            warn!("Initialize metadata failed");
             return false;
         }
+        info!("======Ending initialize metadata Success========");
         result = self.initialize_message_store();
         if !result {
             return false;
@@ -191,6 +194,7 @@ impl BrokerController {
     }
 
     pub fn initialize_metadata(&mut self) -> bool {
+        info!("======Starting initialize metadata========");
         self.topic_config_manager_inner.load()
             & self.topic_queue_mapping_manager.load()
             & self.consumer_offset_manager.load()
@@ -253,26 +257,15 @@ impl BrokerController {
     fn register_processor(&mut self) {
         let broker_server = self.broker_server.as_mut().unwrap();
         let send_message_processor = Arc::new(SendMessageProcessor::default());
-        broker_server.register_processor(
-            RequestCode::SendMessage,
-            send_message_processor.clone(),
-            self.send_message_executor.clone(),
-        );
-        broker_server.register_processor(
-            RequestCode::SendMessageV2,
-            send_message_processor.clone(),
-            self.send_message_executor.clone(),
-        );
+        broker_server.register_processor(RequestCode::SendMessage, send_message_processor.clone());
+        broker_server
+            .register_processor(RequestCode::SendMessageV2, send_message_processor.clone());
         broker_server.register_processor(
             RequestCode::SendBatchMessage,
             send_message_processor.clone(),
-            self.send_message_executor.clone(),
         );
-        broker_server.register_processor(
-            RequestCode::ConsumerSendMsgBack,
-            send_message_processor,
-            self.send_message_executor.clone(),
-        );
+        broker_server.register_processor(RequestCode::ConsumerSendMsgBack, send_message_processor);
+        broker_server.register_default_processor(AdminBrokerProcessor::default());
     }
 
     fn initialize_scheduled_tasks(&mut self) {}
