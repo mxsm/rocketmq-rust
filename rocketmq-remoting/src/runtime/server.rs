@@ -95,9 +95,8 @@ impl ConnectionHandler {
                     .default_request_processor
                     .write()
                     .await
-                    .left
                     .process_request(ctx, cmd),
-                Some(pr) => pr.left.process_request(ctx, cmd),
+                Some(pr) => pr.process_request(ctx, cmd),
             };
             tokio::select! {
                 result = self.connection.framed.send(response.set_opaque(opaque)) => match result{
