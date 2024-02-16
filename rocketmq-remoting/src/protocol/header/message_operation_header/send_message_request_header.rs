@@ -174,3 +174,93 @@ pub fn parse_request_header(request: &RemotingCommand) -> Option<SendMessageRequ
         None => request.decode_command_custom_header::<SendMessageRequestHeader>(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use RemotingCommand;
+
+    use super::*;
+
+    #[test]
+    fn test_send_message_request_header_new() {
+        let header = SendMessageRequestHeader::new(
+            String::from("group"),
+            String::from("topic"),
+            String::from("default_topic"),
+            1,
+            0,
+            0,
+            0,
+            0,
+        );
+        assert_eq!(header.producer_group, "group");
+        assert_eq!(header.topic, "topic");
+        assert_eq!(header.default_topic, "default_topic");
+        assert_eq!(header.default_topic_queue_nums, 1);
+        assert_eq!(header.queue_id, 0);
+        assert_eq!(header.sys_flag, 0);
+        assert_eq!(header.born_timestamp, 0);
+        assert_eq!(header.flag, 0);
+    }
+
+    #[test]
+    fn test_send_message_request_header_v2_new() {
+        let header_v2 = SendMessageRequestHeaderV2::new(
+            String::from("group"),
+            String::from("topic"),
+            String::from("default_topic"),
+            1,
+            0,
+            0,
+            0,
+            0,
+        );
+        assert_eq!(header_v2.a, "group");
+        assert_eq!(header_v2.b, "topic");
+        assert_eq!(header_v2.c, "default_topic");
+        assert_eq!(header_v2.d, 1);
+        assert_eq!(header_v2.e, 0);
+        assert_eq!(header_v2.f, 0);
+        assert_eq!(header_v2.g, 0);
+        assert_eq!(header_v2.h, 0);
+    }
+
+    #[test]
+    fn test_send_message_request_header_v2_create_v1() {
+        let header_v2 = SendMessageRequestHeaderV2::new(
+            String::from("group"),
+            String::from("topic"),
+            String::from("default_topic"),
+            1,
+            0,
+            0,
+            0,
+            0,
+        );
+        let header_v1 = header_v2.create_send_message_request_header_v1();
+        assert_eq!(header_v1.producer_group, "group");
+        assert_eq!(header_v1.topic, "topic");
+        assert_eq!(header_v1.default_topic, "default_topic");
+        assert_eq!(header_v1.default_topic_queue_nums, 1);
+        assert_eq!(header_v1.queue_id, 0);
+        assert_eq!(header_v1.sys_flag, 0);
+        assert_eq!(header_v1.born_timestamp, 0);
+        assert_eq!(header_v1.flag, 0);
+    }
+
+    #[test]
+    fn test_parse_request_header_v1() {
+        let mut request = RemotingCommand::create_response_command();
+        request = request.set_code(RequestCode::SendMessage.to_i32());
+        let header = parse_request_header(&request);
+        assert_eq!(header.is_none(), true);
+    }
+
+    #[test]
+    fn test_parse_request_header_v2() {
+        let mut request = RemotingCommand::create_response_command();
+        request = request.set_code(RequestCode::SendMessage.to_i32());
+        let header = parse_request_header(&request);
+        assert_eq!(header.is_none(), true);
+    }
+}
