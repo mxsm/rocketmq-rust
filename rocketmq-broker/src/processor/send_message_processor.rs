@@ -15,19 +15,45 @@
  * limitations under the License.
  */
 use rocketmq_remoting::{
-    protocol::remoting_command::RemotingCommand,
+    code::request_code::RequestCode,
+    protocol::{
+        header::message_operation_header::send_message_request_header::parse_request_header,
+        remoting_command::RemotingCommand,
+    },
     runtime::{processor::RequestProcessor, server::ConnectionHandlerContext},
 };
 
 #[derive(Default)]
-pub struct SendMessageProcessor {}
+pub struct SendMessageProcessor {
+    inner: SendMessageProcessorInner,
+}
 
 impl RequestProcessor for SendMessageProcessor {
     fn process_request(
         &mut self,
-        _ctx: ConnectionHandlerContext,
-        _request: RemotingCommand,
+        ctx: ConnectionHandlerContext,
+        request: RemotingCommand,
     ) -> RemotingCommand {
+        let request_code = RequestCode::from(request.code());
+        match request_code {
+            RequestCode::ConsumerSendMsgBack => self.inner.consumer_send_msg_back(&ctx, &request),
+            _ => {
+                let _request_header = parse_request_header(&request).unwrap();
+            }
+        }
+        RemotingCommand::create_response_command()
+    }
+}
+
+#[derive(Default)]
+struct SendMessageProcessorInner {}
+
+impl SendMessageProcessorInner {
+    fn consumer_send_msg_back(
+        &mut self,
+        _ctx: &ConnectionHandlerContext,
+        _request: &RemotingCommand,
+    ) {
         todo!()
     }
 }

@@ -15,3 +15,78 @@
  * limitations under the License.
  */
 pub mod manager;
+
+#[derive(Debug, PartialEq, Copy, Clone, Default)]
+pub enum StatsType {
+    #[default]
+    SendSuccess,
+    SendFailure,
+    RcvSuccess,
+    RcvEpolls,
+    SendBack,
+    SendBackToDlq,
+    SendOrder,
+    SendTimer,
+    SendTransaction,
+    PermFailure,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default() {
+        assert_eq!(StatsType::default(), StatsType::SendSuccess);
+    }
+
+    #[test]
+    fn test_send_success() {
+        assert_eq!(StatsType::SendSuccess, StatsType::SendSuccess);
+    }
+
+    #[test]
+    fn test_send_failure() {
+        assert_eq!(StatsType::SendFailure, StatsType::SendFailure);
+    }
+
+    #[test]
+    fn test_rcv_success() {
+        assert_eq!(StatsType::RcvSuccess, StatsType::RcvSuccess);
+    }
+
+    #[test]
+    fn test_rcv_epolls() {
+        assert_eq!(StatsType::RcvEpolls, StatsType::RcvEpolls);
+    }
+
+    #[test]
+    fn test_send_back() {
+        assert_eq!(StatsType::SendBack, StatsType::SendBack);
+    }
+
+    #[test]
+    fn test_send_back_to_dlq() {
+        assert_eq!(StatsType::SendBackToDlq, StatsType::SendBackToDlq);
+    }
+
+    #[test]
+    fn test_send_order() {
+        assert_eq!(StatsType::SendOrder, StatsType::SendOrder);
+    }
+
+    #[test]
+    fn test_send_timer() {
+        assert_eq!(StatsType::SendTimer, StatsType::SendTimer);
+    }
+
+    #[test]
+    fn test_send_transaction() {
+        assert_eq!(StatsType::SendTransaction, StatsType::SendTransaction);
+    }
+
+    #[test]
+    fn test_perm_failure() {
+        assert_eq!(StatsType::PermFailure, StatsType::PermFailure);
+    }
+}

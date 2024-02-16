@@ -67,7 +67,6 @@ async fn start_broker_controller(broker_controller: BrokerController) -> anyhow:
         "Rocketmq name server(Rust) running on {}:{}",
         broker_controller.broker_config.broker_ip1, broker_controller.broker_config.listen_port,
     );
-    let future = broker_controller.start();
-    join!(future);
+    join!(broker_controller.start());
     Ok(())
 }

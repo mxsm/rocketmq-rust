@@ -1,4 +1,3 @@
-#![feature(future_join)]
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
@@ -15,30 +14,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#![allow(dead_code)]
-pub mod clients;
-pub mod code;
-pub mod codec;
-pub mod connection;
-pub mod error;
-pub mod net;
-pub mod protocol;
-pub mod remoting;
-pub mod rpc;
-pub mod runtime;
-pub mod server;
 
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
-}
+use serde::{Deserialize, Serialize};
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RpcRequestHeader {
+    // the namespace name
+    pub ns: Option<String>,
+    // if the data has been namespaced
+    pub nsd: Option<bool>,
+    // the abstract remote addr name, usually the physical broker name
+    pub bname: Option<String>,
+    // oneway
+    pub oway: Option<bool>,
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
+    pub lo: Option<bool>,
 }

@@ -23,6 +23,7 @@ use std::{
 use lazy_static::lazy_static;
 
 pub mod message_batch;
+pub mod message_enum;
 pub mod message_id;
 pub mod message_queue;
 pub mod message_single;

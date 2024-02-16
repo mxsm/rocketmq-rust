@@ -18,8 +18,9 @@
 
 use std::{error::Error, net::SocketAddr, sync::Arc};
 
+use futures::executor::block_on;
 use rocketmq_common::TokioExecutorService;
-use tokio::{net::TcpListener, sync::broadcast};
+use tokio::{net::TcpListener, sync::broadcast, task::JoinHandle};
 
 use crate::{
     protocol::remoting_command::RemotingCommand,
@@ -31,6 +32,7 @@ use crate::{
 pub struct RocketmqDefaultServer {
     pub(crate) broker_server_config: BrokerServerConfig,
     pub(crate) server_inner: ServerInner,
+    pub future: Option<JoinHandle<()>>,
 }
 
 impl RocketmqDefaultServer {
@@ -38,32 +40,36 @@ impl RocketmqDefaultServer {
         Self {
             broker_server_config,
             server_inner: ServerInner::new(),
+            future: None,
         }
     }
 }
 
 impl RemotingService for RocketmqDefaultServer {
-    async fn start(&mut self) {
-        let listener = TcpListener::bind(&format!(
-            "{}:{}",
-            self.broker_server_config.bind_address.as_str(),
-            self.broker_server_config.listen_port
-        ))
-        .await
-        .unwrap();
+    fn start(&mut self) -> impl std::future::Future<Output = ()> + Send {
+        let address = self.broker_server_config.bind_address.as_str();
+        let port = self.broker_server_config.listen_port;
+        let listener = block_on(async move {
+            TcpListener::bind(&format!("{}:{}", address, port))
+                .await
+                .unwrap()
+        });
         let (notify_conn_disconnect, _) = broadcast::channel::<SocketAddr>(100);
+        let default_request_processor = self
+            .server_inner
+            .default_request_processor_pair
+            .as_ref()
+            .unwrap()
+            .clone();
+        let processor_table = self.server_inner.processor_table.as_ref().unwrap().clone();
+
         run(
             listener,
             tokio::signal::ctrl_c(),
-            self.server_inner
-                .default_request_processor_pair
-                .as_ref()
-                .unwrap()
-                .clone(),
-            self.server_inner.processor_table.as_ref().unwrap().clone(),
+            default_request_processor,
+            processor_table,
             Some(notify_conn_disconnect),
         )
-        .await
     }
 
     fn shutdown(&mut self) {

@@ -26,6 +26,7 @@ mod coldctr;
 mod controller;
 mod filter;
 mod longpolling;
+mod mqtrace;
 mod offset;
 mod processor;
 mod schedule;
