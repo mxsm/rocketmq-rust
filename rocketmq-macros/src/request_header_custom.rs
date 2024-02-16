@@ -55,12 +55,22 @@ pub(super) fn request_header_codec_inner(
                     const #static_name: &'static str = #camel_case_name;
                 },
                 (
-                    if has_option.is_some() {
-                        quote! {
+                    if let Some(value) = has_option {
+                        let type_name = get_type_name(value);
+                        if type_name == "String" {
+                            quote! {
+                            if let Some(ref value) = self.#field_name {
+                               map.insert (Self::#static_name.to_string(),value.to_string());
+                             }
+                        }
+                        }else {
+                            quote! {
                             if let Some(value) = self.#field_name {
                                map.insert (Self::#static_name.to_string(),value.to_string());
                              }
                         }
+                        }
+
                     } else {
                         quote! {
                             map.insert (Self::#static_name.to_string(),self.#field_name.to_string());
