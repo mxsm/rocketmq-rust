@@ -112,7 +112,7 @@ pub(super) fn request_header_codec_inner(
         impl crate::protocol::command_custom_header::FromMap for #struct_name {
             type Target = Self;
 
-            fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+            fn from(map: &std::collections::HashMap<String, String>) -> Option<Self::Target> {
                 Some(#struct_name {
                     #(#from_map)*
                 })
