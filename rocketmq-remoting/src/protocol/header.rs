@@ -16,4 +16,5 @@
  */
 pub mod broker;
 pub mod client_request_header;
+pub mod message_operation_header;
 pub mod namesrv;

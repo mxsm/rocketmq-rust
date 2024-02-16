@@ -15,3 +15,18 @@
  * limitations under the License.
  */
 pub mod manager;
+
+#[derive(Debug, PartialEq, Copy, Clone, Default)]
+pub enum StatsType {
+    #[default]
+    SendSuccess,
+    SendFailure,
+    RcvSuccess,
+    RcvEpolls,
+    SendBack,
+    SendBackToDlq,
+    SendOrder,
+    SendTimer,
+    SendTransaction,
+    PermFailure,
+}

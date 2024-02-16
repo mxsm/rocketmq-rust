@@ -174,7 +174,7 @@ impl BrokerController {
 
         if let Some(ref mut broker_server) = self.broker_server {
             broker_server.start().await;
-        };
+        }
 
         //other service start
     }
