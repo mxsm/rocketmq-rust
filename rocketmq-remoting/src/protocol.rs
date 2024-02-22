@@ -277,15 +277,15 @@ pub trait RemotingSerializable {
     ///
     /// The deserialized output of type `Self::Output`.
     fn decode<'a>(bytes: &'a [u8]) -> Self::Output
-        where
-            Self::Output: de::Deserialize<'a>,
+    where
+        Self::Output: de::Deserialize<'a>,
     {
         serde_json::from_slice::<Self::Output>(bytes).unwrap()
     }
 
     fn encode(&self) -> Vec<u8>
-        where
-            Self: Serialize,
+    where
+        Self: Serialize,
     {
         serde_json::to_vec(self).unwrap()
     }
