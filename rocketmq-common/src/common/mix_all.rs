@@ -68,3 +68,7 @@ pub const LOGICAL_QUEUE_MOCK_BROKER_PREFIX: &str = "__syslo__";
 pub const METADATA_SCOPE_GLOBAL: &str = "__global__";
 pub const LOGICAL_QUEUE_MOCK_BROKER_NAME_NOT_EXIST: &str = "__syslo__none__";
 pub const MULTI_PATH_SPLITTER: &str = "rocketmq.broker.multiPathSplitter";
+
+pub fn is_sys_consumer_group(consumer_group: &str) -> bool {
+    consumer_group.starts_with(CID_RMQ_SYS_PREFIX)
+}

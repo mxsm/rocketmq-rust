@@ -16,6 +16,7 @@
  * limitations under the License.
  */
 #![allow(dead_code)]
+
 pub mod clients;
 pub mod code;
 pub mod codec;
@@ -23,6 +24,9 @@ pub mod connection;
 pub mod error;
 pub mod net;
 pub mod protocol;
+
+pub use crate::protocol::rocketmq_serializable as RocketMQSerializable;
+
 pub mod remoting;
 pub mod rpc;
 pub mod runtime;

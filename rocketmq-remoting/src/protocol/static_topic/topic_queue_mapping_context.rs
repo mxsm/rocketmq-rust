@@ -19,6 +19,7 @@ use crate::protocol::static_topic::{
     topic_queue_mapping_detail::TopicQueueMappingDetail,
 };
 
+#[derive(Default)]
 pub struct TopicQueueMappingContext {
     pub topic: String,
     pub global_id: Option<i32>,

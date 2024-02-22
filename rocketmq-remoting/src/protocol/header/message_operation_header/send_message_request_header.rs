@@ -17,7 +17,13 @@
 use rocketmq_macros::{RemotingSerializable, RequestHeaderCodec};
 use serde::{Deserialize, Serialize};
 
-use crate::{code::request_code::RequestCode, protocol::remoting_command::RemotingCommand};
+use crate::{
+    code::request_code::RequestCode,
+    protocol::{
+        header::message_operation_header::TopicRequestHeaderTrait,
+        remoting_command::RemotingCommand,
+    },
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, RemotingSerializable, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
@@ -82,6 +88,56 @@ impl SendMessageRequestHeader {
     }
 }
 
+impl TopicRequestHeaderTrait for SendMessageRequestHeader {
+    fn with_lo(&mut self, lo: Option<bool>) {
+        self.lo = lo;
+    }
+
+    fn lo(&self) -> Option<bool> {
+        self.lo
+    }
+
+    fn with_topic(&mut self, topic: String) {
+        self.topic = topic;
+    }
+
+    fn topic(&self) -> String {
+        self.topic.clone()
+    }
+
+    fn broker_name(&self) -> Option<String> {
+        self.bname.clone()
+    }
+
+    fn with_broker_name(&mut self, broker_name: String) {
+        self.bname = Some(broker_name);
+    }
+
+    fn namespace(&self) -> Option<String> {
+        self.ns.clone()
+    }
+
+    fn with_namespace(&mut self, namespace: String) {
+        self.ns = Some(namespace);
+    }
+
+    fn namespaced(&self) -> Option<bool> {
+        self.nsd
+    }
+
+    fn with_namespaced(&mut self, namespaced: bool) {
+        self.nsd = Some(namespaced);
+    }
+
+    fn oneway(&self) -> Option<bool> {
+        self.oway
+    }
+
+    fn with_oneway(&mut self, oneway: bool) {
+        self.oway = Some(oneway);
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, RemotingSerializable, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
 pub struct SendMessageRequestHeaderV2 {
@@ -96,19 +152,32 @@ pub struct SendMessageRequestHeaderV2 {
 
     pub lo: Option<bool>,
 
-    pub a: String,         // producerGroup
-    pub b: String,         // topic
-    pub c: String,         // defaultTopic
-    pub d: i32,            // defaultTopicQueueNums
-    pub e: i32,            // queueId
-    pub f: i32,            // sysFlag
-    pub g: i64,            // bornTimestamp
-    pub h: i32,            // flag
-    pub i: Option<String>, // properties
-    pub j: Option<i32>,    // reconsumeTimes
-    pub k: Option<bool>,   // unitMode
-    pub l: Option<i32>,    // consumeRetryTimes
-    pub m: Option<bool>,   // batch
+    pub a: String,
+    // producerGroup
+    pub b: String,
+    // topic
+    pub c: String,
+    // defaultTopic
+    pub d: i32,
+    // defaultTopicQueueNums
+    pub e: i32,
+    // queueId
+    pub f: i32,
+    // sysFlag
+    pub g: i64,
+    // bornTimestamp
+    pub h: i32,
+    // flag
+    pub i: Option<String>,
+    // properties
+    pub j: Option<i32>,
+    // reconsumeTimes
+    pub k: Option<bool>,
+    // unitMode
+    pub l: Option<i32>,
+    // consumeRetryTimes
+    pub m: Option<bool>,
+    // batch
     pub n: Option<String>, // brokerName
 }
 
@@ -158,6 +227,56 @@ impl SendMessageRequestHeaderV2 {
             batch: self.m,
             max_reconsume_times: self.l,
         }
+    }
+}
+
+impl TopicRequestHeaderTrait for SendMessageRequestHeaderV2 {
+    fn with_lo(&mut self, lo: Option<bool>) {
+        self.lo = lo;
+    }
+
+    fn lo(&self) -> Option<bool> {
+        self.lo
+    }
+
+    fn with_topic(&mut self, topic: String) {
+        self.b = topic;
+    }
+
+    fn topic(&self) -> String {
+        self.b.clone()
+    }
+
+    fn broker_name(&self) -> Option<String> {
+        self.bname.clone()
+    }
+
+    fn with_broker_name(&mut self, broker_name: String) {
+        self.bname = Some(broker_name);
+    }
+
+    fn namespace(&self) -> Option<String> {
+        self.ns.clone()
+    }
+
+    fn with_namespace(&mut self, namespace: String) {
+        self.ns = Some(namespace);
+    }
+
+    fn namespaced(&self) -> Option<bool> {
+        self.nsd
+    }
+
+    fn with_namespaced(&mut self, namespaced: bool) {
+        self.nsd = Some(namespaced);
+    }
+
+    fn oneway(&self) -> Option<bool> {
+        self.oway
+    }
+
+    fn with_oneway(&mut self, oneway: bool) {
+        self.oway = Some(oneway);
     }
 }
 

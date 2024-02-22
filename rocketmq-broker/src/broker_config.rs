@@ -17,6 +17,8 @@
 
 use rocketmq_common::common::{
     broker::broker_config::{BrokerIdentity, TimerWheelConfig, TopicConfig, TopicQueueConfig},
+    constant::PermName,
+    mix_all,
     topic::TopicValidator,
 };
 use rocketmq_remoting::server::config::BrokerServerConfig;
@@ -41,6 +43,10 @@ pub struct BrokerConfig {
     pub trace_topic_enable: bool,
     pub msg_trace_topic_name: String,
     pub enable_controller_mode: bool,
+    pub broker_name: String,
+    pub region_id: String,
+    pub trace_on: bool,
+    pub broker_permission: i8,
 }
 
 impl Default for BrokerConfig {
@@ -62,6 +68,44 @@ impl Default for BrokerConfig {
             trace_topic_enable: false,
             msg_trace_topic_name: TopicValidator::RMQ_SYS_TRACE_TOPIC.to_string(),
             enable_controller_mode: false,
+            broker_name: "".to_string(),
+            region_id: mix_all::DEFAULT_TRACE_REGION_ID.to_string(),
+            trace_on: true,
+            broker_permission: PermName::PERM_WRITE | PermName::PERM_READ,
         }
+    }
+}
+
+impl BrokerConfig {
+    pub fn broker_name(&self) -> String {
+        self.broker_name.clone()
+    }
+
+    pub fn broker_ip1(&self) -> String {
+        self.broker_ip1.clone()
+    }
+
+    pub fn broker_ip2(&self) -> Option<String> {
+        self.broker_ip2.clone()
+    }
+
+    pub fn listen_port(&self) -> u32 {
+        self.listen_port
+    }
+
+    pub fn trace_topic_enable(&self) -> bool {
+        self.trace_topic_enable
+    }
+
+    pub fn broker_server_config(&self) -> &BrokerServerConfig {
+        &self.broker_server_config
+    }
+
+    pub fn region_id(&self) -> String {
+        self.region_id.clone()
+    }
+
+    pub fn broker_permission(&self) -> i8 {
+        self.broker_permission
     }
 }

@@ -14,30 +14,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BrokerServerConfig {
-    pub listen_port: u32,
-    pub bind_address: String,
-}
+use std::str;
 
-impl Default for BrokerServerConfig {
-    fn default() -> Self {
-        BrokerServerConfig {
-            listen_port: 10911,
-            bind_address: "0.0.0.0".to_string(),
-        }
+use bytes::{BufMut, BytesMut};
+
+pub fn write_str(buf: &mut BytesMut, use_short_length: bool, s: &str) {
+    if use_short_length {
+        buf.put_u16(0);
+    } else {
+        buf.put_u32(0);
     }
-}
+    buf.put(s.as_bytes());
 
-impl BrokerServerConfig {
-    pub fn bind_address(&self) -> String {
-        self.bind_address.clone()
-    }
-
-    pub fn listen_port(&self) -> u32 {
-        self.listen_port
+    let len = buf.len() - if use_short_length { 2 } else { 4 };
+    if use_short_length {
+        buf[0..2].copy_from_slice(&(len as u16).to_be_bytes());
+    } else {
+        buf[0..4].copy_from_slice(&(len as u32).to_be_bytes());
     }
 }
