@@ -284,8 +284,8 @@ impl RemotingCommand {
     pub fn remark(&self) -> &Option<String> {
         &self.remark
     }
-    pub fn ext_fields(&self) -> &Option<HashMap<String, String>> {
-        &self.ext_fields
+    pub fn ext_fields(&self) -> Option<&HashMap<String, String>> {
+        self.ext_fields.as_ref()
     }
     pub fn body(&self) -> &Option<Bytes> {
         &self.body
@@ -326,6 +326,27 @@ impl RemotingCommand {
         } else {
             RemotingCommandType::REQUEST
         }
+    }
+    pub fn with_opaque(&mut self, opaque: i32) -> &mut Self {
+        self.opaque = opaque;
+        self
+    }
+
+    pub fn add_ext_field(&mut self, key: impl Into<String>, value: impl Into<String>) -> &mut Self {
+        if let Some(ref mut ext) = self.ext_fields {
+            ext.insert(key.into(), value.into());
+        }
+        self
+    }
+
+    pub fn with_code(&mut self, code: impl Into<i32>) -> &mut Self {
+        self.code = code.into();
+        self
+    }
+
+    pub fn with_remark(&mut self, remark: Option<String>) -> &mut Self {
+        self.remark = remark;
+        self
     }
 }
 

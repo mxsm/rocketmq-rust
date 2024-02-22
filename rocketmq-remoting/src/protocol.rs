@@ -15,18 +15,23 @@
  * limitations under the License.
  */
 use std::{
+    collections::HashMap,
     fmt::{Display, Formatter},
     sync::atomic::{AtomicI64, Ordering},
     time::SystemTime,
 };
 
+use rocketmq_common::common::{mix_all, topic::TopicValidator};
 use serde::{de, Deserialize, Serialize};
+
+use crate::RocketMQSerializable;
 
 pub mod body;
 pub mod command_custom_header;
 pub mod header;
 pub mod namesrv;
 pub mod remoting_command;
+pub mod rocketmq_serializable;
 pub mod route;
 pub mod static_topic;
 
@@ -272,17 +277,185 @@ pub trait RemotingSerializable {
     ///
     /// The deserialized output of type `Self::Output`.
     fn decode<'a>(bytes: &'a [u8]) -> Self::Output
-    where
-        Self::Output: de::Deserialize<'a>,
+        where
+            Self::Output: de::Deserialize<'a>,
     {
         serde_json::from_slice::<Self::Output>(bytes).unwrap()
     }
 
     fn encode(&self) -> Vec<u8>
-    where
-        Self: Serialize,
+        where
+            Self: Serialize,
     {
         serde_json::to_vec(self).unwrap()
+    }
+}
+
+pub trait FastCodesHeader {
+    fn write_if_not_null(&mut self, out: &mut bytes::BytesMut, key: &str, value: &str) {
+        if !value.is_empty() {
+            RocketMQSerializable::write_str(out, true, key);
+            RocketMQSerializable::write_str(out, false, key);
+        }
+    }
+
+    fn encode_fast(&mut self, out: &mut bytes::BytesMut);
+
+    fn decode_fast(&mut self, fields: &HashMap<String, String>);
+}
+
+pub struct NamespaceUtil;
+
+impl NamespaceUtil {
+    pub const NAMESPACE_SEPARATOR: char = '%';
+    pub const STRING_BLANK: &'static str = "";
+    pub const RETRY_PREFIX_LENGTH: usize = mix_all::RETRY_GROUP_TOPIC_PREFIX.len();
+    pub const DLQ_PREFIX_LENGTH: usize = mix_all::DLQ_GROUP_TOPIC_PREFIX.len();
+
+    pub fn without_namespace(resource_with_namespace: &str) -> String {
+        if resource_with_namespace.is_empty()
+            || NamespaceUtil::is_system_resource(resource_with_namespace)
+        {
+            return resource_with_namespace.to_string();
+        }
+
+        let mut string_builder = String::new();
+        if NamespaceUtil::is_retry_topic(resource_with_namespace) {
+            string_builder.push_str(mix_all::RETRY_GROUP_TOPIC_PREFIX);
+        }
+        if NamespaceUtil::is_dlq_topic(resource_with_namespace) {
+            string_builder.push_str(mix_all::DLQ_GROUP_TOPIC_PREFIX);
+        }
+
+        if let Some(index) = NamespaceUtil::without_retry_and_dlq(resource_with_namespace)
+            .find(NamespaceUtil::NAMESPACE_SEPARATOR)
+        {
+            let resource_without_namespace =
+                &NamespaceUtil::without_retry_and_dlq(resource_with_namespace)[index + 1..];
+            return string_builder + resource_without_namespace;
+        }
+
+        resource_with_namespace.to_string()
+    }
+
+    pub fn without_namespace_with_namespace(
+        resource_with_namespace: &str,
+        namespace: &str,
+    ) -> String {
+        if resource_with_namespace.is_empty() || namespace.is_empty() {
+            return resource_with_namespace.to_string();
+        }
+
+        let resource_without_retry_and_dlq =
+            NamespaceUtil::without_retry_and_dlq(resource_with_namespace);
+        if resource_without_retry_and_dlq.starts_with(&format!(
+            "{}{}",
+            namespace,
+            NamespaceUtil::NAMESPACE_SEPARATOR
+        )) {
+            return NamespaceUtil::without_namespace(resource_with_namespace);
+        }
+
+        resource_with_namespace.to_string()
+    }
+
+    pub fn wrap_namespace(namespace: &str, resource_without_namespace: &str) -> String {
+        if namespace.is_empty() || resource_without_namespace.is_empty() {
+            return resource_without_namespace.to_string();
+        }
+
+        if NamespaceUtil::is_system_resource(resource_without_namespace)
+            || NamespaceUtil::is_already_with_namespace(resource_without_namespace, namespace)
+        {
+            return resource_without_namespace.to_string();
+        }
+
+        let mut string_builder = String::new();
+
+        if NamespaceUtil::is_retry_topic(resource_without_namespace) {
+            string_builder.push_str(mix_all::RETRY_GROUP_TOPIC_PREFIX);
+        }
+
+        if NamespaceUtil::is_dlq_topic(resource_without_namespace) {
+            string_builder.push_str(mix_all::DLQ_GROUP_TOPIC_PREFIX);
+        }
+        let resource_without_retry_and_dlq =
+            NamespaceUtil::without_retry_and_dlq(resource_without_namespace);
+        string_builder
+            + namespace
+            + &NamespaceUtil::NAMESPACE_SEPARATOR.to_string()
+            + resource_without_retry_and_dlq
+    }
+
+    pub fn is_already_with_namespace(resource: &str, namespace: &str) -> bool {
+        if namespace.is_empty()
+            || resource.is_empty()
+            || NamespaceUtil::is_system_resource(resource)
+        {
+            return false;
+        }
+
+        let resource_without_retry_and_dlq = NamespaceUtil::without_retry_and_dlq(resource);
+
+        resource_without_retry_and_dlq.starts_with(&format!(
+            "{}{}",
+            namespace,
+            NamespaceUtil::NAMESPACE_SEPARATOR
+        ))
+    }
+
+    pub fn wrap_namespace_and_retry(namespace: &str, consumer_group: &str) -> Option<String> {
+        if consumer_group.is_empty() {
+            return None;
+        }
+
+        Some(
+            mix_all::RETRY_GROUP_TOPIC_PREFIX.to_string()
+                + &NamespaceUtil::wrap_namespace(namespace, consumer_group),
+        )
+    }
+
+    pub fn get_namespace_from_resource(resource: &str) -> String {
+        if resource.is_empty() || NamespaceUtil::is_system_resource(resource) {
+            return NamespaceUtil::STRING_BLANK.to_string();
+        }
+        let resource_without_retry_and_dlq = NamespaceUtil::without_retry_and_dlq(resource);
+        if let Some(index) = resource_without_retry_and_dlq.find(NamespaceUtil::NAMESPACE_SEPARATOR)
+        {
+            return resource_without_retry_and_dlq[..index].to_string();
+        }
+
+        NamespaceUtil::STRING_BLANK.to_string()
+    }
+
+    fn without_retry_and_dlq(original_resource: &str) -> &str {
+        if original_resource.is_empty() {
+            return NamespaceUtil::STRING_BLANK;
+        }
+        if NamespaceUtil::is_retry_topic(original_resource) {
+            return &original_resource[NamespaceUtil::RETRY_PREFIX_LENGTH..];
+        }
+
+        if NamespaceUtil::is_dlq_topic(original_resource) {
+            return &original_resource[NamespaceUtil::DLQ_PREFIX_LENGTH..];
+        }
+
+        original_resource
+    }
+
+    fn is_system_resource(resource: &str) -> bool {
+        if resource.is_empty() {
+            return false;
+        }
+        TopicValidator::is_system_topic(resource) || mix_all::is_sys_consumer_group(resource)
+    }
+
+    fn is_retry_topic(resource: &str) -> bool {
+        !resource.is_empty() && resource.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX)
+    }
+
+    fn is_dlq_topic(resource: &str) -> bool {
+        !resource.is_empty() && resource.starts_with(mix_all::DLQ_GROUP_TOPIC_PREFIX)
     }
 }
 

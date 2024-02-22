@@ -17,5 +17,5 @@
 
 pub mod logic_queue_mapping_item;
 pub mod topic_queue_info;
-mod topic_queue_mapping_context;
+pub mod topic_queue_mapping_context;
 pub mod topic_queue_mapping_detail;
