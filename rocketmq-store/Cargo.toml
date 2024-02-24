@@ -18,7 +18,7 @@ data_store = ["local_file_store"]
 
 
 [dependencies]
-rocketmq-common = {version = "0.2.0", path = "../rocketmq-common"}
+rocketmq-common = { version = "0.2.0", path = "../rocketmq-common" }
 
 #tools
 dirs.workspace = true
@@ -53,3 +53,8 @@ futures-sink = "0.3"
 futures-io = "0.3"
 
 num_cpus.workspace = true
+tempfile = "3.10.0"
+log = "0.4.20"
+
+[dev-dependencies]
+tempfile = "3.10.0"

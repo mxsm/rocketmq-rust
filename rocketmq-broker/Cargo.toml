@@ -42,6 +42,7 @@ config.workspace = true
 parking_lot.workspace = true
 
 clap = { version = "4.2.7", features = ["derive"] }
+rand = "0.8.5"
 
 [[bin]]
 name = "rocketmq-broker-rust"

@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_remoting::protocol::{
-    header::message_operation_header::send_message_request_header::SendMessageRequestHeader,
+    header::message_operation_header::{
+        send_message_request_header::SendMessageRequestHeader,
+        send_message_response_header::SendMessageResponseHeader, TopicRequestHeaderTrait,
+    },
     static_topic::topic_queue_mapping_context::TopicQueueMappingContext,
 };
 /*
@@ -31,15 +34,20 @@ use rocketmq_remoting::{
 };
 
 use crate::{
-    broker_config::BrokerConfig, mqtrace::send_message_context::SendMessageContext,
+    broker_config::BrokerConfig,
+    mqtrace::send_message_context::SendMessageContext,
     processor::SendMessageProcessorInner,
-    topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager,
+    topic::manager::{
+        topic_config_manager::TopicConfigManager,
+        topic_queue_mapping_manager::TopicQueueMappingManager,
+    },
 };
 
 #[derive(Default)]
 pub struct SendMessageProcessor {
     inner: SendMessageProcessorInner,
     topic_queue_mapping_manager: Arc<parking_lot::RwLock<TopicQueueMappingManager>>,
+    topic_config_manager: Arc<parking_lot::RwLock<TopicConfigManager>>,
     broker_config: Arc<parking_lot::RwLock<BrokerConfig>>,
 }
 
@@ -102,6 +110,7 @@ impl SendMessageProcessor {
         Self {
             inner: SendMessageProcessorInner::default(),
             topic_queue_mapping_manager,
+            topic_config_manager: Arc::new(Default::default()),
             broker_config: Arc::new(Default::default()),
         }
     }
@@ -122,7 +131,7 @@ impl SendMessageProcessor {
     }
 
     fn send_message<F>(
-        &self,
+        &mut self,
         ctx: &ConnectionHandlerContext,
         request: &RemotingCommand,
         send_message_context: SendMessageContext,
@@ -133,7 +142,26 @@ impl SendMessageProcessor {
     where
         F: FnOnce(&SendMessageContext, &RemotingCommand),
     {
-        RemotingCommand::create_response_command()
+        let response = self.pre_send(ctx.as_ref(), request.as_ref(), &request_header);
+        if response.code() != -1 {
+            return response;
+        }
+        let response_header = SendMessageResponseHeader::default();
+        let topic_config = self
+            .topic_config_manager
+            .read()
+            .select_topic_config(request_header.topic().as_str())
+            .unwrap();
+        let mut _queue_id = request_header.queue_id;
+        if _queue_id < 0 {
+            _queue_id = self.inner.random_queue_id(topic_config.write_queue_nums) as i32;
+        }
+
+        if self.broker_config.read().async_send_enable {
+            todo!()
+        } else {
+            todo!()
+        }
     }
 
     fn pre_send(

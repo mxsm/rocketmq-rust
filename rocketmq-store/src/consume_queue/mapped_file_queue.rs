@@ -1,6 +1,7 @@
-use std::{fs, vec};
+use std::{fs, path::Path};
 
-use tracing::{error, info};
+use log::warn;
+use tracing::info;
 
 use crate::{
     base::swappable::Swappable,
@@ -40,55 +41,151 @@ impl Swappable for MappedFileQueue {
 impl MappedFileQueue {
     pub fn load(&mut self) -> bool {
         //list dir files
-        match std::path::Path::new(&self.store_path).read_dir() {
-            Ok(dir) => {
-                let mut files = vec![];
-                for file in dir {
-                    files.push(file.unwrap());
-                }
-                if files.is_empty() {
-                    return true;
-                }
-                self.do_load(files).unwrap()
-            }
-            Err(_) => false,
+        let dir = Path::new(&self.store_path);
+        if let Ok(ls) = fs::read_dir(dir) {
+            let files: Vec<_> = ls
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .collect();
+            return self.do_load(files);
         }
+        true
     }
 
-    fn do_load(&mut self, files: Vec<fs::DirEntry>) -> anyhow::Result<bool> {
+    pub fn do_load(&mut self, files: Vec<std::path::PathBuf>) -> bool {
         // Ascending order sorting
-        let sorted_files: Vec<_> = files.into_iter().collect();
-        //sorted_files.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+        let mut files = files;
+        files.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
 
-        for (i, file) in sorted_files.iter().enumerate() {
-            if file.path().is_dir() {
+        let mut index = 0;
+        for file in &files {
+            index += 1;
+            if file.is_dir() {
                 continue;
             }
 
-            if file.metadata()?.len() == 0 && i == sorted_files.len() - 1 {
-                fs::remove_file(file.path())?;
-                error!("{} size is 0, auto delete.", file.path().display());
+            if file.metadata().map(|metadata| metadata.len()).unwrap_or(0) == 0
+                && files.len() == index
+            {
+                if let Err(err) = fs::remove_file(file) {
+                    warn!("{} size is 0, auto delete. is_ok: {}", file.display(), err);
+                }
                 continue;
             }
 
-            if file.metadata()?.len() != self.mapped_file_size {
-                error!(
-                    "{} length not matched message store config value, please check it manually",
-                    file.path().display()
+            if file.metadata().map(|metadata| metadata.len()).unwrap_or(0) != self.mapped_file_size
+            {
+                warn!(
+                    "{} {} length not matched message store config value, please check it manually",
+                    file.display(),
+                    file.metadata().map(|metadata| metadata.len()).unwrap_or(0)
                 );
-                return Ok(false);
+                return false;
             }
 
-            let mapped_file = DefaultMappedFile::new(
-                file.path().into_os_string().to_string_lossy().to_string(),
-                self.mapped_file_size,
-            );
+            let mapped_file =
+                DefaultMappedFile::new(file.to_string_lossy().to_string(), self.mapped_file_size);
             // Set wrote, flushed, committed positions for mapped_file
 
             self.mapped_files.push(Box::new(mapped_file));
-            info!("load {} OK", file.path().display());
+            info!("load {} OK", file.display());
         }
 
-        Ok(true)
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+
+    #[test]
+    fn test_load_empty_dir() {
+        let mut queue = MappedFileQueue {
+            store_path: String::from("/path/to/empty/dir"),
+            mapped_files: Vec::new(),
+            flushed_where: 0,
+            committed_where: 0,
+            mapped_file_size: 1024,
+            store_timestamp: 0,
+        };
+        assert!(queue.load());
+        assert!(queue.mapped_files.is_empty());
+    }
+
+    #[test]
+    fn test_load_with_files() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file1_path = temp_dir.path().join("file1.txt");
+        let file2_path = temp_dir.path().join("file2.txt");
+        fs::File::create(&file1_path).unwrap();
+        fs::File::create(&file2_path).unwrap();
+
+        let mut queue = MappedFileQueue {
+            store_path: temp_dir.path().to_string_lossy().into_owned(),
+            mapped_files: Vec::new(),
+            flushed_where: 0,
+            committed_where: 0,
+            mapped_file_size: 0,
+            store_timestamp: 0,
+        };
+        assert!(queue.load());
+        assert_eq!(queue.mapped_files.len(), 1);
+    }
+
+    #[test]
+    fn test_load_with_empty_file() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file_path = temp_dir.path().join("empty_file.txt");
+        fs::File::create(&file_path).unwrap();
+
+        let mut queue = MappedFileQueue {
+            store_path: temp_dir.path().to_string_lossy().into_owned(),
+            mapped_files: Vec::new(),
+            flushed_where: 0,
+            committed_where: 0,
+            mapped_file_size: 1024,
+            store_timestamp: 0,
+        };
+        assert!(queue.load());
+        assert!(queue.mapped_files.is_empty());
+    }
+
+    #[test]
+    fn test_load_with_invalid_file_size() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file_path = temp_dir.path().join("invalid_file.txt");
+        fs::write(&file_path, "Some data").unwrap();
+
+        let mut queue = MappedFileQueue {
+            store_path: temp_dir.path().to_string_lossy().into_owned(),
+            mapped_files: Vec::new(),
+            flushed_where: 0,
+            committed_where: 0,
+            mapped_file_size: 1024,
+            store_timestamp: 0,
+        };
+        assert!(!queue.load());
+        assert!(queue.mapped_files.is_empty());
+    }
+
+    #[test]
+    fn test_load_with_correct_file() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file_path = temp_dir.path().join("correct_file.txt");
+        fs::write(&file_path, vec![0u8; 1024]).unwrap();
+
+        let mut queue = MappedFileQueue {
+            store_path: temp_dir.path().to_string_lossy().into_owned(),
+            mapped_files: Vec::new(),
+            flushed_where: 0,
+            committed_where: 0,
+            mapped_file_size: 1024,
+            store_timestamp: 0,
+        };
+        assert!(queue.load());
+        assert_eq!(queue.mapped_files.len(), 1);
     }
 }

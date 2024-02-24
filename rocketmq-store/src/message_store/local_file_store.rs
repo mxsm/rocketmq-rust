@@ -28,10 +28,27 @@ pub struct LocalFileMessageStore {
     pub message_store_config: MessageStoreConfig,
 }
 
+impl MessageStoreConfig {
+    pub fn new() -> Self {
+        MessageStoreConfig::default()
+    }
+}
+
 impl MessageStore for LocalFileMessageStore {
     fn load(&mut self) -> bool {
+        // let mut reuslt = true;
         //check abort file exists
-        //self.is_temp_file_exist();
+        let last_exit_ok = self.is_temp_file_exist();
+
+        tracing::info!(
+            "last shutdown {}, store path root dir: {}",
+            if last_exit_ok {
+                "normally"
+            } else {
+                "abnormally"
+            },
+            self.message_store_config.store_path_root_dir.clone()
+        );
         //load commit log file
 
         // load consume queue file

@@ -173,6 +173,10 @@ impl TopicConfigManager {
             );
         }
     }
+
+    pub fn select_topic_config(&self, topic: &str) -> Option<TopicConfig> {
+        self.topic_config_table.get(topic).cloned()
+    }
 }
 
 //Fully implemented will be removed

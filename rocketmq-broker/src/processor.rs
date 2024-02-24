@@ -16,6 +16,7 @@
  */
 use std::sync::Arc;
 
+use rand::Rng;
 use rocketmq_common::{
     common::{
         constant::PermName,
@@ -158,5 +159,9 @@ impl SendMessageProcessorInner {
             )));
         }
         //todo the next
+    }
+
+    pub(crate) fn random_queue_id(&self, write_queue_nums: u32) -> u32 {
+        rand::thread_rng().gen_range(0..=99999999) % write_queue_nums
     }
 }

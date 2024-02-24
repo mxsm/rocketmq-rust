@@ -17,6 +17,12 @@
 
 use crate::{base::swappable::Swappable, consume_queue::mapped_file_queue::MappedFileQueue};
 
+// Message's MAGIC CODE daa320a7
+pub const MESSAGE_MAGIC_CODE: i32 = -626843481;
+
+// End of file empty MAGIC CODE cbd43194
+pub const BLANK_MAGIC_CODE: i32 = -875286124;
+
 pub struct CommitLog {
     pub(crate) mapped_file_queue: MappedFileQueue,
 }
