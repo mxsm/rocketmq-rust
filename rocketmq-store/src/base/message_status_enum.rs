@@ -52,7 +52,7 @@ impl std::fmt::Display for PutMessageStatus {
     }
 }
 
-#[derive(Debug,Default)]
+#[derive(Debug, Default)]
 pub enum GetMessageStatus {
     #[default]
     Found,
