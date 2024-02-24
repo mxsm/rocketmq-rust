@@ -307,3 +307,15 @@ impl<'a> ConnectionHandlerContext<'a> {
         self.connection.remote_addr
     }
 }
+
+impl<'a> AsRef<ConnectionHandlerContext<'a>> for ConnectionHandlerContext<'a> {
+    fn as_ref(&self) -> &ConnectionHandlerContext<'a> {
+        self
+    }
+}
+
+impl<'a> AsMut<ConnectionHandlerContext<'a>> for ConnectionHandlerContext<'a> {
+    fn as_mut(&mut self) -> &mut ConnectionHandlerContext<'a> {
+        self
+    }
+}

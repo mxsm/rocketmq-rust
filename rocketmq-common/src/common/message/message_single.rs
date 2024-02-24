@@ -19,7 +19,7 @@ use std::{collections::HashMap, net::SocketAddr};
 
 use crate::common::message::{MessageTrait, MessageVersion, MESSAGE_MAGIC_CODE_V1};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Message {
     pub topic: String,
     pub flag: i32,
@@ -85,12 +85,34 @@ pub struct MessageExt {
     pub prepared_transaction_offset: i64,
 }
 
-#[derive(Clone, Debug)]
+impl Default for MessageExt {
+    fn default() -> Self {
+        Self {
+            message_inner: Default::default(),
+            broker_name: "".to_string(),
+            queue_id: 0,
+            store_size: 0,
+            queue_offset: 0,
+            sys_flag: 0,
+            born_timestamp: 0,
+            born_host: "127.0.0.1".parse().unwrap(),
+            store_timestamp: 0,
+            store_host: "127.0.0.1".parse().unwrap(),
+            msg_id: "".to_string(),
+            commit_log_offset: 0,
+            body_crc: 0,
+            reconsume_times: 0,
+            prepared_transaction_offset: 0,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
 pub struct MessageClientExt {
     pub message_ext_inner: MessageExt,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct MessageExtBrokerInner {
     pub message_ext_inner: MessageExt,
     pub properties_string: String,

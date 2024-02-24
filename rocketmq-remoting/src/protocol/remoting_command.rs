@@ -350,6 +350,18 @@ impl RemotingCommand {
     }
 }
 
+impl AsRef<RemotingCommand> for RemotingCommand {
+    fn as_ref(&self) -> &RemotingCommand {
+        self
+    }
+}
+
+impl AsMut<RemotingCommand> for RemotingCommand {
+    fn as_mut(&mut self) -> &mut RemotingCommand {
+        self
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

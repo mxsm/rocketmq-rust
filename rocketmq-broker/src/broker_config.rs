@@ -47,6 +47,7 @@ pub struct BrokerConfig {
     pub region_id: String,
     pub trace_on: bool,
     pub broker_permission: i8,
+    pub async_send_enable: bool,
 }
 
 impl Default for BrokerConfig {
@@ -72,6 +73,7 @@ impl Default for BrokerConfig {
             region_id: mix_all::DEFAULT_TRACE_REGION_ID.to_string(),
             trace_on: true,
             broker_permission: PermName::PERM_WRITE | PermName::PERM_READ,
+            async_send_enable: false,
         }
     }
 }
