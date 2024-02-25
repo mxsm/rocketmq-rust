@@ -20,6 +20,7 @@ pub mod base;
 pub mod config;
 mod consume_queue;
 mod filter;
+pub mod hook;
 pub mod log_file;
 pub mod message_store;
 mod queue;

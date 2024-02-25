@@ -29,6 +29,7 @@ pub mod config;
 pub mod config_manager;
 pub mod constant;
 mod faq;
+pub mod future;
 pub mod message;
 pub mod mix_all;
 pub mod mq_version;

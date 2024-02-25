@@ -14,6 +14,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+use rocketmq_common::common::{
+    future::CompletableFuture,
+    message::{message_batch::MessageExtBatch, message_single::MessageExtBrokerInner},
+};
+
+use crate::base::message_result::PutMessageResult;
+
 pub mod commit_log;
 pub mod mapped_file;
 
@@ -62,10 +70,10 @@ pub trait MessageStore {
     /// # Returns
     ///
     /// A `Future` for the result of the store operation.
-    /*fn async_put_messages(
+    fn async_put_messages(
         &self,
         message_ext_batch: MessageExtBatch,
-    ) -> impl Future<Output = PutMessageResult>;*/
+    ) -> CompletableFuture<PutMessageResult>;
 
     /// Store a message into the store.
     ///
@@ -76,7 +84,7 @@ pub trait MessageStore {
     /// # Returns
     ///
     /// Result of the store operation.
-    /* fn put_message(&self, msg: MessageExtBrokerInner) -> PutMessageResult; */
+    fn put_message(&self, msg: MessageExtBrokerInner) -> PutMessageResult;
 
     /// Store a batch of messages.
     ///

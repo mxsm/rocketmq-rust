@@ -58,7 +58,7 @@ impl SendMessageProcessorInner {
         &mut self,
         _ctx: &ConnectionHandlerContext,
         _request: &RemotingCommand,
-    ) -> RemotingCommand {
+    ) -> Option<RemotingCommand> {
         todo!()
     }
 
