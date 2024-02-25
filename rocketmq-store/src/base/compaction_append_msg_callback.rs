@@ -14,14 +14,27 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use crate::base::message_result::AppendMessageResult;
 
-pub mod append_message_callback;
-pub mod compaction_append_msg_callback;
-pub(crate) mod dispatch_request;
-pub mod message_result;
-pub mod message_status_enum;
-pub mod put_message_context;
-pub mod select_result;
-pub mod store_enum;
-pub mod swappable;
-pub mod transient_store_pool;
+/// Callback interface for compaction append message
+pub trait CompactionAppendMsgCallback {
+    /// Append messages during compaction
+    ///
+    /// # Arguments
+    ///
+    /// * `bb_dest` - The destination buffer to append to
+    /// * `file_from_offset` - The offset of the file
+    /// * `max_blank` - The maximum blank space
+    /// * `bb_src` - The source buffer containing the message to be appended
+    ///
+    /// # Returns
+    ///
+    /// The result of the append operation
+    fn do_append(
+        &self,
+        bb_dest: &mut bytes::Bytes,
+        file_from_offset: i64,
+        max_blank: i32,
+        bb_src: &mut bytes::Bytes,
+    ) -> AppendMessageResult;
+}

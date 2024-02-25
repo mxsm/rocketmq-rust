@@ -118,8 +118,8 @@ mod tests {
     #[test]
     fn test_load_with_files() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let file1_path = temp_dir.path().join("file1.txt");
-        let file2_path = temp_dir.path().join("file2.txt");
+        let file1_path = temp_dir.path().join("1111");
+        let file2_path = temp_dir.path().join("2222");
         fs::File::create(&file1_path).unwrap();
         fs::File::create(&file2_path).unwrap();
 
@@ -138,7 +138,7 @@ mod tests {
     #[test]
     fn test_load_with_empty_file() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let file_path = temp_dir.path().join("empty_file.txt");
+        let file_path = temp_dir.path().join("1111");
         fs::File::create(&file_path).unwrap();
 
         let mut queue = MappedFileQueue {
@@ -174,7 +174,7 @@ mod tests {
     #[test]
     fn test_load_with_correct_file() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let file_path = temp_dir.path().join("correct_file.txt");
+        let file_path = temp_dir.path().join("1111");
         fs::write(&file_path, vec![0u8; 1024]).unwrap();
 
         let mut queue = MappedFileQueue {
