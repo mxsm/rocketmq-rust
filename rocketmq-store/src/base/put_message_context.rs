@@ -14,14 +14,39 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#[derive(Debug, Clone, Default)]
+pub struct PutMessageContext {
+    topic_queue_table_key: String,
+    phy_pos: Vec<i64>,
+    batch_size: i32,
+}
 
-pub mod append_message_callback;
-pub mod compaction_append_msg_callback;
-pub(crate) mod dispatch_request;
-pub mod message_result;
-pub mod message_status_enum;
-pub mod put_message_context;
-pub mod select_result;
-pub mod store_enum;
-pub mod swappable;
-pub mod transient_store_pool;
+impl PutMessageContext {
+    pub fn new(topic_queue_table_key: String) -> Self {
+        PutMessageContext {
+            topic_queue_table_key,
+            phy_pos: Vec::new(),
+            batch_size: 0,
+        }
+    }
+
+    pub fn get_topic_queue_table_key(&self) -> &str {
+        &self.topic_queue_table_key
+    }
+
+    pub fn get_phy_pos(&self) -> &[i64] {
+        &self.phy_pos
+    }
+
+    pub fn phy_pos(&mut self, phy_pos: Vec<i64>) {
+        self.phy_pos = phy_pos;
+    }
+
+    pub fn get_batch_size(&self) -> i32 {
+        self.batch_size
+    }
+
+    pub fn batch_size(&mut self, batch_size: i32) {
+        self.batch_size = batch_size;
+    }
+}

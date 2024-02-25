@@ -15,13 +15,4 @@
  * limitations under the License.
  */
 
-pub mod append_message_callback;
-pub mod compaction_append_msg_callback;
-pub(crate) mod dispatch_request;
-pub mod message_result;
-pub mod message_status_enum;
-pub mod put_message_context;
-pub mod select_result;
-pub mod store_enum;
-pub mod swappable;
-pub mod transient_store_pool;
+pub struct TransientStorePool;
