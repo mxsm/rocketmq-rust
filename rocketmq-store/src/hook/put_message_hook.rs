@@ -14,5 +14,27 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod attribute_enum;
-pub mod topic_message_type;
+use rocketmq_common::common::message::message_batch::MessageExtBatch;
+
+use crate::base::message_result::PutMessageResult;
+
+/// Trait for hook executed before putting a message.
+pub trait PutMessageHook {
+    /// Returns the name of the hook.
+    fn hook_name(&self) -> String;
+
+    /// Execute before putting a message.
+    /// For example, message verification or special message transformation.
+    ///
+    /// # Arguments
+    ///
+    /// * `msg` - The message to be put
+    ///
+    /// # Returns
+    ///
+    /// The result of putting the message
+    fn execute_before_put_message(&self, msg: &MessageExtBatch) -> PutMessageResult;
+}
+
+/// Alias for `Arc<dyn PutMessageHook>`.
+pub type BoxedPutMessageHook = Box<dyn PutMessageHook + Send + Sync + 'static>;

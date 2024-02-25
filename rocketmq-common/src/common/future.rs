@@ -14,5 +14,40 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod attribute_enum;
-pub mod topic_message_type;
+
+use std::{
+    future::Future,
+    pin::Pin,
+    task::{Context, Poll},
+};
+
+pub struct CompletableFuture<T> {
+    result: Option<T>,
+}
+
+impl<T> CompletableFuture<T> {
+    pub fn new() -> Self {
+        CompletableFuture { result: None }
+    }
+
+    pub fn completed_future(&mut self, result: T) {
+        self.result = Some(result);
+    }
+}
+
+impl<T> Default for CompletableFuture<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T> Future for CompletableFuture<T> {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match self.result {
+            None => Poll::Pending,
+            Some(_) => Poll::Ready(()),
+        }
+    }
+}

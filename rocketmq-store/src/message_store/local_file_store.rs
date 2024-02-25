@@ -17,8 +17,15 @@
 
 use std::error::Error;
 
+use rocketmq_common::common::{
+    future::CompletableFuture,
+    message::{message_batch::MessageExtBatch, message_single::MessageExtBrokerInner},
+};
+
 use crate::{
+    base::message_result::PutMessageResult,
     config::{message_store_config::MessageStoreConfig, store_path_config_helper},
+    hook::put_message_hook::BoxedPutMessageHook,
     log_file::MessageStore,
 };
 
@@ -26,6 +33,7 @@ use crate::{
 #[derive(Default)]
 pub struct LocalFileMessageStore {
     pub message_store_config: MessageStoreConfig,
+    pub put_message_hook_list: Vec<BoxedPutMessageHook>,
 }
 
 impl MessageStoreConfig {
@@ -64,6 +72,20 @@ impl MessageStore for LocalFileMessageStore {
         Ok(())
     }
 
+    fn async_put_messages(
+        &self,
+        message_ext_batch: MessageExtBatch,
+    ) -> CompletableFuture<PutMessageResult> {
+        for put_message_hook in self.put_message_hook_list.iter() {
+            let _handle_result = put_message_hook.execute_before_put_message(&message_ext_batch);
+        }
+        CompletableFuture::new()
+    }
+
+    fn put_message(&self, _msg: MessageExtBrokerInner) -> PutMessageResult {
+        todo!()
+    }
+
     fn get_max_offset_in_queue_with_commit(
         &self,
         _topic: &str,
@@ -78,6 +100,7 @@ impl LocalFileMessageStore {
     pub fn new(message_store_config: MessageStoreConfig) -> Self {
         LocalFileMessageStore {
             message_store_config,
+            put_message_hook_list: vec![],
         }
     }
 }

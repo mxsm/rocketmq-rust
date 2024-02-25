@@ -1,6 +1,12 @@
 use std::sync::Arc;
 
-use rocketmq_common::common::message::MessageConst;
+use rocketmq_common::common::{
+    attribute::topic_message_type::TopicMessageType,
+    message::{
+        message_single::{MessageExt, MessageExtBrokerInner},
+        MessageConst,
+    },
+};
 use rocketmq_remoting::protocol::{
     header::message_operation_header::{
         send_message_request_header::SendMessageRequestHeader,
@@ -32,6 +38,10 @@ use rocketmq_remoting::{
     },
     runtime::{processor::RequestProcessor, server::ConnectionHandlerContext},
 };
+use rocketmq_store::{
+    base::message_result::PutMessageResult, log_file::MessageStore,
+    message_store::local_file_store::LocalFileMessageStore,
+};
 
 use crate::{
     broker_config::BrokerConfig,
@@ -43,12 +53,28 @@ use crate::{
     },
 };
 
-#[derive(Default)]
 pub struct SendMessageProcessor {
     inner: SendMessageProcessorInner,
     topic_queue_mapping_manager: Arc<parking_lot::RwLock<TopicQueueMappingManager>>,
     topic_config_manager: Arc<parking_lot::RwLock<TopicConfigManager>>,
     broker_config: Arc<parking_lot::RwLock<BrokerConfig>>,
+    message_store: Arc<parking_lot::RwLock<Box<dyn MessageStore + Sync + Send + 'static>>>,
+}
+
+impl Default for SendMessageProcessor {
+    fn default() -> Self {
+        Self {
+            inner: SendMessageProcessorInner::default(),
+            topic_queue_mapping_manager: Arc::new(parking_lot::RwLock::new(
+                TopicQueueMappingManager::default(),
+            )),
+            topic_config_manager: Arc::new(parking_lot::RwLock::new(TopicConfigManager::default())),
+            broker_config: Arc::new(parking_lot::RwLock::new(BrokerConfig::default())),
+            message_store: Arc::new(parking_lot::RwLock::new(
+                Box::<LocalFileMessageStore>::default(),
+            )),
+        }
+    }
 }
 
 impl RequestProcessor for SendMessageProcessor {
@@ -98,7 +124,7 @@ impl RequestProcessor for SendMessageProcessor {
                 }
             }
         };
-        response
+        response.unwrap()
     }
 }
 
@@ -106,12 +132,14 @@ impl RequestProcessor for SendMessageProcessor {
 impl SendMessageProcessor {
     pub fn new(
         topic_queue_mapping_manager: Arc<parking_lot::RwLock<TopicQueueMappingManager>>,
+        message_store: Arc<parking_lot::RwLock<Box<dyn MessageStore + Sync + Send + 'static>>>,
     ) -> Self {
         Self {
             inner: SendMessageProcessorInner::default(),
             topic_queue_mapping_manager,
             topic_config_manager: Arc::new(Default::default()),
             broker_config: Arc::new(Default::default()),
+            message_store,
         }
     }
 
@@ -123,11 +151,11 @@ impl SendMessageProcessor {
         request_header: SendMessageRequestHeader,
         mapping_context: TopicQueueMappingContext,
         send_message_callback: F,
-    ) -> RemotingCommand
+    ) -> Option<RemotingCommand>
     where
         F: FnOnce(&SendMessageContext, &RemotingCommand),
     {
-        RemotingCommand::create_response_command()
+        Some(RemotingCommand::create_response_command())
     }
 
     fn send_message<F>(
@@ -138,13 +166,13 @@ impl SendMessageProcessor {
         request_header: SendMessageRequestHeader,
         mapping_context: TopicQueueMappingContext,
         send_message_callback: F,
-    ) -> RemotingCommand
+    ) -> Option<RemotingCommand>
     where
         F: FnOnce(&SendMessageContext, &RemotingCommand),
     {
         let response = self.pre_send(ctx.as_ref(), request.as_ref(), &request_header);
         if response.code() != -1 {
-            return response;
+            return Some(response);
         }
         let response_header = SendMessageResponseHeader::default();
         let topic_config = self
@@ -158,13 +186,33 @@ impl SendMessageProcessor {
         }
 
         if self.broker_config.read().async_send_enable {
-            todo!()
+            None
         } else {
-            todo!()
+            let result = self
+                .message_store
+                .read()
+                .put_message(MessageExtBrokerInner::default());
+            Some(response)
         }
     }
 
-    fn pre_send(
+    fn handle_put_message_result(
+        put_message_result: PutMessageResult,
+        response: RemotingCommand,
+        request: RemotingCommand,
+        msg: MessageExt,
+        response_header: SendMessageResponseHeader,
+        send_message_context: SendMessageContext,
+        ctx: ConnectionHandlerContext,
+        queue_id_int: i32,
+        begin_time_millis: i64,
+        mapping_context: TopicQueueMappingContext,
+        message_type: TopicMessageType,
+    ) -> RemotingCommand {
+        // Your implementation here
+        todo!()
+    }
+    pub fn pre_send(
         &mut self,
         ctx: &ConnectionHandlerContext,
         request: &RemotingCommand,
