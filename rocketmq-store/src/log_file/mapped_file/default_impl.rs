@@ -87,6 +87,7 @@ impl DefaultMappedFile {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(true)
             .open(path)
             .unwrap();
         file.set_len(file_size)
