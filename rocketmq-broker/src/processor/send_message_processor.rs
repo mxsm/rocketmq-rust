@@ -58,11 +58,13 @@ pub struct SendMessageProcessor {
     topic_queue_mapping_manager: Arc<parking_lot::RwLock<TopicQueueMappingManager>>,
     topic_config_manager: Arc<parking_lot::RwLock<TopicConfigManager>>,
     broker_config: Arc<parking_lot::RwLock<BrokerConfig>>,
-    message_store: Arc<parking_lot::RwLock<Box<dyn MessageStore + Sync + Send + 'static>>>,
+    #[cfg(feature = "local_file_store")]
+    message_store: Arc<parking_lot::RwLock<LocalFileMessageStore>>,
 }
 
 impl Default for SendMessageProcessor {
     fn default() -> Self {
+        #[cfg(feature = "local_file_store")]
         Self {
             inner: SendMessageProcessorInner::default(),
             topic_queue_mapping_manager: Arc::new(parking_lot::RwLock::new(
@@ -70,9 +72,7 @@ impl Default for SendMessageProcessor {
             )),
             topic_config_manager: Arc::new(parking_lot::RwLock::new(TopicConfigManager::default())),
             broker_config: Arc::new(parking_lot::RwLock::new(BrokerConfig::default())),
-            message_store: Arc::new(parking_lot::RwLock::new(
-                Box::<LocalFileMessageStore>::default(),
-            )),
+            message_store: Arc::new(parking_lot::RwLock::new(LocalFileMessageStore::default())),
         }
     }
 }
@@ -130,9 +130,10 @@ impl RequestProcessor for SendMessageProcessor {
 
 #[allow(unused_variables)]
 impl SendMessageProcessor {
+    #[cfg(feature = "local_file_store")]
     pub fn new(
         topic_queue_mapping_manager: Arc<parking_lot::RwLock<TopicQueueMappingManager>>,
-        message_store: Arc<parking_lot::RwLock<Box<dyn MessageStore + Sync + Send + 'static>>>,
+        message_store: Arc<parking_lot::RwLock<LocalFileMessageStore>>,
     ) -> Self {
         Self {
             inner: SendMessageProcessorInner::default(),

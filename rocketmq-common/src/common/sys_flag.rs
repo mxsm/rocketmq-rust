@@ -14,5 +14,5 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+pub mod message_sys_flag;
 pub mod topic_sys_flag;

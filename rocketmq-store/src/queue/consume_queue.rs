@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 
 use rocketmq_common::common::{
-    attribute::attribute_enum::CQType, boundary_type::BoundaryType,
+    attribute::cq_type::CQType, boundary_type::BoundaryType,
     message::message_single::MessageExtBrokerInner,
 };
 
