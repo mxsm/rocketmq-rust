@@ -30,6 +30,8 @@ pub use crate::{
 };
 
 pub mod common;
+pub use crate::common::attribute::topic_attributes as TopicAttributes;
+
 pub mod log;
 mod thread_pool;
 pub mod utils;

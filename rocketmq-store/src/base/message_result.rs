@@ -23,6 +23,7 @@ use crate::base::{
 };
 
 /// Represents the result of an append message operation.
+#[derive(Default)]
 pub struct AppendMessageResult {
     /// Return code.
     pub status: AppendMessageStatus,
@@ -44,10 +45,25 @@ pub struct AppendMessageResult {
     pub msg_num: i32,
 }
 
+#[derive(Default)]
 pub struct PutMessageResult {
-    pub put_message_status: PutMessageStatus,
-    pub append_message_result: AppendMessageResult,
-    pub remote_put: bool,
+    put_message_status: PutMessageStatus,
+    append_message_result: Option<AppendMessageResult>,
+    remote_put: bool,
+}
+
+impl PutMessageResult {
+    pub fn new(
+        put_message_status: PutMessageStatus,
+        append_message_result: Option<AppendMessageResult>,
+        remote_put: bool,
+    ) -> Self {
+        Self {
+            put_message_status,
+            append_message_result,
+            remote_put,
+        }
+    }
 }
 
 /// Represents the result of getting a message.

@@ -14,10 +14,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::future::Future;
 
-use rocketmq_common::common::{
-    future::CompletableFuture,
-    message::{message_batch::MessageExtBatch, message_single::MessageExtBrokerInner},
+use rocketmq_common::common::message::{
+    message_batch::MessageExtBatch, message_single::MessageExtBrokerInner,
 };
 
 use crate::base::message_result::PutMessageResult;
@@ -56,10 +56,12 @@ pub trait MessageStore {
     /// # Returns
     ///
     /// A `Future` for the result of the store operation.
-    /* fn async_put_message(
+    fn async_put_message(
         &self,
         msg: MessageExtBrokerInner,
-    ) -> impl Future<Output = PutMessageResult>;*/
+    ) -> impl Future<Output = PutMessageResult> {
+        async move { self.put_message(msg) }
+    }
 
     /// Store a batch of messages in an async manner.
     ///
@@ -73,7 +75,9 @@ pub trait MessageStore {
     fn async_put_messages(
         &self,
         message_ext_batch: MessageExtBatch,
-    ) -> CompletableFuture<PutMessageResult>;
+    ) -> impl Future<Output = PutMessageResult> {
+        async move { self.put_messages(message_ext_batch) }
+    }
 
     /// Store a message into the store.
     ///
@@ -95,7 +99,7 @@ pub trait MessageStore {
     /// # Returns
     ///
     /// Result of storing batch messages.
-    // fn put_messages(&self, message_ext_batch: MessageExtBatch) -> PutMessageResult;
+    fn put_messages(&self, message_ext_batch: MessageExtBatch) -> PutMessageResult;
 
     /// Query at most `max_msg_nums` messages belonging to `topic` at `queue_id` starting
     /// from given `offset`. Resulting messages will further be screened using provided message
