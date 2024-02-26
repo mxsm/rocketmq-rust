@@ -101,7 +101,8 @@ pub struct BrokerController {
     pub(crate) cold_data_pull_request_hold_service: ColdDataPullRequestHoldService,
     pub(crate) cold_data_cg_ctr_service: ColdDataCgCtrService,
     pub(crate) broker_outer_api: BrokerOuterAPI,
-    pub(crate) message_store: Option<Box<dyn MessageStore>>,
+    #[cfg(feature = "local_file_store")]
+    pub(crate) message_store: Option<LocalFileMessageStore>,
     pub(crate) timer_message_store: Option<TimerMessageStore>,
     pub(crate) replicas_manager: Option<ReplicasManager>,
     pub(crate) broker_server: Option<RocketmqDefaultServer>,
@@ -160,7 +161,7 @@ impl BrokerController {
 
 impl BrokerController {
     pub async fn start(&mut self) {
-        if self.message_store.is_some() {
+        if self.message_store.as_mut().is_some() {
             let _ = self.message_store.as_mut().unwrap().start();
         }
 
@@ -206,7 +207,7 @@ impl BrokerController {
     pub fn initialize_message_store(&mut self) -> bool {
         if self.store_config.store_type == StoreType::LocalFile {
             info!("Use local file as message store");
-            self.message_store = Some(Box::<LocalFileMessageStore>::default());
+            self.message_store = Some(LocalFileMessageStore::default());
         } else if self.store_config.store_type == StoreType::RocksDB {
             info!("Use RocksDB as message store");
         } else {
