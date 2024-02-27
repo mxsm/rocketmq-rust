@@ -189,6 +189,7 @@ mod tests {
 
         let mut queue = MappedFileQueue {
             store_path: temp_dir.path().to_string_lossy().into_owned(),
+            mapped_file_size: 1024,
             ..MappedFileQueue::default()
         };
         assert!(queue.load());
