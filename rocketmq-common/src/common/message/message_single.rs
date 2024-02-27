@@ -17,7 +17,13 @@
 
 use std::{collections::HashMap, net::SocketAddr};
 
-use crate::common::message::{MessageTrait, MessageVersion, MESSAGE_MAGIC_CODE_V1};
+use crate::{
+    common::{
+        message::{MessageTrait, MessageVersion, MESSAGE_MAGIC_CODE_V1},
+        sys_flag::message_sys_flag::MessageSysFlag,
+    },
+    MessageUtils,
+};
 
 #[derive(Clone, Debug, Default)]
 pub struct Message {
@@ -28,40 +34,47 @@ pub struct Message {
     pub transaction_id: Option<String>,
 }
 
+impl Message {
+    pub fn clear_property(&mut self, name: impl Into<String>) {
+        self.properties.remove(name.into().as_str());
+    }
+}
+
+#[allow(unused_variables)]
 impl MessageTrait for Message {
-    fn get_topic(&self) -> &str {
+    fn topic(&self) -> &str {
         todo!()
     }
 
-    fn set_topic(&mut self, _topic: impl Into<String>) {
+    fn with_topic(&mut self, topic: impl Into<String>) {
         todo!()
     }
 
-    fn get_tags(&self) -> Option<&str> {
+    fn tags(&self) -> Option<&str> {
         todo!()
     }
 
-    fn set_tags(&mut self, _tags: impl Into<String>) {
+    fn with_tags(&mut self, tags: impl Into<String>) {
         todo!()
     }
 
-    fn put_property(&mut self, _key: impl Into<String>, _value: impl Into<String>) {
+    fn put_property(&mut self, key: impl Into<String>, value: impl Into<String>) {
         todo!()
     }
 
-    fn get_properties(&self) -> &HashMap<String, String> {
+    fn properties(&self) -> &HashMap<String, String> {
         todo!()
     }
 
-    fn put_user_property(&mut self, _name: impl Into<String>, _value: impl Into<String>) {
+    fn put_user_property(&mut self, name: impl Into<String>, value: impl Into<String>) {
         todo!()
     }
 
-    fn get_delay_time_level(&self) -> i32 {
+    fn delay_time_level(&self) -> i32 {
         todo!()
     }
 
-    fn set_delay_time_level(&self, _level: i32) -> i32 {
+    fn with_delay_time_level(&self, level: i32) -> i32 {
         todo!()
     }
 }
@@ -80,9 +93,31 @@ pub struct MessageExt {
     pub store_host: SocketAddr,
     pub msg_id: String,
     pub commit_log_offset: i64,
-    pub body_crc: i32,
+    pub body_crc: u32,
     pub reconsume_times: i32,
     pub prepared_transaction_offset: i64,
+}
+
+impl MessageExt {
+    pub fn topic(&self) -> &str {
+        self.message_inner.topic()
+    }
+
+    pub fn born_host(&self) -> SocketAddr {
+        self.born_host
+    }
+
+    pub fn store_host(&self) -> SocketAddr {
+        self.store_host
+    }
+
+    pub fn with_born_host_v6_flag(&mut self) {
+        self.sys_flag |= MessageSysFlag::BORNHOST_V6_FLAG;
+    }
+
+    pub fn with_store_host_v6_flag(&mut self) {
+        self.sys_flag |= MessageSysFlag::STOREHOSTADDRESS_V6_FLAG;
+    }
 }
 
 impl Default for MessageExt {
@@ -119,8 +154,42 @@ pub struct MessageExtBrokerInner {
     pub tags_code: i64,
     pub encoded_buff: bytes::Bytes,
     pub encode_completed: bool,
+    pub version: MessageVersion,
 }
 
 impl MessageExtBrokerInner {
     const VERSION: MessageVersion = MessageVersion::V1(MESSAGE_MAGIC_CODE_V1);
+
+    pub fn delete_property(&mut self, name: impl Into<String>) {
+        let name = name.into();
+        self.message_ext_inner
+            .message_inner
+            .clear_property(name.as_str());
+        self.properties_string =
+            MessageUtils::delete_property(self.properties_string.as_str(), name.as_str());
+    }
+
+    pub fn with_version(&mut self, version: MessageVersion) {
+        self.version = version;
+    }
+
+    pub fn topic(&self) -> &str {
+        self.message_ext_inner.topic()
+    }
+
+    pub fn born_host(&self) -> SocketAddr {
+        self.message_ext_inner.born_host()
+    }
+
+    pub fn store_host(&self) -> SocketAddr {
+        self.message_ext_inner.store_host()
+    }
+
+    pub fn with_born_host_v6_flag(&mut self) {
+        self.message_ext_inner.with_born_host_v6_flag()
+    }
+
+    pub fn with_store_host_v6_flag(&mut self) {
+        self.message_ext_inner.with_store_host_v6_flag()
+    }
 }

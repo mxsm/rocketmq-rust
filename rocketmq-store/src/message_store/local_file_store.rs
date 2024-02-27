@@ -104,7 +104,7 @@ impl MessageStore for LocalFileMessageStore {
         if msg
             .message_ext_inner
             .message_inner
-            .get_properties()
+            .properties()
             .contains_key(MessageConst::PROPERTY_INNER_NUM)
             && MessageSysFlag::check(
                 msg.message_ext_inner.sys_flag,
@@ -118,7 +118,7 @@ impl MessageStore for LocalFileMessageStore {
             msg.message_ext_inner.sys_flag,
             MessageSysFlag::INNER_BATCH_FLAG,
         ) {
-            self.get_topic_config(msg.message_ext_inner.message_inner.get_topic());
+            self.get_topic_config(msg.message_ext_inner.message_inner.topic());
         }
         todo!()
     }

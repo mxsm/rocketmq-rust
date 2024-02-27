@@ -30,32 +30,38 @@ pub mod message_queue;
 pub mod message_single;
 
 pub trait MessageTrait {
-    fn get_topic(&self) -> &str;
+    fn topic(&self) -> &str;
 
-    fn set_topic(&mut self, topic: impl Into<String>);
+    fn with_topic(&mut self, topic: impl Into<String>);
 
-    fn get_tags(&self) -> Option<&str>;
+    fn tags(&self) -> Option<&str>;
 
-    fn set_tags(&mut self, tags: impl Into<String>);
+    fn with_tags(&mut self, tags: impl Into<String>);
 
     fn put_property(&mut self, key: impl Into<String>, value: impl Into<String>);
 
-    fn get_properties(&self) -> &HashMap<String, String>;
+    fn properties(&self) -> &HashMap<String, String>;
 
     fn put_user_property(&mut self, name: impl Into<String>, value: impl Into<String>);
 
-    fn get_delay_time_level(&self) -> i32;
+    fn delay_time_level(&self) -> i32;
 
-    fn set_delay_time_level(&self, level: i32) -> i32;
+    fn with_delay_time_level(&self, level: i32) -> i32;
 }
 
 pub const MESSAGE_MAGIC_CODE_V1: i32 = -626843481;
 pub const MESSAGE_MAGIC_CODE_V2: i32 = -626843477;
 
-#[derive(Debug, PartialEq, Eq, Hash)]
-enum MessageVersion {
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub enum MessageVersion {
     V1(i32),
     V2(i32),
+}
+
+impl Default for MessageVersion {
+    fn default() -> Self {
+        Self::V1(MESSAGE_MAGIC_CODE_V1)
+    }
 }
 
 impl MessageVersion {
