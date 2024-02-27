@@ -15,7 +15,22 @@
  * limitations under the License.
  */
 
-use crate::{base::swappable::Swappable, consume_queue::mapped_file_queue::MappedFileQueue};
+use std::{ops::Deref, sync::Arc};
+
+use rocketmq_common::{
+    common::message::{
+        message_single::MessageExtBrokerInner, MessageConst, MessageVersion, MESSAGE_MAGIC_CODE_V1,
+        MESSAGE_MAGIC_CODE_V2,
+    },
+    utils::time_utils,
+    CRC32Utils::crc32,
+};
+
+use crate::{
+    base::{message_result::PutMessageResult, swappable::Swappable},
+    config::message_store_config::MessageStoreConfig,
+    consume_queue::mapped_file_queue::MappedFileQueue,
+};
 
 // Message's MAGIC CODE daa320a7
 pub const MESSAGE_MAGIC_CODE: i32 = -626843481;
@@ -23,13 +38,50 @@ pub const MESSAGE_MAGIC_CODE: i32 = -626843481;
 // End of file empty MAGIC CODE cbd43194
 pub const BLANK_MAGIC_CODE: i32 = -875286124;
 
+#[derive(Default)]
 pub struct CommitLog {
     pub(crate) mapped_file_queue: MappedFileQueue,
+    pub(crate) message_store_config: Arc<MessageStoreConfig>,
+    pub(crate) enabled_append_prop_crc: bool,
 }
 
 impl CommitLog {
     pub fn load(&mut self) -> bool {
         self.mapped_file_queue.load()
+    }
+
+    async fn async_put_message(&self, msg: MessageExtBrokerInner) -> PutMessageResult {
+        let mut msg = msg;
+        if !self.message_store_config.duplication_enable {
+            msg.message_ext_inner.store_timestamp = time_utils::get_current_millis() as i64;
+        }
+        msg.message_ext_inner.body_crc = crc32(msg.message_ext_inner.message_inner.body.deref());
+        if !self.enabled_append_prop_crc {
+            msg.delete_property(MessageConst::PROPERTY_CRC32);
+        }
+
+        //setting message version
+        msg.with_version(MessageVersion::V1(MESSAGE_MAGIC_CODE_V1));
+        let topic = msg.topic();
+        // setting auto message on topic length
+        if self.message_store_config.auto_message_version_on_topic_len
+            && topic.len() > i8::MAX as usize
+        {
+            msg.with_version(MessageVersion::V2(MESSAGE_MAGIC_CODE_V2));
+        }
+
+        //setting ip type:IPV4 OR IPV6, default is ipv4
+        let born_host = msg.born_host();
+        if born_host.is_ipv6() {
+            msg.with_born_host_v6_flag();
+        }
+
+        let store_host = msg.store_host();
+        if store_host.is_ipv6() {
+            msg.with_store_host_v6_flag();
+        }
+
+        PutMessageResult::default()
     }
 }
 

@@ -25,7 +25,8 @@ pub use crate::{
     },
     utils::{
         crc32_utils as CRC32Utils, env_utils as EnvUtils, file_utils as FileUtils,
-        parse_config_file as ParseConfigFile, time_utils as TimeUtils,
+        message_utils as MessageUtils, parse_config_file as ParseConfigFile,
+        time_utils as TimeUtils,
     },
 };
 

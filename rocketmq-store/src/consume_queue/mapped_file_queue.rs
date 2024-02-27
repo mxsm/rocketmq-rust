@@ -5,9 +5,10 @@ use tracing::info;
 
 use crate::{
     base::swappable::Swappable,
-    log_file::mapped_file::{default_impl::DefaultMappedFile, MappedFile},
+    log_file::mapped_file::{default_impl::DefaultMappedFile, MappedFile}, services::allocate_mapped_file_service::AllocateMappedFileService,
 };
 
+#[derive(Default)]
 pub struct MappedFileQueue {
     pub(crate) store_path: String,
 
@@ -15,7 +16,8 @@ pub struct MappedFileQueue {
 
     pub(crate) mapped_files: Vec<Box<dyn MappedFile>>,
 
-    //AllocateMappedFileService  -- todo
+    pub(crate) allocate_mapped_file_service: AllocateMappedFileService,
+
     pub(crate) flushed_where: u64,
 
     pub(crate) committed_where: u64,
@@ -39,6 +41,22 @@ impl Swappable for MappedFileQueue {
 }
 
 impl MappedFileQueue {
+    pub fn new(
+        store_path: String,
+        mapped_file_size: u64,
+        allocate_mapped_file_service: AllocateMappedFileService,
+    ) -> MappedFileQueue {
+        MappedFileQueue {
+            store_path,
+            mapped_file_size,
+            mapped_files: Vec::new(),
+            allocate_mapped_file_service,
+            flushed_where: 0,
+            committed_where: 0,
+            store_timestamp: 0,
+        }
+    }
+
     pub fn load(&mut self) -> bool {
         //list dir files
         let dir = Path::new(&self.store_path);
@@ -93,6 +111,14 @@ impl MappedFileQueue {
 
         true
     }
+
+    pub fn get_last_mapped_file(&self) -> Option<&dyn MappedFile> {
+        if self.mapped_files.is_empty() {
+            return None;
+        }
+        self.mapped_files.last().take().map(|value| value.as_ref())
+    }
+
 }
 
 #[cfg(test)]
@@ -105,11 +131,7 @@ mod tests {
     fn test_load_empty_dir() {
         let mut queue = MappedFileQueue {
             store_path: String::from("/path/to/empty/dir"),
-            mapped_files: Vec::new(),
-            flushed_where: 0,
-            committed_where: 0,
-            mapped_file_size: 1024,
-            store_timestamp: 0,
+            ..MappedFileQueue::default()
         };
         assert!(queue.load());
         assert!(queue.mapped_files.is_empty());
@@ -125,11 +147,7 @@ mod tests {
 
         let mut queue = MappedFileQueue {
             store_path: temp_dir.path().to_string_lossy().into_owned(),
-            mapped_files: Vec::new(),
-            flushed_where: 0,
-            committed_where: 0,
-            mapped_file_size: 0,
-            store_timestamp: 0,
+            ..MappedFileQueue::default()
         };
         assert!(queue.load());
         assert_eq!(queue.mapped_files.len(), 1);
@@ -143,11 +161,7 @@ mod tests {
 
         let mut queue = MappedFileQueue {
             store_path: temp_dir.path().to_string_lossy().into_owned(),
-            mapped_files: Vec::new(),
-            flushed_where: 0,
-            committed_where: 0,
-            mapped_file_size: 1024,
-            store_timestamp: 0,
+            ..MappedFileQueue::default()
         };
         assert!(queue.load());
         assert!(queue.mapped_files.is_empty());
@@ -161,11 +175,7 @@ mod tests {
 
         let mut queue = MappedFileQueue {
             store_path: temp_dir.path().to_string_lossy().into_owned(),
-            mapped_files: Vec::new(),
-            flushed_where: 0,
-            committed_where: 0,
-            mapped_file_size: 1024,
-            store_timestamp: 0,
+            ..MappedFileQueue::default()
         };
         assert!(!queue.load());
         assert!(queue.mapped_files.is_empty());
@@ -179,11 +189,7 @@ mod tests {
 
         let mut queue = MappedFileQueue {
             store_path: temp_dir.path().to_string_lossy().into_owned(),
-            mapped_files: Vec::new(),
-            flushed_where: 0,
-            committed_where: 0,
-            mapped_file_size: 1024,
-            store_timestamp: 0,
+            ..MappedFileQueue::default()
         };
         assert!(queue.load());
         assert_eq!(queue.mapped_files.len(), 1);

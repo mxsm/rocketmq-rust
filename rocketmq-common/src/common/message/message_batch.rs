@@ -26,40 +26,41 @@ pub struct MessageBatch {
     pub messages: Vec<Message>,
 }
 
+#[allow(unused_variables)]
 impl MessageTrait for MessageBatch {
-    fn get_topic(&self) -> &str {
+    fn topic(&self) -> &str {
         todo!()
     }
 
-    fn set_topic(&mut self, _topic: impl Into<String>) {
+    fn with_topic(&mut self, topic: impl Into<String>) {
         todo!()
     }
 
-    fn get_tags(&self) -> Option<&str> {
+    fn tags(&self) -> Option<&str> {
         todo!()
     }
 
-    fn set_tags(&mut self, _tags: impl Into<String>) {
+    fn with_tags(&mut self, tags: impl Into<String>) {
         todo!()
     }
 
-    fn put_property(&mut self, _key: impl Into<String>, _value: impl Into<String>) {
+    fn put_property(&mut self, key: impl Into<String>, value: impl Into<String>) {
         todo!()
     }
 
-    fn get_properties(&self) -> &HashMap<String, String> {
+    fn properties(&self) -> &HashMap<String, String> {
         todo!()
     }
 
-    fn put_user_property(&mut self, _name: impl Into<String>, _value: impl Into<String>) {
+    fn put_user_property(&mut self, name: impl Into<String>, value: impl Into<String>) {
         todo!()
     }
 
-    fn get_delay_time_level(&self) -> i32 {
+    fn delay_time_level(&self) -> i32 {
         todo!()
     }
 
-    fn set_delay_time_level(&self, _level: i32) -> i32 {
+    fn with_delay_time_level(&self, level: i32) -> i32 {
         todo!()
     }
 }

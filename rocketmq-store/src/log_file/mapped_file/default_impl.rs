@@ -190,7 +190,7 @@ impl MappedFile for DefaultMappedFile {
     }
 
     fn get_file_from_offset(&self) -> i64 {
-        todo!()
+        self.file_from_offset
     }
 
     fn flush(&mut self, flush_least_pages: usize) -> usize {
@@ -262,7 +262,7 @@ impl MappedFile for DefaultMappedFile {
     }
 
     fn get_wrote_position(&self) -> usize {
-        todo!()
+        self.wrote_position.load(std::sync::atomic::Ordering::Relaxed) as usize
     }
 
     fn set_wrote_position(&mut self, wrote_position: usize) {
