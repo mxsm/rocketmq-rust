@@ -262,7 +262,8 @@ impl MappedFile for DefaultMappedFile {
     }
 
     fn get_wrote_position(&self) -> usize {
-        self.wrote_position.load(std::sync::atomic::Ordering::Relaxed) as usize
+        self.wrote_position
+            .load(std::sync::atomic::Ordering::Relaxed) as usize
     }
 
     fn set_wrote_position(&mut self, wrote_position: usize) {

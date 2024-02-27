@@ -5,7 +5,8 @@ use tracing::info;
 
 use crate::{
     base::swappable::Swappable,
-    log_file::mapped_file::{default_impl::DefaultMappedFile, MappedFile}, services::allocate_mapped_file_service::AllocateMappedFileService,
+    log_file::mapped_file::{default_impl::DefaultMappedFile, MappedFile},
+    services::allocate_mapped_file_service::AllocateMappedFileService,
 };
 
 #[derive(Default)]
@@ -118,7 +119,6 @@ impl MappedFileQueue {
         }
         self.mapped_files.last().take().map(|value| value.as_ref())
     }
-
 }
 
 #[cfg(test)]
