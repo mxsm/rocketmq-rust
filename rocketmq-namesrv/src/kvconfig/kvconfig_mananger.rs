@@ -103,7 +103,7 @@ impl KVConfigManager {
         value: impl Into<String>,
     ) {
         let namespace_inner = namespace.into();
-        if self.config_table.get(namespace_inner.as_str()).is_none() {
+        if !self.config_table.contains_key(namespace_inner.as_str()) {
             self.config_table
                 .insert(namespace_inner.clone(), HashMap::new());
         }
@@ -135,7 +135,7 @@ impl KVConfigManager {
     /// Deletes a key-value configuration.
     pub fn delete_kv_config(&mut self, namespace: impl Into<String>, key: impl Into<String>) {
         let namespace_inner = namespace.into();
-        if self.config_table.get(namespace_inner.as_str()).is_none() {
+        if !self.config_table.contains_key(namespace_inner.as_str()) {
             return;
         }
 
