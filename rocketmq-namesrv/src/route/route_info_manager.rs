@@ -517,7 +517,7 @@ impl RouteInfoManager {
     ) -> bool {
         let option = self.query_broker_topic_config(cluster_name, broker_addr);
         if let Some(pre) = option {
-            if !(pre == data_version) {
+            if pre != data_version {
                 return true;
             }
         }
@@ -734,7 +734,7 @@ impl RouteInfoManager {
         }
         let topic_inner = topic.into();
 
-        if self.topic_queue_table.get(&topic_inner).is_none() {
+        if !self.topic_queue_table.contains_key(&topic_inner) {
             self.topic_queue_table
                 .insert(topic_inner.clone(), HashMap::new());
         }
