@@ -221,35 +221,3 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         unimplemented!()
     }
 }
-
-#[cfg(test)]
-mod test {
-    use bytes::{Buf, Bytes};
-
-    #[test]
-    fn tttmain() {
-        // 假设 pre_encode_buffer 是一个 Bytes 实例，包含 msg_len 的值
-        let mut pre_encode_buffer = Bytes::from_static(&[0, 0, 0, 5, 1, 2, 3, 4, 5]);
-
-        // 读取 msg_len 的值
-        let msg_len = pre_encode_buffer.get_i32();
-
-        // 打印读取的 msg_len 值
-        println!("msg_len: {}", msg_len);
-
-        // 获取重新设置读取指针的字节片段
-        let (mut buffer, remaining) = pre_encode_buffer.split_at(pre_encode_buffer.len());
-        println!(
-            "msg_len===========: {}======={}",
-            buffer.len(),
-            remaining.len()
-        );
-        // 将读取指针设置回原始位置
-        let original_position = buffer.len() - remaining.len() as usize;
-        buffer.advance(original_position);
-
-        // 读取 msg_len 的值（第二次）
-        let msg_len_second_time = buffer.get_i32();
-        println!("msg_len second time: {}", msg_len_second_time);
-    }
-}
