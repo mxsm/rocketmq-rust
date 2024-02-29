@@ -87,7 +87,7 @@ pub struct MessageStoreConfig {
     pub file_reserved_time: usize,
     pub delete_file_batch_max: usize,
     pub put_msg_index_hight_water: usize,
-    pub max_message_size: usize,
+    pub max_message_size: i32,
     pub check_crc_on_recover: bool,
     pub flush_commit_log_least_pages: usize,
     pub commit_commit_log_least_pages: usize,

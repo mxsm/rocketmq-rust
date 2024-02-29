@@ -18,9 +18,9 @@
 use std::{ops::Deref, sync::Arc};
 
 use rocketmq_common::{
-    common::message::{
-        message_single::MessageExtBrokerInner, MessageConst, MessageVersion, MESSAGE_MAGIC_CODE_V1,
-        MESSAGE_MAGIC_CODE_V2,
+    common::{
+        message::{message_single::MessageExtBrokerInner, MessageConst, MessageVersion},
+        mix_all,
     },
     utils::time_utils,
     CRC32Utils::crc32,
@@ -37,6 +37,10 @@ pub const MESSAGE_MAGIC_CODE: i32 = -626843481;
 
 // End of file empty MAGIC CODE cbd43194
 pub const BLANK_MAGIC_CODE: i32 = -875286124;
+
+//CRC32 Format: [PROPERTY_CRC32 + NAME_VALUE_SEPARATOR + 10-digit fixed-length string +
+// PROPERTY_SEPARATOR]
+pub const CRC32_RESERVED_LEN: i32 = (MessageConst::PROPERTY_CRC32.len() + 1 + 10 + 1) as i32;
 
 #[derive(Default)]
 pub struct CommitLog {
@@ -55,19 +59,26 @@ impl CommitLog {
         if !self.message_store_config.duplication_enable {
             msg.message_ext_inner.store_timestamp = time_utils::get_current_millis() as i64;
         }
-        msg.message_ext_inner.body_crc = crc32(msg.message_ext_inner.message_inner.body.deref());
+        msg.message_ext_inner.body_crc = crc32(
+            msg.message_ext_inner
+                .message_inner
+                .body
+                .clone()
+                .expect("REASON")
+                .deref(),
+        );
         if !self.enabled_append_prop_crc {
             msg.delete_property(MessageConst::PROPERTY_CRC32);
         }
 
         //setting message version
-        msg.with_version(MessageVersion::V1(MESSAGE_MAGIC_CODE_V1));
+        msg.with_version(MessageVersion::V1);
         let topic = msg.topic();
         // setting auto message on topic length
         if self.message_store_config.auto_message_version_on_topic_len
             && topic.len() > i8::MAX as usize
         {
-            msg.with_version(MessageVersion::V2(MESSAGE_MAGIC_CODE_V2));
+            msg.with_version(MessageVersion::V2);
         }
 
         //setting ip type:IPV4 OR IPV6, default is ipv4
@@ -82,6 +93,15 @@ impl CommitLog {
         }
 
         PutMessageResult::default()
+    }
+
+    pub fn is_multi_dispatch_msg(msg_inner: &MessageExtBrokerInner) -> bool {
+        msg_inner
+            .property(MessageConst::PROPERTY_INNER_MULTI_DISPATCH)
+            .map_or(false, |s| !s.is_empty())
+            && msg_inner
+                .topic()
+                .starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX)
     }
 }
 

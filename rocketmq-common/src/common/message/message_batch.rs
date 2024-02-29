@@ -17,6 +17,8 @@
 
 use std::collections::HashMap;
 
+use bytes::Bytes;
+
 use crate::common::message::{
     message_single::{Message, MessageExtBrokerInner},
     MessageTrait,
@@ -69,4 +71,10 @@ impl MessageTrait for MessageBatch {
 pub struct MessageExtBatch {
     pub message_ext_broker_inner: MessageExtBrokerInner,
     pub is_inner_batch: bool,
+}
+
+impl MessageExtBatch {
+    pub fn wrap(&self) -> Option<Bytes> {
+        self.message_ext_broker_inner.body()
+    }
 }

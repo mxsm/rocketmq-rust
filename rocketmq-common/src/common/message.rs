@@ -54,60 +54,74 @@ pub const MESSAGE_MAGIC_CODE_V2: i32 = -626843477;
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum MessageVersion {
-    V1(i32),
-    V2(i32),
+    V1,
+    V2,
 }
 
 impl Default for MessageVersion {
     fn default() -> Self {
-        Self::V1(MESSAGE_MAGIC_CODE_V1)
+        Self::V1
     }
 }
 
 impl MessageVersion {
-    fn value_of_magic_code(magic_code: i32) -> Result<MessageVersion, &'static str> {
+    pub fn value_of_magic_code(magic_code: i32) -> Result<MessageVersion, &'static str> {
         match magic_code {
-            MESSAGE_MAGIC_CODE_V1 => Ok(MessageVersion::V1(MESSAGE_MAGIC_CODE_V1)),
-            MESSAGE_MAGIC_CODE_V2 => Ok(MessageVersion::V2(MESSAGE_MAGIC_CODE_V2)),
+            MESSAGE_MAGIC_CODE_V1 => Ok(MessageVersion::V1),
+            MESSAGE_MAGIC_CODE_V2 => Ok(MessageVersion::V2),
             _ => Err("Invalid magicCode"),
         }
     }
 
-    fn get_magic_code(&self) -> i32 {
+    pub fn get_magic_code(&self) -> i32 {
         match self {
-            MessageVersion::V1(value) => *value,
-            MessageVersion::V2(value) => *value,
+            MessageVersion::V1 => MESSAGE_MAGIC_CODE_V1,
+            MessageVersion::V2 => MESSAGE_MAGIC_CODE_V2,
         }
     }
 
-    fn get_topic_length_size(&self) -> usize {
+    pub fn get_topic_length_size(&self) -> usize {
         match self {
-            MessageVersion::V1(_) => 1,
-            MessageVersion::V2(_) => 2,
+            MessageVersion::V1 => 1,
+            MessageVersion::V2 => 2,
         }
     }
 
-    fn get_topic_length(&self, buffer: &[u8]) -> usize {
+    pub fn get_topic_length(&self, buffer: &[u8]) -> usize {
         match self {
-            MessageVersion::V1(_) => buffer[0] as usize,
-            MessageVersion::V2(_) => ((buffer[0] as usize) << 8) | (buffer[1] as usize),
+            MessageVersion::V1 => buffer[0] as usize,
+            MessageVersion::V2 => ((buffer[0] as usize) << 8) | (buffer[1] as usize),
         }
     }
 
-    fn get_topic_length_at_index(&self, buffer: &[u8], index: usize) -> usize {
+    pub fn get_topic_length_at_index(&self, buffer: &[u8], index: usize) -> usize {
         match self {
-            MessageVersion::V1(_) => buffer[index] as usize,
-            MessageVersion::V2(_) => ((buffer[index] as usize) << 8) | (buffer[index + 1] as usize),
+            MessageVersion::V1 => buffer[index] as usize,
+            MessageVersion::V2 => ((buffer[index] as usize) << 8) | (buffer[index + 1] as usize),
         }
     }
 
-    fn put_topic_length(&self, buffer: &mut Vec<u8>, topic_length: usize) {
+    pub fn put_topic_length(&self, buffer: &mut Vec<u8>, topic_length: usize) {
         match self {
-            MessageVersion::V1(_) => buffer.push(topic_length as u8),
-            MessageVersion::V2(_) => {
+            MessageVersion::V1 => buffer.push(topic_length as u8),
+            MessageVersion::V2 => {
                 buffer.push((topic_length >> 8) as u8);
                 buffer.push((topic_length & 0xFF) as u8);
             }
+        }
+    }
+
+    pub fn is_v1(&self) -> bool {
+        match self {
+            MessageVersion::V1 => true,
+            MessageVersion::V2 => false,
+        }
+    }
+
+    pub fn is_v2(&self) -> bool {
+        match self {
+            MessageVersion::V1 => false,
+            MessageVersion::V2 => true,
         }
     }
 }

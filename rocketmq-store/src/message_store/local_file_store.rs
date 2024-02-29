@@ -21,7 +21,6 @@ use rocketmq_common::common::{
     config::TopicConfig,
     message::{
         message_batch::MessageExtBatch, message_single::MessageExtBrokerInner, MessageConst,
-        MessageTrait,
     },
     sys_flag::message_sys_flag::MessageSysFlag,
 };
