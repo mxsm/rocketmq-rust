@@ -9,13 +9,15 @@ use memmap2::MmapMut;
 use rocketmq_common::common::message::{
     message_batch::MessageExtBatch, message_single::MessageExtBrokerInner,
 };
+use tracing::error;
 
 use crate::{
     base::{
         append_message_callback::AppendMessageCallback,
         compaction_append_msg_callback::CompactionAppendMsgCallback,
-        message_result::AppendMessageResult, put_message_context::PutMessageContext,
-        select_result::SelectMappedBufferResult, transient_store_pool::TransientStorePool,
+        message_result::AppendMessageResult, message_status_enum::AppendMessageStatus,
+        put_message_context::PutMessageContext, select_result::SelectMappedBufferResult,
+        transient_store_pool::TransientStorePool, ByteBuffer,
     },
     config::flush_disk_type::FlushDiskType,
     log_file::mapped_file::MappedFile,
@@ -24,7 +26,6 @@ use crate::{
 pub struct DefaultMappedFile {
     pub(crate) file: File,
     // pub(crate) file_channel: FileChannel,
-    //pub(crate) write_buffer: Option<ByteBuffer>,
     pub(crate) mmapped_file: MmapMut,
     pub(crate) transient_store_pool: Option<TransientStorePool>,
     pub(crate) file_name: String,
@@ -51,6 +52,7 @@ impl DefaultMappedFile {
         let mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
         Self {
             file,
+            mmapped_file: mmap,
             file_name,
             file_from_offset,
             mapped_byte_buffer: None,
@@ -66,7 +68,6 @@ impl DefaultMappedFile {
             start_timestamp: 0,
             transient_store_pool: None,
             stop_timestamp: 0,
-            mmapped_file: mmap,
         }
     }
 
@@ -337,5 +338,47 @@ impl MappedFile for DefaultMappedFile {
 
     fn is_loaded(&self, position: i64, size: usize) -> bool {
         todo!()
+    }
+}
+
+#[allow(unused_variables)]
+impl DefaultMappedFile {
+    fn append_message_inner(
+        &mut self,
+        message: &MessageExtBrokerInner,
+        append_message_callback: &dyn AppendMessageCallback,
+        put_message_context: &PutMessageContext,
+    ) -> AppendMessageResult {
+        //write pointer position
+        let current_write_pos = self
+            .wrote_position
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if current_write_pos >= self.file_size as i32 {
+            error!(
+                "MappedFile.appendMessage return null, wrotePosition: {} fileSize: {}",
+                current_write_pos, self.file_size
+            );
+            return AppendMessageResult {
+                status: AppendMessageStatus::UnknownError,
+                ..AppendMessageResult::default()
+            };
+        }
+        //do append to the Mapped file(Default is local file)
+        append_message_callback.do_append(
+            self.file_from_offset,
+            &mut ByteBuffer::new(self.mmapped_file.as_mut(), current_write_pos as i64),
+            (self.file_size - current_write_pos as u64) as i32,
+            message,
+            put_message_context,
+        )
+    }
+
+    fn append_messages_inner(
+        &mut self,
+        message: &MessageExtBatch,
+        message_callback: &dyn AppendMessageCallback,
+        put_message_context: &PutMessageContext,
+    ) -> AppendMessageResult {
+        unimplemented!()
     }
 }

@@ -25,3 +25,26 @@ pub mod select_result;
 pub mod store_enum;
 pub mod swappable;
 pub mod transient_store_pool;
+
+pub struct ByteBuffer<'a> {
+    data: &'a mut [u8],
+    position: i64,
+}
+
+impl<'a> ByteBuffer<'a> {
+    pub fn new(data: &'a mut [u8], position: i64) -> ByteBuffer<'a> {
+        ByteBuffer { data, position }
+    }
+
+    pub fn get_position(&self) -> i64 {
+        self.position
+    }
+
+    pub fn set_position(&mut self, position: i64) {
+        self.position = position;
+    }
+
+    pub fn get_data_mut(&mut self) -> &mut [u8] {
+        self.data
+    }
+}
