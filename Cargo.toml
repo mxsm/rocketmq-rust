@@ -2,6 +2,7 @@
 members = [
     "rocketmq",
     "rocketmq-broker",
+    "rocketmq-bytebuf",
     "rocketmq-common",
     "rocketmq-macros",
     "rocketmq-namesrv",
