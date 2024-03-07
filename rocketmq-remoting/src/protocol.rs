@@ -220,21 +220,29 @@ impl DataVersion {
             counter_inner: AtomicI64::new(0),
         }
     }
-    fn get_state_version(&self) -> i64 {
+
+    pub fn assign_new_one(&mut self, data_version: &DataVersion) {
+        self.timestamp = data_version.timestamp;
+        self.state_version = data_version.state_version;
+        self.counter = data_version.counter;
+        self.counter_inner = AtomicI64::new(data_version.counter_inner.load(Ordering::Relaxed));
+    }
+
+    pub fn get_state_version(&self) -> i64 {
         self.state_version
     }
-    fn set_state_version(&mut self, state_version: i64) {
+    pub fn set_state_version(&mut self, state_version: i64) {
         self.state_version = state_version;
     }
-    fn get_timestamp(&self) -> i64 {
+    pub fn get_timestamp(&self) -> i64 {
         self.timestamp
     }
 
-    fn get_counter(&self) -> i64 {
+    pub fn get_counter(&self) -> i64 {
         self.counter_inner.load(Ordering::Relaxed)
     }
 
-    fn increment_counter(&self) -> i64 {
+    pub fn increment_counter(&self) -> i64 {
         self.counter_inner.fetch_add(1, Ordering::Relaxed)
     }
     pub fn state_version(&self) -> i64 {

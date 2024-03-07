@@ -48,6 +48,7 @@ pub struct BrokerConfig {
     pub trace_on: bool,
     pub broker_permission: i8,
     pub async_send_enable: bool,
+    pub store_path_root_dir: String,
 }
 
 impl Default for BrokerConfig {
@@ -74,6 +75,11 @@ impl Default for BrokerConfig {
             trace_on: true,
             broker_permission: PermName::PERM_WRITE | PermName::PERM_READ,
             async_send_enable: false,
+            store_path_root_dir: dirs::home_dir()
+                .unwrap()
+                .join("store")
+                .to_string_lossy()
+                .into_owned(),
         }
     }
 }

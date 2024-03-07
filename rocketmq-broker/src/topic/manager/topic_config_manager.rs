@@ -21,9 +21,12 @@ use rocketmq_common::common::{
     config::TopicConfig, config_manager::ConfigManager, constant::PermName, mix_all,
     topic::TopicValidator,
 };
-use rocketmq_remoting::protocol::DataVersion;
+use rocketmq_remoting::protocol::{
+    body::topic_info_wrapper::TopicConfigSerializeWrapper, DataVersion,
+};
+use tracing::info;
 
-use crate::broker_config::BrokerConfig;
+use crate::{broker_config::BrokerConfig, broker_path_config_helper::get_topic_config_path};
 
 #[derive(Default)]
 pub(crate) struct TopicConfigManager {
@@ -190,8 +193,8 @@ impl ConfigManager for TopicConfigManager {
         todo!()
     }
 
-    fn config_file_path(&mut self) -> &str {
-        ""
+    fn config_file_path(&mut self) -> String {
+        get_topic_config_path(self.broker_config.store_path_root_dir.as_str())
     }
 
     fn encode(&mut self) -> String {
@@ -203,6 +206,19 @@ impl ConfigManager for TopicConfigManager {
     }
 
     fn decode(&mut self, json_string: &str) {
-        todo!()
+        info!("decode topic config from json string:{}", json_string);
+        if json_string.is_empty() {
+            return;
+        }
+        let wrapper =
+            serde_json::from_str::<TopicConfigSerializeWrapper>(json_string).unwrap_or_default();
+        if let Some(value) = wrapper.data_version() {
+            self.data_version.assign_new_one(value);
+        }
+        if let Some(map) = wrapper.topic_config_table() {
+            for (key, value) in map {
+                self.topic_config_table.insert(key.clone(), value.clone());
+            }
+        }
     }
 }

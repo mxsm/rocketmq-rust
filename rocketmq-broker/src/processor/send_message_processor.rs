@@ -58,9 +58,8 @@ pub struct SendMessageProcessor<MS> {
     message_store: Arc<parking_lot::RwLock<MS>>,
 }
 
-impl<MS> Default for SendMessageProcessor<MS> {
+impl<MS: Default> Default for SendMessageProcessor<MS> {
     fn default() -> Self {
-        /* #[cfg(feature = "local_file_store")]
         Self {
             inner: SendMessageProcessorInner::default(),
             topic_queue_mapping_manager: Arc::new(parking_lot::RwLock::new(
@@ -69,8 +68,7 @@ impl<MS> Default for SendMessageProcessor<MS> {
             topic_config_manager: Arc::new(parking_lot::RwLock::new(TopicConfigManager::default())),
             broker_config: Arc::new(parking_lot::RwLock::new(BrokerConfig::default())),
             message_store: Arc::new(parking_lot::RwLock::new(Default::default())),
-        }*/
-        unimplemented!()
+        }
     }
 }
 

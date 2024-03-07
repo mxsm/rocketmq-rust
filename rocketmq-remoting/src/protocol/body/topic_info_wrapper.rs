@@ -33,6 +33,31 @@ pub struct TopicConfigSerializeWrapper {
     data_version: Option<DataVersion>,
 }
 
+impl TopicConfigSerializeWrapper {
+    pub fn topic_config_table(&self) -> Option<&HashMap<String, TopicConfig>> {
+        match &self.topic_config_table {
+            None => None,
+            Some(value) => Some(value),
+        }
+    }
+    pub fn data_version(&self) -> Option<&DataVersion> {
+        match &self.data_version {
+            None => None,
+            Some(value) => Some(value),
+        }
+    }
+
+    pub fn set_topic_config_table(
+        &mut self,
+        topic_config_table: Option<HashMap<String, TopicConfig>>,
+    ) {
+        self.topic_config_table = topic_config_table;
+    }
+    pub fn set_data_version(&mut self, data_version: Option<DataVersion>) {
+        self.data_version = data_version;
+    }
+}
+
 impl RemotingSerializable for TopicConfigSerializeWrapper {
     type Output = Self;
 
