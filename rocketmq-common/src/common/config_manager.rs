@@ -24,9 +24,8 @@ use crate::FileUtils;
 // Define the trait ConfigManager
 pub trait ConfigManager {
     fn load(&mut self) -> bool {
-        true
-        /*let file_name = self.config_file_path();
-        let result = FileUtils::file_to_string(file_name);
+        let file_name = self.config_file_path();
+        let result = FileUtils::file_to_string(file_name.as_str());
         match result {
             Ok(ref content) => {
                 if content.is_empty() {
@@ -37,7 +36,7 @@ pub trait ConfigManager {
                 }
             }
             Err(_) => self.load_bak(),
-        }*/
+        }
     }
 
     fn load_bak(&mut self) -> bool {
@@ -64,14 +63,14 @@ pub trait ConfigManager {
         let json = self.encode_pretty(true);
         if !json.is_empty() {
             let file_name = self.config_file_path();
-            if FileUtils::string_to_file(json.as_str(), file_name).is_err() {
+            if FileUtils::string_to_file(json.as_str(), file_name.as_str()).is_err() {
                 error!("persist file {} exception", file_name);
             }
         }
     }
     fn decode0(&mut self, key: &[u8], body: &[u8]);
     fn stop(&mut self) -> bool;
-    fn config_file_path(&mut self) -> &str;
+    fn config_file_path(&mut self) -> String;
     fn encode(&mut self) -> String;
     fn encode_pretty(&mut self, pretty_format: bool) -> String;
     fn decode(&mut self, json_string: &str);

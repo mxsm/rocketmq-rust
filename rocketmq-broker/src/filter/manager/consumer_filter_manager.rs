@@ -31,8 +31,8 @@ impl ConfigManager for ConsumerFilterManager {
         todo!()
     }
 
-    fn config_file_path(&mut self) -> &str {
-        ""
+    fn config_file_path(&mut self) -> String {
+        "".to_string()
     }
 
     fn encode(&mut self) -> String {

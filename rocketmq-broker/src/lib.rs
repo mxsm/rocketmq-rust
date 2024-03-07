@@ -32,3 +32,4 @@ mod processor;
 mod schedule;
 mod subscription;
 mod topic;
+mod broker_path_config_helper;

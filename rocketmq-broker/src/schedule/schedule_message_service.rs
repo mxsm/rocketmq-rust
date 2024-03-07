@@ -29,8 +29,8 @@ impl ConfigManager for ScheduleMessageService {
         todo!()
     }
 
-    fn config_file_path(&mut self) -> &str {
-        ""
+    fn config_file_path(&mut self) -> String {
+        "".to_string()
     }
 
     fn encode(&mut self) -> String {

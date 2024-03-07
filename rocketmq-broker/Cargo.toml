@@ -48,6 +48,9 @@ parking_lot.workspace = true
 clap = { version = "4.2.7", features = ["derive"] }
 rand = "0.8.5"
 
+#tools
+dirs.workspace = true
+
 [[bin]]
 name = "rocketmq-broker-rust"
 path = "src/bin/broker_bootstrap_server.rs"
