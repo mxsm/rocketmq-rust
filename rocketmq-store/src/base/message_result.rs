@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
- use crate::base::{
+use crate::base::{
     message_status_enum::{AppendMessageStatus, GetMessageStatus, PutMessageStatus},
     select_result::SelectMappedBufferResult,
 };

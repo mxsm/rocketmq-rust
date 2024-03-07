@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
- use std::{
+use std::{
     fs::{File, OpenOptions},
     path::PathBuf,
     sync::atomic::{AtomicI32, AtomicI64},
