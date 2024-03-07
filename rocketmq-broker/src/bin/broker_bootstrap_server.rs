@@ -18,7 +18,6 @@
 use std::{path::PathBuf, process::exit};
 
 use clap::Parser;
-use futures_util::join;
 use rocketmq_broker::{
     broker_config::BrokerConfig, broker_controller::BrokerController, command::Args,
 };
@@ -29,6 +28,7 @@ use tracing::{info, warn};
 
 #[rocketmq::main]
 async fn main() -> anyhow::Result<()> {
+    // init logger
     rocketmq_common::log::init_logger();
     let controller = create_broker_controller()?;
     start_broker_controller(controller).await?;
@@ -67,6 +67,7 @@ async fn start_broker_controller(broker_controller: BrokerController) -> anyhow:
         "Rocketmq name server(Rust) running on {}:{}",
         broker_controller.broker_config.broker_ip1, broker_controller.broker_config.listen_port,
     );
-    join!(broker_controller.start());
+    //start controller
+    broker_controller.start().await;
     Ok(())
 }
