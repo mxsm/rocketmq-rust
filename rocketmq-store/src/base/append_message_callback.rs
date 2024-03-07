@@ -14,10 +14,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::sync::Arc;
+use std::{io::Write, mem, sync::Arc};
 
-use rocketmq_common::common::message::{
-    message_batch::MessageExtBatch, message_single::MessageExtBrokerInner,
+use bytes::{Buf, BufMut};
+use rocketmq_common::{
+    common::{
+        message::{
+            message_batch::MessageExtBatch,
+            message_single::{MessageExt, MessageExtBrokerInner},
+        },
+        sys_flag::message_sys_flag::MessageSysFlag,
+    },
+    UtilAll,
 };
 
 use crate::{
@@ -25,7 +33,7 @@ use crate::{
         message_result::AppendMessageResult, put_message_context::PutMessageContext, ByteBuffer,
     },
     config::message_store_config::MessageStoreConfig,
-    log_file::commit_log::CRC32_RESERVED_LEN,
+    log_file::commit_log::{CommitLog, BLANK_MAGIC_CODE, CRC32_RESERVED_LEN},
 };
 
 /// Write messages callback interface
@@ -44,11 +52,11 @@ pub trait AppendMessageCallback {
     ///
     /// The number of bytes written
     fn do_append(
-        &self,
+        &mut self,
         file_from_offset: i64,
         byte_buffer: &mut ByteBuffer,
         max_blank: i32,
-        msg: &MessageExtBrokerInner,
+        msg: &mut MessageExtBrokerInner,
         put_message_context: &PutMessageContext,
     ) -> AppendMessageResult;
 
@@ -99,26 +107,26 @@ impl DefaultAppendMessageCallback {
 #[allow(unused_variables)]
 impl AppendMessageCallback for DefaultAppendMessageCallback {
     fn do_append(
-        &self,
+        &mut self,
         file_from_offset: i64,
         byte_buffer: &mut ByteBuffer,
         max_blank: i32,
-        msg_inner: &MessageExtBrokerInner,
+        msg_inner: &mut MessageExtBrokerInner,
         put_message_context: &PutMessageContext,
     ) -> AppendMessageResult {
-        /* let mut pre_encode_buffer = msg_inner.encoded_buff.clone();
+        let mut pre_encode_buffer = bytes::BytesMut::from(msg_inner.encoded_buff.as_ref());
         let is_multi_dispatch_msg = self.message_store_config.enable_multi_dispatch
-            && CommitLog::is_multi_dispatch_msg(&msg_inner);
+            && CommitLog::is_multi_dispatch_msg(msg_inner);
         if is_multi_dispatch_msg {
             unimplemented!()
         }
-        let msg_len = pre_encode_buffer.get_i32();
-        let size = std::mem::size_of::<i32>();
+        //can optimize?
+        let msg_len = pre_encode_buffer.clone().get_i32();
+        //physical offset
         let wrote_offset = file_from_offset + byte_buffer.position;
-        pre_encode_buffer.advance(size);
 
         let msg_id_supplier = || {
-            let sys_flag = msg_inner.get_sys_flag();
+            let sys_flag = msg_inner.sys_flag();
             let msg_id_len = if (sys_flag & MessageSysFlag::STOREHOSTADDRESS_V6_FLAG) == 0 {
                 4 + 4 + 8
             } else {
@@ -126,33 +134,33 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
             };
 
             let mut msg_id_buffer = bytes::BytesMut::from(
-                MessageExt::socket_address_2_byte_buffer(&msg_inner.store_host()),
+                MessageExt::socket_address_2_byte_buffer(&msg_inner.store_host()).as_ref(),
             );
             msg_id_buffer.put_i64(wrote_offset);
-            UtilAll::bytes_to_string(msg_id_buffer.array())
+            UtilAll::bytes_to_string(msg_id_buffer.as_ref())
         };
 
-        let queue_offset = msg_inner.queue_offset();
+        let mut queue_offset = msg_inner.queue_offset();
 
-        let message_num = get_message_num(&msg_inner);
+        let message_num = CommitLog::get_message_num(msg_inner);
 
-        let tran_type = MessageSysFlag::get_transaction_value(msg_inner.get_sys_flag());
+        let tran_type = MessageSysFlag::get_transaction_value(msg_inner.sys_flag());
         match tran_type {
             MessageSysFlag::TRANSACTION_PREPARED_TYPE
             | MessageSysFlag::TRANSACTION_ROLLBACK_TYPE => {
-                queue_offset = Some(0);
+                queue_offset = 0;
             }
-            MessageSysFlag::TRANSACTION_NOT_TYPE | MessageSysFlag::TRANSACTION_COMMIT_TYPE | _ => {}
+            _ => {}
         }
 
-        if (msg_len + END_FILE_MIN_BLANK_LENGTH as i32) > max_blank {
-            msg_store_item_memory.clear();
-            msg_store_item_memory.put_int(max_blank);
-            msg_store_item_memory.put_int(CommitLog::BLANK_MAGIC_CODE);
-            byte_buffer.put(&msg_store_item_memory.array()[0..8]);
-            let begin_time_mills = CommitLog::default_message_store().now();
-            return AppendMessageResult::new(
-                AppendMessageStatus::END_OF_FILE,
+        if (msg_len + END_FILE_MIN_BLANK_LENGTH) > max_blank {
+            self.msg_store_item_memory.clear();
+            self.msg_store_item_memory.put_i32(max_blank);
+            self.msg_store_item_memory.put_i32(BLANK_MAGIC_CODE);
+            //  byte_buffer.put(&self.msg_store_item_memory[0..8]);
+            /* let begin_time_mills = CommitLog::default_message_store().now(); */
+            /*return AppendMessageResult::new(
+                AppendMessageStatus::EndOfFile,
                 wrote_offset,
                 max_blank as usize,
                 msg_id_supplier,
@@ -160,54 +168,63 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
                 queue_offset,
                 CommitLog::default_message_store().now() - begin_time_mills,
                 None,
-            );
+            );*/
+            return AppendMessageResult::default();
         }
 
         let mut pos = 4 + 4 + 4 + 4 + 4;
-        pre_encode_buffer.put_long(pos, queue_offset.unwrap());
+        pre_encode_buffer[pos..(pos + mem::size_of::<i64>())]
+            .copy_from_slice(&queue_offset.to_be_bytes());
         pos += 8;
-        pre_encode_buffer.put_long(pos, file_from_offset + byte_buffer.position() as i64);
-        let ip_len = if (msg_inner.get_sys_flag() & MessageSysFlag::BORNHOST_V6_FLAG) == 0 {
+
+        pre_encode_buffer[pos..(pos + mem::size_of::<i64>())]
+            .copy_from_slice(&(file_from_offset + byte_buffer.get_position()).to_be_bytes());
+        let ip_len = if (msg_inner.sys_flag() & MessageSysFlag::BORNHOST_V6_FLAG) == 0 {
             4 + 4
         } else {
             16 + 4
         };
         pos += 8 + 4 + 8 + ip_len;
-        pre_encode_buffer.put_long(pos, msg_inner.get_store_timestamp());
-        if enabled_append_prop_crc {
+        // refresh store time stamp in lock
+        pre_encode_buffer[pos..(pos + mem::size_of::<i64>())]
+            .copy_from_slice(msg_inner.store_timestamp().to_be_bytes().as_ref());
+        /*        if enabled_append_prop_crc {
             let check_size = msg_len - MessageDecoder::CRC32_RESERVED_LENGTH;
             let mut tmp_buffer = pre_encode_buffer.duplicate();
             tmp_buffer.limit(tmp_buffer.position() + check_size as usize);
             let crc32 = MessageDecoder::crc32(&tmp_buffer);
             tmp_buffer.limit(tmp_buffer.position() + MessageDecoder::CRC32_RESERVED_LENGTH);
             MessageDecoder::create_crc32(&mut tmp_buffer, crc32);
-        }
+        }*/
 
-        let begin_time_mills = CommitLog::default_message_store().now();
-        CommitLog::default_message_store()
-            .perf_counter()
-            .start_tick("WRITE_MEMORY_TIME_MS");
-        byte_buffer.put(&pre_encode_buffer);
-        CommitLog::default_message_store()
-            .perf_counter()
-            .end_tick("WRITE_MEMORY_TIME_MS");
-        msg_inner.set_encoded_buff(None);
+        //let begin_time_mills = CommitLog::default_message_store().now();
+        /*   CommitLog::default_message_store()
+        .perf_counter()
+        .start_tick("WRITE_MEMORY_TIME_MS");*/
+        byte_buffer
+            .get_data_mut()
+            .write_all(&pre_encode_buffer)
+            .unwrap();
+        /* CommitLog::default_message_store()
+        .perf_counter()
+        .end_tick("WRITE_MEMORY_TIME_MS");*/
+        msg_inner.encoded_buff.clear();
 
-        if is_multi_dispatch_msg {
+        /*        if is_multi_dispatch_msg {
             CommitLog::multi_dispatch().update_multi_queue_offset(&msg_inner);
-        }
+        }*/
 
-        AppendMessageResult::new(
+        /*AppendMessageResult::new(
             AppendMessageStatus::PutOk,
             wrote_offset,
             msg_len as usize,
             msg_id_supplier,
-            msg_inner.get_store_timestamp(),
+            msg_inner.store_timestamp(),
             queue_offset,
-            CommitLog::default_message_store().now() - begin_time_mills,
+            0,
             Some(message_num),
-        );*/
-        unimplemented!()
+        )*/
+        AppendMessageResult::default()
     }
 
     fn do_append_batch(

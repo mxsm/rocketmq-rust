@@ -1,4 +1,21 @@
-use std::{
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+ use std::{
     fs::{File, OpenOptions},
     path::PathBuf,
     sync::atomic::{AtomicI32, AtomicI64},
@@ -43,6 +60,12 @@ pub struct DefaultMappedFile {
     pub(crate) mapped_byte_buffer_access_count_since_last_swap: AtomicI64,
     pub(crate) start_timestamp: u64,
     pub(crate) stop_timestamp: u64,
+}
+
+impl Default for DefaultMappedFile {
+    fn default() -> Self {
+        Self::new(String::new(), 0)
+    }
 }
 
 impl DefaultMappedFile {
@@ -345,8 +368,8 @@ impl MappedFile for DefaultMappedFile {
 impl DefaultMappedFile {
     fn append_message_inner(
         &mut self,
-        message: &MessageExtBrokerInner,
-        append_message_callback: &dyn AppendMessageCallback,
+        message: &mut MessageExtBrokerInner,
+        append_message_callback: &mut dyn AppendMessageCallback,
         put_message_context: &PutMessageContext,
     ) -> AppendMessageResult {
         //write pointer position
@@ -365,8 +388,8 @@ impl DefaultMappedFile {
         }
         //do append to the Mapped file(Default is local file)
         append_message_callback.do_append(
-            self.file_from_offset,
-            &mut ByteBuffer::new(self.mmapped_file.as_mut(), current_write_pos as i64),
+            self.file_from_offset, // file start logic address offset
+            &mut ByteBuffer::new(&mut self.mmapped_file, current_write_pos as i64),
             (self.file_size - current_write_pos as u64) as i32,
             message,
             put_message_context,

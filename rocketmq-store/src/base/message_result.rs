@@ -15,15 +15,12 @@
  * limitations under the License.
  */
 
-use std::{cell::RefCell, rc::Rc};
-
-use crate::base::{
+ use crate::base::{
     message_status_enum::{AppendMessageStatus, GetMessageStatus, PutMessageStatus},
     select_result::SelectMappedBufferResult,
 };
 
 /// Represents the result of an append message operation.
-#[derive(Default)]
 pub struct AppendMessageResult {
     /// Return code.
     pub status: AppendMessageStatus,
@@ -34,7 +31,7 @@ pub struct AppendMessageResult {
     /// Message ID.
     pub msg_id: String,
     /// Message ID supplier.
-    pub msg_id_supplier: Option<Rc<RefCell<dyn Fn() -> String>>>,
+    pub msg_id_supplier: &'static dyn Fn() -> String,
     /// Message storage timestamp.
     pub store_timestamp: i64,
     /// Consume queue's offset (step by one).
@@ -45,11 +42,22 @@ pub struct AppendMessageResult {
     pub msg_num: i32,
 }
 
-#[derive(Default)]
 pub struct PutMessageResult {
     put_message_status: PutMessageStatus,
     append_message_result: Option<AppendMessageResult>,
     remote_put: bool,
+}
+
+impl Default for AppendMessageResult {
+    fn default() -> Self {
+        unimplemented!()
+    }
+}
+
+impl Default for PutMessageResult {
+    fn default() -> Self {
+        unimplemented!()
+    }
 }
 
 impl PutMessageResult {
@@ -67,9 +75,9 @@ impl PutMessageResult {
 }
 
 /// Represents the result of getting a message.
-pub struct GetMessageResult {
+pub struct GetMessageResult<'a> {
     /// The list of mapped buffer results.
-    pub message_mapped_list: Vec<SelectMappedBufferResult>,
+    pub message_mapped_list: Vec<SelectMappedBufferResult<'a>>,
     /// The list of message buffers.
     pub message_buffer_list: Vec<Vec<u8>>, /* Using Vec<u8> as a simplified representation of
                                             * ByteBuffer in Rust */

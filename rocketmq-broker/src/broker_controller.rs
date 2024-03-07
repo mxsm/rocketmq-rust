@@ -90,7 +90,8 @@ pub struct BrokerController {
     pub(crate) polling_info_processor: PollingInfoProcessor,
     pub(crate) ack_message_processor: AckMessageProcessor,
     pub(crate) change_invisible_time_processor: ChangeInvisibleTimeProcessor,
-    pub(crate) send_message_processor: SendMessageProcessor,
+    #[cfg(feature = "local_file_store")]
+    pub(crate) send_message_processor: SendMessageProcessor<LocalFileMessageStore>,
     pub(crate) reply_message_processor: ReplyMessageProcessor,
     pub(crate) notify_message_arriving_listener: NotifyMessageArrivingListener,
     pub(crate) default_consumer_ids_change_listener: DefaultConsumerIdsChangeListener,
@@ -257,7 +258,8 @@ impl BrokerController {
 
     fn register_processor(&mut self) {
         let broker_server = self.broker_server.as_mut().unwrap();
-        let send_message_processor = Arc::new(SendMessageProcessor::default());
+        let send_message_processor =
+            Arc::new(SendMessageProcessor::<LocalFileMessageStore>::default());
         broker_server.register_processor(RequestCode::SendMessage, send_message_processor.clone());
         broker_server
             .register_processor(RequestCode::SendMessageV2, send_message_processor.clone());
