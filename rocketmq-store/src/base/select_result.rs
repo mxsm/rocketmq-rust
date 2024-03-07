@@ -15,12 +15,10 @@
  * limitations under the License.
  */
 
-use std::{cell::RefCell, sync::Arc};
-
 use crate::log_file::mapped_file::MappedFile;
 
 /// Represents the result of selecting a mapped buffer.
-pub struct SelectMappedBufferResult {
+pub struct SelectMappedBufferResult<'a> {
     /// The start offset.
     pub start_offset: i64,
     /// The ByteBuffer.
@@ -28,7 +26,7 @@ pub struct SelectMappedBufferResult {
     /// The size.
     pub size: i32,
     /// The mapped file.
-    pub mapped_file: Option<Arc<RefCell<dyn MappedFile>>>,
+    pub mapped_file: Option<&'a dyn MappedFile>,
     /// Indicates whether the buffer is in the cache.
     pub is_in_cache: bool,
 }

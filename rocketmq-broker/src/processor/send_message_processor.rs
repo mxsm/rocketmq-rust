@@ -38,10 +38,7 @@ use rocketmq_remoting::{
     },
     runtime::{processor::RequestProcessor, server::ConnectionHandlerContext},
 };
-use rocketmq_store::{
-    base::message_result::PutMessageResult, log_file::MessageStore,
-    message_store::local_file_store::LocalFileMessageStore,
-};
+use rocketmq_store::{base::message_result::PutMessageResult, log_file::MessageStore};
 
 use crate::{
     broker_config::BrokerConfig,
@@ -53,18 +50,17 @@ use crate::{
     },
 };
 
-pub struct SendMessageProcessor {
+pub struct SendMessageProcessor<MS> {
     inner: SendMessageProcessorInner,
     topic_queue_mapping_manager: Arc<parking_lot::RwLock<TopicQueueMappingManager>>,
     topic_config_manager: Arc<parking_lot::RwLock<TopicConfigManager>>,
     broker_config: Arc<parking_lot::RwLock<BrokerConfig>>,
-    #[cfg(feature = "local_file_store")]
-    message_store: Arc<parking_lot::RwLock<LocalFileMessageStore>>,
+    message_store: Arc<parking_lot::RwLock<MS>>,
 }
 
-impl Default for SendMessageProcessor {
+impl<MS> Default for SendMessageProcessor<MS> {
     fn default() -> Self {
-        #[cfg(feature = "local_file_store")]
+        /* #[cfg(feature = "local_file_store")]
         Self {
             inner: SendMessageProcessorInner::default(),
             topic_queue_mapping_manager: Arc::new(parking_lot::RwLock::new(
@@ -72,12 +68,13 @@ impl Default for SendMessageProcessor {
             )),
             topic_config_manager: Arc::new(parking_lot::RwLock::new(TopicConfigManager::default())),
             broker_config: Arc::new(parking_lot::RwLock::new(BrokerConfig::default())),
-            message_store: Arc::new(parking_lot::RwLock::new(LocalFileMessageStore::default())),
-        }
+            message_store: Arc::new(parking_lot::RwLock::new(Default::default())),
+        }*/
+        unimplemented!()
     }
 }
 
-impl RequestProcessor for SendMessageProcessor {
+impl<MS: MessageStore + Send> RequestProcessor for SendMessageProcessor<MS> {
     fn process_request(
         &mut self,
         ctx: ConnectionHandlerContext,
@@ -129,11 +126,10 @@ impl RequestProcessor for SendMessageProcessor {
 }
 
 #[allow(unused_variables)]
-impl SendMessageProcessor {
-    #[cfg(feature = "local_file_store")]
+impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
     pub fn new(
         topic_queue_mapping_manager: Arc<parking_lot::RwLock<TopicQueueMappingManager>>,
-        message_store: Arc<parking_lot::RwLock<LocalFileMessageStore>>,
+        message_store: Arc<parking_lot::RwLock<MS>>,
     ) -> Self {
         Self {
             inner: SendMessageProcessorInner::default(),

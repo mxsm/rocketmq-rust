@@ -15,6 +15,8 @@
  * limitations under the License.
  */
 
+use memmap2::MmapMut;
+
 pub mod append_message_callback;
 pub mod compaction_append_msg_callback;
 pub(crate) mod dispatch_request;
@@ -27,12 +29,12 @@ pub mod swappable;
 pub mod transient_store_pool;
 
 pub struct ByteBuffer<'a> {
-    data: &'a mut [u8],
+    data: &'a mut MmapMut,
     position: i64,
 }
 
 impl<'a> ByteBuffer<'a> {
-    pub fn new(data: &'a mut [u8], position: i64) -> ByteBuffer<'a> {
+    pub fn new(data: &'a mut MmapMut, position: i64) -> ByteBuffer<'a> {
         ByteBuffer { data, position }
     }
 

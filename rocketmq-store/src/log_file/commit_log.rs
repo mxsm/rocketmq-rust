@@ -103,6 +103,10 @@ impl CommitLog {
                 .topic()
                 .starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX)
     }
+
+    pub fn get_message_num(_msg_inner: &MessageExtBrokerInner) -> u8 {
+        unimplemented!()
+    }
 }
 
 impl Swappable for CommitLog {
