@@ -21,6 +21,7 @@ pub mod command;
 
 pub mod broker_config;
 mod broker_outer_api;
+mod broker_path_config_helper;
 mod client;
 mod coldctr;
 mod controller;
@@ -32,4 +33,3 @@ mod processor;
 mod schedule;
 mod subscription;
 mod topic;
-mod broker_path_config_helper;
