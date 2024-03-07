@@ -27,4 +27,5 @@ pub mod message_store;
 mod queue;
 pub(crate) mod services;
 pub mod status;
+pub mod store_path_config_helper;
 pub mod timer;

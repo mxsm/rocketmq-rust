@@ -28,7 +28,7 @@ use rocketmq_remoting::protocol::{
     DataVersion,
 };
 
-use crate::broker_config::BrokerConfig;
+use crate::{broker_config::BrokerConfig, broker_path_config_helper::get_topic_queue_mapping_path};
 
 #[derive(Default)]
 pub(crate) struct TopicQueueMappingManager {
@@ -177,7 +177,7 @@ impl ConfigManager for TopicQueueMappingManager {
     }
 
     fn config_file_path(&mut self) -> String {
-        "".to_string()
+        get_topic_queue_mapping_path(self.broker_config.store_path_root_dir.as_str())
     }
 
     fn encode(&mut self) -> String {
