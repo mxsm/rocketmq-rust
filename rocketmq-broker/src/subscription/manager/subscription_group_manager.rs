@@ -15,10 +15,16 @@
  * limitations under the License.
  */
 
+use std::sync::Arc;
+
 use rocketmq_common::common::config_manager::ConfigManager;
 
+use crate::{broker_config::BrokerConfig, broker_path_config_helper::get_subscription_group_path};
+
 #[derive(Default)]
-pub(crate) struct SubscriptionGroupManager {}
+pub(crate) struct SubscriptionGroupManager {
+    pub(crate) broker_config: Arc<BrokerConfig>,
+}
 
 //Fully implemented will be removed
 #[allow(unused_variables)]
@@ -32,7 +38,7 @@ impl ConfigManager for SubscriptionGroupManager {
     }
 
     fn config_file_path(&mut self) -> String {
-        "".to_string()
+        get_subscription_group_path(self.broker_config.store_path_root_dir.as_str())
     }
 
     fn encode(&mut self) -> String {

@@ -15,10 +15,17 @@
  * limitations under the License.
  */
 
+use std::sync::Arc;
+
 use rocketmq_common::common::config_manager::ConfigManager;
+use rocketmq_store::store_path_config_helper::get_delay_offset_store_path;
+
+use crate::broker_config::BrokerConfig;
 
 #[derive(Default)]
-pub struct ScheduleMessageService {}
+pub struct ScheduleMessageService {
+    pub(crate) broker_config: Arc<BrokerConfig>,
+}
 
 impl ConfigManager for ScheduleMessageService {
     fn decode0(&mut self, _key: &[u8], _body: &[u8]) {
@@ -30,7 +37,7 @@ impl ConfigManager for ScheduleMessageService {
     }
 
     fn config_file_path(&mut self) -> String {
-        "".to_string()
+        get_delay_offset_store_path(self.broker_config.store_path_root_dir.as_str())
     }
 
     fn encode(&mut self) -> String {
