@@ -14,4 +14,5 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+pub(crate) mod delay_offset_serialize_wrapper;
 pub(crate) mod schedule_message_service;
