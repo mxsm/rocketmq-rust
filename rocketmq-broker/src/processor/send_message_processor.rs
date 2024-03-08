@@ -1,19 +1,3 @@
-use std::sync::Arc;
-
-use rocketmq_common::common::{
-    attribute::topic_message_type::TopicMessageType,
-    message::{
-        message_single::{MessageExt, MessageExtBrokerInner},
-        MessageConst,
-    },
-};
-use rocketmq_remoting::protocol::{
-    header::message_operation_header::{
-        send_message_request_header::SendMessageRequestHeader,
-        send_message_response_header::SendMessageResponseHeader, TopicRequestHeaderTrait,
-    },
-    static_topic::topic_queue_mapping_context::TopicQueueMappingContext,
-};
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
@@ -30,11 +14,26 @@ use rocketmq_remoting::protocol::{
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+use std::sync::Arc;
+
+use rocketmq_common::common::{
+    attribute::topic_message_type::TopicMessageType,
+    message::{
+        message_single::{MessageExt, MessageExtBrokerInner},
+        MessageConst,
+    },
+};
 use rocketmq_remoting::{
     code::request_code::RequestCode,
     protocol::{
-        header::message_operation_header::send_message_request_header::parse_request_header,
+        header::message_operation_header::{
+            send_message_request_header::{parse_request_header, SendMessageRequestHeader},
+            send_message_response_header::SendMessageResponseHeader,
+            TopicRequestHeaderTrait,
+        },
         remoting_command::RemotingCommand,
+        static_topic::topic_queue_mapping_context::TopicQueueMappingContext,
     },
     runtime::{processor::RequestProcessor, server::ConnectionHandlerContext},
 };

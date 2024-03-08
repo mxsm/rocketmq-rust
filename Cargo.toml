@@ -3,6 +3,7 @@ members = [
     "rocketmq",
     "rocketmq-broker",
     "rocketmq-common",
+    "rocketmq-filter",
     "rocketmq-macros",
     "rocketmq-namesrv",
     "rocketmq-remoting",
