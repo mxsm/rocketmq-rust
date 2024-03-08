@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::{
+ use std::{
     collections::HashMap,
     fmt::{Display, Formatter},
     sync::atomic::{AtomicI64, Ordering},
@@ -34,6 +34,7 @@ pub mod remoting_command;
 pub mod rocketmq_serializable;
 pub mod route;
 pub mod static_topic;
+pub mod subscription;
 
 #[repr(u8)]
 #[derive(Debug, PartialEq, Eq)]

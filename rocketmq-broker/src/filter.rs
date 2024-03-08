@@ -15,4 +15,5 @@
  * limitations under the License.
  */
 
-pub(crate) mod manager;
+ mod consumer_filter_data;
+ pub(crate) mod manager;
