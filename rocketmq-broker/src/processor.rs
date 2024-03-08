@@ -113,7 +113,7 @@ impl SendMessageProcessorInner {
         if let Some(unique_key) =
             properties.get(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX)
         {
-            send_message_context.msg_unique_key = unique_key.clone();
+            send_message_context.msg_unique_key.clone_from(unique_key);
         } else {
             send_message_context.msg_unique_key = "".to_string();
         }

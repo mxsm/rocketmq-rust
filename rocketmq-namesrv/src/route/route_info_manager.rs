@@ -796,7 +796,7 @@ impl RouteInfoManager {
         if !self.broker_addr_table.is_empty() {
             for broker_addr in self.broker_addr_table.values() {
                 for ip in broker_addr.broker_addrs().values() {
-                    broker_addr_out = ip.clone();
+                    broker_addr_out.clone_from(ip);
                 }
             }
         }
@@ -875,8 +875,12 @@ impl RouteInfoManager {
         un_register_request: &mut UnRegisterBrokerRequestHeader,
         broker_addr_info: &BrokerAddrInfo,
     ) -> bool {
-        un_register_request.cluster_name = broker_addr_info.cluster_name.clone();
-        un_register_request.broker_addr = broker_addr_info.broker_addr.clone();
+        un_register_request
+            .cluster_name
+            .clone_from(&broker_addr_info.cluster_name);
+        un_register_request
+            .broker_addr
+            .clone_from(&broker_addr_info.broker_addr);
 
         for (_broker_addr, broker_data) in self.broker_addr_table.iter() {
             if broker_addr_info.cluster_name != broker_data.cluster() {

@@ -88,7 +88,7 @@ impl FastCodesHeader for SendMessageResponseHeader {
 
     fn decode_fast(&mut self, fields: &HashMap<String, String>) {
         if let Some(str) = fields.get("msgId") {
-            self.msg_id = str.clone();
+            self.msg_id.clone_from(str);
         }
 
         if let Some(str) = fields.get("queueId") {
