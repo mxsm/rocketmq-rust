@@ -15,36 +15,35 @@
  * limitations under the License.
  */
 
- use std::collections::HashMap;
+use std::collections::HashMap;
 
- use rocketmq_macros::RemotingSerializable;
- use serde::{Deserialize, Serialize};
- 
- use crate::protocol::{
-     static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail, DataVersion,
- };
- 
- #[derive(Clone, Debug, Serialize, Deserialize, RemotingSerializable, Default)]
- #[serde(rename_all = "camelCase")]
- pub struct TopicQueueMappingSerializeWrapper {
-     topic_queue_mapping_info_map: Option<HashMap<String, TopicQueueMappingDetail>>,
-     data_version: Option<DataVersion>,
- }
- 
- impl TopicQueueMappingSerializeWrapper {
-     pub fn topic_queue_mapping_info_map(
-         &self,
-     ) -> Option<&HashMap<String, TopicQueueMappingDetail>> {
-         match &self.topic_queue_mapping_info_map {
-             None => None,
-             Some(value) => Some(value),
-         }
-     }
-     pub fn data_version(&self) -> Option<&DataVersion> {
-         match &self.data_version {
-             None => None,
-             Some(value) => Some(value),
-         }
-     }
- }
- 
+use rocketmq_macros::RemotingSerializable;
+use serde::{Deserialize, Serialize};
+
+use crate::protocol::{
+    static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail, DataVersion,
+};
+
+#[derive(Clone, Debug, Serialize, Deserialize, RemotingSerializable, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TopicQueueMappingSerializeWrapper {
+    topic_queue_mapping_info_map: Option<HashMap<String, TopicQueueMappingDetail>>,
+    data_version: Option<DataVersion>,
+}
+
+impl TopicQueueMappingSerializeWrapper {
+    pub fn topic_queue_mapping_info_map(
+        &self,
+    ) -> Option<&HashMap<String, TopicQueueMappingDetail>> {
+        match &self.topic_queue_mapping_info_map {
+            None => None,
+            Some(value) => Some(value),
+        }
+    }
+    pub fn data_version(&self) -> Option<&DataVersion> {
+        match &self.data_version {
+            None => None,
+            Some(value) => Some(value),
+        }
+    }
+}

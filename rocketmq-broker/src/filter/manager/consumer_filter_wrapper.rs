@@ -14,23 +14,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
- use std::collections::HashMap;
+use std::collections::HashMap;
 
- use rocketmq_remoting::protocol::DataVersion;
- use serde::{Deserialize, Serialize};
- 
- use crate::filter::consumer_filter_data::ConsumerFilterData;
- 
- #[derive(Clone, Debug, Serialize, Deserialize, Default)]
- #[serde(rename_all = "camelCase")]
- pub struct ConsumerFilterWrapper {
-     filter_data_by_topic: HashMap<String /* Topic */, FilterDataMapByTopic>,
- }
- 
- #[derive(Clone, Debug, Serialize, Deserialize, Default)]
- #[serde(rename_all = "camelCase")]
- pub struct FilterDataMapByTopic {
-     filter_data_map: HashMap<String /* consumer group */, ConsumerFilterData>,
-     topic: DataVersion,
- }
- 
+use rocketmq_remoting::protocol::DataVersion;
+use serde::{Deserialize, Serialize};
+
+use crate::filter::consumer_filter_data::ConsumerFilterData;
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsumerFilterWrapper {
+    filter_data_by_topic: HashMap<String /* Topic */, FilterDataMapByTopic>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FilterDataMapByTopic {
+    filter_data_map: HashMap<String /* consumer group */, ConsumerFilterData>,
+    topic: DataVersion,
+}

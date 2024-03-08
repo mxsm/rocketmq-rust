@@ -14,7 +14,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
- pub mod group_retry_policy;
- pub mod simple_subscription_data;
- pub mod subscription_group_config;
- 
+pub mod group_retry_policy;
+pub mod simple_subscription_data;
+pub mod subscription_group_config;

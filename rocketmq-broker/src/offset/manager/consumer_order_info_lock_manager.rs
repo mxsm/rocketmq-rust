@@ -15,11 +15,10 @@
  * limitations under the License.
  */
 
- use crate::offset::manager::consumer_order_info_manager::ConsumerOrderInfoWrapper;
+use crate::offset::manager::consumer_order_info_manager::ConsumerOrderInfoWrapper;
 
- pub struct ConsumerOrderInfoLockManager {}
- 
- impl ConsumerOrderInfoLockManager {
-     pub fn recover(&mut self, _consumer_order_info_wrapper: &ConsumerOrderInfoWrapper) {}
- }
- 
+pub struct ConsumerOrderInfoLockManager {}
+
+impl ConsumerOrderInfoLockManager {
+    pub fn recover(&mut self, _consumer_order_info_wrapper: &ConsumerOrderInfoWrapper) {}
+}
