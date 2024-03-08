@@ -15,59 +15,58 @@
  * limitations under the License.
  */
 
- use std::collections::HashMap;
+use std::collections::HashMap;
 
- use rocketmq_common::common::config::TopicConfig;
- use serde::{Deserialize, Serialize};
- 
- use crate::protocol::{DataVersion, RemotingSerializable};
- 
- pub mod topic_config_wrapper;
- pub mod topic_queue_wrapper;
- 
- #[derive(Debug, Deserialize, Serialize, Default)]
- pub struct TopicConfigSerializeWrapper {
-     #[serde(rename = "topicConfigTable")]
-     topic_config_table: Option<HashMap<String, TopicConfig>>,
- 
-     #[serde(rename = "dataVersion")]
-     data_version: Option<DataVersion>,
- }
- 
- impl TopicConfigSerializeWrapper {
-     pub fn topic_config_table(&self) -> Option<&HashMap<String, TopicConfig>> {
-         match &self.topic_config_table {
-             None => None,
-             Some(value) => Some(value),
-         }
-     }
-     pub fn data_version(&self) -> Option<&DataVersion> {
-         match &self.data_version {
-             None => None,
-             Some(value) => Some(value),
-         }
-     }
- 
-     pub fn set_topic_config_table(
-         &mut self,
-         topic_config_table: Option<HashMap<String, TopicConfig>>,
-     ) {
-         self.topic_config_table = topic_config_table;
-     }
-     pub fn set_data_version(&mut self, data_version: Option<DataVersion>) {
-         self.data_version = data_version;
-     }
- }
- 
- impl RemotingSerializable for TopicConfigSerializeWrapper {
-     type Output = Self;
- 
-     /*fn decode(bytes: &[u8]) -> Self::Output {
-         serde_json::from_slice::<Self::Output>(bytes).unwrap()
-     }
- 
-     fn encode(&self, _compress: bool) -> Vec<u8> {
-         todo!()
-     }*/
- }
- 
+use rocketmq_common::common::config::TopicConfig;
+use serde::{Deserialize, Serialize};
+
+use crate::protocol::{DataVersion, RemotingSerializable};
+
+pub mod topic_config_wrapper;
+pub mod topic_queue_wrapper;
+
+#[derive(Debug, Deserialize, Serialize, Default)]
+pub struct TopicConfigSerializeWrapper {
+    #[serde(rename = "topicConfigTable")]
+    topic_config_table: Option<HashMap<String, TopicConfig>>,
+
+    #[serde(rename = "dataVersion")]
+    data_version: Option<DataVersion>,
+}
+
+impl TopicConfigSerializeWrapper {
+    pub fn topic_config_table(&self) -> Option<&HashMap<String, TopicConfig>> {
+        match &self.topic_config_table {
+            None => None,
+            Some(value) => Some(value),
+        }
+    }
+    pub fn data_version(&self) -> Option<&DataVersion> {
+        match &self.data_version {
+            None => None,
+            Some(value) => Some(value),
+        }
+    }
+
+    pub fn set_topic_config_table(
+        &mut self,
+        topic_config_table: Option<HashMap<String, TopicConfig>>,
+    ) {
+        self.topic_config_table = topic_config_table;
+    }
+    pub fn set_data_version(&mut self, data_version: Option<DataVersion>) {
+        self.data_version = data_version;
+    }
+}
+
+impl RemotingSerializable for TopicConfigSerializeWrapper {
+    type Output = Self;
+
+    /*fn decode(bytes: &[u8]) -> Self::Output {
+        serde_json::from_slice::<Self::Output>(bytes).unwrap()
+    }
+
+    fn encode(&self, _compress: bool) -> Vec<u8> {
+        todo!()
+    }*/
+}

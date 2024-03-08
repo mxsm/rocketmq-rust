@@ -16,29 +16,6 @@
  */
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BloomFilterData {
-    bit_pos: Vec<i32>,
-    bit_num: u32,
-}
-
-impl BloomFilterData {
-    pub fn new(bit_pos: Vec<i32>, bit_num: u32) -> Self {
-        Self { bit_pos, bit_num }
-    }
-
-    pub fn set_bit_pos(&mut self, bit_pos: Vec<i32>) {
-        self.bit_pos = bit_pos;
-    }
-    pub fn set_bit_num(&mut self, bit_num: u32) {
-        self.bit_num = bit_num;
-    }
-
-    pub fn bit_pos(&self) -> &Vec<i32> {
-        &self.bit_pos
-    }
-    pub fn bit_num(&self) -> u32 {
-        self.bit_num
-    }
-}
+pub struct GroupRetryPolicy {}

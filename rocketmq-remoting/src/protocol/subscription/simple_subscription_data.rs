@@ -16,29 +16,35 @@
  */
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Hash, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct BloomFilterData {
-    bit_pos: Vec<i32>,
-    bit_num: u32,
+pub struct SimpleSubscriptionData {
+    topic: String,
+    expression_type: String,
+    expression: String,
+    version: u64,
 }
 
-impl BloomFilterData {
-    pub fn new(bit_pos: Vec<i32>, bit_num: u32) -> Self {
-        Self { bit_pos, bit_num }
+impl SimpleSubscriptionData {
+    pub fn new(topic: String, expression_type: String, expression: String, version: u64) -> Self {
+        SimpleSubscriptionData {
+            topic,
+            expression_type,
+            expression,
+            version,
+        }
     }
 
-    pub fn set_bit_pos(&mut self, bit_pos: Vec<i32>) {
-        self.bit_pos = bit_pos;
+    pub fn topic(&self) -> &str {
+        &self.topic
     }
-    pub fn set_bit_num(&mut self, bit_num: u32) {
-        self.bit_num = bit_num;
+    pub fn expression_type(&self) -> &str {
+        &self.expression_type
     }
-
-    pub fn bit_pos(&self) -> &Vec<i32> {
-        &self.bit_pos
+    pub fn expression(&self) -> &str {
+        &self.expression
     }
-    pub fn bit_num(&self) -> u32 {
-        self.bit_num
+    pub fn version(&self) -> u64 {
+        self.version
     }
 }

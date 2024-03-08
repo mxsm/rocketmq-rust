@@ -15,6 +15,5 @@
  * limitations under the License.
  */
 
- pub(crate) mod consumer_filter_manager;
- mod consumer_filter_wrapper;
- 
+pub(crate) mod consumer_filter_manager;
+mod consumer_filter_wrapper;
