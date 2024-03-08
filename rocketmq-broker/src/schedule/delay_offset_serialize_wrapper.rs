@@ -14,24 +14,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
- use std::collections::HashMap;
+use std::collections::HashMap;
 
- use rocketmq_remoting::protocol::DataVersion;
- use serde::{Deserialize, Serialize};
- 
- #[derive(Debug, Clone, Default, Serialize, Deserialize)]
- #[serde(rename_all = "camelCase")]
- pub struct DelayOffsetSerializeWrapper {
-     offset_table: HashMap<i32 /* level */, i64 /* offset */>,
-     data_version: DataVersion,
- }
- 
- impl DelayOffsetSerializeWrapper {
-     pub fn offset_table(&self) -> &HashMap<i32, i64> {
-         &self.offset_table
-     }
-     pub fn data_version(&self) -> &DataVersion {
-         &self.data_version
-     }
- }
- 
+use rocketmq_remoting::protocol::DataVersion;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DelayOffsetSerializeWrapper {
+    offset_table: HashMap<i32 /* level */, i64 /* offset */>,
+    data_version: DataVersion,
+}
+
+impl DelayOffsetSerializeWrapper {
+    pub fn offset_table(&self) -> &HashMap<i32, i64> {
+        &self.offset_table
+    }
+    pub fn data_version(&self) -> &DataVersion {
+        &self.data_version
+    }
+}
