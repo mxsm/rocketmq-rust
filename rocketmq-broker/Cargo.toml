@@ -20,7 +20,9 @@ local_file_store = ["rocketmq-store/local_file_store"]
 rocketmq-rust = { version = "0.2.0", path = "../rocketmq" }
 rocketmq-common = { version = "0.2.0", path = "../rocketmq-common" }
 rocketmq-remoting = { version = "0.2.0", path = "../rocketmq-remoting" }
-rocketmq-store = { version = "0.2.0", path = "../rocketmq-store", default-features = true}
+rocketmq-store = { version = "0.2.0", path = "../rocketmq-store", default-features = true }
+rocketmq-filter = { version = "0.2.0", path = "../rocketmq-filter" }
+rocketmq-macros = { version = "0.2.0", path = "../rocketmq-macros" }
 
 anyhow.workspace = true
 env_logger.workspace = true
@@ -38,8 +40,8 @@ serde_json.workspace = true
 
 futures-core = "0.3.0"
 futures-sink = "0.3.0"
-futures-io = { version = "0.3.0"}
-futures-util = { version = "0.3.0"}
+futures-io = { version = "0.3.0" }
+futures-util = { version = "0.3.0" }
 futures = "0.3.29"
 bytes = "1.5.0"
 config.workspace = true
