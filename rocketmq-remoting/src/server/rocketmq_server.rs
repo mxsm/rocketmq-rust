@@ -72,9 +72,7 @@ impl RemotingService for RocketmqDefaultServer {
         )
     }
 
-    fn shutdown(&mut self) {
-        todo!()
-    }
+    fn shutdown(&mut self) {}
 
     fn register_rpc_hook(&mut self, hook: impl RPCHook) {
         todo!()
