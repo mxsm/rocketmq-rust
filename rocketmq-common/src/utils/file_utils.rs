@@ -18,10 +18,16 @@
 use std::{
     fs::File,
     io::{self, Read, Write},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
+use tracing::warn;
+
 pub fn file_to_string(file_name: &str) -> Result<String, io::Error> {
+    if !PathBuf::from(file_name).exists() {
+        warn!("file not exist:{}", file_name);
+        return Ok("".to_string());
+    }
     let file = File::open(file_name)?;
     file_to_string_impl(&file)
 }

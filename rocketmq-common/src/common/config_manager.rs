@@ -17,7 +17,7 @@
 
 use std::collections::HashMap;
 
-use tracing::error;
+use tracing::{error, info, warn};
 
 use crate::FileUtils;
 
@@ -25,10 +25,12 @@ use crate::FileUtils;
 pub trait ConfigManager {
     fn load(&mut self) -> bool {
         let file_name = self.config_file_path();
+        info!("Config file Path: {}", file_name);
         let result = FileUtils::file_to_string(file_name.as_str());
         match result {
             Ok(ref content) => {
                 if content.is_empty() {
+                    warn!("load back config file");
                     self.load_bak()
                 } else {
                     self.decode(content);
