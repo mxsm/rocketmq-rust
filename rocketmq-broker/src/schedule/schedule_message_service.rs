@@ -48,7 +48,5 @@ impl ConfigManager for ScheduleMessageService {
         todo!()
     }
 
-    fn decode(&mut self, _json_string: &str) {
-        todo!()
-    }
+    fn decode(&mut self, _json_string: &str) {}
 }

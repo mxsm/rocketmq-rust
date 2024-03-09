@@ -49,7 +49,5 @@ impl ConfigManager for ConsumerFilterManager {
         todo!()
     }
 
-    fn decode(&mut self, json_string: &str) {
-        todo!()
-    }
+    fn decode(&mut self, json_string: &str) {}
 }
