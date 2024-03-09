@@ -110,7 +110,7 @@ pub struct BrokerController {
     pub(crate) fast_broker_server: Option<RocketmqDefaultServer>,
 
     //executors
-    pub(crate) send_message_executor: Arc<TokioExecutorService>,
+    pub(crate) send_message_executor: Option<TokioExecutorService>,
 }
 
 impl BrokerController {
@@ -155,7 +155,7 @@ impl BrokerController {
             replicas_manager: None,
             broker_server: None,
             fast_broker_server: None,
-            send_message_executor: Arc::new(Default::default()),
+            send_message_executor: Some(TokioExecutorService::new()),
         }
     }
 }
@@ -278,4 +278,20 @@ impl BrokerController {
     fn initial_acl(&mut self) {}
 
     fn initial_rpc_hooks(&mut self) {}
+}
+
+impl Drop for BrokerController {
+    fn drop(&mut self) {
+        if let Some(ref mut broker_server) = self.broker_server {
+            broker_server.shutdown();
+        }
+
+        match self.send_message_executor.take() {
+            None => {}
+            Some(value) => {
+                info!("Shutdown send message executor");
+                value.shutdown()
+            }
+        }
+    }
 }
