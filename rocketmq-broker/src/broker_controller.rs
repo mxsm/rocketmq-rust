@@ -14,13 +14,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::{net::SocketAddr, sync::Arc};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc, thread::scope};
 
-use rocketmq_common::{common::config_manager::ConfigManager, TokioExecutorService};
+use tracing::{info, warn};
+
+use rocketmq_common::{
+    common::{config::TopicConfig, config_manager::ConfigManager, constant::PermName},
+    TokioExecutorService,
+};
 use rocketmq_remoting::{
     code::request_code::RequestCode,
     remoting::RemotingService,
-    server::{rocketmq_server::RocketmqDefaultServer, RemotingServer},
+    server::{RemotingServer, rocketmq_server::RocketmqDefaultServer},
 };
 use rocketmq_store::{
     base::store_enum::StoreType, config::message_store_config::MessageStoreConfig,
@@ -28,7 +33,6 @@ use rocketmq_store::{
     status::manager::broker_stats_manager::BrokerStatsManager,
     timer::timer_message_store::TimerMessageStore,
 };
-use tracing::{info, warn};
 
 use crate::{
     broker_config::BrokerConfig,
@@ -278,6 +282,84 @@ impl BrokerController {
     fn initial_acl(&mut self) {}
 
     fn initial_rpc_hooks(&mut self) {}
+
+    fn register_broker_all(
+        &mut self,
+        _check_order_config: bool,
+        _oneway: bool,
+        _force_register: bool,
+    ) {
+        let mut topic_config_table = HashMap::new();
+
+        // Clone and modify the topicConfigMap entries concurrently
+        scope(|s| {
+            for topic_config in self.topic_config_manager_inner.topic_config_table.values() {
+                let topic_config_table_ref = &mut topic_config_table;
+                let broker_config_ref = self.broker_config.clone();
+                s.spawn(move |_| {
+                    let new_topic_config =
+                        if !PermName::is_writeable(broker_config_ref.broker_permission)
+                            || !PermName::is_readable(broker_config_ref.broker_permission)
+                        {
+                            TopicConfig {
+                                topic_name: topic_config.topic_name.clone(),
+                                read_queue_nums: topic_config.read_queue_nums,
+                                write_queue_nums: topic_config.write_queue_nums,
+                                perm: topic_config.perm & broker_config_ref.broker_permission,
+                                ..TopicConfig::default()
+                            }
+                        } else {
+                            topic_config.clone()
+                        };
+                    topic_config_table_ref
+                        .insert(new_topic_config.topic_name.clone(), new_topic_config);
+                });
+            }
+        })
+        .unwrap(); // Wait for all threads to finish
+
+        // Handle split registration logic
+        /* if broker.broker_config.enable_split_registration
+            && topic_config_table.len() >= broker.broker_config.split_registration_size
+        {
+            let topic_config_wrapper = broker
+                .topic_config_manager
+                .build_serialize_wrapper(&topic_config_table);
+            do_register_broker_all(check_order_config, oneway, topic_config_wrapper);
+            topic_config_table.clear();
+        }
+
+        // Collect topicQueueMappingInfoMap
+        let topic_queue_mapping_info_map = broker
+            .topic_queue_mapping_manager
+            .topic_queue_mapping_table
+            .iter()
+            .map(|(key, value)| {
+                (
+                    key.clone(),
+                    TopicQueueMappingDetail::clone_as_mapping_info(value),
+                )
+            })
+            .collect();
+
+        let topic_config_wrapper = broker
+            .topic_config_manager
+            .build_serialize_wrapper(&topic_config_table, &topic_queue_mapping_info_map);
+
+        if broker.broker_config.enable_split_registration
+            || force_register
+            || need_register(
+                &broker.broker_config.broker_cluster_name,
+                &broker.broker_config.broker_addr,
+                &broker.broker_config.broker_name,
+                &broker.broker_config.broker_id,
+                broker.broker_config.register_broker_timeout_mills,
+                broker.broker_config.in_broker_container,
+            )
+        {
+            do_register_broker_all(check_order_config, oneway, topic_config_wrapper);
+        }*/
+    }
 }
 
 impl Drop for BrokerController {
