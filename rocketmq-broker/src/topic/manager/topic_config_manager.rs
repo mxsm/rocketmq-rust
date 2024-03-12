@@ -22,7 +22,11 @@ use rocketmq_common::common::{
     topic::TopicValidator,
 };
 use rocketmq_remoting::protocol::{
-    body::topic_info_wrapper::TopicConfigSerializeWrapper, DataVersion,
+    body::topic_info_wrapper::{
+        topic_config_wrapper::TopicConfigAndMappingSerializeWrapper, TopicConfigSerializeWrapper,
+    },
+    static_topic::topic_queue_info::TopicQueueMappingInfo,
+    DataVersion,
 };
 use tracing::info;
 
@@ -179,6 +183,28 @@ impl TopicConfigManager {
 
     pub fn select_topic_config(&self, topic: &str) -> Option<TopicConfig> {
         self.topic_config_table.get(topic).cloned()
+    }
+
+    pub fn build_serialize_wrapper(
+        &mut self,
+        topic_config_table: HashMap<String, TopicConfig>,
+    ) -> TopicConfigAndMappingSerializeWrapper {
+        self.build_serialize_wrapper_with_topic_queue_map(topic_config_table, HashMap::new())
+    }
+
+    pub fn build_serialize_wrapper_with_topic_queue_map(
+        &mut self,
+        topic_config_table: HashMap<String, TopicConfig>,
+        topic_queue_mapping_info_map: HashMap<String, TopicQueueMappingInfo>,
+    ) -> TopicConfigAndMappingSerializeWrapper {
+        if self.broker_config.enable_split_registration {
+            self.data_version.next_version();
+        }
+        TopicConfigAndMappingSerializeWrapper {
+            topic_config_table: Some(topic_config_table),
+            topic_queue_mapping_info_map,
+            ..TopicConfigAndMappingSerializeWrapper::default()
+        }
     }
 }
 

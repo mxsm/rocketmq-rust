@@ -27,3 +27,18 @@ impl TopicQueueMappingDetail {
         None
     }
 }
+
+//impl static methods(Like java static method)
+impl TopicQueueMappingDetail {
+    pub fn clone_as_mapping_info(
+        mapping_detail: &TopicQueueMappingDetail,
+    ) -> TopicQueueMappingInfo {
+        TopicQueueMappingInfo {
+            topic: mapping_detail.topic_queue_mapping_info.topic.clone(),
+            total_queues: mapping_detail.topic_queue_mapping_info.total_queues,
+            bname: mapping_detail.topic_queue_mapping_info.bname.clone(),
+            epoch: mapping_detail.topic_queue_mapping_info.epoch,
+            ..TopicQueueMappingInfo::default()
+        }
+    }
+}

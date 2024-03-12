@@ -49,6 +49,10 @@ pub struct BrokerConfig {
     pub broker_permission: i8,
     pub async_send_enable: bool,
     pub store_path_root_dir: String,
+    pub enable_split_registration: bool,
+    pub split_registration_size: i32,
+    pub register_broker_timeout_mills: i32,
+    pub is_in_broker_container: bool,
 }
 
 impl Default for BrokerConfig {
@@ -80,6 +84,10 @@ impl Default for BrokerConfig {
                 .join("store")
                 .to_string_lossy()
                 .into_owned(),
+            enable_split_registration: false,
+            split_registration_size: 800,
+            register_broker_timeout_mills: 24000,
+            is_in_broker_container: false,
         }
     }
 }
