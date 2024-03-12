@@ -17,8 +17,9 @@
 
 use crate::{net::ResponseFuture, protocol::remoting_command::RemotingCommand, runtime::RPCHook};
 
+#[allow(async_fn_in_trait)]
 pub trait RemotingService: Send {
-    fn start(&mut self) -> impl std::future::Future<Output = ()> + Send;
+    async fn start(&mut self);
 
     fn shutdown(&mut self);
 

@@ -46,7 +46,7 @@ impl RocketmqDefaultServer {
 }
 
 impl RemotingService for RocketmqDefaultServer {
-    fn start(&mut self) -> impl std::future::Future<Output = ()> + Send {
+    async fn start(&mut self) {
         let address = self.broker_server_config.bind_address.as_str();
         let port = self.broker_server_config.listen_port;
         let listener = block_on(async move {
@@ -70,6 +70,7 @@ impl RemotingService for RocketmqDefaultServer {
             processor_table,
             Some(notify_conn_disconnect),
         )
+        .await
     }
 
     fn shutdown(&mut self) {}
