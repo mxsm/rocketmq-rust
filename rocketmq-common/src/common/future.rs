@@ -19,13 +19,9 @@ use std::{
     pin::Pin,
     sync::Arc,
     task::{Context, Poll, Waker},
-    thread,
 };
 
-use tokio::sync::{
-    mpsc,
-    mpsc::{Receiver, Sender},
-};
+use tokio::sync::{mpsc, mpsc::Sender};
 
 /// Enumeration representing the state of a CompletableFuture.
 #[derive(Copy, Clone, PartialEq)]
@@ -126,20 +122,24 @@ impl<T> std::future::Future for CompletableFuture<T> {
 
 #[cfg(test)]
 mod tests {
+    use tokio::runtime::Runtime;
+
     use super::CompletableFuture;
 
-    #[tokio::test]
-    async fn test_completable_future() {
-        let cf = CompletableFuture::new();
-        let sender = cf.get_sender();
+    #[test]
+    fn test_completable_future() {
+        Runtime::new().unwrap().block_on(async move {
+            let cf = CompletableFuture::new();
+            let sender = cf.get_sender();
 
-        // Send data to the CompletableFuture
-        sender.send(42).await.expect("Failed to send data");
+            // Send data to the CompletableFuture
+            sender.send(42).await.expect("Failed to send data");
 
-        // Wait for the CompletableFuture to complete
-        let result = cf.await;
+            // Wait for the CompletableFuture to complete
+            let result = cf.await;
 
-        // Ensure that the result is Some(42)
-        assert_eq!(result, Some(42));
+            // Ensure that the result is Some(42)
+            assert_eq!(result, Some(42));
+        });
     }
 }
