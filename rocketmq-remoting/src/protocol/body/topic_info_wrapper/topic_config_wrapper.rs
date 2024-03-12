@@ -30,17 +30,17 @@ use crate::protocol::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TopicConfigAndMappingSerializeWrapper {
     #[serde(rename = "topicQueueMappingInfoMap")]
-    topic_queue_mapping_info_map: HashMap<String /* topic */, TopicQueueMappingInfo>,
+    pub topic_queue_mapping_info_map: HashMap<String /* topic */, TopicQueueMappingInfo>,
     #[serde(rename = "topicQueueMappingDetailMap")]
-    topic_queue_mapping_detail_map: HashMap<String /* topic */, TopicQueueMappingDetail>,
+    pub topic_queue_mapping_detail_map: HashMap<String /* topic */, TopicQueueMappingDetail>,
     #[serde(rename = "mappingDataVersion")]
-    mapping_data_version: DataVersion,
+    pub mapping_data_version: DataVersion,
 
     #[serde(rename = "topicConfigTable")]
-    topic_config_table: Option<HashMap<String, TopicConfig>>,
+    pub topic_config_table: Option<HashMap<String, TopicConfig>>,
 
     #[serde(rename = "dataVersion")]
-    data_version: Option<DataVersion>,
+    pub data_version: Option<DataVersion>,
 }
 
 impl TopicConfigAndMappingSerializeWrapper {
