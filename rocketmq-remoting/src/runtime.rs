@@ -15,13 +15,16 @@
  * limitations under the License.
  */
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use rocketmq_common::{common::Pair, TokioExecutorService};
+use tokio::time;
 
 use crate::{
+    clients::Client,
     net::ResponseFuture,
     protocol::{remoting_command::RemotingCommand, RemotingCommandType},
+    remoting::InvokeCallback,
     runtime::{processor::RequestProcessor, server::ConnectionHandlerContext},
 };
 
@@ -112,5 +115,21 @@ impl ServiceBridge {
         _ctx: ConnectionHandlerContext,
         _msg: RemotingCommand,
     ) {
+    }
+
+    pub async fn invoke_async(
+        &mut self,
+        client: &mut Client,
+        request: RemotingCommand,
+        timeout_millis: u64,
+        invoke_callback: impl InvokeCallback,
+    ) {
+        if let Ok(resp) = time::timeout(Duration::from_millis(timeout_millis), async {
+            client.invoke(request).await.unwrap()
+        })
+        .await
+        {
+            invoke_callback.operation_succeed(resp)
+        }
     }
 }
