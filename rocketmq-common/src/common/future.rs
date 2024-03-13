@@ -40,6 +40,9 @@ struct CompletableFutureState<T> {
     waker: Option<Waker>,
     /// The data value contained within the CompletableFuture upon completion.
     data: Option<T>,
+
+    /// An optional error value contained within the CompletableFuture upon completion.
+    error: Option<Box<dyn std::error::Error + Send + Sync>>,
 }
 
 /// A CompletableFuture represents a future value that may be completed or pending.
@@ -64,6 +67,7 @@ impl<T: Send + 'static> CompletableFuture<T> {
             completed: State::Pending,
             waker: None,
             data: None,
+            error: None,
         }));
         let arc = status.clone();
 
@@ -97,6 +101,15 @@ impl<T: Send + 'static> CompletableFuture<T> {
         let mut state = self.state.lock().unwrap();
         state.completed = State::Ready;
         state.data = Some(result);
+        if let Some(waker) = state.waker.take() {
+            waker.wake();
+        }
+    }
+
+    pub fn complete_exceptionally(&mut self, error: Box<dyn std::error::Error + Send + Sync>) {
+        let mut state = self.state.lock().unwrap();
+        state.completed = State::Ready;
+        state.error = Some(error);
         if let Some(waker) = state.waker.take() {
             waker.wake();
         }
