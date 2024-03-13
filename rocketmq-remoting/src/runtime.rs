@@ -25,7 +25,7 @@ use crate::{
     runtime::{processor::RequestProcessor, server::ConnectionHandlerContext},
 };
 
-mod config;
+pub mod config;
 pub mod processor;
 pub mod server;
 
@@ -46,7 +46,7 @@ pub trait RPCHook: Send + Sync + 'static {
     );
 }
 
-pub struct ServerInner {
+pub struct ServiceBridge {
     //Limiting the maximum number of one-way requests.
     pub(crate) semaphore_oneway: tokio::sync::Semaphore,
     //Limiting the maximum number of asynchronous requests.
@@ -67,7 +67,7 @@ pub struct ServerInner {
     pub(crate) rpc_hooks: Vec<Box<dyn RPCHook>>,
 }
 
-impl ServerInner {
+impl ServiceBridge {
     pub fn new() -> Self {
         Self {
             semaphore_oneway: tokio::sync::Semaphore::new(1000),
@@ -82,13 +82,13 @@ impl ServerInner {
     }
 }
 
-impl Default for ServerInner {
+impl Default for ServiceBridge {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ServerInner {
+impl ServiceBridge {
     pub fn process_message_received(
         &mut self,
         ctx: ConnectionHandlerContext,

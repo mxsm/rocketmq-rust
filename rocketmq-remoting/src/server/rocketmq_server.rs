@@ -25,13 +25,13 @@ use tokio::{net::TcpListener, sync::broadcast, task::JoinHandle};
 use crate::{
     protocol::remoting_command::RemotingCommand,
     remoting::{InvokeCallback, RemotingService},
-    runtime::{processor::RequestProcessor, server::run, RPCHook, ServerInner},
+    runtime::{processor::RequestProcessor, server::run, RPCHook, ServiceBridge},
     server::{config::BrokerServerConfig, RemotingServer},
 };
 
 pub struct RocketmqDefaultServer {
     pub(crate) broker_server_config: BrokerServerConfig,
-    pub(crate) server_inner: ServerInner,
+    pub(crate) server_inner: ServiceBridge,
     pub future: Option<JoinHandle<()>>,
 }
 
@@ -39,7 +39,7 @@ impl RocketmqDefaultServer {
     pub fn new(broker_server_config: BrokerServerConfig) -> Self {
         Self {
             broker_server_config,
-            server_inner: ServerInner::new(),
+            server_inner: ServiceBridge::new(),
             future: None,
         }
     }

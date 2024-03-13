@@ -23,7 +23,7 @@ lazy_static! {
     static ref NET_SYSTEM_CONFIG: NetSystemConfig = NetSystemConfig::new();
 }
 
-pub struct NettyClientConfig {
+pub struct TokioClientConfig {
     // Worker thread number
     pub client_worker_threads: i32,
     pub client_callback_executor_threads: usize,
@@ -47,9 +47,9 @@ pub struct NettyClientConfig {
     pub enable_transparent_retry: bool,
 }
 
-impl Default for NettyClientConfig {
+impl Default for TokioClientConfig {
     fn default() -> Self {
-        NettyClientConfig {
+        TokioClientConfig {
             client_worker_threads: NET_SYSTEM_CONFIG.client_worker_size,
             client_callback_executor_threads: num_cpus::get(),
             client_oneway_semaphore_value: NET_SYSTEM_CONFIG.client_oneway_semaphore_value,
@@ -80,7 +80,7 @@ mod tests {
 
     #[test]
     fn test_default_config() {
-        let default_config = NettyClientConfig::default();
+        let default_config = TokioClientConfig::default();
 
         assert_eq!(
             default_config.client_worker_threads,

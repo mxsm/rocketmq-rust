@@ -15,6 +15,6 @@
  * limitations under the License.
  */
 
-mod client_config;
+pub mod client_config;
 mod net_system_config;
 mod server_config;

@@ -24,7 +24,7 @@ use std::{
 
 pub use blocking_client::BlockingClient;
 pub use client::Client;
-use rocketmq_common::TokioExecutorService;
+use rocketmq_common::{common::future::CompletableFuture, TokioExecutorService};
 
 use crate::{
     net::ResponseFuture,
@@ -37,6 +37,7 @@ mod async_client;
 mod blocking_client;
 
 mod client;
+mod rocketmq_default_impl;
 
 #[derive(Default)]
 pub struct RemoteClient {
@@ -91,13 +92,15 @@ trait RemotingClient: RemotingService {
         request: RemotingCommand,
         timeout_millis: u64,
     ) -> Result<RemotingCommand, Box<dyn std::error::Error>>;
-    fn invoke_async(
+
+    async fn invoke_async(
         &mut self,
         addr: String,
         request: RemotingCommand,
         timeout_millis: u64,
-        invoke_callback: Arc<dyn InvokeCallback>,
+        invoke_callback: impl InvokeCallback,
     ) -> Result<(), Box<dyn std::error::Error>>;
+
     fn invoke_oneway(
         &self,
         addr: String,
@@ -105,16 +108,32 @@ trait RemotingClient: RemotingService {
         timeout_millis: u64,
     ) -> Result<(), Box<dyn std::error::Error>>;
 
-    fn invoke(
+    async fn invoke(
         &mut self,
         addr: String,
         request: RemotingCommand,
         timeout_millis: u64,
-    ) -> Result<RemotingCommand, Box<dyn std::error::Error>> {
-        let future = Arc::new(DefaultInvokeCallback {});
-        match self.invoke_async(addr, request, timeout_millis, future) {
-            Ok(_) => Ok(RemotingCommand::default()),
-            Err(e) => Err(e),
+    ) -> Result<CompletableFuture<RemotingCommand>, Box<dyn std::error::Error>> {
+        let completable_future = CompletableFuture::new();
+        let sender = completable_future.get_sender();
+        match self
+            .invoke_async(
+                addr,
+                request,
+                timeout_millis,
+                |response: Option<RemotingCommand>,
+                 error: Option<Box<dyn std::error::Error>>,
+                 _response_future: Option<ResponseFuture>| {
+                    if let Some(response) = response {
+                        let _ = sender.blocking_send(response);
+                    } else if let Some(_error) = error {
+                    }
+                },
+            )
+            .await
+        {
+            Ok(_) => Ok(completable_future),
+            Err(err) => Err(err),
         }
     }
 
@@ -128,14 +147,25 @@ trait RemotingClient: RemotingService {
     fn set_callback_executor(&mut self, executor: Arc<TokioExecutorService>);
 
     fn is_address_reachable(&mut self, addr: String);
+
+    fn close_clients(&mut self, addrs: Vec<String>);
 }
 
-struct DefaultInvokeCallback;
+impl<T> InvokeCallback for T
+where
+    T: Fn(Option<RemotingCommand>, Option<Box<dyn std::error::Error>>, Option<ResponseFuture>)
+        + Send
+        + Sync,
+{
+    fn operation_complete(&self, response_future: ResponseFuture) {
+        self(None, None, Some(response_future))
+    }
 
-impl InvokeCallback for DefaultInvokeCallback {
-    fn operation_complete(&self, _response_future: ResponseFuture) {}
+    fn operation_succeed(&self, response: RemotingCommand) {
+        self(Some(response), None, None)
+    }
 
-    fn operation_succeed(&self, _response: RemotingCommand) {}
-
-    fn operation_fail(&self, _throwable: Box<dyn std::error::Error>) {}
+    fn operation_fail(&self, throwable: Box<dyn std::error::Error>) {
+        self(None, Some(throwable), None)
+    }
 }
