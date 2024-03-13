@@ -30,6 +30,6 @@ pub trait RemotingService: Send {
 
 pub trait InvokeCallback {
     fn operation_complete(&self, response_future: ResponseFuture);
-    fn operation_succeed(&self, _response: RemotingCommand) {}
-    fn operation_fail(&self, _throwable: Box<dyn std::error::Error>) {}
+    fn operation_succeed(&self, response: RemotingCommand);
+    fn operation_fail(&self, throwable: Box<dyn std::error::Error>);
 }

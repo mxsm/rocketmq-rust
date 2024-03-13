@@ -14,12 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::{error::Error, sync::Arc};
+use std::{collections::HashMap, error::Error, sync::Arc};
 
 use rocketmq_common::TokioExecutorService;
 
 use crate::{
-    clients::RemotingClient,
+    clients::{Client, RemotingClient},
     protocol::remoting_command::RemotingCommand,
     remoting::{InvokeCallback, RemotingService},
     runtime::{
@@ -31,6 +31,9 @@ use crate::{
 pub struct RocketmqDefaultClient {
     service_bridge: ServiceBridge,
     tokio_client_config: TokioClientConfig,
+    //cache connection
+    connection_tables: HashMap<String /* ip:port */, Client>,
+    lock: std::sync::RwLock<()>,
 }
 
 impl RocketmqDefaultClient {
@@ -38,7 +41,26 @@ impl RocketmqDefaultClient {
         Self {
             service_bridge: ServiceBridge::new(),
             tokio_client_config,
+            connection_tables: Default::default(),
+            lock: Default::default(),
         }
+    }
+}
+
+impl RocketmqDefaultClient {
+    fn get_and_create_client(&mut self, addr: String) -> &mut Client {
+        let lc = self.lock.write().unwrap();
+
+        if self.connection_tables.contains_key(&addr) {
+            return self.connection_tables.get_mut(&addr).unwrap();
+        }
+
+        let addr_inner = addr.clone();
+        let client =
+            futures::executor::block_on(async move { Client::connect(addr_inner).await.unwrap() });
+        self.connection_tables.insert(addr.clone(), client);
+        drop(lc);
+        self.connection_tables.get_mut(&addr).unwrap()
     }
 }
 
@@ -91,7 +113,9 @@ impl RemotingClient for RocketmqDefaultClient {
         timeout_millis: u64,
         invoke_callback: impl InvokeCallback,
     ) -> Result<(), Box<dyn Error>> {
-        todo!()
+        let client = self.get_and_create_client(addr.clone());
+
+        unreachable!()
     }
 
     fn invoke_oneway(
