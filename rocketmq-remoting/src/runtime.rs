@@ -18,7 +18,7 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use rocketmq_common::{common::Pair, TokioExecutorService};
-use tokio::time;
+use tokio::{runtime::Runtime, sync::Mutex, time, time::timeout};
 
 use crate::{
     clients::Client,
@@ -119,17 +119,33 @@ impl ServiceBridge {
 
     pub async fn invoke_async(
         &mut self,
-        client: &mut Client,
+        client: Arc<Mutex<Client>>,
         request: RemotingCommand,
         timeout_millis: u64,
         invoke_callback: impl InvokeCallback,
     ) {
         if let Ok(resp) = time::timeout(Duration::from_millis(timeout_millis), async {
-            client.invoke(request).await.unwrap()
+            client.lock().await.invoke(request).await.unwrap()
         })
         .await
         {
             invoke_callback.operation_succeed(resp)
         }
+    }
+
+    pub fn invoke_sync(
+        &mut self,
+        client: Arc<Mutex<Client>>,
+        request: RemotingCommand,
+        timeout_millis: u64,
+    ) -> Option<RemotingCommand> {
+        let remoting_command = Runtime::new().unwrap().block_on(async move {
+            let result = timeout(Duration::from_millis(timeout_millis), async move {
+                client.lock().await.invoke(request).await.unwrap()
+            })
+            .await;
+            result.unwrap()
+        });
+        Some(remoting_command)
     }
 }

@@ -17,6 +17,7 @@
 use std::{collections::HashMap, error::Error, sync::Arc};
 
 use rocketmq_common::TokioExecutorService;
+use tokio::sync::Mutex;
 
 use crate::{
     clients::{Client, RemotingClient},
@@ -32,7 +33,7 @@ pub struct RocketmqDefaultClient {
     service_bridge: ServiceBridge,
     tokio_client_config: TokioClientConfig,
     //cache connection
-    connection_tables: HashMap<String /* ip:port */, Client>,
+    connection_tables: HashMap<String /* ip:port */, Arc<Mutex<Client>>>,
     lock: std::sync::RwLock<()>,
 }
 
@@ -48,19 +49,21 @@ impl RocketmqDefaultClient {
 }
 
 impl RocketmqDefaultClient {
-    fn get_and_create_client(&mut self, addr: String) -> &mut Client {
+    fn get_and_create_client(&mut self, addr: String) -> Arc<Mutex<Client>> {
         let lc = self.lock.write().unwrap();
 
         if self.connection_tables.contains_key(&addr) {
-            return self.connection_tables.get_mut(&addr).unwrap();
+            return self.connection_tables.get(&addr).cloned().unwrap();
         }
 
         let addr_inner = addr.clone();
         let client =
             futures::executor::block_on(async move { Client::connect(addr_inner).await.unwrap() });
-        self.connection_tables.insert(addr.clone(), client);
+
+        self.connection_tables
+            .insert(addr.clone(), Arc::new(Mutex::new(client)));
         drop(lc);
-        self.connection_tables.get_mut(&addr).unwrap()
+        self.connection_tables.get(&addr).cloned().unwrap()
     }
 }
 
@@ -103,7 +106,11 @@ impl RemotingClient for RocketmqDefaultClient {
         request: RemotingCommand,
         timeout_millis: u64,
     ) -> Result<RemotingCommand, Box<dyn Error>> {
-        todo!()
+        let client = self.get_and_create_client(addr.clone());
+        Ok(self
+            .service_bridge
+            .invoke_sync(client, request, timeout_millis)
+            .unwrap())
     }
 
     async fn invoke_async(
@@ -114,8 +121,10 @@ impl RemotingClient for RocketmqDefaultClient {
         invoke_callback: impl InvokeCallback,
     ) -> Result<(), Box<dyn Error>> {
         let client = self.get_and_create_client(addr.clone());
-
-        unreachable!()
+        self.service_bridge
+            .invoke_async(client, request, timeout_millis, invoke_callback)
+            .await;
+        Ok(())
     }
 
     fn invoke_oneway(
