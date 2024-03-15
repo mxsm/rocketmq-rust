@@ -35,6 +35,7 @@ pub struct RocketmqDefaultClient {
     //cache connection
     connection_tables: HashMap<String /* ip:port */, Arc<Mutex<Client>>>,
     lock: std::sync::RwLock<()>,
+    runtime: tokio::runtime::Runtime,
 }
 
 impl RocketmqDefaultClient {
@@ -44,6 +45,7 @@ impl RocketmqDefaultClient {
             tokio_client_config,
             connection_tables: Default::default(),
             lock: Default::default(),
+            runtime: tokio::runtime::Runtime::new().unwrap(),
         }
     }
 }
@@ -57,8 +59,9 @@ impl RocketmqDefaultClient {
         }
 
         let addr_inner = addr.clone();
-        let client =
-            futures::executor::block_on(async move { Client::connect(addr_inner).await.unwrap() });
+        let client = self
+            .runtime
+            .block_on(async move { Client::connect(addr_inner).await.unwrap() });
 
         self.connection_tables
             .insert(addr.clone(), Arc::new(Mutex::new(client)));

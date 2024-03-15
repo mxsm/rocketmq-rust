@@ -79,6 +79,7 @@ impl RemoteClient {
     }
 }
 
+#[allow(async_fn_in_trait)]
 trait RemotingClient: RemotingService {
     fn update_name_server_address_list(&mut self, addrs: Vec<String>);
 
