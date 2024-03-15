@@ -59,8 +59,9 @@ impl RocketmqDefaultClient {
         }
 
         let addr_inner = addr.clone();
-        let client =
-            self.runtime.block_on(async move { Client::connect(addr_inner).await.unwrap() });
+        let client = self
+            .runtime
+            .block_on(async move { Client::connect(addr_inner).await.unwrap() });
 
         self.connection_tables
             .insert(addr.clone(), Arc::new(Mutex::new(client)));
