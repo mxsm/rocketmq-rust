@@ -123,7 +123,7 @@ impl RemotingClient for RocketmqDefaultClient {
                     "name server address updated. NEW : {:?} , OLD: {:?}",
                     addrs, old
                 );
-                *old = addrs.clone();
+                old.clone_from(&addrs);
 
                 // should close the channel if choosed addr is not exist.
                 if let Some(namesrv_addr) = self.namesrv_addr_choosed.lock().unwrap().as_ref() {
