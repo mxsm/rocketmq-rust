@@ -28,12 +28,4 @@ pub struct KVTable {
 
 impl RemotingSerializable for KVTable {
     type Output = Self;
-
-    /* fn decode(bytes: &[u8]) -> Self::Output {
-        serde_json::from_slice::<Self::Output>(bytes).unwrap()
-    }
-
-    fn encode(&self, _compress: bool) -> Vec<u8> {
-        todo!()
-    }*/
 }

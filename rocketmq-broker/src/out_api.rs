@@ -14,5 +14,5 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#[derive(Default)]
-pub struct BrokerOuterAPI {}
+
+pub(crate) mod broker_outer_api;

@@ -20,7 +20,6 @@ pub mod broker_controller;
 pub mod command;
 
 pub mod broker_config;
-mod broker_outer_api;
 mod broker_path_config_helper;
 mod client;
 mod coldctr;
@@ -29,6 +28,7 @@ mod filter;
 mod longpolling;
 mod mqtrace;
 mod offset;
+mod out_api;
 mod processor;
 mod schedule;
 mod subscription;

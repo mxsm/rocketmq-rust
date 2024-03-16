@@ -28,6 +28,7 @@ use crate::error::RemotingError::{Io, RemotingCommandDecoderError};
 pub enum RemotingError {
     RemotingCommandDecoderError(String),
     RemotingCommandEncoderError(String),
+    RemotingCommandException(String),
     FromStrError(String),
     Io(io::Error),
 }
@@ -47,6 +48,7 @@ impl Display for RemotingError {
             RemotingError::FromStrError(msg) => {
                 write!(f, "{}", msg)
             }
+            RemotingError::RemotingCommandException(msg) => write!(f, "{}", msg),
         }
     }
 }

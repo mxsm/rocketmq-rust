@@ -18,6 +18,7 @@ use std::{collections::HashMap, error::Error, sync::Arc};
 
 use rocketmq_common::TokioExecutorService;
 use tokio::sync::Mutex;
+use tracing::info;
 
 use crate::{
     clients::{Client, RemotingClient},
@@ -34,8 +35,11 @@ pub struct RocketmqDefaultClient {
     tokio_client_config: TokioClientConfig,
     //cache connection
     connection_tables: HashMap<String /* ip:port */, Arc<Mutex<Client>>>,
+    connection_tables_lock: std::sync::RwLock<()>,
     lock: std::sync::RwLock<()>,
     runtime: tokio::runtime::Runtime,
+    namesrv_addr_list: Arc<std::sync::Mutex<Vec<String>>>,
+    namesrv_addr_choosed: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 impl RocketmqDefaultClient {
@@ -44,8 +48,11 @@ impl RocketmqDefaultClient {
             service_bridge: ServiceBridge::new(),
             tokio_client_config,
             connection_tables: Default::default(),
+            connection_tables_lock: Default::default(),
             lock: Default::default(),
             runtime: tokio::runtime::Runtime::new().unwrap(),
+            namesrv_addr_list: Arc::new(Default::default()),
+            namesrv_addr_choosed: Arc::new(Default::default()),
         }
     }
 }
@@ -92,7 +99,50 @@ impl RemotingService for RocketmqDefaultClient {
 #[allow(unused_variables)]
 impl RemotingClient for RocketmqDefaultClient {
     fn update_name_server_address_list(&mut self, addrs: Vec<String>) {
-        todo!()
+        let mut old = self.namesrv_addr_list.lock().unwrap();
+        let mut update = false;
+
+        if !addrs.is_empty() {
+            if old.is_empty() || addrs.len() != old.len() {
+                update = true;
+            } else {
+                for addr in &addrs {
+                    if !old.contains(addr) {
+                        update = true;
+                        break;
+                    }
+                }
+            }
+
+            if update {
+                // Shuffle the addresses
+                // Shuffle logic is not implemented here as it is not available in standard library
+                // You can implement it using various algorithms like Fisher-Yates shuffle
+
+                info!(
+                    "name server address updated. NEW : {:?} , OLD: {:?}",
+                    addrs, old
+                );
+                *old = addrs.clone();
+
+                // should close the channel if choosed addr is not exist.
+                if let Some(namesrv_addr) = self.namesrv_addr_choosed.lock().unwrap().as_ref() {
+                    if !addrs.contains(namesrv_addr) {
+                        let write_guard = self.connection_tables_lock.write().unwrap();
+                        let mut remove_vec = Vec::new();
+                        for (addr, client) in self.connection_tables.iter() {
+                            if addr.contains(namesrv_addr) {
+                                remove_vec.push(addr.clone());
+                            }
+                        }
+                        for addr in &remove_vec {
+                            self.connection_tables.remove(addr);
+                        }
+                        drop(write_guard);
+                    }
+                }
+            }
+        }
     }
 
     fn get_name_server_address_list(&self) -> Vec<String> {

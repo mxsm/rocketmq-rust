@@ -37,7 +37,7 @@ mod async_client;
 mod blocking_client;
 
 mod client;
-mod rocketmq_default_impl;
+pub mod rocketmq_default_impl;
 
 #[derive(Default)]
 pub struct RemoteClient {

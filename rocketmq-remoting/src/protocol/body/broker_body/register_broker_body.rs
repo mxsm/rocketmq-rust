@@ -27,9 +27,9 @@ use crate::protocol::{
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct RegisterBrokerBody {
     #[serde(rename = "topicConfigSerializeWrapper")]
-    topic_config_serialize_wrapper: TopicConfigAndMappingSerializeWrapper,
+    pub topic_config_serialize_wrapper: TopicConfigAndMappingSerializeWrapper,
     #[serde(rename = "filterServerList")]
-    filter_server_list: Vec<String>,
+    pub filter_server_list: Vec<String>,
 }
 
 impl RegisterBrokerBody {
@@ -48,6 +48,14 @@ impl RegisterBrokerBody {
     }
     pub fn filter_server_list(&self) -> &Vec<String> {
         &self.filter_server_list
+    }
+
+    pub fn encode(&self, compress: bool) -> Vec<u8> {
+        if !compress {
+            return <Self as RemotingSerializable>::encode(self);
+        }
+
+        unimplemented!()
     }
 }
 
