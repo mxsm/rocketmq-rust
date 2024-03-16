@@ -90,6 +90,12 @@ pub struct RemotingCommand {
     serialize_type: SerializeType,
 }
 
+impl Clone for RemotingCommand {
+    fn clone(&self) -> Self {
+        unimplemented!()
+    }
+}
+
 impl Default for RemotingCommand {
     fn default() -> Self {
         let opaque = OPAQUE_COUNTER.fetch_add(1, Ordering::SeqCst);

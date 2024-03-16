@@ -27,6 +27,7 @@ use rocketmq_remoting::{
         static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail,
     },
     remoting::RemotingService,
+    runtime::config::client_config::TokioClientConfig,
     server::{rocketmq_server::RocketmqDefaultServer, RemotingServer},
 };
 use rocketmq_store::{
@@ -39,7 +40,6 @@ use tracing::{info, warn};
 
 use crate::{
     broker_config::BrokerConfig,
-    broker_outer_api::BrokerOuterAPI,
     client::{
         default_consumer_ids_change_listener::DefaultConsumerIdsChangeListener,
         manager::{consumer_manager::ConsumerManager, producer_manager::ProducerManager},
@@ -60,6 +60,7 @@ use crate::{
         consumer_offset_manager::ConsumerOffsetManager,
         consumer_order_info_manager::ConsumerOrderInfoManager,
     },
+    out_api::broker_outer_api::BrokerOuterAPI,
     processor::{
         ack_message_processor::AckMessageProcessor, admin_broker_processor::AdminBrokerProcessor,
         change_invisible_time_processor::ChangeInvisibleTimeProcessor,
@@ -108,7 +109,6 @@ pub struct BrokerController {
     pub(crate) schedule_message_service: ScheduleMessageService,
     pub(crate) cold_data_pull_request_hold_service: ColdDataPullRequestHoldService,
     pub(crate) cold_data_cg_ctr_service: ColdDataCgCtrService,
-    pub(crate) broker_outer_api: BrokerOuterAPI,
     #[cfg(feature = "local_file_store")]
     pub(crate) message_store: Option<LocalFileMessageStore>,
     pub(crate) timer_message_store: Option<TimerMessageStore>,
@@ -118,6 +118,8 @@ pub struct BrokerController {
 
     //executors
     pub(crate) send_message_executor: Option<TokioExecutorService>,
+
+    pub(crate) broker_out_api: BrokerOuterAPI,
 }
 
 impl BrokerController {
@@ -156,13 +158,13 @@ impl BrokerController {
             schedule_message_service: ScheduleMessageService::default(),
             cold_data_pull_request_hold_service: ColdDataPullRequestHoldService::default(),
             cold_data_cg_ctr_service: Default::default(),
-            broker_outer_api: Default::default(),
             message_store: None,
             timer_message_store: None,
             replicas_manager: None,
             broker_server: None,
             fast_broker_server: None,
             send_message_executor: Some(TokioExecutorService::new()),
+            broker_out_api: BrokerOuterAPI::new(TokioClientConfig::default()),
         }
     }
 }
@@ -318,7 +320,12 @@ impl BrokerController {
             let topic_config_wrapper = self
                 .topic_config_manager_inner
                 .build_serialize_wrapper(topic_config_table.clone());
-            self.do_register_broker_all(check_order_config, oneway, topic_config_wrapper);
+            Self::do_register_broker_all(
+                Arc::new(tokio::sync::RwLock::new(self)),
+                check_order_config,
+                oneway,
+                topic_config_wrapper,
+            );
         }
 
         // Collect topicQueueMappingInfoMap
@@ -360,7 +367,12 @@ impl BrokerController {
                 self.broker_config.is_in_broker_container,
             )
         {
-            self.do_register_broker_all(check_order_config, oneway, topic_config_wrapper);
+            Self::do_register_broker_all(
+                Arc::new(tokio::sync::RwLock::new(self)),
+                check_order_config,
+                oneway,
+                topic_config_wrapper,
+            );
         }
     }
 
@@ -377,12 +389,51 @@ impl BrokerController {
     }
 
     fn do_register_broker_all(
-        &mut self,
+        broker: Arc<tokio::sync::RwLock<&mut Self>>,
         check_order_config: bool,
         oneway: bool,
         topic_config_wrapper: TopicConfigAndMappingSerializeWrapper,
     ) {
-        unimplemented!()
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let cluster_name = broker
+                    .read()
+                    .await
+                    .broker_config
+                    .broker_identity
+                    .broker_cluster_name
+                    .clone();
+                let broker_name = broker
+                    .read()
+                    .await
+                    .broker_config
+                    .broker_identity
+                    .broker_name
+                    .clone();
+                let broker_addr = broker.read().await.broker_config.broker_ip1.clone();
+                let broker_id = broker.read().await.broker_config.broker_identity.broker_id;
+                broker
+                    .write()
+                    .await
+                    .broker_out_api
+                    .register_broker_all(
+                        cluster_name,
+                        broker_addr.clone(),
+                        broker_name,
+                        broker_id,
+                        broker_addr,
+                        topic_config_wrapper,
+                        vec![],
+                        oneway,
+                        0,
+                        false,
+                        false,
+                        None,
+                        Default::default(),
+                    )
+                    .await;
+            });
     }
 }
 
