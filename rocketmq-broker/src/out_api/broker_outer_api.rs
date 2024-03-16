@@ -57,7 +57,7 @@ impl BrokerOuterAPI {
 
     pub fn new_with_hook(
         tokio_client_config: TokioClientConfig,
-        rpc_hook: Option<impl RPCHook + Sync + Send>,
+        rpc_hook: Option<impl RPCHook>,
     ) -> Self {
         let mut client = RocketmqDefaultClient::new(tokio_client_config);
         if let Some(rpc_hook) = rpc_hook {
