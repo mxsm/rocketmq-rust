@@ -22,7 +22,7 @@ use std::{
     time::Duration,
 };
 
-use tokio::task::JoinHandle;
+use tokio::{runtime::Handle, task::JoinHandle};
 
 pub struct TokioExecutorService {
     inner: tokio::runtime::Runtime,
@@ -37,6 +37,9 @@ impl Default for TokioExecutorService {
 impl TokioExecutorService {
     pub fn shutdown(self) {
         self.inner.shutdown_background();
+    }
+    pub fn shutdown_timeout(self, timeout: Duration) {
+        self.inner.shutdown_timeout(timeout);
     }
 }
 
@@ -86,6 +89,10 @@ impl TokioExecutorService {
         F::Output: Send + 'static,
     {
         self.inner.spawn(future)
+    }
+
+    pub fn get_handle(&self) -> &Handle {
+        self.inner.handle()
     }
 }
 
@@ -224,5 +231,9 @@ impl ScheduledExecutorService {
 impl ScheduledExecutorService {
     pub fn shutdown(self) {
         self.inner.shutdown_background();
+    }
+
+    pub fn shutdown_timeout(self, timeout: Duration) {
+        self.inner.shutdown_timeout(timeout);
     }
 }
