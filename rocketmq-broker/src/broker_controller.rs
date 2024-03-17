@@ -184,6 +184,8 @@ impl BrokerController {
             replicas_manager.start();
         }
 
+        self.register_broker_all(true, false, true).await;
+
         if let Some(ref mut broker_server) = self.broker_server {
             broker_server.start().await;
         }
@@ -289,13 +291,15 @@ impl BrokerController {
 
     fn initial_rpc_hooks(&mut self) {}
 
-    fn register_broker_all(
+    /// Register broker to name server
+    pub(crate) async fn register_broker_all(
         &mut self,
         check_order_config: bool,
         oneway: bool,
         force_register: bool,
     ) {
         let mut topic_config_table = HashMap::new();
+
         for topic_config in self.topic_config_manager_inner.topic_config_table.values() {
             let new_topic_config = if !PermName::is_writeable(self.broker_config.broker_permission)
                 || !PermName::is_readable(self.broker_config.broker_permission)
@@ -320,12 +324,9 @@ impl BrokerController {
             let topic_config_wrapper = self
                 .topic_config_manager_inner
                 .build_serialize_wrapper(topic_config_table.clone());
-            Self::do_register_broker_all(
-                Arc::new(tokio::sync::RwLock::new(self)),
-                check_order_config,
-                oneway,
-                topic_config_wrapper,
-            );
+            self.do_register_broker_all(check_order_config, oneway, topic_config_wrapper)
+                .await;
+            topic_config_table.clear();
         }
 
         // Collect topicQueueMappingInfoMap
@@ -367,12 +368,8 @@ impl BrokerController {
                 self.broker_config.is_in_broker_container,
             )
         {
-            Self::do_register_broker_all(
-                Arc::new(tokio::sync::RwLock::new(self)),
-                check_order_config,
-                oneway,
-                topic_config_wrapper,
-            );
+            self.do_register_broker_all(check_order_config, oneway, topic_config_wrapper)
+                .await;
         }
     }
 
@@ -388,52 +385,75 @@ impl BrokerController {
         unimplemented!()
     }
 
-    fn do_register_broker_all(
-        broker: Arc<tokio::sync::RwLock<&mut Self>>,
+    async fn do_register_broker_all(
+        &mut self,
         check_order_config: bool,
         oneway: bool,
         topic_config_wrapper: TopicConfigAndMappingSerializeWrapper,
     ) {
-        tokio::runtime::Runtime::new()
-            .unwrap()
-            .block_on(async move {
-                let cluster_name = broker
-                    .read()
-                    .await
-                    .broker_config
-                    .broker_identity
-                    .broker_cluster_name
-                    .clone();
-                let broker_name = broker
-                    .read()
-                    .await
-                    .broker_config
-                    .broker_identity
-                    .broker_name
-                    .clone();
-                let broker_addr = broker.read().await.broker_config.broker_ip1.clone();
-                let broker_id = broker.read().await.broker_config.broker_identity.broker_id;
-                broker
-                    .write()
-                    .await
-                    .broker_out_api
-                    .register_broker_all(
-                        cluster_name,
-                        broker_addr.clone(),
-                        broker_name,
-                        broker_id,
-                        broker_addr,
-                        topic_config_wrapper,
-                        vec![],
-                        oneway,
-                        0,
-                        false,
-                        false,
-                        None,
-                        Default::default(),
-                    )
-                    .await;
-            });
+        /*let broker = Arc::new(tokio::sync::RwLock::new(self));
+        let cluster_name = broker
+            .read()
+            .await
+            .broker_config
+            .broker_identity
+            .broker_cluster_name
+            .clone();
+        let broker_name = broker
+            .read()
+            .await
+            .broker_config
+            .broker_identity
+            .broker_name
+            .clone();
+        let broker_addr = broker.read().await.broker_config.broker_ip1.clone();
+        let broker_id = broker.read().await.broker_config.broker_identity.broker_id;
+        broker
+            .write()
+            .await
+            .broker_out_api
+            .register_broker_all(
+                cluster_name,
+                broker_addr.clone(),
+                broker_name,
+                broker_id,
+                broker_addr,
+                topic_config_wrapper,
+                vec![],
+                oneway,
+                10000,
+                false,
+                false,
+                None,
+                Default::default(),
+            )
+            .await;*/
+
+        let cluster_name = self
+            .broker_config
+            .broker_identity
+            .broker_cluster_name
+            .clone();
+        let broker_name = self.broker_config.broker_identity.broker_name.clone();
+        let broker_addr = self.broker_config.broker_ip1.clone();
+        let broker_id = self.broker_config.broker_identity.broker_id;
+        self.broker_out_api
+            .register_broker_all(
+                cluster_name,
+                broker_addr.clone(),
+                broker_name,
+                broker_id,
+                broker_addr,
+                topic_config_wrapper,
+                vec![],
+                oneway,
+                10000,
+                false,
+                false,
+                None,
+                Default::default(),
+            )
+            .await;
     }
 }
 

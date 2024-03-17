@@ -22,7 +22,10 @@ use std::{
     time::Duration,
 };
 
-use tokio::{runtime::Handle, task::JoinHandle};
+use tokio::{
+    runtime::{Handle, Runtime},
+    task::JoinHandle,
+};
 
 pub struct TokioExecutorService {
     inner: tokio::runtime::Runtime,
@@ -93,6 +96,10 @@ impl TokioExecutorService {
 
     pub fn get_handle(&self) -> &Handle {
         self.inner.handle()
+    }
+
+    pub fn block_on<F: Future>(&self, future: F) -> F::Output {
+        self.inner.block_on(future)
     }
 }
 
