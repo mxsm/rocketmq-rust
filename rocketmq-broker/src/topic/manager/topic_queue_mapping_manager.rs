@@ -34,7 +34,7 @@ use crate::{broker_config::BrokerConfig, broker_path_config_helper::get_topic_qu
 #[derive(Default)]
 pub(crate) struct TopicQueueMappingManager {
     pub(crate) data_version: DataVersion,
-    pub(crate) topic_queue_mapping_table: HashMap<String, TopicQueueMappingDetail>,
+    pub(crate) topic_queue_mapping_table: HashMap<String /* topic */, TopicQueueMappingDetail>,
     pub(crate) broker_config: Arc<BrokerConfig>,
 }
 

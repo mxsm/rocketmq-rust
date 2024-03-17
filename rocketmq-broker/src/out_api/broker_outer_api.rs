@@ -14,33 +14,27 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::sync::Arc;
-
 use rocketmq_common::{
     common::broker::broker_config::BrokerIdentity, utils::crc32_utils, TokioExecutorService,
 };
 use rocketmq_remoting::{
     clients::{rocketmq_default_impl::RocketmqDefaultClient, RemotingClient},
-    code::{request_code::RequestCode, response_code::RemotingSysResponseCode},
-    error::RemotingError,
+    code::request_code::RequestCode,
     protocol::{
         body::{
-            broker_body::register_broker_body::RegisterBrokerBody, kv_table::KVTable,
+            broker_body::register_broker_body::RegisterBrokerBody,
             topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper,
         },
-        header::namesrv::register_broker_header::{
-            RegisterBrokerRequestHeader, RegisterBrokerResponseHeader,
-        },
+        header::namesrv::register_broker_header::RegisterBrokerRequestHeader,
         namesrv::RegisterBrokerResult,
         remoting_command::RemotingCommand,
-        RemotingSerializable,
     },
     remoting::RemotingService,
     runtime::{config::client_config::TokioClientConfig, RPCHook},
 };
 
 pub struct BrokerOuterAPI {
-    remoting_client: Arc<std::sync::Mutex<RocketmqDefaultClient>>,
+    remoting_client: RocketmqDefaultClient,
     name_server_address: Option<String>,
     broker_outer_executor: TokioExecutorService,
 }
@@ -49,7 +43,7 @@ impl BrokerOuterAPI {
     pub fn new(tokio_client_config: TokioClientConfig) -> Self {
         let client = RocketmqDefaultClient::new(tokio_client_config);
         Self {
-            remoting_client: Arc::new(std::sync::Mutex::new(client)),
+            remoting_client: client,
             name_server_address: None,
             broker_outer_executor: Default::default(),
         }
@@ -64,7 +58,7 @@ impl BrokerOuterAPI {
             client.register_rpc_hook(rpc_hook);
         }
         Self {
-            remoting_client: Arc::new(std::sync::Mutex::new(client)),
+            remoting_client: client,
             name_server_address: None,
             broker_outer_executor: Default::default(),
         }
@@ -78,8 +72,6 @@ impl BrokerOuterAPI {
             .map(|s| s.to_string())
             .collect::<Vec<String>>();
         self.remoting_client
-            .lock()
-            .unwrap()
             .update_name_server_address_list(addr_vec)
     }
 
@@ -99,13 +91,8 @@ impl BrokerOuterAPI {
         heartbeat_timeout_millis: Option<i64>,
         _broker_identity: BrokerIdentity,
     ) -> Vec<RegisterBrokerResult> {
+        let name_server_address_list = self.remoting_client.get_available_name_srv_list();
         let mut register_broker_result_list = Vec::new();
-        let name_server_address_list = self
-            .remoting_client
-            .lock()
-            .unwrap()
-            .get_available_name_srv_list();
-
         if !name_server_address_list.is_empty() {
             let mut request_header = RegisterBrokerRequestHeader {
                 broker_addr,
@@ -130,78 +117,52 @@ impl BrokerOuterAPI {
             for namesrv_addr in name_server_address_list.iter() {
                 let cloned_body = body.clone();
                 let cloned_header = request_header.clone();
-                let remoting_client_arc = self.remoting_client.clone();
-                let string = namesrv_addr.clone();
-                let handle = self.broker_outer_executor.get_handle().spawn(async move {
-                    Self::register_broker(
-                        remoting_client_arc,
-                        string,
-                        oneway,
-                        timeout_mills,
-                        cloned_header,
-                        cloned_body,
-                    )
-                });
+                let addr = namesrv_addr.clone();
+                let handle = self
+                    .register_broker(addr, oneway, timeout_mills, cloned_header, cloned_body)
+                    .await;
                 handle_vec.push(handle);
             }
 
             for handle in handle_vec {
-                register_broker_result_list.push(handle.await.unwrap().unwrap().unwrap());
+                //let result = self.broker_outer_executor.spawn(handle).await;
+                register_broker_result_list.push(handle.unwrap());
             }
         }
 
         register_broker_result_list
     }
 
-    fn register_broker(
-        remoting_client: Arc<std::sync::Mutex<RocketmqDefaultClient>>,
+    async fn register_broker(
+        &mut self,
         namesrv_addr: String,
         oneway: bool,
         timeout_mills: u64,
         request_header: RegisterBrokerRequestHeader,
         body: Vec<u8>,
-    ) -> Result<Option<RegisterBrokerResult>, RemotingError> {
+    ) -> Option<RegisterBrokerResult> {
         let request =
             RemotingCommand::create_request_command(RequestCode::RegisterBroker, request_header)
                 .set_body(Some(body.clone()));
 
         if oneway {
-            match remoting_client.lock().unwrap().invoke_oneway(
-                namesrv_addr,
-                request,
-                timeout_mills,
-            ) {
-                Ok(_) => return Ok(None),
+            // match remoting_client.lock().unwrap().invoke_oneway(
+            match self
+                .remoting_client
+                .invoke_oneway(namesrv_addr, request, timeout_mills)
+            {
+                Ok(_) => return None,
                 Err(_) => {
                     // Ignore
-                    return Ok(None);
+                    return None;
                 }
             }
         }
 
-        match remoting_client
-            .lock()
-            .unwrap()
+        let _command = self
+            .remoting_client
             .invoke_sync(namesrv_addr, request, timeout_mills)
-        {
-            Ok(response) => match From::from(response.code()) {
-                RemotingSysResponseCode::Success => {
-                    let response_header = response
-                        .decode_command_custom_header::<RegisterBrokerResponseHeader>()
-                        .unwrap();
-                    let mut result = RegisterBrokerResult {
-                        master_addr: response_header.master_addr.clone().unwrap(),
-                        ha_server_addr: response_header.ha_server_addr.clone().unwrap(),
-                        ..Default::default()
-                    };
-                    if let Some(body) = response.body() {
-                        result.kv_table = KVTable::decode(body);
-                    }
-                    Ok(Some(result))
-                }
-                _ => Ok(None),
-            },
-            Err(_err) => Err(RemotingError::RemotingCommandException("1111".to_string())),
-        }
+            .await;
+        Some(RegisterBrokerResult::default())
     }
 }

@@ -17,7 +17,6 @@
 use std::{collections::HashMap, error::Error, sync::Arc};
 
 use rocketmq_common::TokioExecutorService;
-use tokio::sync::Mutex;
 use tracing::info;
 
 use crate::{
@@ -34,10 +33,9 @@ pub struct RocketmqDefaultClient {
     service_bridge: ServiceBridge,
     tokio_client_config: TokioClientConfig,
     //cache connection
-    connection_tables: HashMap<String /* ip:port */, Arc<Mutex<Client>>>,
+    connection_tables: HashMap<String /* ip:port */, Client>,
     connection_tables_lock: std::sync::RwLock<()>,
-    lock: std::sync::RwLock<()>,
-    runtime: tokio::runtime::Runtime,
+    lock: tokio::sync::RwLock<()>,
     namesrv_addr_list: Arc<std::sync::Mutex<Vec<String>>>,
     namesrv_addr_choosed: Arc<std::sync::Mutex<Option<String>>>,
 }
@@ -50,7 +48,6 @@ impl RocketmqDefaultClient {
             connection_tables: Default::default(),
             connection_tables_lock: Default::default(),
             lock: Default::default(),
-            runtime: tokio::runtime::Runtime::new().unwrap(),
             namesrv_addr_list: Arc::new(Default::default()),
             namesrv_addr_choosed: Arc::new(Default::default()),
         }
@@ -58,22 +55,33 @@ impl RocketmqDefaultClient {
 }
 
 impl RocketmqDefaultClient {
-    fn get_and_create_client(&mut self, addr: String) -> Arc<Mutex<Client>> {
-        let lc = self.lock.write().unwrap();
-
+    async fn get_and_create_client(&mut self, addr: String) -> &Client {
+        let lc = self.lock.write().await;
         if self.connection_tables.contains_key(&addr) {
-            return self.connection_tables.get(&addr).cloned().unwrap();
+            return self.connection_tables.get(&addr).unwrap();
         }
 
         let addr_inner = addr.clone();
-        let client = self
-            .runtime
-            .block_on(async move { Client::connect(addr_inner).await.unwrap() });
+        let client = Client::connect(addr_inner).await.unwrap();
 
-        self.connection_tables
-            .insert(addr.clone(), Arc::new(Mutex::new(client)));
+        self.connection_tables.insert(addr.clone(), client);
         drop(lc);
-        self.connection_tables.get(&addr).cloned().unwrap()
+        self.connection_tables.get(&addr).unwrap()
+    }
+
+    async fn get_and_create_client_mut(&mut self, addr: String) -> Option<&mut Client> {
+        let lc = self.lock.write().await;
+
+        if self.connection_tables.contains_key(&addr) {
+            return self.connection_tables.get_mut(&addr);
+        }
+
+        let addr_inner = addr.clone();
+        let client = Client::connect(addr_inner).await.unwrap();
+
+        self.connection_tables.insert(addr.clone(), client);
+        drop(lc);
+        self.connection_tables.get_mut(&addr)
     }
 }
 
@@ -150,20 +158,23 @@ impl RemotingClient for RocketmqDefaultClient {
     }
 
     fn get_available_name_srv_list(&self) -> Vec<String> {
-        todo!()
+        vec!["127.0.0.1:9876".to_string()]
     }
 
-    fn invoke_sync(
+    async fn invoke_sync(
         &mut self,
         addr: String,
         request: RemotingCommand,
         timeout_millis: u64,
-    ) -> Result<RemotingCommand, Box<dyn Error>> {
-        let client = self.get_and_create_client(addr.clone());
-        Ok(self
-            .service_bridge
-            .invoke_sync(client, request, timeout_millis)
-            .unwrap())
+    ) -> RemotingCommand {
+        let client = self
+            .get_and_create_client_mut(addr.clone())
+            .await
+            .take()
+            .unwrap();
+        ServiceBridge::invoke_sync(client, request, timeout_millis)
+            .await
+            .unwrap()
     }
 
     async fn invoke_async(
@@ -173,10 +184,12 @@ impl RemotingClient for RocketmqDefaultClient {
         timeout_millis: u64,
         invoke_callback: impl InvokeCallback,
     ) -> Result<(), Box<dyn Error>> {
-        let client = self.get_and_create_client(addr.clone());
-        self.service_bridge
-            .invoke_async(client, request, timeout_millis, invoke_callback)
-            .await;
+        let client = self
+            .get_and_create_client_mut(addr.clone())
+            .await
+            .take()
+            .unwrap();
+        ServiceBridge::invoke_async(client, request, timeout_millis, invoke_callback).await;
         Ok(())
     }
 

@@ -8,6 +8,7 @@ use crate::protocol::static_topic::{
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TopicQueueMappingDetail {
+    #[serde(flatten)]
     pub topic_queue_mapping_info: TopicQueueMappingInfo,
 
     #[serde(rename = "hostedQueues")]
