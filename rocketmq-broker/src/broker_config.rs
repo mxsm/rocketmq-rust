@@ -21,7 +21,7 @@ use rocketmq_common::common::{
     mix_all,
     topic::TopicValidator,
 };
-use rocketmq_remoting::server::config::BrokerServerConfig;
+use rocketmq_remoting::server::config::ServerConfig;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -35,7 +35,7 @@ pub struct BrokerConfig {
 
     pub timer_wheel_config: TimerWheelConfig,
 
-    pub broker_server_config: BrokerServerConfig,
+    pub broker_server_config: ServerConfig,
 
     pub broker_ip1: String,
     pub broker_ip2: Option<String>,
@@ -113,7 +113,7 @@ impl BrokerConfig {
         self.trace_topic_enable
     }
 
-    pub fn broker_server_config(&self) -> &BrokerServerConfig {
+    pub fn broker_server_config(&self) -> &ServerConfig {
         &self.broker_server_config
     }
 

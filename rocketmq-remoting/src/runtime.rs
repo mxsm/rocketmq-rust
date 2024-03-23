@@ -32,11 +32,9 @@ pub mod config;
 pub mod processor;
 pub mod server;
 
-pub type ArcDefaultRequestProcessor =
-    Arc<tokio::sync::RwLock<Box<dyn RequestProcessor + Send + Sync + 'static>>>;
+pub type ArcDefaultRequestProcessor = Arc<Box<dyn RequestProcessor + Send + Sync + 'static>>;
 
-pub type ArcProcessorTable =
-    Arc<tokio::sync::RwLock<HashMap<i32, Box<dyn RequestProcessor + Sync + Send + 'static>>>>;
+pub type ArcProcessorTable = Arc<HashMap<i32, Box<dyn RequestProcessor + Sync + Send + 'static>>>;
 
 pub trait RPCHook: Send + Sync + 'static {
     fn do_before_request(&self, remote_addr: &str, request: &RemotingCommand);
@@ -76,7 +74,7 @@ impl ServiceBridge {
             semaphore_oneway: tokio::sync::Semaphore::new(1000),
             semaphore_async: tokio::sync::Semaphore::new(1000),
             response_table: HashMap::new(),
-            processor_table: Some(Arc::new(tokio::sync::RwLock::new(HashMap::new()))),
+            processor_table: Some(Arc::new(HashMap::new())),
             default_request_processor_pair: None,
             processor_table1: Default::default(),
             default_request_processor_pair1: None,

@@ -18,7 +18,6 @@
 
 use std::{error::Error, net::SocketAddr, sync::Arc};
 
-use futures::executor::block_on;
 use rocketmq_common::TokioExecutorService;
 use tokio::{net::TcpListener, sync::broadcast, task::JoinHandle};
 
@@ -26,17 +25,17 @@ use crate::{
     protocol::remoting_command::RemotingCommand,
     remoting::{InvokeCallback, RemotingService},
     runtime::{processor::RequestProcessor, server::run, RPCHook, ServiceBridge},
-    server::{config::BrokerServerConfig, RemotingServer},
+    server::{config::ServerConfig, RemotingServer},
 };
 
 pub struct RocketmqDefaultServer {
-    pub(crate) broker_server_config: BrokerServerConfig,
+    pub(crate) broker_server_config: ServerConfig,
     pub(crate) server_inner: ServiceBridge,
     pub future: Option<JoinHandle<()>>,
 }
 
 impl RocketmqDefaultServer {
-    pub fn new(broker_server_config: BrokerServerConfig) -> Self {
+    pub fn new(broker_server_config: ServerConfig) -> Self {
         Self {
             broker_server_config,
             server_inner: ServiceBridge::new(),
@@ -49,11 +48,9 @@ impl RemotingService for RocketmqDefaultServer {
     async fn start(&mut self) {
         let address = self.broker_server_config.bind_address.as_str();
         let port = self.broker_server_config.listen_port;
-        let listener = block_on(async move {
-            TcpListener::bind(&format!("{}:{}", address, port))
-                .await
-                .unwrap()
-        });
+        let listener = TcpListener::bind(&format!("{}:{}", address, port))
+            .await
+            .unwrap();
         let (notify_conn_disconnect, _) = broadcast::channel::<SocketAddr>(100);
         let default_request_processor = self
             .server_inner
@@ -99,8 +96,7 @@ impl RemotingServer for RocketmqDefaultServer {
         &mut self,
         processor: impl RequestProcessor + Send + Sync + 'static,
     ) {
-        self.server_inner.default_request_processor_pair =
-            Some(Arc::new(tokio::sync::RwLock::new(Box::new(processor))));
+        self.server_inner.default_request_processor_pair = Some(Arc::new(Box::new(processor)));
     }
 
     fn local_listen_port(&mut self) -> i32 {

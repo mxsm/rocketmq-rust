@@ -24,7 +24,7 @@ pub struct AckMessageProcessor {}
 
 impl RequestProcessor for AckMessageProcessor {
     fn process_request(
-        &mut self,
+        &self,
         _ctx: ConnectionHandlerContext,
         _request: RemotingCommand,
     ) -> RemotingCommand {

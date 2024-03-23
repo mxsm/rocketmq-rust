@@ -23,7 +23,7 @@ use crate::{
 pub trait RequestProcessor {
     /// Process a request.
     fn process_request(
-        &mut self,
+        &self,
         ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> RemotingCommand;

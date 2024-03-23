@@ -61,10 +61,8 @@ async fn main() -> anyhow::Result<()> {
     server::run(
         listener,
         tokio::signal::ctrl_c(),
-        Arc::new(tokio::sync::RwLock::new(Box::new(
-            default_request_processor,
-        ))),
-        Arc::new(tokio::sync::RwLock::new(processor_table)),
+        Arc::new(Box::new(default_request_processor)),
+        Arc::new(processor_table),
         Some(notify_conn_disconnect),
     )
     .await;

@@ -21,7 +21,7 @@ pub struct ChangeInvisibleTimeProcessor {}
 
 impl RequestProcessor for ChangeInvisibleTimeProcessor {
     fn process_request(
-        &mut self,
+        &self,
         _ctx: ConnectionHandlerContext,
         _request: rocketmq_remoting::protocol::remoting_command::RemotingCommand,
     ) -> rocketmq_remoting::protocol::remoting_command::RemotingCommand {
