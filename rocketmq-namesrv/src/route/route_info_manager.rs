@@ -124,11 +124,7 @@ impl RouteInfoManager {
             .unwrap()
             .insert(broker_name.clone());
 
-        let enable_acting_master_inner = if let Some(value) = enable_acting_master {
-            value
-        } else {
-            false
-        };
+        let enable_acting_master_inner = enable_acting_master.unwrap_or_default();
         let mut register_first =
             if let Some(broker_data) = self.broker_addr_table.get_mut(&broker_name) {
                 broker_data.set_enable_acting_master(enable_acting_master_inner);
