@@ -73,7 +73,7 @@ impl<MS: Default> Default for SendMessageProcessor<MS> {
 
 impl<MS: MessageStore + Send> RequestProcessor for SendMessageProcessor<MS> {
     fn process_request(
-        &mut self,
+        &self,
         ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> RemotingCommand {
@@ -153,7 +153,7 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
     }
 
     fn send_message<F>(
-        &mut self,
+        &self,
         ctx: &ConnectionHandlerContext,
         request: &RemotingCommand,
         send_message_context: SendMessageContext,
@@ -207,7 +207,7 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
         todo!()
     }
     pub fn pre_send(
-        &mut self,
+        &self,
         ctx: &ConnectionHandlerContext,
         request: &RemotingCommand,
         request_header: &SendMessageRequestHeader,

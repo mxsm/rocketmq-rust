@@ -24,7 +24,7 @@ pub struct PopMessageProcessor {}
 
 impl RequestProcessor for PopMessageProcessor {
     fn process_request(
-        &mut self,
+        &self,
         _ctx: ConnectionHandlerContext,
         _request: RemotingCommand,
     ) -> RemotingCommand {

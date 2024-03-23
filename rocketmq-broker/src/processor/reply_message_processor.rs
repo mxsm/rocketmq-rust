@@ -21,7 +21,7 @@ pub struct ReplyMessageProcessor {}
 
 impl RequestProcessor for ReplyMessageProcessor {
     fn process_request(
-        &mut self,
+        &self,
         _ctx: ConnectionHandlerContext,
         _request: rocketmq_remoting::protocol::remoting_command::RemotingCommand,
     ) -> rocketmq_remoting::protocol::remoting_command::RemotingCommand {

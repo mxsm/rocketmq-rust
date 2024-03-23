@@ -90,12 +90,8 @@ impl ConnectionHandler {
             };
             let ctx = ConnectionHandlerContext::new(&self.connection);
             let opaque = cmd.opaque();
-            let response = match self.processor_table.write().await.get_mut(&cmd.code()) {
-                None => self
-                    .default_request_processor
-                    .write()
-                    .await
-                    .process_request(ctx, cmd),
+            let response = match self.processor_table.get(&cmd.code()) {
+                None => self.default_request_processor.process_request(ctx, cmd),
                 Some(pr) => pr.process_request(ctx, cmd),
             };
             tokio::select! {

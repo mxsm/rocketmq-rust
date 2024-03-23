@@ -24,7 +24,7 @@ pub struct AdminBrokerProcessor {}
 
 impl RequestProcessor for AdminBrokerProcessor {
     fn process_request(
-        &mut self,
+        &self,
         _ctx: ConnectionHandlerContext,
         _request: RemotingCommand,
     ) -> RemotingCommand {

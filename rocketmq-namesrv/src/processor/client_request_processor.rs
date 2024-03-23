@@ -65,7 +65,7 @@ impl ClientRequestProcessor {
         }
     }
 
-    fn get_route_info_by_topic(&mut self, request: RemotingCommand) -> RemotingCommand {
+    fn get_route_info_by_topic(&self, request: RemotingCommand) -> RemotingCommand {
         let request_header = request
             .decode_command_custom_header::<GetRouteInfoRequestHeader>()
             .unwrap();
@@ -122,7 +122,7 @@ impl ClientRequestProcessor {
 
 impl RequestProcessor for ClientRequestProcessor {
     fn process_request(
-        &mut self,
+        &self,
         _ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> RemotingCommand {

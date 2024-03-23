@@ -75,7 +75,7 @@ pub struct DefaultRequestProcessor {
 
 impl RequestProcessor for DefaultRequestProcessor {
     fn process_request(
-        &mut self,
+        &self,
         ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> RemotingCommand {
@@ -126,7 +126,7 @@ impl RequestProcessor for DefaultRequestProcessor {
 
 ///implementation put KV config
 impl DefaultRequestProcessor {
-    fn put_kv_config(&mut self, request: RemotingCommand) -> RemotingCommand {
+    fn put_kv_config(&self, request: RemotingCommand) -> RemotingCommand {
         let request_header = request
             .decode_command_custom_header::<PutKVConfigRequestHeader>()
             .unwrap();
@@ -145,7 +145,7 @@ impl DefaultRequestProcessor {
         RemotingCommand::create_response_command()
     }
 
-    fn get_kv_config(&mut self, request: RemotingCommand) -> RemotingCommand {
+    fn get_kv_config(&self, request: RemotingCommand) -> RemotingCommand {
         let request_header = request
             .decode_command_custom_header::<GetKVConfigRequestHeader>()
             .unwrap();
@@ -167,7 +167,7 @@ impl DefaultRequestProcessor {
             )))
     }
 
-    fn delete_kv_config(&mut self, request: RemotingCommand) -> RemotingCommand {
+    fn delete_kv_config(&self, request: RemotingCommand) -> RemotingCommand {
         let request_header = request
             .decode_command_custom_header::<DeleteKVConfigRequestHeader>()
             .unwrap();
@@ -179,7 +179,7 @@ impl DefaultRequestProcessor {
         RemotingCommand::create_response_command()
     }
 
-    fn query_broker_topic_config(&mut self, request: RemotingCommand) -> RemotingCommand {
+    fn query_broker_topic_config(&self, request: RemotingCommand) -> RemotingCommand {
         let request_header = request
             .decode_command_custom_header::<QueryDataVersionRequestHeader>()
             .unwrap();
@@ -236,7 +236,7 @@ impl DefaultRequestProcessor {
 }
 impl DefaultRequestProcessor {
     fn process_register_broker(
-        &mut self,
+        &self,
         remote_addr: SocketAddr,
         request: RemotingCommand,
     ) -> RemotingCommand {
@@ -313,7 +313,7 @@ impl DefaultRequestProcessor {
             ))))
     }
 
-    fn process_unregister_broker(&mut self, request: RemotingCommand) -> RemotingCommand {
+    fn process_unregister_broker(&self, request: RemotingCommand) -> RemotingCommand {
         let request_header = request
             .decode_command_custom_header::<UnRegisterBrokerRequestHeader>()
             .unwrap();
@@ -325,7 +325,7 @@ impl DefaultRequestProcessor {
 }
 
 impl DefaultRequestProcessor {
-    fn process_broker_heartbeat(&mut self, request: RemotingCommand) -> RemotingCommand {
+    fn process_broker_heartbeat(&self, request: RemotingCommand) -> RemotingCommand {
         let request_header = request
             .decode_command_custom_header::<BrokerHeartbeatRequestHeader>()
             .unwrap();
@@ -338,7 +338,7 @@ impl DefaultRequestProcessor {
         RemotingCommand::create_response_command()
     }
 
-    fn get_broker_member_group(&mut self, request: RemotingCommand) -> RemotingCommand {
+    fn get_broker_member_group(&self, request: RemotingCommand) -> RemotingCommand {
         let request_header = request
             .decode_command_custom_header::<GetBrokerMemberGroupRequestHeader>()
             .unwrap();
@@ -353,7 +353,7 @@ impl DefaultRequestProcessor {
         RemotingCommand::create_response_command().set_body(Some(response_body.encode()))
     }
 
-    fn get_broker_cluster_info(&mut self, _request: RemotingCommand) -> RemotingCommand {
+    fn get_broker_cluster_info(&self, _request: RemotingCommand) -> RemotingCommand {
         let vec = self
             .route_info_manager
             .write()
@@ -363,7 +363,7 @@ impl DefaultRequestProcessor {
             .set_body(Some(Bytes::from(vec)))
     }
 
-    fn wipe_write_perm_of_broker(&mut self, request: RemotingCommand) -> RemotingCommand {
+    fn wipe_write_perm_of_broker(&self, request: RemotingCommand) -> RemotingCommand {
         let request_header = request
             .decode_command_custom_header::<WipeWritePermOfBrokerRequestHeader>()
             .unwrap();
@@ -376,7 +376,7 @@ impl DefaultRequestProcessor {
         )))
     }
 
-    fn add_write_perm_of_broker(&mut self, request: RemotingCommand) -> RemotingCommand {
+    fn add_write_perm_of_broker(&self, request: RemotingCommand) -> RemotingCommand {
         let request_header = request
             .decode_command_custom_header::<AddWritePermOfBrokerRequestHeader>()
             .unwrap();
@@ -389,7 +389,7 @@ impl DefaultRequestProcessor {
         )))
     }
 
-    fn get_all_topic_list_from_nameserver(&mut self, _request: RemotingCommand) -> RemotingCommand {
+    fn get_all_topic_list_from_nameserver(&self, _request: RemotingCommand) -> RemotingCommand {
         let rd_lock = self.route_info_manager.read();
         if rd_lock.namesrv_config.enable_all_topic_list {
             let topics = rd_lock.get_all_topic_list();
@@ -401,7 +401,7 @@ impl DefaultRequestProcessor {
             .set_remark(Some(String::from("disable")))
     }
 
-    fn delete_topic_in_name_srv(&mut self, request: RemotingCommand) -> RemotingCommand {
+    fn delete_topic_in_name_srv(&self, request: RemotingCommand) -> RemotingCommand {
         let request_header = request
             .decode_command_custom_header::<DeleteTopicFromNamesrvRequestHeader>()
             .unwrap();
@@ -412,7 +412,7 @@ impl DefaultRequestProcessor {
         RemotingCommand::create_response_command()
     }
 
-    fn register_topic_to_name_srv(&mut self, request: RemotingCommand) -> RemotingCommand {
+    fn register_topic_to_name_srv(&self, request: RemotingCommand) -> RemotingCommand {
         let request_header = request
             .decode_command_custom_header::<RegisterTopicRequestHeader>()
             .unwrap();
@@ -427,7 +427,7 @@ impl DefaultRequestProcessor {
         RemotingCommand::create_response_command()
     }
 
-    fn get_kv_list_by_namespace(&mut self, request: RemotingCommand) -> RemotingCommand {
+    fn get_kv_list_by_namespace(&self, request: RemotingCommand) -> RemotingCommand {
         let request_header = request
             .decode_command_custom_header::<GetKVListByNamespaceRequestHeader>()
             .unwrap();
@@ -446,7 +446,7 @@ impl DefaultRequestProcessor {
         )
     }
 
-    fn get_topics_by_cluster(&mut self, request: RemotingCommand) -> RemotingCommand {
+    fn get_topics_by_cluster(&self, request: RemotingCommand) -> RemotingCommand {
         if !self
             .route_info_manager
             .read()
@@ -469,12 +469,12 @@ impl DefaultRequestProcessor {
         RemotingCommand::create_response_command().set_body(Some(topics_by_cluster.encode()))
     }
 
-    fn get_system_topic_list_from_ns(&mut self, _request: RemotingCommand) -> RemotingCommand {
+    fn get_system_topic_list_from_ns(&self, _request: RemotingCommand) -> RemotingCommand {
         let topic_list = self.route_info_manager.read().get_system_topic_list();
         RemotingCommand::create_response_command().set_body(Some(topic_list.encode()))
     }
 
-    fn get_unit_topic_list(&mut self, _request: RemotingCommand) -> RemotingCommand {
+    fn get_unit_topic_list(&self, _request: RemotingCommand) -> RemotingCommand {
         if self
             .route_info_manager
             .read()
@@ -488,7 +488,7 @@ impl DefaultRequestProcessor {
             .set_remark(Some(String::from("disable")))
     }
 
-    fn get_has_unit_sub_topic_list(&mut self, _request: RemotingCommand) -> RemotingCommand {
+    fn get_has_unit_sub_topic_list(&self, _request: RemotingCommand) -> RemotingCommand {
         if self
             .route_info_manager
             .read()
@@ -502,10 +502,7 @@ impl DefaultRequestProcessor {
             .set_remark(Some(String::from("disable")))
     }
 
-    fn get_has_unit_sub_un_unit_topic_list(
-        &mut self,
-        _request: RemotingCommand,
-    ) -> RemotingCommand {
+    fn get_has_unit_sub_un_unit_topic_list(&self, _request: RemotingCommand) -> RemotingCommand {
         if self
             .route_info_manager
             .read()

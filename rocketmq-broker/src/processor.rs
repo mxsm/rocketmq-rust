@@ -55,7 +55,7 @@ pub(crate) struct SendMessageProcessorInner {
 
 impl SendMessageProcessorInner {
     pub(crate) fn consumer_send_msg_back(
-        &mut self,
+        &self,
         _ctx: &ConnectionHandlerContext,
         _request: &RemotingCommand,
     ) -> Option<RemotingCommand> {
@@ -127,7 +127,7 @@ impl SendMessageProcessorInner {
     }
 
     pub(crate) fn msg_check(
-        &mut self,
+        &self,
         _ctx: &ConnectionHandlerContext,
         _request: &RemotingCommand,
         request_header: &SendMessageRequestHeader,
