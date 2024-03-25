@@ -36,7 +36,7 @@ use rocketmq_remoting::{
 pub struct BrokerOuterAPI {
     remoting_client: RocketmqDefaultClient,
     name_server_address: Option<String>,
-    broker_outer_executor: TokioExecutorService,
+    broker_outer_executor: Option<TokioExecutorService>,
 }
 
 impl BrokerOuterAPI {
@@ -66,13 +66,14 @@ impl BrokerOuterAPI {
 }
 
 impl BrokerOuterAPI {
-    pub fn update_name_server_address_list(&mut self, addrs: String) {
+    pub async fn update_name_server_address_list(&mut self, addrs: String) {
         let addr_vec = addrs
             .split("';'")
             .map(|s| s.to_string())
             .collect::<Vec<String>>();
         self.remoting_client
             .update_name_server_address_list(addr_vec)
+            .await
     }
 
     pub async fn register_broker_all(
