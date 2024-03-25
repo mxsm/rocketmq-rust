@@ -33,11 +33,10 @@ pub struct RocketmqDefaultClient {
     service_bridge: ServiceBridge,
     tokio_client_config: TokioClientConfig,
     //cache connection
-    connection_tables: HashMap<String /* ip:port */, Client>,
-    connection_tables_lock: std::sync::RwLock<()>,
-    lock: tokio::sync::RwLock<()>,
-    namesrv_addr_list: Arc<std::sync::Mutex<Vec<String>>>,
-    namesrv_addr_choosed: Arc<std::sync::Mutex<Option<String>>>,
+    connection_tables:
+        tokio::sync::Mutex<HashMap<String /* ip:port */, Arc<tokio::sync::Mutex<Client>>>>,
+    namesrv_addr_list: Arc<tokio::sync::Mutex<Vec<String>>>,
+    namesrv_addr_choosed: Arc<tokio::sync::Mutex<Option<String>>>,
 }
 
 impl RocketmqDefaultClient {
@@ -46,8 +45,6 @@ impl RocketmqDefaultClient {
             service_bridge: ServiceBridge::new(),
             tokio_client_config,
             connection_tables: Default::default(),
-            connection_tables_lock: Default::default(),
-            lock: Default::default(),
             namesrv_addr_list: Arc::new(Default::default()),
             namesrv_addr_choosed: Arc::new(Default::default()),
         }
@@ -55,33 +52,16 @@ impl RocketmqDefaultClient {
 }
 
 impl RocketmqDefaultClient {
-    async fn get_and_create_client(&mut self, addr: String) -> &Client {
-        let lc = self.lock.write().await;
-        if self.connection_tables.contains_key(&addr) {
-            return self.connection_tables.get(&addr).unwrap();
+    async fn get_and_create_client(&mut self, addr: String) -> Arc<tokio::sync::Mutex<Client>> {
+        let mut mutex_guard = self.connection_tables.lock().await;
+        if mutex_guard.contains_key(&addr) {
+            return mutex_guard.get(&addr).unwrap().clone();
         }
 
         let addr_inner = addr.clone();
         let client = Client::connect(addr_inner).await.unwrap();
-
-        self.connection_tables.insert(addr.clone(), client);
-        drop(lc);
-        self.connection_tables.get(&addr).unwrap()
-    }
-
-    async fn get_and_create_client_mut(&mut self, addr: String) -> Option<&mut Client> {
-        let lc = self.lock.write().await;
-
-        if self.connection_tables.contains_key(&addr) {
-            return self.connection_tables.get_mut(&addr);
-        }
-
-        let addr_inner = addr.clone();
-        let client = Client::connect(addr_inner).await.unwrap();
-
-        self.connection_tables.insert(addr.clone(), client);
-        drop(lc);
-        self.connection_tables.get_mut(&addr)
+        mutex_guard.insert(addr.clone(), Arc::new(tokio::sync::Mutex::new(client)));
+        mutex_guard.get(&addr).unwrap().clone()
     }
 }
 
@@ -106,8 +86,8 @@ impl RemotingService for RocketmqDefaultClient {
 
 #[allow(unused_variables)]
 impl RemotingClient for RocketmqDefaultClient {
-    fn update_name_server_address_list(&mut self, addrs: Vec<String>) {
-        let mut old = self.namesrv_addr_list.lock().unwrap();
+    async fn update_name_server_address_list(&mut self, addrs: Vec<String>) {
+        let mut old = self.namesrv_addr_list.lock().await;
         let mut update = false;
 
         if !addrs.is_empty() {
@@ -134,19 +114,18 @@ impl RemotingClient for RocketmqDefaultClient {
                 old.clone_from(&addrs);
 
                 // should close the channel if choosed addr is not exist.
-                if let Some(namesrv_addr) = self.namesrv_addr_choosed.lock().unwrap().as_ref() {
+                if let Some(namesrv_addr) = self.namesrv_addr_choosed.lock().await.as_ref() {
                     if !addrs.contains(namesrv_addr) {
-                        let write_guard = self.connection_tables_lock.write().unwrap();
                         let mut remove_vec = Vec::new();
-                        for (addr, client) in self.connection_tables.iter() {
+                        let mut result = self.connection_tables.lock().await;
+                        for (addr, client) in result.iter() {
                             if addr.contains(namesrv_addr) {
                                 remove_vec.push(addr.clone());
                             }
                         }
                         for addr in &remove_vec {
-                            self.connection_tables.remove(addr);
+                            result.remove(addr);
                         }
-                        drop(write_guard);
                     }
                 }
             }
@@ -167,12 +146,9 @@ impl RemotingClient for RocketmqDefaultClient {
         request: RemotingCommand,
         timeout_millis: u64,
     ) -> RemotingCommand {
-        let client = self
-            .get_and_create_client_mut(addr.clone())
-            .await
-            .take()
-            .unwrap();
-        ServiceBridge::invoke_sync(client, request, timeout_millis)
+        let client = self.get_and_create_client(addr.clone()).await;
+        let client_ref = &mut *client.lock().await;
+        ServiceBridge::invoke_sync(client_ref, request, timeout_millis)
             .await
             .unwrap()
     }
@@ -184,12 +160,9 @@ impl RemotingClient for RocketmqDefaultClient {
         timeout_millis: u64,
         invoke_callback: impl InvokeCallback,
     ) -> Result<(), Box<dyn Error>> {
-        let client = self
-            .get_and_create_client_mut(addr.clone())
-            .await
-            .take()
-            .unwrap();
-        ServiceBridge::invoke_async(client, request, timeout_millis, invoke_callback).await;
+        let client = self.get_and_create_client(addr.clone()).await;
+        let client_ref = &mut *client.lock().await;
+        ServiceBridge::invoke_async(client_ref, request, timeout_millis, invoke_callback).await;
         Ok(())
     }
 
