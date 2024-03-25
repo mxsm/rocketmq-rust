@@ -17,7 +17,6 @@
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use rocketmq_common::{common::Pair, TokioExecutorService};
 use tokio::{time, time::timeout};
 
 use crate::{
@@ -34,7 +33,7 @@ pub mod server;
 
 pub type ArcDefaultRequestProcessor = Arc<Box<dyn RequestProcessor + Send + Sync + 'static>>;
 
-pub type ArcProcessorTable = Arc<HashMap<i32, Box<dyn RequestProcessor + Sync + Send + 'static>>>;
+pub type ArcProcessorTable = HashMap<i32, ArcDefaultRequestProcessor>;
 
 pub trait RPCHook: Send + Sync + 'static {
     fn do_before_request(&self, remote_addr: &str, request: &RemotingCommand);
@@ -58,13 +57,6 @@ pub struct ServiceBridge {
     pub(crate) processor_table: Option<ArcProcessorTable>,
     pub(crate) default_request_processor_pair: Option<ArcDefaultRequestProcessor>,
 
-    pub(crate) processor_table1: HashMap<
-        i32, /* request code */
-        Pair<Box<dyn RequestProcessor + Send + Sync>, TokioExecutorService>,
-    >,
-    pub(crate) default_request_processor_pair1:
-        Option<Pair<Box<dyn RequestProcessor + Send + Sync>, TokioExecutorService>>,
-
     pub(crate) rpc_hooks: Vec<Box<dyn RPCHook>>,
 }
 
@@ -74,10 +66,8 @@ impl ServiceBridge {
             semaphore_oneway: tokio::sync::Semaphore::new(1000),
             semaphore_async: tokio::sync::Semaphore::new(1000),
             response_table: HashMap::new(),
-            processor_table: Some(Arc::new(HashMap::new())),
+            processor_table: Some(HashMap::new()),
             default_request_processor_pair: None,
-            processor_table1: Default::default(),
-            default_request_processor_pair1: None,
             rpc_hooks: Vec::new(),
         }
     }

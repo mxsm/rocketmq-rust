@@ -28,7 +28,7 @@ use rocketmq_namesrv::{
 };
 use rocketmq_remoting::{
     code::request_code::RequestCode,
-    runtime::{processor::RequestProcessor, server},
+    runtime::{processor::RequestProcessor, server, ArcProcessorTable},
 };
 use rocketmq_rust::rocketmq;
 use tokio::{net::TcpListener, sync::broadcast, task::JoinHandle};
@@ -62,7 +62,7 @@ async fn main() -> anyhow::Result<()> {
         listener,
         tokio::signal::ctrl_c(),
         Arc::new(Box::new(default_request_processor)),
-        Arc::new(processor_table),
+        processor_table,
         Some(notify_conn_disconnect),
     )
     .await;
@@ -71,7 +71,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 type InitProcessorsReturn = (
-    HashMap<i32, Box<dyn RequestProcessor + Send + Sync + 'static>>,
+    ArcProcessorTable,
     DefaultRequestProcessor,
     ScheduledExecutorService,
     JoinHandle<()>,
@@ -86,16 +86,16 @@ fn init_processors(
     let route_info_manager_inner = Arc::new(parking_lot::RwLock::new(route_info_manager));
     let handle = RouteInfoManager::start(route_info_manager_inner.clone(), receiver);
     let kvconfig_manager_inner = Arc::new(parking_lot::RwLock::new(kvconfig_manager));
-    let mut processors: HashMap<i32, Box<dyn RequestProcessor + Send + Sync + 'static>> =
+    let mut processors: HashMap<i32, Arc<Box<dyn RequestProcessor + Send + Sync + 'static>>> =
         HashMap::new();
 
     processors.insert(
         RequestCode::GetRouteinfoByTopic.to_i32(),
-        Box::new(ClientRequestProcessor::new(
+        Arc::new(Box::new(ClientRequestProcessor::new(
             route_info_manager_inner.clone(),
             namesrv_config.clone(),
             kvconfig_manager_inner.clone(),
-        )),
+        ))),
     );
     let scheduled_executor_service = ScheduledExecutorService::new_with_config(
         1,
