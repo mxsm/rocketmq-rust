@@ -45,7 +45,7 @@ impl RocketmqDefaultServer {
 }
 
 impl RemotingService for RocketmqDefaultServer {
-    async fn start(&mut self) {
+    async fn start(&self) {
         let address = self.broker_server_config.bind_address.as_str();
         let port = self.broker_server_config.listen_port;
         let listener = TcpListener::bind(&format!("{}:{}", address, port))
