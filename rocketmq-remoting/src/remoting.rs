@@ -19,7 +19,7 @@ use crate::{net::ResponseFuture, protocol::remoting_command::RemotingCommand, ru
 
 #[allow(async_fn_in_trait)]
 pub trait RemotingService: Send {
-    async fn start(&mut self);
+    async fn start(&self);
 
     fn shutdown(&mut self);
 
