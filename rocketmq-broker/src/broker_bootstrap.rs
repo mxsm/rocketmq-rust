@@ -24,12 +24,12 @@ pub struct BrokerBootstrap {
 }
 
 impl BrokerBootstrap {
-    pub async fn bootstrap(&self) {
+    pub async fn bootstrap(&mut self) {
         if !self.initialize() {}
         self.start().await;
     }
 
-    fn initialize(&self) -> bool {
+    fn initialize(&mut self) -> bool {
         self.broker_runtime.initialize()
     }
 

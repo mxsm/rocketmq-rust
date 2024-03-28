@@ -15,13 +15,15 @@
  * limitations under the License.
  */
 
+use std::sync::Arc;
+
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 
 use crate::broker_config::BrokerConfig;
 
 pub(crate) struct BrokerRuntime {
-    broker_config: BrokerConfig,
-    message_store_config: MessageStoreConfig,
+    broker_config:  Arc<BrokerConfig>,
+    message_store_config: Arc<MessageStoreConfig>,
 }
 
 impl BrokerRuntime {
@@ -30,8 +32,8 @@ impl BrokerRuntime {
         message_store_config: MessageStoreConfig,
     ) -> Self {
         Self {
-            broker_config,
-            message_store_config,
+            broker_config: Arc::new(broker_config),
+            message_store_config: Arc::new(message_store_config),
         }
     }
 
@@ -45,8 +47,22 @@ impl BrokerRuntime {
 }
 
 impl BrokerRuntime {
-    pub(crate) fn initialize(&self) -> bool {
-        unimplemented!()
+    pub(crate) fn initialize(&mut self) -> bool {
+        self.initialize_metadata()
+            && self.initialize_message_store()
+            && self.recover_initialize_service()
+    }
+
+    fn initialize_metadata(&mut self) -> bool {
+        true
+    }
+
+    fn initialize_message_store(&mut self) -> bool {
+        true
+    }
+
+    fn recover_initialize_service(&mut self) -> bool {
+        true
     }
 
     pub async fn start(&self) {
