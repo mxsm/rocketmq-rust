@@ -215,7 +215,7 @@ impl DefaultRequestProcessor {
 
 #[allow(clippy::new_without_default)]
 impl DefaultRequestProcessor {
-    pub fn new(namesrv_config: NamesrvConfig) -> Self {
+    pub fn new(namesrv_config: Arc<NamesrvConfig>) -> Self {
         Self {
             route_info_manager: Arc::new(parking_lot::RwLock::new(RouteInfoManager::new())),
             kvconfig_manager: Arc::new(parking_lot::RwLock::new(KVConfigManager::new(

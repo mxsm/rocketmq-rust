@@ -44,7 +44,7 @@ use crate::{
 
 pub struct ClientRequestProcessor {
     route_info_manager: Arc<parking_lot::RwLock<RouteInfoManager>>,
-    namesrv_config: NamesrvConfig,
+    namesrv_config: Arc<NamesrvConfig>,
     need_check_namesrv_ready: AtomicBool,
     startup_time_millis: u64,
     kvconfig_manager: Arc<parking_lot::RwLock<KVConfigManager>>,
@@ -53,7 +53,7 @@ pub struct ClientRequestProcessor {
 impl ClientRequestProcessor {
     pub fn new(
         route_info_manager: Arc<parking_lot::RwLock<RouteInfoManager>>,
-        namesrv_config: NamesrvConfig,
+        namesrv_config: Arc<NamesrvConfig>,
         kvconfig_manager: Arc<parking_lot::RwLock<KVConfigManager>>,
     ) -> Self {
         Self {

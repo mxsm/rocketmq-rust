@@ -23,6 +23,7 @@ pub use self::{
     route::route_info_manager::RouteInfoManager,
 };
 
+pub mod bootstrap;
 mod kvconfig;
 mod namesrv_config_parse;
 pub mod processor;

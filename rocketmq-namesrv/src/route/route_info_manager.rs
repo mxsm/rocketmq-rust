@@ -49,7 +49,7 @@ use rocketmq_remoting::{
         DataVersion,
     },
 };
-use tokio::{sync::broadcast, task::JoinHandle};
+use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 
 use crate::route_info::broker_addr_info::{BrokerAddrInfo, BrokerLiveInfo, BrokerStatusChangeInfo};
@@ -74,7 +74,7 @@ pub struct RouteInfoManager {
     pub(crate) broker_live_table: BrokerLiveTable,
     pub(crate) filter_server_table: FilterServerTable,
     pub(crate) topic_queue_mapping_info_table: TopicQueueMappingInfoTable,
-    pub(crate) namesrv_config: NamesrvConfig,
+    pub(crate) namesrv_config: Arc<NamesrvConfig>,
     pub(crate) remote_client: RemoteClient,
 }
 
@@ -84,7 +84,7 @@ impl RouteInfoManager {
         Self::default()
     }
 
-    pub fn new_with_config(namesrv_config: NamesrvConfig) -> Self {
+    pub fn new_with_config(namesrv_config: Arc<NamesrvConfig>) -> Self {
         RouteInfoManager {
             topic_queue_table: HashMap::new(),
             broker_addr_table: HashMap::new(),
@@ -1104,19 +1104,14 @@ impl RouteInfoManager {
     pub fn start(
         route_info_manager: Arc<parking_lot::RwLock<Self>>,
         receiver: broadcast::Receiver<SocketAddr>,
-    ) -> JoinHandle<()> {
+    ) {
         let mut receiver = receiver;
         tokio::spawn(async move {
-            loop {
-                match receiver.recv().await {
-                    Ok(socket_addr) => {
-                        route_info_manager
-                            .write()
-                            .connection_disconnected(socket_addr);
-                    }
-                    Err(_err) => {}
-                }
+            while let Ok(socket_addr) = receiver.recv().await {
+                route_info_manager
+                    .write()
+                    .connection_disconnected(socket_addr);
             }
-        })
+        });
     }
 }

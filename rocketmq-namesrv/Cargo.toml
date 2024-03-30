@@ -15,6 +15,7 @@ readme = "README.md"
 rocketmq-rust = { version = "0.2.0", path = "../rocketmq" }
 rocketmq-common = { version = "0.2.0", path = "../rocketmq-common" }
 rocketmq-remoting = { version = "0.2.0", path = "../rocketmq-remoting" }
+rocketmq-runtime = { version = "0.2.0", path = "../rocketmq-runtime" }
 
 
 
@@ -34,8 +35,8 @@ serde_json.workspace = true
 
 futures-core = "0.3.0"
 futures-sink = "0.3.0"
-futures-io = { version = "0.3.0"}
-futures-util = { version = "0.3.0"}
+futures-io = { version = "0.3.0" }
+futures-util = { version = "0.3.0" }
 futures = "0.3.29"
 bytes = "1.5.0"
 config.workspace = true
@@ -46,4 +47,4 @@ log = "0.4.20"
 
 [[bin]]
 name = "rocketmq-namesrv-rust"
-path = "src/bin/bootstrap_server.rs"
+path = "src/bin/namesrv_bootstrap_server.rs"

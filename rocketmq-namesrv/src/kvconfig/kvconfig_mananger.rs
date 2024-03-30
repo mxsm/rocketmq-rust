@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use rocketmq_common::{common::namesrv::namesrv_config::NamesrvConfig, FileUtils};
 use rocketmq_remoting::protocol::{body::kv_table::KVTable, RemotingSerializable};
@@ -27,7 +27,7 @@ pub struct KVConfigManager {
     pub(crate) config_table:
         HashMap<String /* Namespace */, HashMap<String /* Key */, String /* Value */>>,
 
-    pub(crate) namesrv_config: NamesrvConfig,
+    pub(crate) namesrv_config: Arc<NamesrvConfig>,
 }
 
 impl KVConfigManager {
@@ -40,7 +40,7 @@ impl KVConfigManager {
     /// # Returns
     ///
     /// A new `KVConfigManager` instance.
-    pub fn new(namesrv_config: NamesrvConfig) -> KVConfigManager {
+    pub fn new(namesrv_config: Arc<NamesrvConfig>) -> KVConfigManager {
         KVConfigManager {
             config_table: HashMap::new(),
             namesrv_config,
