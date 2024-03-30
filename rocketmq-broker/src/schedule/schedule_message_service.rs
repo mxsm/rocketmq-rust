@@ -22,7 +22,7 @@ use rocketmq_store::store_path_config_helper::get_delay_offset_store_path;
 
 use crate::broker_config::BrokerConfig;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ScheduleMessageService {
     pub(crate) broker_config: Arc<BrokerConfig>,
 }

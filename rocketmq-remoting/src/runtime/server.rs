@@ -29,7 +29,8 @@ use tracing::{error, info, warn};
 use crate::{
     connection::Connection,
     protocol::remoting_command::RemotingCommand,
-    runtime::{ArcDefaultRequestProcessor, ArcProcessorTable},
+    runtime::{BoxedRequestProcessor, RequestProcessorTable},
+    server::config::ServerConfig,
 };
 
 /// Default limit the max number of connections.
@@ -42,8 +43,8 @@ type Tx = mpsc::UnboundedSender<RemotingCommand>;
 type Rx = mpsc::UnboundedReceiver<RemotingCommand>;
 
 pub struct ConnectionHandler {
-    default_request_processor: ArcDefaultRequestProcessor,
-    processor_table: ArcProcessorTable,
+    default_request_processor: BoxedRequestProcessor,
+    processor_table: RequestProcessorTable,
     connection: Connection,
     shutdown: Shutdown,
     _shutdown_complete: mpsc::Sender<()>,
@@ -130,8 +131,8 @@ struct ConnectionListener {
 
     conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
 
-    default_request_processor: ArcDefaultRequestProcessor,
-    processor_table: ArcProcessorTable,
+    default_request_processor: BoxedRequestProcessor,
+    processor_table: RequestProcessorTable,
 }
 
 impl ConnectionListener {
@@ -203,11 +204,55 @@ impl ConnectionListener {
     }
 }
 
+pub struct RocketMQServer {
+    config: Arc<ServerConfig>,
+    request_processor_table: RequestProcessorTable,
+    default_request_processor: BoxedRequestProcessor,
+}
+
+impl RocketMQServer {
+    pub fn new(
+        config: Arc<ServerConfig>,
+        request_processor_table: RequestProcessorTable,
+        default_request_processor: BoxedRequestProcessor,
+    ) -> Self {
+        Self {
+            config,
+            request_processor_table,
+            default_request_processor,
+        }
+    }
+}
+
+impl RocketMQServer {
+    pub async fn run(&self) {
+        let listener = TcpListener::bind(&format!(
+            "{}:{}",
+            self.config.bind_address, self.config.listen_port
+        ))
+        .await
+        .unwrap();
+        info!(
+            "Bind local address: {}",
+            format!("{}:{}", self.config.bind_address, self.config.listen_port)
+        );
+        let (notify_conn_disconnect, _) = broadcast::channel::<SocketAddr>(100);
+        run(
+            listener,
+            tokio::signal::ctrl_c(),
+            self.default_request_processor.clone(),
+            self.request_processor_table.clone(),
+            Some(notify_conn_disconnect),
+        )
+        .await;
+    }
+}
+
 pub async fn run(
     listener: TcpListener,
     shutdown: impl Future,
-    default_request_processor: ArcDefaultRequestProcessor,
-    processor_table: ArcProcessorTable,
+    default_request_processor: BoxedRequestProcessor,
+    processor_table: RequestProcessorTable,
     conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
 ) {
     let (notify_shutdown, _) = broadcast::channel(1);
@@ -236,7 +281,7 @@ pub async fn run(
             }
         }
         _ = shutdown => {
-            info!("shutdown now");
+            info!("Shutdown now.....");
         }
     }
 

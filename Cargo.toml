@@ -6,7 +6,7 @@ members = [
     "rocketmq-filter",
     "rocketmq-macros",
     "rocketmq-namesrv",
-    "rocketmq-remoting",
+    "rocketmq-remoting", "rocketmq-runtime",
     "rocketmq-store"]
 resolver = "2"
 

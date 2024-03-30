@@ -15,59 +15,56 @@
  * limitations under the License.
  */
 
-use std::{path::PathBuf, process::exit};
+use std::path::PathBuf;
 
 use clap::Parser;
-use rocketmq_broker::{
-    broker_config::BrokerConfig, broker_controller::BrokerController, command::Args,
-};
+use rocketmq_broker::{broker_config::BrokerConfig, command::Args, Builder};
 use rocketmq_common::{EnvUtils::EnvUtils, ParseConfigFile};
 use rocketmq_rust::rocketmq;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
-use tracing::{info, warn};
+use tracing::info;
 
 #[rocketmq::main]
 async fn main() -> anyhow::Result<()> {
     // init logger
     rocketmq_common::log::init_logger();
-    let controller = create_broker_controller()?;
-    start_broker_controller(controller).await?;
+    let (broker_config, message_store_config) = parse_config_file();
+    // boot strap broker
+    Builder::new()
+        .set_broker_config(broker_config)
+        .set_message_store_config(message_store_config)
+        .build()
+        .boot()
+        .await;
     Ok(())
 }
 
-fn create_broker_controller() -> anyhow::Result<BrokerController> {
+fn parse_config_file() -> (BrokerConfig, MessageStoreConfig) {
     let args = Args::parse();
     let home = EnvUtils::get_rocketmq_home();
-    let (broker_config, message_store_config) = if let Some(ref config_file) = args.config_file {
+    let config = if let Some(ref config_file) = args.config_file {
         let config_file = PathBuf::from(config_file);
         (
-            ParseConfigFile::parse_config_file::<BrokerConfig>(config_file.clone())?,
-            ParseConfigFile::parse_config_file::<MessageStoreConfig>(config_file.clone())?,
+            ParseConfigFile::parse_config_file::<BrokerConfig>(config_file.clone())
+                .ok()
+                .unwrap(),
+            ParseConfigFile::parse_config_file::<MessageStoreConfig>(config_file.clone())
+                .ok()
+                .unwrap(),
         )
     } else {
         let path_buf = PathBuf::from(home.as_str())
             .join("conf")
             .join("broker.toml");
         (
-            ParseConfigFile::parse_config_file::<BrokerConfig>(path_buf.clone())?,
-            ParseConfigFile::parse_config_file::<MessageStoreConfig>(path_buf)?,
+            ParseConfigFile::parse_config_file::<BrokerConfig>(path_buf.clone())
+                .ok()
+                .unwrap(),
+            ParseConfigFile::parse_config_file::<MessageStoreConfig>(path_buf)
+                .ok()
+                .unwrap(),
         )
     };
     info!("Rocketmq(Rust) home: {}", home);
-    Ok(BrokerController::new(broker_config, message_store_config))
-}
-
-async fn start_broker_controller(broker_controller: BrokerController) -> anyhow::Result<()> {
-    let mut broker_controller = broker_controller;
-    if !broker_controller.initialize() {
-        warn!("Rocketmq(Rust) start failed, initialize failed");
-        exit(0);
-    }
-    info!(
-        "Rocketmq name server(Rust) running on {}:{}",
-        broker_controller.broker_config.broker_ip1, broker_controller.broker_config.listen_port,
-    );
-    //start controller
-    broker_controller.start().await;
-    Ok(())
+    config
 }

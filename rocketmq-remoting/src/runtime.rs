@@ -31,9 +31,9 @@ pub mod config;
 pub mod processor;
 pub mod server;
 
-pub type ArcDefaultRequestProcessor = Arc<Box<dyn RequestProcessor + Send + Sync + 'static>>;
+pub type BoxedRequestProcessor = Arc<Box<dyn RequestProcessor + Send + Sync + 'static>>;
 
-pub type ArcProcessorTable = HashMap<i32, ArcDefaultRequestProcessor>;
+pub type RequestProcessorTable = HashMap<i32, BoxedRequestProcessor>;
 
 pub trait RPCHook: Send + Sync + 'static {
     fn do_before_request(&self, remote_addr: &str, request: &RemotingCommand);
@@ -54,8 +54,8 @@ pub struct ServiceBridge {
     //Cache mapping between request unique code(opaque-request header) and ResponseFuture.
     pub(crate) response_table: HashMap<i32, ResponseFuture>,
 
-    pub(crate) processor_table: Option<ArcProcessorTable>,
-    pub(crate) default_request_processor_pair: Option<ArcDefaultRequestProcessor>,
+    pub(crate) processor_table: Option<RequestProcessorTable>,
+    pub(crate) default_request_processor_pair: Option<BoxedRequestProcessor>,
 
     pub(crate) rpc_hooks: Vec<Box<dyn RPCHook>>,
 }
