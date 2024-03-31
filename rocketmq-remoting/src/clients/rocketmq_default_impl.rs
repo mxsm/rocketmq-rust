@@ -52,7 +52,7 @@ impl RocketmqDefaultClient {
 }
 
 impl RocketmqDefaultClient {
-    async fn get_and_create_client(&mut self, addr: String) -> Arc<tokio::sync::Mutex<Client>> {
+    async fn get_and_create_client(&self, addr: String) -> Arc<tokio::sync::Mutex<Client>> {
         let mut mutex_guard = self.connection_tables.lock().await;
         if mutex_guard.contains_key(&addr) {
             return mutex_guard.get(&addr).unwrap().clone();
@@ -141,7 +141,7 @@ impl RemotingClient for RocketmqDefaultClient {
     }
 
     async fn invoke_sync(
-        &mut self,
+        &self,
         addr: String,
         request: RemotingCommand,
         timeout_millis: u64,

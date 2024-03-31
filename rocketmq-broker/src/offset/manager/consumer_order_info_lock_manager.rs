@@ -20,5 +20,5 @@ use crate::offset::manager::consumer_order_info_manager::ConsumerOrderInfoWrappe
 pub struct ConsumerOrderInfoLockManager {}
 
 impl ConsumerOrderInfoLockManager {
-    pub fn recover(&mut self, _consumer_order_info_wrapper: &ConsumerOrderInfoWrapper) {}
+    pub fn recover(&self, _consumer_order_info_wrapper: &ConsumerOrderInfoWrapper) {}
 }

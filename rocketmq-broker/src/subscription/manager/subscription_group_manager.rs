@@ -28,7 +28,7 @@ use crate::{broker_config::BrokerConfig, broker_path_config_helper::get_subscrip
 #[derive(Default)]
 pub(crate) struct SubscriptionGroupManager {
     pub(crate) broker_config: Arc<BrokerConfig>,
-    subscription_group_wrapper: SubscriptionGroupWrapper,
+    subscription_group_wrapper: parking_lot::Mutex<SubscriptionGroupWrapper>,
 }
 
 //Fully implemented will be removed
@@ -42,7 +42,7 @@ impl ConfigManager for SubscriptionGroupManager {
         todo!()
     }
 
-    fn config_file_path(&mut self) -> String {
+    fn config_file_path(&self) -> String {
         get_subscription_group_path(self.broker_config.store_path_root_dir.as_str())
     }
 
@@ -54,7 +54,7 @@ impl ConfigManager for SubscriptionGroupManager {
         todo!()
     }
 
-    fn decode(&mut self, json_string: &str) {
+    fn decode(&self, json_string: &str) {
         if json_string.is_empty() {
             return;
         }
@@ -62,15 +62,18 @@ impl ConfigManager for SubscriptionGroupManager {
             serde_json::from_str::<SubscriptionGroupWrapper>(json_string).unwrap_or_default();
         for (key, subscription_group_config) in wrapper.subscription_group_table.iter() {
             self.subscription_group_wrapper
+                .lock()
                 .subscription_group_table
                 .insert(key.clone(), subscription_group_config.clone());
         }
         for (key, subscription_group_config) in wrapper.forbidden_table.iter() {
             self.subscription_group_wrapper
+                .lock()
                 .forbidden_table
                 .insert(key.clone(), subscription_group_config.clone());
         }
         self.subscription_group_wrapper
+            .lock()
             .data_version
             .assign_new_one(&wrapper.data_version)
     }

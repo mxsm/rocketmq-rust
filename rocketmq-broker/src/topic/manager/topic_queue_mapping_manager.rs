@@ -33,8 +33,9 @@ use crate::{broker_config::BrokerConfig, broker_path_config_helper::get_topic_qu
 
 #[derive(Default)]
 pub(crate) struct TopicQueueMappingManager {
-    pub(crate) data_version: DataVersion,
-    pub(crate) topic_queue_mapping_table: HashMap<String /* topic */, TopicQueueMappingDetail>,
+    pub(crate) data_version: parking_lot::Mutex<DataVersion>,
+    pub(crate) topic_queue_mapping_table:
+        parking_lot::Mutex<HashMap<String /* topic */, TopicQueueMappingDetail>>,
     pub(crate) broker_config: Arc<BrokerConfig>,
 }
 
@@ -65,7 +66,7 @@ impl TopicQueueMappingManager {
         {
             global_id = header.queue_id;
         }*/
-        if let Some(mapping_detail) = self.topic_queue_mapping_table.get(&topic) {
+        if let Some(mapping_detail) = self.topic_queue_mapping_table.lock().get(&topic) {
             // it is not static topic
             if mapping_detail
                 .topic_queue_mapping_info
@@ -177,7 +178,7 @@ impl ConfigManager for TopicQueueMappingManager {
         todo!()
     }
 
-    fn config_file_path(&mut self) -> String {
+    fn config_file_path(&self) -> String {
         get_topic_queue_mapping_path(self.broker_config.store_path_root_dir.as_str())
     }
 
@@ -189,18 +190,19 @@ impl ConfigManager for TopicQueueMappingManager {
         todo!()
     }
 
-    fn decode(&mut self, json_string: &str) {
+    fn decode(&self, json_string: &str) {
         if json_string.is_empty() {
             return;
         }
         let wrapper = serde_json::from_str::<TopicQueueMappingSerializeWrapper>(json_string)
             .unwrap_or_default();
         if let Some(value) = wrapper.data_version() {
-            self.data_version.assign_new_one(value);
+            self.data_version.lock().assign_new_one(value);
         }
         if let Some(map) = wrapper.topic_queue_mapping_info_map() {
             for (key, value) in map {
                 self.topic_queue_mapping_table
+                    .lock()
                     .insert(key.clone(), value.clone());
             }
         }
