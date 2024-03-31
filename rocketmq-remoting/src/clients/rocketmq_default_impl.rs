@@ -14,23 +14,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::{collections::HashMap, error::Error, sync::Arc};
+use std::{collections::HashMap, error::Error, sync::Arc, time::Duration};
 
 use rocketmq_common::TokioExecutorService;
+use tokio::{runtime::Handle, time, time::timeout};
 use tracing::info;
 
 use crate::{
     clients::{Client, RemotingClient},
     protocol::remoting_command::RemotingCommand,
     remoting::{InvokeCallback, RemotingService},
-    runtime::{
-        config::client_config::TokioClientConfig, processor::RequestProcessor, RPCHook,
-        ServiceBridge,
-    },
+    runtime::{config::client_config::TokioClientConfig, processor::RequestProcessor, RPCHook},
 };
 
 pub struct RocketmqDefaultClient {
-    service_bridge: ServiceBridge,
     tokio_client_config: TokioClientConfig,
     //cache connection
     connection_tables:
@@ -42,7 +39,6 @@ pub struct RocketmqDefaultClient {
 impl RocketmqDefaultClient {
     pub fn new(tokio_client_config: TokioClientConfig) -> Self {
         Self {
-            service_bridge: ServiceBridge::new(),
             tokio_client_config,
             connection_tables: Default::default(),
             namesrv_addr_list: Arc::new(Default::default()),
@@ -133,7 +129,8 @@ impl RemotingClient for RocketmqDefaultClient {
     }
 
     fn get_name_server_address_list(&self) -> Vec<String> {
-        todo!()
+        let cloned = self.namesrv_addr_list.clone();
+        Handle::current().block_on(async move { cloned.lock().await.clone() })
     }
 
     fn get_available_name_srv_list(&self) -> Vec<String> {
@@ -147,10 +144,15 @@ impl RemotingClient for RocketmqDefaultClient {
         timeout_millis: u64,
     ) -> RemotingCommand {
         let client = self.get_and_create_client(addr.clone()).await;
-        let client_ref = &mut *client.lock().await;
-        ServiceBridge::invoke_sync(client_ref, request, timeout_millis)
-            .await
-            .unwrap()
+        if let Ok(result) = timeout(Duration::from_millis(timeout_millis), async {
+            client.lock().await.send_read(request).await.unwrap()
+        })
+        .await
+        {
+            result
+        } else {
+            RemotingCommand::create_response_command()
+        }
     }
 
     async fn invoke_async(
@@ -161,18 +163,29 @@ impl RemotingClient for RocketmqDefaultClient {
         invoke_callback: impl InvokeCallback,
     ) -> Result<(), Box<dyn Error>> {
         let client = self.get_and_create_client(addr.clone()).await;
-        let client_ref = &mut *client.lock().await;
-        ServiceBridge::invoke_async(client_ref, request, timeout_millis, invoke_callback).await;
+        if let Ok(resp) = time::timeout(Duration::from_millis(timeout_millis), async {
+            client.lock().await.send_read(request).await.unwrap()
+        })
+        .await
+        {
+            invoke_callback.operation_succeed(resp)
+        }
+
         Ok(())
     }
 
-    fn invoke_oneway(
+    async fn invoke_oneway(
         &self,
         addr: String,
         request: RemotingCommand,
         timeout_millis: u64,
     ) -> Result<(), Box<dyn Error>> {
-        todo!()
+        let client = self.get_and_create_client(addr.clone()).await;
+        let _ = time::timeout(Duration::from_millis(timeout_millis), async move {
+            client.lock().await.send(request).await.unwrap()
+        })
+        .await;
+        Ok(())
     }
 
     fn register_processor(

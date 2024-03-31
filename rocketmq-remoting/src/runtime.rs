@@ -15,16 +15,11 @@
  * limitations under the License.
  */
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
-
-use tokio::{time, time::timeout};
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{
-    clients::Client,
-    net::ResponseFuture,
-    protocol::{remoting_command::RemotingCommand, RemotingCommandType},
-    remoting::InvokeCallback,
-    runtime::{processor::RequestProcessor, server::ConnectionHandlerContext},
+    net::ResponseFuture, protocol::remoting_command::RemotingCommand,
+    runtime::processor::RequestProcessor,
 };
 
 pub mod config;
@@ -80,7 +75,7 @@ impl Default for ServiceBridge {
 }
 
 impl ServiceBridge {
-    pub fn process_message_received(
+    /*    pub fn process_message_received(
         &mut self,
         ctx: ConnectionHandlerContext,
         msg: RemotingCommand,
@@ -103,8 +98,9 @@ impl ServiceBridge {
         _ctx: ConnectionHandlerContext,
         _msg: RemotingCommand,
     ) {
-    }
+    }*/
 
+    /*    #[allow(unused_variables)]
     pub async fn invoke_async(
         client: &mut Client,
         //client: Arc<Mutex<Client>>,
@@ -112,16 +108,16 @@ impl ServiceBridge {
         timeout_millis: u64,
         invoke_callback: impl InvokeCallback,
     ) {
-        if let Ok(resp) = time::timeout(Duration::from_millis(timeout_millis), async {
+                if let Ok(resp) = time::timeout(Duration::from_millis(timeout_millis), async {
             client.invoke(request).await.unwrap()
         })
         .await
         {
             invoke_callback.operation_succeed(resp)
         }
-    }
+    }*/
 
-    pub async fn invoke_sync(
+    /*    pub async fn invoke_sync(
         client: &mut Client,
         request: RemotingCommand,
         timeout_millis: u64,
@@ -132,5 +128,5 @@ impl ServiceBridge {
         })
         .await;
         Some(result.unwrap())
-    }
+    }*/
 }

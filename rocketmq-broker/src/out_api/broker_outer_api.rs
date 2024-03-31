@@ -106,6 +106,8 @@ impl BrokerOuterAPI {
                 heartbeat_timeout_millis,
                 body_crc32: 0,
             };
+
+            //build request body
             let request_body = RegisterBrokerBody {
                 topic_config_serialize_wrapper: topic_config_wrapper,
                 filter_server_list,
@@ -119,15 +121,18 @@ impl BrokerOuterAPI {
                 let cloned_body = body.clone();
                 let cloned_header = request_header.clone();
                 let addr = namesrv_addr.clone();
-                let handle = self
-                    .register_broker(addr, oneway, timeout_mills, cloned_header, cloned_body)
-                    .await;
+                let handle =
+                    self.register_broker(addr, oneway, timeout_mills, cloned_header, cloned_body);
                 handle_vec.push(handle);
             }
 
-            for handle in handle_vec {
+            /*for handle in handle_vec {
                 //let result = self.broker_outer_executor.spawn(handle).await;
                 register_broker_result_list.push(handle.unwrap());
+            }*/
+            while let Some(handle) = handle_vec.pop() {
+                let result = tokio::join!(handle);
+                register_broker_result_list.push(result.0.unwrap());
             }
         }
 
@@ -147,10 +152,10 @@ impl BrokerOuterAPI {
                 .set_body(Some(body.clone()));
 
         if oneway {
-            // match remoting_client.lock().unwrap().invoke_oneway(
             match self
                 .remoting_client
                 .invoke_oneway(namesrv_addr, request, timeout_mills)
+                .await
             {
                 Ok(_) => return None,
                 Err(_) => {

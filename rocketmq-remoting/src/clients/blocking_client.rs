@@ -62,10 +62,10 @@ impl BlockingClient {
         request: RemotingCommand,
         timeout: Duration,
     ) -> anyhow::Result<()> {
-        match self.rt.block_on(tokio::time::timeout(
-            timeout,
-            self.inner.send_request(request),
-        )) {
+        match self
+            .rt
+            .block_on(tokio::time::timeout(timeout, self.inner.send(request)))
+        {
             Ok(Ok(_)) => Ok(()),
             Ok(Err(err)) => Err(err.into()),
             Err(err) => Err(err.into()),

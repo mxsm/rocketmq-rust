@@ -102,7 +102,7 @@ pub trait RemotingClient: RemotingService {
         invoke_callback: impl InvokeCallback,
     ) -> Result<(), Box<dyn std::error::Error>>;
 
-    fn invoke_oneway(
+    async fn invoke_oneway(
         &self,
         addr: String,
         request: RemotingCommand,

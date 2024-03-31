@@ -243,8 +243,8 @@ impl BrokerRuntime {
             .unwrap()
             .get_handle()
             .spawn(async move {
-                let period = Duration::from_secs(5);
-                let initial_delay = Some(Duration::from_secs(5));
+                let period = Duration::from_secs(10);
+                let initial_delay = Some(Duration::from_secs(60));
                 // initial delay
                 if let Some(initial_delay_inner) = initial_delay {
                     tokio::time::sleep(initial_delay_inner).await;
@@ -272,10 +272,6 @@ impl BrokerRuntime {
 
     /// Register broker to name server
     pub(crate) async fn register_broker_all(
-        /* broker_config: Arc<BrokerConfig>,
-        topic_config_manager: Arc<RwLock<TopicConfigManager>>,
-        topic_queue_mapping_manager: Arc<RwLock<TopicQueueMappingManager>>,
-        broker_out_api: Arc<RwLock<BrokerOuterAPI>>,*/
         &mut self,
         check_order_config: bool,
         oneway: bool,
@@ -307,15 +303,8 @@ impl BrokerRuntime {
             let topic_config_wrapper = self
                 .topic_config_manager
                 .build_serialize_wrapper(topic_config_table.clone());
-            self.do_register_broker_all(
-                /*Self::do_register_broker_all(
-                self.broker_config.clone(),
-                self.broker_out_api.clone(),*/
-                check_order_config,
-                oneway,
-                topic_config_wrapper,
-            )
-            .await;
+            self.do_register_broker_all(check_order_config, oneway, topic_config_wrapper)
+                .await;
             topic_config_table.clear();
         }
 
@@ -359,15 +348,8 @@ impl BrokerRuntime {
                 self.broker_config.is_in_broker_container,
             )
         {
-            self.do_register_broker_all(
-                /*Self::do_register_broker_all(
-                self.broker_config.clone(),
-                self.broker_out_api.clone(),*/
-                check_order_config,
-                oneway,
-                topic_config_wrapper,
-            )
-            .await;
+            self.do_register_broker_all(check_order_config, oneway, topic_config_wrapper)
+                .await;
         }
     }
 
@@ -383,8 +365,6 @@ impl BrokerRuntime {
     }
 
     async fn do_register_broker_all(
-        /*broker_config: Arc<BrokerConfig>,
-        broker_out_api: Arc<RwLock<BrokerOuterAPI>>,*/
         &mut self,
         _check_order_config: bool,
         oneway: bool,
