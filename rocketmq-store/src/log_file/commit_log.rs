@@ -25,6 +25,7 @@ use rocketmq_common::{
     utils::time_utils,
     CRC32Utils::crc32,
 };
+use tokio::runtime::Handle;
 
 use crate::{
     base::{message_result::PutMessageResult, swappable::Swappable},
@@ -44,7 +45,7 @@ pub const CRC32_RESERVED_LEN: i32 = (MessageConst::PROPERTY_CRC32.len() + 1 + 10
 
 #[derive(Default)]
 pub struct CommitLog {
-    mapped_file_queue: MappedFileQueue,
+    mapped_file_queue: Arc<tokio::sync::RwLock<MappedFileQueue>>,
     message_store_config: Arc<MessageStoreConfig>,
     enabled_append_prop_crc: bool,
 }
@@ -61,7 +62,8 @@ impl CommitLog {
 
 impl CommitLog {
     pub fn load(&mut self) -> bool {
-        self.mapped_file_queue.load()
+        let arc = self.mapped_file_queue.clone();
+        Handle::current().block_on(async move { arc.write().await.load() })
     }
 
     pub async fn put_message(&self, msg: MessageExtBrokerInner) -> PutMessageResult {
