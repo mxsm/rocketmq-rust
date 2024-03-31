@@ -36,7 +36,7 @@ impl ConfigManager for ScheduleMessageService {
         todo!()
     }
 
-    fn config_file_path(&mut self) -> String {
+    fn config_file_path(&self) -> String {
         get_delay_offset_store_path(self.broker_config.store_path_root_dir.as_str())
     }
 
@@ -48,5 +48,5 @@ impl ConfigManager for ScheduleMessageService {
         todo!()
     }
 
-    fn decode(&mut self, _json_string: &str) {}
+    fn decode(&self, _json_string: &str) {}
 }

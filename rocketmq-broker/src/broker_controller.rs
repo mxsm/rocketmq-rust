@@ -300,7 +300,12 @@ impl BrokerController {
     ) {
         let mut topic_config_table = HashMap::new();
 
-        for topic_config in self.topic_config_manager_inner.topic_config_table.values() {
+        for topic_config in self
+            .topic_config_manager_inner
+            .topic_config_table
+            .lock()
+            .values()
+        {
             let new_topic_config = if !PermName::is_writeable(self.broker_config.broker_permission)
                 || !PermName::is_readable(self.broker_config.broker_permission)
             {
@@ -333,6 +338,7 @@ impl BrokerController {
         let topic_queue_mapping_info_map = self
             .topic_queue_mapping_manager
             .topic_queue_mapping_table
+            .lock()
             .iter()
             .map(|(key, value)| {
                 (

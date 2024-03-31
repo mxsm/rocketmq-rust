@@ -26,7 +26,7 @@ use crate::{broker_config::BrokerConfig, broker_path_config_helper::get_consumer
 #[derive(Default)]
 pub(crate) struct ConsumerOffsetManager {
     pub(crate) broker_config: Arc<BrokerConfig>,
-    consumer_offset_wrapper: ConsumerOffsetWrapper,
+    consumer_offset_wrapper: parking_lot::Mutex<ConsumerOffsetWrapper>,
 }
 
 //Fully implemented will be removed
@@ -40,7 +40,7 @@ impl ConfigManager for ConsumerOffsetManager {
         todo!()
     }
 
-    fn config_file_path(&mut self) -> String {
+    fn config_file_path(&self) -> String {
         get_consumer_offset_path(self.broker_config.store_path_root_dir.as_str())
     }
 
@@ -52,7 +52,7 @@ impl ConfigManager for ConsumerOffsetManager {
         todo!()
     }
 
-    fn decode(&mut self, json_string: &str) {
+    fn decode(&self, json_string: &str) {
         if json_string.is_empty() {
             return;
         }
@@ -60,9 +60,10 @@ impl ConfigManager for ConsumerOffsetManager {
             serde_json::from_str::<ConsumerOffsetWrapper>(json_string).unwrap_or_default();
         if !wrapper.offset_table.is_empty() {
             self.consumer_offset_wrapper
+                .lock()
                 .offset_table
                 .clone_from(&wrapper.offset_table);
-            self.consumer_offset_wrapper.data_version = wrapper.data_version.clone();
+            self.consumer_offset_wrapper.lock().data_version = wrapper.data_version.clone();
         }
     }
 }

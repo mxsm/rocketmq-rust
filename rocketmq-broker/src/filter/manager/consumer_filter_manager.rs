@@ -37,7 +37,7 @@ impl ConfigManager for ConsumerFilterManager {
         todo!()
     }
 
-    fn config_file_path(&mut self) -> String {
+    fn config_file_path(&self) -> String {
         get_consumer_filter_path(self.broker_config.store_path_root_dir.as_str())
     }
 
@@ -49,5 +49,5 @@ impl ConfigManager for ConsumerFilterManager {
         todo!()
     }
 
-    fn decode(&mut self, json_string: &str) {}
+    fn decode(&self, json_string: &str) {}
 }

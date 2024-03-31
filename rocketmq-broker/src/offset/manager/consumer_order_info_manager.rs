@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, ops::Deref, sync::Arc};
 
 use rocketmq_common::common::config_manager::ConfigManager;
 use serde::{Deserialize, Serialize};
@@ -28,7 +28,7 @@ use crate::{
 #[derive(Default)]
 pub(crate) struct ConsumerOrderInfoManager {
     pub(crate) broker_config: Arc<BrokerConfig>,
-    pub(crate) consumer_order_info_wrapper: ConsumerOrderInfoWrapper,
+    pub(crate) consumer_order_info_wrapper: parking_lot::Mutex<ConsumerOrderInfoWrapper>,
     pub(crate) consumer_order_info_lock_manager: Option<ConsumerOrderInfoLockManager>,
 }
 
@@ -43,7 +43,7 @@ impl ConfigManager for ConsumerOrderInfoManager {
         todo!()
     }
 
-    fn config_file_path(&mut self) -> String {
+    fn config_file_path(&self) -> String {
         get_consumer_order_info_path(self.broker_config.store_path_root_dir.as_str())
     }
 
@@ -55,7 +55,7 @@ impl ConfigManager for ConsumerOrderInfoManager {
         todo!()
     }
 
-    fn decode(&mut self, json_string: &str) {
+    fn decode(&self, json_string: &str) {
         if json_string.is_empty() {
             return;
         }
@@ -63,13 +63,14 @@ impl ConfigManager for ConsumerOrderInfoManager {
             serde_json::from_str::<ConsumerOrderInfoWrapper>(json_string).unwrap_or_default();
         if !wrapper.table.is_empty() {
             self.consumer_order_info_wrapper
+                .lock()
                 .table
                 .clone_from(&wrapper.table);
             if self.consumer_order_info_lock_manager.is_some() {
                 self.consumer_order_info_lock_manager
-                    .as_mut()
+                    .as_ref()
                     .unwrap()
-                    .recover(&self.consumer_order_info_wrapper);
+                    .recover(self.consumer_order_info_wrapper.lock().deref());
             }
         }
     }

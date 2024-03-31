@@ -37,7 +37,6 @@ use rocketmq_store::{
     message_store::local_file_store::LocalFileMessageStore,
     timer::timer_message_store::TimerMessageStore,
 };
-use tokio::sync::RwLock;
 use tracing::{info, warn};
 
 use crate::{
@@ -61,18 +60,18 @@ pub(crate) struct BrokerRuntime {
     broker_config: Arc<BrokerConfig>,
     message_store_config: Arc<MessageStoreConfig>,
     server_config: Arc<ServerConfig>,
-    topic_config_manager: Arc<RwLock<TopicConfigManager>>,
-    topic_queue_mapping_manager: Arc<RwLock<TopicQueueMappingManager>>,
-    consumer_offset_manager: Arc<RwLock<ConsumerOffsetManager>>,
-    subscription_group_manager: Arc<RwLock<SubscriptionGroupManager>>,
-    consumer_filter_manager: Arc<RwLock<ConsumerFilterManager>>,
-    consumer_order_info_manager: Arc<RwLock<ConsumerOrderInfoManager>>,
+    topic_config_manager: Arc<TopicConfigManager>,
+    topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
+    consumer_offset_manager: Arc<ConsumerOffsetManager>,
+    subscription_group_manager: Arc<SubscriptionGroupManager>,
+    consumer_filter_manager: Arc<ConsumerFilterManager>,
+    consumer_order_info_manager: Arc<ConsumerOrderInfoManager>,
     #[cfg(feature = "local_file_store")]
-    message_store: Option<Arc<RwLock<LocalFileMessageStore>>>,
+    message_store: Option<Arc<LocalFileMessageStore>>,
     schedule_message_service: ScheduleMessageService,
     timer_message_store: Option<TimerMessageStore>,
 
-    broker_out_api: Arc<RwLock<BrokerOuterAPI>>,
+    broker_out_api: Arc<BrokerOuterAPI>,
 
     broker_runtime: Option<RocketMQRuntime>,
 }
@@ -118,9 +117,7 @@ impl BrokerRuntime {
             message_store: None,
             schedule_message_service: Default::default(),
             timer_message_store: None,
-            broker_out_api: Arc::new(RwLock::new(BrokerOuterAPI::new(
-                TokioClientConfig::default(),
-            ))),
+            broker_out_api: Arc::new(BrokerOuterAPI::new(TokioClientConfig::default())),
             broker_runtime: Some(runtime),
         }
     }
@@ -160,18 +157,18 @@ impl BrokerRuntime {
     async fn initialize_metadata(&self) -> bool {
         info!("======Starting initialize metadata========");
 
-        self.topic_config_manager.write().await.load()
-            & self.topic_queue_mapping_manager.write().await.load()
-            & self.consumer_offset_manager.write().await.load()
-            & self.subscription_group_manager.write().await.load()
-            & self.consumer_filter_manager.write().await.load()
-            & self.consumer_order_info_manager.write().await.load()
+        self.topic_config_manager.load()
+            & self.topic_queue_mapping_manager.load()
+            & self.consumer_offset_manager.load()
+            & self.subscription_group_manager.load()
+            & self.consumer_filter_manager.load()
+            & self.consumer_order_info_manager.load()
     }
 
     fn initialize_message_store(&mut self) -> bool {
         if self.message_store_config.store_type == StoreType::LocalFile {
             info!("Use local file as message store");
-            self.message_store = Some(Arc::new(RwLock::new(LocalFileMessageStore::default())));
+            self.message_store = Some(Arc::new(LocalFileMessageStore::default()));
         } else if self.message_store_config.store_type == StoreType::RocksDB {
             info!("Use RocksDB as message store");
         } else {
@@ -286,13 +283,7 @@ impl BrokerRuntime {
     ) {
         let mut topic_config_table = HashMap::new();
 
-        for topic_config in self
-            .topic_config_manager
-            .write()
-            .await
-            .topic_config_table
-            .values()
-        {
+        for topic_config in self.topic_config_manager.topic_config_table.lock().values() {
             let new_topic_config = if !PermName::is_writeable(self.broker_config.broker_permission)
                 || !PermName::is_readable(self.broker_config.broker_permission)
             {
@@ -315,8 +306,6 @@ impl BrokerRuntime {
         {
             let topic_config_wrapper = self
                 .topic_config_manager
-                .write()
-                .await
                 .build_serialize_wrapper(topic_config_table.clone());
             self.do_register_broker_all(
                 /*Self::do_register_broker_all(
@@ -333,9 +322,8 @@ impl BrokerRuntime {
         // Collect topicQueueMappingInfoMap
         let topic_queue_mapping_info_map = self
             .topic_queue_mapping_manager
-            .write()
-            .await
             .topic_queue_mapping_table
+            .lock()
             .iter()
             .map(|(key, value)| {
                 (
@@ -347,8 +335,6 @@ impl BrokerRuntime {
 
         let topic_config_wrapper = self
             .topic_config_manager
-            .write()
-            .await
             .build_serialize_wrapper_with_topic_queue_map(
                 topic_config_table,
                 topic_queue_mapping_info_map,
@@ -413,8 +399,6 @@ impl BrokerRuntime {
         let broker_addr = self.broker_config.broker_ip1.clone();
         let broker_id = self.broker_config.broker_identity.broker_id;
         self.broker_out_api
-            .write()
-            .await
             .register_broker_all(
                 cluster_name,
                 broker_addr.clone(),

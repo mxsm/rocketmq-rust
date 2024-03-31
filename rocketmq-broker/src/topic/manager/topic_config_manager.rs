@@ -35,8 +35,8 @@ use crate::{broker_config::BrokerConfig, broker_path_config_helper::get_topic_co
 #[derive(Default)]
 pub(crate) struct TopicConfigManager {
     pub consumer_order_info_manager: String,
-    pub topic_config_table: HashMap<String, TopicConfig>,
-    pub data_version: DataVersion,
+    pub topic_config_table: parking_lot::Mutex<HashMap<String, TopicConfig>>,
+    pub data_version: parking_lot::Mutex<DataVersion>,
     pub broker_config: Arc<BrokerConfig>,
 }
 
@@ -44,8 +44,8 @@ impl TopicConfigManager {
     pub fn new(broker_config: Arc<BrokerConfig>) -> Self {
         let mut manager = Self {
             consumer_order_info_manager: "".to_string(),
-            topic_config_table: HashMap::new(),
-            data_version: DataVersion::new(),
+            topic_config_table: parking_lot::Mutex::new(HashMap::new()),
+            data_version: parking_lot::Mutex::new(DataVersion::default()),
             broker_config,
         };
         manager.init();
@@ -55,7 +55,7 @@ impl TopicConfigManager {
     fn init(&mut self) {
         //SELF_TEST_TOPIC
         {
-            self.topic_config_table.insert(
+            self.topic_config_table.lock().insert(
                 TopicValidator::RMQ_SYS_SELF_TEST_TOPIC.to_string(),
                 TopicConfig::new_with(TopicValidator::RMQ_SYS_SELF_TEST_TOPIC, 1, 1),
             );
@@ -68,7 +68,7 @@ impl TopicConfigManager {
                     .broker_config
                     .topic_queue_config
                     .default_topic_queue_nums;
-                self.topic_config_table.insert(
+                self.topic_config_table.lock().insert(
                     TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC.to_string(),
                     TopicConfig::new_with_perm(
                         TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC,
@@ -81,7 +81,7 @@ impl TopicConfigManager {
             }
         }
         {
-            self.topic_config_table.insert(
+            self.topic_config_table.lock().insert(
                 TopicValidator::RMQ_SYS_BENCHMARK_TOPIC.to_string(),
                 TopicConfig::new_with(TopicValidator::RMQ_SYS_BENCHMARK_TOPIC, 1024, 1024),
             );
@@ -98,7 +98,7 @@ impl TopicConfigManager {
                 perm |= PermName::PERM_READ | PermName::PERM_WRITE;
             }
             config.perm = perm as u32;
-            self.topic_config_table.insert(topic, config);
+            self.topic_config_table.lock().insert(topic, config);
         }
 
         {
@@ -109,18 +109,18 @@ impl TopicConfigManager {
                 perm |= PermName::PERM_READ | PermName::PERM_WRITE;
             }
             config.perm = perm as u32;
-            self.topic_config_table.insert(topic, config);
+            self.topic_config_table.lock().insert(topic, config);
         }
 
         {
-            self.topic_config_table.insert(
+            self.topic_config_table.lock().insert(
                 TopicValidator::RMQ_SYS_OFFSET_MOVED_EVENT.to_string(),
                 TopicConfig::new_with(TopicValidator::RMQ_SYS_OFFSET_MOVED_EVENT, 1, 1),
             );
         }
 
         {
-            self.topic_config_table.insert(
+            self.topic_config_table.lock().insert(
                 TopicValidator::RMQ_SYS_SCHEDULE_TOPIC.to_string(),
                 TopicConfig::new_with(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC, 18, 18),
             );
@@ -130,6 +130,7 @@ impl TopicConfigManager {
             if self.broker_config.trace_topic_enable {
                 let topic = self.broker_config.msg_trace_topic_name.clone();
                 self.topic_config_table
+                    .lock()
                     .insert(topic.clone(), TopicConfig::new_with(topic, 1, 1));
             }
         }
@@ -141,6 +142,7 @@ impl TopicConfigManager {
                 mix_all::REPLY_TOPIC_POSTFIX
             );
             self.topic_config_table
+                .lock()
                 .insert(topic.clone(), TopicConfig::new_with(topic, 1, 1));
         }
 
@@ -151,6 +153,7 @@ impl TopicConfigManager {
                 self.broker_config.broker_identity.broker_cluster_name
             );
             self.topic_config_table
+                .lock()
                 .insert(topic.clone(), TopicConfig::new_with(topic, 1, 1));
         }
 
@@ -160,21 +163,21 @@ impl TopicConfigManager {
                 TopicValidator::SYNC_BROKER_MEMBER_GROUP_PREFIX,
                 self.broker_config.broker_identity.broker_name,
             );
-            self.topic_config_table.insert(
+            self.topic_config_table.lock().insert(
                 topic.clone(),
                 TopicConfig::new_with_perm(topic, 1, 1, PermName::PERM_INHERIT as u32),
             );
         }
 
         {
-            self.topic_config_table.insert(
+            self.topic_config_table.lock().insert(
                 TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC.to_string(),
                 TopicConfig::new_with(TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC, 1, 1),
             );
         }
 
         {
-            self.topic_config_table.insert(
+            self.topic_config_table.lock().insert(
                 TopicValidator::RMQ_SYS_TRANS_OP_HALF_TOPIC.to_string(),
                 TopicConfig::new_with(TopicValidator::RMQ_SYS_TRANS_OP_HALF_TOPIC, 1, 1),
             );
@@ -182,23 +185,23 @@ impl TopicConfigManager {
     }
 
     pub fn select_topic_config(&self, topic: &str) -> Option<TopicConfig> {
-        self.topic_config_table.get(topic).cloned()
+        self.topic_config_table.lock().get(topic).cloned()
     }
 
     pub fn build_serialize_wrapper(
-        &mut self,
+        &self,
         topic_config_table: HashMap<String, TopicConfig>,
     ) -> TopicConfigAndMappingSerializeWrapper {
         self.build_serialize_wrapper_with_topic_queue_map(topic_config_table, HashMap::new())
     }
 
     pub fn build_serialize_wrapper_with_topic_queue_map(
-        &mut self,
+        &self,
         topic_config_table: HashMap<String, TopicConfig>,
         topic_queue_mapping_info_map: HashMap<String, TopicQueueMappingInfo>,
     ) -> TopicConfigAndMappingSerializeWrapper {
         if self.broker_config.enable_split_registration {
-            self.data_version.next_version();
+            self.data_version.lock().next_version();
         }
         TopicConfigAndMappingSerializeWrapper {
             topic_config_table: Some(topic_config_table),
@@ -219,7 +222,7 @@ impl ConfigManager for TopicConfigManager {
         todo!()
     }
 
-    fn config_file_path(&mut self) -> String {
+    fn config_file_path(&self) -> String {
         get_topic_config_path(self.broker_config.store_path_root_dir.as_str())
     }
 
@@ -231,7 +234,7 @@ impl ConfigManager for TopicConfigManager {
         todo!()
     }
 
-    fn decode(&mut self, json_string: &str) {
+    fn decode(&self, json_string: &str) {
         info!("decode topic config from json string:{}", json_string);
         if json_string.is_empty() {
             return;
@@ -239,11 +242,13 @@ impl ConfigManager for TopicConfigManager {
         let wrapper =
             serde_json::from_str::<TopicConfigSerializeWrapper>(json_string).unwrap_or_default();
         if let Some(value) = wrapper.data_version() {
-            self.data_version.assign_new_one(value);
+            self.data_version.lock().assign_new_one(value);
         }
         if let Some(map) = wrapper.topic_config_table() {
             for (key, value) in map {
-                self.topic_config_table.insert(key.clone(), value.clone());
+                self.topic_config_table
+                    .lock()
+                    .insert(key.clone(), value.clone());
             }
         }
     }

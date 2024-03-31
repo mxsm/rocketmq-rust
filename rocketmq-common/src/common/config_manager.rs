@@ -23,7 +23,7 @@ use crate::FileUtils;
 
 // Define the trait ConfigManager
 pub trait ConfigManager {
-    fn load(&mut self) -> bool {
+    fn load(&self) -> bool {
         let file_name = self.config_file_path();
         info!("Config file Path: {}", file_name);
         let result = FileUtils::file_to_string(file_name.as_str());
@@ -41,7 +41,7 @@ pub trait ConfigManager {
         }
     }
 
-    fn load_bak(&mut self) -> bool {
+    fn load_bak(&self) -> bool {
         let file_name = self.config_file_path();
         return if let Ok(ref content) =
             FileUtils::file_to_string(format!("{}{}", file_name, ".bak").as_str())
@@ -72,8 +72,8 @@ pub trait ConfigManager {
     }
     fn decode0(&mut self, key: &[u8], body: &[u8]);
     fn stop(&mut self) -> bool;
-    fn config_file_path(&mut self) -> String;
+    fn config_file_path(&self) -> String;
     fn encode(&mut self) -> String;
     fn encode_pretty(&mut self, pretty_format: bool) -> String;
-    fn decode(&mut self, json_string: &str);
+    fn decode(&self, json_string: &str);
 }

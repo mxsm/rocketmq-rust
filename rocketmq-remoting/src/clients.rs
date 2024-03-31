@@ -88,7 +88,7 @@ pub trait RemotingClient: RemotingService {
     fn get_available_name_srv_list(&self) -> Vec<String>;
 
     async fn invoke_sync(
-        &mut self,
+        &self,
         addr: String,
         request: RemotingCommand,
         timeout_millis: u64,

@@ -77,7 +77,7 @@ impl BrokerOuterAPI {
     }
 
     pub async fn register_broker_all(
-        &mut self,
+        &self,
         cluster_name: String,
         broker_addr: String,
         broker_name: String,
@@ -135,7 +135,7 @@ impl BrokerOuterAPI {
     }
 
     async fn register_broker(
-        &mut self,
+        &self,
         namesrv_addr: String,
         oneway: bool,
         timeout_mills: u64,
