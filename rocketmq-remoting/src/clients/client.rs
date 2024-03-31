@@ -60,9 +60,9 @@ impl Client {
     ///
     /// The `RemotingCommand` representing the response, wrapped in a `Result`. Returns an error if
     /// the invocation fails.
-    pub async fn invoke(&mut self, request: RemotingCommand) -> anyhow::Result<RemotingCommand> {
-        self.send_request(request).await?;
-        let response = self.read_response().await?;
+    pub async fn send_read(&mut self, request: RemotingCommand) -> anyhow::Result<RemotingCommand> {
+        self.send(request).await?;
+        let response = self.read().await?;
         Ok(response)
     }
 
@@ -90,10 +90,7 @@ impl Client {
     /// # Returns
     ///
     /// A `Result` indicating success or failure in sending the request.
-    pub async fn send_request(
-        &mut self,
-        request: RemotingCommand,
-    ) -> anyhow::Result<(), RemotingError> {
+    pub async fn send(&mut self, request: RemotingCommand) -> anyhow::Result<(), RemotingError> {
         self.connection.framed.send(request).await?;
         Ok(())
     }
@@ -104,7 +101,7 @@ impl Client {
     ///
     /// The `RemotingCommand` representing the response, wrapped in a `Result`. Returns an error if
     /// reading the response fails.
-    async fn read_response(&mut self) -> anyhow::Result<RemotingCommand, RemotingError> {
+    async fn read(&mut self) -> anyhow::Result<RemotingCommand, RemotingError> {
         let response = self.connection.framed.next().await;
         response.unwrap()
     }
