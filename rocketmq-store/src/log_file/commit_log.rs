@@ -44,9 +44,19 @@ pub const CRC32_RESERVED_LEN: i32 = (MessageConst::PROPERTY_CRC32.len() + 1 + 10
 
 #[derive(Default)]
 pub struct CommitLog {
-    pub(crate) mapped_file_queue: MappedFileQueue,
-    pub(crate) message_store_config: Arc<MessageStoreConfig>,
-    pub(crate) enabled_append_prop_crc: bool,
+    mapped_file_queue: MappedFileQueue,
+    message_store_config: Arc<MessageStoreConfig>,
+    enabled_append_prop_crc: bool,
+}
+
+impl CommitLog {
+    pub fn new(message_store_config: Arc<MessageStoreConfig>) -> Self {
+        Self {
+            mapped_file_queue: Default::default(),
+            message_store_config,
+            enabled_append_prop_crc: false,
+        }
+    }
 }
 
 impl CommitLog {
@@ -54,7 +64,7 @@ impl CommitLog {
         self.mapped_file_queue.load()
     }
 
-    async fn async_put_message(&self, msg: MessageExtBrokerInner) -> PutMessageResult {
+    pub async fn put_message(&self, msg: MessageExtBrokerInner) -> PutMessageResult {
         let mut msg = msg;
         if !self.message_store_config.duplication_enable {
             msg.message_ext_inner.store_timestamp = time_utils::get_current_millis() as i64;

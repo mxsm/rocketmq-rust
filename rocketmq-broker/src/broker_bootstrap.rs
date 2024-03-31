@@ -59,7 +59,7 @@ impl Builder {
     pub fn new() -> Self {
         Builder {
             broker_config: Default::default(),
-            message_store_config: MessageStoreConfig::new(),
+            message_store_config: MessageStoreConfig::default(),
             server_config: Default::default(),
         }
     }

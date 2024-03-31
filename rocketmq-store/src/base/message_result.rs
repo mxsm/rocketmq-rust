@@ -72,6 +72,14 @@ impl PutMessageResult {
             remote_put,
         }
     }
+
+    pub fn new_default(put_message_status: PutMessageStatus) -> Self {
+        Self {
+            put_message_status,
+            append_message_result: None,
+            remote_put: false,
+        }
+    }
 }
 
 /// Represents the result of getting a message.

@@ -51,26 +51,25 @@ use crate::{
 
 pub struct SendMessageProcessor<MS> {
     inner: SendMessageProcessorInner,
-    topic_queue_mapping_manager: Arc<parking_lot::RwLock<TopicQueueMappingManager>>,
-    topic_config_manager: Arc<parking_lot::RwLock<TopicConfigManager>>,
-    broker_config: Arc<parking_lot::RwLock<BrokerConfig>>,
-    message_store: Arc<parking_lot::RwLock<MS>>,
+    topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
+    topic_config_manager: Arc<TopicConfigManager>,
+    broker_config: Arc<BrokerConfig>,
+    message_store: Arc<MS>,
 }
 
 impl<MS: Default> Default for SendMessageProcessor<MS> {
     fn default() -> Self {
         Self {
             inner: SendMessageProcessorInner::default(),
-            topic_queue_mapping_manager: Arc::new(parking_lot::RwLock::new(
-                TopicQueueMappingManager::default(),
-            )),
-            topic_config_manager: Arc::new(parking_lot::RwLock::new(TopicConfigManager::default())),
-            broker_config: Arc::new(parking_lot::RwLock::new(BrokerConfig::default())),
-            message_store: Arc::new(parking_lot::RwLock::new(Default::default())),
+            topic_queue_mapping_manager: Arc::new(TopicQueueMappingManager::default()),
+            topic_config_manager: Arc::new(TopicConfigManager::default()),
+            broker_config: Arc::new(BrokerConfig::default()),
+            message_store: Arc::new(Default::default()),
         }
     }
 }
 
+// RequestProcessor implementation
 impl<MS: MessageStore + Send> RequestProcessor for SendMessageProcessor<MS> {
     fn process_request(
         &self,
@@ -84,11 +83,9 @@ impl<MS: MessageStore + Send> RequestProcessor for SendMessageProcessor<MS> {
                 let mut request_header = parse_request_header(&request).unwrap();
                 let mapping_context = self
                     .topic_queue_mapping_manager
-                    .write()
                     .build_topic_queue_mapping_context(&request_header, true);
                 let rewrite_result = self
                     .topic_queue_mapping_manager
-                    .read()
                     .rewrite_request_for_static_topic(&request_header, &mapping_context);
                 if let Some(rewrite_result) = rewrite_result {
                     return rewrite_result;
@@ -125,14 +122,18 @@ impl<MS: MessageStore + Send> RequestProcessor for SendMessageProcessor<MS> {
 #[allow(unused_variables)]
 impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
     pub fn new(
-        topic_queue_mapping_manager: Arc<parking_lot::RwLock<TopicQueueMappingManager>>,
-        message_store: Arc<parking_lot::RwLock<MS>>,
+        topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
+        topic_config_manager: Arc<TopicConfigManager>,
+        broker_config: Arc<BrokerConfig>,
+        message_store: Arc<MS>,
     ) -> Self {
         Self {
-            inner: SendMessageProcessorInner::default(),
+            inner: SendMessageProcessorInner {
+                broker_config: broker_config.clone(),
+            },
             topic_queue_mapping_manager,
-            topic_config_manager: Arc::new(Default::default()),
-            broker_config: Arc::new(Default::default()),
+            topic_config_manager,
+            broker_config,
             message_store,
         }
     }
@@ -171,7 +172,6 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
         let response_header = SendMessageResponseHeader::default();
         let topic_config = self
             .topic_config_manager
-            .read()
             .select_topic_config(request_header.topic().as_str())
             .unwrap();
         let mut _queue_id = request_header.queue_id;
@@ -179,12 +179,11 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
             _queue_id = self.inner.random_queue_id(topic_config.write_queue_nums) as i32;
         }
 
-        if self.broker_config.read().async_send_enable {
+        if self.broker_config.async_send_enable {
             None
         } else {
             let result = self
                 .message_store
-                .read()
                 .put_message(MessageExtBrokerInner::default());
             Some(response)
         }
@@ -216,11 +215,11 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
         response.with_opaque(request.opaque());
         response.add_ext_field(
             MessageConst::PROPERTY_MSG_REGION,
-            self.broker_config.read().region_id(),
+            self.broker_config.region_id(),
         );
         response.add_ext_field(
             MessageConst::PROPERTY_TRACE_SWITCH,
-            self.broker_config.read().trace_on.to_string(),
+            self.broker_config.trace_on.to_string(),
         );
 
         //todo java code to implement

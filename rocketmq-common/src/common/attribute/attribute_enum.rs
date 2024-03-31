@@ -14,3 +14,30 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::collections::HashSet;
+
+use crate::common::attribute::Attribute;
+
+pub struct EnumAttribute {
+    pub(crate) attribute: Attribute,
+    pub(crate) universe: HashSet<String>,
+    pub(crate) default_value: String,
+}
+
+impl EnumAttribute {
+    pub fn get_name(&self) -> &str {
+        self.attribute.name.as_str()
+    }
+
+    pub fn get_default_value(&self) -> &str {
+        &self.default_value
+    }
+
+    pub fn get_universe(&self) -> &HashSet<String> {
+        &self.universe
+    }
+
+    pub fn verify(&self, value: &str) -> bool {
+        !self.universe.contains(value)
+    }
+}
