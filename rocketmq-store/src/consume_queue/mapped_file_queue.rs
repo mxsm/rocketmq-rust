@@ -32,7 +32,7 @@ pub struct MappedFileQueue {
 
     pub(crate) mapped_file_size: u64,
 
-    pub(crate) mapped_files: Vec<Box<dyn MappedFile + Send>>,
+    pub(crate) mapped_files: Vec<Box<dyn MappedFile + Send + Sync + 'static>>,
 
     pub(crate) allocate_mapped_file_service: AllocateMappedFileService,
 
@@ -130,7 +130,7 @@ impl MappedFileQueue {
         true
     }
 
-    pub fn get_last_mapped_file(&self) -> Option<&(dyn MappedFile + Send)> {
+    pub fn get_last_mapped_file(&self) -> Option<&(dyn MappedFile + Send + Sync + 'static)> {
         if self.mapped_files.is_empty() {
             return None;
         }

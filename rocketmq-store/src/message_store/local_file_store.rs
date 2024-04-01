@@ -39,7 +39,7 @@ pub struct LocalFileMessageStore {
     put_message_hook_list: Vec<BoxedPutMessageHook>,
     topic_config_table: HashMap<String, TopicConfig>,
     message_store_runtime: Option<RocketMQRuntime>,
-    commitLog: CommitLog,
+    commit_log: Arc<CommitLog>,
 }
 
 impl LocalFileMessageStore {
@@ -49,7 +49,7 @@ impl LocalFileMessageStore {
             put_message_hook_list: vec![],
             topic_config_table: HashMap::new(),
             message_store_runtime: Some(RocketMQRuntime::new_multi(10, "message-store-thread")),
-            commitLog: CommitLog::new(message_store_config),
+            commit_log: Arc::new(CommitLog::new(message_store_config)),
         }
     }
 }
@@ -104,6 +104,6 @@ impl MessageStore for LocalFileMessageStore {
             let _topic_config = self.get_topic_config(msg.topic());
             //todo
         }
-        self.commitLog.put_message(msg).await
+        self.commit_log.put_message(msg).await
     }
 }

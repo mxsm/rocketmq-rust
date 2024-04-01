@@ -144,7 +144,7 @@ impl Drop for BrokerRuntime {
 
 impl BrokerRuntime {
     pub(crate) async fn initialize(&mut self) -> bool {
-        let mut result = self.initialize_metadata().await;
+        let mut result = self.initialize_metadata();
         if !result {
             warn!("Initialize metadata failed");
             return false;
@@ -157,7 +157,7 @@ impl BrokerRuntime {
         self.recover_initialize_service()
     }
 
-    async fn initialize_metadata(&self) -> bool {
+    fn initialize_metadata(&self) -> bool {
         info!("======Starting initialize metadata========");
 
         self.topic_config_manager.load()
@@ -219,9 +219,7 @@ impl BrokerRuntime {
         let default_processor = BoxedRequestProcessor::new(Box::<AdminBrokerProcessor>::default());
         let mut request_processor_table = RequestProcessorTable::new();
 
-        let send_message_process = BoxedRequestProcessor::new(Box::new(SendMessageProcessor::<
-            LocalFileMessageStore,
-        >::new(
+        let send_message_process = BoxedRequestProcessor::new(Box::new(SendMessageProcessor::new(
             self.topic_queue_mapping_manager.clone(),
             self.topic_config_manager.clone(),
             self.broker_config.clone(),
