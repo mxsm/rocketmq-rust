@@ -16,7 +16,7 @@
  */
 use std::{io::Write, mem, sync::Arc};
 
-use bytes::{Buf, BufMut};
+use bytes::{Buf, BufMut, BytesMut};
 use rocketmq_common::{
     common::{
         message::{
@@ -54,7 +54,7 @@ pub trait AppendMessageCallback {
     fn do_append(
         &mut self,
         file_from_offset: i64,
-        byte_buffer: &mut ByteBuffer,
+        byte_buffer: &mut BytesMut,
         max_blank: i32,
         msg: &mut MessageExtBrokerInner,
         put_message_context: &PutMessageContext,
@@ -76,7 +76,7 @@ pub trait AppendMessageCallback {
     fn do_append_batch(
         &self,
         file_from_offset: i64,
-        byte_buffer: &mut [u8],
+        byte_buffer: &mut BytesMut,
         max_blank: i32,
         message_ext_batch: &MessageExtBatch,
         put_message_context: &PutMessageContext,
@@ -107,6 +107,16 @@ impl DefaultAppendMessageCallback {
 #[allow(unused_variables)]
 impl AppendMessageCallback for DefaultAppendMessageCallback {
     fn do_append(
+        &mut self,
+        file_from_offset: i64,
+        byte_buffer: &mut BytesMut,
+        max_blank: i32,
+        msg: &mut MessageExtBrokerInner,
+        put_message_context: &PutMessageContext,
+    ) -> AppendMessageResult {
+        todo!()
+    }
+    /* fn do_append(
         &mut self,
         file_from_offset: i64,
         byte_buffer: &mut ByteBuffer,
@@ -225,7 +235,7 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
             Some(message_num),
         )*/
         AppendMessageResult::default()
-    }
+    }*/
 
     fn do_append_batch(
         &self,

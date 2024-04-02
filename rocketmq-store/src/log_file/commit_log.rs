@@ -31,6 +31,7 @@ use crate::{
     base::{message_result::PutMessageResult, swappable::Swappable},
     config::message_store_config::MessageStoreConfig,
     consume_queue::mapped_file_queue::MappedFileQueue,
+    message_encoder::message_ext_encoder::MessageExtEncoder,
 };
 
 // Message's MAGIC CODE daa320a7
@@ -102,6 +103,23 @@ impl CommitLog {
         let store_host = msg.store_host();
         if store_host.is_ipv6() {
             msg.with_store_host_v6_flag();
+        }
+
+        let mut encoder = MessageExtEncoder::new(self.message_store_config.clone());
+        let put_message_result = encoder.encode(&msg);
+        if put_message_result.is_some() {
+            return put_message_result.unwrap();
+        }
+        msg.encoded_buff = encoder.byte_buf();
+
+        match self
+            .mapped_file_queue
+            .write()
+            .await
+            .get_last_mapped_file_mut()
+        {
+            None => false,
+            Some(mapped_file) => mapped_file.append_data(msg.encoded_buff.clone(), true),
         }
 
         PutMessageResult::default()
