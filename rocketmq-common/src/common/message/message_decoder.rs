@@ -19,7 +19,7 @@ use std::collections::HashMap;
 pub const NAME_VALUE_SEPARATOR: char = '\u{0001}';
 pub const PROPERTY_SEPARATOR: char = '\u{0002}';
 
-pub fn string_to_message_properties(properties: Option<&str>) -> HashMap<String, String> {
+pub fn string_to_message_properties(properties: Option<&String>) -> HashMap<String, String> {
     let mut map = HashMap::new();
     if let Some(properties) = properties {
         let mut index = 0;

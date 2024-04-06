@@ -22,6 +22,7 @@ use std::{
 
 use lazy_static::lazy_static;
 
+pub mod message_accessor;
 pub mod message_batch;
 pub mod message_decoder;
 pub mod message_enum;

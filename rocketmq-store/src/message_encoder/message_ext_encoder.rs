@@ -38,7 +38,7 @@ use crate::{
 };
 
 pub struct MessageExtEncoder {
-    byte_buf: Option<bytes::BytesMut>,
+    byte_buf: bytes::BytesMut,
     max_message_body_size: i32,
     max_message_size: i32,
     crc32_reserved_length: i32,
@@ -59,7 +59,7 @@ impl MessageExtEncoder {
             0
         };
         MessageExtEncoder {
-            byte_buf: Some(bytes::BytesMut::with_capacity(max_message_size as usize)),
+            byte_buf: bytes::BytesMut::with_capacity(max_message_size as usize),
             max_message_body_size,
             max_message_size,
             crc32_reserved_length,
@@ -371,9 +371,7 @@ impl MessageExtEncoder {
             self.byte_buf
                 .put_u8(MessageDecoder::PROPERTY_SEPARATOR as u32 as u8);
         }
-
         // 18 CRC32
-
         None
     }
 
@@ -524,10 +522,8 @@ impl MessageExtEncoder {
         };
         self.byte_buf.resize(self.max_message_size as usize, 0);
     }
-    pub fn byte_buf(&mut self) -> bytes::Bytes {
-        let bytes = self.byte_buf.copy_to_bytes(self.byte_buf.len());
-        self.byte_buf.clear();
-        bytes
+    pub fn byte_buf(&mut self) -> bytes::BytesMut {
+        self.byte_buf.split()
     }
 }
 

@@ -67,7 +67,7 @@ impl MessageTrait for MessageBatch {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct MessageExtBatch {
     pub message_ext_broker_inner: MessageExtBrokerInner,
     pub is_inner_batch: bool,

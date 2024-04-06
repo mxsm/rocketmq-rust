@@ -30,7 +30,8 @@ use rocketmq_common::{
 
 use crate::{
     base::{
-        message_result::AppendMessageResult, put_message_context::PutMessageContext, ByteBuffer,
+        message_result::AppendMessageResult, message_status_enum::AppendMessageStatus,
+        put_message_context::PutMessageContext, ByteBuffer,
     },
     config::message_store_config::MessageStoreConfig,
     log_file::commit_log::{CommitLog, BLANK_MAGIC_CODE, CRC32_RESERVED_LEN},
@@ -54,10 +55,9 @@ pub trait AppendMessageCallback {
     fn do_append(
         &mut self,
         file_from_offset: i64,
-        byte_buffer: &mut BytesMut,
         max_blank: i32,
         msg: &mut MessageExtBrokerInner,
-        put_message_context: &PutMessageContext,
+        //put_message_context: &PutMessageContext,
     ) -> AppendMessageResult;
 
     /// After batched message serialization, write MappedByteBuffer
@@ -109,13 +109,108 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
     fn do_append(
         &mut self,
         file_from_offset: i64,
+        max_blank: i32,
+        msg_inner: &mut MessageExtBrokerInner,
+    ) -> AppendMessageResult {
+        let mut pre_encode_buffer = msg_inner.encoded_buff.clone(); // Assuming get_encoded_buff returns Option<ByteBuffer>
+        let is_multi_dispatch_msg = self.message_store_config.enable_multi_dispatch
+            && CommitLog::is_multi_dispatch_msg(msg_inner);
+        if is_multi_dispatch_msg {
+            /*if let Some(result) = self.handle_properties_for_lmq_msg(&msg_inner) {
+                return result;
+            }*/
+        }
+
+        let msg_len = i32::from_le_bytes(pre_encode_buffer[0..4].try_into().unwrap());
+        let wrote_offset = file_from_offset + 1;
+
+        let msg_id_supplier = || {
+            let sysflag = msg_inner.sys_flag();
+            let msg_id_len = if sysflag & MessageSysFlag::STOREHOSTADDRESS_V6_FLAG == 0 {
+                4 + 4 + 8
+            } else {
+                16 + 4 + 8
+            };
+        };
+
+        let mut queue_offset = msg_inner.queue_offset();
+        let message_num = CommitLog::get_message_num(msg_inner);
+
+        match MessageSysFlag::get_transaction_value(msg_inner.sys_flag()) {
+            MessageSysFlag::TRANSACTION_PREPARED_TYPE
+            | MessageSysFlag::TRANSACTION_ROLLBACK_TYPE => queue_offset = 0,
+            MessageSysFlag::TRANSACTION_NOT_TYPE | MessageSysFlag::TRANSACTION_COMMIT_TYPE | _ => {}
+        }
+
+        if (msg_len + END_FILE_MIN_BLANK_LENGTH) > max_blank {
+            /* self.msg_store_item_memory.0.clear();
+            self.msg_store_item_memory.0.extend_from_slice(&(max_blank as i32).to_le_bytes());
+            self.msg_store_item_memory.0.extend_from_slice(&(BLANK_MAGIC_CODE as i32).to_le_bytes());
+            let mut byte_buffer = Vec::new();
+            byte_buffer.extend_from_slice(&self.msg_store_item_memory.0[..8]);*/
+            return AppendMessageResult {
+                status: AppendMessageStatus::EndOfFile,
+                ..Default::default()
+            };
+        }
+
+        let mut pos = 4 + 4 + 4 + 4 + 4;
+        pre_encode_buffer[pos..(pos + 8)].copy_from_slice(&queue_offset.to_le_bytes());
+        pos += 8;
+        pre_encode_buffer[pos..(pos + 8)].copy_from_slice(&wrote_offset.to_le_bytes());
+        let ip_len = if msg_inner.sys_flag() & MessageSysFlag::BORNHOST_V6_FLAG == 0 {
+            4 + 4
+        } else {
+            16 + 4
+        };
+        pos += 8 + 4 + 8 + ip_len;
+        pre_encode_buffer[pos..(pos + 8)]
+            .copy_from_slice(&msg_inner.store_timestamp().to_le_bytes());
+        /*  if self.enabled_append_prop_crc {
+            let check_size = msg_len - self.crc32_reserved_length as i32;
+            let mut tmp_buffer = pre_encode_buffer.clone();
+            tmp_buffer.0.truncate(tmp_buffer.0.len() + check_size as usize);
+            let crc32 = util_all::crc32(&tmp_buffer.0);
+            tmp_buffer.0.extend_from_slice(&crc32.to_le_bytes());
+        }*/
+
+        /* let begin_time_mills = self.default_message_store.now();
+        self.message_store.get_perf_counter().start_tick("WRITE_MEMORY_TIME_MS");*/
+        msg_inner.encoded_buff = pre_encode_buffer;
+        /* self.message_store.get_perf_counter().end_tick("WRITE_MEMORY_TIME_MS");
+        msg_inner.set_encoded_buff(None);*/
+
+        /*if is_multi_dispatch_msg {
+            self.multi_dispatch.update_multi_queue_offset(msg_inner);
+        }*/
+
+        AppendMessageResult {
+            status: AppendMessageStatus::PutOk,
+            ..Default::default()
+        }
+    }
+
+    fn do_append_batch(
+        &self,
+        file_from_offset: i64,
         byte_buffer: &mut BytesMut,
         max_blank: i32,
-        msg: &mut MessageExtBrokerInner,
+        message_ext_batch: &MessageExtBatch,
         put_message_context: &PutMessageContext,
     ) -> AppendMessageResult {
         todo!()
     }
+
+    /* fn do_append_batch(
+        &self,
+        file_from_offset: i64,
+        byte_buffer: &mut BytesMut,
+        max_blank: i32,
+        message_ext_batch: &MessageExtBatch,
+        put_message_context: &PutMessageContext,
+    ) -> AppendMessageResult {
+        todo!()
+    }*/
     /* fn do_append(
         &mut self,
         file_from_offset: i64,
@@ -236,15 +331,4 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         )*/
         AppendMessageResult::default()
     }*/
-
-    fn do_append_batch(
-        &self,
-        file_from_offset: i64,
-        byte_buffer: &mut [u8],
-        max_blank: i32,
-        message_ext_batch: &MessageExtBatch,
-        put_message_context: &PutMessageContext,
-    ) -> AppendMessageResult {
-        unimplemented!()
-    }
 }

@@ -22,7 +22,7 @@ use std::{
     sync::atomic::{AtomicI32, Ordering},
 };
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use memmap2::MmapMut;
 
 use crate::base::message_result::AppendMessageResult;
@@ -91,7 +91,7 @@ impl LocalMappedFile {
 }
 
 impl LocalMappedFile {
-    pub fn append_data(&mut self, data: Bytes, sync: bool) -> bool {
+    pub fn append_data(&mut self, data: BytesMut, sync: bool) -> bool {
         let current_pos = self.wrote_position.load(Ordering::SeqCst) as usize;
         if current_pos + data.len() > self.file_size as usize {
             return false;

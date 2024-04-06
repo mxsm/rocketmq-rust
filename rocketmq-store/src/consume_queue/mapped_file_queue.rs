@@ -138,6 +138,10 @@ impl MappedFileQueue {
         }
         self.mapped_files.last_mut()
     }
+
+    pub fn get_last_mapped_file_mut_start_offset(&mut self) -> Option<&mut LocalMappedFile> {
+        unimplemented!()
+    }
 }
 
 #[cfg(test)]

@@ -41,6 +41,14 @@ impl Message {
         self.properties.remove(name.into().as_str());
     }
 
+    pub fn set_properties(&mut self, properties: HashMap<String, String>) {
+        self.properties = properties;
+    }
+
+    pub fn get_property(&self, key: impl Into<String>) -> Option<String> {
+        self.properties.get(key.into().as_str()).cloned()
+    }
+
     pub fn body(&self) -> Option<bytes::Bytes> {
         self.body.as_ref().cloned()
     }
@@ -101,7 +109,7 @@ impl MessageTrait for Message {
 
 #[derive(Clone, Debug)]
 pub struct MessageExt {
-    pub message_inner: Message,
+    pub message: Message,
     pub broker_name: String,
     pub queue_id: i32,
     pub store_size: i32,
@@ -145,7 +153,7 @@ impl MessageExt {
     }
 
     pub fn topic(&self) -> &str {
-        self.message_inner.topic()
+        self.message.topic()
     }
 
     pub fn born_host(&self) -> SocketAddr {
@@ -165,7 +173,7 @@ impl MessageExt {
     }
 
     pub fn body(&self) -> Option<bytes::Bytes> {
-        self.message_inner.body()
+        self.message.body()
     }
 
     #[inline]
@@ -182,11 +190,11 @@ impl MessageExt {
     }
 
     pub fn flag(&self) -> i32 {
-        self.message_inner.flag()
+        self.message.flag()
     }
 
     pub fn message_inner(&self) -> &Message {
-        &self.message_inner
+        &self.message
     }
     pub fn broker_name(&self) -> &str {
         &self.broker_name
@@ -217,7 +225,7 @@ impl MessageExt {
     }
 
     pub fn set_message_inner(&mut self, message_inner: Message) {
-        self.message_inner = message_inner;
+        self.message = message_inner;
     }
     pub fn set_broker_name(&mut self, broker_name: String) {
         self.broker_name = broker_name;
@@ -263,14 +271,14 @@ impl MessageExt {
     }
 
     pub fn properties(&self) -> &HashMap<String, String> {
-        self.message_inner.properties()
+        self.message.properties()
     }
 }
 
 impl Default for MessageExt {
     fn default() -> Self {
         Self {
-            message_inner: Default::default(),
+            message: Default::default(),
             broker_name: "".to_string(),
             queue_id: 0,
             store_size: 0,
@@ -309,9 +317,7 @@ impl MessageExtBrokerInner {
 
     pub fn delete_property(&mut self, name: impl Into<String>) {
         let name = name.into();
-        self.message_ext_inner
-            .message_inner
-            .clear_property(name.as_str());
+        self.message_ext_inner.message.clear_property(name.as_str());
         self.properties_string =
             MessageUtils::delete_property(self.properties_string.as_str(), name.as_str());
     }

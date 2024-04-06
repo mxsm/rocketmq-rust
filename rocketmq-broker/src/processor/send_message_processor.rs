@@ -17,15 +17,22 @@
 
 use std::sync::Arc;
 
-use rocketmq_common::common::{
-    attribute::topic_message_type::TopicMessageType,
-    message::{
-        message_single::{MessageExt, MessageExtBrokerInner},
-        MessageConst,
+use rocketmq_common::{
+    common::{
+        attribute::topic_message_type::TopicMessageType,
+        message::{
+            message_batch::MessageExtBatch,
+            message_single::{MessageExt, MessageExtBrokerInner},
+            MessageConst,
+        },
+        mix_all::RETRY_GROUP_TOPIC_PREFIX,
+        sys_flag::message_sys_flag::MessageSysFlag,
+        TopicFilterType,
     },
+    MessageDecoder,
 };
 use rocketmq_remoting::{
-    code::request_code::RequestCode,
+    code::{request_code::RequestCode, response_code::ResponseCode},
     protocol::{
         header::message_operation_header::{
             send_message_request_header::{parse_request_header, SendMessageRequestHeader},
@@ -165,20 +172,81 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
     where
         F: FnOnce(&SendMessageContext, &RemotingCommand),
     {
-        let response = self.pre_send(ctx.as_ref(), request.as_ref(), &request_header);
+        let mut response = self.pre_send(ctx.as_ref(), request.as_ref(), &request_header);
         if response.code() != -1 {
             return Some(response);
         }
+
+        if request_header.topic.len() > i8::MAX as usize {
+            return Some(
+                response
+                    .set_code(ResponseCode::MessageIllegal)
+                    .set_remark(Some(format!(
+                        "message topic length too long {}",
+                        request_header.topic().len()
+                    ))),
+            );
+        }
+
+        if request_header.topic.len() != 0
+            && request_header.topic.starts_with(RETRY_GROUP_TOPIC_PREFIX)
+        {
+            return Some(
+                response
+                    .set_code(ResponseCode::MessageIllegal)
+                    .set_remark(Some(format!(
+                        "batch request does not support retry group  {}",
+                        request_header.topic()
+                    ))),
+            );
+        }
+
         let response_header = SendMessageResponseHeader::default();
         let topic_config = self
             .topic_config_manager
             .select_topic_config(request_header.topic().as_str())
             .unwrap();
-        let mut _queue_id = request_header.queue_id;
-        if _queue_id < 0 {
-            _queue_id = self.inner.random_queue_id(topic_config.write_queue_nums) as i32;
+        let mut queue_id = request_header.queue_id;
+        if queue_id < 0 {
+            queue_id = self.inner.random_queue_id(topic_config.write_queue_nums) as i32;
         }
 
+        let mut message_ext_batch = MessageExtBatch::default();
+        message_ext_batch
+            .message_ext_broker_inner
+            .message_ext_inner
+            .message
+            .topic = request_header.topic().to_string();
+        message_ext_batch
+            .message_ext_broker_inner
+            .message_ext_inner
+            .queue_id = queue_id;
+        let mut sys_flag = request_header.sys_flag;
+        if TopicFilterType::MultiTag == topic_config.topic_filter_type {
+            sys_flag |= MessageSysFlag::MULTI_TAGS_FLAG;
+        }
+        message_ext_batch
+            .message_ext_broker_inner
+            .message_ext_inner
+            .sys_flag = sys_flag;
+        message_ext_batch
+            .message_ext_broker_inner
+            .message_ext_inner
+            .message
+            .flag = request_header.flag;
+
+        message_ext_batch
+            .message_ext_broker_inner
+            .message_ext_inner
+            .message
+            .properties =
+            MessageDecoder::string_to_message_properties(request_header.properties.as_ref());
+
+        message_ext_batch
+            .message_ext_broker_inner
+            .message_ext_inner
+            .message
+            .body = request.body().clone();
         if self.broker_config.async_send_enable {
             None
         } else {

@@ -39,7 +39,7 @@ pub mod namesrv;
 pub mod sys_flag;
 pub mod topic;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Eq, PartialEq)]
 pub enum TopicFilterType {
     #[default]
     SingleTag,

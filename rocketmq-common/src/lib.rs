@@ -37,7 +37,9 @@ pub mod log;
 mod thread_pool;
 pub mod utils;
 
-pub use crate::common::message::message_decoder as MessageDecoder;
+pub use crate::common::message::{
+    message_accessor as MessageAccessor, message_decoder as MessageDecoder,
+};
 
 #[cfg(test)]
 mod tests {}

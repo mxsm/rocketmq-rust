@@ -28,7 +28,11 @@ use rocketmq_common::{
 use tokio::runtime::Handle;
 
 use crate::{
-    base::{message_result::PutMessageResult, swappable::Swappable},
+    base::{
+        append_message_callback::{AppendMessageCallback, DefaultAppendMessageCallback},
+        message_result::PutMessageResult,
+        swappable::Swappable,
+    },
     config::message_store_config::MessageStoreConfig,
     consume_queue::mapped_file_queue::MappedFileQueue,
     message_encoder::message_ext_encoder::MessageExtEncoder,
@@ -74,7 +78,7 @@ impl CommitLog {
         }
         msg.message_ext_inner.body_crc = crc32(
             msg.message_ext_inner
-                .message_inner
+                .message
                 .body
                 .clone()
                 .expect("REASON")
@@ -112,16 +116,19 @@ impl CommitLog {
         }
         msg.encoded_buff = encoder.byte_buf();
 
-        match self
-            .mapped_file_queue
-            .write()
-            .await
-            .get_last_mapped_file_mut()
-        {
-            None => false,
-            Some(mapped_file) => mapped_file.append_data(msg.encoded_buff.clone(), true),
-        }
+        let mut mapped_file_guard = self.mapped_file_queue.write().await;
+        let mapped_file = match mapped_file_guard.get_last_mapped_file_mut() {
+            None => mapped_file_guard
+                .get_last_mapped_file_mut_start_offset()
+                .unwrap(),
+            Some(mapped_file) => mapped_file,
+        };
 
+        let mut append_message_callback =
+            DefaultAppendMessageCallback::new(self.message_store_config.clone());
+        let result =
+            append_message_callback.do_append(mapped_file.file_from_offset() as i64, 0, &mut msg);
+        mapped_file.append_data(msg.encoded_buff.clone(), false);
         PutMessageResult::default()
     }
 
