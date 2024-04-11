@@ -15,21 +15,14 @@
  * limitations under the License.
  */
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use rocketmq_common::{
     common::{
-        attribute::topic_message_type::TopicMessageType,
-        message::{
-            message_batch::MessageExtBatch,
-            message_single::{MessageExt, MessageExtBrokerInner},
-            MessageConst,
-        },
-        mix_all::RETRY_GROUP_TOPIC_PREFIX,
-        sys_flag::message_sys_flag::MessageSysFlag,
-        TopicFilterType,
-    },
-    MessageDecoder,
+        attribute::{cleanup_policy::CleanupPolicy, topic_message_type::TopicMessageType}, broker::broker_config::TopicConfig, message::{
+            message_batch::MessageExtBatch, message_client_id_setter, message_single::{MessageExt, MessageExtBrokerInner}, MessageConst
+        }, mix_all::RETRY_GROUP_TOPIC_PREFIX, sys_flag::message_sys_flag::MessageSysFlag, TopicFilterType
+    }, CleanupPolicyUtils, MessageAccessor, MessageDecoder
 };
 use rocketmq_remoting::{
     code::{request_code::RequestCode, response_code::ResponseCode},
@@ -202,7 +195,7 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
         }
 
         let response_header = SendMessageResponseHeader::default();
-        let topic_config = self
+        let mut topic_config = self
             .topic_config_manager
             .select_topic_config(request_header.topic().as_str())
             .unwrap();
@@ -221,6 +214,48 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
             .message_ext_broker_inner
             .message_ext_inner
             .queue_id = queue_id;
+        let mut ori_props = MessageDecoder::string_to_message_properties(request_header.properties.as_ref());
+        if self.handle_retry_and_dlq(&request_header, &mut response, &request, &message_ext_batch.message_ext_broker_inner.message_ext_inner, &mut topic_config, &mut ori_props){
+            return Some(response);
+        }
+        message_ext_batch
+            .message_ext_broker_inner
+            .message_ext_inner
+            .message
+            .body = request.body().clone();
+        message_ext_batch
+        .message_ext_broker_inner
+        .message_ext_inner
+        .message
+        .flag = request_header.flag;
+
+        let uniq_key = ori_props.get(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX);
+        let uniq_key = if let Some(value) = uniq_key{
+             if value.len() <= 0 {
+                let uniq_key_inner = message_client_id_setter::create_uniq_id();
+                ori_props.insert(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX.to_string(), uniq_key_inner.clone());
+                uniq_key_inner
+             } else {
+                value.to_string()
+             }
+             
+        }else{
+            let uniq_key_inner = message_client_id_setter::create_uniq_id();
+            ori_props.insert(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX.to_string(), uniq_key_inner.clone());
+              uniq_key_inner
+        };
+
+        message_ext_batch.message_ext_broker_inner.message_ext_inner.message.properties = ori_props;
+        let cleanup_policy = CleanupPolicyUtils::get_delete_policy(Some(&topic_config));
+
+        if cleanup_policy == CleanupPolicy::COMPACTION {
+            if let Some(value) = message_ext_batch.message_ext_broker_inner.message_ext_inner.message.properties.get(MessageConst::PROPERTY_KEYS){
+                if(value.trim().is_empty()){
+                    return Some(response.set_code(ResponseCode::MessageIllegal).set_remark(Some("Required message key is missing".to_string())));
+                }
+            }
+        }
+
         let mut sys_flag = request_header.sys_flag;
         if TopicFilterType::MultiTag == topic_config.topic_filter_type {
             sys_flag |= MessageSysFlag::MULTI_TAGS_FLAG;
@@ -229,11 +264,7 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
             .message_ext_broker_inner
             .message_ext_inner
             .sys_flag = sys_flag;
-        message_ext_batch
-            .message_ext_broker_inner
-            .message_ext_inner
-            .message
-            .flag = request_header.flag;
+
 
         message_ext_batch
             .message_ext_broker_inner
@@ -242,11 +273,10 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
             .properties =
             MessageDecoder::string_to_message_properties(request_header.properties.as_ref());
 
-        message_ext_batch
-            .message_ext_broker_inner
-            .message_ext_inner
-            .message
-            .body = request.body().clone();
+
+
+
+
         if self.broker_config.async_send_enable {
             None
         } else {
@@ -299,5 +329,12 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
         self.inner
             .msg_check(ctx, request, request_header, &mut response);
         response
+        
     }
+
+    fn handle_retry_and_dlq(&self,request_header: &SendMessageRequestHeader, response: &mut RemotingCommand,
+        request: &RemotingCommand, msg: &MessageExt, topic_config: &mut rocketmq_common::common::config::TopicConfig,
+        properties: &mut HashMap<String, String>) -> bool {
+            unimplemented!()
+        }
 }

@@ -15,31 +15,10 @@
  * limitations under the License.
  */
 
-#![allow(dead_code)]
-#![allow(unused_imports)]
+use crate::common::{attribute::cleanup_policy::CleanupPolicy, config::TopicConfig};
 
-pub use crate::{
-    thread_pool::{
-        FuturesExecutorService, FuturesExecutorServiceBuilder, ScheduledExecutorService,
-        TokioExecutorService,
-    },
-    utils::{
-        crc32_utils as CRC32Utils, env_utils as EnvUtils, file_utils as FileUtils,
-        message_utils as MessageUtils, parse_config_file as ParseConfigFile,
-        time_utils as TimeUtils, util_all as UtilAll, cleanup_policy_utils as CleanupPolicyUtils
-    },
-};
+ pub fn get_delete_policy(_topic_config:Option<&TopicConfig>) -> CleanupPolicy{
 
-pub mod common;
-pub use crate::common::attribute::topic_attributes as TopicAttributes;
+    unimplemented!()
 
-pub mod log;
-mod thread_pool;
-pub mod utils;
-
-pub use crate::common::message::{
-    message_accessor as MessageAccessor, message_decoder as MessageDecoder,
-};
-
-#[cfg(test)]
-mod tests {}
+ }

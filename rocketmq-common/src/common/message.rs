@@ -29,6 +29,7 @@ pub mod message_enum;
 pub mod message_id;
 pub mod message_queue;
 pub mod message_single;
+pub mod message_client_id_setter;
 
 pub trait MessageTrait {
     fn topic(&self) -> &str;
