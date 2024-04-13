@@ -15,9 +15,9 @@
  * limitations under the License.
  */
 
- #[derive(Debug,Clone,Copy,Default, PartialEq, Eq)]
- pub enum CleanupPolicy {
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CleanupPolicy {
     #[default]
     DELETE,
-    COMPACTION
- }
+    COMPACTION,
+}

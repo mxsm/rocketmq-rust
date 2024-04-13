@@ -15,14 +15,19 @@
  * limitations under the License.
  */
 
-use std::{collections::HashMap, net::SocketAddr};
+use std::{
+    collections::HashMap,
+    hash::{DefaultHasher, Hash, Hasher},
+    net::SocketAddr,
+};
 
 use bytes::{Buf, BufMut};
 
 use crate::{
     common::{
-        message::{MessageTrait, MessageVersion, MESSAGE_MAGIC_CODE_V1},
+        message::{MessageConst, MessageTrait, MessageVersion, MESSAGE_MAGIC_CODE_V1},
         sys_flag::message_sys_flag::MessageSysFlag,
+        TopicFilterType,
     },
     MessageUtils,
 };
@@ -65,6 +70,10 @@ impl Message {
     }
     pub fn transaction_id(&self) -> Option<&str> {
         self.transaction_id.as_deref()
+    }
+
+    pub fn get_tags(&self) -> Option<String> {
+        self.get_property(MessageConst::PROPERTY_TAGS)
     }
 }
 
@@ -273,6 +282,10 @@ impl MessageExt {
     pub fn properties(&self) -> &HashMap<String, String> {
         self.message.properties()
     }
+
+    pub fn get_tags(&self) -> Option<String> {
+        self.message.get_tags()
+    }
 }
 
 impl Default for MessageExt {
@@ -399,5 +412,18 @@ impl MessageExtBrokerInner {
 
     pub fn queue_offset(&self) -> i64 {
         self.message_ext_inner.queue_offset()
+    }
+
+    pub fn tags_string2tags_code(_filter: &TopicFilterType, tags: &str) -> u64 {
+        if tags.is_empty() {
+            return 0;
+        }
+        let mut hasher = DefaultHasher::new();
+        tags.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    pub fn get_tags(&self) -> Option<String> {
+        self.message_ext_inner.get_tags()
     }
 }

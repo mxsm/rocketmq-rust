@@ -17,10 +17,10 @@
 use std::collections::HashSet;
 
 pub mod attribute_enum;
+pub mod cleanup_policy;
 pub mod cq_type;
 pub mod topic_attributes;
 pub mod topic_message_type;
-pub mod cleanup_policy;
 
 pub struct Attribute {
     pub(crate) name: String,

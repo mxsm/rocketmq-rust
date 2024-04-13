@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+pub mod cleanup_policy_utils;
 pub mod crc32_utils;
 pub mod env_utils;
 pub mod file_utils;
@@ -22,4 +23,3 @@ pub mod parse_config_file;
 pub mod queue_type_utils;
 pub mod time_utils;
 pub mod util_all;
-pub mod cleanup_policy_utils;

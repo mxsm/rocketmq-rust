@@ -17,8 +17,6 @@
 
 use crate::common::{attribute::cleanup_policy::CleanupPolicy, config::TopicConfig};
 
- pub fn get_delete_policy(_topic_config:Option<&TopicConfig>) -> CleanupPolicy{
-
+pub fn get_delete_policy(_topic_config: Option<&TopicConfig>) -> CleanupPolicy {
     unimplemented!()
-
- }
+}
