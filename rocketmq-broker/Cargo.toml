@@ -54,6 +54,8 @@ rand = "0.8.5"
 #tools
 dirs.workspace = true
 
+local-ip-address = "0.6.1"
+
 [[bin]]
 name = "rocketmq-broker-rust"
 path = "src/bin/broker_bootstrap_server.rs"

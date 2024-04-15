@@ -58,8 +58,9 @@ pub struct BrokerConfig {
 impl Default for BrokerConfig {
     fn default() -> Self {
         let broker_identity = BrokerIdentity::new();
-        let broker_ip1 = String::from("127.0.0.1");
-        let broker_ip2 = None;
+        let local_ip = local_ip_address::local_ip().unwrap();
+        let broker_ip1 = local_ip.to_string();
+        let broker_ip2 = Some(local_ip.to_string());
         let listen_port = 10911;
 
         BrokerConfig {
