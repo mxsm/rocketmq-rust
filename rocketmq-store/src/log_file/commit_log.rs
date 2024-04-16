@@ -57,10 +57,11 @@ pub struct CommitLog {
 
 impl CommitLog {
     pub fn new(message_store_config: Arc<MessageStoreConfig>) -> Self {
+        let enabled_append_prop_crc = message_store_config.enabled_append_prop_crc;
         Self {
             mapped_file_queue: Default::default(),
             message_store_config,
-            enabled_append_prop_crc: false,
+            enabled_append_prop_crc,
         }
     }
 }
@@ -126,7 +127,7 @@ impl CommitLog {
 
         let mut append_message_callback =
             DefaultAppendMessageCallback::new(self.message_store_config.clone());
-        let _result =
+        let result =
             append_message_callback.do_append(mapped_file.file_from_offset() as i64, 0, &mut msg);
         mapped_file.append_data(msg.encoded_buff.clone(), false);
         PutMessageResult::default()

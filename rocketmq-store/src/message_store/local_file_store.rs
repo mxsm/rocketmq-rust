@@ -17,13 +17,16 @@
 
 use std::{collections::HashMap, error::Error, sync::Arc};
 
-use rocketmq_common::common::{
-    config::TopicConfig,
-    message::{message_single::MessageExtBrokerInner, MessageConst},
-    sys_flag::message_sys_flag::MessageSysFlag,
+use rocketmq_common::{
+    common::{
+        config::TopicConfig,
+        message::{message_single::MessageExtBrokerInner, MessageConst},
+        sys_flag::message_sys_flag::MessageSysFlag,
+    },
+    utils::queue_type_utils::QueueTypeUtils,
 };
 use rocketmq_runtime::RocketMQRuntime;
-use tracing::warn;
+use tracing::{error, warn};
 
 use crate::{
     base::{message_result::PutMessageResult, message_status_enum::PutMessageStatus},
@@ -101,8 +104,11 @@ impl MessageStore for LocalFileMessageStore {
         }
 
         if MessageSysFlag::check(msg.sys_flag(), MessageSysFlag::INNER_BATCH_FLAG) {
-            let _topic_config = self.get_topic_config(msg.topic());
-            //todo
+            let topic_config = self.get_topic_config(msg.topic());
+            if !QueueTypeUtils::is_batch_cq(&topic_config) {
+                error!("[BUG]The message is an inner batch but cq type is not batch cq");
+                return PutMessageResult::new_default(PutMessageStatus::MessageIllegal);
+            }
         }
         self.commit_log.put_message(msg).await
     }

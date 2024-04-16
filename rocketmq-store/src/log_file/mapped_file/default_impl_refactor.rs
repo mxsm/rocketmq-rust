@@ -24,6 +24,13 @@ use std::{
 
 use bytes::BytesMut;
 use memmap2::MmapMut;
+use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
+use tracing::error;
+
+use crate::base::{
+    append_message_callback::AppendMessageCallback, message_result::AppendMessageResult,
+    put_message_context::PutMessageContext,
+};
 
 pub struct LocalMappedFile {
     //file information
@@ -112,6 +119,23 @@ impl LocalMappedFile {
         };
 
         write_success
+    }
+
+    pub fn append_message(
+        &mut self,
+        message: MessageExtBrokerInner,
+        message_callback: impl AppendMessageCallback,
+        put_message_context: &mut PutMessageContext,
+    ) -> AppendMessageResult {
+        let current_pos = self.wrote_position.load(Ordering::Relaxed) as u64;
+        if current_pos < self.file_size {
+            unimplemented!()
+        }
+        error!(
+            "MappedFile.appendMessage return null, wrotePosition: {} fileSize: {}",
+            current_pos, self.file_size
+        );
+        AppendMessageResult::default()
     }
 }
 
