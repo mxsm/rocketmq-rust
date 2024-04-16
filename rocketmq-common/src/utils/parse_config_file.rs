@@ -35,6 +35,6 @@ where
         .map_or(C::default(), |result| {
             result.try_deserialize::<C>().unwrap_or_default()
         });
-    info!("parse config: {:?}", config_file);
+    //info!("parse config: {:?}", config_file);
     Ok(config_file)
 }

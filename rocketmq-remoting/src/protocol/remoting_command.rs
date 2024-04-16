@@ -24,6 +24,7 @@ use std::{
 
 use bytes::Bytes;
 use lazy_static::lazy_static;
+use rocketmq_common::common::mq_version::RocketMqVersion;
 use serde::{Deserialize, Serialize};
 
 use super::{RemotingCommandType, SerializeType};
@@ -44,8 +45,10 @@ lazy_static! {
 fn set_cmd_version(cmd: &mut RemotingCommand) {
     INIT.call_once(|| {
         let v = match std::env::var("REMOTING_VERSION_KEY") {
-            Ok(value) => value.parse::<i32>().unwrap_or(-1),
-            Err(_) => -1,
+            Ok(value) => value
+                .parse::<i32>()
+                .unwrap_or(i32::from(RocketMqVersion::V500)),
+            Err(_) => i32::from(RocketMqVersion::V500),
         };
         *CONFIG_VERSION.write().unwrap() = v;
     });

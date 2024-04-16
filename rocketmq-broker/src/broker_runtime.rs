@@ -401,7 +401,7 @@ impl BrokerRuntime {
             .broker_cluster_name
             .clone();
         let broker_name = self.broker_config.broker_identity.broker_name.clone();
-        let broker_addr = self.broker_config.broker_ip1.clone();
+        let broker_addr = format!("{}:{}", self.broker_config.broker_ip1, 10911);
         let broker_id = self.broker_config.broker_identity.broker_id;
         self.broker_out_api
             .register_broker_all(
