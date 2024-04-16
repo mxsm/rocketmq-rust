@@ -53,6 +53,7 @@ pub struct BrokerConfig {
     pub split_registration_size: i32,
     pub register_broker_timeout_mills: i32,
     pub is_in_broker_container: bool,
+    pub commercial_size_per_msg: i32,
 }
 
 impl Default for BrokerConfig {
@@ -89,6 +90,7 @@ impl Default for BrokerConfig {
             split_registration_size: 800,
             register_broker_timeout_mills: 24000,
             is_in_broker_container: false,
+            commercial_size_per_msg: 4 * 1024,
         }
     }
 }

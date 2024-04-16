@@ -80,6 +80,16 @@ impl PutMessageResult {
             remote_put: false,
         }
     }
+
+    pub fn put_message_status(&self) -> PutMessageStatus {
+        self.put_message_status
+    }
+    pub fn append_message_result(&self) -> Option<&AppendMessageResult> {
+        self.append_message_result.as_ref()
+    }
+    pub fn remote_put(&self) -> bool {
+        self.remote_put
+    }
 }
 
 /// Represents the result of getting a message.
