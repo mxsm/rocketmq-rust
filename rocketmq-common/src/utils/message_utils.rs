@@ -34,7 +34,7 @@ pub fn get_sharding_key_index(sharding_key: &str, index_size: usize) -> usize {
 #[allow(clippy::manual_unwrap_or_default)]
 pub fn get_sharding_key_index_by_msg(msg: &MessageExt, index_size: usize) -> usize {
     let sharding_key = match msg
-        .message_inner
+        .message
         .properties
         .get(MessageConst::PROPERTY_SHARDING_KEY)
     {

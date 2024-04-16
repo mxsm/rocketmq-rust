@@ -34,7 +34,7 @@ use crate::{
         compaction_append_msg_callback::CompactionAppendMsgCallback,
         message_result::AppendMessageResult, message_status_enum::AppendMessageStatus,
         put_message_context::PutMessageContext, select_result::SelectMappedBufferResult,
-        transient_store_pool::TransientStorePool, ByteBuffer,
+        transient_store_pool::TransientStorePool,
     },
     config::flush_disk_type::FlushDiskType,
     log_file::mapped_file::MappedFile,
@@ -387,13 +387,14 @@ impl DefaultMappedFile {
             };
         }
         //do append to the Mapped file(Default is local file)
-        append_message_callback.do_append(
+        /*        append_message_callback.do_append(
             self.file_from_offset, // file start logic address offset
             &mut ByteBuffer::new(&mut self.mmapped_file, current_write_pos as i64),
             (self.file_size - current_write_pos as u64) as i32,
             message,
             put_message_context,
-        )
+        )*/
+        AppendMessageResult::default()
     }
 
     fn append_messages_inner(

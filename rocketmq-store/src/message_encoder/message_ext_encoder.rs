@@ -17,7 +17,6 @@
 use std::sync::Arc;
 
 use bytes::{Buf, BufMut};
-use log::warn;
 use rocketmq_common::{
     common::{
         message::{
@@ -27,6 +26,7 @@ use rocketmq_common::{
     },
     MessageDecoder,
 };
+use tracing::warn;
 
 use crate::{
     base::{
@@ -155,10 +155,8 @@ impl MessageExtEncoder {
                 "message body size exceeded, msg body size: {}, maxMessageSize: {}",
                 body_length, self.max_message_body_size
             );
-            return Some(PutMessageResult::new(
+            return Some(PutMessageResult::new_default(
                 PutMessageStatus::MessageIllegal,
-                None,
-                false,
             ));
         }
 
@@ -253,7 +251,7 @@ impl MessageExtEncoder {
             + self.crc32_reserved_length as usize;
 
         if properties_length > i16::MAX as usize {
-            println!(
+            warn!(
                 "putMessage message properties length too long. length={}",
                 properties_length
             );
@@ -351,7 +349,9 @@ impl MessageExtEncoder {
         // 15 BODY
         self.byte_buf.put_i32(body_length.try_into().unwrap());
         if let Some(body) = msg_inner.body() {
-            self.byte_buf.put(body);
+            if body_length > 0 {
+                self.byte_buf.put(body);
+            }
         }
 
         // 16 TOPIC
@@ -360,7 +360,7 @@ impl MessageExtEncoder {
         } else {
             self.byte_buf.put_u8(topic_length as u8);
         }
-        self.byte_buf.extend_from_slice(topic_data);
+        self.byte_buf.put(topic_data);
 
         // 17 PROPERTIES
         self.byte_buf.put_u16(properties_length as u16);
@@ -371,9 +371,7 @@ impl MessageExtEncoder {
             self.byte_buf
                 .put_u8(MessageDecoder::PROPERTY_SEPARATOR as u32 as u8);
         }
-
         // 18 CRC32
-
         None
     }
 
@@ -523,6 +521,9 @@ impl MessageExtEncoder {
             i32::MAX
         };
         self.byte_buf.resize(self.max_message_size as usize, 0);
+    }
+    pub fn byte_buf(&mut self) -> bytes::BytesMut {
+        self.byte_buf.split()
     }
 }
 

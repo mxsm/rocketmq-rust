@@ -67,7 +67,7 @@ impl MessageTrait for MessageBatch {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct MessageExtBatch {
     pub message_ext_broker_inner: MessageExtBrokerInner,
     pub is_inner_batch: bool,
@@ -76,5 +76,9 @@ pub struct MessageExtBatch {
 impl MessageExtBatch {
     pub fn wrap(&self) -> Option<Bytes> {
         self.message_ext_broker_inner.body()
+    }
+
+    pub fn get_tags(&self) -> Option<String> {
+        self.message_ext_broker_inner.get_tags()
     }
 }

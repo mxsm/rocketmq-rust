@@ -99,7 +99,7 @@ impl SendMessageProcessorInner {
         }
 
         let mut properties =
-            MessageDecoder::string_to_message_properties(request_header.properties.as_deref());
+            MessageDecoder::string_to_message_properties(request_header.properties.as_ref());
         properties.insert(
             MessageConst::PROPERTY_MSG_REGION.to_string(),
             self.broker_config.region_id(),

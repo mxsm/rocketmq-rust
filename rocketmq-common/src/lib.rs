@@ -24,9 +24,9 @@ pub use crate::{
         TokioExecutorService,
     },
     utils::{
-        crc32_utils as CRC32Utils, env_utils as EnvUtils, file_utils as FileUtils,
-        message_utils as MessageUtils, parse_config_file as ParseConfigFile,
-        time_utils as TimeUtils, util_all as UtilAll,
+        cleanup_policy_utils as CleanupPolicyUtils, crc32_utils as CRC32Utils,
+        env_utils as EnvUtils, file_utils as FileUtils, message_utils as MessageUtils,
+        parse_config_file as ParseConfigFile, time_utils as TimeUtils, util_all as UtilAll,
     },
 };
 
@@ -37,7 +37,9 @@ pub mod log;
 mod thread_pool;
 pub mod utils;
 
-pub use crate::common::message::message_decoder as MessageDecoder;
+pub use crate::common::message::{
+    message_accessor as MessageAccessor, message_decoder as MessageDecoder,
+};
 
 #[cfg(test)]
 mod tests {}

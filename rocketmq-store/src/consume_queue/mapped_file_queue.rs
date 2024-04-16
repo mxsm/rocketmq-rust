@@ -21,8 +21,7 @@ use log::warn;
 use tracing::info;
 
 use crate::{
-    base::swappable::Swappable,
-    log_file::mapped_file::{default_impl::DefaultMappedFile, MappedFile},
+    base::swappable::Swappable, log_file::mapped_file::default_impl_refactor::LocalMappedFile,
     services::allocate_mapped_file_service::AllocateMappedFileService,
 };
 
@@ -32,7 +31,7 @@ pub struct MappedFileQueue {
 
     pub(crate) mapped_file_size: u64,
 
-    pub(crate) mapped_files: Vec<Box<dyn MappedFile + Send>>,
+    pub(crate) mapped_files: Vec<LocalMappedFile>,
 
     pub(crate) allocate_mapped_file_service: AllocateMappedFileService,
 
@@ -120,21 +119,25 @@ impl MappedFileQueue {
             }
 
             let mapped_file =
-                DefaultMappedFile::new(file.to_string_lossy().to_string(), self.mapped_file_size);
+                LocalMappedFile::new(file.to_string_lossy().to_string(), self.mapped_file_size);
             // Set wrote, flushed, committed positions for mapped_file
 
-            self.mapped_files.push(Box::new(mapped_file));
+            self.mapped_files.push(mapped_file);
             info!("load {} OK", file.display());
         }
 
         true
     }
 
-    pub fn get_last_mapped_file(&self) -> Option<&(dyn MappedFile + Send)> {
+    pub fn get_last_mapped_file_mut(&mut self) -> Option<&mut LocalMappedFile> {
         if self.mapped_files.is_empty() {
             return None;
         }
-        self.mapped_files.last().take().map(|value| value.as_ref())
+        self.mapped_files.last_mut()
+    }
+
+    pub fn get_last_mapped_file_mut_start_offset(&mut self) -> Option<&mut LocalMappedFile> {
+        unimplemented!()
     }
 }
 

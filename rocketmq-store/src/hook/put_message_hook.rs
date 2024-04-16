@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use rocketmq_common::common::message::message_batch::MessageExtBatch;
+use rocketmq_common::common::message::message_single::MessageExt;
 
 use crate::base::message_result::PutMessageResult;
 
@@ -33,7 +33,7 @@ pub trait PutMessageHook {
     /// # Returns
     ///
     /// The result of putting the message
-    fn execute_before_put_message(&self, msg: &MessageExtBatch) -> PutMessageResult;
+    fn execute_before_put_message(&self, msg: &MessageExt) -> Option<PutMessageResult>;
 }
 
 /// Alias for `Arc<dyn PutMessageHook>`.

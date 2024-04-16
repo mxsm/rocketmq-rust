@@ -25,11 +25,17 @@ use rocketmq_common::{
     utils::time_utils,
     CRC32Utils::crc32,
 };
+use tokio::runtime::Handle;
 
 use crate::{
-    base::{message_result::PutMessageResult, swappable::Swappable},
+    base::{
+        append_message_callback::{AppendMessageCallback, DefaultAppendMessageCallback},
+        message_result::PutMessageResult,
+        swappable::Swappable,
+    },
     config::message_store_config::MessageStoreConfig,
     consume_queue::mapped_file_queue::MappedFileQueue,
+    message_encoder::message_ext_encoder::MessageExtEncoder,
 };
 
 // Message's MAGIC CODE daa320a7
@@ -44,24 +50,35 @@ pub const CRC32_RESERVED_LEN: i32 = (MessageConst::PROPERTY_CRC32.len() + 1 + 10
 
 #[derive(Default)]
 pub struct CommitLog {
-    pub(crate) mapped_file_queue: MappedFileQueue,
-    pub(crate) message_store_config: Arc<MessageStoreConfig>,
-    pub(crate) enabled_append_prop_crc: bool,
+    mapped_file_queue: Arc<tokio::sync::RwLock<MappedFileQueue>>,
+    message_store_config: Arc<MessageStoreConfig>,
+    enabled_append_prop_crc: bool,
+}
+
+impl CommitLog {
+    pub fn new(message_store_config: Arc<MessageStoreConfig>) -> Self {
+        Self {
+            mapped_file_queue: Default::default(),
+            message_store_config,
+            enabled_append_prop_crc: false,
+        }
+    }
 }
 
 impl CommitLog {
     pub fn load(&mut self) -> bool {
-        self.mapped_file_queue.load()
+        let arc = self.mapped_file_queue.clone();
+        Handle::current().block_on(async move { arc.write().await.load() })
     }
 
-    async fn async_put_message(&self, msg: MessageExtBrokerInner) -> PutMessageResult {
+    pub async fn put_message(&self, msg: MessageExtBrokerInner) -> PutMessageResult {
         let mut msg = msg;
         if !self.message_store_config.duplication_enable {
             msg.message_ext_inner.store_timestamp = time_utils::get_current_millis() as i64;
         }
         msg.message_ext_inner.body_crc = crc32(
             msg.message_ext_inner
-                .message_inner
+                .message
                 .body
                 .clone()
                 .expect("REASON")
@@ -92,6 +109,26 @@ impl CommitLog {
             msg.with_store_host_v6_flag();
         }
 
+        let mut encoder = MessageExtEncoder::new(self.message_store_config.clone());
+        let put_message_result = encoder.encode(&msg);
+        if let Some(result) = put_message_result {
+            return result;
+        }
+        msg.encoded_buff = encoder.byte_buf();
+
+        let mut mapped_file_guard = self.mapped_file_queue.write().await;
+        let mapped_file = match mapped_file_guard.get_last_mapped_file_mut() {
+            None => mapped_file_guard
+                .get_last_mapped_file_mut_start_offset()
+                .unwrap(),
+            Some(mapped_file) => mapped_file,
+        };
+
+        let mut append_message_callback =
+            DefaultAppendMessageCallback::new(self.message_store_config.clone());
+        let _result =
+            append_message_callback.do_append(mapped_file.file_from_offset() as i64, 0, &mut msg);
+        mapped_file.append_data(msg.encoded_buff.clone(), false);
         PutMessageResult::default()
     }
 

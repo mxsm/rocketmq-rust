@@ -15,26 +15,9 @@
  * limitations under the License.
  */
 
-use std::{fmt::Debug, path::PathBuf};
-
-use config::Config;
-use serde::Deserialize;
-use tracing::info;
-
-use crate::common::namesrv::namesrv_config::NamesrvConfig;
-
-pub fn parse_config_file<'de, C>(config_file: PathBuf) -> anyhow::Result<C, anyhow::Error>
-where
-    C: Default + Debug + Deserialize<'de>,
-{
-    let config_file = Config::builder()
-        .add_source(config::File::with_name(
-            config_file.to_string_lossy().into_owned().as_str(),
-        ))
-        .build()
-        .map_or(C::default(), |result| {
-            result.try_deserialize::<C>().unwrap_or_default()
-        });
-    //info!("parse config: {:?}", config_file);
-    Ok(config_file)
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CleanupPolicy {
+    #[default]
+    DELETE,
+    COMPACTION,
 }

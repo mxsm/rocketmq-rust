@@ -32,6 +32,7 @@ use crate::{
 };
 
 pub(crate) mod default_impl;
+pub(crate) mod default_impl_refactor;
 
 pub trait MappedFile {
     /// Returns the file name of the `MappedFile`.

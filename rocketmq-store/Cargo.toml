@@ -19,6 +19,7 @@ data_store = ["local_file_store"]
 
 [dependencies]
 rocketmq-common = { version = "0.2.0", path = "../rocketmq-common" }
+rocketmq-runtime = { version = "0.2.0", path = "../rocketmq-runtime" }
 
 #tools
 dirs.workspace = true

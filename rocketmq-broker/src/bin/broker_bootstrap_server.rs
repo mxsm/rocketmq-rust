@@ -48,7 +48,7 @@ fn parse_config_file() -> (BrokerConfig, MessageStoreConfig) {
             ParseConfigFile::parse_config_file::<BrokerConfig>(config_file.clone())
                 .ok()
                 .unwrap(),
-            ParseConfigFile::parse_config_file::<MessageStoreConfig>(config_file.clone())
+            ParseConfigFile::parse_config_file::<MessageStoreConfig>(config_file)
                 .ok()
                 .unwrap(),
         )
