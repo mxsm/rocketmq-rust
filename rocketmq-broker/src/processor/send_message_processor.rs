@@ -368,7 +368,7 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
         response: RemotingCommand,
         request: &RemotingCommand,
         msg: &MessageExt,
-        response_header: SendMessageResponseHeader,
+        response_header: &mut SendMessageResponseHeader,
         send_message_context: SendMessageContext,
         ctx: ConnectionHandlerContext,
         queue_id_int: i32,
@@ -441,7 +441,7 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
 
         if send_ok {
             if TopicValidator::RMQ_SYS_SCHEDULE_TOPIC == msg.topic() {
-                
+                unimplemented!()
             }
         } else {
         }
