@@ -45,6 +45,7 @@ use rocketmq_remoting::{
 };
 use rocketmq_store::{base::message_result::PutMessageResult, log_file::MessageStore};
 use tokio::runtime::Handle;
+use tracing::info;
 
 use crate::{
     broker_config::BrokerConfig,
@@ -87,6 +88,7 @@ impl<MS: MessageStore + Send> RequestProcessor for SendMessageProcessor<MS> {
         request: RemotingCommand,
     ) -> RemotingCommand {
         let request_code = RequestCode::from(request.code());
+        info!("process_request: {:?}", request_code);
         let response = match request_code {
             RequestCode::ConsumerSendMsgBack => self.inner.consumer_send_msg_back(&ctx, &request),
             _ => {
@@ -195,7 +197,7 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
             );
         }
 
-        if request_header.topic.len() != 0
+        if !request_header.topic.is_empty()
             && request_header.topic.starts_with(RETRY_GROUP_TOPIC_PREFIX)
         {
             return Some(
@@ -233,7 +235,7 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
         if self.handle_retry_and_dlq(
             &request_header,
             &mut response,
-            &request,
+            request,
             &message_ext_batch.message_ext_broker_inner.message_ext_inner,
             &mut topic_config,
             &mut ori_props,
@@ -244,7 +246,7 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
             .message_ext_broker_inner
             .message_ext_inner
             .message
-            .body = request.body().clone();
+            .body.clone_from(request.body());
         message_ext_batch
             .message_ext_broker_inner
             .message_ext_inner
@@ -253,7 +255,7 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
 
         let uniq_key = ori_props.get(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX);
         let uniq_key = if let Some(value) = uniq_key {
-            if value.len() <= 0 {
+            if value.is_empty() {
                 let uniq_key_inner = message_client_id_setter::create_uniq_id();
                 ori_props.insert(
                     MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX.to_string(),

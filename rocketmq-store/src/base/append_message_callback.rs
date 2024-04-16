@@ -14,27 +14,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::{io::Write, mem, sync::Arc};
+use std::sync::Arc;
 
-use bytes::{Buf, BufMut, BytesMut};
-use rocketmq_common::{
-    common::{
-        message::{
-            message_batch::MessageExtBatch,
-            message_single::{MessageExt, MessageExtBrokerInner},
-        },
-        sys_flag::message_sys_flag::MessageSysFlag,
-    },
-    UtilAll,
+use bytes::BytesMut;
+use rocketmq_common::common::{
+    message::{message_batch::MessageExtBatch, message_single::MessageExtBrokerInner},
+    sys_flag::message_sys_flag::MessageSysFlag,
 };
 
 use crate::{
     base::{
         message_result::AppendMessageResult, message_status_enum::AppendMessageStatus,
-        put_message_context::PutMessageContext, ByteBuffer,
+        put_message_context::PutMessageContext,
     },
     config::message_store_config::MessageStoreConfig,
-    log_file::commit_log::{CommitLog, BLANK_MAGIC_CODE, CRC32_RESERVED_LEN},
+    log_file::commit_log::{CommitLog, CRC32_RESERVED_LEN},
 };
 
 /// Write messages callback interface
@@ -139,7 +133,8 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         match MessageSysFlag::get_transaction_value(msg_inner.sys_flag()) {
             MessageSysFlag::TRANSACTION_PREPARED_TYPE
             | MessageSysFlag::TRANSACTION_ROLLBACK_TYPE => queue_offset = 0,
-            MessageSysFlag::TRANSACTION_NOT_TYPE | MessageSysFlag::TRANSACTION_COMMIT_TYPE | _ => {}
+           // MessageSysFlag::TRANSACTION_NOT_TYPE | MessageSysFlag::TRANSACTION_COMMIT_TYPE | _ => {}
+           _ => {}
         }
 
         if (msg_len + END_FILE_MIN_BLANK_LENGTH) > max_blank {

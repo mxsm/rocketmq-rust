@@ -14,11 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::future::Future;
 
-use rocketmq_common::common::message::{
-    message_batch::MessageExtBatch, message_single::MessageExtBrokerInner,
-};
+use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
 
 use crate::base::message_result::PutMessageResult;
 

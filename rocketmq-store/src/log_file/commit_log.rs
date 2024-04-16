@@ -111,8 +111,8 @@ impl CommitLog {
 
         let mut encoder = MessageExtEncoder::new(self.message_store_config.clone());
         let put_message_result = encoder.encode(&msg);
-        if put_message_result.is_some() {
-            return put_message_result.unwrap();
+        if let Some(result) = put_message_result {
+            return result;
         }
         msg.encoded_buff = encoder.byte_buf();
 
@@ -126,7 +126,7 @@ impl CommitLog {
 
         let mut append_message_callback =
             DefaultAppendMessageCallback::new(self.message_store_config.clone());
-        let result =
+        let _result =
             append_message_callback.do_append(mapped_file.file_from_offset() as i64, 0, &mut msg);
         mapped_file.append_data(msg.encoded_buff.clone(), false);
         PutMessageResult::default()

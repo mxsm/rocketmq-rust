@@ -26,7 +26,7 @@ use rocketmq_common::{
     },
     MessageDecoder,
 };
-use tracing::{info, warn};
+use tracing::warn;
 
 use crate::{
     base::{

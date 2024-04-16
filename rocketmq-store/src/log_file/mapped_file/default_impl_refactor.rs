@@ -22,10 +22,10 @@ use std::{
     sync::atomic::{AtomicI32, Ordering},
 };
 
-use bytes::{Bytes, BytesMut};
+use bytes::{ BytesMut};
 use memmap2::MmapMut;
 
-use crate::base::message_result::AppendMessageResult;
+
 
 pub struct LocalMappedFile {
     //file information
@@ -48,7 +48,7 @@ impl LocalMappedFile {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
-            .create(true)
+            //.create(true)
             .open(&path_buf)
             .unwrap();
         file.set_len(file_size).unwrap();
@@ -96,25 +96,21 @@ impl LocalMappedFile {
         if current_pos + data.len() > self.file_size as usize {
             return false;
         }
-        let mut write_success =
-            if let Ok(_) = (&mut self.mmapped_file[current_pos..]).write_all(data.as_ref()) {
-                self.wrote_position
-                    .store((current_pos + data.len()) as i32, Ordering::SeqCst);
-                true
-            } else {
-                false
-            };
+        let mut write_success = if (&mut self.mmapped_file[current_pos..])
+            .write_all(data.as_ref())
+            .is_ok()
+        {
+            self.wrote_position
+                .store((current_pos + data.len()) as i32, Ordering::SeqCst);
+            true
+        } else {
+            false
+        };
 
         write_success &= if sync {
-            match self.mmapped_file.flush() {
-                Ok(_) => true,
-                Err(_) => false,
-            }
+            self.mmapped_file.flush().is_ok()
         } else {
-            match self.mmapped_file.flush_async() {
-                Ok(_) => true,
-                Err(_) => false,
-            }
+            self.mmapped_file.flush_async().is_ok()
         };
 
         write_success

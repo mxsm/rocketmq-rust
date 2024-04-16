@@ -23,7 +23,7 @@ use tracing::info;
 use crate::{
     base::swappable::Swappable,
     log_file::mapped_file::{
-        default_impl::DefaultMappedFile, default_impl_refactor::LocalMappedFile, MappedFile,
+         default_impl_refactor::LocalMappedFile,
     },
     services::allocate_mapped_file_service::AllocateMappedFileService,
 };

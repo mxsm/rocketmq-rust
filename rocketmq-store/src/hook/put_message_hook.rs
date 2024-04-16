@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 use rocketmq_common::common::message::{
-    message_batch::MessageExtBatch, message_single::MessageExt,
+    message_single::MessageExt,
 };
 
 use crate::base::message_result::PutMessageResult;
