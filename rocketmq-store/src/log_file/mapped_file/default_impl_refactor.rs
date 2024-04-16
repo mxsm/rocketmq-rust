@@ -22,10 +22,8 @@ use std::{
     sync::atomic::{AtomicI32, Ordering},
 };
 
-use bytes::{ BytesMut};
+use bytes::BytesMut;
 use memmap2::MmapMut;
-
-
 
 pub struct LocalMappedFile {
     //file information

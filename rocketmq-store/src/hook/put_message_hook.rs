@@ -14,9 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use rocketmq_common::common::message::{
-    message_single::MessageExt,
-};
+use rocketmq_common::common::message::message_single::MessageExt;
 
 use crate::base::message_result::PutMessageResult;
 

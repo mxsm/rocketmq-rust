@@ -133,8 +133,9 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         match MessageSysFlag::get_transaction_value(msg_inner.sys_flag()) {
             MessageSysFlag::TRANSACTION_PREPARED_TYPE
             | MessageSysFlag::TRANSACTION_ROLLBACK_TYPE => queue_offset = 0,
-           // MessageSysFlag::TRANSACTION_NOT_TYPE | MessageSysFlag::TRANSACTION_COMMIT_TYPE | _ => {}
-           _ => {}
+            // MessageSysFlag::TRANSACTION_NOT_TYPE | MessageSysFlag::TRANSACTION_COMMIT_TYPE | _ =>
+            // {}
+            _ => {}
         }
 
         if (msg_len + END_FILE_MIN_BLANK_LENGTH) > max_blank {

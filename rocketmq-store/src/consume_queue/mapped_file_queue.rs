@@ -21,10 +21,7 @@ use log::warn;
 use tracing::info;
 
 use crate::{
-    base::swappable::Swappable,
-    log_file::mapped_file::{
-         default_impl_refactor::LocalMappedFile,
-    },
+    base::swappable::Swappable, log_file::mapped_file::default_impl_refactor::LocalMappedFile,
     services::allocate_mapped_file_service::AllocateMappedFileService,
 };
 

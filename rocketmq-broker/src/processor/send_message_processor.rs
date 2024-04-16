@@ -246,7 +246,8 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
             .message_ext_broker_inner
             .message_ext_inner
             .message
-            .body.clone_from(request.body());
+            .body
+            .clone_from(request.body());
         message_ext_batch
             .message_ext_broker_inner
             .message_ext_inner
