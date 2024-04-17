@@ -16,6 +16,7 @@
  */
 
 use std::{ops::Deref, sync::Arc};
+use std::cell::{Cell, RefCell};
 
 use rocketmq_common::{
     common::{
@@ -47,6 +48,20 @@ pub const BLANK_MAGIC_CODE: i32 = -875286124;
 //CRC32 Format: [PROPERTY_CRC32 + NAME_VALUE_SEPARATOR + 10-digit fixed-length string +
 // PROPERTY_SEPARATOR]
 pub const CRC32_RESERVED_LEN: i32 = (MessageConst::PROPERTY_CRC32.len() + 1 + 10 + 1) as i32;
+
+struct PutMessageThreadLocal{
+    encoder: RefCell<Option<MessageExtEncoder>>
+    key: RefCell<Option<String>>,
+}
+
+thread_local! {
+    static PUT_MESSAGE_THREAD_LOCAL: PutMessageThreadLocal = PutMessageThreadLocal{
+        encoder: RefCell::new(None),
+        key: RefCell::new(None),
+    };
+}
+
+
 
 #[derive(Default)]
 pub struct CommitLog {
