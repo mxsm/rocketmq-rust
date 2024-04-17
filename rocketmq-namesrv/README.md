@@ -37,7 +37,7 @@ Feature list:
 | Get has unit sub topic list            | 312          | :sparkling_heart: :white_check_mark: |        |
 | Get has unit sub ununit topic list     | 313          | :sparkling_heart: :white_check_mark: |        |
 | Update name server config              | 318          | :broken_heart: :x:                   |        |
-| Get name server config                 | 318          | :broken_heart: :x:                   |        |
+| Get name server config                 | 319          | :broken_heart: :x:                   |        |
 
 ## Getting Started
 
