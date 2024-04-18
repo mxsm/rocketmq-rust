@@ -35,6 +35,7 @@ use crate::{
     base::{
         append_message_callback::{AppendMessageCallback, DefaultAppendMessageCallback},
         message_result::PutMessageResult,
+        message_status_enum::{AppendMessageStatus, PutMessageStatus},
         put_message_context::PutMessageContext,
         swappable::Swappable,
     },
@@ -152,7 +153,21 @@ impl CommitLog {
         let result =
             mapped_file.append_message(msg, append_message_callback, &mut put_message_context);
 
-        PutMessageResult::default()
+        match result.status {
+            AppendMessageStatus::PutOk => {
+                PutMessageResult::new_append_result(PutMessageStatus::PutOk, Some(result))
+            }
+            AppendMessageStatus::EndOfFile => {
+                unimplemented!()
+            }
+            AppendMessageStatus::MessageSizeExceeded
+            | AppendMessageStatus::PropertiesSizeExceeded => {
+                PutMessageResult::new_append_result(PutMessageStatus::MessageIllegal, Some(result))
+            }
+            AppendMessageStatus::UnknownError => {
+                PutMessageResult::new_append_result(PutMessageStatus::UnknownError, Some(result))
+            }
+        }
     }
 
     pub fn is_multi_dispatch_msg(msg_inner: &MessageExtBrokerInner) -> bool {

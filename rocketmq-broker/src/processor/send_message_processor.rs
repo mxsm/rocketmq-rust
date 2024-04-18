@@ -449,6 +449,7 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
             response.setRemark(String.format("broker unable to service, until %s", UtilAll.timeMillisToHumanString2(startTimestamp)));
             return response;
         }*/
+        response = response.set_code(-1);
         self.inner
             .msg_check(ctx, request, request_header, &mut response);
         response
