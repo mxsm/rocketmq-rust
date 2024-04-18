@@ -29,6 +29,35 @@ pub fn bytes_to_string(src: &[u8]) -> String {
     hex_chars.into_iter().collect()
 }
 
+fn string_to_bytes(hex_string: impl Into<String>) -> Option<Vec<u8>> {
+    let hex_string = hex_string.into();
+    if hex_string.is_empty() {
+        return None;
+    }
+
+    let hex_string = hex_string.to_uppercase();
+    let length = hex_string.len() / 2;
+    let mut bytes = Vec::<u8>::with_capacity(length);
+
+    for i in 0..length {
+        let pos = i * 2;
+        let byte = match char_to_byte(hex_string.chars().nth(pos)?) << 4
+            | char_to_byte(hex_string.chars().nth(pos + 1)?)
+        {
+            byte if byte <= 255 => byte,
+            _ => return None,
+        };
+        bytes.push(byte);
+    }
+
+    Some(bytes)
+}
+
+fn char_to_byte(c: char) -> u8 {
+    let hex_chars = "0123456789ABCDEF";
+    hex_chars.find(c).unwrap_or(0) as u8
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

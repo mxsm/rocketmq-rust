@@ -31,7 +31,7 @@ pub struct AppendMessageResult {
     /// Message ID.
     pub msg_id: String,
     /// Message ID supplier.
-    pub msg_id_supplier: Box<dyn Fn() -> String>,
+    // pub msg_id_supplier: Box<dyn Fn() -> String>,
     /// Message storage timestamp.
     pub store_timestamp: i64,
     /// Consume queue's offset (step by one).

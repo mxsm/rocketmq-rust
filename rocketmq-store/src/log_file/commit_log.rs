@@ -15,8 +15,11 @@
  * limitations under the License.
  */
 
-use std::{ops::Deref, sync::Arc};
-use std::cell::{Cell, RefCell};
+use std::{
+    cell::{Cell, RefCell, RefMut},
+    ops::Deref,
+    sync::Arc,
+};
 
 use rocketmq_common::{
     common::{
@@ -32,6 +35,7 @@ use crate::{
     base::{
         append_message_callback::{AppendMessageCallback, DefaultAppendMessageCallback},
         message_result::PutMessageResult,
+        put_message_context::PutMessageContext,
         swappable::Swappable,
     },
     config::message_store_config::MessageStoreConfig,
@@ -49,19 +53,17 @@ pub const BLANK_MAGIC_CODE: i32 = -875286124;
 // PROPERTY_SEPARATOR]
 pub const CRC32_RESERVED_LEN: i32 = (MessageConst::PROPERTY_CRC32.len() + 1 + 10 + 1) as i32;
 
-struct PutMessageThreadLocal{
-    encoder: RefCell<Option<MessageExtEncoder>>
-    key: RefCell<Option<String>>,
+struct PutMessageThreadLocal {
+    encoder: Cell<Option<MessageExtEncoder>>,
+    key: Cell<Option<String>>,
 }
 
 thread_local! {
-    static PUT_MESSAGE_THREAD_LOCAL: PutMessageThreadLocal = PutMessageThreadLocal{
-        encoder: RefCell::new(None),
-        key: RefCell::new(None),
-    };
+    static PUT_MESSAGE_THREAD_LOCAL: Arc<PutMessageThreadLocal> = Arc::new(PutMessageThreadLocal{
+        encoder: Cell::new(None),
+        key: Cell::new(None),
+    });
 }
-
-
 
 #[derive(Default)]
 pub struct CommitLog {
@@ -139,12 +141,17 @@ impl CommitLog {
                 .unwrap(),
             Some(mapped_file) => mapped_file,
         };
-
-        let mut append_message_callback =
+        let topic_queue_key = generate_key(&msg);
+        let mut put_message_context = PutMessageContext::new(topic_queue_key);
+        let append_message_callback =
             DefaultAppendMessageCallback::new(self.message_store_config.clone());
-        let result =
+        /* let result =
             append_message_callback.do_append(mapped_file.file_from_offset() as i64, 0, &mut msg);
-        mapped_file.append_data(msg.encoded_buff.clone(), false);
+        mapped_file.append_data(msg.encoded_buff.clone(), false);*/
+
+        let result =
+            mapped_file.append_message(msg, append_message_callback, &mut put_message_context);
+
         PutMessageResult::default()
     }
 
@@ -160,6 +167,14 @@ impl CommitLog {
     pub fn get_message_num(_msg_inner: &MessageExtBrokerInner) -> u8 {
         unimplemented!()
     }
+}
+
+fn generate_key(msg: &MessageExtBrokerInner) -> String {
+    let mut topic_queue_key = String::new();
+    topic_queue_key.push_str(msg.topic());
+    topic_queue_key.push_str("-");
+    topic_queue_key.push_str(msg.queue_id().to_string().as_str());
+    topic_queue_key
 }
 
 impl Swappable for CommitLog {

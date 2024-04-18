@@ -127,6 +127,7 @@ impl LocalMappedFile {
         message_callback: impl AppendMessageCallback,
         put_message_context: &mut PutMessageContext,
     ) -> AppendMessageResult {
+        let mut message = message;
         let current_pos = self.wrote_position.load(Ordering::Relaxed) as u64;
         if current_pos < self.file_size {
             unimplemented!()
@@ -135,7 +136,16 @@ impl LocalMappedFile {
             "MappedFile.appendMessage return null, wrotePosition: {} fileSize: {}",
             current_pos, self.file_size
         );
-        AppendMessageResult::default()
+        let mut message_callback = message_callback;
+        let append_message_result = message_callback.do_append(
+            self.file_from_offset() as i64,
+            current_pos as i64,
+            (self.file_size - current_pos) as i32,
+            &mut message,
+            put_message_context,
+        );
+        self.append_data(message.encoded_buff.clone(), false);
+        append_message_result
     }
 }
 

@@ -17,11 +17,21 @@
 use std::{
     collections::{hash_map::DefaultHasher, HashMap, HashSet},
     hash::{Hash, Hasher},
+    net::SocketAddr,
 };
 
+use bytes::BufMut;
+
 use crate::{
-    common::message::{message_single::MessageExt, MessageConst},
+    common::{
+        message::{
+            message_single::{MessageExt, MessageExtBrokerInner},
+            MessageConst,
+        },
+        sys_flag::message_sys_flag::MessageSysFlag,
+    },
     MessageDecoder::{NAME_VALUE_SEPARATOR, PROPERTY_SEPARATOR},
+    UtilAll::bytes_to_string,
 };
 
 pub fn get_sharding_key_index(sharding_key: &str, index_size: usize) -> usize {
@@ -70,6 +80,29 @@ pub fn delete_property(properties_string: &str, name: &str) -> String {
         .join(PROPERTY_SEPARATOR.to_string().as_str())
 }
 
+pub fn build_message_id(socket_addr: SocketAddr, wrote_offset: i64) -> String {
+    let mut msg_id_vec = match socket_addr {
+        SocketAddr::V4(addr) => {
+            let mut msg_id_vec = Vec::<u8>::with_capacity(16);
+            msg_id_vec.extend_from_slice(&addr.ip().octets());
+            msg_id_vec.put_i32(addr.port() as i32);
+            msg_id_vec
+        }
+        SocketAddr::V6(addr) => {
+            let mut msg_id_vec = Vec::<u8>::with_capacity(28);
+            msg_id_vec.extend_from_slice(&addr.ip().octets());
+            msg_id_vec.put_i32(addr.port() as i32);
+            msg_id_vec
+        }
+    };
+    msg_id_vec.put_i64(wrote_offset);
+    bytes_to_string(msg_id_vec.as_slice())
+}
+
+pub fn parse_message_id(msg_id: impl Into<String>) -> (SocketAddr, i64) {
+    unimplemented!()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -80,5 +113,10 @@ mod tests {
             delete_property("aa\u{0001}bb\u{0002}cc\u{0001}bb\u{0002}", "a"),
             "aa\u{0001}bb"
         );
+    }
+
+    #[test]
+    fn test_build_message_id() {
+        println!("{}", build_message_id("127.0.0.1:12".parse().unwrap(), 1))
     }
 }
