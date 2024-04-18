@@ -2,6 +2,7 @@
 members = [
     "rocketmq",
     "rocketmq-broker",
+    "rocketmq-cmd",
     "rocketmq-common",
     "rocketmq-filter",
     "rocketmq-macros",
