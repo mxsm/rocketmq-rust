@@ -464,6 +464,6 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
         topic_config: &mut rocketmq_common::common::config::TopicConfig,
         properties: &mut HashMap<String, String>,
     ) -> bool {
-        unimplemented!()
+        false
     }
 }
