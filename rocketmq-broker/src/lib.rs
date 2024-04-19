@@ -19,7 +19,6 @@
 
 pub use broker_bootstrap::{BrokerBootstrap, Builder};
 
-pub mod broker_controller;
 pub mod command;
 
 mod broker_bootstrap;
