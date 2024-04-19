@@ -21,15 +21,16 @@ use std::{
     sync::Arc,
 };
 
+use tokio::runtime::Handle;
+
 use rocketmq_common::{
     common::{
         message::{message_single::MessageExtBrokerInner, MessageConst, MessageVersion},
         mix_all,
     },
-    utils::time_utils,
     CRC32Utils::crc32,
+    utils::time_utils,
 };
-use tokio::runtime::Handle;
 
 use crate::{
     base::{

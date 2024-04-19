@@ -16,13 +16,13 @@
  */
 use rocketmq_remoting::{
     protocol::remoting_command::RemotingCommand,
-    runtime::{processor::RequestProcessor, server::ConnectionHandlerContext},
+    runtime::server::ConnectionHandlerContext,
 };
 
 #[derive(Default)]
 pub struct PullMessageProcessor {}
 
-impl RequestProcessor for PullMessageProcessor {
+impl PullMessageProcessor {
     fn process_request(
         &self,
         _ctx: ConnectionHandlerContext,

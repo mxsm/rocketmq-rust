@@ -50,6 +50,7 @@ use crate::{
     out_api::broker_outer_api::BrokerOuterAPI,
     processor::{
         admin_broker_processor::AdminBrokerProcessor, send_message_processor::SendMessageProcessor,
+        BrokerRequestProcessor,
     },
     schedule::schedule_message_service::ScheduleMessageService,
     subscription::manager::subscription_group_manager::SubscriptionGroupManager,
@@ -215,33 +216,17 @@ impl BrokerRuntime {
 
     fn initialize_resources(&mut self) {}
 
-    fn init_processor(&self) -> (BoxedRequestProcessor, RequestProcessorTable) {
-        let default_processor = BoxedRequestProcessor::new(Box::<AdminBrokerProcessor>::default());
-        let mut request_processor_table = RequestProcessorTable::new();
-
-        let send_message_process = BoxedRequestProcessor::new(Box::new(SendMessageProcessor::new(
+    fn init_processor(&self) -> Arc<BrokerRequestProcessor<LocalFileMessageStore>> {
+        let send_message_processor = SendMessageProcessor::<LocalFileMessageStore>::new(
             self.topic_queue_mapping_manager.clone(),
             self.topic_config_manager.clone(),
             self.broker_config.clone(),
             self.message_store.clone().unwrap(),
-        )));
-        request_processor_table.insert(
-            RequestCode::SendMessage.to_i32(),
-            send_message_process.clone(),
         );
-        request_processor_table.insert(
-            RequestCode::SendMessageV2.to_i32(),
-            send_message_process.clone(),
-        );
-        request_processor_table.insert(
-            RequestCode::SendBatchMessage.to_i32(),
-            send_message_process.clone(),
-        );
-        request_processor_table.insert(
-            RequestCode::ConsumerSendMsgBack.to_i32(),
-            send_message_process,
-        );
-        (default_processor, request_processor_table)
+        Arc::new(BrokerRequestProcessor {
+            send_message_processor,
+            admin_broker_processor: Default::default(),
+        })
     }
 
     fn initialize_scheduled_tasks(&mut self) {}
@@ -253,12 +238,8 @@ impl BrokerRuntime {
     fn initial_rpc_hooks(&mut self) {}
 
     pub async fn start(&mut self) {
-        let (default_processor, request_processor_table) = self.init_processor();
-        let server = RocketMQServer::new(
-            self.server_config.clone(),
-            request_processor_table,
-            default_processor,
-        );
+        let request_processor = self.init_processor();
+        let server = RocketMQServer::new(self.server_config.clone(), request_processor);
         let server_future = server.run();
         self.register_broker_all(true, false, true).await;
         let mut cloned_broker_runtime = self.clone();

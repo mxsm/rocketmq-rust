@@ -17,8 +17,9 @@
 
 use std::fmt;
 
-pub use faq::FAQUrl;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+pub use faq::FAQUrl;
 
 pub use crate::common::sys_flag::topic_sys_flag as TopicSysFlag;
 

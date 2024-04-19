@@ -17,6 +17,8 @@
 
 use std::{collections::HashMap, error::Error, sync::Arc};
 
+use tracing::{error, warn};
+
 use rocketmq_common::{
     common::{
         config::TopicConfig,
@@ -26,7 +28,6 @@ use rocketmq_common::{
     utils::queue_type_utils::QueueTypeUtils,
 };
 use rocketmq_runtime::RocketMQRuntime;
-use tracing::{error, warn};
 
 use crate::{
     base::{message_result::PutMessageResult, message_status_enum::PutMessageStatus},

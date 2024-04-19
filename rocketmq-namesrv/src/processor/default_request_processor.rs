@@ -73,8 +73,8 @@ pub struct DefaultRequestProcessor {
     kvconfig_manager: Arc<parking_lot::RwLock<KVConfigManager>>,
 }
 
-impl RequestProcessor for DefaultRequestProcessor {
-    fn process_request(
+impl DefaultRequestProcessor {
+    pub fn process_request(
         &self,
         ctx: ConnectionHandlerContext,
         request: RemotingCommand,

@@ -149,8 +149,9 @@ impl NamesrvConfig {
 mod tests {
     use std::env;
 
-    use super::*;
     use crate::common::mix_all::{ROCKETMQ_HOME_ENV, ROCKETMQ_HOME_PROPERTY};
+
+    use super::*;
 
     #[test]
     fn test_namesrv_config() {

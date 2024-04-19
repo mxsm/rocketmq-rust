@@ -18,11 +18,12 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use rocketmq_broker::{broker_config::BrokerConfig, command::Args, Builder};
+use tracing::info;
+
+use rocketmq_broker::{broker_config::BrokerConfig, Builder, command::Args};
 use rocketmq_common::{EnvUtils::EnvUtils, ParseConfigFile};
 use rocketmq_rust::rocketmq;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
-use tracing::info;
 
 #[rocketmq::main]
 async fn main() -> anyhow::Result<()> {

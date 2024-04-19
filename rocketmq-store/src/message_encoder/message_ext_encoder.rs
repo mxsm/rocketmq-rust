@@ -17,6 +17,8 @@
 use std::sync::Arc;
 
 use bytes::{Buf, BufMut};
+use tracing::warn;
+
 use rocketmq_common::{
     common::{
         message::{
@@ -26,7 +28,6 @@ use rocketmq_common::{
     },
     MessageDecoder,
 };
-use tracing::warn;
 
 use crate::{
     base::{

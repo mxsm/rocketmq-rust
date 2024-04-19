@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::{
     common::{
-        attribute::{cq_type::CQType, Attribute},
+        attribute::cq_type::CQType,
         config::TopicConfig,
     },
     TopicAttributes,
@@ -39,7 +39,6 @@ impl QueueTypeUtils {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::TopicFilterType;
 
     #[test]
     fn test_is_batch_cq() {

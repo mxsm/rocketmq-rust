@@ -17,6 +17,7 @@
 use std::sync::Arc;
 
 use bytes::BytesMut;
+
 use rocketmq_common::{
     common::{
         message::{message_batch::MessageExtBatch, message_single::MessageExtBrokerInner},

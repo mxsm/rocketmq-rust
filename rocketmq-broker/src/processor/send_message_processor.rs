@@ -87,8 +87,8 @@ impl<MS: Default> Default for SendMessageProcessor<MS> {
 }
 
 // RequestProcessor implementation
-impl<MS: MessageStore + Send> RequestProcessor for SendMessageProcessor<MS> {
-    fn process_request(
+impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
+    pub fn process_request(
         &self,
         ctx: ConnectionHandlerContext,
         request: RemotingCommand,

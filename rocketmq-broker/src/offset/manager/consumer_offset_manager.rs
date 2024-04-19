@@ -17,9 +17,10 @@
 
 use std::{collections::HashMap, sync::Arc};
 
+use serde::{Deserialize, Serialize};
+
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_remoting::protocol::DataVersion;
-use serde::{Deserialize, Serialize};
 
 use crate::{broker_config::BrokerConfig, broker_path_config_helper::get_consumer_offset_path};
 

@@ -17,8 +17,9 @@
 
 use std::{collections::HashMap, ops::Deref, sync::Arc};
 
-use rocketmq_common::common::config_manager::ConfigManager;
 use serde::{Deserialize, Serialize};
+
+use rocketmq_common::common::config_manager::ConfigManager;
 
 use crate::{
     broker_config::BrokerConfig, broker_path_config_helper::get_consumer_order_info_path,

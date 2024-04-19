@@ -17,11 +17,12 @@
 
 use std::{collections::HashMap, sync::Arc};
 
+use serde::{Deserialize, Serialize};
+
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_remoting::protocol::{
-    subscription::subscription_group_config::SubscriptionGroupConfig, DataVersion,
+    DataVersion, subscription::subscription_group_config::SubscriptionGroupConfig,
 };
-use serde::{Deserialize, Serialize};
 
 use crate::{broker_config::BrokerConfig, broker_path_config_helper::get_subscription_group_path};
 

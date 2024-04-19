@@ -25,7 +25,7 @@ use bytes::{Buf, BufMut};
 
 use crate::{
     common::{
-        message::{MessageConst, MessageTrait, MessageVersion, MESSAGE_MAGIC_CODE_V1},
+        message::{MessageConst, MessageTrait, MessageVersion},
         sys_flag::message_sys_flag::MessageSysFlag,
         TopicFilterType,
     },

@@ -23,7 +23,7 @@ use std::{
 };
 
 use tokio::{
-    runtime::{Handle, Runtime},
+    runtime::Handle,
     task::JoinHandle,
 };
 

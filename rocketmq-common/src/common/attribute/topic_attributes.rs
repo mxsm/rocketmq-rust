@@ -1,10 +1,8 @@
-use std::collections::HashMap;
-
 use lazy_static::lazy_static;
 
 use crate::{
     common::attribute::{
-        attribute_enum::EnumAttribute, topic_message_type::TopicMessageType, Attribute,
+        Attribute, attribute_enum::EnumAttribute, topic_message_type::TopicMessageType,
     },
     hashset,
 };

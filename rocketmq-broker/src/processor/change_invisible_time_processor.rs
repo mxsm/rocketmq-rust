@@ -14,12 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use rocketmq_remoting::runtime::{processor::RequestProcessor, server::ConnectionHandlerContext};
+use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
 
 #[derive(Default)]
 pub struct ChangeInvisibleTimeProcessor {}
 
-impl RequestProcessor for ChangeInvisibleTimeProcessor {
+impl ChangeInvisibleTimeProcessor {
     fn process_request(
         &self,
         _ctx: ConnectionHandlerContext,

@@ -23,10 +23,11 @@ use std::{
 
 use bytes::Bytes;
 use memmap2::MmapMut;
+use tracing::error;
+
 use rocketmq_common::common::message::{
     message_batch::MessageExtBatch, message_single::MessageExtBrokerInner,
 };
-use tracing::error;
 
 use crate::{
     base::{

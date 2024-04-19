@@ -15,8 +15,6 @@
  * limitations under the License.
  */
 
-use std::collections::{HashMap, HashSet};
-
 use lazy_static::lazy_static;
 
 /*const VALID_CHAR_BIT_MAP: [bool; 128] = {

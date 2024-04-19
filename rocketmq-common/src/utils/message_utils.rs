@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 use std::{
-    collections::{hash_map::DefaultHasher, HashMap, HashSet},
+    collections::{hash_map::DefaultHasher, HashSet},
     hash::{Hash, Hasher},
     net::SocketAddr,
 };
@@ -23,14 +23,11 @@ use std::{
 use bytes::BufMut;
 
 use crate::{
-    common::{
-        message::{
-            message_single::{MessageExt, MessageExtBrokerInner},
-            MessageConst,
-        },
-        sys_flag::message_sys_flag::MessageSysFlag,
+    common::message::{
+        message_single::MessageExt,
+        MessageConst,
     },
-    MessageDecoder::{NAME_VALUE_SEPARATOR, PROPERTY_SEPARATOR},
+    MessageDecoder::PROPERTY_SEPARATOR,
     UtilAll::bytes_to_string,
 };
 

@@ -16,8 +16,9 @@
  */
 use std::collections::HashMap;
 
-use rocketmq_remoting::protocol::DataVersion;
 use serde::{Deserialize, Serialize};
+
+use rocketmq_remoting::protocol::DataVersion;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -20,11 +20,12 @@ use crate::{
 };
 
 /// Trait for processing requests.
-pub trait RequestProcessor {
+#[trait_variant::make(RequestProcessor: Send)]
+pub trait LocalRequestProcessor {
     /// Process a request.
-    fn process_request(
+    async fn process_request(
         &self,
-        ctx: ConnectionHandlerContext,
+        ctx: ConnectionHandlerContext<'_>,
         request: RemotingCommand,
     ) -> RemotingCommand;
 }
