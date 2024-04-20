@@ -19,6 +19,10 @@
 #![allow(unused_imports)]
 
 pub use crate::{
+    common::{
+        attribute::topic_attributes as TopicAttributes,
+        message::{message_accessor as MessageAccessor, message_decoder as MessageDecoder},
+    },
     thread_pool::{
         FuturesExecutorService, FuturesExecutorServiceBuilder, ScheduledExecutorService,
         TokioExecutorService,
@@ -31,15 +35,9 @@ pub use crate::{
 };
 
 pub mod common;
-pub use crate::common::attribute::topic_attributes as TopicAttributes;
-
 pub mod log;
 mod thread_pool;
 pub mod utils;
-
-pub use crate::common::message::{
-    message_accessor as MessageAccessor, message_decoder as MessageDecoder,
-};
 
 #[cfg(test)]
 mod tests {}

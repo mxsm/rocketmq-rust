@@ -17,9 +17,12 @@
 use std::sync::Arc;
 
 use bytes::BytesMut;
-use rocketmq_common::common::{
-    message::{message_batch::MessageExtBatch, message_single::MessageExtBrokerInner},
-    sys_flag::message_sys_flag::MessageSysFlag,
+use rocketmq_common::{
+    common::{
+        message::{message_batch::MessageExtBatch, message_single::MessageExtBrokerInner},
+        sys_flag::message_sys_flag::MessageSysFlag,
+    },
+    utils::message_utils,
 };
 
 use crate::{
@@ -49,9 +52,10 @@ pub trait AppendMessageCallback {
     fn do_append(
         &mut self,
         file_from_offset: i64,
+        file_wrote_position: i64,
         max_blank: i32,
         msg: &mut MessageExtBrokerInner,
-        //put_message_context: &PutMessageContext,
+        put_message_context: &PutMessageContext,
     ) -> AppendMessageResult;
 
     /// After batched message serialization, write MappedByteBuffer
@@ -103,8 +107,10 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
     fn do_append(
         &mut self,
         file_from_offset: i64,
+        file_wrote_position: i64,
         max_blank: i32,
         msg_inner: &mut MessageExtBrokerInner,
+        put_message_context: &PutMessageContext,
     ) -> AppendMessageResult {
         let mut pre_encode_buffer = msg_inner.encoded_buff.clone(); // Assuming get_encoded_buff returns Option<ByteBuffer>
         let is_multi_dispatch_msg = self.message_store_config.enable_multi_dispatch
@@ -116,16 +122,10 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         }
 
         let msg_len = i32::from_le_bytes(pre_encode_buffer[0..4].try_into().unwrap());
-        let wrote_offset = file_from_offset + 1;
+        let wrote_offset = file_from_offset + file_wrote_position;
 
-        let msg_id_supplier = || {
-            let sysflag = msg_inner.sys_flag();
-            let msg_id_len = if sysflag & MessageSysFlag::STOREHOSTADDRESS_V6_FLAG == 0 {
-                4 + 4 + 8
-            } else {
-                16 + 4 + 8
-            };
-        };
+        let msg_id =
+            message_utils::build_message_id(msg_inner.message_ext_inner.store_host, wrote_offset);
 
         let mut queue_offset = msg_inner.queue_offset();
         let message_num = CommitLog::get_message_num(msg_inner);
@@ -139,13 +139,13 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         }
 
         if (msg_len + END_FILE_MIN_BLANK_LENGTH) > max_blank {
-            /* self.msg_store_item_memory.0.clear();
-            self.msg_store_item_memory.0.extend_from_slice(&(max_blank as i32).to_le_bytes());
-            self.msg_store_item_memory.0.extend_from_slice(&(BLANK_MAGIC_CODE as i32).to_le_bytes());
-            let mut byte_buffer = Vec::new();
-            byte_buffer.extend_from_slice(&self.msg_store_item_memory.0[..8]);*/
             return AppendMessageResult {
                 status: AppendMessageStatus::EndOfFile,
+                wrote_offset,
+                wrote_bytes: max_blank,
+                msg_id,
+                store_timestamp: msg_inner.store_timestamp(),
+                logics_offset: queue_offset,
                 ..Default::default()
             };
         }
@@ -162,26 +162,16 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         pos += 8 + 4 + 8 + ip_len;
         pre_encode_buffer[pos..(pos + 8)]
             .copy_from_slice(&msg_inner.store_timestamp().to_le_bytes());
-        /*  if self.enabled_append_prop_crc {
-            let check_size = msg_len - self.crc32_reserved_length as i32;
-            let mut tmp_buffer = pre_encode_buffer.clone();
-            tmp_buffer.0.truncate(tmp_buffer.0.len() + check_size as usize);
-            let crc32 = util_all::crc32(&tmp_buffer.0);
-            tmp_buffer.0.extend_from_slice(&crc32.to_le_bytes());
-        }*/
 
-        /* let begin_time_mills = self.default_message_store.now();
-        self.message_store.get_perf_counter().start_tick("WRITE_MEMORY_TIME_MS");*/
         msg_inner.encoded_buff = pre_encode_buffer;
-        /* self.message_store.get_perf_counter().end_tick("WRITE_MEMORY_TIME_MS");
-        msg_inner.set_encoded_buff(None);*/
-
-        /*if is_multi_dispatch_msg {
-            self.multi_dispatch.update_multi_queue_offset(msg_inner);
-        }*/
 
         AppendMessageResult {
             status: AppendMessageStatus::PutOk,
+            wrote_offset,
+            wrote_bytes: msg_len,
+            msg_id,
+            store_timestamp: msg_inner.store_timestamp(),
+            logics_offset: queue_offset,
             ..Default::default()
         }
     }

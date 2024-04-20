@@ -58,6 +58,6 @@ tempfile = "3.10.0"
 log = "0.4.20"
 
 memmap2 = "0.9.4"
-
+trait-variant.workspace = true
 [dev-dependencies]
 tempfile = "3.10.0"

@@ -14,8 +14,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::collections::HashSet;
-
 pub mod attribute_enum;
 pub mod cleanup_policy;
 pub mod cq_type;

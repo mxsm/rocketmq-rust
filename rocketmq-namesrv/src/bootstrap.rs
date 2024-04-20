@@ -14,26 +14,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
-use rocketmq_remoting::{
-    code::request_code::RequestCode,
-    runtime::{
-        processor::RequestProcessor, server::RocketMQServer, BoxedRequestProcessor,
-        RequestProcessorTable,
-    },
-    server::config::ServerConfig,
-};
+use rocketmq_remoting::{runtime::server::RocketMQServer, server::config::ServerConfig};
 use rocketmq_runtime::RocketMQRuntime;
 use tokio::{select, sync::broadcast};
 
 use crate::{
-    processor::{default_request_processor::DefaultRequestProcessor, ClientRequestProcessor},
+    processor::{
+        default_request_processor::DefaultRequestProcessor, ClientRequestProcessor,
+        NameServerRequestProcessor,
+    },
     KVConfigManager, RouteInfoManager,
 };
-
-type InitProcessorsReturn = (RequestProcessorTable, BoxedRequestProcessor);
 
 pub struct NameServerBootstrap {
     name_server_runtime: NameServerRuntime,
@@ -66,28 +60,27 @@ impl NameServerRuntime {
     pub async fn start(&mut self) {
         let (notify_conn_disconnect, _) = broadcast::channel::<SocketAddr>(100);
         let receiver = notify_conn_disconnect.subscribe();
-        let (processor_table, default_request_processor) = self.init_processors(receiver);
-        let server = RocketMQServer::new(
-            self.server_config.clone(),
-            processor_table,
-            default_request_processor,
-        );
+        let request_processor = self.init_processors(receiver);
+        let server = RocketMQServer::new(self.server_config.clone(), request_processor);
         server.run().await;
     }
 
-    fn init_processors(&self, receiver: broadcast::Receiver<SocketAddr>) -> InitProcessorsReturn {
+    fn init_processors(
+        &self,
+        receiver: broadcast::Receiver<SocketAddr>,
+    ) -> Arc<NameServerRequestProcessor> {
         RouteInfoManager::start(self.route_info_manager.clone(), receiver);
-        let mut processors: HashMap<i32, Arc<Box<dyn RequestProcessor + Send + Sync + 'static>>> =
-            HashMap::new();
 
-        processors.insert(
-            RequestCode::GetRouteinfoByTopic.to_i32(),
-            Arc::new(Box::new(ClientRequestProcessor::new(
-                self.route_info_manager.clone(),
-                self.name_server_config.clone(),
-                self.kvconfig_manager.clone(),
-            ))),
+        let client_request_processor = ClientRequestProcessor::new(
+            self.route_info_manager.clone(),
+            self.name_server_config.clone(),
+            self.kvconfig_manager.clone(),
         );
+        let default_request_processor = DefaultRequestProcessor::new_with(
+            self.route_info_manager.clone(),
+            self.kvconfig_manager.clone(),
+        );
+
         let route_info_manager_arc = self.route_info_manager.clone();
         self.name_server_runtime
             .as_ref()
@@ -99,13 +92,10 @@ impl NameServerRuntime {
                 Some(Duration::from_secs(5)),
                 Duration::from_secs(5),
             );
-        (
-            processors,
-            Arc::new(Box::new(DefaultRequestProcessor::new_with(
-                self.route_info_manager.clone(),
-                self.kvconfig_manager.clone(),
-            ))),
-        )
+        Arc::new(NameServerRequestProcessor {
+            client_request_processor: Arc::new(client_request_processor),
+            default_request_processor: Arc::new(default_request_processor),
+        })
     }
 }
 

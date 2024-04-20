@@ -27,10 +27,8 @@ use tokio_stream::StreamExt;
 use tracing::{error, info, warn};
 
 use crate::{
-    connection::Connection,
-    protocol::remoting_command::RemotingCommand,
-    runtime::{BoxedRequestProcessor, RequestProcessorTable},
-    server::config::ServerConfig,
+    connection::Connection, protocol::remoting_command::RemotingCommand,
+    runtime::processor::RequestProcessor, server::config::ServerConfig,
 };
 
 /// Default limit the max number of connections.
@@ -42,16 +40,15 @@ type Tx = mpsc::UnboundedSender<RemotingCommand>;
 /// Shorthand for the receive half of the message channel.
 type Rx = mpsc::UnboundedReceiver<RemotingCommand>;
 
-pub struct ConnectionHandler {
-    default_request_processor: BoxedRequestProcessor,
-    processor_table: RequestProcessorTable,
+pub struct ConnectionHandler<RP> {
+    request_processor: Arc<RP>,
     connection: Connection,
     shutdown: Shutdown,
     _shutdown_complete: mpsc::Sender<()>,
     conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
 }
 
-impl Drop for ConnectionHandler {
+impl<RP> Drop for ConnectionHandler<RP> {
     fn drop(&mut self) {
         if let Some(ref sender) = self.conn_disconnect_notify {
             let socket_addr = self.connection.remote_addr;
@@ -64,7 +61,7 @@ impl Drop for ConnectionHandler {
     }
 }
 
-impl ConnectionHandler {
+impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
     async fn handle(&mut self) -> anyhow::Result<()> {
         let _remote_addr = self.connection.remote_addr;
         while !self.shutdown.is_shutdown {
@@ -91,9 +88,8 @@ impl ConnectionHandler {
             };
             let ctx = ConnectionHandlerContext::new(&self.connection);
             let opaque = cmd.opaque();
-            let response = match self.processor_table.get(&cmd.code()) {
-                None => self.default_request_processor.process_request(ctx, cmd),
-                Some(pr) => pr.process_request(ctx, cmd),
+            let response = tokio::select! {
+                result = self.request_processor.process_request( ctx,cmd) =>  result,
             };
             tokio::select! {
                 result = self.connection.framed.send(response.set_opaque(opaque)) => match result{
@@ -111,7 +107,7 @@ impl ConnectionHandler {
 
 /// Server listener state. Created in the `run` call. It includes a `run` method
 /// which performs the TCP listening and initialization of per-connection state.
-struct ConnectionListener {
+struct ConnectionListener<RP> {
     /// The TCP listener supplied by the `run` caller.
     listener: TcpListener,
 
@@ -131,11 +127,10 @@ struct ConnectionListener {
 
     conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
 
-    default_request_processor: BoxedRequestProcessor,
-    processor_table: RequestProcessorTable,
+    request_processor: Arc<RP>,
 }
 
-impl ConnectionListener {
+impl<RP: RequestProcessor + Sync + 'static> ConnectionListener<RP> {
     async fn run(&mut self) -> anyhow::Result<()> {
         info!("Prepare accepting connection");
         loop {
@@ -153,8 +148,7 @@ impl ConnectionListener {
             info!("Accepted connection, client ip:{}", remote_addr);
             //create per connection handler state
             let mut handler = ConnectionHandler {
-                default_request_processor: self.default_request_processor.clone(),
-                processor_table: self.processor_table.clone(),
+                request_processor: self.request_processor.clone(),
                 connection: Connection::new(socket, remote_addr),
                 shutdown: Shutdown::new(self.notify_shutdown.subscribe()),
                 _shutdown_complete: self.shutdown_complete_tx.clone(),
@@ -204,27 +198,21 @@ impl ConnectionListener {
     }
 }
 
-pub struct RocketMQServer {
+pub struct RocketMQServer<RP> {
     config: Arc<ServerConfig>,
-    request_processor_table: RequestProcessorTable,
-    default_request_processor: BoxedRequestProcessor,
+    request_processor: Arc<RP>,
 }
 
-impl RocketMQServer {
-    pub fn new(
-        config: Arc<ServerConfig>,
-        request_processor_table: RequestProcessorTable,
-        default_request_processor: BoxedRequestProcessor,
-    ) -> Self {
+impl<RP> RocketMQServer<RP> {
+    pub fn new(config: Arc<ServerConfig>, request_processor: Arc<RP>) -> Self {
         Self {
             config,
-            request_processor_table,
-            default_request_processor,
+            request_processor,
         }
     }
 }
 
-impl RocketMQServer {
+impl<RP: RequestProcessor + Sync + 'static> RocketMQServer<RP> {
     pub async fn run(&self) {
         let listener = TcpListener::bind(&format!(
             "{}:{}",
@@ -240,19 +228,17 @@ impl RocketMQServer {
         run(
             listener,
             tokio::signal::ctrl_c(),
-            self.default_request_processor.clone(),
-            self.request_processor_table.clone(),
+            self.request_processor.clone(),
             Some(notify_conn_disconnect),
         )
         .await;
     }
 }
 
-pub async fn run(
+pub async fn run<RP: RequestProcessor + Sync + 'static>(
     listener: TcpListener,
     shutdown: impl Future,
-    default_request_processor: BoxedRequestProcessor,
-    processor_table: RequestProcessorTable,
+    request_processor: Arc<RP>,
     conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
 ) {
     let (notify_shutdown, _) = broadcast::channel(1);
@@ -261,11 +247,10 @@ pub async fn run(
     let mut listener = ConnectionListener {
         listener,
         notify_shutdown,
-        default_request_processor,
         shutdown_complete_tx,
         conn_disconnect_notify,
-        processor_table,
         limit_connections: Arc::new(Semaphore::new(DEFAULT_MAX_CONNECTIONS)),
+        request_processor,
     };
 
     tokio::select! {

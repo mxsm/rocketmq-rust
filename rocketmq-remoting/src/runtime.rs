@@ -17,10 +17,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use crate::{
-    net::ResponseFuture, protocol::remoting_command::RemotingCommand,
-    runtime::processor::RequestProcessor,
-};
+use crate::{protocol::remoting_command::RemotingCommand, runtime::processor::RequestProcessor};
 
 pub mod config;
 pub mod processor;
@@ -41,7 +38,7 @@ pub trait RPCHook: Send + Sync + 'static {
     );
 }
 
-pub struct ServiceBridge {
+/*pub struct ServiceBridge {
     //Limiting the maximum number of one-way requests.
     pub(crate) semaphore_oneway: tokio::sync::Semaphore,
     //Limiting the maximum number of asynchronous requests.
@@ -53,80 +50,4 @@ pub struct ServiceBridge {
     pub(crate) default_request_processor_pair: Option<BoxedRequestProcessor>,
 
     pub(crate) rpc_hooks: Vec<Box<dyn RPCHook>>,
-}
-
-impl ServiceBridge {
-    pub fn new() -> Self {
-        Self {
-            semaphore_oneway: tokio::sync::Semaphore::new(1000),
-            semaphore_async: tokio::sync::Semaphore::new(1000),
-            response_table: HashMap::new(),
-            processor_table: Some(HashMap::new()),
-            default_request_processor_pair: None,
-            rpc_hooks: Vec::new(),
-        }
-    }
-}
-
-impl Default for ServiceBridge {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ServiceBridge {
-    /*    pub fn process_message_received(
-        &mut self,
-        ctx: ConnectionHandlerContext,
-        msg: RemotingCommand,
-    ) {
-        match msg.get_type() {
-            RemotingCommandType::REQUEST => self.process_request_command(ctx, msg),
-            RemotingCommandType::RESPONSE => self.process_response_command(ctx, msg),
-        }
-    }
-
-    pub fn process_request_command(
-        &mut self,
-        _ctx: ConnectionHandlerContext,
-        _msg: RemotingCommand,
-    ) {
-    }
-
-    pub fn process_response_command(
-        &mut self,
-        _ctx: ConnectionHandlerContext,
-        _msg: RemotingCommand,
-    ) {
-    }*/
-
-    /*    #[allow(unused_variables)]
-    pub async fn invoke_async(
-        client: &mut Client,
-        //client: Arc<Mutex<Client>>,
-        request: RemotingCommand,
-        timeout_millis: u64,
-        invoke_callback: impl InvokeCallback,
-    ) {
-                if let Ok(resp) = time::timeout(Duration::from_millis(timeout_millis), async {
-            client.invoke(request).await.unwrap()
-        })
-        .await
-        {
-            invoke_callback.operation_succeed(resp)
-        }
-    }*/
-
-    /*    pub async fn invoke_sync(
-        client: &mut Client,
-        request: RemotingCommand,
-        timeout_millis: u64,
-    ) -> Option<RemotingCommand> {
-        let result = timeout(Duration::from_millis(timeout_millis), async {
-            // client.lock().await.invoke(request).await.unwrap()
-            client.invoke(request).await.unwrap()
-        })
-        .await;
-        Some(result.unwrap())
-    }*/
-}
+}*/

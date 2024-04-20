@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy)]
 pub enum AppendMessageStatus {
     #[default]
     PutOk,
@@ -25,7 +25,7 @@ pub enum AppendMessageStatus {
     UnknownError,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy)]
 pub enum PutMessageStatus {
     #[default]
     PutOk,

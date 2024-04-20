@@ -26,16 +26,28 @@ use rocketmq_common::{
     MessageDecoder, TimeUtils,
 };
 use rocketmq_remoting::{
-    code::response_code::{RemotingSysResponseCode::SystemError, ResponseCode},
+    code::{
+        request_code::RequestCode,
+        response_code::{RemotingSysResponseCode::SystemError, ResponseCode},
+    },
     protocol::{
         header::message_operation_header::send_message_request_header::SendMessageRequestHeader,
         remoting_command::RemotingCommand, NamespaceUtil,
     },
-    runtime::server::ConnectionHandlerContext,
+    runtime::{processor::RequestProcessor, server::ConnectionHandlerContext},
 };
-use rocketmq_store::status::manager::broker_stats_manager::BrokerStatsManager;
+use rocketmq_store::{
+    log_file::MessageStore, status::manager::broker_stats_manager::BrokerStatsManager,
+};
+use tracing::info;
 
-use crate::{broker_config::BrokerConfig, mqtrace::send_message_context::SendMessageContext};
+use crate::{
+    broker_config::BrokerConfig,
+    mqtrace::send_message_context::SendMessageContext,
+    processor::{
+        admin_broker_processor::AdminBrokerProcessor, send_message_processor::SendMessageProcessor,
+    },
+};
 
 pub(crate) mod ack_message_processor;
 pub(crate) mod admin_broker_processor;
@@ -47,6 +59,33 @@ pub(crate) mod pop_message_processor;
 pub(crate) mod pull_message_processor;
 pub(crate) mod reply_message_processor;
 pub(crate) mod send_message_processor;
+
+pub struct BrokerRequestProcessor<MS> {
+    pub(crate) send_message_processor: SendMessageProcessor<MS>,
+    pub(crate) admin_broker_processor: AdminBrokerProcessor,
+}
+
+impl<MS: MessageStore + Send + Sync + 'static> RequestProcessor for BrokerRequestProcessor<MS> {
+    async fn process_request(
+        &self,
+        ctx: ConnectionHandlerContext<'_>,
+        request: RemotingCommand,
+    ) -> RemotingCommand {
+        let request_code = RequestCode::from(request.code());
+        info!("process_request: {:?}", request_code);
+        match request_code {
+            RequestCode::SendMessage
+            | RequestCode::SendMessageV2
+            | RequestCode::SendBatchMessage
+            | RequestCode::ConsumerSendMsgBack => {
+                self.send_message_processor
+                    .process_request(ctx, request_code, request)
+                    .await
+            }
+            _ => self.admin_broker_processor.process_request(ctx, request),
+        }
+    }
+}
 
 #[derive(Default)]
 pub(crate) struct SendMessageProcessorInner {

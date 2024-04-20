@@ -21,6 +21,7 @@ use crate::base::{
 };
 
 /// Represents the result of an append message operation.
+#[derive(Debug)]
 pub struct AppendMessageResult {
     /// Return code.
     pub status: AppendMessageStatus,
@@ -31,7 +32,7 @@ pub struct AppendMessageResult {
     /// Message ID.
     pub msg_id: String,
     /// Message ID supplier.
-    pub msg_id_supplier: &'static dyn Fn() -> String,
+    // pub msg_id_supplier: Box<dyn Fn() -> String>,
     /// Message storage timestamp.
     pub store_timestamp: i64,
     /// Consume queue's offset (step by one).
@@ -73,12 +74,33 @@ impl PutMessageResult {
         }
     }
 
+    pub fn new_append_result(
+        put_message_status: PutMessageStatus,
+        append_message_result: Option<AppendMessageResult>,
+    ) -> Self {
+        Self {
+            put_message_status,
+            append_message_result,
+            remote_put: false,
+        }
+    }
+
     pub fn new_default(put_message_status: PutMessageStatus) -> Self {
         Self {
             put_message_status,
             append_message_result: None,
             remote_put: false,
         }
+    }
+
+    pub fn put_message_status(&self) -> PutMessageStatus {
+        self.put_message_status
+    }
+    pub fn append_message_result(&self) -> Option<&AppendMessageResult> {
+        self.append_message_result.as_ref()
+    }
+    pub fn remote_put(&self) -> bool {
+        self.remote_put
     }
 }
 

@@ -25,7 +25,7 @@ use bytes::{Buf, BufMut};
 
 use crate::{
     common::{
-        message::{MessageConst, MessageTrait, MessageVersion, MESSAGE_MAGIC_CODE_V1},
+        message::{MessageConst, MessageTrait, MessageVersion},
         sys_flag::message_sys_flag::MessageSysFlag,
         TopicFilterType,
     },
@@ -298,9 +298,9 @@ impl Default for MessageExt {
             queue_offset: 0,
             sys_flag: 0,
             born_timestamp: 0,
-            born_host: "127.0.0.1".parse().unwrap(),
+            born_host: "127.0.0.1:10911".parse().unwrap(),
             store_timestamp: 0,
-            store_host: "127.0.0.1".parse().unwrap(),
+            store_host: "127.0.0.1:10911".parse().unwrap(),
             msg_id: "".to_string(),
             commit_log_offset: 0,
             body_crc: 0,

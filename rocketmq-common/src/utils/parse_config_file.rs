@@ -19,9 +19,6 @@ use std::{fmt::Debug, path::PathBuf};
 
 use config::Config;
 use serde::Deserialize;
-use tracing::info;
-
-use crate::common::namesrv::namesrv_config::NamesrvConfig;
 
 pub fn parse_config_file<'de, C>(config_file: PathBuf) -> anyhow::Result<C, anyhow::Error>
 where

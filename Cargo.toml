@@ -53,3 +53,4 @@ config = "0.14"
 
 parking_lot = "0.12"
 dirs = "5.0"
+trait-variant = "0.1.2"

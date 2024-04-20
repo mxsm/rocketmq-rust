@@ -141,7 +141,7 @@ pub trait RemotingClient: RemotingService {
     fn register_processor(
         &mut self,
         request_code: i32,
-        processor: impl RequestProcessor + Send + Sync + 'static,
+        processor: impl RequestProcessor + Sync + 'static,
         executor: Arc<TokioExecutorService>,
     );
 

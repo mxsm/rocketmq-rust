@@ -44,6 +44,6 @@ futures-io = "0.3"
 
 num_cpus.workspace = true
 parking_lot.workspace = true
-
+trait-variant.workspace = true
 [dev-dependencies]
 bytes = "1.5.0"

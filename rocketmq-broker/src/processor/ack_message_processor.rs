@@ -15,14 +15,13 @@
  * limitations under the License.
  */
 use rocketmq_remoting::{
-    protocol::remoting_command::RemotingCommand,
-    runtime::{processor::RequestProcessor, server::ConnectionHandlerContext},
+    protocol::remoting_command::RemotingCommand, runtime::server::ConnectionHandlerContext,
 };
 
 #[derive(Default)]
 pub struct AckMessageProcessor {}
 
-impl RequestProcessor for AckMessageProcessor {
+impl AckMessageProcessor {
     fn process_request(
         &self,
         _ctx: ConnectionHandlerContext,

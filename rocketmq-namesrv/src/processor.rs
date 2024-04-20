@@ -15,7 +15,39 @@
  * limitations under the License.
  */
 
+use std::sync::Arc;
+
+use rocketmq_remoting::{
+    code::request_code::RequestCode,
+    protocol::remoting_command::RemotingCommand,
+    runtime::{processor::RequestProcessor, server::ConnectionHandlerContext},
+};
+use tracing::info;
+
 pub use self::client_request_processor::ClientRequestProcessor;
+use crate::processor::default_request_processor::DefaultRequestProcessor;
 
 mod client_request_processor;
 pub mod default_request_processor;
+
+pub struct NameServerRequestProcessor {
+    pub(crate) client_request_processor: Arc<ClientRequestProcessor>,
+    pub(crate) default_request_processor: Arc<DefaultRequestProcessor>,
+}
+
+impl RequestProcessor for NameServerRequestProcessor {
+    async fn process_request(
+        &self,
+        ctx: ConnectionHandlerContext<'_>,
+        request: RemotingCommand,
+    ) -> RemotingCommand {
+        let request_code = RequestCode::from(request.code());
+        info!("process_request: {:?}", request_code);
+        match request_code {
+            RequestCode::GetRouteinfoByTopic => {
+                self.client_request_processor.process_request(ctx, request)
+            }
+            _ => self.default_request_processor.process_request(ctx, request),
+        }
+    }
+}

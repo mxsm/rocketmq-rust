@@ -34,7 +34,7 @@ use rocketmq_remoting::{
         header::client_request_header::GetRouteInfoRequestHeader,
         remoting_command::RemotingCommand, RemotingSerializable,
     },
-    runtime::{processor::RequestProcessor, server::ConnectionHandlerContext},
+    runtime::server::ConnectionHandlerContext,
 };
 use tracing::warn;
 
@@ -120,10 +120,10 @@ impl ClientRequestProcessor {
     }
 }
 
-impl RequestProcessor for ClientRequestProcessor {
-    fn process_request(
+impl ClientRequestProcessor {
+    pub fn process_request(
         &self,
-        _ctx: ConnectionHandlerContext,
+        _ctx: ConnectionHandlerContext<'_>,
         request: RemotingCommand,
     ) -> RemotingCommand {
         self.get_route_info_by_topic(request)

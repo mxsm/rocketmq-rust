@@ -21,15 +21,11 @@ use rocketmq_common::common::{
     config::TopicConfig, config_manager::ConfigManager, constant::PermName,
 };
 use rocketmq_remoting::{
-    code::request_code::RequestCode,
     protocol::{
         body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper,
         static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail,
     },
-    runtime::{
-        config::client_config::TokioClientConfig, server::RocketMQServer, BoxedRequestProcessor,
-        RequestProcessorTable,
-    },
+    runtime::{config::client_config::TokioClientConfig, server::RocketMQServer},
     server::config::ServerConfig,
 };
 use rocketmq_runtime::RocketMQRuntime;
@@ -48,9 +44,7 @@ use crate::{
         consumer_order_info_manager::ConsumerOrderInfoManager,
     },
     out_api::broker_outer_api::BrokerOuterAPI,
-    processor::{
-        admin_broker_processor::AdminBrokerProcessor, send_message_processor::SendMessageProcessor,
-    },
+    processor::{send_message_processor::SendMessageProcessor, BrokerRequestProcessor},
     schedule::schedule_message_service::ScheduleMessageService,
     subscription::manager::subscription_group_manager::SubscriptionGroupManager,
     topic::manager::{
@@ -215,33 +209,17 @@ impl BrokerRuntime {
 
     fn initialize_resources(&mut self) {}
 
-    fn init_processor(&self) -> (BoxedRequestProcessor, RequestProcessorTable) {
-        let default_processor = BoxedRequestProcessor::new(Box::<AdminBrokerProcessor>::default());
-        let mut request_processor_table = RequestProcessorTable::new();
-
-        let send_message_process = BoxedRequestProcessor::new(Box::new(SendMessageProcessor::new(
+    fn init_processor(&self) -> Arc<BrokerRequestProcessor<LocalFileMessageStore>> {
+        let send_message_processor = SendMessageProcessor::<LocalFileMessageStore>::new(
             self.topic_queue_mapping_manager.clone(),
             self.topic_config_manager.clone(),
             self.broker_config.clone(),
             self.message_store.clone().unwrap(),
-        )));
-        request_processor_table.insert(
-            RequestCode::SendMessage.to_i32(),
-            send_message_process.clone(),
         );
-        request_processor_table.insert(
-            RequestCode::SendMessageV2.to_i32(),
-            send_message_process.clone(),
-        );
-        request_processor_table.insert(
-            RequestCode::SendBatchMessage.to_i32(),
-            send_message_process.clone(),
-        );
-        request_processor_table.insert(
-            RequestCode::ConsumerSendMsgBack.to_i32(),
-            send_message_process,
-        );
-        (default_processor, request_processor_table)
+        Arc::new(BrokerRequestProcessor {
+            send_message_processor,
+            admin_broker_processor: Default::default(),
+        })
     }
 
     fn initialize_scheduled_tasks(&mut self) {}
@@ -253,12 +231,8 @@ impl BrokerRuntime {
     fn initial_rpc_hooks(&mut self) {}
 
     pub async fn start(&mut self) {
-        let (default_processor, request_processor_table) = self.init_processor();
-        let server = RocketMQServer::new(
-            self.server_config.clone(),
-            request_processor_table,
-            default_processor,
-        );
+        let request_processor = self.init_processor();
+        let server = RocketMQServer::new(self.server_config.clone(), request_processor);
         let server_future = server.run();
         self.register_broker_all(true, false, true).await;
         let mut cloned_broker_runtime = self.clone();
@@ -401,7 +375,10 @@ impl BrokerRuntime {
             .broker_cluster_name
             .clone();
         let broker_name = self.broker_config.broker_identity.broker_name.clone();
-        let broker_addr = format!("{}:{}", self.broker_config.broker_ip1, 10911);
+        let broker_addr = format!(
+            "{}:{}",
+            self.broker_config.broker_ip1, self.server_config.listen_port
+        );
         let broker_id = self.broker_config.broker_identity.broker_id;
         self.broker_out_api
             .register_broker_all(

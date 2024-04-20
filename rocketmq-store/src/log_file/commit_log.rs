@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-use std::{ops::Deref, sync::Arc};
+use std::{cell::Cell, ops::Deref, sync::Arc};
 
 use rocketmq_common::{
     common::{
@@ -29,8 +29,10 @@ use tokio::runtime::Handle;
 
 use crate::{
     base::{
-        append_message_callback::{AppendMessageCallback, DefaultAppendMessageCallback},
+        append_message_callback::DefaultAppendMessageCallback,
         message_result::PutMessageResult,
+        message_status_enum::{AppendMessageStatus, PutMessageStatus},
+        put_message_context::PutMessageContext,
         swappable::Swappable,
     },
     config::message_store_config::MessageStoreConfig,
@@ -48,6 +50,18 @@ pub const BLANK_MAGIC_CODE: i32 = -875286124;
 // PROPERTY_SEPARATOR]
 pub const CRC32_RESERVED_LEN: i32 = (MessageConst::PROPERTY_CRC32.len() + 1 + 10 + 1) as i32;
 
+struct PutMessageThreadLocal {
+    encoder: Cell<Option<MessageExtEncoder>>,
+    key: Cell<Option<String>>,
+}
+
+// thread_local! {
+//     static PUT_MESSAGE_THREAD_LOCAL: Arc<PutMessageThreadLocal> = Arc::new(PutMessageThreadLocal{
+//         encoder: Cell::new(None),
+//         key: Cell::new(None),
+//     });
+// }
+
 #[derive(Default)]
 pub struct CommitLog {
     mapped_file_queue: Arc<tokio::sync::RwLock<MappedFileQueue>>,
@@ -57,10 +71,11 @@ pub struct CommitLog {
 
 impl CommitLog {
     pub fn new(message_store_config: Arc<MessageStoreConfig>) -> Self {
+        let enabled_append_prop_crc = message_store_config.enabled_append_prop_crc;
         Self {
             mapped_file_queue: Default::default(),
             message_store_config,
-            enabled_append_prop_crc: false,
+            enabled_append_prop_crc,
         }
     }
 }
@@ -123,13 +138,32 @@ impl CommitLog {
                 .unwrap(),
             Some(mapped_file) => mapped_file,
         };
-
-        let mut append_message_callback =
+        let topic_queue_key = generate_key(&msg);
+        let mut put_message_context = PutMessageContext::new(topic_queue_key);
+        let append_message_callback =
             DefaultAppendMessageCallback::new(self.message_store_config.clone());
-        let _result =
+        /* let result =
             append_message_callback.do_append(mapped_file.file_from_offset() as i64, 0, &mut msg);
-        mapped_file.append_data(msg.encoded_buff.clone(), false);
-        PutMessageResult::default()
+        mapped_file.append_data(msg.encoded_buff.clone(), false);*/
+
+        let result =
+            mapped_file.append_message(msg, append_message_callback, &mut put_message_context);
+
+        match result.status {
+            AppendMessageStatus::PutOk => {
+                PutMessageResult::new_append_result(PutMessageStatus::PutOk, Some(result))
+            }
+            AppendMessageStatus::EndOfFile => {
+                unimplemented!()
+            }
+            AppendMessageStatus::MessageSizeExceeded
+            | AppendMessageStatus::PropertiesSizeExceeded => {
+                PutMessageResult::new_append_result(PutMessageStatus::MessageIllegal, Some(result))
+            }
+            AppendMessageStatus::UnknownError => {
+                PutMessageResult::new_append_result(PutMessageStatus::UnknownError, Some(result))
+            }
+        }
     }
 
     pub fn is_multi_dispatch_msg(msg_inner: &MessageExtBrokerInner) -> bool {
@@ -144,6 +178,14 @@ impl CommitLog {
     pub fn get_message_num(_msg_inner: &MessageExtBrokerInner) -> u8 {
         unimplemented!()
     }
+}
+
+fn generate_key(msg: &MessageExtBrokerInner) -> String {
+    let mut topic_queue_key = String::new();
+    topic_queue_key.push_str(msg.topic());
+    topic_queue_key.push('-');
+    topic_queue_key.push_str(msg.queue_id().to_string().as_str());
+    topic_queue_key
 }
 
 impl Swappable for CommitLog {

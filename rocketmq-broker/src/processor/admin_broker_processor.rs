@@ -15,19 +15,22 @@
  * limitations under the License.
  */
 use rocketmq_remoting::{
-    protocol::remoting_command::RemotingCommand,
-    runtime::{processor::RequestProcessor, server::ConnectionHandlerContext},
+    code::request_code::RequestCode, protocol::remoting_command::RemotingCommand,
+    runtime::server::ConnectionHandlerContext,
 };
+use tracing::info;
 
 #[derive(Default)]
 pub struct AdminBrokerProcessor {}
 
-impl RequestProcessor for AdminBrokerProcessor {
-    fn process_request(
+impl AdminBrokerProcessor {
+    pub fn process_request(
         &self,
         _ctx: ConnectionHandlerContext,
-        _request: RemotingCommand,
+        request: RemotingCommand,
     ) -> RemotingCommand {
-        todo!()
+        let request_code = RequestCode::from(request.code());
+        info!("AdminBrokerProcessor process_request: {:?}", request_code);
+        RemotingCommand::create_response_command()
     }
 }

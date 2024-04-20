@@ -61,7 +61,7 @@ use rocketmq_remoting::{
         route::route_data_view::TopicRouteData,
         DataVersion, RemotingSerializable,
     },
-    runtime::{processor::RequestProcessor, server::ConnectionHandlerContext},
+    runtime::server::ConnectionHandlerContext,
 };
 use tracing::{info, warn};
 
@@ -73,8 +73,8 @@ pub struct DefaultRequestProcessor {
     kvconfig_manager: Arc<parking_lot::RwLock<KVConfigManager>>,
 }
 
-impl RequestProcessor for DefaultRequestProcessor {
-    fn process_request(
+impl DefaultRequestProcessor {
+    pub fn process_request(
         &self,
         ctx: ConnectionHandlerContext,
         request: RemotingCommand,

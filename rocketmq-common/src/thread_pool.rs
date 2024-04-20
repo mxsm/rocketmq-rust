@@ -22,10 +22,7 @@ use std::{
     time::Duration,
 };
 
-use tokio::{
-    runtime::{Handle, Runtime},
-    task::JoinHandle,
-};
+use tokio::{runtime::Handle, task::JoinHandle};
 
 pub struct TokioExecutorService {
     inner: tokio::runtime::Runtime,
