@@ -23,7 +23,8 @@ pub mod commit_log;
 pub mod mapped_file;
 
 #[allow(async_fn_in_trait)]
-pub trait MessageStore {
+#[trait_variant::make(MessageStore: Send)]
+pub trait RocketMQMessageStore {
     /// Load previously stored messages.
     ///
     /// Returns `true` if success; `false` otherwise.

@@ -50,7 +50,6 @@ use rocketmq_store::{
     base::message_result::PutMessageResult, log_file::MessageStore,
     status::manager::broker_stats_manager::BrokerStatsManager,
 };
-use tokio::runtime::Handle;
 
 use crate::{
     broker_config::BrokerConfig,
@@ -312,9 +311,10 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
             &message_ext.message_ext_inner.message.properties,
         );
         let topic = message_ext.topic().to_string();
-        let result = self.message_store.put_message(message_ext);
-        let put_message_result = Handle::current().block_on(result);
-        SendMessageResponseHeader::default();
+        // let result = self.message_store.put_message(message_ext);
+        // let put_message_result = Handle::current().block_on(result);
+        let put_message_result = self.message_store.put_message(message_ext).await;
+
         self.handle_put_message_result(
             put_message_result,
             response,
