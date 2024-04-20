@@ -17,8 +17,6 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use tracing::info;
-
 use rocketmq_common::common::{
     config::TopicConfig, config_manager::ConfigManager, constant::PermName, mix_all,
     topic::TopicValidator,
@@ -27,9 +25,10 @@ use rocketmq_remoting::protocol::{
     body::topic_info_wrapper::{
         topic_config_wrapper::TopicConfigAndMappingSerializeWrapper, TopicConfigSerializeWrapper,
     },
-    DataVersion,
     static_topic::topic_queue_info::TopicQueueMappingInfo,
+    DataVersion,
 };
+use tracing::info;
 
 use crate::{broker_config::BrokerConfig, broker_path_config_helper::get_topic_config_path};
 

@@ -20,13 +20,13 @@ use std::{collections::HashMap, sync::Arc};
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_remoting::protocol::{
     body::topic_info_wrapper::topic_queue_wrapper::TopicQueueMappingSerializeWrapper,
-    DataVersion,
     header::message_operation_header::TopicRequestHeaderTrait,
     remoting_command::RemotingCommand,
     static_topic::{
         topic_queue_mapping_context::TopicQueueMappingContext,
         topic_queue_mapping_detail::TopicQueueMappingDetail,
     },
+    DataVersion,
 };
 
 use crate::{broker_config::BrokerConfig, broker_path_config_helper::get_topic_queue_mapping_path};

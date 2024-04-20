@@ -14,17 +14,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
-use rocketmq_remoting::{
-    code::request_code::RequestCode,
-    runtime::{
-        processor::RequestProcessor, server::RocketMQServer, BoxedRequestProcessor,
-        RequestProcessorTable,
-    },
-    server::config::ServerConfig,
-};
+use rocketmq_remoting::{runtime::server::RocketMQServer, server::config::ServerConfig};
 use rocketmq_runtime::RocketMQRuntime;
 use tokio::{select, sync::broadcast};
 

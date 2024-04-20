@@ -21,15 +21,11 @@ use rocketmq_common::common::{
     config::TopicConfig, config_manager::ConfigManager, constant::PermName,
 };
 use rocketmq_remoting::{
-    code::request_code::RequestCode,
     protocol::{
         body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper,
         static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail,
     },
-    runtime::{
-        config::client_config::TokioClientConfig, server::RocketMQServer, BoxedRequestProcessor,
-        RequestProcessorTable,
-    },
+    runtime::{config::client_config::TokioClientConfig, server::RocketMQServer},
     server::config::ServerConfig,
 };
 use rocketmq_runtime::RocketMQRuntime;
@@ -48,10 +44,7 @@ use crate::{
         consumer_order_info_manager::ConsumerOrderInfoManager,
     },
     out_api::broker_outer_api::BrokerOuterAPI,
-    processor::{
-        admin_broker_processor::AdminBrokerProcessor, send_message_processor::SendMessageProcessor,
-        BrokerRequestProcessor,
-    },
+    processor::{send_message_processor::SendMessageProcessor, BrokerRequestProcessor},
     schedule::schedule_message_service::ScheduleMessageService,
     subscription::manager::subscription_group_manager::SubscriptionGroupManager,
     topic::manager::{

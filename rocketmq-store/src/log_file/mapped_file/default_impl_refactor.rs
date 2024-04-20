@@ -24,9 +24,8 @@ use std::{
 
 use bytes::BytesMut;
 use memmap2::MmapMut;
-use tracing::error;
-
 use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
+use tracing::error;
 
 use crate::base::{
     append_message_callback::AppendMessageCallback, message_result::AppendMessageResult,

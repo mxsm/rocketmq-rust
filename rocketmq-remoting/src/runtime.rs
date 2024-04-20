@@ -17,10 +17,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use crate::{
-    net::ResponseFuture, protocol::remoting_command::RemotingCommand,
-    runtime::processor::RequestProcessor,
-};
+use crate::{protocol::remoting_command::RemotingCommand, runtime::processor::RequestProcessor};
 
 pub mod config;
 pub mod processor;

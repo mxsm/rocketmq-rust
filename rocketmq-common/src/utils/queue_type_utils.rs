@@ -1,10 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    common::{
-        attribute::cq_type::CQType,
-        config::TopicConfig,
-    },
+    common::{attribute::cq_type::CQType, config::TopicConfig},
     TopicAttributes,
 };
 

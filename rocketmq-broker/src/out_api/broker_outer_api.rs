@@ -15,10 +15,10 @@
  * limitations under the License.
  */
 use rocketmq_common::{
-    common::broker::broker_config::BrokerIdentity, TokioExecutorService, utils::crc32_utils,
+    common::broker::broker_config::BrokerIdentity, utils::crc32_utils, TokioExecutorService,
 };
 use rocketmq_remoting::{
-    clients::{RemotingClient, rocketmq_default_impl::RocketmqDefaultClient},
+    clients::{rocketmq_default_impl::RocketmqDefaultClient, RemotingClient},
     code::request_code::RequestCode,
     protocol::{
         body::{

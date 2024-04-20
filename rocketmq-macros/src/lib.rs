@@ -16,7 +16,6 @@
  */
 
 use proc_macro::TokenStream;
-
 use quote::ToTokens;
 use syn::{PathArguments, Type};
 

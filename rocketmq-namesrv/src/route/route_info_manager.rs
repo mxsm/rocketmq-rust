@@ -22,9 +22,6 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use tokio::sync::broadcast;
-use tracing::{debug, info, warn};
-
 use rocketmq_common::{
     common::{
         config::TopicConfig, constant::PermName, mix_all, namesrv::namesrv_config::NamesrvConfig,
@@ -41,7 +38,6 @@ use rocketmq_remoting::{
             topic::topic_list::TopicList,
             topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper,
         },
-        DataVersion,
         header::namesrv::{
             broker_request::UnRegisterBrokerRequestHeader,
             brokerid_change_request_header::NotifyMinBrokerIdChangeRequestHeader,
@@ -50,8 +46,11 @@ use rocketmq_remoting::{
         remoting_command::RemotingCommand,
         route::route_data_view::{BrokerData, QueueData, TopicRouteData},
         static_topic::topic_queue_info::TopicQueueMappingInfo,
+        DataVersion,
     },
 };
+use tokio::sync::broadcast;
+use tracing::{debug, info, warn};
 
 use crate::route_info::broker_addr_info::{BrokerAddrInfo, BrokerLiveInfo, BrokerStatusChangeInfo};
 

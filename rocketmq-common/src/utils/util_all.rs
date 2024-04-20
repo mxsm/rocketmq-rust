@@ -41,12 +41,9 @@ fn string_to_bytes(hex_string: impl Into<String>) -> Option<Vec<u8>> {
 
     for i in 0..length {
         let pos = i * 2;
-        let byte = match char_to_byte(hex_string.chars().nth(pos)?) << 4
-            | char_to_byte(hex_string.chars().nth(pos + 1)?)
-        {
-            byte if byte <= 255 => byte,
-            _ => return None,
-        };
+        let byte = char_to_byte(hex_string.chars().nth(pos)?) << 4
+            | char_to_byte(hex_string.chars().nth(pos + 1)?);
+
         bytes.push(byte);
     }
 

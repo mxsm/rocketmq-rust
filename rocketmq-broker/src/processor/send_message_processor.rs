@@ -44,14 +44,13 @@ use rocketmq_remoting::{
         remoting_command::RemotingCommand,
         static_topic::topic_queue_mapping_context::TopicQueueMappingContext,
     },
-    runtime::{processor::RequestProcessor, server::ConnectionHandlerContext},
+    runtime::server::ConnectionHandlerContext,
 };
 use rocketmq_store::{
     base::message_result::PutMessageResult, log_file::MessageStore,
     status::manager::broker_stats_manager::BrokerStatsManager,
 };
 use tokio::runtime::Handle;
-use tracing::info;
 
 use crate::{
     broker_config::BrokerConfig,
@@ -88,13 +87,12 @@ impl<MS: Default> Default for SendMessageProcessor<MS> {
 
 // RequestProcessor implementation
 impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
-    pub fn process_request(
+    pub async fn process_request(
         &self,
-        ctx: ConnectionHandlerContext,
+        ctx: ConnectionHandlerContext<'_>,
+        request_code: RequestCode,
         request: RemotingCommand,
     ) -> RemotingCommand {
-        let request_code = RequestCode::from(request.code());
-        info!("process_request: {:?}", request_code);
         let response = match request_code {
             RequestCode::ConsumerSendMsgBack => self.inner.consumer_send_msg_back(&ctx, &request),
             _ => {
@@ -115,21 +113,23 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
                 if request_header.batch.is_none() || !request_header.batch.unwrap() {
                     self.send_message(
                         &ctx,
-                        &request,
+                        request,
                         send_message_context,
                         request_header,
                         mapping_context,
                         |_, _| {},
                     )
+                    .await
                 } else {
                     self.send_batch_message(
                         &ctx,
-                        &request,
+                        request,
                         send_message_context,
                         request_header,
                         mapping_context,
                         |_, _| {},
                     )
+                    .await
                 }
             }
         };
@@ -160,10 +160,10 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
         }
     }
 
-    fn send_batch_message<F>(
+    async fn send_batch_message<F>(
         &self,
-        ctx: &ConnectionHandlerContext,
-        request: &RemotingCommand,
+        ctx: &ConnectionHandlerContext<'_>,
+        request: RemotingCommand,
         send_message_context: SendMessageContext,
         request_header: SendMessageRequestHeader,
         mapping_context: TopicQueueMappingContext,
@@ -175,10 +175,10 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
         Some(RemotingCommand::create_response_command())
     }
 
-    fn send_message<F>(
+    async fn send_message<F>(
         &self,
-        ctx: &ConnectionHandlerContext,
-        request: &RemotingCommand,
+        ctx: &ConnectionHandlerContext<'_>,
+        request: RemotingCommand,
         send_message_context: SendMessageContext,
         request_header: SendMessageRequestHeader,
         mapping_context: TopicQueueMappingContext,
@@ -234,7 +234,7 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
         if self.handle_retry_and_dlq(
             &request_header,
             &mut response,
-            request,
+            &request,
             &message_ext.message_ext_inner,
             &mut topic_config,
             &mut ori_props,
@@ -318,7 +318,7 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
         self.handle_put_message_result(
             put_message_result,
             response,
-            request,
+            &request,
             topic.as_str(),
             &mut response_header,
             queue_id,
@@ -366,7 +366,7 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
              },
              rocketmq_store::base::message_status_enum::PutMessageStatus::MessageIllegal |
              rocketmq_store::base::message_status_enum::PutMessageStatus::PropertiesSizeExceeded => {
-                 response = response.set_code(ResponseCode::MessageIllegal).set_remark(Some(format!("the message is illegal, maybe msg body or properties length not matched. msg body length limit B, msg properties length limit 32KB.")));
+                 response = response.set_code(ResponseCode::MessageIllegal).set_remark(Some("the message is illegal, maybe msg body or properties length not matched. msg body length limit B, msg properties length limit 32KB.".to_string()));
              },
              rocketmq_store::base::message_status_enum::PutMessageStatus::OsPageCacheBusy =>{
                  response = response.set_code(RemotingSysResponseCode::SystemError).set_remark(Some("[PC_SYNCHRONIZED]broker busy, start flow control for a while".to_string()));

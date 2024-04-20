@@ -61,7 +61,7 @@ use rocketmq_remoting::{
         route::route_data_view::TopicRouteData,
         DataVersion, RemotingSerializable,
     },
-    runtime::{processor::RequestProcessor, server::ConnectionHandlerContext},
+    runtime::server::ConnectionHandlerContext,
 };
 use tracing::{info, warn};
 

@@ -2,9 +2,8 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::common::constant::PermName;
-
 use super::TopicFilterType;
+use crate::common::constant::PermName;
 
 const SEPARATOR: &str = " ";
 const DEFAULT_READ_QUEUE_NUMS: u32 = 16;

@@ -15,8 +15,7 @@
  * limitations under the License.
  */
 use rocketmq_remoting::{
-    protocol::remoting_command::RemotingCommand,
-    runtime::server::ConnectionHandlerContext,
+    protocol::remoting_command::RemotingCommand, runtime::server::ConnectionHandlerContext,
 };
 
 #[derive(Default)]

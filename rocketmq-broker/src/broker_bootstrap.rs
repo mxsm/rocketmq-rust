@@ -15,11 +15,10 @@
  * limitations under the License.
  */
 
-use tokio::select;
-use tracing::error;
-
 use rocketmq_remoting::server::config::ServerConfig;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
+use tokio::select;
+use tracing::error;
 
 use crate::{broker_config::BrokerConfig, broker_runtime::BrokerRuntime};
 

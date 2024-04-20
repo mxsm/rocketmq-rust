@@ -16,9 +16,8 @@
  */
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
-
 use rocketmq_remoting::protocol::DataVersion;
+use serde::{Deserialize, Serialize};
 
 use crate::filter::consumer_filter_data::ConsumerFilterData;
 

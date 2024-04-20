@@ -15,26 +15,21 @@
  * limitations under the License.
  */
 
-use std::{
-    cell::{Cell, RefCell, RefMut},
-    ops::Deref,
-    sync::Arc,
-};
-
-use tokio::runtime::Handle;
+use std::{cell::Cell, ops::Deref, sync::Arc};
 
 use rocketmq_common::{
     common::{
         message::{message_single::MessageExtBrokerInner, MessageConst, MessageVersion},
         mix_all,
     },
-    CRC32Utils::crc32,
     utils::time_utils,
+    CRC32Utils::crc32,
 };
+use tokio::runtime::Handle;
 
 use crate::{
     base::{
-        append_message_callback::{AppendMessageCallback, DefaultAppendMessageCallback},
+        append_message_callback::DefaultAppendMessageCallback,
         message_result::PutMessageResult,
         message_status_enum::{AppendMessageStatus, PutMessageStatus},
         put_message_context::PutMessageContext,
@@ -60,12 +55,12 @@ struct PutMessageThreadLocal {
     key: Cell<Option<String>>,
 }
 
-thread_local! {
-    static PUT_MESSAGE_THREAD_LOCAL: Arc<PutMessageThreadLocal> = Arc::new(PutMessageThreadLocal{
-        encoder: Cell::new(None),
-        key: Cell::new(None),
-    });
-}
+// thread_local! {
+//     static PUT_MESSAGE_THREAD_LOCAL: Arc<PutMessageThreadLocal> = Arc::new(PutMessageThreadLocal{
+//         encoder: Cell::new(None),
+//         key: Cell::new(None),
+//     });
+// }
 
 #[derive(Default)]
 pub struct CommitLog {
@@ -188,7 +183,7 @@ impl CommitLog {
 fn generate_key(msg: &MessageExtBrokerInner) -> String {
     let mut topic_queue_key = String::new();
     topic_queue_key.push_str(msg.topic());
-    topic_queue_key.push_str("-");
+    topic_queue_key.push('-');
     topic_queue_key.push_str(msg.queue_id().to_string().as_str());
     topic_queue_key
 }

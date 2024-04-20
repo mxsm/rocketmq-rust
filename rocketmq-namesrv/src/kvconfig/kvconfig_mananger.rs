@@ -16,10 +16,9 @@
  */
 use std::{collections::HashMap, sync::Arc};
 
-use tracing::{error, info};
-
 use rocketmq_common::{common::namesrv::namesrv_config::NamesrvConfig, FileUtils};
 use rocketmq_remoting::protocol::{body::kv_table::KVTable, RemotingSerializable};
+use tracing::{error, info};
 
 use crate::kvconfig::KVConfigSerializeWrapper;
 

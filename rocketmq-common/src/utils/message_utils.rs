@@ -23,10 +23,7 @@ use std::{
 use bytes::BufMut;
 
 use crate::{
-    common::message::{
-        message_single::MessageExt,
-        MessageConst,
-    },
+    common::message::{message_single::MessageExt, MessageConst},
     MessageDecoder::PROPERTY_SEPARATOR,
     UtilAll::bytes_to_string,
 };
@@ -96,7 +93,7 @@ pub fn build_message_id(socket_addr: SocketAddr, wrote_offset: i64) -> String {
     bytes_to_string(msg_id_vec.as_slice())
 }
 
-pub fn parse_message_id(msg_id: impl Into<String>) -> (SocketAddr, i64) {
+pub fn parse_message_id(_msg_id: impl Into<String>) -> (SocketAddr, i64) {
     unimplemented!()
 }
 

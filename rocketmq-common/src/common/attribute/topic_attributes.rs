@@ -2,7 +2,7 @@ use lazy_static::lazy_static;
 
 use crate::{
     common::attribute::{
-        Attribute, attribute_enum::EnumAttribute, topic_message_type::TopicMessageType,
+        attribute_enum::EnumAttribute, topic_message_type::TopicMessageType, Attribute,
     },
     hashset,
 };

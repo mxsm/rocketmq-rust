@@ -18,14 +18,13 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use tracing::info;
-
 use rocketmq_common::{
     common::namesrv::namesrv_config::NamesrvConfig, EnvUtils::EnvUtils, ParseConfigFile,
 };
 use rocketmq_namesrv::bootstrap::Builder;
 use rocketmq_remoting::server::config::ServerConfig;
 use rocketmq_rust::rocketmq;
+use tracing::info;
 
 #[rocketmq::main]
 async fn main() -> anyhow::Result<()> {

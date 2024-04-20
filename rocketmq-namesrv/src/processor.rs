@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-use std::{future::Future, sync::Arc};
+use std::sync::Arc;
 
 use rocketmq_remoting::{
     code::request_code::RequestCode,

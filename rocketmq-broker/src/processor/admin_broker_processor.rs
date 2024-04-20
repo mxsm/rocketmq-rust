@@ -15,9 +15,8 @@
  * limitations under the License.
  */
 use rocketmq_remoting::{
-    code::request_code::RequestCode,
-    protocol::remoting_command::RemotingCommand,
-    runtime::{processor::RequestProcessor, server::ConnectionHandlerContext},
+    code::request_code::RequestCode, protocol::remoting_command::RemotingCommand,
+    runtime::server::ConnectionHandlerContext,
 };
 use tracing::info;
 

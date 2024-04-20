@@ -34,7 +34,7 @@ pub struct SendMessageContext {
     pub code: i32,
     pub error_msg: String,
     pub msg_props: String,
-    pub mq_trace_context: Option<Box<dyn Any>>,
+    pub mq_trace_context: Option<Box<dyn Any + Send + 'static>>,
     pub ext_props: HashMap<String, String>,
     pub broker_region_id: String,
     pub msg_unique_key: String,

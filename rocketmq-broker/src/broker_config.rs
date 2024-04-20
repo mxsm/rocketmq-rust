@@ -15,8 +15,6 @@
  * limitations under the License.
  */
 
-use serde::Deserialize;
-
 use rocketmq_common::common::{
     broker::broker_config::{BrokerIdentity, TimerWheelConfig, TopicConfig, TopicQueueConfig},
     constant::PermName,
@@ -24,6 +22,7 @@ use rocketmq_common::common::{
     topic::TopicValidator,
 };
 use rocketmq_remoting::server::config::ServerConfig;
+use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

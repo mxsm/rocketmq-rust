@@ -27,10 +27,8 @@ use tokio_stream::StreamExt;
 use tracing::{error, info, warn};
 
 use crate::{
-    connection::Connection,
-    protocol::remoting_command::RemotingCommand,
-    runtime::{processor::RequestProcessor, BoxedRequestProcessor, RequestProcessorTable},
-    server::config::ServerConfig,
+    connection::Connection, protocol::remoting_command::RemotingCommand,
+    runtime::processor::RequestProcessor, server::config::ServerConfig,
 };
 
 /// Default limit the max number of connections.

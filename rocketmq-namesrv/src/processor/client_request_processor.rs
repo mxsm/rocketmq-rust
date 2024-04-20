@@ -34,7 +34,7 @@ use rocketmq_remoting::{
         header::client_request_header::GetRouteInfoRequestHeader,
         remoting_command::RemotingCommand, RemotingSerializable,
     },
-    runtime::{processor::RequestProcessor, server::ConnectionHandlerContext},
+    runtime::server::ConnectionHandlerContext,
 };
 use tracing::warn;
 

@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::{future::Future, sync::Arc};
+use std::sync::Arc;
 
 use rand::Rng;
 use rocketmq_common::{
@@ -78,7 +78,9 @@ impl<MS: MessageStore + Send + Sync + 'static> RequestProcessor for BrokerReques
             | RequestCode::SendMessageV2
             | RequestCode::SendBatchMessage
             | RequestCode::ConsumerSendMsgBack => {
-                self.send_message_processor.process_request(ctx, request)
+                self.send_message_processor
+                    .process_request(ctx, request_code, request)
+                    .await
             }
             _ => self.admin_broker_processor.process_request(ctx, request),
         }
