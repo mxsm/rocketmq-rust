@@ -22,7 +22,7 @@ use std::{
     sync::atomic::{AtomicI32, Ordering},
 };
 
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use memmap2::MmapMut;
 use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
 use tracing::error;
@@ -146,6 +146,13 @@ impl LocalMappedFile {
         );
         self.append_data(message.encoded_buff.clone(), false);
         append_message_result
+    }
+
+    pub fn get_bytes(&mut self, pos: usize, size: usize) -> Option<bytes::Bytes> {
+        if pos + size > self.file_size as usize {
+            return None;
+        }
+        Some(Bytes::copy_from_slice(&self.mmapped_file[pos..pos + size]))
     }
 }
 

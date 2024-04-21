@@ -14,6 +14,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use clap::Parser;
+use rocketmq_cli::{
+    command_line::{Commands, RootCli},
+    content_show::print_content,
+};
 
-pub mod command_line;
-pub mod content_show;
+fn main() {
+    let cli = RootCli::parse();
+    match cli.command {
+        Commands::ReadMessageLog { config, from, to } => {
+            print_content(from, to, config);
+        }
+    }
+}
