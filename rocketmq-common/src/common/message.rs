@@ -20,6 +20,7 @@ use std::{
     string::ToString,
 };
 
+use bytes::{Buf, Bytes};
 use lazy_static::lazy_static;
 
 pub mod message_accessor;
@@ -89,10 +90,10 @@ impl MessageVersion {
         }
     }
 
-    pub fn get_topic_length(&self, buffer: &[u8]) -> usize {
+    pub fn get_topic_length(&self, buffer: &mut Bytes) -> usize {
         match self {
-            MessageVersion::V1 => buffer[0] as usize,
-            MessageVersion::V2 => ((buffer[0] as usize) << 8) | (buffer[1] as usize),
+            MessageVersion::V1 => i32::from(buffer.get_u8()) as usize,
+            MessageVersion::V2 => buffer.get_i16() as usize,
         }
     }
 

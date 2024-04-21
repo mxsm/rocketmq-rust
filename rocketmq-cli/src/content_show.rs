@@ -1,0 +1,104 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+use std::{fs, path::PathBuf};
+
+use rocketmq_common::common::message::message_decoder;
+use rocketmq_store::log_file::mapped_file::default_impl_refactor::LocalMappedFile;
+use tabled::{Table, Tabled};
+
+pub fn print_content(from: Option<u32>, to: Option<u32>, path: Option<PathBuf>) {
+    if path.is_none() {
+        println!("path is none");
+        return;
+    }
+    let path_buf = path.unwrap().into_os_string();
+    let file_metadata = fs::metadata(path_buf.clone()).unwrap();
+    println!("file size: {}B", file_metadata.len());
+    let mut mapped_file = LocalMappedFile::new(
+        path_buf.to_os_string().to_string_lossy().to_string(),
+        file_metadata.len(),
+    );
+    // read message number
+    let mut counter = 0;
+    let form = from.unwrap_or_default();
+    let to = match to {
+        None => u32::MAX,
+        Some(value) => value,
+    };
+    let mut current_pos = 0usize;
+    let mut table = vec![];
+    loop {
+        if counter >= to {
+            break;
+        }
+        let bytes = mapped_file.get_bytes(current_pos, 4);
+        if bytes.is_none() {
+            break;
+        }
+        let size_bytes = bytes.unwrap();
+        let size = i32::from_be_bytes(size_bytes[0..4].try_into().unwrap());
+        if size <= 0 {
+            break;
+        }
+        counter += 1;
+        if counter < form {
+            current_pos += size as usize;
+            continue;
+        }
+        let mut msg_bytes = mapped_file.get_bytes(current_pos, size as usize);
+        current_pos += size as usize;
+        if msg_bytes.is_none() {
+            break;
+        }
+        let message =
+            message_decoder::decode(msg_bytes.as_mut().unwrap(), true, false, false, false, true);
+        //parse message bytes and print it
+        match message {
+            None => {}
+            Some(value) => {
+                table.push(MessagePrint {
+                    message_id: value.msg_id.clone(),
+                });
+            }
+        }
+    }
+    println!("{}", Table::new(table));
+}
+
+#[derive(Tabled)]
+struct MessagePrint {
+    message_id: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use crate::content_show::print_content;
+
+    #[test]
+    pub fn test_print_content() {
+        print_content(
+            Some(0),
+            Some(1),
+            Some(PathBuf::from(
+                "C:\\Users\\ljbmx\\store\\commitlog\\00000000000000000000",
+            )),
+        );
+    }
+}
