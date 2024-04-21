@@ -84,21 +84,3 @@ pub fn print_content(from: Option<u32>, to: Option<u32>, path: Option<PathBuf>) 
 struct MessagePrint {
     message_id: String,
 }
-
-#[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
-
-    use crate::content_show::print_content;
-
-    #[test]
-    pub fn test_print_content() {
-        print_content(
-            Some(0),
-            Some(1),
-            Some(PathBuf::from(
-                "C:\\Users\\ljbmx\\store\\commitlog\\00000000000000000000",
-            )),
-        );
-    }
-}
