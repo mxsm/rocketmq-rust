@@ -43,6 +43,7 @@ pub struct AppendMessageResult {
     pub msg_num: i32,
 }
 
+#[derive(Default)]
 pub struct PutMessageResult {
     put_message_status: PutMessageStatus,
     append_message_result: Option<AppendMessageResult>,
@@ -60,16 +61,6 @@ impl Default for AppendMessageResult {
             logics_offset: 0,
             page_cache_rt: 0,
             msg_num: 0,
-        }
-    }
-}
-
-impl Default for PutMessageResult {
-    fn default() -> Self {
-        Self{
-            put_message_status: Default::default(),
-            append_message_result: None,
-            remote_put: false,
         }
     }
 }

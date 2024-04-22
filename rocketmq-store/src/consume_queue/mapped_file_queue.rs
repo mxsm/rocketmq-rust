@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
- use std::{
+use std::{
     fs,
     path::{Path, PathBuf},
     sync::Arc,
@@ -139,9 +139,7 @@ impl MappedFileQueue {
         if self.mapped_files.is_empty() {
             return None;
         }
-        self.mapped_files
-            .last()
-            .map_or(None, |last| Some(last.clone()))
+        self.mapped_files.last().cloned()
     }
 
     pub fn get_last_mapped_file_mut_start_offset(
@@ -157,7 +155,9 @@ impl MappedFileQueue {
                 create_offset = start_offset as i64 - (start_offset as i64 % file_size);
             }
             Some(ref value) => {
-                create_offset = value.lock().get_file_from_offset() as i64 + file_size;
+                if value.lock().is_full() {
+                    create_offset = value.lock().get_file_from_offset() as i64 + file_size
+                }
             }
         }
         if create_offset != -1 && need_create {

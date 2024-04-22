@@ -28,9 +28,9 @@ use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
 use tracing::error;
 
 use crate::base::{
-    append_message_callback::AppendMessageCallback, message_result::AppendMessageResult, message_status_enum::AppendMessageStatus, put_message_context::PutMessageContext
+    append_message_callback::AppendMessageCallback, message_result::AppendMessageResult,
+    message_status_enum::AppendMessageStatus, put_message_context::PutMessageContext,
 };
-
 
 pub struct LocalMappedFile {
     //file information
@@ -55,7 +55,8 @@ impl LocalMappedFile {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
-            //.create(true)
+            .create(true)
+            .truncate(false)
             .open(&path_buf)
             .unwrap();
         file.set_len(file_size).unwrap();

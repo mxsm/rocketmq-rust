@@ -19,7 +19,9 @@ use std::{cell::Cell, ops::Deref, sync::Arc};
 
 use rocketmq_common::{
     common::{
-        attribute::cq_type::CQType, message::{message_single::MessageExtBrokerInner, MessageConst, MessageVersion}, mix_all
+        attribute::cq_type::CQType,
+        message::{message_single::MessageExtBrokerInner, MessageConst, MessageVersion},
+        mix_all,
     },
     utils::time_utils,
     CRC32Utils::crc32,
@@ -150,8 +152,11 @@ impl CommitLog {
             append_message_callback.do_append(mapped_file.file_from_offset() as i64, 0, &mut msg);
         mapped_file.append_data(msg.encoded_buff.clone(), false);*/
 
-        let result =
-            mapped_file.lock().append_message(msg, append_message_callback, &mut put_message_context);
+        let result = mapped_file.lock().append_message(
+            msg,
+            append_message_callback,
+            &mut put_message_context,
+        );
 
         match result.status {
             AppendMessageStatus::PutOk => {
@@ -179,13 +184,14 @@ impl CommitLog {
                 .starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX)
     }
 
-    pub fn get_message_num(&self,_msg_inner: &MessageExtBrokerInner) -> i16 {
-        let mut message_num = 1i16;
+    pub fn get_message_num(&self, _msg_inner: &MessageExtBrokerInner) -> i16 {
+        // let mut message_num = 1i16;
 
-        message_num
+        // message_num
+        1
     }
 
-    fn get_cq_type(&self,_msg_inner:MessageExtBrokerInner) -> CQType{
+    fn get_cq_type(&self, _msg_inner: MessageExtBrokerInner) -> CQType {
         CQType::SimpleCQ
     }
 }
