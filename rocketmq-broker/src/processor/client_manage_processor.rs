@@ -15,27 +15,33 @@
  * limitations under the License.
  */
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use rocketmq_remoting::{
     code::request_code::RequestCode,
     protocol::{
-        header::namesrv::broker_request::UnRegisterBrokerRequestHeader,
+        header::unregister_client_request_header::UnregisterClientRequestHeader,
         remoting_command::RemotingCommand,
     },
     runtime::server::ConnectionHandlerContext,
+};
+
+use crate::client::{
+    client_channel_info::ClientChannelInfo, manager::producer_manager::ProducerManager,
 };
 
 #[derive(Default)]
 pub struct ClientManageProcessor {
     consumer_group_heartbeat_table:
         HashMap<String /* ConsumerGroup */, i32 /* HeartbeatFingerprint */>,
+    producer_manager: Arc<ProducerManager>,
 }
 
 impl ClientManageProcessor {
-    pub fn new() -> Self {
+    pub fn new(producer_manager: Arc<ProducerManager>) -> Self {
         Self {
             consumer_group_heartbeat_table: HashMap::new(),
+            producer_manager,
         }
     }
 }
@@ -69,6 +75,26 @@ impl ClientManageProcessor {
         ctx: ConnectionHandlerContext<'_>,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
+        let request_header = request
+            .decode_command_custom_header::<UnregisterClientRequestHeader>()
+            .unwrap();
+
+        let client_channel_info = ClientChannelInfo::new(
+            ctx.remoting_address().to_string(),
+            request_header.client_id.clone(),
+            request.language(),
+            request.version(),
+        );
+
+        if let Some(ref group) = request_header.producer_group {
+            self.producer_manager
+                .unregister_producer(group, &client_channel_info);
+        }
+
+        if let Some(ref _group) = request_header.consumer_group {
+            unimplemented!()
+        }
+
         Some(RemotingCommand::create_response_command())
     }
 }

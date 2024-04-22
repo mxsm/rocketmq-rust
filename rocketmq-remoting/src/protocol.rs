@@ -72,7 +72,7 @@ impl RemotingCommandType {
 }
 
 #[repr(u8)]
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, Default, Hash, Copy)]
 pub enum LanguageCode {
     JAVA,
     CPP,
@@ -86,6 +86,7 @@ pub enum LanguageCode {
     GO,
     PHP,
     OMS,
+    #[default]
     RUST,
 }
 

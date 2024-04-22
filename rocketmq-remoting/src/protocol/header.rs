@@ -18,3 +18,4 @@ pub mod broker;
 pub mod client_request_header;
 pub mod message_operation_header;
 pub mod namesrv;
+pub mod unregister_client_request_header;

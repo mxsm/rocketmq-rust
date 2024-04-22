@@ -15,5 +15,35 @@
  * limitations under the License.
  */
 
+use std::collections::HashMap;
+
+use crate::client::client_channel_info::ClientChannelInfo;
+
 #[derive(Default)]
-pub struct ProducerManager {}
+pub struct ProducerManager {
+    group_channel_table:
+        parking_lot::Mutex<HashMap<String /* group name */, HashMap<String, ClientChannelInfo>>>,
+    client_channel_table: parking_lot::Mutex<HashMap<String, String /* client ip:port */>>,
+}
+
+impl ProducerManager {
+    pub fn new() -> Self {
+        Self {
+            group_channel_table: parking_lot::Mutex::new(HashMap::new()),
+            client_channel_table: parking_lot::Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl ProducerManager {
+    pub fn group_online(&self, group: String) -> bool {
+        let binding = self.group_channel_table.lock();
+        let channels = binding.get(&group);
+        if channels.is_none() {
+            return false;
+        }
+        channels.unwrap().len() > 0
+    }
+
+    pub fn unregister_producer(&self, _group: &String, _client_channel_info: &ClientChannelInfo) {}
+}

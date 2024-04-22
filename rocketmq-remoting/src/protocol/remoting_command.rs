@@ -278,8 +278,8 @@ impl RemotingCommand {
     pub fn code(&self) -> i32 {
         self.code
     }
-    pub fn language(&self) -> &LanguageCode {
-        &self.language
+    pub fn language(&self) -> LanguageCode {
+        self.language
     }
     pub fn version(&self) -> i32 {
         self.version
