@@ -147,7 +147,7 @@ impl CommitLog {
         mapped_file.append_data(msg.encoded_buff.clone(), false);*/
 
         let result =
-            mapped_file.append_message(msg, append_message_callback, &mut put_message_context);
+            mapped_file.lock().append_message(msg, append_message_callback, &mut put_message_context);
 
         match result.status {
             AppendMessageStatus::PutOk => {

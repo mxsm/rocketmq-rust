@@ -17,7 +17,7 @@
 
 use std::{
     fs,
-    path::{Path, PathBuf},
+    path::{Path, PathBuf}, sync::Arc,
 };
 
 use log::warn;
@@ -35,7 +35,7 @@ pub struct MappedFileQueue {
 
     pub(crate) mapped_file_size: u64,
 
-    pub(crate) mapped_files: Vec<LocalMappedFile>,
+    pub(crate) mapped_files: Vec<Arc<parking_lot::Mutex<LocalMappedFile>>>,
 
     pub(crate) allocate_mapped_file_service: Option<AllocateMappedFileService>,
 
@@ -126,33 +126,36 @@ impl MappedFileQueue {
                 LocalMappedFile::new(file.to_string_lossy().to_string(), self.mapped_file_size);
             // Set wrote, flushed, committed positions for mapped_file
 
-            self.mapped_files.push(mapped_file);
+            self.mapped_files.push(Arc::new(parking_lot::Mutex::new(mapped_file)));
             info!("load {} OK", file.display());
         }
 
         true
     }
 
-    pub fn get_last_mapped_file_mut(&mut self) -> Option<&mut LocalMappedFile> {
+    pub fn get_last_mapped_file_mut(&self) -> Option<Arc<parking_lot::Mutex<LocalMappedFile>>> {
         if self.mapped_files.is_empty() {
             return None;
         }
-        self.mapped_files.last_mut()
+        self.mapped_files
+        .last()
+        .map_or(None, |last| Some(last.clone()))
     }
 
     pub fn get_last_mapped_file_mut_start_offset(
         &mut self,
         start_offset: u64,
         need_create: bool,
-    ) -> Option<&mut LocalMappedFile> {
+    ) -> Option<Arc<parking_lot::Mutex<LocalMappedFile>>> {
         let mut create_offset = -1i64;
+        let file_size = self.mapped_file_size as i64;
         let mapped_file_last = self.get_last_mapped_file_mut();
         match mapped_file_last {
             None => {
-                create_offset = start_offset as i64 - (start_offset % self.mapped_file_size) as i64;
+                create_offset = start_offset as i64 - (start_offset as i64 % file_size);
             }
-            Some(value) => {
-                create_offset = value.get_file_from_offset() as i64 + self.mapped_file_size as i64;
+            Some(ref value) => {
+                create_offset = value.lock().get_file_from_offset() as i64 + file_size;
             }
         }
         if create_offset != -1 && need_create {
@@ -161,7 +164,7 @@ impl MappedFileQueue {
         mapped_file_last
     }
 
-    pub fn try_create_mapped_file(&mut self, create_offset: u64) -> Option<&mut LocalMappedFile> {
+    pub fn try_create_mapped_file(&mut self, create_offset: u64) -> Option<Arc<parking_lot::Mutex<LocalMappedFile>>> {
         let next_file_path =
             PathBuf::from(self.store_path.clone()).join(offset_to_file_name(create_offset));
         let next_next_file_path = PathBuf::from(self.store_path.clone())
@@ -173,13 +176,13 @@ impl MappedFileQueue {
         &mut self,
         next_file_path: PathBuf,
         _next_next_file_path: PathBuf,
-    ) -> Option<&mut LocalMappedFile> {
+    ) -> Option<Arc<parking_lot::Mutex<LocalMappedFile>>> {
         let mut mapped_file = match self.allocate_mapped_file_service {
             None => LocalMappedFile::new(
                 next_file_path.to_string_lossy().to_string(),
                 self.mapped_file_size,
             ),
-            Some(ref value) => {
+            Some(ref _value) => {
                 unimplemented!()
             }
         };
@@ -187,8 +190,9 @@ impl MappedFileQueue {
         if self.mapped_files.is_empty() {
             mapped_file.set_first_create_in_queue(true);
         }
-        self.mapped_files.push(mapped_file);
-        self.mapped_files.last_mut()
+        let mapped_file_inner = Arc::new(parking_lot::Mutex::new(mapped_file));
+        self.mapped_files.push(Arc::clone(&mapped_file_inner));
+        Some(mapped_file_inner)
     }
 }
 
