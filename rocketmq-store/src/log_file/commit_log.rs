@@ -62,7 +62,6 @@ struct PutMessageThreadLocal {
 //     });
 // }
 
-#[derive(Default)]
 pub struct CommitLog {
     mapped_file_queue: Arc<tokio::sync::RwLock<MappedFileQueue>>,
     message_store_config: Arc<MessageStoreConfig>,
@@ -72,8 +71,14 @@ pub struct CommitLog {
 impl CommitLog {
     pub fn new(message_store_config: Arc<MessageStoreConfig>) -> Self {
         let enabled_append_prop_crc = message_store_config.enabled_append_prop_crc;
+        let store_path = message_store_config.get_store_path_commit_log();
+        let mapped_file_size = message_store_config.mapped_file_size_commit_log;
         Self {
-            mapped_file_queue: Default::default(),
+            mapped_file_queue: Arc::new(tokio::sync::RwLock::new(MappedFileQueue::new(
+                store_path,
+                mapped_file_size as u64,
+                None,
+            ))),
             message_store_config,
             enabled_append_prop_crc,
         }

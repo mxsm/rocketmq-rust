@@ -165,7 +165,7 @@ impl BrokerRuntime {
     fn initialize_message_store(&mut self) -> bool {
         if self.message_store_config.store_type == StoreType::LocalFile {
             info!("Use local file as message store");
-            self.message_store = Some(Arc::new(LocalFileMessageStore::default()));
+            self.message_store = Some(Arc::new(LocalFileMessageStore::new(self.message_store_config.clone())));
         } else if self.message_store_config.store_type == StoreType::RocksDB {
             info!("Use RocksDB as message store");
         } else {

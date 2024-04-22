@@ -15,9 +15,10 @@
  * limitations under the License.
  */
 
-use std::{
+ use std::{
     fs,
-    path::{Path, PathBuf}, sync::Arc,
+    path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use log::warn;
@@ -126,7 +127,8 @@ impl MappedFileQueue {
                 LocalMappedFile::new(file.to_string_lossy().to_string(), self.mapped_file_size);
             // Set wrote, flushed, committed positions for mapped_file
 
-            self.mapped_files.push(Arc::new(parking_lot::Mutex::new(mapped_file)));
+            self.mapped_files
+                .push(Arc::new(parking_lot::Mutex::new(mapped_file)));
             info!("load {} OK", file.display());
         }
 
@@ -138,8 +140,8 @@ impl MappedFileQueue {
             return None;
         }
         self.mapped_files
-        .last()
-        .map_or(None, |last| Some(last.clone()))
+            .last()
+            .map_or(None, |last| Some(last.clone()))
     }
 
     pub fn get_last_mapped_file_mut_start_offset(
@@ -164,7 +166,10 @@ impl MappedFileQueue {
         mapped_file_last
     }
 
-    pub fn try_create_mapped_file(&mut self, create_offset: u64) -> Option<Arc<parking_lot::Mutex<LocalMappedFile>>> {
+    pub fn try_create_mapped_file(
+        &mut self,
+        create_offset: u64,
+    ) -> Option<Arc<parking_lot::Mutex<LocalMappedFile>>> {
         let next_file_path =
             PathBuf::from(self.store_path.clone()).join(offset_to_file_name(create_offset));
         let next_next_file_path = PathBuf::from(self.store_path.clone())

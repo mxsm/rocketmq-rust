@@ -389,3 +389,15 @@ impl Default for MessageStoreConfig {
         }
     }
 }
+
+impl MessageStoreConfig {
+    pub fn get_store_path_commit_log(&self) -> String {
+        if self.store_path_commit_log.is_none() {
+            return PathBuf::from(self.store_path_root_dir.clone())
+                .join("commitlog")
+                .to_string_lossy()
+                .to_string();
+        }
+        self.store_path_commit_log.clone().unwrap()
+    }
+}
