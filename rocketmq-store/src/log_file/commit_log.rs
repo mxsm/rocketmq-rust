@@ -19,8 +19,7 @@ use std::{cell::Cell, ops::Deref, sync::Arc};
 
 use rocketmq_common::{
     common::{
-        message::{message_single::MessageExtBrokerInner, MessageConst, MessageVersion},
-        mix_all,
+        attribute::cq_type::CQType, message::{message_single::MessageExtBrokerInner, MessageConst, MessageVersion}, mix_all
     },
     utils::time_utils,
     CRC32Utils::crc32,
@@ -180,8 +179,14 @@ impl CommitLog {
                 .starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX)
     }
 
-    pub fn get_message_num(_msg_inner: &MessageExtBrokerInner) -> u8 {
-        unimplemented!()
+    pub fn get_message_num(&self,_msg_inner: &MessageExtBrokerInner) -> i16 {
+        let mut message_num = 1i16;
+
+        message_num
+    }
+
+    fn get_cq_type(&self,_msg_inner:MessageExtBrokerInner) -> CQType{
+        CQType::SimpleCQ
     }
 }
 
