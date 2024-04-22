@@ -15,9 +15,13 @@
  * limitations under the License.
  */
 
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use log::warn;
+use rocketmq_common::UtilAll::offset_to_file_name;
 use tracing::info;
 
 use crate::{
@@ -33,7 +37,7 @@ pub struct MappedFileQueue {
 
     pub(crate) mapped_files: Vec<LocalMappedFile>,
 
-    pub(crate) allocate_mapped_file_service: AllocateMappedFileService,
+    pub(crate) allocate_mapped_file_service: Option<AllocateMappedFileService>,
 
     pub(crate) flushed_where: u64,
 
@@ -61,7 +65,7 @@ impl MappedFileQueue {
     pub fn new(
         store_path: String,
         mapped_file_size: u64,
-        allocate_mapped_file_service: AllocateMappedFileService,
+        allocate_mapped_file_service: Option<AllocateMappedFileService>,
     ) -> MappedFileQueue {
         MappedFileQueue {
             store_path,
@@ -147,12 +151,44 @@ impl MappedFileQueue {
             None => {
                 create_offset = start_offset as i64 - (start_offset % self.mapped_file_size) as i64;
             }
-            Some(value) => {}
+            Some(value) => {
+                create_offset = value.get_file_from_offset() as i64 + self.mapped_file_size as i64;
+            }
         }
-        if create_offset != -1 {
-            unimplemented!()
+        if create_offset != -1 && need_create {
+            return self.try_create_mapped_file(create_offset as u64);
         }
-        None
+        mapped_file_last
+    }
+
+    pub fn try_create_mapped_file(&mut self, create_offset: u64) -> Option<&mut LocalMappedFile> {
+        let next_file_path =
+            PathBuf::from(self.store_path.clone()).join(offset_to_file_name(create_offset));
+        let next_next_file_path = PathBuf::from(self.store_path.clone())
+            .join(offset_to_file_name(create_offset + self.mapped_file_size));
+        self.do_create_mapped_file(next_file_path, next_next_file_path)
+    }
+
+    fn do_create_mapped_file(
+        &mut self,
+        next_file_path: PathBuf,
+        _next_next_file_path: PathBuf,
+    ) -> Option<&mut LocalMappedFile> {
+        let mut mapped_file = match self.allocate_mapped_file_service {
+            None => LocalMappedFile::new(
+                next_file_path.to_string_lossy().to_string(),
+                self.mapped_file_size,
+            ),
+            Some(ref value) => {
+                unimplemented!()
+            }
+        };
+
+        if self.mapped_files.is_empty() {
+            mapped_file.set_first_create_in_queue(true);
+        }
+        self.mapped_files.push(mapped_file);
+        self.mapped_files.last_mut()
     }
 }
 

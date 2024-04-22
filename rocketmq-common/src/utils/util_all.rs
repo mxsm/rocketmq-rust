@@ -55,6 +55,10 @@ fn char_to_byte(c: char) -> u8 {
     hex_chars.find(c).unwrap_or(0) as u8
 }
 
+pub fn offset_to_file_name(offset: u64) -> String {
+    format!("{:020}", offset)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -81,5 +85,14 @@ mod tests {
         let expected = "6162636465666768696A6B6C6D6E6F707172737475767778797A4142434445464748494A4B4C4D4E4F505152535455565758595A";
         let result = bytes_to_string(src);
         assert_eq!(result, String::from(expected));
+    }
+
+    #[test]
+    fn test_offset_to_file_name() {
+        assert_eq!(offset_to_file_name(0), "00000000000000000000");
+        assert_eq!(
+            offset_to_file_name(2000000000000000000),
+            "02000000000000000000"
+        );
     }
 }

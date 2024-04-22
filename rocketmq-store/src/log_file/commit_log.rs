@@ -134,7 +134,7 @@ impl CommitLog {
         let mut mapped_file_guard = self.mapped_file_queue.write().await;
         let mapped_file = match mapped_file_guard.get_last_mapped_file_mut() {
             None => mapped_file_guard
-                .get_last_mapped_file_mut_start_offset()
+                .get_last_mapped_file_mut_start_offset(0, true)
                 .unwrap(),
             Some(mapped_file) => mapped_file,
         };

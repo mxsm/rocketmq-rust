@@ -45,6 +45,8 @@ pub struct LocalMappedFile {
     file_from_offset: u64,
 
     mmapped_file: MmapMut,
+
+    first_create_in_queue: bool,
 }
 
 impl LocalMappedFile {
@@ -74,6 +76,7 @@ impl LocalMappedFile {
                 .parse::<u64>()
                 .unwrap(),
             mmapped_file: mmap,
+            first_create_in_queue: false,
         }
     }
 
@@ -92,6 +95,14 @@ impl LocalMappedFile {
 
     pub fn file_from_offset(&self) -> u64 {
         self.file_from_offset
+    }
+
+    pub fn get_file_from_offset(&self) -> u64 {
+        self.file_from_offset
+    }
+
+    pub fn set_first_create_in_queue(&mut self, first_create_in_queue: bool) {
+        self.first_create_in_queue = first_create_in_queue;
     }
 }
 
