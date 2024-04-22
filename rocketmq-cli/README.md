@@ -52,7 +52,7 @@ Provide some command-line tools to read data from RocketMQ files.
   
   RocketMQ CLI(Rust)
   
-  Usage: rocketmq-cli-rust.exe <COMMAND>
+  Usage: rocketmq-cli-rust <COMMAND>
   
   Commands:
     read-message-log  read message log file
@@ -66,7 +66,7 @@ Provide some command-line tools to read data from RocketMQ files.
   $ cargo run --bin rocketmq-cli-rust help read-message-log
   read message log file
   
-  Usage: rocketmq-cli-rust.exe read-message-log [OPTIONS]
+  Usage: rocketmq-cli-rust read-message-log [OPTIONS]
   
   Options:
     -c, --config <FILE>  message log file path
@@ -75,15 +75,6 @@ Provide some command-line tools to read data from RocketMQ files.
     -h, --help           Print help
     -V, --version        Print version$ cargo run --bin rocketmq-namesrv-rust -- --help
   
-  RocketMQ Name server(Rust)
-  
-  Usage: rocketmq-namesrv-rust [OPTIONS]
-  
-  Options:
-    -p, --port <PORT>  rocketmq name server port [default: 9876]
-    -i, --ip <IP>      rocketmq name server ip [default: 127.0.0.1]
-    -h, --help         Print help
-    -V, --version      Print version
   ```
 
 ### read-message-log Command
