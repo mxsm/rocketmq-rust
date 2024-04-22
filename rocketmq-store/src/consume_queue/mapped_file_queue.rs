@@ -136,8 +136,23 @@ impl MappedFileQueue {
         self.mapped_files.last_mut()
     }
 
-    pub fn get_last_mapped_file_mut_start_offset(&mut self) -> Option<&mut LocalMappedFile> {
-        unimplemented!()
+    pub fn get_last_mapped_file_mut_start_offset(
+        &mut self,
+        start_offset: u64,
+        need_create: bool,
+    ) -> Option<&mut LocalMappedFile> {
+        let mut create_offset = -1i64;
+        let mapped_file_last = self.get_last_mapped_file_mut();
+        match mapped_file_last {
+            None => {
+                create_offset = start_offset as i64 - (start_offset % self.mapped_file_size) as i64;
+            }
+            Some(value) => {}
+        }
+        if create_offset != -1 {
+            unimplemented!()
+        }
+        None
     }
 }
 

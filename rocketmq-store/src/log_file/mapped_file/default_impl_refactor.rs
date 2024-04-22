@@ -154,6 +154,10 @@ impl LocalMappedFile {
         }
         Some(Bytes::copy_from_slice(&self.mmapped_file[pos..pos + size]))
     }
+
+    pub fn is_full(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]

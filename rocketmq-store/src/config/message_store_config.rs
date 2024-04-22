@@ -205,7 +205,6 @@ pub struct MessageStoreConfig {
     pub topic_queue_lock_num: usize,
 }
 
-
 impl Default for MessageStoreConfig {
     fn default() -> Self {
         let store_path_root_dir = USER_HOME
@@ -221,8 +220,10 @@ impl Default for MessageStoreConfig {
             store_path_broker_identity: None,
             read_only_commit_log_store_paths: None,
             mapped_file_size_commit_log: 1024 * 1024 * 1024, //CommitLog file size,default is 1G
-            compaction_mapped_file_size: 100 * 1024 * 1024, // CompactinLog file size, default is 100M
-            compaction_cq_mapped_file_size: 10 * 1024 * 1024, //CompactionLog consumeQueue file size, default is 10M
+            compaction_mapped_file_size: 100 * 1024 * 1024,  /* CompactinLog file size, default
+                                                              * is 100M */
+            compaction_cq_mapped_file_size: 10 * 1024 * 1024, /* CompactionLog consumeQueue file
+                                                               * size, default is 10M */
             compaction_schedule_internal: 15 * 60 * 1000,
             max_offset_map_size: 100 * 1024 * 1024,
             compaction_thread_num: 6,
