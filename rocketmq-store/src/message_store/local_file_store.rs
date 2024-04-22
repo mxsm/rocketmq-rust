@@ -36,7 +36,6 @@ use crate::{
 };
 
 ///Using local files to store message data, which is also the default method.
-#[derive(Default)]
 pub struct LocalFileMessageStore {
     message_store_config: Arc<MessageStoreConfig>,
     put_message_hook_list: Vec<BoxedPutMessageHook>,

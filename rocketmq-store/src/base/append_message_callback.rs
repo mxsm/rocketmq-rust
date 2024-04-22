@@ -128,8 +128,8 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
             message_utils::build_message_id(msg_inner.message_ext_inner.store_host, wrote_offset);
 
         let mut queue_offset = msg_inner.queue_offset();
-        let message_num = CommitLog::get_message_num(msg_inner);
-
+        //let message_num = CommitLog::get_message_num(msg_inner);
+        let message_num = 1;
         match MessageSysFlag::get_transaction_value(msg_inner.sys_flag()) {
             MessageSysFlag::TRANSACTION_PREPARED_TYPE
             | MessageSysFlag::TRANSACTION_ROLLBACK_TYPE => queue_offset = 0,

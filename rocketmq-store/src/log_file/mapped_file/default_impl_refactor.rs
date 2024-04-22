@@ -29,7 +29,7 @@ use tracing::error;
 
 use crate::base::{
     append_message_callback::AppendMessageCallback, message_result::AppendMessageResult,
-    put_message_context::PutMessageContext,
+    message_status_enum::AppendMessageStatus, put_message_context::PutMessageContext,
 };
 
 pub struct LocalMappedFile {
@@ -45,6 +45,8 @@ pub struct LocalMappedFile {
     file_from_offset: u64,
 
     mmapped_file: MmapMut,
+
+    first_create_in_queue: bool,
 }
 
 impl LocalMappedFile {
@@ -53,7 +55,8 @@ impl LocalMappedFile {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
-            //.create(true)
+            .create(true)
+            .truncate(false)
             .open(&path_buf)
             .unwrap();
         file.set_len(file_size).unwrap();
@@ -74,6 +77,7 @@ impl LocalMappedFile {
                 .parse::<u64>()
                 .unwrap(),
             mmapped_file: mmap,
+            first_create_in_queue: false,
         }
     }
 
@@ -92,6 +96,14 @@ impl LocalMappedFile {
 
     pub fn file_from_offset(&self) -> u64 {
         self.file_from_offset
+    }
+
+    pub fn get_file_from_offset(&self) -> u64 {
+        self.file_from_offset
+    }
+
+    pub fn set_first_create_in_queue(&mut self, first_create_in_queue: bool) {
+        self.first_create_in_queue = first_create_in_queue;
     }
 }
 
@@ -129,13 +141,16 @@ impl LocalMappedFile {
     ) -> AppendMessageResult {
         let mut message = message;
         let current_pos = self.wrote_position.load(Ordering::Relaxed) as u64;
-        if current_pos < self.file_size {
-            unimplemented!()
+        if current_pos >= self.file_size {
+            error!(
+                "MappedFile.appendMessage return null, wrotePosition: {} fileSize: {}",
+                current_pos, self.file_size
+            );
+            return AppendMessageResult {
+                status: AppendMessageStatus::UnknownError,
+                ..Default::default()
+            };
         }
-        error!(
-            "MappedFile.appendMessage return null, wrotePosition: {} fileSize: {}",
-            current_pos, self.file_size
-        );
         let mut message_callback = message_callback;
         let append_message_result = message_callback.do_append(
             self.file_from_offset() as i64,
@@ -153,6 +168,10 @@ impl LocalMappedFile {
             return None;
         }
         Some(Bytes::copy_from_slice(&self.mmapped_file[pos..pos + size]))
+    }
+
+    pub fn is_full(&self) -> bool {
+        false
     }
 }
 

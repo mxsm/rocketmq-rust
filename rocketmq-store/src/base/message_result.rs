@@ -43,6 +43,7 @@ pub struct AppendMessageResult {
     pub msg_num: i32,
 }
 
+#[derive(Default)]
 pub struct PutMessageResult {
     put_message_status: PutMessageStatus,
     append_message_result: Option<AppendMessageResult>,
@@ -51,13 +52,16 @@ pub struct PutMessageResult {
 
 impl Default for AppendMessageResult {
     fn default() -> Self {
-        unimplemented!()
-    }
-}
-
-impl Default for PutMessageResult {
-    fn default() -> Self {
-        unimplemented!()
+        Self {
+            status: Default::default(),
+            wrote_offset: 0,
+            wrote_bytes: 0,
+            msg_id: "".to_string(),
+            store_timestamp: 0,
+            logics_offset: 0,
+            page_cache_rt: 0,
+            msg_num: 0,
+        }
     }
 }
 

@@ -37,7 +37,7 @@ use crate::{
         transient_store_pool::TransientStorePool,
     },
     config::flush_disk_type::FlushDiskType,
-    log_file::mapped_file::MappedFile,
+    log_file::mapped_file::MappedFileBak,
 };
 
 pub struct DefaultMappedFile {
@@ -150,7 +150,7 @@ impl DefaultMappedFile {
 }
 
 #[allow(unused_variables)]
-impl MappedFile for DefaultMappedFile {
+impl MappedFileBak for DefaultMappedFile {
     fn get_file_name(&self) -> &str {
         todo!()
     }

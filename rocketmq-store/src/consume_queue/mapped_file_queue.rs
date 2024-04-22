@@ -15,9 +15,14 @@
  * limitations under the License.
  */
 
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use log::warn;
+use rocketmq_common::UtilAll::offset_to_file_name;
 use tracing::info;
 
 use crate::{
@@ -31,9 +36,9 @@ pub struct MappedFileQueue {
 
     pub(crate) mapped_file_size: u64,
 
-    pub(crate) mapped_files: Vec<LocalMappedFile>,
+    pub(crate) mapped_files: Vec<Arc<parking_lot::Mutex<LocalMappedFile>>>,
 
-    pub(crate) allocate_mapped_file_service: AllocateMappedFileService,
+    pub(crate) allocate_mapped_file_service: Option<AllocateMappedFileService>,
 
     pub(crate) flushed_where: u64,
 
@@ -61,7 +66,7 @@ impl MappedFileQueue {
     pub fn new(
         store_path: String,
         mapped_file_size: u64,
-        allocate_mapped_file_service: AllocateMappedFileService,
+        allocate_mapped_file_service: Option<AllocateMappedFileService>,
     ) -> MappedFileQueue {
         MappedFileQueue {
             store_path,
@@ -122,22 +127,77 @@ impl MappedFileQueue {
                 LocalMappedFile::new(file.to_string_lossy().to_string(), self.mapped_file_size);
             // Set wrote, flushed, committed positions for mapped_file
 
-            self.mapped_files.push(mapped_file);
+            self.mapped_files
+                .push(Arc::new(parking_lot::Mutex::new(mapped_file)));
             info!("load {} OK", file.display());
         }
 
         true
     }
 
-    pub fn get_last_mapped_file_mut(&mut self) -> Option<&mut LocalMappedFile> {
+    pub fn get_last_mapped_file_mut(&self) -> Option<Arc<parking_lot::Mutex<LocalMappedFile>>> {
         if self.mapped_files.is_empty() {
             return None;
         }
-        self.mapped_files.last_mut()
+        self.mapped_files.last().cloned()
     }
 
-    pub fn get_last_mapped_file_mut_start_offset(&mut self) -> Option<&mut LocalMappedFile> {
-        unimplemented!()
+    pub fn get_last_mapped_file_mut_start_offset(
+        &mut self,
+        start_offset: u64,
+        need_create: bool,
+    ) -> Option<Arc<parking_lot::Mutex<LocalMappedFile>>> {
+        let mut create_offset = -1i64;
+        let file_size = self.mapped_file_size as i64;
+        let mapped_file_last = self.get_last_mapped_file_mut();
+        match mapped_file_last {
+            None => {
+                create_offset = start_offset as i64 - (start_offset as i64 % file_size);
+            }
+            Some(ref value) => {
+                if value.lock().is_full() {
+                    create_offset = value.lock().get_file_from_offset() as i64 + file_size
+                }
+            }
+        }
+        if create_offset != -1 && need_create {
+            return self.try_create_mapped_file(create_offset as u64);
+        }
+        mapped_file_last
+    }
+
+    pub fn try_create_mapped_file(
+        &mut self,
+        create_offset: u64,
+    ) -> Option<Arc<parking_lot::Mutex<LocalMappedFile>>> {
+        let next_file_path =
+            PathBuf::from(self.store_path.clone()).join(offset_to_file_name(create_offset));
+        let next_next_file_path = PathBuf::from(self.store_path.clone())
+            .join(offset_to_file_name(create_offset + self.mapped_file_size));
+        self.do_create_mapped_file(next_file_path, next_next_file_path)
+    }
+
+    fn do_create_mapped_file(
+        &mut self,
+        next_file_path: PathBuf,
+        _next_next_file_path: PathBuf,
+    ) -> Option<Arc<parking_lot::Mutex<LocalMappedFile>>> {
+        let mut mapped_file = match self.allocate_mapped_file_service {
+            None => LocalMappedFile::new(
+                next_file_path.to_string_lossy().to_string(),
+                self.mapped_file_size,
+            ),
+            Some(ref _value) => {
+                unimplemented!()
+            }
+        };
+
+        if self.mapped_files.is_empty() {
+            mapped_file.set_first_create_in_queue(true);
+        }
+        let mapped_file_inner = Arc::new(parking_lot::Mutex::new(mapped_file));
+        self.mapped_files.push(Arc::clone(&mapped_file_inner));
+        Some(mapped_file_inner)
     }
 }
 

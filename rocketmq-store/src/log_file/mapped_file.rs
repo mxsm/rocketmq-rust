@@ -34,7 +34,7 @@ use crate::{
 pub(crate) mod default_impl;
 pub mod default_impl_refactor;
 
-pub trait MappedFile {
+pub trait MappedFileBak {
     /// Returns the file name of the `MappedFile`.
     fn get_file_name(&self) -> &str;
 

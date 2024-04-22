@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-use crate::log_file::mapped_file::MappedFile;
+use crate::log_file::mapped_file::MappedFileBak;
 
 /// Represents the result of selecting a mapped buffer.
 pub struct SelectMappedBufferResult<'a> {
@@ -26,7 +26,7 @@ pub struct SelectMappedBufferResult<'a> {
     /// The size.
     pub size: i32,
     /// The mapped file.
-    pub mapped_file: Option<&'a dyn MappedFile>,
+    pub mapped_file: Option<&'a dyn MappedFileBak>,
     /// Indicates whether the buffer is in the cache.
     pub is_in_cache: bool,
 }

@@ -215,7 +215,6 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
             );
         }
 
-        let mut response_header = SendMessageResponseHeader::default();
         let mut topic_config = self
             .topic_config_manager
             .select_topic_config(request_header.topic().as_str())
@@ -320,7 +319,6 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
             response,
             &request,
             topic.as_str(),
-            &mut response_header,
             queue_id,
         )
     }
@@ -331,7 +329,6 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
         response: RemotingCommand,
         request: &RemotingCommand,
         topic: &str,
-        response_header: &mut SendMessageResponseHeader,
         //  send_message_context: &mut SendMessageContext,
         // ctx: ConnectionHandlerContext,
         queue_id_int: i32,
@@ -339,6 +336,7 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
         // mapping_context: TopicQueueMappingContext,
         //message_type: TopicMessageType,
     ) -> Option<RemotingCommand> {
+        let mut response_header = SendMessageResponseHeader::default();
         let mut response = response;
         let mut send_ok = false;
         match put_message_result.put_message_status() {
@@ -421,6 +419,7 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
                     .logics_offset,
             );
             //response_header.set_transaction_id();
+            response = response.set_command_custom_header(Some(Box::new(response_header)));
             Some(response)
         } else {
             unimplemented!()
