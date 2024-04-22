@@ -52,6 +52,7 @@ use crate::{
 pub(crate) mod ack_message_processor;
 pub(crate) mod admin_broker_processor;
 pub(crate) mod change_invisible_time_processor;
+pub(crate) mod client_manage_processor;
 pub(crate) mod notification_processor;
 pub(crate) mod peek_message_processor;
 pub(crate) mod polling_info_processor;
