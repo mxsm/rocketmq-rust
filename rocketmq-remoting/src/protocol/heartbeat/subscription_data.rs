@@ -15,11 +15,11 @@
  * limitations under the License.
  */
 
- use std::collections::HashSet;
+ use std::{collections::HashSet, hash::{Hash, Hasher}};
 
  use serde::{Deserialize, Serialize};
  
- #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize,Hash)]
+ #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
  #[serde(rename_all = "camelCase")]
  pub struct SubscriptionData {
      pub class_filter_mode: bool,
@@ -33,4 +33,17 @@
      // documentation or external crates.
      pub filter_class_source: String, // This field is not used in this example.
  }
+
+ impl Hash for SubscriptionData {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.class_filter_mode.hash(state);
+        self.topic.hash(state);
+        self.sub_string.hash(state);
+        self.tags_set.iter().for_each(|tag| tag.hash(state));
+        self.code_set.iter().for_each(|code| code.hash(state));
+        self.sub_version.hash(state);
+        self.expression_type.hash(state);
+        self.filter_class_source.hash(state);
+    }
+}
  

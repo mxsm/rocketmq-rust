@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::collections::HashSet;
+use std::{collections::HashSet, hash::Hash};
 
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use serde::{Deserialize, Serialize};
@@ -23,7 +23,7 @@ use crate::protocol::heartbeat::{
     consume_type::ConsumeType, message_model::MessageModel, subscription_data::SubscriptionData,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ConsumerData {
     pub group_name: String,
@@ -32,4 +32,17 @@ pub struct ConsumerData {
     pub consume_from_where: ConsumeFromWhere,
     pub subscription_data_set: HashSet<SubscriptionData>,
     pub unit_mode: bool,
+}
+
+impl Hash for ConsumerData {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.group_name.hash(state);
+        self.consume_type.hash(state);
+        self.message_model.hash(state);
+        self.consume_from_where.hash(state);
+        self.subscription_data_set
+            .iter()
+            .for_each(|code| code.hash(state));
+        self.unit_mode.hash(state);
+    }
 }

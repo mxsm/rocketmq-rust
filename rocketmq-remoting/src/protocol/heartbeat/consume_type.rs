@@ -19,7 +19,7 @@ use std::fmt;
 use rocketmq_common::common::TopicFilterType;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
 pub enum ConsumeType {
     ConsumeActively,
     ConsumePassively,

@@ -18,7 +18,7 @@ use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConsumeFromWhere {
     ConsumeFromLastOffset,
     ConsumeFromLastOffsetAndFromMinWhenBootFirst,
