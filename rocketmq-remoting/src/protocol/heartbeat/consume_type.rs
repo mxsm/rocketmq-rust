@@ -16,7 +16,6 @@
  */
 use std::fmt;
 
-use rocketmq_common::common::TopicFilterType;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]

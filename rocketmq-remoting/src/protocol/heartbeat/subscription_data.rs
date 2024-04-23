@@ -15,26 +15,29 @@
  * limitations under the License.
  */
 
- use std::{collections::HashSet, hash::{Hash, Hasher}};
+use std::{
+    collections::HashSet,
+    hash::{Hash, Hasher},
+};
 
- use serde::{Deserialize, Serialize};
- 
- #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
- #[serde(rename_all = "camelCase")]
- pub struct SubscriptionData {
-     pub class_filter_mode: bool,
-     pub topic: String,
-     pub sub_string: String,
-     pub tags_set: HashSet<String>,
-     pub code_set: HashSet<i32>,
-     pub sub_version: i64,
-     pub expression_type: String,
-     // In Rust, attributes like `@JSONField(serialize = false)` are typically handled through
-     // documentation or external crates.
-     pub filter_class_source: String, // This field is not used in this example.
- }
+use serde::{Deserialize, Serialize};
 
- impl Hash for SubscriptionData {
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubscriptionData {
+    pub class_filter_mode: bool,
+    pub topic: String,
+    pub sub_string: String,
+    pub tags_set: HashSet<String>,
+    pub code_set: HashSet<i32>,
+    pub sub_version: i64,
+    pub expression_type: String,
+    // In Rust, attributes like `@JSONField(serialize = false)` are typically handled through
+    // documentation or external crates.
+    pub filter_class_source: String, // This field is not used in this example.
+}
+
+impl Hash for SubscriptionData {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.class_filter_mode.hash(state);
         self.topic.hash(state);
@@ -46,4 +49,3 @@
         self.filter_class_source.hash(state);
     }
 }
- 

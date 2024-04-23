@@ -16,7 +16,7 @@
  */
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize,Hash)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, Hash)]
 #[serde(rename_all = "camelCase")]
 pub struct ProducerData {
     pub group_name: String,

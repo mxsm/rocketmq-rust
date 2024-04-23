@@ -15,10 +15,9 @@
  * limitations under the License.
  */
 
- mod consume_type;
- mod consumer_data;
- pub mod heartbeat_data;
- mod message_model;
- mod producer_data;
- mod subscription_data;
- 
+mod consume_type;
+mod consumer_data;
+pub mod heartbeat_data;
+mod message_model;
+mod producer_data;
+mod subscription_data;
