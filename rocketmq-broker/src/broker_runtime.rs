@@ -38,13 +38,17 @@ use tracing::{info, warn};
 
 use crate::{
     broker_config::BrokerConfig,
+    client::manager::producer_manager::ProducerManager,
     filter::manager::consumer_filter_manager::ConsumerFilterManager,
     offset::manager::{
         consumer_offset_manager::ConsumerOffsetManager,
         consumer_order_info_manager::ConsumerOrderInfoManager,
     },
     out_api::broker_outer_api::BrokerOuterAPI,
-    processor::{send_message_processor::SendMessageProcessor, BrokerRequestProcessor},
+    processor::{
+        client_manage_processor::ClientManageProcessor,
+        send_message_processor::SendMessageProcessor, BrokerRequestProcessor,
+    },
     schedule::schedule_message_service::ScheduleMessageService,
     subscription::manager::subscription_group_manager::SubscriptionGroupManager,
     topic::manager::{
@@ -71,6 +75,7 @@ pub(crate) struct BrokerRuntime {
     broker_out_api: Arc<BrokerOuterAPI>,
 
     broker_runtime: Option<RocketMQRuntime>,
+    producer_manager: Arc<ProducerManager>,
 }
 
 impl Clone for BrokerRuntime {
@@ -90,6 +95,7 @@ impl Clone for BrokerRuntime {
             timer_message_store: self.timer_message_store.clone(),
             broker_out_api: self.broker_out_api.clone(),
             broker_runtime: None,
+            producer_manager: self.producer_manager.clone(),
         }
     }
 }
@@ -116,6 +122,7 @@ impl BrokerRuntime {
             timer_message_store: None,
             broker_out_api: Arc::new(BrokerOuterAPI::new(TokioClientConfig::default())),
             broker_runtime: Some(runtime),
+            producer_manager: Arc::new(ProducerManager::new()),
         }
     }
 
@@ -221,6 +228,7 @@ impl BrokerRuntime {
         Arc::new(BrokerRequestProcessor {
             send_message_processor,
             admin_broker_processor: Default::default(),
+            client_manage_processor: ClientManageProcessor::new(self.producer_manager.clone()),
         })
     }
 

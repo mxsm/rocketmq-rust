@@ -41,6 +41,7 @@ use rocketmq_store::{
 };
 use tracing::info;
 
+use self::client_manage_processor::ClientManageProcessor;
 use crate::{
     broker_config::BrokerConfig,
     mqtrace::send_message_context::SendMessageContext,
@@ -64,6 +65,7 @@ pub(crate) mod send_message_processor;
 pub struct BrokerRequestProcessor<MS> {
     pub(crate) send_message_processor: SendMessageProcessor<MS>,
     pub(crate) admin_broker_processor: AdminBrokerProcessor,
+    pub(crate) client_manage_processor: ClientManageProcessor,
 }
 
 impl<MS: MessageStore + Send + Sync + 'static> RequestProcessor for BrokerRequestProcessor<MS> {
@@ -80,6 +82,13 @@ impl<MS: MessageStore + Send + Sync + 'static> RequestProcessor for BrokerReques
             | RequestCode::SendBatchMessage
             | RequestCode::ConsumerSendMsgBack => {
                 self.send_message_processor
+                    .process_request(ctx, request_code, request)
+                    .await
+            }
+            RequestCode::HeartBeat
+            | RequestCode::UnregisterClient
+            | RequestCode::CheckClientConfig => {
+                self.client_manage_processor
                     .process_request(ctx, request_code, request)
                     .await
             }
