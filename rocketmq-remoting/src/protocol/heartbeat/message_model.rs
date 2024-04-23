@@ -14,62 +14,47 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 use std::fmt;
 
-pub use faq::FAQUrl;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-pub use crate::common::sys_flag::topic_sys_flag as TopicSysFlag;
-
-pub mod attribute;
-pub mod boundary_type;
-pub mod broker;
-pub mod compression;
-pub mod config;
-pub mod config_manager;
-pub mod constant;
-pub mod consumer;
-mod faq;
-pub mod filter;
-pub mod future;
-pub mod macros;
-pub mod message;
-pub mod mix_all;
-pub mod mq_version;
-pub mod namesrv;
-pub mod sys_flag;
-pub mod topic;
-
-#[derive(Debug, Clone, Default, Eq, PartialEq)]
-pub enum TopicFilterType {
-    #[default]
-    SingleTag,
-    MultiTag,
+#[derive(Debug, Clone, Copy)]
+pub enum MessageModel {
+    BROADCASTING,
+    CLUSTERING,
 }
 
-impl Serialize for TopicFilterType {
+impl MessageModel {
+    fn get_mode_cn(&self) -> &'static str {
+        match self {
+            MessageModel::BROADCASTING => "BROADCASTING",
+            MessageModel::CLUSTERING => "CLUSTERING",
+        }
+    }
+}
+
+impl Serialize for MessageModel {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
         let value = match self {
-            TopicFilterType::SingleTag => "SINGLE_TAG",
-            TopicFilterType::MultiTag => "MULTI_TAG",
+            MessageModel::BROADCASTING => "BROADCASTING",
+            MessageModel::CLUSTERING => "CLUSTERING",
         };
         serializer.serialize_str(value)
     }
 }
 
-impl<'de> Deserialize<'de> for TopicFilterType {
+impl<'de> Deserialize<'de> for MessageModel {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        struct TopicFilterTypeVisitor;
+        struct MessageModelVisitor;
 
-        impl<'de> serde::de::Visitor<'de> for TopicFilterTypeVisitor {
-            type Value = TopicFilterType;
+        impl<'de> serde::de::Visitor<'de> for MessageModelVisitor {
+            type Value = MessageModel;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
                 formatter.write_str("a string representing TopicFilterType")
@@ -80,27 +65,16 @@ impl<'de> Deserialize<'de> for TopicFilterType {
                 E: serde::de::Error,
             {
                 match value {
-                    "SINGLE_TAG" => Ok(TopicFilterType::SingleTag),
-                    "MULTI_TAG" => Ok(TopicFilterType::MultiTag),
+                    "BROADCASTING" => Ok(MessageModel::BROADCASTING),
+                    "CLUSTERING" => Ok(MessageModel::CLUSTERING),
                     _ => Err(serde::de::Error::unknown_variant(
                         value,
-                        &["SingleTag", "MultiTag"],
+                        &["BROADCASTING", "CLUSTERING"],
                     )),
                 }
             }
         }
 
-        deserializer.deserialize_str(TopicFilterTypeVisitor)
-    }
-}
-
-pub struct Pair<T, U> {
-    pub left: T,
-    pub right: U,
-}
-
-impl<T, U> Pair<T, U> {
-    pub fn new(left: T, right: U) -> Self {
-        Self { left, right }
+        deserializer.deserialize_str(MessageModelVisitor)
     }
 }

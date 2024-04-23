@@ -32,6 +32,7 @@ use crate::RocketMQSerializable;
 pub mod body;
 pub mod command_custom_header;
 pub mod header;
+pub mod heartbeat;
 pub mod namesrv;
 pub mod remoting_command;
 pub mod rocketmq_serializable;

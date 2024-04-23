@@ -14,62 +14,51 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 use std::fmt;
 
-pub use faq::FAQUrl;
+use rocketmq_common::common::TopicFilterType;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-pub use crate::common::sys_flag::topic_sys_flag as TopicSysFlag;
-
-pub mod attribute;
-pub mod boundary_type;
-pub mod broker;
-pub mod compression;
-pub mod config;
-pub mod config_manager;
-pub mod constant;
-pub mod consumer;
-mod faq;
-pub mod filter;
-pub mod future;
-pub mod macros;
-pub mod message;
-pub mod mix_all;
-pub mod mq_version;
-pub mod namesrv;
-pub mod sys_flag;
-pub mod topic;
-
-#[derive(Debug, Clone, Default, Eq, PartialEq)]
-pub enum TopicFilterType {
-    #[default]
-    SingleTag,
-    MultiTag,
+#[derive(Debug, Clone, Copy)]
+pub enum ConsumeType {
+    ConsumeActively,
+    ConsumePassively,
+    ConsumePop,
 }
 
-impl Serialize for TopicFilterType {
+impl ConsumeType {
+    fn get_type_cn(&self) -> &'static str {
+        match self {
+            ConsumeType::ConsumeActively => "PULL",
+            ConsumeType::ConsumePassively => "PUSH",
+            ConsumeType::ConsumePop => "POP",
+        }
+    }
+}
+
+impl Serialize for ConsumeType {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
         let value = match self {
-            TopicFilterType::SingleTag => "SINGLE_TAG",
-            TopicFilterType::MultiTag => "MULTI_TAG",
+            ConsumeType::ConsumeActively => "CONSUME_ACTIVELY",
+            ConsumeType::ConsumePassively => "CONSUME_PASSIVELY",
+            ConsumeType::ConsumePop => "CONSUME_POP",
         };
         serializer.serialize_str(value)
     }
 }
 
-impl<'de> Deserialize<'de> for TopicFilterType {
+impl<'de> Deserialize<'de> for ConsumeType {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        struct TopicFilterTypeVisitor;
+        struct ConsumeTypeVisitor;
 
-        impl<'de> serde::de::Visitor<'de> for TopicFilterTypeVisitor {
-            type Value = TopicFilterType;
+        impl<'de> serde::de::Visitor<'de> for ConsumeTypeVisitor {
+            type Value = ConsumeType;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
                 formatter.write_str("a string representing TopicFilterType")
@@ -80,27 +69,17 @@ impl<'de> Deserialize<'de> for TopicFilterType {
                 E: serde::de::Error,
             {
                 match value {
-                    "SINGLE_TAG" => Ok(TopicFilterType::SingleTag),
-                    "MULTI_TAG" => Ok(TopicFilterType::MultiTag),
+                    "CONSUME_ACTIVELY" => Ok(ConsumeType::ConsumeActively),
+                    "CONSUME_PASSIVELY" => Ok(ConsumeType::ConsumePassively),
+                    "CONSUME_POP" => Ok(ConsumeType::ConsumePop),
                     _ => Err(serde::de::Error::unknown_variant(
                         value,
-                        &["SingleTag", "MultiTag"],
+                        &["ConsumeActively", "ConsumePassively", "ConsumePop"],
                     )),
                 }
             }
         }
 
-        deserializer.deserialize_str(TopicFilterTypeVisitor)
-    }
-}
-
-pub struct Pair<T, U> {
-    pub left: T,
-    pub right: U,
-}
-
-impl<T, U> Pair<T, U> {
-    pub fn new(left: T, right: U) -> Self {
-        Self { left, right }
+        deserializer.deserialize_str(ConsumeTypeVisitor)
     }
 }
