@@ -74,9 +74,7 @@ impl ProducerManager {
     pub fn register_producer(&self, group: &String, client_channel_info: &ClientChannelInfo) {
         let mut group_channel_table = self.group_channel_table.lock();
 
-        let channel_table = group_channel_table
-            .entry(group.clone())
-            .or_insert_with(HashMap::new);
+        let channel_table = group_channel_table.entry(group.to_owned()).or_default();
 
         if let Some(client_channel_info_found) =
             channel_table.get_mut(client_channel_info.socket_addr())

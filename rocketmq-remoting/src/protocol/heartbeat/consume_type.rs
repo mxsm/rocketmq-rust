@@ -18,6 +18,7 @@ use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
 pub enum ConsumeType {
     ConsumeActively,

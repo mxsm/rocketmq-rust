@@ -20,15 +20,15 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
 pub enum MessageModel {
-    BROADCASTING,
-    CLUSTERING,
+    Broadcasting,
+    Clustering,
 }
 
 impl MessageModel {
     fn get_mode_cn(&self) -> &'static str {
         match self {
-            MessageModel::BROADCASTING => "BROADCASTING",
-            MessageModel::CLUSTERING => "CLUSTERING",
+            MessageModel::Broadcasting => "BROADCASTING",
+            MessageModel::Clustering => "CLUSTERING",
         }
     }
 }
@@ -39,8 +39,8 @@ impl Serialize for MessageModel {
         S: Serializer,
     {
         let value = match self {
-            MessageModel::BROADCASTING => "BROADCASTING",
-            MessageModel::CLUSTERING => "CLUSTERING",
+            MessageModel::Broadcasting => "BROADCASTING",
+            MessageModel::Clustering => "CLUSTERING",
         };
         serializer.serialize_str(value)
     }
@@ -65,8 +65,8 @@ impl<'de> Deserialize<'de> for MessageModel {
                 E: serde::de::Error,
             {
                 match value {
-                    "BROADCASTING" => Ok(MessageModel::BROADCASTING),
-                    "CLUSTERING" => Ok(MessageModel::CLUSTERING),
+                    "BROADCASTING" => Ok(MessageModel::Broadcasting),
+                    "CLUSTERING" => Ok(MessageModel::Clustering),
                     _ => Err(serde::de::Error::unknown_variant(
                         value,
                         &["BROADCASTING", "CLUSTERING"],
