@@ -79,8 +79,8 @@ cargo run --bin rocketmq-broker-rust
 | schedule message store load  | :heavy_minus_sign: | 💔 ❌     |                                         |
 | send message hook            | :heavy_minus_sign: | 💔 ❌     |                                         |
 | consume message hook         | :heavy_minus_sign: | 💔 ❌     |                                         |
-| send message                 | 10                 | 💔 ❌     |                                         |
-| send message v2              | 310                | 💔 ❌     |                                         |
+| send message                 | 10                 | ❤️ ✅     |                                         |
+| send message v2              | 310                | ❤️ ✅     |                                         |
 | send batch message           | 320                | 💔 ❌     |                                         |
 | consume send message back    | 36                 | 💔 ❌     |                                         |
 | pull message                 | 11                 | 💔 ❌     |                                         |
@@ -96,8 +96,8 @@ cargo run --bin rocketmq-broker-rust
 | send reply message v2        | 325                | 💔 ❌     |                                         |
 | query message                | 12                 | 💔 ❌     |                                         |
 | view message by id           | 33                 | 💔 ❌     |                                         |
-| heart beat                   | 34                 | 💔 ❌     |                                         |
-| unregister client            | 35                 | 💔 ❌     |                                         |
+| heart beat                   | 34                 | ❤️ ✅     |                                         |
+| unregister client            | 35                 | ❤️ ✅     |                                         |
 | check client config          | 46                 | 💔 ❌     |                                         |
 | get consumer list by group   | 38                 | 💔 ❌     |                                         |
 | update consumer offset       | 15                 | 💔 ❌     |                                         |
