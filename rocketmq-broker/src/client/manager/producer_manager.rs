@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 
+use rocketmq_common::TimeUtils::get_current_millis;
 use tracing::info;
 
 use crate::client::client_channel_info::ClientChannelInfo;
@@ -68,5 +69,29 @@ impl ProducerManager {
                 );
             }
         }
+    }
+
+    pub fn register_producer(&self, group: &String, client_channel_info: &ClientChannelInfo) {
+        let mut group_channel_table = self.group_channel_table.lock();
+
+        let channel_table = group_channel_table.entry(group.to_owned()).or_default();
+
+        if let Some(client_channel_info_found) =
+            channel_table.get_mut(client_channel_info.socket_addr())
+        {
+            client_channel_info_found.set_last_update_timestamp(get_current_millis() as i64);
+            return;
+        }
+
+        channel_table.insert(
+            client_channel_info.socket_addr().clone(),
+            client_channel_info.clone(),
+        );
+
+        let mut client_channel_table = self.client_channel_table.lock();
+        client_channel_table.insert(
+            client_channel_info.client_id().clone(),
+            client_channel_info.socket_addr().clone(),
+        );
     }
 }
