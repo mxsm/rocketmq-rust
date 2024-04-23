@@ -19,10 +19,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::protocol::{
-    command_custom_header::{CommandCustomHeader, FromMap},
-    header::client_request_header::GetRouteInfoRequestHeader,
-};
+use crate::protocol::command_custom_header::{CommandCustomHeader, FromMap};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct RpcRequestHeader {

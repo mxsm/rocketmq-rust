@@ -43,10 +43,10 @@ impl ClientChannelInfo {
         }
     }
 
-    pub fn socket_addr(&self) -> &str {
+    pub fn socket_addr(&self) -> &String {
         &self.socket_addr
     }
-    pub fn client_id(&self) -> &str {
+    pub fn client_id(&self) -> &String {
         &self.client_id
     }
     pub fn language(&self) -> LanguageCode {

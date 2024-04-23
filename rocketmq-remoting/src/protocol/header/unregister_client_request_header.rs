@@ -17,14 +17,10 @@
 
 use std::collections::HashMap;
 
-use rocketmq_macros::{RemotingSerializable, RequestHeaderCodec};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    protocol::{
-        command_custom_header::{CommandCustomHeader, FromMap},
-        RemotingSerializable,
-    },
+    protocol::command_custom_header::{CommandCustomHeader, FromMap},
     rpc::rpc_request_header::RpcRequestHeader,
 };
 

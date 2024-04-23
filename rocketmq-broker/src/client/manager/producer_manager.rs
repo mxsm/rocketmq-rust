@@ -17,6 +17,8 @@
 
 use std::collections::HashMap;
 
+use tracing::info;
+
 use crate::client::client_channel_info::ClientChannelInfo;
 
 #[derive(Default)]
@@ -42,8 +44,29 @@ impl ProducerManager {
         if channels.is_none() {
             return false;
         }
-        channels.unwrap().len() > 0
+        !channels.unwrap().is_empty()
     }
 
-    pub fn unregister_producer(&self, _group: &String, _client_channel_info: &ClientChannelInfo) {}
+    pub fn unregister_producer(&self, group: &String, client_channel_info: &ClientChannelInfo) {
+        let mut mutex_guard = self.group_channel_table.lock();
+        let channel_table = mutex_guard.get_mut(group);
+        if let Some(ct) = channel_table {
+            if !ct.is_empty() {
+                let old = ct.remove(client_channel_info.socket_addr());
+                if old.is_some() {
+                    info!(
+                        "unregister a producer[{}] from groupChannelTable {:?}",
+                        group, client_channel_info
+                    );
+                }
+            }
+            if ct.is_empty() {
+                let _ = mutex_guard.remove(group);
+                info!(
+                    "unregister a producer group[{}] from groupChannelTable",
+                    group
+                );
+            }
+        }
+    }
 }
