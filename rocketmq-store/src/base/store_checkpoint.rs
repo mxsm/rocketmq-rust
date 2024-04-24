@@ -15,40 +15,19 @@
  * limitations under the License.
  */
 
-use memmap2::MmapMut;
+#[derive(Default, Clone)]
+pub struct StoreCheckpoint {}
 
-pub mod allocate_mapped_file_service;
-pub mod append_message_callback;
-pub mod compaction_append_msg_callback;
-pub(crate) mod dispatch_request;
-pub mod message_result;
-pub mod message_status_enum;
-pub mod put_message_context;
-pub mod select_result;
-pub mod store_checkpoint;
-pub mod store_enum;
-pub mod swappable;
-pub mod transient_store_pool;
-
-pub struct ByteBuffer<'a> {
-    data: &'a mut MmapMut,
-    position: i64,
-}
-
-impl<'a> ByteBuffer<'a> {
-    pub fn new(data: &'a mut MmapMut, position: i64) -> ByteBuffer<'a> {
-        ByteBuffer { data, position }
+impl StoreCheckpoint {
+    pub fn new(_scp_path: String) -> Self {
+        Self {}
     }
 
-    pub fn get_position(&self) -> i64 {
-        self.position
+    pub fn get_master_flushed_offset(&self) -> i64 {
+        -1
     }
 
-    pub fn set_position(&mut self, position: i64) {
-        self.position = position;
-    }
-
-    pub fn get_data_mut(&mut self) -> &mut [u8] {
-        self.data
+    pub fn get_confirm_phy_offset(&self) -> i64 {
+        -1
     }
 }

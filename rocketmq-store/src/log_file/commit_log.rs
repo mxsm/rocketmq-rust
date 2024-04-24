@@ -63,6 +63,7 @@ struct PutMessageThreadLocal {
 //     });
 // }
 
+#[derive(Clone)]
 pub struct CommitLog {
     mapped_file_queue: Arc<tokio::sync::RwLock<MappedFileQueue>>,
     message_store_config: Arc<MessageStoreConfig>,
@@ -89,8 +90,20 @@ impl CommitLog {
 impl CommitLog {
     pub fn load(&mut self) -> bool {
         let arc = self.mapped_file_queue.clone();
-        Handle::current().block_on(async move { arc.write().await.load() })
+        let handle = Handle::current();
+        let result = std::thread::spawn(move || {
+            // Using Handle::block_on to run async code in the new thread.
+            handle.block_on(async move {
+                let mut write_mf = arc.write().await;
+                let result = write_mf.load();
+                write_mf.check_self();
+                result
+            })
+        });
+        result.join().unwrap_or(false)
     }
+
+    pub fn set_confirm_offset(&mut self, _phy_offset: i64) {}
 
     pub async fn put_message(&self, msg: MessageExtBrokerInner) -> PutMessageResult {
         let mut msg = msg;

@@ -31,7 +31,7 @@ use rocketmq_remoting::{
 use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_store::{
     base::store_enum::StoreType, config::message_store_config::MessageStoreConfig,
-    message_store::local_file_store::LocalFileMessageStore,
+    log_file::MessageStore, message_store::local_file_store::LocalFileMessageStore,
     timer::timer_message_store::TimerMessageStore,
 };
 use tracing::{info, warn};
@@ -68,7 +68,7 @@ pub(crate) struct BrokerRuntime {
     consumer_filter_manager: Arc<ConsumerFilterManager>,
     consumer_order_info_manager: Arc<ConsumerOrderInfoManager>,
     #[cfg(feature = "local_file_store")]
-    message_store: Option<Arc<LocalFileMessageStore>>,
+    message_store: Option<LocalFileMessageStore>,
     schedule_message_service: ScheduleMessageService,
     timer_message_store: Option<TimerMessageStore>,
 
@@ -172,9 +172,9 @@ impl BrokerRuntime {
     fn initialize_message_store(&mut self) -> bool {
         if self.message_store_config.store_type == StoreType::LocalFile {
             info!("Use local file as message store");
-            self.message_store = Some(Arc::new(LocalFileMessageStore::new(
+            self.message_store = Some(LocalFileMessageStore::new(
                 self.message_store_config.clone(),
-            )));
+            ));
         } else if self.message_store_config.store_type == StoreType::RocksDB {
             info!("Use RocksDB as message store");
         } else {
@@ -192,7 +192,7 @@ impl BrokerRuntime {
             todo!()
         }
         if self.message_store.is_some() {
-            // result = self.message_store.as_ref().unwrap().write().load();
+            self.message_store.as_mut().unwrap().load();
         }
 
         if self.broker_config.timer_wheel_config.timer_wheel_enable {
