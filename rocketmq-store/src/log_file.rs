@@ -15,27 +15,34 @@
  * limitations under the License.
  */
 
-use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
+ use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
 
-use crate::base::message_result::PutMessageResult;
-
-pub mod commit_log;
-pub mod mapped_file;
-
-#[allow(async_fn_in_trait)]
-#[trait_variant::make(MessageStore: Send)]
-pub trait RocketMQMessageStore: Clone {
-    /// Load previously stored messages.
-    ///
-    /// Returns `true` if success; `false` otherwise.
-    fn load(&mut self) -> bool;
-
-    /// Launch this message store.
-    ///
-    /// # Throws
-    ///
-    /// Throws an `Exception` if there is any error.
-    fn start(&mut self) -> Result<(), Box<dyn std::error::Error>>;
-
-    async fn put_message(&self, msg: MessageExtBrokerInner) -> PutMessageResult;
-}
+ use crate::base::message_result::PutMessageResult;
+ 
+ pub mod commit_log;
+ pub mod mapped_file;
+ 
+ #[allow(async_fn_in_trait)]
+ #[trait_variant::make(MessageStore: Send)]
+ pub trait RocketMQMessageStore: Clone {
+     /// Load previously stored messages.
+     ///
+     /// Returns `true` if success; `false` otherwise.
+     fn load(&mut self) -> bool;
+ 
+     /// Launch this message store.
+     ///
+     /// # Throws
+     ///
+     /// Throws an `Exception` if there is any error.
+     fn start(&mut self) -> Result<(), Box<dyn std::error::Error>>;
+ 
+     fn set_confirm_offset(&mut self, phy_offset: i64);
+ 
+     fn get_max_phy_offset(&self) -> i64;
+ 
+     fn set_broker_init_max_offset(&mut self, broker_init_max_offset: i64);
+ 
+     async fn put_message(&self, msg: MessageExtBrokerInner) -> PutMessageResult;
+ }
+ 

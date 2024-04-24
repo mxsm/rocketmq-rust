@@ -14,20 +14,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#![allow(dead_code)]
 
-pub mod base;
-pub mod config;
-mod consume_queue;
-mod filter;
-pub mod hook;
-mod index;
-mod kv;
-pub mod log_file;
-pub(crate) mod message_encoder;
-pub mod message_store;
-mod queue;
-pub(crate) mod services;
-pub mod status;
-pub mod store_path_config_helper;
-pub mod timer;
+ #[derive(Clone)]
+ pub struct IndexService {}
+ 
+ impl IndexService {
+     pub fn new() -> Self {
+         Self {}
+     }
+ 
+     pub fn load(&mut self, _last_exit_ok: bool) -> bool {
+         true
+     }
+ }
+ 
