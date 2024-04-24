@@ -15,16 +15,15 @@
  * limitations under the License.
  */
 
- #[derive(Clone)]
- pub struct IndexService {}
- 
- impl IndexService {
-     pub fn new() -> Self {
-         Self {}
-     }
- 
-     pub fn load(&mut self, _last_exit_ok: bool) -> bool {
-         true
-     }
- }
- 
+#[derive(Clone)]
+pub struct IndexService {}
+
+impl IndexService {
+    pub fn new() -> Self {
+        Self {}
+    }
+
+    pub fn load(&mut self, _last_exit_ok: bool) -> bool {
+        true
+    }
+}
