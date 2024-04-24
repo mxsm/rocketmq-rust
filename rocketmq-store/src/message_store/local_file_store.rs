@@ -44,6 +44,12 @@ pub struct LocalFileMessageStore {
     commit_log: Arc<CommitLog>,
 }
 
+impl Clone for LocalFileMessageStore {
+    fn clone(&self) -> Self {
+        unimplemented!()
+    }
+}
+
 impl LocalFileMessageStore {
     pub fn new(message_store_config: Arc<MessageStoreConfig>) -> Self {
         Self {

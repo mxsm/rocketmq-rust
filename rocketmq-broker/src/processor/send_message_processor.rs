@@ -66,7 +66,7 @@ pub struct SendMessageProcessor<MS> {
     topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
     topic_config_manager: Arc<TopicConfigManager>,
     broker_config: Arc<BrokerConfig>,
-    message_store: Arc<MS>,
+    message_store: MS,
     store_host: SocketAddr,
 }
 
@@ -78,7 +78,7 @@ impl<MS: Default> Default for SendMessageProcessor<MS> {
             topic_queue_mapping_manager: Arc::new(TopicQueueMappingManager::default()),
             topic_config_manager: Arc::new(TopicConfigManager::default()),
             broker_config: Arc::new(BrokerConfig::default()),
-            message_store: Arc::new(Default::default()),
+            message_store: Default::default(),
             store_host,
         }
     }
@@ -142,7 +142,7 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
         topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
         topic_config_manager: Arc<TopicConfigManager>,
         broker_config: Arc<BrokerConfig>,
-        message_store: Arc<MS>,
+        message_store: MS,
     ) -> Self {
         let store_host = format!("{}:{}", broker_config.broker_ip1, broker_config.listen_port)
             .parse::<SocketAddr>()
