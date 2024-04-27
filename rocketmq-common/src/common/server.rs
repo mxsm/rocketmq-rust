@@ -15,5 +15,4 @@
  * limitations under the License.
  */
 
-#[derive(Clone)]
-pub struct QueueOffsetOperator {}
+pub mod config;

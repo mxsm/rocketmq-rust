@@ -23,10 +23,11 @@ use std::{
 
 use log::warn;
 use rocketmq_common::UtilAll::offset_to_file_name;
+use tokio::sync::Mutex;
 use tracing::info;
 
 use crate::{
-    base::swappable::Swappable, log_file::mapped_file::default_impl_refactor::LocalMappedFile,
+    log_file::mapped_file::default_impl_refactor::LocalMappedFile,
     services::allocate_mapped_file_service::AllocateMappedFileService,
 };
 
@@ -36,8 +37,8 @@ pub struct MappedFileQueue {
 
     pub(crate) mapped_file_size: u64,
 
-    pub(crate) mapped_files: Vec<Arc<parking_lot::Mutex<LocalMappedFile>>>,
-
+    pub(crate) mapped_files: Vec<Arc<Mutex<LocalMappedFile>>>,
+    //  pub(crate) mapped_files: Vec<LocalMappedFile>,
     pub(crate) allocate_mapped_file_service: Option<AllocateMappedFileService>,
 
     pub(crate) flushed_where: u64,
@@ -47,7 +48,7 @@ pub struct MappedFileQueue {
     pub(crate) store_timestamp: u64,
 }
 
-impl Swappable for MappedFileQueue {
+/*impl Swappable for MappedFileQueue {
     fn swap_map(
         &self,
         _reserve_num: i32,
@@ -60,7 +61,7 @@ impl Swappable for MappedFileQueue {
     fn clean_swapped_map(&self, _force_clean_swap_interval_ms: i64) {
         todo!()
     }
-}
+}*/
 
 impl MappedFileQueue {
     pub fn new(
@@ -129,36 +130,51 @@ impl MappedFileQueue {
                 LocalMappedFile::new(file.to_string_lossy().to_string(), self.mapped_file_size);
             // Set wrote, flushed, committed positions for mapped_file
 
-            self.mapped_files
-                .push(Arc::new(parking_lot::Mutex::new(mapped_file)));
+            self.mapped_files.push(Arc::new(Mutex::new(mapped_file)));
+            // self.mapped_files
+            //     .push(mapped_file);
             info!("load {} OK", file.display());
         }
 
         true
     }
 
-    pub fn get_last_mapped_file_mut(&self) -> Option<Arc<parking_lot::Mutex<LocalMappedFile>>> {
+    // pub fn get_last_mapped_file_mut(&mut self) -> Option<&mut LocalMappedFile>{
+    //     if self.mapped_files.is_empty() {
+    //         return None;
+    //     }
+    //     self.mapped_files.last_mut()
+    // }
+
+    // pub fn get_last_mapped_file(&mut self) -> Option<&LocalMappedFile>{
+    //     if self.mapped_files.is_empty() {
+    //         return None;
+    //     }
+    //     self.mapped_files.last()
+    // }
+
+    pub fn get_last_mapped_file(&mut self) -> Option<Arc<Mutex<LocalMappedFile>>> {
         if self.mapped_files.is_empty() {
             return None;
         }
         self.mapped_files.last().cloned()
     }
 
-    pub fn get_last_mapped_file_mut_start_offset(
+    pub async fn get_last_mapped_file_mut_start_offset(
         &mut self,
         start_offset: u64,
         need_create: bool,
-    ) -> Option<Arc<parking_lot::Mutex<LocalMappedFile>>> {
+    ) -> Option<Arc<Mutex<LocalMappedFile>>> {
         let mut create_offset = -1i64;
         let file_size = self.mapped_file_size as i64;
-        let mapped_file_last = self.get_last_mapped_file_mut();
+        let mapped_file_last = self.get_last_mapped_file();
         match mapped_file_last {
             None => {
                 create_offset = start_offset as i64 - (start_offset as i64 % file_size);
             }
             Some(ref value) => {
-                if value.lock().is_full() {
-                    create_offset = value.lock().get_file_from_offset() as i64 + file_size
+                if value.lock().await.is_full() {
+                    create_offset = value.lock().await.get_file_from_offset() as i64 + file_size
                 }
             }
         }
@@ -171,7 +187,7 @@ impl MappedFileQueue {
     pub fn try_create_mapped_file(
         &mut self,
         create_offset: u64,
-    ) -> Option<Arc<parking_lot::Mutex<LocalMappedFile>>> {
+    ) -> Option<Arc<Mutex<LocalMappedFile>>> {
         let next_file_path =
             PathBuf::from(self.store_path.clone()).join(offset_to_file_name(create_offset));
         let next_next_file_path = PathBuf::from(self.store_path.clone())
@@ -183,7 +199,7 @@ impl MappedFileQueue {
         &mut self,
         next_file_path: PathBuf,
         _next_next_file_path: PathBuf,
-    ) -> Option<Arc<parking_lot::Mutex<LocalMappedFile>>> {
+    ) -> Option<Arc<Mutex<LocalMappedFile>>> {
         let mut mapped_file = match self.allocate_mapped_file_service {
             None => LocalMappedFile::new(
                 next_file_path.to_string_lossy().to_string(),
@@ -197,10 +213,24 @@ impl MappedFileQueue {
         if self.mapped_files.is_empty() {
             mapped_file.set_first_create_in_queue(true);
         }
-        let mapped_file_inner = Arc::new(parking_lot::Mutex::new(mapped_file));
-        self.mapped_files.push(Arc::clone(&mapped_file_inner));
-        Some(mapped_file_inner)
+        let inner = Arc::new(Mutex::new(mapped_file));
+        self.mapped_files.push(inner.clone());
+        Some(inner)
     }
+
+    pub fn get_mapped_files(&self) -> Vec<Arc<Mutex<LocalMappedFile>>> {
+        self.mapped_files.to_vec()
+    }
+
+    pub fn set_flushed_where(&mut self, flushed_where: i64) {
+        self.flushed_where = flushed_where as u64;
+    }
+
+    pub fn set_committed_where(&mut self, committed_where: i64) {
+        self.committed_where = committed_where as u64;
+    }
+
+    pub fn truncate_dirty_files(&mut self, offset: i64) {}
 }
 
 #[cfg(test)]

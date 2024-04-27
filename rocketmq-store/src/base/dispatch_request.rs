@@ -15,4 +15,27 @@
  * limitations under the License.
  */
 
-pub struct DispatchRequest {}
+use std::collections::HashMap;
+
+#[derive(Debug, Default)]
+pub struct DispatchRequest {
+    pub topic: String,
+    pub queue_id: i32,
+    pub commit_log_offset: i64,
+    pub msg_size: i32,
+    pub tags_code: i64,
+    pub store_timestamp: i64,
+    pub consume_queue_offset: i64,
+    pub keys: String,
+    pub success: bool,
+    pub uniq_key: Option<String>,
+    pub sys_flag: i32,
+    pub prepared_transaction_offset: i64,
+    pub properties_map: HashMap<String, String>,
+    pub bit_map: Vec<u8>,
+    pub buffer_size: i32,
+    pub msg_base_offset: i64,
+    pub batch_size: i16,
+    pub next_reput_from_offset: i64,
+    pub offset_id: String,
+}

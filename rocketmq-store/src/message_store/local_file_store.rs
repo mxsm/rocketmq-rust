@@ -14,12 +14,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#![allow(unused_variables)]
 
-use std::{collections::HashMap, error::Error, fs, sync::Arc};
+use std::{collections::HashMap, error::Error, fs, sync::Arc, time::Instant};
 
 use log::info;
 use rocketmq_common::{
     common::{
+        broker::broker_config::BrokerConfig,
         config::TopicConfig,
         message::{message_single::MessageExtBrokerInner, MessageConst},
         sys_flag::message_sys_flag::MessageSysFlag,
@@ -27,65 +29,73 @@ use rocketmq_common::{
     utils::queue_type_utils::QueueTypeUtils,
 };
 use rocketmq_runtime::RocketMQRuntime;
+use tokio::sync::Mutex;
 use tracing::{error, warn};
 
 use crate::{
     base::{
-        allocate_mapped_file_service::AllocateMappedFileService, message_result::PutMessageResult,
-        message_status_enum::PutMessageStatus, store_checkpoint::StoreCheckpoint,
+        allocate_mapped_file_service::AllocateMappedFileService,
+        commit_log_dispatcher::CommitLogDispatcher, dispatch_request::DispatchRequest,
+        message_result::PutMessageResult, message_status_enum::PutMessageStatus,
+        store_checkpoint::StoreCheckpoint,
     },
     config::message_store_config::MessageStoreConfig,
     hook::put_message_hook::BoxedPutMessageHook,
     index::index_service::IndexService,
     kv::compaction_service::CompactionService,
     log_file::{commit_log::CommitLog, MessageStore},
+    queue::{
+        consume_queue::ConsumeQueueStoreTrait,
+        local_file_consume_queue_store::{LocalFileConsumeQueue, LocalFileConsumeQueueStore},
+    },
     store_path_config_helper::{get_abort_file, get_store_checkpoint},
 };
 
 ///Using local files to store message data, which is also the default method.
 pub struct LocalFileMessageStore {
     message_store_config: Arc<MessageStoreConfig>,
+    broker_config: Arc<BrokerConfig>,
     put_message_hook_list: Arc<tokio::sync::Mutex<Vec<BoxedPutMessageHook>>>,
     topic_config_table: HashMap<String, TopicConfig>,
     message_store_runtime: Option<RocketMQRuntime>,
-    commit_log: CommitLog,
+    commit_log: Arc<Mutex<CommitLog>>,
     compaction_service: CompactionService,
     store_checkpoint: Option<StoreCheckpoint>,
     master_flushed_offset: Arc<parking_lot::Mutex<i64>>,
     index_service: IndexService,
     allocate_mapped_file_service: AllocateMappedFileService,
-}
-
-impl Clone for LocalFileMessageStore {
-    fn clone(&self) -> Self {
-        Self {
-            message_store_config: self.message_store_config.clone(),
-            put_message_hook_list: self.put_message_hook_list.clone(),
-            topic_config_table: self.topic_config_table.clone(),
-            message_store_runtime: None,
-            commit_log: self.commit_log.clone(),
-            compaction_service: self.compaction_service.clone(),
-            store_checkpoint: None,
-            master_flushed_offset: self.master_flushed_offset.clone(),
-            index_service: self.index_service.clone(),
-            allocate_mapped_file_service: self.allocate_mapped_file_service.clone(),
-        }
-    }
+    consume_queue_store: LocalFileConsumeQueueStore<LocalFileConsumeQueue>,
+    dispatcher_list: Arc<Mutex<Vec<Box<dyn CommitLogDispatcher>>>>,
 }
 
 impl LocalFileMessageStore {
-    pub fn new(message_store_config: Arc<MessageStoreConfig>) -> Self {
+    pub fn new(
+        message_store_config: Arc<MessageStoreConfig>,
+        broker_config: Arc<BrokerConfig>,
+    ) -> Self {
+        let dispatcher_list = Arc::new(Mutex::new(vec![]));
+        let commit_log = Arc::new(Mutex::new(CommitLog::new(
+            message_store_config.clone(),
+            broker_config.clone(),
+            dispatcher_list.clone(),
+        )));
         Self {
             message_store_config: message_store_config.clone(),
+            broker_config,
             put_message_hook_list: Arc::new(tokio::sync::Mutex::new(vec![])),
             topic_config_table: HashMap::new(),
             message_store_runtime: Some(RocketMQRuntime::new_multi(10, "message-store-thread")),
-            commit_log: CommitLog::new(message_store_config),
+            commit_log: commit_log.clone(),
             compaction_service: Default::default(),
             store_checkpoint: None,
             master_flushed_offset: Arc::new(parking_lot::Mutex::new(-1)),
             index_service: IndexService {},
             allocate_mapped_file_service: AllocateMappedFileService {},
+            consume_queue_store: LocalFileConsumeQueueStore::new(
+                message_store_config.clone(),
+                commit_log,
+            ),
+            dispatcher_list,
         }
     }
 }
@@ -111,12 +121,125 @@ impl LocalFileMessageStore {
         fs::metadata(file_name).is_ok()
     }
 
-    fn recover(&mut self, _last_exit_ok: bool) {}
+    /*    pub fn set_weak_message_store(&mut self, weak: Weak<Mutex<Self>>) {
+        let handle = Handle::current();
+        let commit_log = self.commit_log.clone();
+        std::thread::spawn(move || {
+            handle.block_on(
+                async move { commit_log.lock().await.set_local_file_message_store(weak) },
+            );
+        });
+    }*/
+
+    async fn recover(&mut self, last_exit_ok: bool) {
+        let recover_concurrently = self.is_recover_concurrently();
+        info!(
+            "message store recover mode: {}",
+            if recover_concurrently {
+                "concurrent"
+            } else {
+                "normal"
+            },
+        );
+        let recover_consume_queue_start = Instant::now();
+        self.recover_consume_queue();
+        let max_phy_offset_of_consume_queue = self
+            .consume_queue_store
+            .get_max_phy_offset_in_consume_queue();
+        let recover_consume_queue = Instant::now()
+            .saturating_duration_since(recover_consume_queue_start)
+            .as_millis();
+
+        let recover_commit_log_start = Instant::now();
+        if last_exit_ok {
+            self.recover_normally(max_phy_offset_of_consume_queue).await;
+        } else {
+            self.recover_abnormally(max_phy_offset_of_consume_queue);
+        }
+        let recover_commit_log = Instant::now()
+            .saturating_duration_since(recover_commit_log_start)
+            .as_millis();
+
+        let recover_topic_queue_table_start = Instant::now();
+        self.recover_topic_queue_table();
+        let recover_topic_queue_table = Instant::now()
+            .saturating_duration_since(recover_topic_queue_table_start)
+            .as_millis();
+        info!(
+            "message store recover total cost: {} ms, recoverConsumeQueue: {} ms, \
+             recoverCommitLog: {} ms, recoverOffsetTable: {} ms",
+            recover_consume_queue + recover_commit_log + recover_topic_queue_table,
+            recover_consume_queue,
+            recover_commit_log,
+            recover_topic_queue_table
+        );
+    }
+
+    pub fn recover_topic_queue_table(&mut self) {}
+
+    pub async fn recover_normally(&mut self, max_phy_offset_of_consume_queue: i64) {
+        /*let handle = Handle::current();
+        let commit_log_inner = self.commit_log.clone();
+        std::thread::spawn(move || {
+            handle.block_on(async move {
+                commit_log_inner
+                    .lock()
+                    .await
+                    .recover_normally(max_phy_offset_of_consume_queue);
+            })
+        })
+        .join()
+        .unwrap_or_default()*/
+        self.commit_log
+            .lock()
+            .await
+            .recover_normally(max_phy_offset_of_consume_queue)
+            .await;
+    }
+
+    pub fn recover_abnormally(&mut self, max_phy_offset_of_consume_queue: i64) {}
+
+    fn is_recover_concurrently(&self) -> bool {
+        self.broker_config.recover_concurrently
+            & self.message_store_config.is_enable_rocksdb_store()
+    }
+
+    fn recover_consume_queue(&mut self) {
+        if self.is_recover_concurrently() {
+            self.consume_queue_store.recover_concurrently();
+        } else {
+            self.consume_queue_store.recover();
+        }
+    }
+
+    pub async fn on_commit_log_dispatch(
+        &mut self,
+        dispatch_request: &DispatchRequest,
+        do_dispatch: bool,
+        is_recover: bool,
+        _is_file_end: bool,
+    ) {
+        if do_dispatch && !is_recover {
+            self.do_dispatch(dispatch_request).await;
+        }
+    }
+
+    pub async fn do_dispatch(&mut self, dispatch_request: &DispatchRequest) {
+        for dispatcher in self.dispatcher_list.lock().await.iter_mut() {
+            dispatcher.dispatch(dispatch_request);
+        }
+    }
+
+    pub fn truncate_dirty_logic_files(&mut self, phy_offset: i64) {}
+
+    pub fn get_queue_store(&mut self) -> &mut LocalFileConsumeQueueStore<LocalFileConsumeQueue> {
+        &mut self.consume_queue_store
+    }
 }
 
 impl MessageStore for LocalFileMessageStore {
-    fn load(&mut self) -> bool {
-        let last_exit_ok = self.is_temp_file_exist();
+    async fn load(&mut self) -> bool {
+        let last_exit_ok = !self.is_temp_file_exist();
         info!(
             "last shutdown {}, store path root dir: {}",
             if last_exit_ok {
@@ -126,7 +249,14 @@ impl MessageStore for LocalFileMessageStore {
             },
             self.message_store_config.store_path_root_dir
         );
-        let mut result = self.commit_log.load();
+        /*let handle = Handle::current();
+        let commitlog_inner = self.commit_log.clone();
+        let mut result = std::thread::spawn(move || {
+            handle.block_on(async move { commitlog_inner.lock().await.load() })
+        })
+        .join()
+        .unwrap_or_default();*/
+        let mut result = self.commit_log.lock().await.load();
         if !result {
             return result;
         }
@@ -155,6 +285,7 @@ impl MessageStore for LocalFileMessageStore {
                     .get_confirm_phy_offset(),
             );
             result = self.index_service.load(last_exit_ok);
+            self.recover(last_exit_ok).await;
             info!(
                 "message store recover end, and the max phy offset = {}",
                 self.get_max_phy_offset()
@@ -176,7 +307,8 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn set_confirm_offset(&mut self, phy_offset: i64) {
-        self.commit_log.set_confirm_offset(phy_offset);
+
+        // self.commit_log.set_confirm_offset(phy_offset);
     }
 
     fn get_max_phy_offset(&self) -> i64 {
@@ -213,6 +345,6 @@ impl MessageStore for LocalFileMessageStore {
                 return PutMessageResult::new_default(PutMessageStatus::MessageIllegal);
             }
         }
-        self.commit_log.put_message(msg).await
+        self.commit_log.lock().await.put_message(msg).await
     }
 }

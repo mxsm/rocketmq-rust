@@ -17,13 +17,13 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use rocketmq_common::common::config_manager::ConfigManager;
+use rocketmq_common::common::{broker::broker_config::BrokerConfig, config_manager::ConfigManager};
 use rocketmq_remoting::protocol::{
     subscription::subscription_group_config::SubscriptionGroupConfig, DataVersion,
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{broker_config::BrokerConfig, broker_path_config_helper::get_subscription_group_path};
+use crate::broker_path_config_helper::get_subscription_group_path;
 
 #[derive(Default)]
 pub(crate) struct SubscriptionGroupManager {

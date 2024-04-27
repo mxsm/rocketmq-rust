@@ -400,4 +400,8 @@ impl MessageStoreConfig {
         }
         self.store_path_commit_log.clone().unwrap()
     }
+
+    pub fn is_enable_rocksdb_store(&self) -> bool {
+        self.store_type == StoreType::RocksDB
+    }
 }

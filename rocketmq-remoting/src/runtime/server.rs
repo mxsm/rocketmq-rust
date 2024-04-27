@@ -18,6 +18,7 @@
 use std::{future::Future, net::SocketAddr, sync::Arc, time::Duration};
 
 use futures::SinkExt;
+use rocketmq_common::common::server::config::ServerConfig;
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::{broadcast, mpsc, Semaphore},
@@ -28,7 +29,7 @@ use tracing::{error, info, warn};
 
 use crate::{
     connection::Connection, protocol::remoting_command::RemotingCommand,
-    runtime::processor::RequestProcessor, server::config::ServerConfig,
+    runtime::processor::RequestProcessor,
 };
 
 /// Default limit the max number of connections.

@@ -18,8 +18,8 @@
 use std::{collections::HashMap, sync::Arc};
 
 use rocketmq_common::common::{
-    config::TopicConfig, config_manager::ConfigManager, constant::PermName, mix_all,
-    topic::TopicValidator,
+    broker::broker_config::BrokerConfig, config::TopicConfig, config_manager::ConfigManager,
+    constant::PermName, mix_all, topic::TopicValidator,
 };
 use rocketmq_remoting::protocol::{
     body::topic_info_wrapper::{
@@ -30,7 +30,7 @@ use rocketmq_remoting::protocol::{
 };
 use tracing::info;
 
-use crate::{broker_config::BrokerConfig, broker_path_config_helper::get_topic_config_path};
+use crate::broker_path_config_helper::get_topic_config_path;
 
 #[derive(Default)]
 pub(crate) struct TopicConfigManager {

@@ -19,6 +19,7 @@ use std::sync::Arc;
 use rand::Rng;
 use rocketmq_common::{
     common::{
+        broker::broker_config::BrokerConfig,
         constant::PermName,
         message::{message_enum::MessageType, MessageConst},
         topic::TopicValidator,
@@ -43,7 +44,6 @@ use tracing::info;
 
 use self::client_manage_processor::ClientManageProcessor;
 use crate::{
-    broker_config::BrokerConfig,
     mqtrace::send_message_context::SendMessageContext,
     processor::{
         admin_broker_processor::AdminBrokerProcessor, send_message_processor::SendMessageProcessor,

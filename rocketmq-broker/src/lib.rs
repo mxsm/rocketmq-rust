@@ -22,7 +22,6 @@ pub use broker_bootstrap::{BrokerBootstrap, Builder};
 pub mod command;
 
 mod broker_bootstrap;
-pub mod broker_config;
 mod broker_path_config_helper;
 mod broker_runtime;
 mod client;

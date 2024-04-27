@@ -105,6 +105,14 @@ impl LocalMappedFile {
     pub fn set_first_create_in_queue(&mut self, first_create_in_queue: bool) {
         self.first_create_in_queue = first_create_in_queue;
     }
+
+    pub fn get_file_name(&self) -> String {
+        PathBuf::from(&self.file_name)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string()
+    }
 }
 
 impl LocalMappedFile {
