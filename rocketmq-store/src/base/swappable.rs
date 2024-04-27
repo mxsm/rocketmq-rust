@@ -16,7 +16,7 @@
  */
 
 /// Clean up page-table on super large disk.
-pub trait Swappable {
+pub trait Swappable: Send + Sync {
     /// Swap map with specified parameters.
     ///
     /// `reserve_num`: Number of reserved items.

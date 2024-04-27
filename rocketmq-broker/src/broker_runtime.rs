@@ -18,7 +18,8 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use rocketmq_common::common::{
-    config::TopicConfig, config_manager::ConfigManager, constant::PermName,
+    broker::broker_config::BrokerConfig, config::TopicConfig, config_manager::ConfigManager,
+    constant::PermName, server::config::ServerConfig,
 };
 use rocketmq_remoting::{
     protocol::{
@@ -26,7 +27,6 @@ use rocketmq_remoting::{
         static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail,
     },
     runtime::{config::client_config::TokioClientConfig, server::RocketMQServer},
-    server::config::ServerConfig,
 };
 use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_store::{
@@ -34,10 +34,10 @@ use rocketmq_store::{
     log_file::MessageStore, message_store::local_file_store::LocalFileMessageStore,
     timer::timer_message_store::TimerMessageStore,
 };
+use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 use crate::{
-    broker_config::BrokerConfig,
     client::manager::producer_manager::ProducerManager,
     filter::manager::consumer_filter_manager::ConsumerFilterManager,
     offset::manager::{
@@ -68,7 +68,7 @@ pub(crate) struct BrokerRuntime {
     consumer_filter_manager: Arc<ConsumerFilterManager>,
     consumer_order_info_manager: Arc<ConsumerOrderInfoManager>,
     #[cfg(feature = "local_file_store")]
-    message_store: Option<LocalFileMessageStore>,
+    message_store: Option<Arc<Mutex<LocalFileMessageStore>>>,
     schedule_message_service: ScheduleMessageService,
     timer_message_store: Option<TimerMessageStore>,
 
@@ -151,11 +151,11 @@ impl BrokerRuntime {
             return false;
         }
         info!("====== initialize metadata Success========");
-        result = self.initialize_message_store();
+        result = self.initialize_message_store().await;
         if !result {
             return false;
         }
-        self.recover_initialize_service()
+        self.recover_initialize_service().await
     }
 
     fn initialize_metadata(&self) -> bool {
@@ -169,12 +169,21 @@ impl BrokerRuntime {
             & self.consumer_order_info_manager.load()
     }
 
-    fn initialize_message_store(&mut self) -> bool {
+    async fn initialize_message_store(&mut self) -> bool {
         if self.message_store_config.store_type == StoreType::LocalFile {
             info!("Use local file as message store");
-            self.message_store = Some(LocalFileMessageStore::new(
+            let message_store = Arc::new(Mutex::new(LocalFileMessageStore::new(
                 self.message_store_config.clone(),
-            ));
+                self.broker_config.clone(),
+            )));
+            // let weak = Arc::downgrade(&message_store);
+            self.message_store = Some(message_store);
+            /*self.message_store
+            .as_mut()
+            .unwrap()
+            .lock()
+            .await
+            .set_weak_message_store(weak);*/
         } else if self.message_store_config.store_type == StoreType::RocksDB {
             info!("Use RocksDB as message store");
         } else {
@@ -184,15 +193,21 @@ impl BrokerRuntime {
         true
     }
 
-    fn recover_initialize_service(&mut self) -> bool {
-        let mut result = true;
+    async fn recover_initialize_service(&mut self) -> bool {
+        let mut result: bool = true;
 
         if self.broker_config.enable_controller_mode {
             info!("Start controller mode(Support for future versions)");
-            todo!()
+            unimplemented!()
         }
         if self.message_store.is_some() {
-            self.message_store.as_mut().unwrap().load();
+            self.message_store
+                .as_mut()
+                .unwrap()
+                .lock()
+                .await
+                .load()
+                .await;
         }
 
         if self.broker_config.timer_wheel_config.timer_wheel_enable {

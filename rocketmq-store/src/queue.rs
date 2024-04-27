@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-mod consume_queue;
+pub mod consume_queue;
 mod file_queue;
+pub mod local_file_consume_queue_store;
 mod queue_offset_operator;

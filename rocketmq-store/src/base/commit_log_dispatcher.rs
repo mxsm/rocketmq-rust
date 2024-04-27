@@ -15,5 +15,8 @@
  * limitations under the License.
  */
 
-#[derive(Clone)]
-pub struct QueueOffsetOperator {}
+use crate::base::dispatch_request::DispatchRequest;
+
+pub trait CommitLogDispatcher: Send + Sync {
+    fn dispatch(&mut self, dispatch_request: &DispatchRequest);
+}

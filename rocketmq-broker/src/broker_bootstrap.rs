@@ -15,12 +15,12 @@
  * limitations under the License.
  */
 
-use rocketmq_remoting::server::config::ServerConfig;
+use rocketmq_common::common::{broker::broker_config::BrokerConfig, server::config::ServerConfig};
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use tokio::select;
 use tracing::error;
 
-use crate::{broker_config::BrokerConfig, broker_runtime::BrokerRuntime};
+use crate::broker_runtime::BrokerRuntime;
 
 pub struct BrokerBootstrap {
     broker_runtime: BrokerRuntime,

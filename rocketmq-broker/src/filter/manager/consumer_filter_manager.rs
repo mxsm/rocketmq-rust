@@ -17,9 +17,9 @@
 
 use std::sync::Arc;
 
-use rocketmq_common::common::config_manager::ConfigManager;
+use rocketmq_common::common::{broker::broker_config::BrokerConfig, config_manager::ConfigManager};
 
-use crate::{broker_config::BrokerConfig, broker_path_config_helper::get_consumer_filter_path};
+use crate::broker_path_config_helper::get_consumer_filter_path;
 
 #[derive(Default)]
 pub(crate) struct ConsumerFilterManager {

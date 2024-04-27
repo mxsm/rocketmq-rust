@@ -20,6 +20,7 @@ use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 use rocketmq_common::{
     common::{
         attribute::cleanup_policy::CleanupPolicy,
+        broker::broker_config::BrokerConfig,
         message::{
             message_client_id_setter,
             message_single::{MessageExt, MessageExtBrokerInner},
@@ -50,9 +51,9 @@ use rocketmq_store::{
     base::message_result::PutMessageResult, log_file::MessageStore,
     status::manager::broker_stats_manager::BrokerStatsManager,
 };
+use tokio::sync::Mutex;
 
 use crate::{
-    broker_config::BrokerConfig,
     mqtrace::send_message_context::SendMessageContext,
     processor::SendMessageProcessorInner,
     topic::manager::{
@@ -66,7 +67,7 @@ pub struct SendMessageProcessor<MS> {
     topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
     topic_config_manager: Arc<TopicConfigManager>,
     broker_config: Arc<BrokerConfig>,
-    message_store: MS,
+    message_store: Arc<Mutex<MS>>,
     store_host: SocketAddr,
 }
 
@@ -142,7 +143,7 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
         topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
         topic_config_manager: Arc<TopicConfigManager>,
         broker_config: Arc<BrokerConfig>,
-        message_store: MS,
+        message_store: Arc<Mutex<MS>>,
     ) -> Self {
         let store_host = format!("{}:{}", broker_config.broker_ip1, broker_config.listen_port)
             .parse::<SocketAddr>()
@@ -312,7 +313,12 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
         let topic = message_ext.topic().to_string();
         // let result = self.message_store.put_message(message_ext);
         // let put_message_result = Handle::current().block_on(result);
-        let put_message_result = self.message_store.put_message(message_ext).await;
+        let put_message_result = self
+            .message_store
+            .lock()
+            .await
+            .put_message(message_ext)
+            .await;
 
         self.handle_put_message_result(
             put_message_result,

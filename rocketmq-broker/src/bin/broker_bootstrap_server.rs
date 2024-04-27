@@ -18,8 +18,10 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use rocketmq_broker::{broker_config::BrokerConfig, command::Args, Builder};
-use rocketmq_common::{EnvUtils::EnvUtils, ParseConfigFile};
+use rocketmq_broker::{command::Args, Builder};
+use rocketmq_common::{
+    common::broker::broker_config::BrokerConfig, EnvUtils::EnvUtils, ParseConfigFile,
+};
 use rocketmq_rust::rocketmq;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use tracing::info;

@@ -427,3 +427,24 @@ impl MessageExtBrokerInner {
         self.message_ext_inner.get_tags()
     }
 }
+
+pub fn parse_topic_filter_type(sys_flag: i32) -> TopicFilterType {
+    if (sys_flag & MessageSysFlag::MULTI_TAGS_FLAG) == MessageSysFlag::MULTI_TAGS_FLAG {
+        TopicFilterType::MultiTag
+    } else {
+        TopicFilterType::SingleTag
+    }
+}
+
+pub fn tags_string2tags_code(tags: Option<&String>) -> i64 {
+    if tags.is_none() {
+        return 0;
+    }
+    let tags = tags.unwrap();
+    if tags.is_empty() {
+        return 0;
+    }
+    let mut hasher = DefaultHasher::new();
+    tags.hash(&mut hasher);
+    hasher.finish() as i64
+}

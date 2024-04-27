@@ -17,11 +17,11 @@
 
 use std::{collections::HashMap, ops::Deref, sync::Arc};
 
-use rocketmq_common::common::config_manager::ConfigManager;
+use rocketmq_common::common::{broker::broker_config::BrokerConfig, config_manager::ConfigManager};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    broker_config::BrokerConfig, broker_path_config_helper::get_consumer_order_info_path,
+    broker_path_config_helper::get_consumer_order_info_path,
     offset::manager::consumer_order_info_lock_manager::ConsumerOrderInfoLockManager,
 };
 

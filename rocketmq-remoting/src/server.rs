@@ -15,8 +15,6 @@
  * limitations under the License.
  */
 
-pub mod config;
-
 use crate::remoting::RemotingService;
 
 pub trait RemotingServer: RemotingService {
