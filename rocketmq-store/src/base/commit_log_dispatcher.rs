@@ -15,8 +15,10 @@
  * limitations under the License.
  */
 
-use crate::base::dispatch_request::DispatchRequest;
+ use crate::base::dispatch_request::DispatchRequest;
 
-pub trait CommitLogDispatcher: Send + Sync {
-    fn dispatch(&mut self, dispatch_request: &DispatchRequest);
-}
+ #[trait_variant::make(CommitLogDispatcher:Send + Sync)]
+ pub trait RocketMQCommitLogDispatcher {
+     async fn dispatch(&mut self, dispatch_request: &DispatchRequest);
+ }
+ 
