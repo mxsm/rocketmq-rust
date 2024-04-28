@@ -15,6 +15,8 @@
  * limitations under the License.
  */
 
+use crate::base::dispatch_request::DispatchRequest;
+
 #[derive(Clone)]
 pub struct IndexService {}
 
@@ -25,5 +27,12 @@ impl IndexService {
 
     pub fn load(&mut self, _last_exit_ok: bool) -> bool {
         true
+    }
+
+    pub fn build_index(&mut self, dispatch_request: &DispatchRequest) {
+        println!(
+            "=========================build index:{}",
+            dispatch_request.msg_size
+        )
     }
 }

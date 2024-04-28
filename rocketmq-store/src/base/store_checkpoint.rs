@@ -30,4 +30,6 @@ impl StoreCheckpoint {
     pub fn get_confirm_phy_offset(&self) -> i64 {
         -1
     }
+
+    pub fn set_confirm_phy_offset(&mut self, _confirm_phy_offset: i64) {}
 }

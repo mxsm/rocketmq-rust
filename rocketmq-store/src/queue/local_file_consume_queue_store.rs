@@ -15,19 +15,18 @@
  * limitations under the License.
  */
 #![allow(unused_variables)]
+
 use std::{collections::HashMap, sync::Arc};
 
 use rocketmq_common::common::{
     attribute::cq_type::CQType, boundary_type::BoundaryType,
     message::message_single::MessageExtBrokerInner,
 };
-use tokio::sync::Mutex;
 
 use crate::{
     base::{dispatch_request::DispatchRequest, swappable::Swappable},
     config::message_store_config::MessageStoreConfig,
     filter::MessageFilter,
-    log_file::commit_log::CommitLog,
     queue::{
         consume_queue::{ConsumeQueueStoreTrait, ConsumeQueueTrait, CqUnit},
         file_queue::FileQueueLifeCycle,
@@ -42,7 +41,7 @@ pub struct LocalFileConsumeQueueStore<CQ> {
 
 #[derive(Clone)]
 struct ConsumeQueueStoreInner<CQ> {
-    commit_log: Arc<Mutex<CommitLog>>,
+    // commit_log: Arc<Mutex<CommitLog>>,
     message_store_config: Arc<MessageStoreConfig>,
     queue_offset_operator: QueueOffsetOperator,
     consume_queue_table: HashMap<String, HashMap<i32, CQ>>,
@@ -54,16 +53,23 @@ where
 {
     pub fn new(
         message_store_config: Arc<MessageStoreConfig>,
-        commit_log: Arc<Mutex<CommitLog>>,
+        //commit_log: Arc<Mutex<CommitLog>>,
     ) -> Self {
         Self {
             inner: ConsumeQueueStoreInner {
-                commit_log,
+                //commit_log,
                 message_store_config,
                 queue_offset_operator: QueueOffsetOperator {},
                 consume_queue_table: HashMap::new(),
             },
         }
+    }
+
+    pub fn put_message_position_info_wrapper(&mut self, dispatch_request: &DispatchRequest) {
+        println!(
+            "put_message_position_info_wrapper{}",
+            dispatch_request.topic
+        )
     }
 }
 

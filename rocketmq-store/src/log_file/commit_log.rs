@@ -47,11 +47,13 @@ use crate::{
         message_result::PutMessageResult,
         message_status_enum::{AppendMessageStatus, PutMessageStatus},
         put_message_context::PutMessageContext,
+        store_checkpoint::StoreCheckpoint,
         swappable::Swappable,
     },
     config::message_store_config::MessageStoreConfig,
     consume_queue::mapped_file_queue::MappedFileQueue,
     message_encoder::message_ext_encoder::MessageExtEncoder,
+    message_store::local_file_store::CommitLogDispatcherDefault,
 };
 
 // Message's MAGIC CODE daa320a7
@@ -83,14 +85,17 @@ pub struct CommitLog {
     broker_config: Arc<BrokerConfig>,
     enabled_append_prop_crc: bool,
     //local_file_message_store: Option<Weak<Mutex<LocalFileMessageStore>>>,
-    dispatcher_list: Arc<Mutex<Vec<Box<dyn CommitLogDispatcher>>>>,
+    dispatcher: Arc<Mutex<CommitLogDispatcherDefault>>,
+    confirm_offset: i64,
+    store_checkpoint: StoreCheckpoint,
 }
 
 impl CommitLog {
     pub fn new(
         message_store_config: Arc<MessageStoreConfig>,
         broker_config: Arc<BrokerConfig>,
-        dispatcher_list: Arc<Mutex<Vec<Box<dyn CommitLogDispatcher>>>>,
+        dispatcher: Arc<Mutex<CommitLogDispatcherDefault>>,
+        store_checkpoint: StoreCheckpoint,
     ) -> Self {
         let enabled_append_prop_crc = message_store_config.enabled_append_prop_crc;
         let store_path = message_store_config.get_store_path_commit_log();
@@ -105,7 +110,9 @@ impl CommitLog {
             broker_config,
             enabled_append_prop_crc,
             //local_file_message_store: None,
-            dispatcher_list,
+            dispatcher,
+            confirm_offset: -1,
+            store_checkpoint,
         }
     }
 }
@@ -134,7 +141,10 @@ impl CommitLog {
        // self.local_file_message_store = Some(local_file_message_store);
     }*/
 
-    pub fn set_confirm_offset(&mut self, _phy_offset: i64) {}
+    pub fn set_confirm_offset(&mut self, phy_offset: i64) {
+        self.confirm_offset = phy_offset;
+        self.store_checkpoint.set_confirm_phy_offset(phy_offset);
+    }
 
     pub async fn put_message(&self, msg: MessageExtBrokerInner) -> PutMessageResult {
         let mut msg = msg;
@@ -245,13 +255,8 @@ impl CommitLog {
         let check_dup_info = self.message_store_config.duplication_enable;
         let handle = Handle::current();
         let mapped_files = self.mapped_file_queue.clone();
-        let mut commit_log = self.clone();
         let message_store_config = self.message_store_config.clone();
         let broker_config = self.broker_config.clone();
-        //let message_store = self.local_file_message_store.clone().unwrap();
-        let dispatcher_list = self.dispatcher_list.clone();
-        /* std::thread::spawn(move || {
-        handle.block_on(async move {*/
         let mut mapped_file_queue = mapped_files.write().await;
         let mapped_files_inner = mapped_file_queue.get_mapped_files();
         if !mapped_files_inner.is_empty() {
@@ -264,7 +269,7 @@ impl CommitLog {
             let mut mapped_file = mapped_files_inner.get(index).unwrap().lock().await;
             let mut process_offset = mapped_file.get_file_from_offset();
             let mut mapped_file_offset = 0u64;
-            let mut last_valid_msg_phy_offset = commit_log.get_confirm_offset();
+            let mut last_valid_msg_phy_offset = self.get_confirm_offset();
             let do_dispatch = false;
             let mut current_pos = 0usize;
             loop {
@@ -286,16 +291,17 @@ impl CommitLog {
                 if dispatch_request.success && dispatch_request.msg_size > 0 {
                     last_valid_msg_phy_offset = process_offset + mapped_file_offset;
                     mapped_file_offset += dispatch_request.msg_size as u64;
-                    let mut guard = dispatcher_list.lock().await;
-                    for dispatcher in guard.iter_mut() {
-                        dispatcher.dispatch(&dispatch_request);
-                    }
+                    self.dispatcher
+                        .lock()
+                        .await
+                        .dispatch(&dispatch_request)
+                        .await;
                 } else if dispatch_request.success && dispatch_request.msg_size == 0 {
                     // Come the end of the file, switch to the next file Since the
                     // return 0 representatives met last hole,
                     // this can not be included in truncate offset
                     index += 1;
-                    if index > mapped_files_inner.len() {
+                    if index >= mapped_files_inner.len() {
                         info!(
                             "recover last 3 physics file over, last mapped file:{} ",
                             mapped_file.get_file_name()
@@ -323,7 +329,7 @@ impl CommitLog {
             if broker_config.enable_controller_mode {
                 unimplemented!();
             } else {
-                commit_log.set_confirm_offset(last_valid_msg_phy_offset as i64);
+                self.set_confirm_offset(last_valid_msg_phy_offset as i64);
             }
 
             if max_phy_offset_of_consume_queue as u64 > process_offset {
@@ -340,7 +346,7 @@ impl CommitLog {
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
-                    files"
+                     files"
             );
             mapped_file_queue.set_flushed_where(0);
             mapped_file_queue.set_committed_where(0);
