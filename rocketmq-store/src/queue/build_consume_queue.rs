@@ -23,6 +23,7 @@ use crate::{
     queue::local_file_consume_queue_store::{LocalFileConsumeQueue, LocalFileConsumeQueueStore},
 };
 
+#[derive(Clone)]
 pub struct CommitLogDispatcherBuildConsumeQueue {
     consume_queue_store: Arc<Mutex<LocalFileConsumeQueueStore<LocalFileConsumeQueue>>>,
 }

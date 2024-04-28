@@ -31,12 +31,12 @@ use crate::{
     services::allocate_mapped_file_service::AllocateMappedFileService,
 };
 
-#[derive(Default)]
+#[derive(Default,Clone)]
 pub struct MappedFileQueue {
     pub(crate) store_path: String,
 
     pub(crate) mapped_file_size: u64,
-
+    //pub(crate) mapped_files: Arc<Mutex<Vec<LocalMappedFile>>>,
     pub(crate) mapped_files: Vec<Arc<Mutex<LocalMappedFile>>>,
     //  pub(crate) mapped_files: Vec<LocalMappedFile>,
     pub(crate) allocate_mapped_file_service: Option<AllocateMappedFileService>,
@@ -153,7 +153,7 @@ impl MappedFileQueue {
     //     self.mapped_files.last()
     // }
 
-    pub fn get_last_mapped_file(&mut self) -> Option<Arc<Mutex<LocalMappedFile>>> {
+    pub fn get_last_mapped_file(&self) -> Option<Arc<Mutex<LocalMappedFile>>> {
         if self.mapped_files.is_empty() {
             return None;
         }
@@ -161,7 +161,7 @@ impl MappedFileQueue {
     }
 
     pub async fn get_last_mapped_file_mut_start_offset(
-        &mut self,
+        & self,
         start_offset: u64,
         need_create: bool,
     ) -> Option<Arc<Mutex<LocalMappedFile>>> {
@@ -179,7 +179,7 @@ impl MappedFileQueue {
             }
         }
         if create_offset != -1 && need_create {
-            return self.try_create_mapped_file(create_offset as u64);
+            //return self.try_create_mapped_file(create_offset as u64);
         }
         mapped_file_last
     }

@@ -56,17 +56,23 @@ use crate::{
 pub struct LocalFileMessageStore {
     message_store_config: Arc<MessageStoreConfig>,
     broker_config: Arc<BrokerConfig>,
-    put_message_hook_list: Arc<tokio::sync::Mutex<Vec<BoxedPutMessageHook>>>,
-    topic_config_table: HashMap<String, TopicConfig>,
-    message_store_runtime: Option<RocketMQRuntime>,
-    commit_log: Arc<Mutex<CommitLog>>,
+    put_message_hook_list: Vec<BoxedPutMessageHook>,
+    topic_config_table: Arc<Mutex<HashMap<String, TopicConfig>>>,
+    //message_store_runtime: Option<RocketMQRuntime>,
+    commit_log: CommitLog,
     compaction_service: CompactionService,
     store_checkpoint: Option<StoreCheckpoint>,
     master_flushed_offset: Arc<parking_lot::Mutex<i64>>,
     index_service: Arc<Mutex<IndexService>>,
     allocate_mapped_file_service: AllocateMappedFileService,
-    consume_queue_store: Arc<Mutex<LocalFileConsumeQueueStore<LocalFileConsumeQueue>>>,
-    dispatcher: Arc<Mutex<CommitLogDispatcherDefault>>,
+    consume_queue_store: LocalFileConsumeQueueStore<LocalFileConsumeQueue>,
+    dispatcher: CommitLogDispatcherDefault,
+}
+
+impl Clone for LocalFileMessageStore {
+    fn clone(&self) -> Self {
+        unimplemented!()
+    }
 }
 
 impl LocalFileMessageStore {
@@ -83,32 +89,32 @@ impl LocalFileMessageStore {
         )));
         let build_consume_queue =
             CommitLogDispatcherBuildConsumeQueue::new(consume_queue_store.clone());
-        let dispatcher = Arc::new(Mutex::new(CommitLogDispatcherDefault {
+        let dispatcher = CommitLogDispatcherDefault {
             build_index,
             build_consume_queue,
-        }));
+        };
         let store_checkpoint = StoreCheckpoint {};
-        let commit_log = Arc::new(Mutex::new(CommitLog::new(
+        let commit_log = CommitLog::new(
             message_store_config.clone(),
             broker_config.clone(),
-            dispatcher.clone(),
+            &dispatcher,
             store_checkpoint.clone(),
-        )));
+        );
         Self {
             message_store_config: message_store_config.clone(),
             broker_config,
-            put_message_hook_list: Arc::new(tokio::sync::Mutex::new(vec![])),
-            topic_config_table: HashMap::new(),
-            message_store_runtime: Some(RocketMQRuntime::new_multi(10, "message-store-thread")),
+            put_message_hook_list: vec![],
+            topic_config_table: Arc::new(Mutex::new(HashMap::new())),
+           // message_store_runtime: Some(RocketMQRuntime::new_multi(10, "message-store-thread")),
             commit_log: commit_log.clone(),
             compaction_service: Default::default(),
             store_checkpoint: Some(store_checkpoint),
             master_flushed_offset: Arc::new(parking_lot::Mutex::new(-1)),
             index_service,
             allocate_mapped_file_service: AllocateMappedFileService {},
-            consume_queue_store: Arc::new(Mutex::new(LocalFileConsumeQueueStore::new(
+            consume_queue_store: LocalFileConsumeQueueStore::new(
                 message_store_config.clone(),
-            ))),
+            ),
             dispatcher,
         }
     }
@@ -116,18 +122,18 @@ impl LocalFileMessageStore {
 
 impl Drop for LocalFileMessageStore {
     fn drop(&mut self) {
-        if let Some(runtime) = self.message_store_runtime.take() {
-            runtime.shutdown();
-        }
+        // if let Some(runtime) = self.message_store_runtime.take() {
+        //     runtime.shutdown();
+        // }
     }
 }
 
 impl LocalFileMessageStore {
-    pub fn get_topic_config(&self, topic: &str) -> Option<TopicConfig> {
-        if self.topic_config_table.is_empty() {
+    pub async fn get_topic_config(&self, topic: &str) -> Option<TopicConfig> {
+        if self.topic_config_table.lock().await.is_empty() {
             return None;
         }
-        self.topic_config_table.get(topic).cloned()
+        self.topic_config_table.lock().await.get(topic).cloned()
     }
 
     pub fn is_temp_file_exist(&self) -> bool {
@@ -149,8 +155,6 @@ impl LocalFileMessageStore {
         self.recover_consume_queue().await;
         let max_phy_offset_of_consume_queue = self
             .consume_queue_store
-            .lock()
-            .await
             .get_max_phy_offset_in_consume_queue();
         let recover_consume_queue = Instant::now()
             .saturating_duration_since(recover_consume_queue_start)
@@ -185,8 +189,6 @@ impl LocalFileMessageStore {
 
     pub async fn recover_normally(&mut self, max_phy_offset_of_consume_queue: i64) {
         self.commit_log
-            .lock()
-            .await
             .recover_normally(max_phy_offset_of_consume_queue)
             .await;
     }
@@ -200,9 +202,9 @@ impl LocalFileMessageStore {
 
     async fn recover_consume_queue(&mut self) {
         if self.is_recover_concurrently() {
-            self.consume_queue_store.lock().await.recover_concurrently();
+            self.consume_queue_store.recover_concurrently();
         } else {
-            self.consume_queue_store.lock().await.recover();
+            self.consume_queue_store.recover();
         }
     }
 
@@ -219,19 +221,15 @@ impl LocalFileMessageStore {
     }
 
     pub async fn do_dispatch(&mut self, dispatch_request: &DispatchRequest) {
-        self.dispatcher
-            .lock()
-            .await
-            .dispatch(dispatch_request)
-            .await
+        self.dispatcher.dispatch(dispatch_request).await
     }
 
     pub fn truncate_dirty_logic_files(&mut self, phy_offset: i64) {}
 
-    pub fn get_queue_store(
+    pub fn get_queue_store_mut(
         &mut self,
-    ) -> Arc<Mutex<LocalFileConsumeQueueStore<LocalFileConsumeQueue>>> {
-        self.consume_queue_store.clone()
+    ) -> &mut LocalFileConsumeQueueStore<LocalFileConsumeQueue> {
+        &mut self.consume_queue_store
     }
 }
 
@@ -254,7 +252,7 @@ impl MessageStore for LocalFileMessageStore {
         })
         .join()
         .unwrap_or_default();*/
-        let mut result = self.commit_log.lock().await.load();
+        let mut result = self.commit_log.load();
         if !result {
             return result;
         }
@@ -316,8 +314,13 @@ impl MessageStore for LocalFileMessageStore {
     fn set_broker_init_max_offset(&mut self, _broker_init_max_offset: i64) {}
 
     async fn put_message(&self, msg: MessageExtBrokerInner) -> PutMessageResult {
-        let guard = self.put_message_hook_list.lock().await;
-        for hook in guard.iter() {
+        // let guard = self.put_message_hook_list.lock().await;
+        // for hook in guard.iter() {
+        //     if let Some(result) = hook.execute_before_put_message(&msg.message_ext_inner) {
+        //         return result;
+        //     }
+        // }
+        for hook in self.put_message_hook_list.iter() {
             if let Some(result) = hook.execute_before_put_message(&msg.message_ext_inner) {
                 return result;
             }
@@ -337,16 +340,17 @@ impl MessageStore for LocalFileMessageStore {
         }
 
         if MessageSysFlag::check(msg.sys_flag(), MessageSysFlag::INNER_BATCH_FLAG) {
-            let topic_config = self.get_topic_config(msg.topic());
+            let topic_config = self.get_topic_config(msg.topic()).await;
             if !QueueTypeUtils::is_batch_cq(&topic_config) {
                 error!("[BUG]The message is an inner batch but cq type is not batch cq");
                 return PutMessageResult::new_default(PutMessageStatus::MessageIllegal);
             }
         }
-        self.commit_log.lock().await.put_message(msg).await
+        self.commit_log.put_message(msg).await
     }
 }
 
+#[derive(Clone)]
 pub struct CommitLogDispatcherDefault {
     build_index: CommitLogDispatcherBuildIndex,
     build_consume_queue: CommitLogDispatcherBuildConsumeQueue,

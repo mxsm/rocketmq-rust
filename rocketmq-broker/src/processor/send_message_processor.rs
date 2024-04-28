@@ -51,7 +51,6 @@ use rocketmq_store::{
     base::message_result::PutMessageResult, log_file::MessageStore,
     status::manager::broker_stats_manager::BrokerStatsManager,
 };
-use tokio::sync::Mutex;
 
 use crate::{
     mqtrace::send_message_context::SendMessageContext,
@@ -67,7 +66,7 @@ pub struct SendMessageProcessor<MS> {
     topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
     topic_config_manager: Arc<TopicConfigManager>,
     broker_config: Arc<BrokerConfig>,
-    message_store: Arc<Mutex<MS>>,
+    message_store: MS,
     store_host: SocketAddr,
 }
 
@@ -138,12 +137,12 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
 }
 
 #[allow(unused_variables)]
-impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
+impl<MS: MessageStore + Send + Clone> SendMessageProcessor<MS> {
     pub fn new(
         topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
         topic_config_manager: Arc<TopicConfigManager>,
         broker_config: Arc<BrokerConfig>,
-        message_store: Arc<Mutex<MS>>,
+        message_store: &MS,
     ) -> Self {
         let store_host = format!("{}:{}", broker_config.broker_ip1, broker_config.listen_port)
             .parse::<SocketAddr>()
@@ -155,7 +154,7 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
             topic_queue_mapping_manager,
             topic_config_manager,
             broker_config,
-            message_store,
+            message_store: message_store.clone(),
             store_host,
         }
     }
@@ -313,12 +312,7 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
         let topic = message_ext.topic().to_string();
         // let result = self.message_store.put_message(message_ext);
         // let put_message_result = Handle::current().block_on(result);
-        let put_message_result = self
-            .message_store
-            .lock()
-            .await
-            .put_message(message_ext)
-            .await;
+        let put_message_result = self.message_store.put_message(message_ext).await;
 
         self.handle_put_message_result(
             put_message_result,

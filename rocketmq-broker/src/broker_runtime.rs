@@ -34,7 +34,6 @@ use rocketmq_store::{
     log_file::MessageStore, message_store::local_file_store::LocalFileMessageStore,
     timer::timer_message_store::TimerMessageStore,
 };
-use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 use crate::{
@@ -68,7 +67,8 @@ pub(crate) struct BrokerRuntime {
     consumer_filter_manager: Arc<ConsumerFilterManager>,
     consumer_order_info_manager: Arc<ConsumerOrderInfoManager>,
     #[cfg(feature = "local_file_store")]
-    message_store: Option<Arc<Mutex<LocalFileMessageStore>>>,
+    message_store: Option<LocalFileMessageStore>,
+    //message_store: Option<Arc<Mutex<LocalFileMessageStore>>>,
     schedule_message_service: ScheduleMessageService,
     timer_message_store: Option<TimerMessageStore>,
 
@@ -172,10 +172,10 @@ impl BrokerRuntime {
     async fn initialize_message_store(&mut self) -> bool {
         if self.message_store_config.store_type == StoreType::LocalFile {
             info!("Use local file as message store");
-            let message_store = Arc::new(Mutex::new(LocalFileMessageStore::new(
+            let message_store = LocalFileMessageStore::new(
                 self.message_store_config.clone(),
                 self.broker_config.clone(),
-            )));
+            );
             // let weak = Arc::downgrade(&message_store);
             self.message_store = Some(message_store);
             /*self.message_store
@@ -201,13 +201,7 @@ impl BrokerRuntime {
             unimplemented!()
         }
         if self.message_store.is_some() {
-            self.message_store
-                .as_mut()
-                .unwrap()
-                .lock()
-                .await
-                .load()
-                .await;
+            self.message_store.as_mut().unwrap().load().await;
         }
 
         if self.broker_config.timer_wheel_config.timer_wheel_enable {
@@ -238,7 +232,7 @@ impl BrokerRuntime {
             self.topic_queue_mapping_manager.clone(),
             self.topic_config_manager.clone(),
             self.broker_config.clone(),
-            self.message_store.clone().unwrap(),
+            self.message_store.as_ref().unwrap(),
         );
         Arc::new(BrokerRequestProcessor {
             send_message_processor,

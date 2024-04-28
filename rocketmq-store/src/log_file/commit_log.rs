@@ -80,12 +80,12 @@ struct PutMessageThreadLocal {
 
 #[derive(Clone)]
 pub struct CommitLog {
-    mapped_file_queue: Arc<RwLock<MappedFileQueue>>,
+    mapped_file_queue: MappedFileQueue,
     message_store_config: Arc<MessageStoreConfig>,
     broker_config: Arc<BrokerConfig>,
     enabled_append_prop_crc: bool,
     //local_file_message_store: Option<Weak<Mutex<LocalFileMessageStore>>>,
-    dispatcher: Arc<Mutex<CommitLogDispatcherDefault>>,
+    dispatcher: CommitLogDispatcherDefault,
     confirm_offset: i64,
     store_checkpoint: StoreCheckpoint,
 }
@@ -94,23 +94,23 @@ impl CommitLog {
     pub fn new(
         message_store_config: Arc<MessageStoreConfig>,
         broker_config: Arc<BrokerConfig>,
-        dispatcher: Arc<Mutex<CommitLogDispatcherDefault>>,
+        dispatcher: &CommitLogDispatcherDefault,
         store_checkpoint: StoreCheckpoint,
     ) -> Self {
         let enabled_append_prop_crc = message_store_config.enabled_append_prop_crc;
         let store_path = message_store_config.get_store_path_commit_log();
         let mapped_file_size = message_store_config.mapped_file_size_commit_log;
         Self {
-            mapped_file_queue: Arc::new(tokio::sync::RwLock::new(MappedFileQueue::new(
+            mapped_file_queue: MappedFileQueue::new(
                 store_path,
                 mapped_file_size as u64,
                 None,
-            ))),
+            ),
             message_store_config,
             broker_config,
             enabled_append_prop_crc,
             //local_file_message_store: None,
-            dispatcher,
+            dispatcher: dispatcher.clone(),
             confirm_offset: -1,
             store_checkpoint,
         }
@@ -120,18 +120,21 @@ impl CommitLog {
 #[allow(unused_variables)]
 impl CommitLog {
     pub fn load(&mut self) -> bool {
-        let arc = self.mapped_file_queue.clone();
-        let handle = Handle::current();
-        let result = std::thread::spawn(move || {
-            // Using Handle::block_on to run async code in the new thread.
-            handle.block_on(async move {
-                let mut write_mf = arc.write().await;
-                let result = write_mf.load();
-                write_mf.check_self();
-                result
-            })
-        });
-        result.join().unwrap_or(false)
+        // let arc = self.mapped_file_queue.clone();
+        // let handle = Handle::current();
+        // let result = std::thread::spawn(move || {
+        //     // Using Handle::block_on to run async code in the new thread.
+        //     handle.block_on(async move {
+        //         let mut write_mf = arc.write().await;
+        //         let result = write_mf.load();
+        //         write_mf.check_self();
+        //         result
+        //     })
+        // });
+        // result.join().unwrap_or(false)
+        let result = self.mapped_file_queue.load();
+        self.mapped_file_queue.check_self();
+        result
     }
 
     /*    pub fn set_local_file_message_store(
@@ -146,7 +149,7 @@ impl CommitLog {
         self.store_checkpoint.set_confirm_phy_offset(phy_offset);
     }
 
-    pub async fn put_message(&self, msg: MessageExtBrokerInner) -> PutMessageResult {
+    pub async fn cput_message(&self, msg: MessageExtBrokerInner) -> PutMessageResult {
         let mut msg = msg;
         if !self.message_store_config.duplication_enable {
             msg.message_ext_inner.store_timestamp = time_utils::get_current_millis() as i64;
@@ -191,9 +194,10 @@ impl CommitLog {
         }
         msg.encoded_buff = encoder.byte_buf();
 
-        let mut mapped_file_guard = self.mapped_file_queue.write().await;
-        let mapped_file = match mapped_file_guard.get_last_mapped_file() {
-            None => mapped_file_guard
+        //let mut mapped_file_guard = self.mapped_file_queue.write().await;
+       // let mapped_file = match mapped_file_guard.get_last_mapped_file() {
+        let mapped_file = match self.mapped_file_queue.get_last_mapped_file() {
+            None => self.mapped_file_queue
                 .get_last_mapped_file_mut_start_offset(0, true)
                 .await
                 .unwrap(),
@@ -254,11 +258,11 @@ impl CommitLog {
         let check_crc_on_recover = self.message_store_config.check_crc_on_recover;
         let check_dup_info = self.message_store_config.duplication_enable;
         let handle = Handle::current();
-        let mapped_files = self.mapped_file_queue.clone();
+       // let mapped_files = self.mapped_file_queue.clone();
         let message_store_config = self.message_store_config.clone();
         let broker_config = self.broker_config.clone();
-        let mut mapped_file_queue = mapped_files.write().await;
-        let mapped_files_inner = mapped_file_queue.get_mapped_files();
+       // let mut mapped_file_queue = mapped_files.write().await;
+        let mapped_files_inner = self.mapped_file_queue.get_mapped_files();
         if !mapped_files_inner.is_empty() {
             // Began to recover from the last third file
             let mut index = (mapped_files_inner.len() as i32) - 3;
@@ -291,11 +295,7 @@ impl CommitLog {
                 if dispatch_request.success && dispatch_request.msg_size > 0 {
                     last_valid_msg_phy_offset = process_offset + mapped_file_offset;
                     mapped_file_offset += dispatch_request.msg_size as u64;
-                    self.dispatcher
-                        .lock()
-                        .await
-                        .dispatch(&dispatch_request)
-                        .await;
+                    self.dispatcher.dispatch(&dispatch_request).await;
                 } else if dispatch_request.success && dispatch_request.msg_size == 0 {
                     // Come the end of the file, switch to the next file Since the
                     // return 0 representatives met last hole,
@@ -340,16 +340,16 @@ impl CommitLog {
                         .truncate_dirty_logic_files(process_offset as i64);
                 }*/
             }
-            mapped_file_queue.set_flushed_where(process_offset as i64);
-            mapped_file_queue.set_committed_where(process_offset as i64);
-            mapped_file_queue.truncate_dirty_files(process_offset as i64);
+            self.mapped_file_queue.set_flushed_where(process_offset as i64);
+            self.mapped_file_queue.set_committed_where(process_offset as i64);
+            self.mapped_file_queue.truncate_dirty_files(process_offset as i64);
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
                      files"
             );
-            mapped_file_queue.set_flushed_where(0);
-            mapped_file_queue.set_committed_where(0);
+            self.mapped_file_queue.set_flushed_where(0);
+            self.mapped_file_queue.set_committed_where(0);
             /*if let Some(value) = message_store.upgrade() {
                 value.lock().await.get_queue_store().destroy();
                 value.lock().await.get_queue_store().load_after_destroy();
