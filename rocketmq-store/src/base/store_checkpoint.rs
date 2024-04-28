@@ -15,22 +15,21 @@
  * limitations under the License.
  */
 
- #[derive(Default, Clone)]
- pub struct StoreCheckpoint {}
- 
- impl StoreCheckpoint {
-     pub fn new(_scp_path: String) -> Self {
-         Self {}
-     }
- 
-     pub fn get_master_flushed_offset(&self) -> i64 {
-         -1
-     }
- 
-     pub fn get_confirm_phy_offset(&self) -> i64 {
-         -1
-     }
- 
-     pub fn set_confirm_phy_offset(&mut self, _confirm_phy_offset: i64) {}
- }
- 
+#[derive(Default, Clone)]
+pub struct StoreCheckpoint {}
+
+impl StoreCheckpoint {
+    pub fn new(_scp_path: String) -> Self {
+        Self {}
+    }
+
+    pub fn get_master_flushed_offset(&self) -> i64 {
+        -1
+    }
+
+    pub fn get_confirm_phy_offset(&self) -> i64 {
+        -1
+    }
+
+    pub fn set_confirm_phy_offset(&mut self, _confirm_phy_offset: i64) {}
+}

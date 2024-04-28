@@ -15,41 +15,40 @@
  * limitations under the License.
  */
 
- use std::sync::Arc;
+use std::sync::Arc;
 
- use tokio::sync::Mutex;
- 
- use crate::{
-     base::{commit_log_dispatcher::CommitLogDispatcher, dispatch_request::DispatchRequest},
-     config::message_store_config::MessageStoreConfig,
-     index::index_service::IndexService,
- };
- 
- pub struct CommitLogDispatcherBuildIndex {
-     index_service: Arc<Mutex<IndexService>>,
-     message_store_config: Arc<MessageStoreConfig>,
- }
- 
- impl CommitLogDispatcherBuildIndex {
-     pub fn new(
-         index_service: Arc<Mutex<IndexService>>,
-         message_store_config: Arc<MessageStoreConfig>,
-     ) -> Self {
-         Self {
-             index_service,
-             message_store_config,
-         }
-     }
- }
- 
- impl CommitLogDispatcher for CommitLogDispatcherBuildIndex {
-     async fn dispatch(&mut self, dispatch_request: &DispatchRequest) {
-         if self.message_store_config.message_index_enable {
-             self.index_service
-                 .lock()
-                 .await
-                 .build_index(dispatch_request);
-         }
-     }
- }
- 
+use tokio::sync::Mutex;
+
+use crate::{
+    base::{commit_log_dispatcher::CommitLogDispatcher, dispatch_request::DispatchRequest},
+    config::message_store_config::MessageStoreConfig,
+    index::index_service::IndexService,
+};
+
+pub struct CommitLogDispatcherBuildIndex {
+    index_service: Arc<Mutex<IndexService>>,
+    message_store_config: Arc<MessageStoreConfig>,
+}
+
+impl CommitLogDispatcherBuildIndex {
+    pub fn new(
+        index_service: Arc<Mutex<IndexService>>,
+        message_store_config: Arc<MessageStoreConfig>,
+    ) -> Self {
+        Self {
+            index_service,
+            message_store_config,
+        }
+    }
+}
+
+impl CommitLogDispatcher for CommitLogDispatcherBuildIndex {
+    async fn dispatch(&mut self, dispatch_request: &DispatchRequest) {
+        if self.message_store_config.message_index_enable {
+            self.index_service
+                .lock()
+                .await
+                .build_index(dispatch_request);
+        }
+    }
+}
