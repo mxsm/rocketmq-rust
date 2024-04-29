@@ -31,21 +31,21 @@ use crate::{
     services::allocate_mapped_file_service::AllocateMappedFileService,
 };
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct MappedFileQueue {
     pub(crate) store_path: String,
 
     pub(crate) mapped_file_size: u64,
-
+    //pub(crate) mapped_files: Arc<Mutex<Vec<LocalMappedFile>>>,
     pub(crate) mapped_files: Vec<Arc<Mutex<LocalMappedFile>>>,
     //  pub(crate) mapped_files: Vec<LocalMappedFile>,
     pub(crate) allocate_mapped_file_service: Option<AllocateMappedFileService>,
 
-    pub(crate) flushed_where: u64,
+    pub(crate) flushed_where: Arc<parking_lot::Mutex<u64>>,
 
-    pub(crate) committed_where: u64,
+    pub(crate) committed_where: Arc<parking_lot::Mutex<u64>>,
 
-    pub(crate) store_timestamp: u64,
+    pub(crate) store_timestamp: Arc<parking_lot::Mutex<u64>>,
 }
 
 /*impl Swappable for MappedFileQueue {
@@ -74,9 +74,9 @@ impl MappedFileQueue {
             mapped_file_size,
             mapped_files: Vec::new(),
             allocate_mapped_file_service,
-            flushed_where: 0,
-            committed_where: 0,
-            store_timestamp: 0,
+            flushed_where: Arc::new(parking_lot::Mutex::new(0)),
+            committed_where: Arc::new(parking_lot::Mutex::new(0)),
+            store_timestamp: Arc::new(parking_lot::Mutex::new(0)),
         }
     }
 
@@ -153,7 +153,7 @@ impl MappedFileQueue {
     //     self.mapped_files.last()
     // }
 
-    pub fn get_last_mapped_file(&mut self) -> Option<Arc<Mutex<LocalMappedFile>>> {
+    pub fn get_last_mapped_file(&self) -> Option<Arc<Mutex<LocalMappedFile>>> {
         if self.mapped_files.is_empty() {
             return None;
         }
@@ -223,11 +223,11 @@ impl MappedFileQueue {
     }
 
     pub fn set_flushed_where(&mut self, flushed_where: i64) {
-        self.flushed_where = flushed_where as u64;
+        *self.flushed_where.lock() = flushed_where as u64;
     }
 
     pub fn set_committed_where(&mut self, committed_where: i64) {
-        self.committed_where = committed_where as u64;
+        *self.committed_where.lock() = committed_where as u64;
     }
 
     pub fn truncate_dirty_files(&mut self, offset: i64) {}

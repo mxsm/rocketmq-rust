@@ -24,7 +24,7 @@ pub mod mapped_file;
 
 #[allow(async_fn_in_trait)]
 #[trait_variant::make(MessageStore: Send)]
-pub trait RocketMQMessageStore {
+pub trait RocketMQMessageStore: Clone {
     /// Load previously stored messages.
     ///
     /// Returns `true` if success; `false` otherwise.
@@ -43,5 +43,5 @@ pub trait RocketMQMessageStore {
 
     fn set_broker_init_max_offset(&mut self, broker_init_max_offset: i64);
 
-    async fn put_message(&self, msg: MessageExtBrokerInner) -> PutMessageResult;
+    async fn put_message(&mut self, msg: MessageExtBrokerInner) -> PutMessageResult;
 }

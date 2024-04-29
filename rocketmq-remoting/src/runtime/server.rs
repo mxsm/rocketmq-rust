@@ -42,7 +42,7 @@ type Tx = mpsc::UnboundedSender<RemotingCommand>;
 type Rx = mpsc::UnboundedReceiver<RemotingCommand>;
 
 pub struct ConnectionHandler<RP> {
-    request_processor: Arc<RP>,
+    request_processor: RP,
     connection: Connection,
     shutdown: Shutdown,
     _shutdown_complete: mpsc::Sender<()>,
@@ -128,10 +128,10 @@ struct ConnectionListener<RP> {
 
     conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
 
-    request_processor: Arc<RP>,
+    request_processor: RP,
 }
 
-impl<RP: RequestProcessor + Sync + 'static> ConnectionListener<RP> {
+impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
     async fn run(&mut self) -> anyhow::Result<()> {
         info!("Prepare accepting connection");
         loop {
@@ -201,20 +201,20 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionListener<RP> {
 
 pub struct RocketMQServer<RP> {
     config: Arc<ServerConfig>,
-    request_processor: Arc<RP>,
+    _phantom_data: std::marker::PhantomData<RP>,
 }
 
 impl<RP> RocketMQServer<RP> {
-    pub fn new(config: Arc<ServerConfig>, request_processor: Arc<RP>) -> Self {
+    pub fn new(config: Arc<ServerConfig>) -> Self {
         Self {
             config,
-            request_processor,
+            _phantom_data: std::marker::PhantomData,
         }
     }
 }
 
 impl<RP: RequestProcessor + Sync + 'static> RocketMQServer<RP> {
-    pub async fn run(&self) {
+    pub async fn run(&self, request_processor: RP) {
         let listener = TcpListener::bind(&format!(
             "{}:{}",
             self.config.bind_address, self.config.listen_port
@@ -229,7 +229,7 @@ impl<RP: RequestProcessor + Sync + 'static> RocketMQServer<RP> {
         run(
             listener,
             tokio::signal::ctrl_c(),
-            self.request_processor.clone(),
+            request_processor,
             Some(notify_conn_disconnect),
         )
         .await;
@@ -239,7 +239,7 @@ impl<RP: RequestProcessor + Sync + 'static> RocketMQServer<RP> {
 pub async fn run<RP: RequestProcessor + Sync + 'static>(
     listener: TcpListener,
     shutdown: impl Future,
-    request_processor: Arc<RP>,
+    request_processor: RP,
     conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
 ) {
     let (notify_shutdown, _) = broadcast::channel(1);

@@ -25,6 +25,7 @@ use crate::{
     index::index_service::IndexService,
 };
 
+#[derive(Clone)]
 pub struct CommitLogDispatcherBuildIndex {
     index_service: Arc<Mutex<IndexService>>,
     message_store_config: Arc<MessageStoreConfig>,

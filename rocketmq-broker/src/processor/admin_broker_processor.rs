@@ -20,7 +20,7 @@ use rocketmq_remoting::{
 };
 use tracing::info;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct AdminBrokerProcessor {}
 
 impl AdminBrokerProcessor {

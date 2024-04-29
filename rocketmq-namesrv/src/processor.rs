@@ -35,9 +35,18 @@ pub struct NameServerRequestProcessor {
     pub(crate) default_request_processor: Arc<DefaultRequestProcessor>,
 }
 
+impl Clone for NameServerRequestProcessor {
+    fn clone(&self) -> Self {
+        Self {
+            client_request_processor: self.client_request_processor.clone(),
+            default_request_processor: self.default_request_processor.clone(),
+        }
+    }
+}
+
 impl RequestProcessor for NameServerRequestProcessor {
     async fn process_request(
-        &self,
+        &mut self,
         ctx: ConnectionHandlerContext<'_>,
         request: RemotingCommand,
     ) -> RemotingCommand {

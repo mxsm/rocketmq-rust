@@ -34,7 +34,6 @@ use rocketmq_store::{
     log_file::MessageStore, message_store::local_file_store::LocalFileMessageStore,
     timer::timer_message_store::TimerMessageStore,
 };
-use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 use crate::{
@@ -68,7 +67,8 @@ pub(crate) struct BrokerRuntime {
     consumer_filter_manager: Arc<ConsumerFilterManager>,
     consumer_order_info_manager: Arc<ConsumerOrderInfoManager>,
     #[cfg(feature = "local_file_store")]
-    message_store: Option<Arc<Mutex<LocalFileMessageStore>>>,
+    message_store: Option<LocalFileMessageStore>,
+    //message_store: Option<Arc<Mutex<LocalFileMessageStore>>>,
     schedule_message_service: ScheduleMessageService,
     timer_message_store: Option<TimerMessageStore>,
 
@@ -172,18 +172,11 @@ impl BrokerRuntime {
     async fn initialize_message_store(&mut self) -> bool {
         if self.message_store_config.store_type == StoreType::LocalFile {
             info!("Use local file as message store");
-            let message_store = Arc::new(Mutex::new(LocalFileMessageStore::new(
+            let message_store = LocalFileMessageStore::new(
                 self.message_store_config.clone(),
                 self.broker_config.clone(),
-            )));
-            // let weak = Arc::downgrade(&message_store);
+            );
             self.message_store = Some(message_store);
-            /*self.message_store
-            .as_mut()
-            .unwrap()
-            .lock()
-            .await
-            .set_weak_message_store(weak);*/
         } else if self.message_store_config.store_type == StoreType::RocksDB {
             info!("Use RocksDB as message store");
         } else {
@@ -201,13 +194,7 @@ impl BrokerRuntime {
             unimplemented!()
         }
         if self.message_store.is_some() {
-            self.message_store
-                .as_mut()
-                .unwrap()
-                .lock()
-                .await
-                .load()
-                .await;
+            self.message_store.as_mut().unwrap().load().await;
         }
 
         if self.broker_config.timer_wheel_config.timer_wheel_enable {
@@ -233,18 +220,18 @@ impl BrokerRuntime {
 
     fn initialize_resources(&mut self) {}
 
-    fn init_processor(&self) -> Arc<BrokerRequestProcessor<LocalFileMessageStore>> {
+    fn init_processor(&self) -> BrokerRequestProcessor<LocalFileMessageStore> {
         let send_message_processor = SendMessageProcessor::<LocalFileMessageStore>::new(
             self.topic_queue_mapping_manager.clone(),
             self.topic_config_manager.clone(),
             self.broker_config.clone(),
-            self.message_store.clone().unwrap(),
+            self.message_store.as_ref().unwrap(),
         );
-        Arc::new(BrokerRequestProcessor {
+        BrokerRequestProcessor {
             send_message_processor,
             admin_broker_processor: Default::default(),
             client_manage_processor: ClientManageProcessor::new(self.producer_manager.clone()),
-        })
+        }
     }
 
     fn initialize_scheduled_tasks(&mut self) {}
@@ -257,8 +244,8 @@ impl BrokerRuntime {
 
     pub async fn start(&mut self) {
         let request_processor = self.init_processor();
-        let server = RocketMQServer::new(self.server_config.clone(), request_processor);
-        let server_future = server.run();
+        let server = RocketMQServer::new(self.server_config.clone());
+        let server_future = server.run(request_processor);
         self.register_broker_all(true, false, true).await;
         let mut cloned_broker_runtime = self.clone();
 

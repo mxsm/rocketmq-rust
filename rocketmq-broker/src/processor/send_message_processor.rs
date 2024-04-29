@@ -51,7 +51,6 @@ use rocketmq_store::{
     base::message_result::PutMessageResult, log_file::MessageStore,
     status::manager::broker_stats_manager::BrokerStatsManager,
 };
-use tokio::sync::Mutex;
 
 use crate::{
     mqtrace::send_message_context::SendMessageContext,
@@ -62,33 +61,49 @@ use crate::{
     },
 };
 
-pub struct SendMessageProcessor<MS> {
+pub struct SendMessageProcessor<MS>
+where
+    MS: Clone,
+{
     inner: SendMessageProcessorInner,
     topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
     topic_config_manager: Arc<TopicConfigManager>,
     broker_config: Arc<BrokerConfig>,
-    message_store: Arc<Mutex<MS>>,
+    message_store: MS,
     store_host: SocketAddr,
 }
 
-impl<MS: Default> Default for SendMessageProcessor<MS> {
-    fn default() -> Self {
-        let store_host = "127.0.0.1:100".parse::<SocketAddr>().unwrap();
+impl<MS: Clone> Clone for SendMessageProcessor<MS> {
+    fn clone(&self) -> Self {
         Self {
-            inner: SendMessageProcessorInner::default(),
-            topic_queue_mapping_manager: Arc::new(TopicQueueMappingManager::default()),
-            topic_config_manager: Arc::new(TopicConfigManager::default()),
-            broker_config: Arc::new(BrokerConfig::default()),
-            message_store: Default::default(),
-            store_host,
+            inner: self.inner.clone(),
+            topic_queue_mapping_manager: self.topic_queue_mapping_manager.clone(),
+            topic_config_manager: self.topic_config_manager.clone(),
+            broker_config: self.broker_config.clone(),
+            message_store: self.message_store.clone(),
+            store_host: self.store_host,
         }
     }
 }
 
+// impl<MS: Default> Default for SendMessageProcessor<MS> {
+//     fn default() -> Self {
+//         let store_host = "127.0.0.1:100".parse::<SocketAddr>().unwrap();
+//         Self {
+//             inner: SendMessageProcessorInner::default(),
+//             topic_queue_mapping_manager: Arc::new(TopicQueueMappingManager::default()),
+//             topic_config_manager: Arc::new(TopicConfigManager::default()),
+//             broker_config: Arc::new(BrokerConfig::default()),
+//             message_store: Default::default(),
+//             store_host,
+//         }
+//     }
+// }
+
 // RequestProcessor implementation
 impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
     pub async fn process_request(
-        &self,
+        &mut self,
         ctx: ConnectionHandlerContext<'_>,
         request_code: RequestCode,
         request: RemotingCommand,
@@ -138,12 +153,12 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
 }
 
 #[allow(unused_variables)]
-impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
+impl<MS: MessageStore + Send + Clone> SendMessageProcessor<MS> {
     pub fn new(
         topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
         topic_config_manager: Arc<TopicConfigManager>,
         broker_config: Arc<BrokerConfig>,
-        message_store: Arc<Mutex<MS>>,
+        message_store: &MS,
     ) -> Self {
         let store_host = format!("{}:{}", broker_config.broker_ip1, broker_config.listen_port)
             .parse::<SocketAddr>()
@@ -155,13 +170,13 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
             topic_queue_mapping_manager,
             topic_config_manager,
             broker_config,
-            message_store,
+            message_store: message_store.clone(),
             store_host,
         }
     }
 
     async fn send_batch_message<F>(
-        &self,
+        &mut self,
         ctx: &ConnectionHandlerContext<'_>,
         request: RemotingCommand,
         send_message_context: SendMessageContext,
@@ -176,7 +191,7 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
     }
 
     async fn send_message<F>(
-        &self,
+        &mut self,
         ctx: &ConnectionHandlerContext<'_>,
         request: RemotingCommand,
         send_message_context: SendMessageContext,
@@ -313,12 +328,7 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
         let topic = message_ext.topic().to_string();
         // let result = self.message_store.put_message(message_ext);
         // let put_message_result = Handle::current().block_on(result);
-        let put_message_result = self
-            .message_store
-            .lock()
-            .await
-            .put_message(message_ext)
-            .await;
+        let put_message_result = self.message_store.put_message(message_ext).await;
 
         self.handle_put_message_result(
             put_message_result,
