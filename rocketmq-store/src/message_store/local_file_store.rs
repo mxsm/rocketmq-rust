@@ -55,7 +55,7 @@ use crate::{
 pub struct LocalFileMessageStore {
     message_store_config: Arc<MessageStoreConfig>,
     broker_config: Arc<BrokerConfig>,
-    put_message_hook_list: Vec<BoxedPutMessageHook>,
+    put_message_hook_list: Arc<Vec<BoxedPutMessageHook>>,
     topic_config_table: Arc<Mutex<HashMap<String, TopicConfig>>>,
     //message_store_runtime: Option<RocketMQRuntime>,
     commit_log: CommitLog,
@@ -70,7 +70,20 @@ pub struct LocalFileMessageStore {
 
 impl Clone for LocalFileMessageStore {
     fn clone(&self) -> Self {
-        unimplemented!()
+        Self {
+            message_store_config: self.message_store_config.clone(),
+            broker_config: self.broker_config.clone(),
+            put_message_hook_list: self.put_message_hook_list.clone(),
+            topic_config_table: self.topic_config_table.clone(),
+            commit_log: self.commit_log.clone(),
+            compaction_service: self.compaction_service.clone(),
+            store_checkpoint: self.store_checkpoint.clone(),
+            master_flushed_offset: self.master_flushed_offset.clone(),
+            index_service: self.index_service.clone(),
+            allocate_mapped_file_service: self.allocate_mapped_file_service.clone(),
+            consume_queue_store: self.consume_queue_store.clone(),
+            dispatcher: self.dispatcher.clone(),
+        }
     }
 }
 
@@ -102,7 +115,7 @@ impl LocalFileMessageStore {
         Self {
             message_store_config: message_store_config.clone(),
             broker_config,
-            put_message_hook_list: vec![],
+            put_message_hook_list: Arc::new(vec![]),
             topic_config_table: Arc::new(Mutex::new(HashMap::new())),
             // message_store_runtime: Some(RocketMQRuntime::new_multi(10, "message-store-thread")),
             commit_log: commit_log.clone(),
