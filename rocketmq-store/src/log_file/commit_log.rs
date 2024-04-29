@@ -33,9 +33,7 @@ use rocketmq_common::{
     CRC32Utils::crc32,
     MessageDecoder::{string_to_message_properties, MESSAGE_MAGIC_CODE_V2},
 };
-use tokio::{
-    runtime::Handle,
-};
+use tokio::runtime::Handle;
 use tracing::{error, info, warn};
 
 use crate::{

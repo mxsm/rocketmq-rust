@@ -75,8 +75,8 @@ impl MappedFileQueue {
             mapped_files: Vec::new(),
             allocate_mapped_file_service,
             flushed_where: Arc::new(parking_lot::Mutex::new(0)),
-            committed_where:  Arc::new(parking_lot::Mutex::new(0)),
-            store_timestamp:  Arc::new(parking_lot::Mutex::new(0)),
+            committed_where: Arc::new(parking_lot::Mutex::new(0)),
+            store_timestamp: Arc::new(parking_lot::Mutex::new(0)),
         }
     }
 
@@ -227,7 +227,7 @@ impl MappedFileQueue {
     }
 
     pub fn set_committed_where(&mut self, committed_where: i64) {
-        *self.committed_where.lock()  = committed_where as u64;
+        *self.committed_where.lock() = committed_where as u64;
     }
 
     pub fn truncate_dirty_files(&mut self, offset: i64) {}
