@@ -61,7 +61,10 @@ use crate::{
     },
 };
 
-pub struct SendMessageProcessor<MS> {
+pub struct SendMessageProcessor<MS>
+where
+    MS: Clone,
+{
     inner: SendMessageProcessorInner,
     topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
     topic_config_manager: Arc<TopicConfigManager>,
@@ -70,24 +73,37 @@ pub struct SendMessageProcessor<MS> {
     store_host: SocketAddr,
 }
 
-impl<MS: Default> Default for SendMessageProcessor<MS> {
-    fn default() -> Self {
-        let store_host = "127.0.0.1:100".parse::<SocketAddr>().unwrap();
+impl<MS: Clone> Clone for SendMessageProcessor<MS> {
+    fn clone(&self) -> Self {
         Self {
-            inner: SendMessageProcessorInner::default(),
-            topic_queue_mapping_manager: Arc::new(TopicQueueMappingManager::default()),
-            topic_config_manager: Arc::new(TopicConfigManager::default()),
-            broker_config: Arc::new(BrokerConfig::default()),
-            message_store: Default::default(),
-            store_host,
+            inner: self.inner.clone(),
+            topic_queue_mapping_manager: self.topic_queue_mapping_manager.clone(),
+            topic_config_manager: self.topic_config_manager.clone(),
+            broker_config: self.broker_config.clone(),
+            message_store: self.message_store.clone(),
+            store_host: self.store_host,
         }
     }
 }
 
+// impl<MS: Default> Default for SendMessageProcessor<MS> {
+//     fn default() -> Self {
+//         let store_host = "127.0.0.1:100".parse::<SocketAddr>().unwrap();
+//         Self {
+//             inner: SendMessageProcessorInner::default(),
+//             topic_queue_mapping_manager: Arc::new(TopicQueueMappingManager::default()),
+//             topic_config_manager: Arc::new(TopicConfigManager::default()),
+//             broker_config: Arc::new(BrokerConfig::default()),
+//             message_store: Default::default(),
+//             store_host,
+//         }
+//     }
+// }
+
 // RequestProcessor implementation
 impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
     pub async fn process_request(
-        &self,
+        &mut self,
         ctx: ConnectionHandlerContext<'_>,
         request_code: RequestCode,
         request: RemotingCommand,
@@ -160,7 +176,7 @@ impl<MS: MessageStore + Send + Clone> SendMessageProcessor<MS> {
     }
 
     async fn send_batch_message<F>(
-        &self,
+        &mut self,
         ctx: &ConnectionHandlerContext<'_>,
         request: RemotingCommand,
         send_message_context: SendMessageContext,
@@ -175,7 +191,7 @@ impl<MS: MessageStore + Send + Clone> SendMessageProcessor<MS> {
     }
 
     async fn send_message<F>(
-        &self,
+        &mut self,
         ctx: &ConnectionHandlerContext<'_>,
         request: RemotingCommand,
         send_message_context: SendMessageContext,

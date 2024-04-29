@@ -31,7 +31,7 @@ use crate::{
     services::allocate_mapped_file_service::AllocateMappedFileService,
 };
 
-#[derive(Default,Clone)]
+#[derive(Default, Clone)]
 pub struct MappedFileQueue {
     pub(crate) store_path: String,
 
@@ -161,7 +161,7 @@ impl MappedFileQueue {
     }
 
     pub async fn get_last_mapped_file_mut_start_offset(
-        & self,
+        &mut self,
         start_offset: u64,
         need_create: bool,
     ) -> Option<Arc<Mutex<LocalMappedFile>>> {
@@ -179,7 +179,7 @@ impl MappedFileQueue {
             }
         }
         if create_offset != -1 && need_create {
-            //return self.try_create_mapped_file(create_offset as u64);
+            return self.try_create_mapped_file(create_offset as u64);
         }
         mapped_file_last
     }

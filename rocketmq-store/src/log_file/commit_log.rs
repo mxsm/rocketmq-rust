@@ -35,7 +35,6 @@ use rocketmq_common::{
 };
 use tokio::{
     runtime::Handle,
-    sync::{Mutex, RwLock},
 };
 use tracing::{error, info, warn};
 
@@ -101,11 +100,7 @@ impl CommitLog {
         let store_path = message_store_config.get_store_path_commit_log();
         let mapped_file_size = message_store_config.mapped_file_size_commit_log;
         Self {
-            mapped_file_queue: MappedFileQueue::new(
-                store_path,
-                mapped_file_size as u64,
-                None,
-            ),
+            mapped_file_queue: MappedFileQueue::new(store_path, mapped_file_size as u64, None),
             message_store_config,
             broker_config,
             enabled_append_prop_crc,
@@ -149,7 +144,7 @@ impl CommitLog {
         self.store_checkpoint.set_confirm_phy_offset(phy_offset);
     }
 
-    pub async fn cput_message(&self, msg: MessageExtBrokerInner) -> PutMessageResult {
+    pub async fn put_message(&mut self, msg: MessageExtBrokerInner) -> PutMessageResult {
         let mut msg = msg;
         if !self.message_store_config.duplication_enable {
             msg.message_ext_inner.store_timestamp = time_utils::get_current_millis() as i64;
@@ -195,9 +190,10 @@ impl CommitLog {
         msg.encoded_buff = encoder.byte_buf();
 
         //let mut mapped_file_guard = self.mapped_file_queue.write().await;
-       // let mapped_file = match mapped_file_guard.get_last_mapped_file() {
+        // let mapped_file = match mapped_file_guard.get_last_mapped_file() {
         let mapped_file = match self.mapped_file_queue.get_last_mapped_file() {
-            None => self.mapped_file_queue
+            None => self
+                .mapped_file_queue
                 .get_last_mapped_file_mut_start_offset(0, true)
                 .await
                 .unwrap(),
@@ -258,10 +254,10 @@ impl CommitLog {
         let check_crc_on_recover = self.message_store_config.check_crc_on_recover;
         let check_dup_info = self.message_store_config.duplication_enable;
         let handle = Handle::current();
-       // let mapped_files = self.mapped_file_queue.clone();
+        // let mapped_files = self.mapped_file_queue.clone();
         let message_store_config = self.message_store_config.clone();
         let broker_config = self.broker_config.clone();
-       // let mut mapped_file_queue = mapped_files.write().await;
+        // let mut mapped_file_queue = mapped_files.write().await;
         let mapped_files_inner = self.mapped_file_queue.get_mapped_files();
         if !mapped_files_inner.is_empty() {
             // Began to recover from the last third file
@@ -340,9 +336,12 @@ impl CommitLog {
                         .truncate_dirty_logic_files(process_offset as i64);
                 }*/
             }
-            self.mapped_file_queue.set_flushed_where(process_offset as i64);
-            self.mapped_file_queue.set_committed_where(process_offset as i64);
-            self.mapped_file_queue.truncate_dirty_files(process_offset as i64);
+            self.mapped_file_queue
+                .set_flushed_where(process_offset as i64);
+            self.mapped_file_queue
+                .set_committed_where(process_offset as i64);
+            self.mapped_file_queue
+                .truncate_dirty_files(process_offset as i64);
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue

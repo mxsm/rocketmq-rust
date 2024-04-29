@@ -43,5 +43,5 @@ pub trait RocketMQMessageStore: Clone {
 
     fn set_broker_init_max_offset(&mut self, broker_init_max_offset: i64);
 
-    async fn put_message(&self, msg: MessageExtBrokerInner) -> PutMessageResult;
+    async fn put_message(&mut self, msg: MessageExtBrokerInner) -> PutMessageResult;
 }

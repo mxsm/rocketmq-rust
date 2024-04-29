@@ -62,15 +62,25 @@ pub(crate) mod pull_message_processor;
 pub(crate) mod reply_message_processor;
 pub(crate) mod send_message_processor;
 
-pub struct BrokerRequestProcessor<MS> {
+pub struct BrokerRequestProcessor<MS> where MS:Clone{
     pub(crate) send_message_processor: SendMessageProcessor<MS>,
     pub(crate) admin_broker_processor: AdminBrokerProcessor,
     pub(crate) client_manage_processor: ClientManageProcessor,
 }
 
+impl<MS:Clone> Clone for BrokerRequestProcessor<MS> {
+    fn clone(&self) -> Self {
+        Self {
+            send_message_processor: self.send_message_processor.clone(),
+            admin_broker_processor: self.admin_broker_processor.clone(),
+            client_manage_processor: self.client_manage_processor.clone(),
+        }
+    }
+}
+
 impl<MS: MessageStore + Send + Sync + 'static> RequestProcessor for BrokerRequestProcessor<MS> {
     async fn process_request(
-        &self,
+        &mut self,
         ctx: ConnectionHandlerContext<'_>,
         request: RemotingCommand,
     ) -> RemotingCommand {
@@ -97,7 +107,7 @@ impl<MS: MessageStore + Send + Sync + 'static> RequestProcessor for BrokerReques
     }
 }
 
-#[derive(Default)]
+#[derive(Default,Clone)]
 pub(crate) struct SendMessageProcessorInner {
     pub(crate) broker_config: Arc<BrokerConfig>,
 }

@@ -1,2 +1,2 @@
-#[derive(Default,Clone)]
+#[derive(Default, Clone)]
 pub struct AllocateMappedFileService;

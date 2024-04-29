@@ -28,7 +28,6 @@ use rocketmq_common::{
     },
     utils::queue_type_utils::QueueTypeUtils,
 };
-use rocketmq_runtime::RocketMQRuntime;
 use tokio::sync::Mutex;
 use tracing::{error, warn};
 
@@ -105,16 +104,14 @@ impl LocalFileMessageStore {
             broker_config,
             put_message_hook_list: vec![],
             topic_config_table: Arc::new(Mutex::new(HashMap::new())),
-           // message_store_runtime: Some(RocketMQRuntime::new_multi(10, "message-store-thread")),
+            // message_store_runtime: Some(RocketMQRuntime::new_multi(10, "message-store-thread")),
             commit_log: commit_log.clone(),
             compaction_service: Default::default(),
             store_checkpoint: Some(store_checkpoint),
             master_flushed_offset: Arc::new(parking_lot::Mutex::new(-1)),
             index_service,
             allocate_mapped_file_service: AllocateMappedFileService {},
-            consume_queue_store: LocalFileConsumeQueueStore::new(
-                message_store_config.clone(),
-            ),
+            consume_queue_store: LocalFileConsumeQueueStore::new(message_store_config.clone()),
             dispatcher,
         }
     }
@@ -313,7 +310,7 @@ impl MessageStore for LocalFileMessageStore {
 
     fn set_broker_init_max_offset(&mut self, _broker_init_max_offset: i64) {}
 
-    async fn put_message(&self, msg: MessageExtBrokerInner) -> PutMessageResult {
+    async fn put_message(&mut self, msg: MessageExtBrokerInner) -> PutMessageResult {
         // let guard = self.put_message_hook_list.lock().await;
         // for hook in guard.iter() {
         //     if let Some(result) = hook.execute_before_put_message(&msg.message_ext_inner) {

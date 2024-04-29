@@ -63,14 +63,14 @@ impl NameServerRuntime {
         let (notify_conn_disconnect, _) = broadcast::channel::<SocketAddr>(100);
         let receiver = notify_conn_disconnect.subscribe();
         let request_processor = self.init_processors(receiver);
-        let server = RocketMQServer::new(self.server_config.clone(), request_processor);
-        server.run().await;
+        let server = RocketMQServer::new(self.server_config.clone());
+        server.run(request_processor).await;
     }
 
     fn init_processors(
         &self,
         receiver: broadcast::Receiver<SocketAddr>,
-    ) -> Arc<NameServerRequestProcessor> {
+    ) -> NameServerRequestProcessor {
         RouteInfoManager::start(self.route_info_manager.clone(), receiver);
 
         let client_request_processor = ClientRequestProcessor::new(
@@ -94,10 +94,10 @@ impl NameServerRuntime {
                 Some(Duration::from_secs(5)),
                 Duration::from_secs(5),
             );
-        Arc::new(NameServerRequestProcessor {
+        NameServerRequestProcessor {
             client_request_processor: Arc::new(client_request_processor),
             default_request_processor: Arc::new(default_request_processor),
-        })
+        }
     }
 }
 

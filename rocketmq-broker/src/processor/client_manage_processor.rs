@@ -32,7 +32,7 @@ use crate::client::{
     client_channel_info::ClientChannelInfo, manager::producer_manager::ProducerManager,
 };
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ClientManageProcessor {
     consumer_group_heartbeat_table:
         HashMap<String /* ConsumerGroup */, i32 /* HeartbeatFingerprint */>,
