@@ -17,6 +17,7 @@ rocketmq-store = { version = "0.2.0", path = "../rocketmq-store" }
 
 clap = { version = "4.2.7", features = ["derive"] }
 tabled = "0.15.0"
+bytes = { workspace = true }
 [[bin]]
 name = "rocketmq-cli-rust"
 path = "src/bin/rocketmq_cli.rs"

@@ -17,6 +17,7 @@
 
 use std::{fs, path::PathBuf};
 
+use bytes::Buf;
 use rocketmq_common::common::message::message_decoder;
 use rocketmq_store::log_file::mapped_file::default_impl_refactor::LocalMappedFile;
 use tabled::{Table, Tabled};
@@ -50,8 +51,8 @@ pub fn print_content(from: Option<u32>, to: Option<u32>, path: Option<PathBuf>) 
         if bytes.is_none() {
             break;
         }
-        let size_bytes = bytes.unwrap();
-        let size = i32::from_be_bytes(size_bytes[0..4].try_into().unwrap());
+        let mut size_bytes = bytes.unwrap();
+        let size = size_bytes.get_i32();
         if size <= 0 {
             break;
         }
