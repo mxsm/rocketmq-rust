@@ -16,52 +16,57 @@
  */
 #![allow(unused_variables)]
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, fs, path::Path, sync::Arc};
 
-use rocketmq_common::common::{
-    attribute::cq_type::CQType, boundary_type::BoundaryType,
-    message::message_single::MessageExtBrokerInner,
+use rocketmq_common::{
+    common::{
+        attribute::cq_type::CQType, config::TopicConfig,
+        message::message_single::MessageExtBrokerInner,
+    },
+    utils::queue_type_utils::QueueTypeUtils,
 };
 
 use crate::{
-    base::{dispatch_request::DispatchRequest, swappable::Swappable},
+    base::dispatch_request::DispatchRequest,
     config::message_store_config::MessageStoreConfig,
-    filter::MessageFilter,
     queue::{
-        consume_queue::{ConsumeQueueStoreTrait, ConsumeQueueTrait, CqUnit},
-        file_queue::FileQueueLifeCycle,
-        queue_offset_operator::QueueOffsetOperator,
+        batch_consume_queue::BatchConsumeQueue, queue_offset_operator::QueueOffsetOperator,
+        single_consume_queue::ConsumeQueue, ConsumeQueueStoreTrait, ConsumeQueueTrait, CqUnit,
     },
+    store_path_config_helper::get_store_path_consume_queue,
 };
 
 #[derive(Clone)]
-pub struct LocalFileConsumeQueueStore<CQ> {
-    inner: ConsumeQueueStoreInner<CQ>,
+pub struct ConsumeQueueStore {
+    inner: Arc<ConsumeQueueStoreInner>,
+    topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
 }
 
-#[derive(Clone)]
-struct ConsumeQueueStoreInner<CQ> {
+type ConsumeQueueTable = parking_lot::Mutex<
+    HashMap<String, HashMap<i32, Arc<parking_lot::Mutex<Box<dyn ConsumeQueueTrait>>>>>,
+>;
+
+struct ConsumeQueueStoreInner {
     // commit_log: Arc<Mutex<CommitLog>>,
-    message_store_config: Arc<MessageStoreConfig>,
-    queue_offset_operator: QueueOffsetOperator,
-    consume_queue_table: HashMap<String, HashMap<i32, CQ>>,
+    pub(crate) message_store_config: Arc<MessageStoreConfig>,
+    pub(crate) queue_offset_operator: QueueOffsetOperator,
+    pub(crate) consume_queue_table: ConsumeQueueTable,
 }
 
-impl<CQ> LocalFileConsumeQueueStore<CQ>
-where
-    CQ: ConsumeQueueTrait + Clone,
-{
+impl ConsumeQueueStore {
     pub fn new(
         message_store_config: Arc<MessageStoreConfig>,
+        topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
         //commit_log: Arc<Mutex<CommitLog>>,
     ) -> Self {
         Self {
-            inner: ConsumeQueueStoreInner {
+            inner: Arc::new(ConsumeQueueStoreInner {
                 //commit_log,
                 message_store_config,
-                queue_offset_operator: QueueOffsetOperator {},
-                consume_queue_table: HashMap::new(),
-            },
+                queue_offset_operator: QueueOffsetOperator::new(),
+                consume_queue_table: parking_lot::Mutex::new(HashMap::new()),
+            }),
+            topic_config_table,
         }
     }
 
@@ -74,26 +79,34 @@ where
 }
 
 #[allow(unused_variables)]
-impl<CQ> ConsumeQueueStoreTrait for LocalFileConsumeQueueStore<CQ>
-where
-    CQ: ConsumeQueueTrait + Clone,
-{
+impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     fn start(&self) {
         todo!()
     }
 
     fn load(&mut self) -> bool {
-        todo!()
+        self.load_consume_queue(
+            get_store_path_consume_queue(
+                self.inner.message_store_config.store_path_root_dir.as_str(),
+            ),
+            CQType::SimpleCQ,
+        ) & self.load_consume_queue(
+            get_store_path_consume_queue(
+                self.inner.message_store_config.store_path_root_dir.as_str(),
+            ),
+            CQType::BatchCQ,
+        )
     }
 
     fn load_after_destroy(&self) -> bool {
-        todo!()
+        true
     }
 
     fn recover(&mut self) {
-        for (_topic, consume_queue_table) in self.inner.consume_queue_table.iter_mut() {
+        let mutex = &mut *self.inner.consume_queue_table.lock();
+        for (_topic, consume_queue_table) in mutex.iter_mut() {
             for (_queue_id, consume_queue) in consume_queue_table.iter_mut() {
-                consume_queue.recover();
+                consume_queue.lock().recover();
             }
         }
     }
@@ -147,7 +160,11 @@ where
     }
 
     fn truncate_dirty(&self, offset_to_truncate: i64) {
-        todo!()
+        for consume_queue_table in self.inner.consume_queue_table.lock().values() {
+            for logic in consume_queue_table.values() {
+                self.truncate_dirty_logic_files(&**logic.lock(), offset_to_truncate);
+            }
+        }
     }
 
     fn put_message_position_info_wrapper_single(&self, request: DispatchRequest) {
@@ -198,8 +215,42 @@ where
         &self,
         topic: &str,
         queue_id: i32,
-    ) -> Box<dyn ConsumeQueueTrait> {
-        todo!()
+    ) -> Arc<parking_lot::Mutex<Box<dyn ConsumeQueueTrait>>> {
+        let mut consume_queue_table = self.inner.consume_queue_table.lock();
+
+        let topic_map = consume_queue_table.entry(topic.to_string()).or_default();
+
+        if let Some(value) = topic_map.get(&queue_id) {
+            return value.clone();
+        }
+
+        let consume_queue = topic_map.entry(queue_id).or_insert_with(|| {
+            let option = self
+                .topic_config_table
+                .lock()
+                .get(&topic.to_string())
+                .cloned();
+            match QueueTypeUtils::get_cq_type(&option) {
+                CQType::SimpleCQ => Arc::new(parking_lot::Mutex::new(Box::new(ConsumeQueue::new(
+                    topic.to_string(),
+                    queue_id,
+                    get_store_path_consume_queue(
+                        self.inner.message_store_config.store_path_root_dir.as_str(),
+                    ),
+                    self.inner
+                        .message_store_config
+                        .get_mapped_file_size_consume_queue(),
+                    self.inner.message_store_config.clone(),
+                )))),
+                CQType::BatchCQ => {
+                    Arc::new(parking_lot::Mutex::new(Box::new(BatchConsumeQueue {})))
+                }
+                CQType::RocksDBCQ => {
+                    unimplemented!()
+                }
+            }
+        });
+        consume_queue.clone()
     }
 
     fn find_consume_queue_map(
@@ -218,154 +269,111 @@ where
     }
 }
 
-#[derive(Clone)]
-pub struct LocalFileConsumeQueue {}
-
-impl FileQueueLifeCycle for LocalFileConsumeQueue {
-    fn load(&self) -> bool {
-        todo!()
+impl ConsumeQueueStore {
+    fn load_consume_queue(&mut self, store_path: String, cq_type: CQType) -> bool {
+        let dir = Path::new(&store_path);
+        if let Ok(ls) = fs::read_dir(dir) {
+            let dirs: Vec<_> = ls
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .collect();
+            for dir in dirs {
+                let topic = dir.file_name().unwrap().to_str().unwrap().to_string();
+                if let Ok(ls) = fs::read_dir(&dir) {
+                    let file_queue_id_list: Vec<_> = ls
+                        .filter_map(Result::ok)
+                        .map(|entry| entry.path())
+                        .collect();
+                    for file_queue_id in file_queue_id_list {
+                        let queue_id = file_queue_id
+                            .file_name()
+                            .unwrap()
+                            .to_str()
+                            .unwrap()
+                            .parse::<i32>()
+                            .unwrap();
+                        self.queue_type_should_be(&topic, cq_type);
+                        let logic = self.create_consume_queue_by_type(
+                            topic.as_str(),
+                            queue_id,
+                            cq_type,
+                            store_path.clone(),
+                        );
+                        self.put_consume_queue(topic.clone(), queue_id, logic);
+                        if !self.load_logic(topic.clone(), queue_id) {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+        true
     }
 
-    fn recover(&self) {
-        println!("LocalFileConsumeQueue recover")
+    fn load_logic(&mut self, topic: String, queue_id: i32) -> bool {
+        true
     }
 
-    fn check_self(&self) {
-        todo!()
+    fn put_consume_queue(
+        &self,
+        topic: String,
+        queue_id: i32,
+        consume_queue: Box<dyn ConsumeQueueTrait>,
+    ) {
+        let mut consume_queue_table = self.inner.consume_queue_table.lock();
+        let topic_table = consume_queue_table.entry(topic).or_default();
+        topic_table.insert(queue_id, Arc::new(parking_lot::Mutex::new(consume_queue)));
     }
 
-    fn flush(&self, flush_least_pages: i32) -> bool {
-        todo!()
-    }
+    fn queue_type_should_be(&self, topic: &str, cq_type: CQType) {}
 
-    fn destroy(&self) {
-        todo!()
-    }
-
-    fn truncate_dirty_logic_files(&self, max_commit_log_pos: i64) {
-        todo!()
-    }
-
-    fn delete_expired_file(&self, min_commit_log_pos: i64) -> i32 {
-        todo!()
-    }
-
-    fn roll_next_file(&self, next_begin_offset: i64) -> i64 {
-        todo!()
-    }
-
-    fn is_first_file_available(&self) -> bool {
-        todo!()
-    }
-
-    fn is_first_file_exist(&self) -> bool {
-        todo!()
+    fn truncate_dirty_logic_files(&self, consume_queue: &dyn ConsumeQueueTrait, phy_offset: i64) {
+        let file_queue_life_cycle = self.get_life_cycle(
+            consume_queue.get_topic().as_str(),
+            consume_queue.get_queue_id(),
+        );
+        file_queue_life_cycle
+            .lock()
+            .truncate_dirty_logic_files(phy_offset);
     }
 }
 
-impl Swappable for LocalFileConsumeQueue {
-    fn swap_map(
+impl ConsumeQueueStore {
+    fn create_consume_queue_by_type(
         &self,
-        reserve_num: i32,
-        force_swap_interval_ms: i64,
-        normal_swap_interval_ms: i64,
-    ) {
-        todo!()
+        topic: &str,
+        queue_id: i32,
+        cq_type: CQType,
+        store_path: String,
+    ) -> Box<dyn ConsumeQueueTrait> {
+        match cq_type {
+            CQType::SimpleCQ => {
+                let consume_queue = ConsumeQueue::new(
+                    topic.to_string(),
+                    queue_id,
+                    store_path,
+                    self.inner
+                        .message_store_config
+                        .get_mapped_file_size_consume_queue(),
+                    self.inner.message_store_config.clone(),
+                );
+                Box::new(consume_queue)
+            }
+            CQType::BatchCQ => {
+                let consume_queue = BatchConsumeQueue {};
+                Box::new(consume_queue)
+            }
+            _ => {
+                unimplemented!()
+            }
+        }
     }
 
-    fn clean_swapped_map(&self, _force_clean_swap_interval_ms: i64) {
-        todo!()
-    }
-}
-
-#[allow(unused_variables)]
-impl ConsumeQueueTrait for LocalFileConsumeQueue {
-    fn get_topic(&self) -> String {
-        todo!()
-    }
-
-    fn get_queue_id(&self) -> i32 {
-        todo!()
-    }
-
-    fn get(&self, index: i64) -> CqUnit {
-        todo!()
-    }
-
-    fn get_earliest_unit(&self) -> CqUnit {
-        todo!()
-    }
-
-    fn get_latest_unit(&self) -> CqUnit {
-        todo!()
-    }
-
-    fn get_last_offset(&self) -> i64 {
-        todo!()
-    }
-
-    fn get_min_offset_in_queue(&self) -> i64 {
-        todo!()
-    }
-
-    fn get_max_offset_in_queue(&self) -> i64 {
-        todo!()
-    }
-
-    fn get_message_total_in_queue(&self) -> i64 {
-        todo!()
-    }
-
-    fn get_offset_in_queue_by_time(&self, timestamp: i64) -> i64 {
-        todo!()
-    }
-
-    fn get_offset_in_queue_by_time_boundary(
+    fn get_life_cycle(
         &self,
-        timestamp: i64,
-        boundary_type: BoundaryType,
-    ) -> i64 {
-        todo!()
-    }
-
-    fn get_max_physic_offset(&self) -> i64 {
-        todo!()
-    }
-
-    fn get_min_logic_offset(&self) -> i64 {
-        todo!()
-    }
-
-    fn get_cq_type(&self) -> CQType {
-        todo!()
-    }
-
-    fn get_total_size(&self) -> i64 {
-        todo!()
-    }
-
-    fn get_unit_size(&self) -> i32 {
-        todo!()
-    }
-
-    fn correct_min_offset(&self, min_commit_log_offset: i64) {
-        todo!()
-    }
-
-    fn put_message_position_info_wrapper(&self, request: DispatchRequest) {
-        todo!()
-    }
-
-    fn increase_queue_offset(
-        &self,
-        queue_offset_assigner: QueueOffsetOperator,
-        msg: MessageExtBrokerInner,
-        message_num: i16,
-    ) {
-        todo!()
-    }
-
-    fn estimate_message_count(&self, from: i64, to: i64, filter: &dyn MessageFilter) -> i64 {
-        todo!()
+        topic: &str,
+        queue_id: i32,
+    ) -> Arc<parking_lot::Mutex<Box<dyn ConsumeQueueTrait>>> {
+        self.find_or_create_consume_queue(topic, queue_id)
     }
 }

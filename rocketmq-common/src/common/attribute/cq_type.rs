@@ -19,7 +19,7 @@ use std::str::FromStr;
 
 use anyhow::anyhow;
 
-#[derive(PartialEq, Default, Debug)]
+#[derive(PartialEq, Default, Debug, Copy, Clone)]
 pub enum CQType {
     #[default]
     SimpleCQ,

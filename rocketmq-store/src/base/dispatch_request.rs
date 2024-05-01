@@ -15,7 +15,10 @@
  * limitations under the License.
  */
 
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    fmt::{Display, Formatter},
+};
 
 #[derive(Debug, Default)]
 pub struct DispatchRequest {
@@ -38,4 +41,36 @@ pub struct DispatchRequest {
     pub batch_size: i16,
     pub next_reput_from_offset: i64,
     pub offset_id: String,
+}
+
+impl Display for DispatchRequest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "DispatchRequest {{ topic: {}, queue_id: {}, commit_log_offset: {}, msg_size: {}, \
+             tags_code: {}, store_timestamp: {}, consume_queue_offset: {}, keys: {}, success: {}, \
+             uniq_key: {:?}, sys_flag: {}, prepared_transaction_offset: {}, properties_map: {:?}, \
+             bit_map: {:?}, buffer_size: {}, msg_base_offset: {}, batch_size: {}, \
+             next_reput_from_offset: {}, offset_id: {} }}",
+            self.topic,
+            self.queue_id,
+            self.commit_log_offset,
+            self.msg_size,
+            self.tags_code,
+            self.store_timestamp,
+            self.consume_queue_offset,
+            self.keys,
+            self.success,
+            self.uniq_key,
+            self.sys_flag,
+            self.prepared_transaction_offset,
+            self.properties_map,
+            self.bit_map,
+            self.buffer_size,
+            self.msg_base_offset,
+            self.batch_size,
+            self.next_reput_from_offset,
+            self.offset_id
+        )
+    }
 }

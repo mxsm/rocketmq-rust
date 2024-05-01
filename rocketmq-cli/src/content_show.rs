@@ -29,7 +29,7 @@ pub fn print_content(from: Option<u32>, to: Option<u32>, path: Option<PathBuf>) 
     let path_buf = path.unwrap().into_os_string();
     let file_metadata = fs::metadata(path_buf.clone()).unwrap();
     println!("file size: {}B", file_metadata.len());
-    let mut mapped_file = LocalMappedFile::new(
+    let mapped_file = LocalMappedFile::new(
         path_buf.to_os_string().to_string_lossy().to_string(),
         file_metadata.len(),
     );
