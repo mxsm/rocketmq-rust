@@ -23,7 +23,6 @@ use std::{
 
 use log::warn;
 use rocketmq_common::UtilAll::offset_to_file_name;
-use tokio::sync::Mutex;
 use tracing::info;
 
 use crate::{
@@ -37,7 +36,8 @@ pub struct MappedFileQueue {
 
     pub(crate) mapped_file_size: u64,
     //pub(crate) mapped_files: Arc<Mutex<Vec<LocalMappedFile>>>,
-    pub(crate) mapped_files: Vec<Arc<Mutex<LocalMappedFile>>>,
+    //pub(crate) mapped_files: Vec<Arc<Mutex<LocalMappedFile>>>,
+    pub(crate) mapped_files: Vec<Arc<LocalMappedFile>>,
     //  pub(crate) mapped_files: Vec<LocalMappedFile>,
     pub(crate) allocate_mapped_file_service: Option<AllocateMappedFileService>,
 
@@ -130,7 +130,7 @@ impl MappedFileQueue {
                 LocalMappedFile::new(file.to_string_lossy().to_string(), self.mapped_file_size);
             // Set wrote, flushed, committed positions for mapped_file
 
-            self.mapped_files.push(Arc::new(Mutex::new(mapped_file)));
+            self.mapped_files.push(Arc::new(mapped_file));
             // self.mapped_files
             //     .push(mapped_file);
             info!("load {} OK", file.display());
@@ -153,7 +153,7 @@ impl MappedFileQueue {
     //     self.mapped_files.last()
     // }
 
-    pub fn get_last_mapped_file(&self) -> Option<Arc<Mutex<LocalMappedFile>>> {
+    pub fn get_last_mapped_file(&self) -> Option<Arc<LocalMappedFile>> {
         if self.mapped_files.is_empty() {
             return None;
         }
@@ -164,7 +164,7 @@ impl MappedFileQueue {
         &mut self,
         start_offset: u64,
         need_create: bool,
-    ) -> Option<Arc<Mutex<LocalMappedFile>>> {
+    ) -> Option<Arc<LocalMappedFile>> {
         let mut create_offset = -1i64;
         let file_size = self.mapped_file_size as i64;
         let mapped_file_last = self.get_last_mapped_file();
@@ -173,8 +173,8 @@ impl MappedFileQueue {
                 create_offset = start_offset as i64 - (start_offset as i64 % file_size);
             }
             Some(ref value) => {
-                if value.lock().await.is_full() {
-                    create_offset = value.lock().await.get_file_from_offset() as i64 + file_size
+                if value.is_full() {
+                    create_offset = value.get_file_from_offset() as i64 + file_size
                 }
             }
         }
@@ -184,10 +184,7 @@ impl MappedFileQueue {
         mapped_file_last
     }
 
-    pub fn try_create_mapped_file(
-        &mut self,
-        create_offset: u64,
-    ) -> Option<Arc<Mutex<LocalMappedFile>>> {
+    pub fn try_create_mapped_file(&mut self, create_offset: u64) -> Option<Arc<LocalMappedFile>> {
         let next_file_path =
             PathBuf::from(self.store_path.clone()).join(offset_to_file_name(create_offset));
         let next_next_file_path = PathBuf::from(self.store_path.clone())
@@ -199,7 +196,7 @@ impl MappedFileQueue {
         &mut self,
         next_file_path: PathBuf,
         _next_next_file_path: PathBuf,
-    ) -> Option<Arc<Mutex<LocalMappedFile>>> {
+    ) -> Option<Arc<LocalMappedFile>> {
         let mut mapped_file = match self.allocate_mapped_file_service {
             None => LocalMappedFile::new(
                 next_file_path.to_string_lossy().to_string(),
@@ -213,12 +210,12 @@ impl MappedFileQueue {
         if self.mapped_files.is_empty() {
             mapped_file.set_first_create_in_queue(true);
         }
-        let inner = Arc::new(Mutex::new(mapped_file));
+        let inner = Arc::new(mapped_file);
         self.mapped_files.push(inner.clone());
         Some(inner)
     }
 
-    pub fn get_mapped_files(&self) -> Vec<Arc<Mutex<LocalMappedFile>>> {
+    pub fn get_mapped_files(&self) -> Vec<Arc<LocalMappedFile>> {
         self.mapped_files.to_vec()
     }
 
@@ -231,6 +228,34 @@ impl MappedFileQueue {
     }
 
     pub fn truncate_dirty_files(&mut self, offset: i64) {}
+
+    pub fn get_max_offset(&self) -> i64 {
+        /*let handle = Handle::current();
+        let mapped_file = self.get_last_mapped_file();
+        std::thread::spawn(move || {
+            handle.block_on(async move {
+                match mapped_file {
+                    None => 0,
+                    Some(value) => {
+                        let file = value.lock().await;
+                        file.get_file_from_offset() as i64 + file.get_read_position() as i64
+                    }
+                }
+            })
+        })
+        .join()
+        .unwrap()*/
+        match self.get_last_mapped_file() {
+            None => 0,
+            Some(file) => file.get_file_from_offset() as i64 + file.get_read_position() as i64,
+        }
+    }
+
+    pub fn delete_last_mapped_file(&self) {
+        unimplemented!()
+    }
+
+    pub(crate) fn delete_expired_file(&self, files: Vec<Option<Arc<LocalMappedFile>>>) {}
 }
 
 #[cfg(test)]

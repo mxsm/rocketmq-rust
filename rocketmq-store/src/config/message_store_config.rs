@@ -23,6 +23,7 @@ use serde::Deserialize;
 use crate::{
     base::store_enum::StoreType,
     config::{broker_role::BrokerRole, flush_disk_type::FlushDiskType},
+    queue::single_consume_queue::CQ_STORE_UNIT_SIZE,
 };
 
 lazy_static! {
@@ -251,9 +252,9 @@ impl Default for MessageStoreConfig {
             store_type: Default::default(),
             mapped_file_size_consume_queue: 0,
             enable_consume_queue_ext: false,
-            mapped_file_size_consume_queue_ext: 0,
+            mapped_file_size_consume_queue_ext: 48 * 1024 * 1024,
             mapper_file_size_batch_consume_queue: 0,
-            bit_map_length_consume_queue_ext: 0,
+            bit_map_length_consume_queue_ext: 64,
             flush_interval_commit_log: 0,
             commit_interval_commit_log: 0,
             max_recovery_commit_log_files: 0,
@@ -403,5 +404,11 @@ impl MessageStoreConfig {
 
     pub fn is_enable_rocksdb_store(&self) -> bool {
         self.store_type == StoreType::RocksDB
+    }
+
+    pub fn get_mapped_file_size_consume_queue(&self) -> i32 {
+        let factor = (self.mapped_file_size_consume_queue as f64 / (CQ_STORE_UNIT_SIZE as f64))
+            .ceil() as i32;
+        factor * CQ_STORE_UNIT_SIZE
     }
 }

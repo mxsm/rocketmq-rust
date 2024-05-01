@@ -42,9 +42,10 @@ pub struct LocalMappedFile {
     committed_position: AtomicI32,
     flushed_position: AtomicI32,
 
+    //file name, for example: file name is:00000000000000000000, file_from_offset is 0
     file_from_offset: u64,
 
-    mmapped_file: MmapMut,
+    mmapped_file: parking_lot::RwLock<MmapMut>,
 
     first_create_in_queue: bool,
 }
@@ -76,7 +77,7 @@ impl LocalMappedFile {
                 .to_string()
                 .parse::<u64>()
                 .unwrap(),
-            mmapped_file: mmap,
+            mmapped_file: parking_lot::RwLock::new(mmap),
             first_create_in_queue: false,
         }
     }
@@ -113,15 +114,32 @@ impl LocalMappedFile {
             .to_string_lossy()
             .to_string()
     }
+
+    ///Returns the current max readable position of this mapped file.
+    pub fn get_read_position(&self) -> i32 {
+        self.committed_position.load(Ordering::Relaxed)
+    }
+
+    pub fn set_wrote_position(&self, wrote_position: i32) {
+        self.wrote_position.store(wrote_position, Ordering::SeqCst);
+    }
+    pub fn set_committed_position(&self, committed_position: i32) {
+        self.committed_position
+            .store(committed_position, Ordering::SeqCst);
+    }
+    pub fn set_flushed_position(&self, flushed_position: i32) {
+        self.flushed_position
+            .store(flushed_position, Ordering::SeqCst);
+    }
 }
 
 impl LocalMappedFile {
-    pub fn append_data(&mut self, data: BytesMut, sync: bool) -> bool {
+    pub fn append_data(&self, data: BytesMut, sync: bool) -> bool {
         let current_pos = self.wrote_position.load(Ordering::SeqCst) as usize;
         if current_pos + data.len() > self.file_size as usize {
             return false;
         }
-        let mut write_success = if (&mut self.mmapped_file[current_pos..])
+        let mut write_success = if (&mut self.mmapped_file.write()[current_pos..])
             .write_all(data.as_ref())
             .is_ok()
         {
@@ -133,16 +151,16 @@ impl LocalMappedFile {
         };
 
         write_success &= if sync {
-            self.mmapped_file.flush().is_ok()
+            self.mmapped_file.write().flush().is_ok()
         } else {
-            self.mmapped_file.flush_async().is_ok()
+            self.mmapped_file.write().flush_async().is_ok()
         };
 
         write_success
     }
 
     pub fn append_message(
-        &mut self,
+        &self,
         message: MessageExtBrokerInner,
         message_callback: impl AppendMessageCallback,
         put_message_context: &mut PutMessageContext,
@@ -171,11 +189,13 @@ impl LocalMappedFile {
         append_message_result
     }
 
-    pub fn get_bytes(&mut self, pos: usize, size: usize) -> Option<bytes::Bytes> {
+    pub fn get_bytes(&self, pos: usize, size: usize) -> Option<bytes::Bytes> {
         if pos + size > self.file_size as usize {
             return None;
         }
-        Some(Bytes::copy_from_slice(&self.mmapped_file[pos..pos + size]))
+        Some(Bytes::copy_from_slice(
+            &self.mmapped_file.read()[pos..pos + size],
+        ))
     }
 
     pub fn is_full(&self) -> bool {

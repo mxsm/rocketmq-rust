@@ -14,24 +14,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::sync::Arc;
-
-use tokio::sync::Mutex;
-
 use crate::{
     base::{commit_log_dispatcher::CommitLogDispatcher, dispatch_request::DispatchRequest},
-    queue::local_file_consume_queue_store::{LocalFileConsumeQueue, LocalFileConsumeQueueStore},
+    queue::local_file_consume_queue_store::ConsumeQueueStore,
 };
 
 #[derive(Clone)]
 pub struct CommitLogDispatcherBuildConsumeQueue {
-    consume_queue_store: Arc<Mutex<LocalFileConsumeQueueStore<LocalFileConsumeQueue>>>,
+    consume_queue_store: ConsumeQueueStore,
 }
 
 impl CommitLogDispatcherBuildConsumeQueue {
-    pub fn new(
-        consume_queue_store: Arc<Mutex<LocalFileConsumeQueueStore<LocalFileConsumeQueue>>>,
-    ) -> Self {
+    pub fn new(consume_queue_store: ConsumeQueueStore) -> Self {
         Self {
             consume_queue_store,
         }
@@ -39,10 +33,8 @@ impl CommitLogDispatcherBuildConsumeQueue {
 }
 
 impl CommitLogDispatcher for CommitLogDispatcherBuildConsumeQueue {
-    async fn dispatch(&mut self, dispatch_request: &DispatchRequest) {
+    fn dispatch(&mut self, dispatch_request: &DispatchRequest) {
         self.consume_queue_store
-            .lock()
-            .await
             .put_message_position_info_wrapper(dispatch_request);
     }
 }

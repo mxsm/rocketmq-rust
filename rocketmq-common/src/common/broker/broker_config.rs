@@ -110,6 +110,7 @@ pub struct BrokerConfig {
     pub is_in_broker_container: bool,
     pub commercial_size_per_msg: i32,
     pub recover_concurrently: bool,
+    pub duplication_enable: bool,
 }
 
 impl Default for BrokerConfig {
@@ -148,6 +149,7 @@ impl Default for BrokerConfig {
             is_in_broker_container: false,
             commercial_size_per_msg: 4 * 1024,
             recover_concurrently: false,
+            duplication_enable: false,
         }
     }
 }

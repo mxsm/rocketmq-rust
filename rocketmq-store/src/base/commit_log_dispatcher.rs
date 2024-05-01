@@ -17,7 +17,6 @@
 
 use crate::base::dispatch_request::DispatchRequest;
 
-#[trait_variant::make(CommitLogDispatcher:Send)]
-pub trait RocketMQCommitLogDispatcher: Clone {
-    async fn dispatch(&mut self, dispatch_request: &DispatchRequest);
+pub trait CommitLogDispatcher: Send + Clone {
+    fn dispatch(&mut self, dispatch_request: &DispatchRequest);
 }

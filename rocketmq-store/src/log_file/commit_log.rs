@@ -33,7 +33,6 @@ use rocketmq_common::{
     CRC32Utils::crc32,
     MessageDecoder::{string_to_message_properties, MESSAGE_MAGIC_CODE_V2},
 };
-use tokio::runtime::Handle;
 use tracing::{error, info, warn};
 
 use crate::{
@@ -49,8 +48,10 @@ use crate::{
     },
     config::message_store_config::MessageStoreConfig,
     consume_queue::mapped_file_queue::MappedFileQueue,
+    log_file::mapped_file::default_impl_refactor::LocalMappedFile,
     message_encoder::message_ext_encoder::MessageExtEncoder,
-    message_store::local_file_store::CommitLogDispatcherDefault,
+    message_store::local_file_store::{CommitLogDispatcherDefault, LocalFileMessageStore},
+    queue::ConsumeQueueStoreTrait,
 };
 
 // Message's MAGIC CODE daa320a7
@@ -205,11 +206,8 @@ impl CommitLog {
             append_message_callback.do_append(mapped_file.file_from_offset() as i64, 0, &mut msg);
         mapped_file.append_data(msg.encoded_buff.clone(), false);*/
 
-        let result = mapped_file.lock().await.append_message(
-            msg,
-            append_message_callback,
-            &mut put_message_context,
-        );
+        let result =
+            mapped_file.append_message(msg, append_message_callback, &mut put_message_context);
 
         match result.status {
             AppendMessageStatus::PutOk => {
@@ -248,11 +246,13 @@ impl CommitLog {
         CQType::SimpleCQ
     }
 
-    pub async fn recover_normally(&mut self, max_phy_offset_of_consume_queue: i64) {
+    pub async fn recover_normally(
+        &mut self,
+        max_phy_offset_of_consume_queue: i64,
+        mut message_store: LocalFileMessageStore,
+    ) {
         let check_crc_on_recover = self.message_store_config.check_crc_on_recover;
         let check_dup_info = self.message_store_config.duplication_enable;
-        let handle = Handle::current();
-        // let mapped_files = self.mapped_file_queue.clone();
         let message_store_config = self.message_store_config.clone();
         let broker_config = self.broker_config.clone();
         // let mut mapped_file_queue = mapped_files.write().await;
@@ -264,32 +264,34 @@ impl CommitLog {
                 index = 0;
             }
             let mut index = index as usize;
-            let mut mapped_file = mapped_files_inner.get(index).unwrap().lock().await;
+            //let mut mapped_file = mapped_files_inner.get(index).unwrap().lock().await;
+            let mut mapped_file = mapped_files_inner.get(index).unwrap();
             let mut process_offset = mapped_file.get_file_from_offset();
             let mut mapped_file_offset = 0u64;
-            let mut last_valid_msg_phy_offset = self.get_confirm_offset();
+            //When recovering, the maximum value obtained when getting get_confirm_offset is
+            // the file size of the latest file plus the value resolved from the file name.
+            let mut last_valid_msg_phy_offset = self.get_confirm_offset() as u64;
             let do_dispatch = false;
             let mut current_pos = 0usize;
             loop {
-                let bytes = mapped_file.get_bytes(0, 4);
-                if bytes.is_none() {
+                let (msg, size) = self.get_simple_message_bytes(current_pos, mapped_file);
+                if msg.is_none() {
                     break;
                 }
-                let size_bytes = bytes.unwrap();
-                let size = i32::from_be_bytes(size_bytes[0..4].try_into().unwrap());
-                let mut msg_bytes = mapped_file.get_bytes(current_pos, size as usize);
+                let mut msg_bytes = msg.unwrap();
                 let dispatch_request = check_message_and_return_size(
-                    msg_bytes.as_mut().unwrap(),
+                    &mut msg_bytes,
                     check_crc_on_recover,
                     check_dup_info,
                     true,
                     &message_store_config,
                 );
-                current_pos += size as usize;
+                println!("{}", dispatch_request);
+                current_pos += size;
                 if dispatch_request.success && dispatch_request.msg_size > 0 {
                     last_valid_msg_phy_offset = process_offset + mapped_file_offset;
                     mapped_file_offset += dispatch_request.msg_size as u64;
-                    self.dispatcher.dispatch(&dispatch_request).await;
+                    self.dispatcher.dispatch(&dispatch_request);
                 } else if dispatch_request.success && dispatch_request.msg_size == 0 {
                     // Come the end of the file, switch to the next file Since the
                     // return 0 representatives met last hole,
@@ -302,7 +304,7 @@ impl CommitLog {
                         );
                         break;
                     } else {
-                        mapped_file = mapped_files_inner.get(index).unwrap().lock().await;
+                        mapped_file = mapped_files_inner.get(index).unwrap();
                         mapped_file_offset = 0;
                         process_offset = mapped_file.get_file_from_offset();
                         current_pos = 0;
@@ -327,12 +329,7 @@ impl CommitLog {
             }
 
             if max_phy_offset_of_consume_queue as u64 > process_offset {
-                /*if let Some(value) = message_store.upgrade() {
-                    value
-                        .lock()
-                        .await
-                        .truncate_dirty_logic_files(process_offset as i64);
-                }*/
+                message_store.truncate_dirty_logic_files(process_offset as i64)
             }
             self.mapped_file_queue
                 .set_flushed_where(process_offset as i64);
@@ -343,10 +340,12 @@ impl CommitLog {
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
-                     files"
+                      files"
             );
             self.mapped_file_queue.set_flushed_where(0);
             self.mapped_file_queue.set_committed_where(0);
+            message_store.consume_queue_store_mut().destroy();
+            message_store.consume_queue_store_mut().load_after_destroy();
             /*if let Some(value) = message_store.upgrade() {
                 value.lock().await.get_queue_store().destroy();
                 value.lock().await.get_queue_store().load_after_destroy();
@@ -356,11 +355,42 @@ impl CommitLog {
         });*/
     }
 
-    pub fn get_confirm_offset(&self) -> u64 {
-        0
+    fn get_simple_message_bytes(
+        &self,
+        position: usize,
+        mapped_file: &LocalMappedFile,
+    ) -> (Option<Bytes>, usize) {
+        let mut bytes = mapped_file.get_bytes(position, 4);
+        match bytes {
+            None => (None, 0),
+            Some(ref mut inner) => {
+                let size = inner.get_i32();
+                if size <= 0 {
+                    return (None, 0);
+                }
+                (
+                    mapped_file.get_bytes(position, size as usize),
+                    size as usize,
+                )
+            }
+        }
+    }
+
+    //Fetch and compute the newest confirmOffset.
+    pub fn get_confirm_offset(&self) -> i64 {
+        if self.broker_config.enable_controller_mode {
+            unimplemented!()
+        } else if self.broker_config.duplication_enable {
+            return self.confirm_offset;
+        }
+        self.get_max_offset()
     }
 
     pub fn recover_abnormally(&mut self, max_phy_offset_of_consume_queue: i64) {}
+
+    pub fn get_max_offset(&self) -> i64 {
+        self.mapped_file_queue.get_max_offset()
+    }
 }
 
 fn generate_key(msg: &MessageExtBrokerInner) -> String {
