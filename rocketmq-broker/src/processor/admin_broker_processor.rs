@@ -28,9 +28,9 @@ impl AdminBrokerProcessor {
         &self,
         _ctx: ConnectionHandlerContext,
         request: RemotingCommand,
-    ) -> RemotingCommand {
+    ) -> Option<RemotingCommand> {
         let request_code = RequestCode::from(request.code());
         info!("AdminBrokerProcessor process_request: {:?}", request_code);
-        RemotingCommand::create_response_command()
+        None
     }
 }
