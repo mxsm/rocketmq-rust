@@ -93,8 +93,8 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
         ctx: ConnectionHandlerContext<'_>,
         request_code: RequestCode,
         request: RemotingCommand,
-    ) -> RemotingCommand {
-        let response = match request_code {
+    ) -> Option<RemotingCommand> {
+        match request_code {
             RequestCode::ConsumerSendMsgBack => self.inner.consumer_send_msg_back(&ctx, &request),
             _ => {
                 let mut request_header = parse_request_header(&request).unwrap();
@@ -105,7 +105,7 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
                     .topic_queue_mapping_manager
                     .rewrite_request_for_static_topic(&request_header, &mapping_context);
                 if let Some(rewrite_result) = rewrite_result {
-                    return rewrite_result;
+                    return Some(rewrite_result);
                 }
 
                 let send_message_context =
@@ -133,8 +133,7 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
                     .await
                 }
             }
-        };
-        response.unwrap()
+        }
     }
 }
 

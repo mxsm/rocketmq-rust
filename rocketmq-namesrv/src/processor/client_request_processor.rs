@@ -125,7 +125,7 @@ impl ClientRequestProcessor {
         &self,
         _ctx: ConnectionHandlerContext<'_>,
         request: RemotingCommand,
-    ) -> RemotingCommand {
-        self.get_route_info_by_topic(request)
+    ) -> Option<RemotingCommand> {
+        Some(self.get_route_info_by_topic(request))
     }
 }

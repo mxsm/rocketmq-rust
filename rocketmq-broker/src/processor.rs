@@ -86,7 +86,7 @@ impl<MS: MessageStore + Send + Sync + 'static> RequestProcessor for BrokerReques
         &mut self,
         ctx: ConnectionHandlerContext<'_>,
         request: RemotingCommand,
-    ) -> RemotingCommand {
+    ) -> Option<RemotingCommand> {
         let request_code = RequestCode::from(request.code());
         info!("process_request: {:?}", request_code);
         match request_code {

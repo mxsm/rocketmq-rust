@@ -54,8 +54,8 @@ impl ClientManageProcessor {
         ctx: ConnectionHandlerContext<'_>,
         request_code: RequestCode,
         request: RemotingCommand,
-    ) -> RemotingCommand {
-        let response = match request_code {
+    ) -> Option<RemotingCommand> {
+        match request_code {
             RequestCode::HeartBeat => self.heart_beat(ctx, request),
             RequestCode::UnregisterClient => self.unregister_client(ctx, request),
             RequestCode::CheckClientConfig => {
@@ -64,8 +64,7 @@ impl ClientManageProcessor {
             _ => {
                 unimplemented!("CheckClientConfig")
             }
-        };
-        response.unwrap()
+        }
     }
 }
 

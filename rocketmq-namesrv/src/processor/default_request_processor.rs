@@ -78,7 +78,7 @@ impl DefaultRequestProcessor {
         &self,
         ctx: ConnectionHandlerContext,
         request: RemotingCommand,
-    ) -> RemotingCommand {
+    ) -> Option<RemotingCommand> {
         let code = request.code();
         let broker_request_code = RequestCode::value_of(code);
         info!(
@@ -86,7 +86,7 @@ impl DefaultRequestProcessor {
             code,
             broker_request_code.as_ref()
         );
-        match broker_request_code {
+        let response = match broker_request_code {
             Some(RequestCode::PutKvConfig) => self.put_kv_config(request),
             Some(RequestCode::GetKvConfig) => self.get_kv_config(request),
             Some(RequestCode::DeleteKvConfig) => self.delete_kv_config(request),
@@ -120,7 +120,8 @@ impl DefaultRequestProcessor {
             _ => RemotingCommand::create_response_command_with_code(
                 RemotingSysResponseCode::SystemError,
             ),
-        }
+        };
+        Some(response)
     }
 }
 

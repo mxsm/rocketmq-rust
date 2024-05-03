@@ -27,5 +27,5 @@ pub trait LocalRequestProcessor: Clone {
         &mut self,
         ctx: ConnectionHandlerContext<'_>,
         request: RemotingCommand,
-    ) -> RemotingCommand;
+    ) -> Option<RemotingCommand>;
 }

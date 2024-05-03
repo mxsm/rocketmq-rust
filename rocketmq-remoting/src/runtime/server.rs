@@ -92,6 +92,10 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
             let response = tokio::select! {
                 result = self.request_processor.process_request( ctx,cmd) =>  result,
             };
+            if response.is_none() {
+                continue;
+            }
+            let response = response.unwrap();
             tokio::select! {
                 result = self.connection.framed.send(response.set_opaque(opaque)) => match result{
                     Ok(_) =>{},
