@@ -33,7 +33,7 @@ use crate::{
         batch_consume_queue::BatchConsumeQueue, queue_offset_operator::QueueOffsetOperator,
         single_consume_queue::ConsumeQueue, ConsumeQueueStoreTrait, ConsumeQueueTrait, CqUnit,
     },
-    store_path_config_helper::get_store_path_consume_queue,
+    store_path_config_helper::{get_store_path_batch_consume_queue, get_store_path_consume_queue},
 };
 
 #[derive(Clone)]
@@ -91,7 +91,7 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
             ),
             CQType::SimpleCQ,
         ) & self.load_consume_queue(
-            get_store_path_consume_queue(
+            get_store_path_batch_consume_queue(
                 self.inner.message_store_config.store_path_root_dir.as_str(),
             ),
             CQType::BatchCQ,
@@ -243,7 +243,18 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
                     self.inner.message_store_config.clone(),
                 )))),
                 CQType::BatchCQ => {
-                    Arc::new(parking_lot::Mutex::new(Box::new(BatchConsumeQueue {})))
+                    Arc::new(parking_lot::Mutex::new(Box::new(BatchConsumeQueue::new(
+                        topic.to_string(),
+                        queue_id,
+                        get_store_path_batch_consume_queue(
+                            self.inner.message_store_config.store_path_root_dir.as_str(),
+                        ),
+                        self.inner
+                            .message_store_config
+                            .mapper_file_size_batch_consume_queue,
+                        None,
+                        self.inner.message_store_config.clone(),
+                    ))))
                 }
                 CQType::RocksDBCQ => {
                     unimplemented!()
@@ -311,7 +322,9 @@ impl ConsumeQueueStore {
     }
 
     fn load_logic(&mut self, topic: String, queue_id: i32) -> bool {
-        true
+        let file_queue_life_cycle = self.get_life_cycle(topic.as_str(), queue_id);
+        let result = file_queue_life_cycle.lock().load();
+        result
     }
 
     fn put_consume_queue(
@@ -360,7 +373,16 @@ impl ConsumeQueueStore {
                 Box::new(consume_queue)
             }
             CQType::BatchCQ => {
-                let consume_queue = BatchConsumeQueue {};
+                let consume_queue = BatchConsumeQueue::new(
+                    topic.to_string(),
+                    queue_id,
+                    store_path,
+                    self.inner
+                        .message_store_config
+                        .mapper_file_size_batch_consume_queue,
+                    None,
+                    self.inner.message_store_config.clone(),
+                );
                 Box::new(consume_queue)
             }
             _ => {

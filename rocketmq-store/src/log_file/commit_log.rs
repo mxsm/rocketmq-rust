@@ -50,7 +50,7 @@ use crate::{
     consume_queue::mapped_file_queue::MappedFileQueue,
     log_file::mapped_file::default_impl_refactor::LocalMappedFile,
     message_encoder::message_ext_encoder::MessageExtEncoder,
-    message_store::local_file_store::{CommitLogDispatcherDefault, LocalFileMessageStore},
+    message_store::default_message_store::{CommitLogDispatcherDefault, DefaultMessageStore},
     queue::ConsumeQueueStoreTrait,
 };
 
@@ -114,20 +114,9 @@ impl CommitLog {
 #[allow(unused_variables)]
 impl CommitLog {
     pub fn load(&mut self) -> bool {
-        // let arc = self.mapped_file_queue.clone();
-        // let handle = Handle::current();
-        // let result = std::thread::spawn(move || {
-        //     // Using Handle::block_on to run async code in the new thread.
-        //     handle.block_on(async move {
-        //         let mut write_mf = arc.write().await;
-        //         let result = write_mf.load();
-        //         write_mf.check_self();
-        //         result
-        //     })
-        // });
-        // result.join().unwrap_or(false)
         let result = self.mapped_file_queue.load();
         self.mapped_file_queue.check_self();
+        info!("load commit log {}", if result { "OK" } else { "Failed" });
         result
     }
 
@@ -249,7 +238,7 @@ impl CommitLog {
     pub async fn recover_normally(
         &mut self,
         max_phy_offset_of_consume_queue: i64,
-        mut message_store: LocalFileMessageStore,
+        mut message_store: DefaultMessageStore,
     ) {
         let check_crc_on_recover = self.message_store_config.check_crc_on_recover;
         let check_dup_info = self.message_store_config.duplication_enable;

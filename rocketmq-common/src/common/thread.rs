@@ -15,5 +15,4 @@
  * limitations under the License.
  */
 
-#[cfg(feature = "local_file_store")]
-pub mod default_message_store;
+pub mod thread_service;

@@ -35,6 +35,18 @@ pub struct TopicConfigSerializeWrapper {
 }
 
 impl TopicConfigSerializeWrapper {
+    pub fn new(
+        topic_config_table: Option<HashMap<String, TopicConfig>>,
+        data_version: Option<DataVersion>,
+    ) -> Self {
+        Self {
+            topic_config_table,
+            data_version,
+        }
+    }
+}
+
+impl TopicConfigSerializeWrapper {
     pub fn topic_config_table(&self) -> Option<&HashMap<String, TopicConfig>> {
         match &self.topic_config_table {
             None => None,

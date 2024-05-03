@@ -26,7 +26,7 @@ use rocketmq_remoting::protocol::{
         topic_config_wrapper::TopicConfigAndMappingSerializeWrapper, TopicConfigSerializeWrapper,
     },
     static_topic::topic_queue_info::TopicQueueMappingInfo,
-    DataVersion,
+    DataVersion, RemotingSerializable,
 };
 use tracing::info;
 
@@ -231,7 +231,15 @@ impl ConfigManager for TopicConfigManager {
     }
 
     fn encode_pretty(&mut self, pretty_format: bool) -> String {
-        todo!()
+        let topic_config_table = self.topic_config_table.lock().clone();
+        let version = self.data_version.lock().clone();
+        match pretty_format {
+            true => TopicConfigSerializeWrapper::new(Some(topic_config_table), Some(version))
+                .to_json_pretty(),
+            false => {
+                TopicConfigSerializeWrapper::new(Some(topic_config_table), Some(version)).to_json()
+            }
+        }
     }
 
     fn decode(&self, json_string: &str) {

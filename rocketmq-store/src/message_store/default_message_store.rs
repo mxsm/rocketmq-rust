@@ -16,7 +16,16 @@
  */
 #![allow(unused_variables)]
 
-use std::{collections::HashMap, error::Error, fs, sync::Arc, time::Instant};
+use std::{
+    collections::HashMap,
+    error::Error,
+    fs,
+    sync::{
+        atomic::{AtomicI64, Ordering},
+        Arc,
+    },
+    time::Instant,
+};
 
 use log::info;
 use rocketmq_common::{
@@ -25,6 +34,7 @@ use rocketmq_common::{
         config::TopicConfig,
         message::{message_single::MessageExtBrokerInner, MessageConst},
         sys_flag::message_sys_flag::MessageSysFlag,
+        thread::thread_service::ThreadService,
     },
     utils::queue_type_utils::QueueTypeUtils,
 };
@@ -50,7 +60,7 @@ use crate::{
 };
 
 ///Using local files to store message data, which is also the default method.
-pub struct LocalFileMessageStore {
+pub struct DefaultMessageStore {
     message_store_config: Arc<MessageStoreConfig>,
     broker_config: Arc<BrokerConfig>,
     put_message_hook_list: Arc<Vec<BoxedPutMessageHook>>,
@@ -59,14 +69,15 @@ pub struct LocalFileMessageStore {
     commit_log: CommitLog,
     compaction_service: CompactionService,
     store_checkpoint: Option<StoreCheckpoint>,
-    master_flushed_offset: Arc<parking_lot::Mutex<i64>>,
+    master_flushed_offset: Arc<AtomicI64>,
     index_service: IndexService,
-    allocate_mapped_file_service: AllocateMappedFileService,
+    allocate_mapped_file_service: Arc<AllocateMappedFileService>,
     consume_queue_store: ConsumeQueueStore,
     dispatcher: CommitLogDispatcherDefault,
+    broker_init_max_offset: Arc<AtomicI64>,
 }
 
-impl Clone for LocalFileMessageStore {
+impl Clone for DefaultMessageStore {
     fn clone(&self) -> Self {
         Self {
             message_store_config: self.message_store_config.clone(),
@@ -81,11 +92,12 @@ impl Clone for LocalFileMessageStore {
             allocate_mapped_file_service: self.allocate_mapped_file_service.clone(),
             consume_queue_store: self.consume_queue_store.clone(),
             dispatcher: self.dispatcher.clone(),
+            broker_init_max_offset: self.broker_init_max_offset.clone(),
         }
     }
 }
 
-impl LocalFileMessageStore {
+impl DefaultMessageStore {
     pub fn new(
         message_store_config: Arc<MessageStoreConfig>,
         broker_config: Arc<BrokerConfig>,
@@ -118,16 +130,17 @@ impl LocalFileMessageStore {
             commit_log: commit_log.clone(),
             compaction_service: Default::default(),
             store_checkpoint: Some(store_checkpoint),
-            master_flushed_offset: Arc::new(parking_lot::Mutex::new(-1)),
+            master_flushed_offset: Arc::new(AtomicI64::new(-1)),
             index_service,
-            allocate_mapped_file_service: AllocateMappedFileService {},
+            allocate_mapped_file_service: Arc::new(AllocateMappedFileService::new()),
             consume_queue_store,
             dispatcher,
+            broker_init_max_offset: Arc::new(AtomicI64::new(-1)),
         }
     }
 }
 
-impl Drop for LocalFileMessageStore {
+impl Drop for DefaultMessageStore {
     fn drop(&mut self) {
         // if let Some(runtime) = self.message_store_runtime.take() {
         //     runtime.shutdown();
@@ -135,7 +148,7 @@ impl Drop for LocalFileMessageStore {
     }
 }
 
-impl LocalFileMessageStore {
+impl DefaultMessageStore {
     pub fn get_topic_config(&self, topic: &str) -> Option<TopicConfig> {
         if self.topic_config_table.lock().is_empty() {
             return None;
@@ -240,7 +253,7 @@ impl LocalFileMessageStore {
     }
 }
 
-impl MessageStore for LocalFileMessageStore {
+impl MessageStore for DefaultMessageStore {
     async fn load(&mut self) -> bool {
         let last_exit_ok = !self.is_temp_file_exist();
         info!(
@@ -252,20 +265,16 @@ impl MessageStore for LocalFileMessageStore {
             },
             self.message_store_config.store_path_root_dir
         );
-        /*let handle = Handle::current();
-        let commitlog_inner = self.commit_log.clone();
-        let mut result = std::thread::spawn(move || {
-            handle.block_on(async move { commitlog_inner.lock().await.load() })
-        })
-        .join()
-        .unwrap_or_default();*/
+        //load Commit log
         let mut result = self.commit_log.load();
         if !result {
             return result;
         }
+        // load Consume Queue
+        result &= self.consume_queue_store.load();
 
         if self.message_store_config.enable_compaction {
-            result |= self.compaction_service.load(last_exit_ok);
+            result &= self.compaction_service.load(last_exit_ok);
             if !result {
                 return result;
             }
@@ -275,18 +284,10 @@ impl MessageStore for LocalFileMessageStore {
             self.store_checkpoint = Some(StoreCheckpoint::new(get_store_checkpoint(
                 self.message_store_config.store_path_root_dir.as_str(),
             )));
-            self.master_flushed_offset = Arc::new(parking_lot::Mutex::new(
-                self.store_checkpoint
-                    .as_ref()
-                    .unwrap()
-                    .get_master_flushed_offset(),
-            ));
-            self.set_confirm_offset(
-                self.store_checkpoint
-                    .as_ref()
-                    .unwrap()
-                    .get_confirm_phy_offset(),
-            );
+            let checkpoint = self.store_checkpoint.as_ref().unwrap();
+            self.master_flushed_offset =
+                Arc::new(AtomicI64::new(checkpoint.get_master_flushed_offset()));
+            self.set_confirm_offset(checkpoint.get_confirm_phy_offset());
             result = self.index_service.load(last_exit_ok);
             self.recover(last_exit_ok).await;
             info!(
@@ -318,7 +319,10 @@ impl MessageStore for LocalFileMessageStore {
         -1
     }
 
-    fn set_broker_init_max_offset(&mut self, _broker_init_max_offset: i64) {}
+    fn set_broker_init_max_offset(&mut self, broker_init_max_offset: i64) {
+        self.broker_init_max_offset
+            .store(broker_init_max_offset, Ordering::SeqCst);
+    }
 
     async fn put_message(&mut self, msg: MessageExtBrokerInner) -> PutMessageResult {
         // let guard = self.put_message_hook_list.lock().await;

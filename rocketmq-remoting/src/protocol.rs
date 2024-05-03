@@ -314,6 +314,20 @@ pub trait RemotingSerializable {
     {
         serde_json::to_vec(self).unwrap()
     }
+
+    fn to_json(&self) -> String
+    where
+        Self: Serialize,
+    {
+        serde_json::to_string(self).unwrap()
+    }
+
+    fn to_json_pretty(&self) -> String
+    where
+        Self: Serialize,
+    {
+        serde_json::to_string_pretty(self).unwrap()
+    }
 }
 
 pub trait FastCodesHeader {

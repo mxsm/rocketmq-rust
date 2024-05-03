@@ -219,6 +219,10 @@ impl MappedFileQueue {
         self.mapped_files.to_vec()
     }
 
+    pub fn get_mapped_files_size(&self) -> usize {
+        self.mapped_files.len()
+    }
+
     pub fn set_flushed_where(&mut self, flushed_where: i64) {
         *self.flushed_where.lock() = flushed_where as u64;
     }
