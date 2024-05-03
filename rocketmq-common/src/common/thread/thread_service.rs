@@ -15,5 +15,10 @@
  * limitations under the License.
  */
 
-#[cfg(feature = "local_file_store")]
-pub mod default_message_store;
+pub trait ThreadService: Send + Sync + 'static {
+    fn start(&self);
+
+    fn shutdown(&self);
+
+    fn get_service_name(&self) -> String;
+}

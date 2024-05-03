@@ -31,7 +31,7 @@ use rocketmq_remoting::{
 use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_store::{
     base::store_enum::StoreType, config::message_store_config::MessageStoreConfig,
-    log_file::MessageStore, message_store::local_file_store::LocalFileMessageStore,
+    log_file::MessageStore, message_store::default_message_store::DefaultMessageStore,
     timer::timer_message_store::TimerMessageStore,
 };
 use tracing::{info, warn};
@@ -67,7 +67,7 @@ pub(crate) struct BrokerRuntime {
     consumer_filter_manager: Arc<ConsumerFilterManager>,
     consumer_order_info_manager: Arc<ConsumerOrderInfoManager>,
     #[cfg(feature = "local_file_store")]
-    message_store: Option<LocalFileMessageStore>,
+    message_store: Option<DefaultMessageStore>,
     //message_store: Option<Arc<Mutex<LocalFileMessageStore>>>,
     schedule_message_service: ScheduleMessageService,
     timer_message_store: Option<TimerMessageStore>,
@@ -172,7 +172,7 @@ impl BrokerRuntime {
     async fn initialize_message_store(&mut self) -> bool {
         if self.message_store_config.store_type == StoreType::LocalFile {
             info!("Use local file as message store");
-            let message_store = LocalFileMessageStore::new(
+            let message_store = DefaultMessageStore::new(
                 self.message_store_config.clone(),
                 self.broker_config.clone(),
             );
@@ -220,8 +220,8 @@ impl BrokerRuntime {
 
     fn initialize_resources(&mut self) {}
 
-    fn init_processor(&self) -> BrokerRequestProcessor<LocalFileMessageStore> {
-        let send_message_processor = SendMessageProcessor::<LocalFileMessageStore>::new(
+    fn init_processor(&self) -> BrokerRequestProcessor<DefaultMessageStore> {
+        let send_message_processor = SendMessageProcessor::<DefaultMessageStore>::new(
             self.topic_queue_mapping_manager.clone(),
             self.topic_config_manager.clone(),
             self.broker_config.clone(),

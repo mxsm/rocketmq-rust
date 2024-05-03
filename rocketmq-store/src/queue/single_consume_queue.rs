@@ -21,6 +21,7 @@ use rocketmq_common::common::{
     attribute::cq_type::CQType, boundary_type::BoundaryType,
     message::message_single::MessageExtBrokerInner,
 };
+use tracing::info;
 
 use crate::{
     base::{dispatch_request::DispatchRequest, swappable::Swappable},
@@ -102,10 +103,6 @@ impl ConsumeQueue {
             consume_queue_ext,
         }
     }
-
-    pub fn is_ext_addr(tags_code: i64) -> bool {
-        ConsumeQueueExt::is_ext_addr(tags_code)
-    }
 }
 
 impl ConsumeQueue {
@@ -117,7 +114,7 @@ impl ConsumeQueue {
         self.set_max_physic_offset(phy_offset);
         let mut max_ext_addr = -1i64;
         let mut should_delete_file = false;
-
+        let mapped_file_size = self.mapped_file_size;
         loop {
             let mapped_file_option = self.mapped_file_queue.get_last_mapped_file();
             if mapped_file_option.is_none() {
@@ -128,7 +125,7 @@ impl ConsumeQueue {
             mapped_file.set_committed_position(0);
             mapped_file.set_flushed_position(0);
 
-            for index in 0..(self.mapped_file_size / CQ_STORE_UNIT_SIZE) {
+            for index in 0..(mapped_file_size / CQ_STORE_UNIT_SIZE) {
                 let bytes_option = mapped_file.get_bytes(
                     (index * CQ_STORE_UNIT_SIZE) as usize,
                     CQ_STORE_UNIT_SIZE as usize,
@@ -166,7 +163,7 @@ impl ConsumeQueue {
                     if Self::is_ext_addr(tags_code) {
                         max_ext_addr = tags_code;
                     }
-                    if pos == self.mapped_file_size {
+                    if pos == mapped_file_size {
                         return;
                     }
                 } else {
@@ -193,15 +190,112 @@ impl ConsumeQueue {
     pub fn is_ext_read_enable(&self) -> bool {
         self.consume_queue_ext.is_some()
     }
+    pub fn is_ext_addr(tags_code: i64) -> bool {
+        ConsumeQueueExt::is_ext_addr(tags_code)
+    }
 }
 
 impl FileQueueLifeCycle for ConsumeQueue {
-    fn load(&self) -> bool {
-        todo!()
+    fn load(&mut self) -> bool {
+        let mut result = self.mapped_file_queue.load();
+        info!(
+            "load consume queue {}-{}  {}",
+            self.topic,
+            self.queue_id,
+            if result { "OK" } else { "Failed" }
+        );
+        if self.is_ext_read_enable() {
+            result &= self.consume_queue_ext.as_mut().unwrap().load();
+        }
+        result
     }
 
-    fn recover(&self) {
-        println!("LocalFileConsumeQueue recover")
+    fn recover(&mut self) {
+        let mapped_files = self.mapped_file_queue.get_mapped_files();
+        if mapped_files.is_empty() {
+            return;
+        }
+        let mut index = (mapped_files.len()) as i32 - 1;
+        if index < 0 {
+            index = 0;
+        }
+        let mut index = index as usize;
+        let mapped_file_size_logics = self.mapped_file_size;
+        let mut mapped_file = mapped_files.get(index).unwrap();
+        let mut process_offset = mapped_file.get_file_from_offset();
+        let mut mapped_file_offset = 0i64;
+        let mut max_ext_addr = 1i64;
+        loop {
+            for index in 0..(mapped_file_size_logics / CQ_STORE_UNIT_SIZE) {
+                let bytes_option = mapped_file.get_bytes(
+                    (index * CQ_STORE_UNIT_SIZE) as usize,
+                    CQ_STORE_UNIT_SIZE as usize,
+                );
+                if bytes_option.is_none() {
+                    break;
+                }
+                let mut byte_buffer = bytes_option.unwrap();
+                let offset = byte_buffer.get_i64();
+                let size = byte_buffer.get_i32();
+                let tags_code = byte_buffer.get_i64();
+                if offset >= 0 && size > 0 {
+                    mapped_file_offset =
+                        (index * CQ_STORE_UNIT_SIZE) as i64 + CQ_STORE_UNIT_SIZE as i64;
+                    self.set_max_physic_offset(offset + size as i64);
+                    if Self::is_ext_addr(tags_code) {
+                        max_ext_addr = tags_code;
+                    }
+                } else {
+                    info!(
+                        "recover current consume queue file over,  {}, {} {} {}",
+                        mapped_file.get_file_name(),
+                        offset,
+                        size,
+                        tags_code
+                    );
+                    break;
+                }
+            }
+            if mapped_file_offset == mapped_file_size_logics as i64 {
+                index += 1;
+                if index >= mapped_files.len() {
+                    info!(
+                        "recover last consume queue file over, last mapped file {}",
+                        mapped_file.get_file_name()
+                    );
+                    break;
+                } else {
+                    mapped_file = mapped_files.get(index).unwrap();
+                    process_offset = mapped_file.get_file_from_offset();
+                    mapped_file_offset = 0;
+                    info!(
+                        "recover next consume queue file, {}",
+                        mapped_file.get_file_name()
+                    );
+                }
+            } else {
+                info!(
+                    "recover current consume queue file over, {} {}",
+                    mapped_file.get_file_name(),
+                    process_offset + (mapped_file_offset as u64),
+                );
+                break;
+            }
+        }
+        process_offset += mapped_file_offset as u64;
+        self.mapped_file_queue
+            .set_flushed_where(process_offset as i64);
+        self.mapped_file_queue
+            .set_committed_where(process_offset as i64);
+        self.mapped_file_queue
+            .truncate_dirty_files(process_offset as i64);
+
+        if self.is_ext_read_enable() {
+            let consume_queue_ext = self.consume_queue_ext.as_mut().unwrap();
+            consume_queue_ext.recover();
+            info!("Truncate consume queue extend file by max {}", max_ext_addr);
+            consume_queue_ext.truncate_by_max_address(max_ext_addr);
+        }
     }
 
     fn check_self(&self) {

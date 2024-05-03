@@ -56,12 +56,12 @@ pub trait ConfigManager {
     }
 
     fn persist_with_topic<T>(&mut self, _topic_name: &str, _t: T) {
-        self.persist_all()
+        self.persist()
     }
     fn persist_map<T>(&mut self, _m: &HashMap<String, T>) {
-        self.persist_all()
+        self.persist()
     }
-    fn persist_all(&mut self) {
+    fn persist(&mut self) {
         let json = self.encode_pretty(true);
         if !json.is_empty() {
             let file_name = self.config_file_path();
@@ -73,7 +73,9 @@ pub trait ConfigManager {
     fn decode0(&mut self, key: &[u8], body: &[u8]);
     fn stop(&mut self) -> bool;
     fn config_file_path(&self) -> String;
-    fn encode(&mut self) -> String;
+    fn encode(&mut self) -> String {
+        self.encode_pretty(false)
+    }
     fn encode_pretty(&mut self, pretty_format: bool) -> String;
     fn decode(&self, json_string: &str);
 }

@@ -86,20 +86,6 @@ impl<MS: Clone> Clone for SendMessageProcessor<MS> {
     }
 }
 
-// impl<MS: Default> Default for SendMessageProcessor<MS> {
-//     fn default() -> Self {
-//         let store_host = "127.0.0.1:100".parse::<SocketAddr>().unwrap();
-//         Self {
-//             inner: SendMessageProcessorInner::default(),
-//             topic_queue_mapping_manager: Arc::new(TopicQueueMappingManager::default()),
-//             topic_config_manager: Arc::new(TopicConfigManager::default()),
-//             broker_config: Arc::new(BrokerConfig::default()),
-//             message_store: Default::default(),
-//             store_host,
-//         }
-//     }
-// }
-
 // RequestProcessor implementation
 impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
     pub async fn process_request(

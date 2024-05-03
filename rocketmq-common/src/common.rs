@@ -40,6 +40,7 @@ pub mod mq_version;
 pub mod namesrv;
 pub mod server;
 pub mod sys_flag;
+pub mod thread;
 pub mod topic;
 
 #[derive(Debug, Clone, Default, Eq, PartialEq)]

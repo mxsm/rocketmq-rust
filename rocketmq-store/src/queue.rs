@@ -40,10 +40,10 @@ use crate::{
 pub trait FileQueueLifeCycle: Swappable {
     /// Load from file.
     /// Returns true if loaded successfully.
-    fn load(&self) -> bool;
+    fn load(&mut self) -> bool;
 
     /// Recover from file.
-    fn recover(&self);
+    fn recover(&mut self);
 
     /// Check files.
     fn check_self(&self);
