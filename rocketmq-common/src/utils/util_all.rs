@@ -15,6 +15,8 @@
  * limitations under the License.
  */
 
+use chrono::{Datelike, TimeZone, Timelike, Utc};
+
 const HEX_ARRAY: [char; 16] = [
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F',
 ];
@@ -53,6 +55,33 @@ fn string_to_bytes(hex_string: impl Into<String>) -> Option<Vec<u8>> {
 fn char_to_byte(c: char) -> u8 {
     let hex_chars = "0123456789ABCDEF";
     hex_chars.find(c).unwrap_or(0) as u8
+}
+
+pub fn time_millis_to_human_string2(t: i64) -> String {
+    let dt = Utc.timestamp_millis_opt(t).unwrap();
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02},{:03}",
+        dt.year(),
+        dt.month(),
+        dt.day(),
+        dt.hour(),
+        dt.minute(),
+        dt.second(),
+        dt.timestamp_subsec_millis(),
+    )
+}
+
+pub fn time_millis_to_human_string3(t: i64) -> String {
+    let dt = Utc.timestamp_millis_opt(t).unwrap();
+    format!(
+        "{:04}{:02}{:02}{:02}{:02}{:02}",
+        dt.year(),
+        dt.month(),
+        dt.day(),
+        dt.hour(),
+        dt.minute(),
+        dt.second(),
+    )
 }
 
 pub fn offset_to_file_name(offset: u64) -> String {

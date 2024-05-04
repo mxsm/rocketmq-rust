@@ -29,6 +29,7 @@ use rocketmq_common::{
         mix_all::RETRY_GROUP_TOPIC_PREFIX,
         topic::TopicValidator,
     },
+    utils::util_all,
     CleanupPolicyUtils, MessageDecoder,
 };
 use rocketmq_remoting::{
@@ -51,6 +52,7 @@ use rocketmq_store::{
     base::message_result::PutMessageResult, log_file::MessageStore,
     status::manager::broker_stats_manager::BrokerStatsManager,
 };
+use tracing::debug;
 
 use crate::{
     mqtrace::send_message_context::SendMessageContext,
@@ -67,7 +69,6 @@ where
 {
     inner: SendMessageProcessorInner,
     topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
-    topic_config_manager: Arc<TopicConfigManager>,
     broker_config: Arc<BrokerConfig>,
     message_store: MS,
     store_host: SocketAddr,
@@ -78,7 +79,6 @@ impl<MS: Clone> Clone for SendMessageProcessor<MS> {
         Self {
             inner: self.inner.clone(),
             topic_queue_mapping_manager: self.topic_queue_mapping_manager.clone(),
-            topic_config_manager: self.topic_config_manager.clone(),
             broker_config: self.broker_config.clone(),
             message_store: self.message_store.clone(),
             store_host: self.store_host,
@@ -141,7 +141,7 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
 impl<MS: MessageStore + Send + Clone> SendMessageProcessor<MS> {
     pub fn new(
         topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
-        topic_config_manager: Arc<TopicConfigManager>,
+        topic_config_manager: TopicConfigManager,
         broker_config: Arc<BrokerConfig>,
         message_store: &MS,
     ) -> Self {
@@ -151,9 +151,9 @@ impl<MS: MessageStore + Send + Clone> SendMessageProcessor<MS> {
         Self {
             inner: SendMessageProcessorInner {
                 broker_config: broker_config.clone(),
+                topic_config_manager,
             },
             topic_queue_mapping_manager,
-            topic_config_manager,
             broker_config,
             message_store: message_store.clone(),
             store_host,
@@ -217,6 +217,7 @@ impl<MS: MessageStore + Send + Clone> SendMessageProcessor<MS> {
         }
 
         let mut topic_config = self
+            .inner
             .topic_config_manager
             .select_topic_config(request_header.topic().as_str())
             .unwrap();
@@ -427,8 +428,8 @@ impl<MS: MessageStore + Send + Clone> SendMessageProcessor<MS> {
         }
     }
     pub fn pre_send(
-        &self,
-        ctx: &ConnectionHandlerContext,
+        &mut self,
+        ctx: &ConnectionHandlerContext<'_>,
         request: &RemotingCommand,
         request_header: &SendMessageRequestHeader,
     ) -> RemotingCommand {
@@ -443,12 +444,17 @@ impl<MS: MessageStore + Send + Clone> SendMessageProcessor<MS> {
             self.broker_config.trace_on.to_string(),
         );
 
-        //todo java code to implement
-        /*        if (this.brokerController.getMessageStore().now() < startTimestamp) {
-            response.setCode(ResponseCode.SYSTEM_ERROR);
-            response.setRemark(String.format("broker unable to service, until %s", UtilAll.timeMillisToHumanString2(startTimestamp)));
+        debug!("Receive SendMessage request command: {:?}", request_header);
+        let start_timestamp = self.broker_config.start_accept_send_request_time_stamp;
+        if self.message_store.now() < (start_timestamp as u64) {
+            response = response
+                .set_code(RemotingSysResponseCode::SystemError)
+                .set_remark(Some(format!(
+                    "broker unable to service, until {}",
+                    util_all::time_millis_to_human_string2(start_timestamp)
+                )));
             return response;
-        }*/
+        }
         response = response.set_code(-1);
         self.inner
             .msg_check(ctx, request, request_header, &mut response);

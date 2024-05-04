@@ -45,7 +45,7 @@ impl ConfigManager for ConsumerFilterManager {
         todo!()
     }
 
-    fn encode_pretty(&mut self, pretty_format: bool) -> String {
+    fn encode_pretty(&self, pretty_format: bool) -> String {
         todo!()
     }
 

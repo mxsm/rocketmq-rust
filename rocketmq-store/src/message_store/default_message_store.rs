@@ -75,6 +75,7 @@ pub struct DefaultMessageStore {
     consume_queue_store: ConsumeQueueStore,
     dispatcher: CommitLogDispatcherDefault,
     broker_init_max_offset: Arc<AtomicI64>,
+    state_machine_version: Arc<AtomicI64>,
 }
 
 impl Clone for DefaultMessageStore {
@@ -93,6 +94,7 @@ impl Clone for DefaultMessageStore {
             consume_queue_store: self.consume_queue_store.clone(),
             dispatcher: self.dispatcher.clone(),
             broker_init_max_offset: self.broker_init_max_offset.clone(),
+            state_machine_version: self.state_machine_version.clone(),
         }
     }
 }
@@ -136,6 +138,7 @@ impl DefaultMessageStore {
             consume_queue_store,
             dispatcher,
             broker_init_max_offset: Arc::new(AtomicI64::new(-1)),
+            state_machine_version: Arc::new(AtomicI64::new(0)),
         }
     }
 }
@@ -322,6 +325,10 @@ impl MessageStore for DefaultMessageStore {
     fn set_broker_init_max_offset(&mut self, broker_init_max_offset: i64) {
         self.broker_init_max_offset
             .store(broker_init_max_offset, Ordering::SeqCst);
+    }
+
+    fn get_state_machine_version(&self) -> i64 {
+        self.state_machine_version.load(Ordering::Relaxed)
     }
 
     async fn put_message(&mut self, msg: MessageExtBrokerInner) -> PutMessageResult {

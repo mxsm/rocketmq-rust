@@ -14,33 +14,35 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::{collections::HashMap, error::Error, sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use rocketmq_common::TokioExecutorService;
-use tokio::{runtime::Handle, time, time::timeout};
+use tokio::{runtime::Handle, time};
 use tracing::info;
 
 use crate::{
     clients::{Client, RemotingClient},
+    error::RemotingError,
     protocol::remoting_command::RemotingCommand,
-    remoting::{InvokeCallback, RemotingService},
+    remoting::RemotingService,
     runtime::{config::client_config::TokioClientConfig, processor::RequestProcessor, RPCHook},
 };
 
+#[derive(Clone)]
 pub struct RocketmqDefaultClient {
-    tokio_client_config: TokioClientConfig,
+    tokio_client_config: Arc<TokioClientConfig>,
     //cache connection
     connection_tables:
-        tokio::sync::Mutex<HashMap<String /* ip:port */, Arc<tokio::sync::Mutex<Client>>>>,
-    namesrv_addr_list: Arc<tokio::sync::Mutex<Vec<String>>>,
-    namesrv_addr_choosed: Arc<tokio::sync::Mutex<Option<String>>>,
+        Arc<parking_lot::Mutex<HashMap<String /* ip:port */, Arc<tokio::sync::Mutex<Client>>>>>,
+    namesrv_addr_list: Arc<parking_lot::Mutex<Vec<String>>>,
+    namesrv_addr_choosed: Arc<parking_lot::Mutex<Option<String>>>,
 }
 
 impl RocketmqDefaultClient {
-    pub fn new(tokio_client_config: TokioClientConfig) -> Self {
+    pub fn new(tokio_client_config: Arc<TokioClientConfig>) -> Self {
         Self {
             tokio_client_config,
-            connection_tables: Default::default(),
+            connection_tables: Arc::new(parking_lot::Mutex::new(Default::default())),
             namesrv_addr_list: Arc::new(Default::default()),
             namesrv_addr_choosed: Arc::new(Default::default()),
         }
@@ -48,14 +50,20 @@ impl RocketmqDefaultClient {
 }
 
 impl RocketmqDefaultClient {
-    async fn get_and_create_client(&self, addr: String) -> Arc<tokio::sync::Mutex<Client>> {
-        let mut mutex_guard = self.connection_tables.lock().await;
+    fn get_and_create_client(&self, addr: String) -> Arc<tokio::sync::Mutex<Client>> {
+        let mut mutex_guard = self.connection_tables.lock();
         if mutex_guard.contains_key(&addr) {
             return mutex_guard.get(&addr).unwrap().clone();
         }
 
         let addr_inner = addr.clone();
-        let client = Client::connect(addr_inner).await.unwrap();
+        let handle = Handle::current();
+        let client = std::thread::spawn(move || {
+            handle.block_on(async move { Client::connect(addr_inner).await.unwrap() })
+        })
+        .join()
+        .unwrap();
+        // let client = Client::connect(addr_inner).await.unwrap();
         mutex_guard.insert(addr.clone(), Arc::new(tokio::sync::Mutex::new(client)));
         mutex_guard.get(&addr).unwrap().clone()
     }
@@ -82,8 +90,8 @@ impl RemotingService for RocketmqDefaultClient {
 
 #[allow(unused_variables)]
 impl RemotingClient for RocketmqDefaultClient {
-    async fn update_name_server_address_list(&mut self, addrs: Vec<String>) {
-        let mut old = self.namesrv_addr_list.lock().await;
+    fn update_name_server_address_list(&self, addrs: Vec<String>) {
+        let mut old = self.namesrv_addr_list.lock();
         let mut update = false;
 
         if !addrs.is_empty() {
@@ -110,10 +118,10 @@ impl RemotingClient for RocketmqDefaultClient {
                 old.clone_from(&addrs);
 
                 // should close the channel if choosed addr is not exist.
-                if let Some(namesrv_addr) = self.namesrv_addr_choosed.lock().await.as_ref() {
+                if let Some(namesrv_addr) = self.namesrv_addr_choosed.lock().as_ref() {
                     if !addrs.contains(namesrv_addr) {
                         let mut remove_vec = Vec::new();
-                        let mut result = self.connection_tables.lock().await;
+                        let mut result = self.connection_tables.lock();
                         for (addr, client) in result.iter() {
                             if addr.contains(namesrv_addr) {
                                 remove_vec.push(addr.clone());
@@ -129,30 +137,36 @@ impl RemotingClient for RocketmqDefaultClient {
     }
 
     fn get_name_server_address_list(&self) -> Vec<String> {
-        let cloned = self.namesrv_addr_list.clone();
-        Handle::current().block_on(async move { cloned.lock().await.clone() })
+        /*let cloned = self.namesrv_addr_list.clone();
+        Handle::current().block_on(async move { cloned.lock().await.clone() })*/
+        self.namesrv_addr_list.lock().clone()
     }
 
     fn get_available_name_srv_list(&self) -> Vec<String> {
         vec!["127.0.0.1:9876".to_string()]
     }
 
-    async fn invoke_sync(
+    fn invoke_sync(
         &self,
         addr: String,
         request: RemotingCommand,
         timeout_millis: u64,
     ) -> RemotingCommand {
-        let client = self.get_and_create_client(addr.clone()).await;
-        if let Ok(result) = timeout(Duration::from_millis(timeout_millis), async {
-            client.lock().await.send_read(request).await.unwrap()
+        let client = self.get_and_create_client(addr.clone());
+        let handle = Handle::current();
+        std::thread::spawn(move || {
+            handle.block_on(async move { client.lock().await.send_read(request).await.unwrap() })
         })
-        .await
-        {
+        .join()
+        .unwrap()
+
+        /*if let Ok(result) = timeout(Duration::from_millis(timeout_millis), async {
+            client.lock().await.send_read(request).await.unwrap()
+        }) {
             result
         } else {
             RemotingCommand::create_response_command()
-        }
+        }*/
     }
 
     async fn invoke_async(
@@ -160,18 +174,28 @@ impl RemotingClient for RocketmqDefaultClient {
         addr: String,
         request: RemotingCommand,
         timeout_millis: u64,
-        invoke_callback: impl InvokeCallback,
-    ) -> Result<(), Box<dyn Error>> {
-        let client = self.get_and_create_client(addr.clone()).await;
-        if let Ok(resp) = time::timeout(Duration::from_millis(timeout_millis), async {
+    ) -> Result<RemotingCommand, RemotingError> {
+        let client = self.get_and_create_client(addr.clone());
+        /*if let Ok(resp) = time::timeout(Duration::from_millis(timeout_millis), async {
             client.lock().await.send_read(request).await.unwrap()
+        })
+        .await*/
+
+        match tokio::spawn(async move {
+            match time::timeout(Duration::from_millis(timeout_millis), async move {
+                client.lock().await.send_read(request).await.unwrap()
+            })
+            .await
+            {
+                Ok(result) => Ok(result),
+                Err(err) => Err(RemotingError::RemoteException(err.to_string())),
+            }
         })
         .await
         {
-            invoke_callback.operation_succeed(resp)
+            Ok(result) => result,
+            Err(err) => Err(RemotingError::RemoteException(err.to_string())),
         }
-
-        Ok(())
     }
 
     async fn invoke_oneway(
@@ -179,12 +203,23 @@ impl RemotingClient for RocketmqDefaultClient {
         addr: String,
         request: RemotingCommand,
         timeout_millis: u64,
-    ) -> Result<(), Box<dyn Error>> {
-        let client = self.get_and_create_client(addr.clone()).await;
-        let _ = time::timeout(Duration::from_millis(timeout_millis), async move {
+    ) -> Result<(), RemotingError> {
+        let client = self.get_and_create_client(addr.clone());
+        /*        let _ = time::timeout(Duration::from_millis(timeout_millis), async move {
             client.lock().await.send(request).await.unwrap()
         })
-        .await;
+        .await;*/
+
+        tokio::spawn(async move {
+            match time::timeout(Duration::from_millis(timeout_millis), async move {
+                client.lock().await.send(request).await.unwrap()
+            })
+            .await
+            {
+                Ok(_) => Ok(()),
+                Err(err) => Err(RemotingError::RemoteException(err.to_string())),
+            }
+        });
         Ok(())
     }
 

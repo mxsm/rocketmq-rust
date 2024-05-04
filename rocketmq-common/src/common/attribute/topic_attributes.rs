@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use lazy_static::lazy_static;
 
 use crate::{
@@ -32,17 +34,20 @@ lazy_static! {
         universe: hashset! {String::from("BatchCQ"), String::from("SimpleCQ")},
         default_value: String::from("SimpleCQ"),
     };
-/*    pub static ref ALL: HashMap<&'static str, EnumAttribute> = {
-        let mut map = HashMap::<&'static str, EnumAttribute>::new();
-        map.insert(QUEUE_TYPE_ATTRIBUTE.get_name(), QUEUE_TYPE_ATTRIBUTE);
+    pub static ref ALL: HashMap<String, EnumAttribute> = {
+        let mut map = HashMap::<String, EnumAttribute>::new();
         map.insert(
-            CLEANUP_POLICY_ATTRIBUTE.get_name(),
-            CLEANUP_POLICY_ATTRIBUTE,
+            QUEUE_TYPE_ATTRIBUTE.get_name().to_string(),
+            QUEUE_TYPE_ATTRIBUTE.clone(),
         );
         map.insert(
-            TOPIC_MESSAGE_TYPE_ATTRIBUTE.get_name(),
-            TOPIC_MESSAGE_TYPE_ATTRIBUTE,
+            CLEANUP_POLICY_ATTRIBUTE.get_name().to_string(),
+            CLEANUP_POLICY_ATTRIBUTE.clone(),
+        );
+        map.insert(
+            TOPIC_MESSAGE_TYPE_ATTRIBUTE.get_name().to_string(),
+            TOPIC_MESSAGE_TYPE_ATTRIBUTE.clone(),
         );
         map
-    };*/
+    };
 }

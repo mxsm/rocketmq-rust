@@ -111,6 +111,9 @@ pub struct BrokerConfig {
     pub commercial_size_per_msg: i32,
     pub recover_concurrently: bool,
     pub duplication_enable: bool,
+    pub start_accept_send_request_time_stamp: i64,
+    pub auto_create_topic_enable: bool,
+    pub enable_single_topic_register: bool,
 }
 
 impl Default for BrokerConfig {
@@ -150,6 +153,9 @@ impl Default for BrokerConfig {
             commercial_size_per_msg: 4 * 1024,
             recover_concurrently: false,
             duplication_enable: false,
+            start_accept_send_request_time_stamp: 0,
+            auto_create_topic_enable: true,
+            enable_single_topic_register: false,
         }
     }
 }

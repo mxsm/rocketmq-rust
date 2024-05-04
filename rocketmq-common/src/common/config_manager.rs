@@ -61,7 +61,7 @@ pub trait ConfigManager {
     fn persist_map<T>(&mut self, _m: &HashMap<String, T>) {
         self.persist()
     }
-    fn persist(&mut self) {
+    fn persist(&self) {
         let json = self.encode_pretty(true);
         if !json.is_empty() {
             let file_name = self.config_file_path();
@@ -76,6 +76,6 @@ pub trait ConfigManager {
     fn encode(&mut self) -> String {
         self.encode_pretty(false)
     }
-    fn encode_pretty(&mut self, pretty_format: bool) -> String;
+    fn encode_pretty(&self, pretty_format: bool) -> String;
     fn decode(&self, json_string: &str);
 }

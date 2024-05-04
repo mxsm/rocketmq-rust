@@ -19,7 +19,10 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::protocol::command_custom_header::{CommandCustomHeader, FromMap};
+use crate::{
+    protocol::command_custom_header::{CommandCustomHeader, FromMap},
+    rpc::rpc_request_header::RpcRequestHeader,
+};
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -60,9 +63,12 @@ impl FromMap for DeleteTopicFromNamesrvRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RegisterTopicRequestHeader {
     pub topic: String,
+    #[serde(flatten)]
+    pub topic_request: Option<TopicRequestHeader>,
 }
 
 impl RegisterTopicRequestHeader {
@@ -70,13 +76,19 @@ impl RegisterTopicRequestHeader {
     pub fn new(topic: impl Into<String>) -> Self {
         Self {
             topic: topic.into(),
+            topic_request: None,
         }
     }
 }
 
 impl CommandCustomHeader for RegisterTopicRequestHeader {
     fn to_map(&self) -> Option<HashMap<String, String>> {
-        let map = HashMap::from([(Self::TOPIC.to_string(), self.topic.clone())]);
+        let mut map = HashMap::from([(Self::TOPIC.to_string(), self.topic.clone())]);
+        if let Some(ref request) = self.topic_request {
+            if let Some(val) = request.to_map() {
+                map.extend(val);
+            }
+        }
         Some(map)
     }
 }
@@ -86,6 +98,7 @@ impl FromMap for RegisterTopicRequestHeader {
     fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
         Some(RegisterTopicRequestHeader {
             topic: map.get(Self::TOPIC).cloned().unwrap_or_default(),
+            topic_request: <TopicRequestHeader as FromMap>::from(map),
         })
     }
 }
@@ -117,6 +130,44 @@ impl FromMap for GetTopicsByClusterRequestHeader {
     fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
         Some(GetTopicsByClusterRequestHeader {
             cluster: map.get(Self::CLUSTER).cloned().unwrap_or_default(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopicRequestHeader {
+    pub lo: Option<bool>,
+    #[serde(flatten)]
+    pub rpc: Option<RpcRequestHeader>,
+}
+
+impl TopicRequestHeader {
+    const LO: &'static str = "lo";
+}
+
+impl CommandCustomHeader for TopicRequestHeader {
+    fn to_map(&self) -> Option<HashMap<String, String>> {
+        let mut map = HashMap::new();
+        if let Some(lo) = self.lo {
+            map.insert(Self::LO.to_string(), lo.to_string());
+        }
+        if let Some(ref rpc) = self.rpc {
+            if let Some(rpc_map) = rpc.to_map() {
+                map.extend(rpc_map);
+            }
+        }
+        Some(map)
+    }
+}
+
+impl FromMap for TopicRequestHeader {
+    type Target = Self;
+
+    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+        Some(TopicRequestHeader {
+            lo: map.get(Self::LO).and_then(|s| s.parse::<bool>().ok()),
+            rpc: <RpcRequestHeader as FromMap>::from(map),
         })
     }
 }

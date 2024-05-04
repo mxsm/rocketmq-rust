@@ -15,11 +15,15 @@
  * limitations under the License.
  */
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
-use rocketmq_common::common::{
-    broker::broker_config::BrokerConfig, config::TopicConfig, config_manager::ConfigManager,
-    constant::PermName, mix_all, topic::TopicValidator,
+use rocketmq_common::{
+    common::{
+        attribute::attribute_util::alter_current_attributes, broker::broker_config::BrokerConfig,
+        config::TopicConfig, config_manager::ConfigManager, constant::PermName, mix_all,
+        topic::TopicValidator,
+    },
+    TopicAttributes::ALL,
 };
 use rocketmq_remoting::protocol::{
     body::topic_info_wrapper::{
@@ -28,25 +32,48 @@ use rocketmq_remoting::protocol::{
     static_topic::topic_queue_info::TopicQueueMappingInfo,
     DataVersion, RemotingSerializable,
 };
-use tracing::info;
+use rocketmq_store::{
+    log_file::MessageStore, message_store::default_message_store::DefaultMessageStore,
+};
+use tokio::runtime::Handle;
+use tracing::{info, warn};
 
-use crate::broker_path_config_helper::get_topic_config_path;
+use crate::{broker_path_config_helper::get_topic_config_path, broker_runtime::BrokerRuntimeInner};
 
-#[derive(Default)]
 pub(crate) struct TopicConfigManager {
-    pub consumer_order_info_manager: String,
-    pub topic_config_table: parking_lot::Mutex<HashMap<String, TopicConfig>>,
-    pub data_version: parking_lot::Mutex<DataVersion>,
-    pub broker_config: Arc<BrokerConfig>,
+    pub topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
+    data_version: Arc<parking_lot::Mutex<DataVersion>>,
+    broker_config: Arc<BrokerConfig>,
+    pub message_store: Option<DefaultMessageStore>,
+    topic_config_table_lock: Arc<parking_lot::ReentrantMutex<()>>,
+    broker_runtime_inner: Arc<BrokerRuntimeInner>,
+}
+
+impl Clone for TopicConfigManager {
+    fn clone(&self) -> Self {
+        Self {
+            topic_config_table: self.topic_config_table.clone(),
+            data_version: self.data_version.clone(),
+            broker_config: self.broker_config.clone(),
+            message_store: self.message_store.clone(),
+            topic_config_table_lock: self.topic_config_table_lock.clone(),
+            broker_runtime_inner: self.broker_runtime_inner.clone(),
+        }
+    }
 }
 
 impl TopicConfigManager {
-    pub fn new(broker_config: Arc<BrokerConfig>) -> Self {
+    pub fn new(
+        broker_config: Arc<BrokerConfig>,
+        broker_runtime_inner: Arc<BrokerRuntimeInner>,
+    ) -> Self {
         let mut manager = Self {
-            consumer_order_info_manager: "".to_string(),
-            topic_config_table: parking_lot::Mutex::new(HashMap::new()),
-            data_version: parking_lot::Mutex::new(DataVersion::default()),
+            topic_config_table: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            data_version: Arc::new(parking_lot::Mutex::new(DataVersion::default())),
             broker_config,
+            message_store: None,
+            topic_config_table_lock: Default::default(),
+            broker_runtime_inner,
         };
         manager.init();
         manager
@@ -209,6 +236,227 @@ impl TopicConfigManager {
             ..TopicConfigAndMappingSerializeWrapper::default()
         }
     }
+
+    pub fn is_order_topic(&self, topic: &str) -> bool {
+        match self.get_topic_config(topic) {
+            None => false,
+            Some(value) => value.order,
+        }
+    }
+
+    fn get_topic_config(&self, topic_name: &str) -> Option<TopicConfig> {
+        self.topic_config_table.lock().get(topic_name).cloned()
+    }
+
+    pub(crate) fn put_topic_config(&self, topic_config: TopicConfig) -> Option<TopicConfig> {
+        self.topic_config_table
+            .lock()
+            .insert(topic_config.topic_name.clone(), topic_config)
+    }
+
+    pub fn create_topic_in_send_message_method(
+        &mut self,
+        topic: &str,
+        default_topic: &str,
+        remote_address: SocketAddr,
+        client_default_topic_queue_nums: i32,
+        topic_sys_flag: u32,
+    ) -> Option<TopicConfig> {
+        let mut create_new = false;
+        let lock = self
+            .topic_config_table_lock
+            .try_lock_for(Duration::from_secs(3));
+        let topic_config = if lock.is_some() {
+            let mut topic_config = self.get_topic_config(topic);
+            if topic_config.is_some() {
+                return topic_config;
+            }
+            let mut default_topic_config = self.get_topic_config(default_topic);
+            let topic_config = if default_topic_config.is_some() {
+                //default topic
+                if default_topic == TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC
+                    && self.broker_config.auto_create_topic_enable
+                {
+                    default_topic_config.as_mut().unwrap().perm =
+                        (PermName::PERM_READ | PermName::PERM_WRITE) as u32;
+                }
+
+                if PermName::is_inherit(default_topic_config.as_ref().unwrap().perm as i8) {
+                    topic_config = Some(TopicConfig::new(topic));
+                    let mut queue_nums = client_default_topic_queue_nums
+                        .min(default_topic_config.as_ref().unwrap().write_queue_nums as i32);
+                    if queue_nums < 0 {
+                        queue_nums = 0;
+                    }
+                    let ref_topic_config = topic_config.as_mut().unwrap();
+                    ref_topic_config.write_queue_nums = queue_nums as u32;
+                    ref_topic_config.read_queue_nums = queue_nums as u32;
+                    let mut perm = default_topic_config.as_ref().unwrap().perm;
+                    perm &= !(PermName::PERM_INHERIT as u32);
+                    ref_topic_config.perm = perm;
+                    ref_topic_config.topic_sys_flag = topic_sys_flag;
+                    ref_topic_config.topic_filter_type =
+                        default_topic_config.as_ref().unwrap().topic_filter_type
+                } else {
+                    warn!(
+                        "Create new topic failed, because the default topic[{}] has no perm [{}] \
+                         producer:[{}]",
+                        default_topic,
+                        default_topic_config.as_ref().unwrap().perm,
+                        remote_address
+                    );
+                }
+
+                if topic_config.is_some() {
+                    info!(
+                        "Create new topic by default topic:[{}] config:[{:?}] producer:[{}]",
+                        default_topic,
+                        topic_config.as_ref().unwrap(),
+                        remote_address
+                    );
+                    let _ = self.put_topic_config(topic_config.clone().unwrap());
+                    self.data_version.lock().next_version_with(
+                        self.message_store
+                            .as_ref()
+                            .unwrap()
+                            .get_state_machine_version(),
+                    );
+                    create_new = true;
+                    self.persist();
+                }
+                topic_config
+            } else {
+                None
+            };
+            topic_config
+        } else {
+            None
+        };
+        drop(lock);
+        if create_new {
+            self.register_broker_data(topic_config.as_ref().unwrap());
+        }
+
+        topic_config
+    }
+
+    pub fn create_topic_in_send_message_back_method(
+        &mut self,
+        topic: &str,
+        client_default_topic_queue_nums: i32,
+        perm: i8,
+        is_order: bool,
+        topic_sys_flag: u32,
+    ) -> Option<TopicConfig> {
+        let mut topic_config = self.get_topic_config(topic);
+        if let Some(ref mut config) = topic_config {
+            if is_order != config.order {
+                config.order = is_order;
+                self.update_topic_config(config);
+            }
+            return topic_config;
+        }
+        let mut create_new = false;
+
+        let lock = self
+            .topic_config_table_lock
+            .try_lock_for(Duration::from_secs(3));
+        let topic_config_result = if lock.is_some() {
+            topic_config = self.get_topic_config(topic);
+            if topic_config.is_some() {
+                return topic_config;
+            }
+            topic_config = Some(TopicConfig::new(topic));
+            if let Some(ref mut config) = topic_config {
+                config.read_queue_nums = client_default_topic_queue_nums as u32;
+                config.write_queue_nums = client_default_topic_queue_nums as u32;
+                config.perm = perm as u32;
+                config.topic_sys_flag = topic_sys_flag;
+                config.order = is_order;
+                info!("create new topic {:?}", config);
+                self.put_topic_config(config.clone());
+                create_new = true;
+                self.data_version.lock().next_version_with(
+                    self.message_store
+                        .as_ref()
+                        .unwrap()
+                        .get_state_machine_version(),
+                );
+                self.persist();
+            }
+            topic_config
+        } else {
+            None
+        };
+        drop(lock);
+        if create_new {
+            self.register_broker_data(topic_config_result.as_ref().unwrap());
+        }
+
+        topic_config_result
+    }
+
+    fn register_broker_data(&mut self, topic_config: &TopicConfig) {
+        let broker_config = self.broker_config.clone();
+        let broker_runtime_inner = self.broker_runtime_inner.clone();
+        let topic_config_inner = topic_config.clone();
+        let handle = Handle::current();
+        std::thread::spawn(move || {
+            handle.block_on(async move {
+                if broker_config.enable_single_topic_register {
+                    broker_runtime_inner
+                        .register_single_topic_all(topic_config_inner)
+                        .await;
+                } else {
+                    unimplemented!()
+                }
+            });
+        });
+    }
+
+    pub fn update_topic_config(&mut self, topic_config: &mut TopicConfig) {
+        let new_attributes = Self::request(topic_config);
+        let current_attributes = self.current(topic_config.topic_name.as_str());
+        let create = self
+            .topic_config_table
+            .lock()
+            .get(topic_config.topic_name.as_str())
+            .is_none();
+        let final_attributes =
+            alter_current_attributes(create, ALL.clone(), new_attributes, current_attributes);
+        topic_config.attributes = final_attributes;
+        match self.put_topic_config(topic_config.clone()) {
+            None => {
+                info!("create new topic [{:?}]", topic_config)
+            }
+            Some(ref old) => {
+                info!(
+                    "update topic config, old:[{:?}] new:[{:?}]",
+                    old, topic_config
+                );
+            }
+        }
+
+        self.data_version.lock().next_version_with(
+            self.message_store
+                .as_ref()
+                .unwrap()
+                .get_state_machine_version(),
+        );
+        self.persist_with_topic(topic_config.topic_name.as_str(), topic_config.clone());
+    }
+
+    fn request(topic_config: &TopicConfig) -> HashMap<String, String> {
+        topic_config.attributes.clone()
+    }
+
+    fn current(&self, topic: &str) -> HashMap<String, String> {
+        let topic_config = self.get_topic_config(topic);
+        match topic_config {
+            None => HashMap::new(),
+            Some(config) => config.attributes.clone(),
+        }
+    }
 }
 
 //Fully implemented will be removed
@@ -230,7 +478,7 @@ impl ConfigManager for TopicConfigManager {
         todo!()
     }
 
-    fn encode_pretty(&mut self, pretty_format: bool) -> String {
+    fn encode_pretty(&self, pretty_format: bool) -> String {
         let topic_config_table = self.topic_config_table.lock().clone();
         let version = self.data_version.lock().clone();
         match pretty_format {
