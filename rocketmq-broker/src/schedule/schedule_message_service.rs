@@ -42,7 +42,7 @@ impl ConfigManager for ScheduleMessageService {
         todo!()
     }
 
-    fn encode_pretty(&mut self, _pretty_format: bool) -> String {
+    fn encode_pretty(&self, _pretty_format: bool) -> String {
         todo!()
     }
 

@@ -16,12 +16,27 @@
  */
 use std::collections::HashSet;
 
-use crate::common::attribute::Attribute;
+use crate::common::attribute::{Attribute, AttributeTrait};
 
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct EnumAttribute {
     pub(crate) attribute: Attribute,
     pub(crate) universe: HashSet<String>,
     pub(crate) default_value: String,
+}
+
+impl AttributeTrait for EnumAttribute {
+    fn name(&self) -> String {
+        self.attribute.name.clone()
+    }
+
+    fn changeable(&self) -> bool {
+        self.attribute.changeable
+    }
+
+    fn verify(&self, _value: &str) {
+        todo!()
+    }
 }
 
 impl EnumAttribute {

@@ -40,6 +40,13 @@ pub(crate) struct TopicQueueMappingManager {
 }
 
 impl TopicQueueMappingManager {
+    pub(crate) fn new(broker_config: Arc<BrokerConfig>) -> Self {
+        Self {
+            broker_config,
+            ..Default::default()
+        }
+    }
+
     pub(crate) fn build_topic_queue_mapping_context(
         &self,
         request_header: &impl TopicRequestHeaderTrait,
@@ -165,6 +172,10 @@ impl TopicQueueMappingManager {
         //TODO
         None
     }
+
+    pub fn get_topic_queue_mapping(&self, topic: &str) -> Option<TopicQueueMappingDetail> {
+        self.topic_queue_mapping_table.lock().get(topic).cloned()
+    }
 }
 
 //Fully implemented will be removed
@@ -186,7 +197,7 @@ impl ConfigManager for TopicQueueMappingManager {
         todo!()
     }
 
-    fn encode_pretty(&mut self, pretty_format: bool) -> String {
+    fn encode_pretty(&self, pretty_format: bool) -> String {
         todo!()
     }
 

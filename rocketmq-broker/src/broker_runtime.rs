@@ -24,7 +24,7 @@ use rocketmq_common::common::{
 use rocketmq_remoting::{
     protocol::{
         body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper,
-        static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail,
+        static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail, DataVersion,
     },
     runtime::{config::client_config::TokioClientConfig, server::RocketMQServer},
 };
@@ -60,7 +60,7 @@ pub(crate) struct BrokerRuntime {
     broker_config: Arc<BrokerConfig>,
     message_store_config: Arc<MessageStoreConfig>,
     server_config: Arc<ServerConfig>,
-    topic_config_manager: Arc<TopicConfigManager>,
+    topic_config_manager: TopicConfigManager,
     topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
     consumer_offset_manager: Arc<ConsumerOffsetManager>,
     subscription_group_manager: Arc<SubscriptionGroupManager>,
@@ -106,13 +106,31 @@ impl BrokerRuntime {
         message_store_config: MessageStoreConfig,
         server_config: ServerConfig,
     ) -> Self {
+        let broker_config = Arc::new(broker_config);
         let runtime = RocketMQRuntime::new_multi(10, "broker-thread");
+        let broker_outer_api =
+            Arc::new(BrokerOuterAPI::new(Arc::new(TokioClientConfig::default())));
+        let server_config = Arc::new(server_config);
+        let message_store_config = Arc::new(message_store_config);
+        let topic_queue_mapping_manager =
+            Arc::new(TopicQueueMappingManager::new(broker_config.clone()));
+        let broker_runtime_inner = Arc::new(BrokerRuntimeInner {
+            broker_out_api: broker_outer_api.clone(),
+            broker_config: broker_config.clone(),
+            message_store_config: message_store_config.clone(),
+            server_config: server_config.clone(),
+            topic_queue_mapping_manager: topic_queue_mapping_manager.clone(),
+        });
+
         Self {
-            broker_config: Arc::new(broker_config),
-            message_store_config: Arc::new(message_store_config),
-            server_config: Arc::new(server_config),
-            topic_config_manager: Arc::new(Default::default()),
-            topic_queue_mapping_manager: Arc::new(Default::default()),
+            broker_config: broker_config.clone(),
+            message_store_config,
+            server_config,
+            topic_config_manager: TopicConfigManager::new(
+                broker_config.clone(),
+                broker_runtime_inner,
+            ),
+            topic_queue_mapping_manager,
             consumer_offset_manager: Arc::new(Default::default()),
             subscription_group_manager: Arc::new(Default::default()),
             consumer_filter_manager: Arc::new(Default::default()),
@@ -120,7 +138,7 @@ impl BrokerRuntime {
             message_store: None,
             schedule_message_service: Default::default(),
             timer_message_store: None,
-            broker_out_api: Arc::new(BrokerOuterAPI::new(TokioClientConfig::default())),
+            broker_out_api: broker_outer_api,
             broker_runtime: Some(runtime),
             producer_manager: Arc::new(ProducerManager::new()),
         }
@@ -176,6 +194,7 @@ impl BrokerRuntime {
                 self.message_store_config.clone(),
                 self.broker_config.clone(),
             );
+            self.topic_config_manager.message_store = Some(message_store.clone());
             self.message_store = Some(message_store);
         } else if self.message_store_config.store_type == StoreType::RocksDB {
             info!("Use RocksDB as message store");
@@ -377,6 +396,118 @@ impl BrokerRuntime {
 
     async fn do_register_broker_all(
         &mut self,
+        _check_order_config: bool,
+        oneway: bool,
+        topic_config_wrapper: TopicConfigAndMappingSerializeWrapper,
+    ) {
+        let cluster_name = self
+            .broker_config
+            .broker_identity
+            .broker_cluster_name
+            .clone();
+        let broker_name = self.broker_config.broker_identity.broker_name.clone();
+        let broker_addr = format!(
+            "{}:{}",
+            self.broker_config.broker_ip1, self.server_config.listen_port
+        );
+        let broker_id = self.broker_config.broker_identity.broker_id;
+        self.broker_out_api
+            .register_broker_all(
+                cluster_name,
+                broker_addr.clone(),
+                broker_name,
+                broker_id,
+                broker_addr,
+                topic_config_wrapper,
+                vec![],
+                oneway,
+                10000,
+                false,
+                false,
+                None,
+                Default::default(),
+            )
+            .await;
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct BrokerRuntimeInner {
+    pub(crate) broker_out_api: Arc<BrokerOuterAPI>,
+    pub(crate) broker_config: Arc<BrokerConfig>,
+    pub(crate) message_store_config: Arc<MessageStoreConfig>,
+    pub(crate) server_config: Arc<ServerConfig>,
+    pub(crate) topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
+}
+
+impl BrokerRuntimeInner {
+    pub async fn register_single_topic_all(&self, topic_config: TopicConfig) {
+        let mut topic_config = topic_config;
+        if !PermName::is_writeable(self.broker_config.broker_permission)
+            || !PermName::is_readable(self.broker_config.broker_permission)
+        {
+            topic_config.perm &= self.broker_config.broker_permission as u32;
+        }
+        self.broker_out_api
+            .register_single_topic_all(
+                self.broker_config
+                    .broker_identity
+                    .broker_cluster_name
+                    .clone(),
+                topic_config,
+                3000,
+            )
+            .await;
+    }
+
+    pub async fn register_increment_broker_data(
+        &self,
+        topic_config_list: Vec<TopicConfig>,
+        data_version: DataVersion,
+    ) {
+        let mut serialize_wrapper = TopicConfigAndMappingSerializeWrapper {
+            data_version: Some(data_version),
+            ..Default::default()
+        };
+
+        let mut topic_config_table = HashMap::new();
+        for topic_config in topic_config_list.iter() {
+            let register_topic_config =
+                if !PermName::is_writeable(self.broker_config.broker_permission)
+                    || !PermName::is_readable(self.broker_config.broker_permission)
+                {
+                    TopicConfig {
+                        perm: topic_config.perm & self.broker_config.broker_permission as u32,
+                        ..topic_config.clone()
+                    }
+                } else {
+                    topic_config.clone()
+                };
+            topic_config_table.insert(
+                register_topic_config.topic_name.clone(),
+                register_topic_config,
+            );
+        }
+        serialize_wrapper.topic_config_table = Some(topic_config_table);
+        let mut topic_queue_mapping_info_map = HashMap::new();
+        for topic_config in topic_config_list {
+            if let Some(ref value) = self
+                .topic_queue_mapping_manager
+                .get_topic_queue_mapping(topic_config.topic_name.as_str())
+            {
+                topic_queue_mapping_info_map.insert(
+                    topic_config.topic_name.clone(),
+                    TopicQueueMappingDetail::clone_as_mapping_info(value),
+                );
+            }
+        }
+        serialize_wrapper.topic_queue_mapping_info_map = topic_queue_mapping_info_map;
+        self.do_register_broker_all(true, false, serialize_wrapper)
+            .await;
+    }
+
+    async fn do_register_broker_all(
+        &self,
         _check_order_config: bool,
         oneway: bool,
         topic_config_wrapper: TopicConfigAndMappingSerializeWrapper,

@@ -24,9 +24,10 @@ use std::{
 
 pub use blocking_client::BlockingClient;
 pub use client::Client;
-use rocketmq_common::{common::future::CompletableFuture, TokioExecutorService};
+use rocketmq_common::TokioExecutorService;
 
 use crate::{
+    error::RemotingError,
     net::ResponseFuture,
     protocol::remoting_command::RemotingCommand,
     remoting::{InvokeCallback, RemotingService},
@@ -81,13 +82,13 @@ impl RemoteClient {
 
 #[allow(async_fn_in_trait)]
 pub trait RemotingClient: RemotingService {
-    async fn update_name_server_address_list(&mut self, addrs: Vec<String>);
+    fn update_name_server_address_list(&self, addrs: Vec<String>);
 
     fn get_name_server_address_list(&self) -> Vec<String>;
 
     fn get_available_name_srv_list(&self) -> Vec<String>;
 
-    async fn invoke_sync(
+    fn invoke_sync(
         &self,
         addr: String,
         request: RemotingCommand,
@@ -99,22 +100,22 @@ pub trait RemotingClient: RemotingService {
         addr: String,
         request: RemotingCommand,
         timeout_millis: u64,
-        invoke_callback: impl InvokeCallback,
-    ) -> Result<(), Box<dyn std::error::Error>>;
+        //invoke_callback: impl InvokeCallback,
+    ) -> Result<RemotingCommand, RemotingError>;
 
     async fn invoke_oneway(
         &self,
         addr: String,
         request: RemotingCommand,
         timeout_millis: u64,
-    ) -> Result<(), Box<dyn std::error::Error>>;
+    ) -> Result<(), RemotingError>;
 
-    async fn invoke(
+    /*    async fn invoke(
         &mut self,
         addr: String,
         request: RemotingCommand,
         timeout_millis: u64,
-    ) -> Result<CompletableFuture<RemotingCommand>, Box<dyn std::error::Error>> {
+    ) -> Result<RemotingCommand, Box<dyn std::error::Error>> {
         let completable_future = CompletableFuture::new();
         let sender = completable_future.get_sender();
         match self
@@ -136,7 +137,7 @@ pub trait RemotingClient: RemotingService {
             Ok(_) => Ok(completable_future),
             Err(err) => Err(err),
         }
-    }
+    }*/
 
     fn register_processor(
         &mut self,

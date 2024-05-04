@@ -15,11 +15,19 @@
  * limitations under the License.
  */
 pub mod attribute_enum;
+pub mod attribute_util;
 pub mod cleanup_policy;
 pub mod cq_type;
 pub mod topic_attributes;
 pub mod topic_message_type;
 
+pub trait AttributeTrait {
+    fn name(&self) -> String;
+    fn changeable(&self) -> bool;
+    fn verify(&self, value: &str);
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Attribute {
     pub(crate) name: String,
     pub(crate) changeable: bool,

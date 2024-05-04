@@ -1,15 +1,3 @@
-use std::collections::HashMap;
-
-use serde::{Deserialize, Serialize};
-
-use super::TopicFilterType;
-use crate::common::constant::PermName;
-
-const SEPARATOR: &str = " ";
-const DEFAULT_READ_QUEUE_NUMS: u32 = 16;
-const DEFAULT_WRITE_QUEUE_NUMS: u32 = 16;
-
-#[derive(Debug)]
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
@@ -26,7 +14,19 @@ const DEFAULT_WRITE_QUEUE_NUMS: u32 = 16;
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#[derive(Clone, Serialize, Deserialize)]
+
+use std::collections::HashMap;
+
+use serde::{Deserialize, Serialize};
+
+use super::TopicFilterType;
+use crate::common::constant::PermName;
+
+const SEPARATOR: &str = " ";
+const DEFAULT_READ_QUEUE_NUMS: u32 = 16;
+const DEFAULT_WRITE_QUEUE_NUMS: u32 = 16;
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct TopicConfig {
     #[serde(rename = "topicName")]
     pub topic_name: String,

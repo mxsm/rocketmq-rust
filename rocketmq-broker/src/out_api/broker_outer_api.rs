@@ -14,8 +14,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::sync::Arc;
+
 use rocketmq_common::{
-    common::broker::broker_config::BrokerIdentity, utils::crc32_utils, TokioExecutorService,
+    common::{broker::broker_config::BrokerIdentity, config::TopicConfig},
+    utils::crc32_utils,
 };
 use rocketmq_remoting::{
     clients::{rocketmq_default_impl::RocketmqDefaultClient, RemotingClient},
@@ -25,32 +28,36 @@ use rocketmq_remoting::{
             broker_body::register_broker_body::RegisterBrokerBody,
             topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper,
         },
-        header::namesrv::register_broker_header::RegisterBrokerRequestHeader,
+        header::namesrv::{
+            register_broker_header::RegisterBrokerRequestHeader,
+            topic_operation_header::RegisterTopicRequestHeader,
+        },
         namesrv::RegisterBrokerResult,
         remoting_command::RemotingCommand,
+        route::route_data_view::{QueueData, TopicRouteData},
+        RemotingSerializable,
     },
     remoting::RemotingService,
     runtime::{config::client_config::TokioClientConfig, RPCHook},
 };
 
+#[derive(Clone)]
 pub struct BrokerOuterAPI {
     remoting_client: RocketmqDefaultClient,
     name_server_address: Option<String>,
-    broker_outer_executor: Option<TokioExecutorService>,
 }
 
 impl BrokerOuterAPI {
-    pub fn new(tokio_client_config: TokioClientConfig) -> Self {
+    pub fn new(tokio_client_config: Arc<TokioClientConfig>) -> Self {
         let client = RocketmqDefaultClient::new(tokio_client_config);
         Self {
             remoting_client: client,
             name_server_address: None,
-            broker_outer_executor: Default::default(),
         }
     }
 
     pub fn new_with_hook(
-        tokio_client_config: TokioClientConfig,
+        tokio_client_config: Arc<TokioClientConfig>,
         rpc_hook: Option<impl RPCHook>,
     ) -> Self {
         let mut client = RocketmqDefaultClient::new(tokio_client_config);
@@ -60,20 +67,18 @@ impl BrokerOuterAPI {
         Self {
             remoting_client: client,
             name_server_address: None,
-            broker_outer_executor: Default::default(),
         }
     }
 }
 
 impl BrokerOuterAPI {
-    pub async fn update_name_server_address_list(&mut self, addrs: String) {
+    pub fn update_name_server_address_list(&self, addrs: String) {
         let addr_vec = addrs
             .split("';'")
             .map(|s| s.to_string())
             .collect::<Vec<String>>();
         self.remoting_client
             .update_name_server_address_list(addr_vec)
-            .await
     }
 
     pub async fn register_broker_all(
@@ -121,18 +126,19 @@ impl BrokerOuterAPI {
                 let cloned_body = body.clone();
                 let cloned_header = request_header.clone();
                 let addr = namesrv_addr.clone();
-                let handle =
-                    self.register_broker(addr, oneway, timeout_mills, cloned_header, cloned_body);
-                handle_vec.push(handle);
+                let outer_api = self.clone();
+                let join_handle = tokio::spawn(async move {
+                    outer_api
+                        .register_broker(addr, oneway, timeout_mills, cloned_header, cloned_body)
+                        .await
+                });
+                /*let handle =
+                self.register_broker(addr, oneway, timeout_mills, cloned_header, cloned_body);*/
+                handle_vec.push(join_handle);
             }
-
-            /*for handle in handle_vec {
-                //let result = self.broker_outer_executor.spawn(handle).await;
-                register_broker_result_list.push(handle.unwrap());
-            }*/
             while let Some(handle) = handle_vec.pop() {
                 let result = tokio::join!(handle);
-                register_broker_result_list.push(result.0.unwrap());
+                register_broker_result_list.push(result.0.unwrap().unwrap());
             }
         }
 
@@ -164,11 +170,54 @@ impl BrokerOuterAPI {
                 }
             }
         }
-
         let _command = self
             .remoting_client
-            .invoke_sync(namesrv_addr, request, timeout_mills)
-            .await;
+            .invoke_sync(namesrv_addr, request, timeout_mills);
         Some(RegisterBrokerResult::default())
+    }
+
+    /// Register the topic route info of single topic to all name server nodes.
+    /// This method is used to replace incremental broker registration feature.
+    pub async fn register_single_topic_all(
+        &self,
+        broker_name: String,
+        topic_config: TopicConfig,
+        timeout_mills: u64,
+    ) {
+        let request_header = RegisterTopicRequestHeader::new(topic_config.topic_name.clone());
+        let queue_data = QueueData::new(
+            broker_name.clone(),
+            topic_config.read_queue_nums,
+            topic_config.write_queue_nums,
+            topic_config.perm,
+            topic_config.topic_sys_flag,
+        );
+        let topic_route_data = TopicRouteData {
+            queue_datas: vec![queue_data],
+            ..Default::default()
+        };
+        let topic_route_body = topic_route_data.encode();
+
+        let request = RemotingCommand::create_request_command(
+            RequestCode::RegisterTopicInNamesrv,
+            request_header,
+        )
+        .set_body(Some(topic_route_body));
+        let name_server_address_list = self.remoting_client.get_available_name_srv_list();
+        let mut handle_vec = Vec::with_capacity(name_server_address_list.len());
+        for namesrv_addr in name_server_address_list.iter() {
+            let cloned_request = request.clone();
+            let addr = namesrv_addr.clone();
+            let mut client = self.remoting_client.clone();
+            let join_handle = tokio::spawn(async move {
+                client
+                    .invoke_async(addr, cloned_request, timeout_mills)
+                    .await
+            });
+            handle_vec.push(join_handle);
+        }
+        while let Some(handle) = handle_vec.pop() {
+            let _result = tokio::join!(handle);
+        }
     }
 }

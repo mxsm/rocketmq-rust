@@ -46,3 +46,5 @@ lz4_flex = { version = "0.11", default-features = false }
 zstd = "0.13"
 
 local-ip-address = "0.6.1"
+chrono = "0.4.38"
+log = "0.4.20"

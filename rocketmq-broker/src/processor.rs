@@ -22,7 +22,9 @@ use rocketmq_common::{
         broker::broker_config::BrokerConfig,
         constant::PermName,
         message::{message_enum::MessageType, MessageConst},
+        mix_all::RETRY_GROUP_TOPIC_PREFIX,
         topic::TopicValidator,
+        TopicSysFlag::build_sys_flag,
     },
     MessageDecoder, TimeUtils,
 };
@@ -32,15 +34,18 @@ use rocketmq_remoting::{
         response_code::{RemotingSysResponseCode::SystemError, ResponseCode},
     },
     protocol::{
-        header::message_operation_header::send_message_request_header::SendMessageRequestHeader,
-        remoting_command::RemotingCommand, NamespaceUtil,
+        header::message_operation_header::{
+            send_message_request_header::SendMessageRequestHeader, TopicRequestHeaderTrait,
+        },
+        remoting_command::RemotingCommand,
+        NamespaceUtil,
     },
     runtime::{processor::RequestProcessor, server::ConnectionHandlerContext},
 };
 use rocketmq_store::{
     log_file::MessageStore, status::manager::broker_stats_manager::BrokerStatsManager,
 };
-use tracing::info;
+use tracing::{info, warn};
 
 use self::client_manage_processor::ClientManageProcessor;
 use crate::{
@@ -48,6 +53,7 @@ use crate::{
     processor::{
         admin_broker_processor::AdminBrokerProcessor, send_message_processor::SendMessageProcessor,
     },
+    topic::manager::topic_config_manager::TopicConfigManager,
 };
 
 pub(crate) mod ack_message_processor;
@@ -110,9 +116,10 @@ impl<MS: MessageStore + Send + Sync + 'static> RequestProcessor for BrokerReques
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub(crate) struct SendMessageProcessorInner {
     pub(crate) broker_config: Arc<BrokerConfig>,
+    pub(crate) topic_config_manager: TopicConfigManager,
 }
 
 impl SendMessageProcessorInner {
@@ -189,14 +196,18 @@ impl SendMessageProcessorInner {
     }
 
     pub(crate) fn msg_check(
-        &self,
-        _ctx: &ConnectionHandlerContext,
+        &mut self,
+        ctx: &ConnectionHandlerContext<'_>,
         _request: &RemotingCommand,
         request_header: &SendMessageRequestHeader,
         response: &mut RemotingCommand,
     ) {
         //check broker permission
-        if !PermName::is_writeable(self.broker_config.broker_permission()) {
+        if !PermName::is_writeable(self.broker_config.broker_permission())
+            && self
+                .topic_config_manager
+                .is_order_topic(request_header.topic.as_str())
+        {
             response.with_code(ResponseCode::NoPermission);
             response.with_remark(Some(format!(
                 "the broker[{}] sending message is forbidden",
@@ -220,7 +231,54 @@ impl SendMessageProcessorInner {
                 request_header.topic.as_str()
             )));
         }
-        //todo the next
+        let mut topic_config = self
+            .topic_config_manager
+            .select_topic_config(request_header.topic.as_str());
+        if topic_config.is_none() {
+            let mut topic_sys_flag = 0;
+            if request_header.unit_mode.unwrap_or(false) {
+                if request_header.topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) {
+                    topic_sys_flag = build_sys_flag(false, true);
+                } else {
+                    topic_sys_flag = build_sys_flag(true, false);
+                }
+            }
+            warn!(
+                "the topic {} not exist, producer: {}",
+                request_header.topic(),
+                ctx.remoting_address(),
+            );
+            topic_config = self
+                .topic_config_manager
+                .create_topic_in_send_message_method(
+                    request_header.topic.as_str(),
+                    request_header.default_topic.as_str(),
+                    ctx.remoting_address(),
+                    request_header.default_topic_queue_nums,
+                    topic_sys_flag,
+                );
+
+            if topic_config.is_none() && request_header.topic.starts_with(RETRY_GROUP_TOPIC_PREFIX)
+            {
+                topic_config = self
+                    .topic_config_manager
+                    .create_topic_in_send_message_back_method(
+                        request_header.topic.as_str(),
+                        1,
+                        PermName::PERM_WRITE | PermName::PERM_READ,
+                        false,
+                        topic_sys_flag,
+                    );
+            }
+
+            if topic_config.is_none() {
+                response.with_code(ResponseCode::TopicNotExist);
+                response.with_remark(Some(format!(
+                    "topic[{}] not exist, apply first please!",
+                    request_header.topic.as_str()
+                )));
+            }
+        }
     }
 
     pub(crate) fn random_queue_id(&self, write_queue_nums: u32) -> u32 {

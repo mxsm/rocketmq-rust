@@ -15,7 +15,9 @@
  * limitations under the License.
  */
 
-use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
+use rocketmq_common::{
+    common::message::message_single::MessageExtBrokerInner, TimeUtils::get_current_millis,
+};
 
 use crate::base::message_result::PutMessageResult;
 
@@ -42,6 +44,12 @@ pub trait RocketMQMessageStore: Clone {
     fn get_max_phy_offset(&self) -> i64;
 
     fn set_broker_init_max_offset(&mut self, broker_init_max_offset: i64);
+
+    fn now(&self) -> u64 {
+        get_current_millis()
+    }
+
+    fn get_state_machine_version(&self) -> i64;
 
     async fn put_message(&mut self, msg: MessageExtBrokerInner) -> PutMessageResult;
 }

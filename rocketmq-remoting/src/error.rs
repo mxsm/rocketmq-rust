@@ -31,6 +31,7 @@ pub enum RemotingError {
     RemotingCommandException(String),
     FromStrError(String),
     Io(io::Error),
+    RemoteException(String),
 }
 
 impl From<io::Error> for RemotingError {
@@ -49,6 +50,7 @@ impl Display for RemotingError {
                 write!(f, "{}", msg)
             }
             RemotingError::RemotingCommandException(msg) => write!(f, "{}", msg),
+            RemotingError::RemoteException(msg) => write!(f, "{}", msg),
         }
     }
 }
