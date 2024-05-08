@@ -20,6 +20,7 @@ use std::{
     collections::HashMap,
     error::Error,
     fs,
+    io::Write,
     sync::{
         atomic::{AtomicI64, Ordering},
         Arc,
@@ -159,9 +160,19 @@ impl DefaultMessageStore {
         self.topic_config_table.lock().get(topic).cloned()
     }
 
-    pub fn is_temp_file_exist(&self) -> bool {
+    fn is_temp_file_exist(&self) -> bool {
         let file_name = get_abort_file(self.message_store_config.store_path_root_dir.as_str());
         fs::metadata(file_name).is_ok()
+    }
+
+    fn create_temp_file(&self) {
+        let file_name = get_abort_file(self.message_store_config.store_path_root_dir.as_str());
+        match fs::File::create(file_name) {
+            Ok(temp_file) => temp_file.write(b"recovering"),
+            Err(e) => {
+                error!("create temp file error: {}", e);
+            }
+        }
     }
 
     async fn recover(&mut self, last_exit_ok: bool) {
