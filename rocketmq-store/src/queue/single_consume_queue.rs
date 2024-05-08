@@ -349,11 +349,11 @@ impl Swappable for ConsumeQueue {
 #[allow(unused_variables)]
 impl ConsumeQueueTrait for ConsumeQueue {
     fn get_topic(&self) -> String {
-        todo!()
+        self.topic.clone()
     }
 
     fn get_queue_id(&self) -> i32 {
-        todo!()
+        self.queue_id
     }
 
     fn get(&self, index: i64) -> CqUnit {
@@ -397,7 +397,7 @@ impl ConsumeQueueTrait for ConsumeQueue {
     }
 
     fn get_max_physic_offset(&self) -> i64 {
-        todo!()
+        *self.max_physic_offset.lock()
     }
 
     fn get_min_logic_offset(&self) -> i64 {

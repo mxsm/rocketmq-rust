@@ -72,7 +72,7 @@ impl ConsumeQueueStore {
 
     pub fn put_message_position_info_wrapper(&mut self, dispatch_request: &DispatchRequest) {
         println!(
-            "put_message_position_info_wrapper{}",
+            "put_message_position_info_wrapper-----{}",
             dispatch_request.topic
         )
     }
@@ -160,9 +160,16 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     fn truncate_dirty(&self, offset_to_truncate: i64) {
-        for consume_queue_table in self.inner.consume_queue_table.lock().values() {
+        let guard = self.inner.consume_queue_table.lock();
+        let cloned = guard.clone();
+        drop(guard);
+        for consume_queue_table in cloned.values() {
             for logic in consume_queue_table.values() {
-                self.truncate_dirty_logic_files(&**logic.lock(), offset_to_truncate);
+                let lock = logic.lock();
+                let topic = lock.get_topic();
+                let queue_id = lock.get_queue_id();
+                drop(lock);
+                self.truncate_dirty_logic_files(topic.as_str(), queue_id, offset_to_truncate);
             }
         }
     }
@@ -204,7 +211,17 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     fn get_max_phy_offset_in_consume_queue(&self) -> i64 {
-        -1
+        let mut max_physic_offset = -1i64;
+        for (topic, consume_queue_table) in self.inner.consume_queue_table.lock().iter() {
+            for (queue_id, consume_queue) in consume_queue_table.iter() {
+                let max_physic_offset_in_consume_queue =
+                    consume_queue.lock().get_max_physic_offset();
+                if max_physic_offset_in_consume_queue > max_physic_offset {
+                    max_physic_offset = max_physic_offset_in_consume_queue;
+                }
+            }
+        }
+        max_physic_offset
     }
 
     fn get_max_offset(&self, topic: &str, queue_id: i32) -> i64 {
@@ -340,11 +357,18 @@ impl ConsumeQueueStore {
 
     fn queue_type_should_be(&self, topic: &str, cq_type: CQType) {}
 
-    fn truncate_dirty_logic_files(&self, consume_queue: &dyn ConsumeQueueTrait, phy_offset: i64) {
+    /*fn truncate_dirty_logic_files(&self, consume_queue: &dyn ConsumeQueueTrait, phy_offset: i64) {
         let file_queue_life_cycle = self.get_life_cycle(
             consume_queue.get_topic().as_str(),
             consume_queue.get_queue_id(),
         );
+        file_queue_life_cycle
+            .lock()
+            .truncate_dirty_logic_files(phy_offset);
+    }*/
+
+    fn truncate_dirty_logic_files(&self, topic: &str, queue_id: i32, phy_offset: i64) {
+        let file_queue_life_cycle = self.get_life_cycle(topic, queue_id);
         file_queue_life_cycle
             .lock()
             .truncate_dirty_logic_files(phy_offset);
