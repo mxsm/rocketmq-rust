@@ -37,6 +37,7 @@ use rocketmq_common::{
         thread::thread_service::ThreadService,
     },
     utils::queue_type_utils::QueueTypeUtils,
+    FileUtils::string_to_file,
 };
 use tracing::{error, warn};
 
@@ -159,9 +160,21 @@ impl DefaultMessageStore {
         self.topic_config_table.lock().get(topic).cloned()
     }
 
-    pub fn is_temp_file_exist(&self) -> bool {
+    fn is_temp_file_exist(&self) -> bool {
         let file_name = get_abort_file(self.message_store_config.store_path_root_dir.as_str());
         fs::metadata(file_name).is_ok()
+    }
+
+    fn create_temp_file(&self) {
+        let file_name = get_abort_file(self.message_store_config.store_path_root_dir.as_str());
+        let pid = std::process::id();
+        match fs::File::create(file_name.as_str()) {
+            Ok(_) => {}
+            Err(e) => {
+                error!("create temp file error: {}", e);
+            }
+        }
+        let _ = string_to_file(pid.to_string().as_str(), file_name.as_str());
     }
 
     async fn recover(&mut self, last_exit_ok: bool) {
@@ -310,7 +323,8 @@ impl MessageStore for DefaultMessageStore {
     }
 
     fn start(&mut self) -> Result<(), Box<dyn Error>> {
-        todo!()
+        self.create_temp_file();
+        Ok(())
     }
 
     fn set_confirm_offset(&mut self, phy_offset: i64) {

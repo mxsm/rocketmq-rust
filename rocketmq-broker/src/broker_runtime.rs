@@ -15,7 +15,14 @@
  * limitations under the License.
  */
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use rocketmq_common::common::{
     broker::broker_config::BrokerConfig, config::TopicConfig, config_manager::ConfigManager,
@@ -76,6 +83,7 @@ pub(crate) struct BrokerRuntime {
 
     broker_runtime: Option<RocketMQRuntime>,
     producer_manager: Arc<ProducerManager>,
+    drop: Arc<AtomicBool>,
 }
 
 impl Clone for BrokerRuntime {
@@ -96,6 +104,7 @@ impl Clone for BrokerRuntime {
             broker_out_api: self.broker_out_api.clone(),
             broker_runtime: None,
             producer_manager: self.producer_manager.clone(),
+            drop: self.drop.clone(),
         }
     }
 }
@@ -141,6 +150,7 @@ impl BrokerRuntime {
             broker_out_api: broker_outer_api,
             broker_runtime: Some(runtime),
             producer_manager: Arc::new(ProducerManager::new()),
+            drop: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -155,9 +165,19 @@ impl BrokerRuntime {
 
 impl Drop for BrokerRuntime {
     fn drop(&mut self) {
-        if let Some(runtime) = self.broker_runtime.take() {
-            runtime.shutdown();
+        let result =
+            self.drop
+                .clone()
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed);
+        if result.is_ok() {
+            if let Some(runtime) = self.broker_runtime.take() {
+                runtime.shutdown();
+            }
         }
+
+        /*if let Some(runtime) = self.broker_runtime.take() {
+            runtime.shutdown();
+        }*/
     }
 }
 
@@ -262,6 +282,11 @@ impl BrokerRuntime {
     fn initial_rpc_hooks(&mut self) {}
 
     pub async fn start(&mut self) {
+        self.message_store
+            .as_mut()
+            .unwrap()
+            .start()
+            .expect("Message store start error");
         let request_processor = self.init_processor();
         let server = RocketMQServer::new(self.server_config.clone());
         let server_future = server.run(request_processor);
