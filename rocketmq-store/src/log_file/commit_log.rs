@@ -22,6 +22,7 @@ use rocketmq_common::{
     common::{
         attribute::cq_type::CQType,
         broker::broker_config::BrokerConfig,
+        config::TopicConfig,
         message::{
             message_single::{tags_string2tags_code, MessageExtBrokerInner},
             MessageConst, MessageVersion,
@@ -86,6 +87,7 @@ pub struct CommitLog {
     dispatcher: CommitLogDispatcherDefault,
     confirm_offset: i64,
     store_checkpoint: StoreCheckpoint,
+    append_message_callback: Arc<DefaultAppendMessageCallback>,
 }
 
 impl CommitLog {
@@ -94,19 +96,24 @@ impl CommitLog {
         broker_config: Arc<BrokerConfig>,
         dispatcher: &CommitLogDispatcherDefault,
         store_checkpoint: StoreCheckpoint,
+        topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
     ) -> Self {
         let enabled_append_prop_crc = message_store_config.enabled_append_prop_crc;
         let store_path = message_store_config.get_store_path_commit_log();
         let mapped_file_size = message_store_config.mapped_file_size_commit_log;
         Self {
             mapped_file_queue: MappedFileQueue::new(store_path, mapped_file_size as u64, None),
-            message_store_config,
+            message_store_config: message_store_config.clone(),
             broker_config,
             enabled_append_prop_crc,
             //local_file_message_store: None,
             dispatcher: dispatcher.clone(),
             confirm_offset: -1,
             store_checkpoint,
+            append_message_callback: Arc::new(DefaultAppendMessageCallback::new(
+                message_store_config,
+                topic_config_table,
+            )),
         }
     }
 }
@@ -189,14 +196,12 @@ impl CommitLog {
         };
         let topic_queue_key = generate_key(&msg);
         let mut put_message_context = PutMessageContext::new(topic_queue_key);
-        let append_message_callback =
-            DefaultAppendMessageCallback::new(self.message_store_config.clone());
-        /* let result =
-            append_message_callback.do_append(mapped_file.file_from_offset() as i64, 0, &mut msg);
-        mapped_file.append_data(msg.encoded_buff.clone(), false);*/
 
-        let result =
-            mapped_file.append_message(msg, append_message_callback, &mut put_message_context);
+        let result = mapped_file.append_message(
+            msg,
+            self.append_message_callback.as_ref(),
+            &mut put_message_context,
+        );
 
         match result.status {
             AppendMessageStatus::PutOk => {

@@ -14,15 +14,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use bytes::BytesMut;
 use rocketmq_common::{
     common::{
-        message::{message_batch::MessageExtBatch, message_single::MessageExtBrokerInner},
+        attribute::cq_type::CQType,
+        config::TopicConfig,
+        message::{
+            message_batch::MessageExtBatch, message_single::MessageExtBrokerInner, MessageConst,
+        },
         sys_flag::message_sys_flag::MessageSysFlag,
     },
-    utils::message_utils,
+    utils::{message_utils, queue_type_utils::QueueTypeUtils},
 };
 
 use crate::{
@@ -31,7 +35,10 @@ use crate::{
         put_message_context::PutMessageContext,
     },
     config::message_store_config::MessageStoreConfig,
-    log_file::commit_log::{CommitLog, CRC32_RESERVED_LEN},
+    log_file::{
+        commit_log::{CommitLog, CRC32_RESERVED_LEN},
+        mapped_file::default_impl_refactor::LocalMappedFile,
+    },
 };
 
 /// Write messages callback interface
@@ -50,9 +57,9 @@ pub trait AppendMessageCallback {
     ///
     /// The number of bytes written
     fn do_append(
-        &mut self,
+        &self,
         file_from_offset: i64,
-        file_wrote_position: i64,
+        mapped_file: &LocalMappedFile,
         max_blank: i32,
         msg: &mut MessageExtBrokerInner,
         put_message_context: &PutMessageContext,
@@ -85,29 +92,58 @@ pub trait AppendMessageCallback {
 const END_FILE_MIN_BLANK_LENGTH: i32 = 4 + 4;
 
 pub(crate) struct DefaultAppendMessageCallback {
-    pub msg_store_item_memory: bytes::BytesMut,
-    pub crc32_reserved_length: i32,
-    pub message_store_config: Arc<MessageStoreConfig>,
+    msg_store_item_memory: bytes::BytesMut,
+    crc32_reserved_length: i32,
+    message_store_config: Arc<MessageStoreConfig>,
+    topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
 }
 
 impl DefaultAppendMessageCallback {
-    pub fn new(message_store_config: Arc<MessageStoreConfig>) -> Self {
+    pub fn new(
+        message_store_config: Arc<MessageStoreConfig>,
+        topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
+    ) -> Self {
         Self {
             msg_store_item_memory: bytes::BytesMut::with_capacity(
                 END_FILE_MIN_BLANK_LENGTH as usize,
             ),
             crc32_reserved_length: CRC32_RESERVED_LEN,
             message_store_config,
+            topic_config_table,
         }
+    }
+}
+
+impl DefaultAppendMessageCallback {
+    fn get_message_num(&self, msg_inner: &MessageExtBrokerInner) -> i16 {
+        let mut message_num = 1i16;
+        let cq_type = self.get_cq_type(msg_inner);
+        if MessageSysFlag::check(msg_inner.sys_flag(), MessageSysFlag::INNER_BATCH_FLAG)
+            || CQType::BatchCQ == cq_type
+        {
+            if let Some(key) = msg_inner.property(MessageConst::PROPERTY_INNER_NUM) {
+                message_num = key.parse::<i16>().unwrap_or(1);
+            }
+        }
+        message_num
+    }
+
+    fn get_cq_type(&self, msg_inner: &MessageExtBrokerInner) -> CQType {
+        let topic_config = self
+            .topic_config_table
+            .lock()
+            .get(msg_inner.message_ext_inner.topic())
+            .cloned();
+        QueueTypeUtils::get_cq_type(&topic_config)
     }
 }
 
 #[allow(unused_variables)]
 impl AppendMessageCallback for DefaultAppendMessageCallback {
     fn do_append(
-        &mut self,
+        &self,
         file_from_offset: i64,
-        file_wrote_position: i64,
+        mapped_file: &LocalMappedFile,
         max_blank: i32,
         msg_inner: &mut MessageExtBrokerInner,
         put_message_context: &PutMessageContext,
@@ -122,14 +158,14 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         }
 
         let msg_len = i32::from_le_bytes(pre_encode_buffer[0..4].try_into().unwrap());
-        let wrote_offset = file_from_offset + file_wrote_position;
+        let wrote_offset = file_from_offset + mapped_file.wrote_position() as i64;
 
         let msg_id =
             message_utils::build_message_id(msg_inner.message_ext_inner.store_host, wrote_offset);
 
         let mut queue_offset = msg_inner.queue_offset();
         //let message_num = CommitLog::get_message_num(msg_inner);
-        let message_num = 1;
+        let message_num = self.get_message_num(msg_inner);
         match MessageSysFlag::get_transaction_value(msg_inner.sys_flag()) {
             MessageSysFlag::TRANSACTION_PREPARED_TYPE
             | MessageSysFlag::TRANSACTION_ROLLBACK_TYPE => queue_offset = 0,
