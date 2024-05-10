@@ -159,10 +159,10 @@ impl LocalMappedFile {
         write_success
     }
 
-    pub fn append_message(
+    pub fn append_message<AMC: AppendMessageCallback>(
         &self,
         message: MessageExtBrokerInner,
-        message_callback: impl AppendMessageCallback,
+        message_callback: &AMC,
         put_message_context: &mut PutMessageContext,
     ) -> AppendMessageResult {
         let mut message = message;
@@ -177,10 +177,9 @@ impl LocalMappedFile {
                 ..Default::default()
             };
         }
-        let mut message_callback = message_callback;
         let append_message_result = message_callback.do_append(
             self.file_from_offset() as i64,
-            current_pos as i64,
+            self,
             (self.file_size - current_pos) as i32,
             &mut message,
             put_message_context,

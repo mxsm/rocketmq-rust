@@ -123,6 +123,7 @@ impl DefaultMessageStore {
             broker_config.clone(),
             &dispatcher,
             store_checkpoint.clone(),
+            topic_config_table.clone(),
         );
         Self {
             message_store_config: message_store_config.clone(),
