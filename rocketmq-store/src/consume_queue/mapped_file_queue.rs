@@ -265,8 +265,6 @@ impl MappedFileQueue {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use super::*;
 
     #[test]

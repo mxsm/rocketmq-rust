@@ -44,6 +44,7 @@ use rocketmq_store::{
 use tracing::{info, warn};
 
 use crate::{
+    broker::broker_hook::BrokerShutdownHook,
     client::manager::producer_manager::ProducerManager,
     filter::manager::consumer_filter_manager::ConsumerFilterManager,
     offset::manager::{
@@ -84,6 +85,8 @@ pub(crate) struct BrokerRuntime {
     broker_runtime: Option<RocketMQRuntime>,
     producer_manager: Arc<ProducerManager>,
     drop: Arc<AtomicBool>,
+    shutdown: Arc<AtomicBool>,
+    shutdown_hook: Option<BrokerShutdownHook>,
 }
 
 impl Clone for BrokerRuntime {
@@ -105,6 +108,8 @@ impl Clone for BrokerRuntime {
             broker_runtime: None,
             producer_manager: self.producer_manager.clone(),
             drop: self.drop.clone(),
+            shutdown: self.shutdown.clone(),
+            shutdown_hook: self.shutdown_hook.clone(),
         }
     }
 }
@@ -151,6 +156,8 @@ impl BrokerRuntime {
             broker_runtime: Some(runtime),
             producer_manager: Arc::new(ProducerManager::new()),
             drop: Arc::new(AtomicBool::new(false)),
+            shutdown: Arc::new(AtomicBool::new(false)),
+            shutdown_hook: None,
         }
     }
 
@@ -161,6 +168,22 @@ impl BrokerRuntime {
     pub(crate) fn message_store_config(&self) -> &MessageStoreConfig {
         &self.message_store_config
     }
+
+    pub fn shutdown(&mut self) {
+        self.broker_out_api.shutdown();
+        self.message_store.as_mut().unwrap().shutdown();
+        if let Some(runtime) = self.broker_runtime.take() {
+            runtime.shutdown();
+        }
+    }
+
+    pub(crate) fn shutdown_basic_service(&mut self) {
+        self.shutdown.store(true, Ordering::SeqCst);
+
+        if let Some(hook) = self.shutdown_hook.as_ref() {
+            hook.before_shutdown();
+        }
+    }
 }
 
 impl Drop for BrokerRuntime {
@@ -170,14 +193,8 @@ impl Drop for BrokerRuntime {
                 .clone()
                 .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed);
         if result.is_ok() {
-            if let Some(runtime) = self.broker_runtime.take() {
-                runtime.shutdown();
-            }
+            self.shutdown();
         }
-
-        /*if let Some(runtime) = self.broker_runtime.take() {
-            runtime.shutdown();
-        }*/
     }
 }
 

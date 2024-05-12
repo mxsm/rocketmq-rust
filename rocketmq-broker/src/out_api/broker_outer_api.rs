@@ -220,4 +220,6 @@ impl BrokerOuterAPI {
             let _result = tokio::join!(handle);
         }
     }
+
+    pub fn shutdown(&self) {}
 }

@@ -14,22 +14,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#![allow(dead_code)]
-#![allow(unused_variables)]
 
-pub mod base;
-pub mod config;
-mod consume_queue;
-mod filter;
-pub mod hook;
-mod index;
-mod kv;
-pub mod log_file;
-pub(crate) mod message_encoder;
-pub mod message_store;
-mod queue;
-pub(crate) mod services;
-pub mod status;
-mod store;
-pub mod store_path_config_helper;
-pub mod timer;
+use std::sync::Arc;
+
+pub trait ShutdownHook {
+    fn before_shutdown(&self);
+}
+
+pub type BrokerShutdownHook = Arc<dyn ShutdownHook + Send + Sync + 'static>;
