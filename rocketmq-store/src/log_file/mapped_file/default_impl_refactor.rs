@@ -24,12 +24,20 @@ use std::{
 
 use bytes::{Bytes, BytesMut};
 use memmap2::MmapMut;
-use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
+use rocketmq_common::common::message::{
+    message_batch::MessageExtBatch, message_single::MessageExtBrokerInner,
+};
 use tracing::error;
 
-use crate::base::{
-    append_message_callback::AppendMessageCallback, message_result::AppendMessageResult,
-    message_status_enum::AppendMessageStatus, put_message_context::PutMessageContext,
+use crate::{
+    base::{
+        append_message_callback::AppendMessageCallback,
+        compaction_append_msg_callback::CompactionAppendMsgCallback,
+        message_result::AppendMessageResult, message_status_enum::AppendMessageStatus,
+        put_message_context::PutMessageContext, select_result::SelectMappedBufferResult,
+    },
+    config::flush_disk_type::FlushDiskType,
+    log_file::mapped_file::MappedFile,
 };
 
 pub struct LocalMappedFile {
@@ -184,7 +192,7 @@ impl LocalMappedFile {
             &mut message,
             put_message_context,
         );
-        self.append_data(message.encoded_buff.clone(), false);
+        self.append_data(message.encoded_buff.take().unwrap(), false);
         append_message_result
     }
 
@@ -199,6 +207,202 @@ impl LocalMappedFile {
 
     pub fn is_full(&self) -> bool {
         false
+    }
+}
+
+impl MappedFile for LocalMappedFile {
+    fn get_file_name(&self) -> String {
+        todo!()
+    }
+
+    fn rename_to(&mut self, file_name: &str) -> bool {
+        todo!()
+    }
+
+    fn get_file_size(&self) -> u64 {
+        todo!()
+    }
+
+    fn is_full(&self) -> bool {
+        todo!()
+    }
+
+    fn is_available(&self) -> bool {
+        todo!()
+    }
+
+    fn append_message<AMC: AppendMessageCallback>(
+        &self,
+        message: MessageExtBrokerInner,
+        message_callback: &AMC,
+        put_message_context: &PutMessageContext,
+    ) -> AppendMessageResult {
+        todo!()
+    }
+
+    fn append_messages<AMC: AppendMessageCallback>(
+        &mut self,
+        message: &MessageExtBatch,
+        message_callback: &AMC,
+        put_message_context: &PutMessageContext,
+    ) -> AppendMessageResult {
+        todo!()
+    }
+
+    fn append_message_compaction(
+        &mut self,
+        byte_buffer_msg: &mut Bytes,
+        cb: &dyn CompactionAppendMsgCallback,
+    ) -> AppendMessageResult {
+        todo!()
+    }
+
+    fn get_bytes(&self, pos: usize, size: usize) -> Option<Bytes> {
+        todo!()
+    }
+
+    fn append_message_offset_length(&self, data: &Bytes, offset: usize, length: usize) -> bool {
+        todo!()
+    }
+
+    fn get_file_from_offset(&self) -> u64 {
+        todo!()
+    }
+
+    fn flush(&mut self, flush_least_pages: i32) -> i32 {
+        todo!()
+    }
+
+    fn commit(&mut self, commit_least_pages: usize) -> usize {
+        todo!()
+    }
+
+    fn select_mapped_buffer_size(&self, pos: usize, size: usize) -> SelectMappedBufferResult {
+        todo!()
+    }
+
+    fn select_mapped_buffer(&self, pos: usize) -> SelectMappedBufferResult {
+        todo!()
+    }
+
+    fn get_mapped_byte_buffer(&self) -> Bytes {
+        todo!()
+    }
+
+    fn slice_byte_buffer(&self) -> Bytes {
+        todo!()
+    }
+
+    fn get_store_timestamp(&self) -> i64 {
+        todo!()
+    }
+
+    fn get_last_modified_timestamp(&self) -> i64 {
+        todo!()
+    }
+
+    fn get_data(&self, pos: usize, size: usize) -> Option<bytes::Bytes> {
+        todo!()
+    }
+
+    fn destroy(&self, interval_forcibly: i64) -> bool {
+        todo!()
+    }
+
+    fn shutdown(&self, interval_forcibly: i64) {
+        todo!()
+    }
+
+    fn release(&self) {
+        todo!()
+    }
+
+    fn hold(&self) -> bool {
+        todo!()
+    }
+
+    fn is_first_create_in_queue(&self) -> bool {
+        todo!()
+    }
+
+    fn set_first_create_in_queue(&mut self, first_create_in_queue: bool) {
+        todo!()
+    }
+
+    fn get_flushed_position(&self) -> i32 {
+        todo!()
+    }
+
+    fn set_flushed_position(&self, flushed_position: i32) {
+        todo!()
+    }
+
+    fn get_wrote_position(&self) -> i32 {
+        todo!()
+    }
+
+    fn set_wrote_position(&self, wrote_position: i32) {
+        todo!()
+    }
+
+    fn get_read_position(&self) -> i32 {
+        todo!()
+    }
+
+    fn set_committed_position(&self, committed_position: i32) {
+        todo!()
+    }
+
+    fn get_committed_position(&self) -> i32 {
+        todo!()
+    }
+
+    fn mlock(&self) {
+        todo!()
+    }
+
+    fn munlock(&self) {
+        todo!()
+    }
+
+    fn warm_mapped_file(&self, flush_disk_type: FlushDiskType, pages: usize) {
+        todo!()
+    }
+
+    fn swap_map(&self) -> bool {
+        todo!()
+    }
+
+    fn clean_swaped_map(&self, force: bool) {
+        todo!()
+    }
+
+    fn get_recent_swap_map_time(&self) -> i64 {
+        todo!()
+    }
+
+    fn get_mapped_byte_buffer_access_count_since_last_swap(&self) -> i64 {
+        todo!()
+    }
+
+    fn get_file(&self) -> &File {
+        todo!()
+    }
+
+    fn rename_to_delete(&self) {
+        todo!()
+    }
+
+    fn move_to_parent(&self) -> std::io::Result<()> {
+        todo!()
+    }
+
+    fn get_last_flush_time(&self) -> i64 {
+        todo!()
+    }
+
+    fn is_loaded(&self, position: i64, size: usize) -> bool {
+        todo!()
     }
 }
 

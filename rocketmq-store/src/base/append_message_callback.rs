@@ -16,7 +16,7 @@
  */
 use std::{collections::HashMap, sync::Arc};
 
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use rocketmq_common::{
     common::{
         attribute::cq_type::CQType,
@@ -37,7 +37,7 @@ use crate::{
     config::message_store_config::MessageStoreConfig,
     log_file::{
         commit_log::{CommitLog, CRC32_RESERVED_LEN},
-        mapped_file::default_impl_refactor::LocalMappedFile,
+        mapped_file::MappedFile,
     },
 };
 
@@ -56,14 +56,23 @@ pub trait AppendMessageCallback {
     /// # Returns
     ///
     /// The number of bytes written
-    fn do_append(
+    fn do_append<MF: MappedFile>(
         &self,
         file_from_offset: i64,
-        mapped_file: &LocalMappedFile,
+        mapped_file: &MF,
         max_blank: i32,
         msg: &mut MessageExtBrokerInner,
         put_message_context: &PutMessageContext,
     ) -> AppendMessageResult;
+
+    /*    fn do_append_back(
+        &self,
+        file_from_offset: i64,
+        mapped_file: &DefaultMappedFile,
+        max_blank: i32,
+        msg: &mut MessageExtBrokerInner,
+        put_message_context: &PutMessageContext,
+    ) -> AppendMessageResult;*/
 
     /// After batched message serialization, write MappedByteBuffer
     ///
@@ -140,15 +149,15 @@ impl DefaultAppendMessageCallback {
 
 #[allow(unused_variables)]
 impl AppendMessageCallback for DefaultAppendMessageCallback {
-    fn do_append(
+    fn do_append<MF: MappedFile>(
         &self,
         file_from_offset: i64,
-        mapped_file: &LocalMappedFile,
+        mapped_file: &MF,
         max_blank: i32,
         msg_inner: &mut MessageExtBrokerInner,
         put_message_context: &PutMessageContext,
     ) -> AppendMessageResult {
-        let mut pre_encode_buffer = msg_inner.encoded_buff.clone(); // Assuming get_encoded_buff returns Option<ByteBuffer>
+        let mut pre_encode_buffer = msg_inner.encoded_buff.take().unwrap(); // Assuming get_encoded_buff returns Option<ByteBuffer>
         let is_multi_dispatch_msg = self.message_store_config.enable_multi_dispatch
             && CommitLog::is_multi_dispatch_msg(msg_inner);
         if is_multi_dispatch_msg {
@@ -158,7 +167,7 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         }
 
         let msg_len = i32::from_le_bytes(pre_encode_buffer[0..4].try_into().unwrap());
-        let wrote_offset = file_from_offset + mapped_file.wrote_position() as i64;
+        let wrote_offset = file_from_offset + mapped_file.get_wrote_position() as i64;
 
         let msg_id =
             message_utils::build_message_id(msg_inner.message_ext_inner.store_host, wrote_offset);
@@ -175,6 +184,13 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         }
 
         if (msg_len + END_FILE_MIN_BLANK_LENGTH) > max_blank {
+            /*self.msg_store_item_memory.borrow_mut().clear();
+            self.msg_store_item_memory.borrow_mut().put_i32(max_blank);
+            self.msg_store_item_memory
+                .borrow_mut()
+                .put_i32(BLANK_MAGIC_CODE);
+            let bytes = self.msg_store_item_memory.borrow_mut().split().freeze();
+            mapped_file.append_message_bytes(&bytes);*/
             return AppendMessageResult {
                 status: AppendMessageStatus::EndOfFile,
                 wrote_offset,
@@ -199,8 +215,9 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         pre_encode_buffer[pos..(pos + 8)]
             .copy_from_slice(&msg_inner.store_timestamp().to_le_bytes());
 
-        msg_inner.encoded_buff = pre_encode_buffer;
-
+        // msg_inner.encoded_buff = pre_encode_buffer;
+        let bytes = Bytes::from(pre_encode_buffer);
+        mapped_file.append_message_bytes(&bytes);
         AppendMessageResult {
             status: AppendMessageStatus::PutOk,
             wrote_offset,

@@ -26,7 +26,7 @@ use rocketmq_common::UtilAll::offset_to_file_name;
 use tracing::info;
 
 use crate::{
-    log_file::mapped_file::default_impl_refactor::LocalMappedFile,
+    log_file::mapped_file::{default_impl::DefaultMappedFile, MappedFile},
     services::allocate_mapped_file_service::AllocateMappedFileService,
 };
 
@@ -37,7 +37,8 @@ pub struct MappedFileQueue {
     pub(crate) mapped_file_size: u64,
     //pub(crate) mapped_files: Arc<Mutex<Vec<LocalMappedFile>>>,
     //pub(crate) mapped_files: Vec<Arc<Mutex<LocalMappedFile>>>,
-    pub(crate) mapped_files: Vec<Arc<LocalMappedFile>>,
+    //pub(crate) mapped_files: Vec<Arc<LocalMappedFile>>,
+    pub(crate) mapped_files: Vec<Arc<DefaultMappedFile>>,
     //  pub(crate) mapped_files: Vec<LocalMappedFile>,
     pub(crate) allocate_mapped_file_service: Option<AllocateMappedFileService>,
 
@@ -127,7 +128,7 @@ impl MappedFileQueue {
             }
 
             let mapped_file =
-                LocalMappedFile::new(file.to_string_lossy().to_string(), self.mapped_file_size);
+                DefaultMappedFile::new(file.to_string_lossy().to_string(), self.mapped_file_size);
             // Set wrote, flushed, committed positions for mapped_file
 
             self.mapped_files.push(Arc::new(mapped_file));
@@ -153,7 +154,7 @@ impl MappedFileQueue {
     //     self.mapped_files.last()
     // }
 
-    pub fn get_last_mapped_file(&self) -> Option<Arc<LocalMappedFile>> {
+    pub fn get_last_mapped_file(&self) -> Option<Arc<DefaultMappedFile>> {
         if self.mapped_files.is_empty() {
             return None;
         }
@@ -164,7 +165,7 @@ impl MappedFileQueue {
         &mut self,
         start_offset: u64,
         need_create: bool,
-    ) -> Option<Arc<LocalMappedFile>> {
+    ) -> Option<Arc<DefaultMappedFile>> {
         let mut create_offset = -1i64;
         let file_size = self.mapped_file_size as i64;
         let mapped_file_last = self.get_last_mapped_file();
@@ -184,7 +185,7 @@ impl MappedFileQueue {
         mapped_file_last
     }
 
-    pub fn try_create_mapped_file(&mut self, create_offset: u64) -> Option<Arc<LocalMappedFile>> {
+    pub fn try_create_mapped_file(&mut self, create_offset: u64) -> Option<Arc<DefaultMappedFile>> {
         let next_file_path =
             PathBuf::from(self.store_path.clone()).join(offset_to_file_name(create_offset));
         let next_next_file_path = PathBuf::from(self.store_path.clone())
@@ -196,9 +197,9 @@ impl MappedFileQueue {
         &mut self,
         next_file_path: PathBuf,
         _next_next_file_path: PathBuf,
-    ) -> Option<Arc<LocalMappedFile>> {
+    ) -> Option<Arc<DefaultMappedFile>> {
         let mut mapped_file = match self.allocate_mapped_file_service {
-            None => LocalMappedFile::new(
+            None => DefaultMappedFile::new(
                 next_file_path.to_string_lossy().to_string(),
                 self.mapped_file_size,
             ),
@@ -215,7 +216,7 @@ impl MappedFileQueue {
         Some(inner)
     }
 
-    pub fn get_mapped_files(&self) -> Vec<Arc<LocalMappedFile>> {
+    pub fn get_mapped_files(&self) -> Vec<Arc<DefaultMappedFile>> {
         self.mapped_files.to_vec()
     }
 
@@ -259,7 +260,7 @@ impl MappedFileQueue {
         unimplemented!()
     }
 
-    pub(crate) fn delete_expired_file(&self, files: Vec<Option<Arc<LocalMappedFile>>>) {}
+    pub(crate) fn delete_expired_file(&self, files: Vec<Option<Arc<DefaultMappedFile>>>) {}
 }
 
 #[cfg(test)]
