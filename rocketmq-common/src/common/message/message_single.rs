@@ -320,7 +320,7 @@ pub struct MessageExtBrokerInner {
     pub message_ext_inner: MessageExt,
     pub properties_string: String,
     pub tags_code: i64,
-    pub encoded_buff: bytes::BytesMut,
+    pub encoded_buff: Option<bytes::BytesMut>,
     pub encode_completed: bool,
     pub version: MessageVersion,
 }

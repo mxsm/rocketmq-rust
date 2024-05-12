@@ -49,7 +49,7 @@ use crate::{
     },
     config::message_store_config::MessageStoreConfig,
     consume_queue::mapped_file_queue::MappedFileQueue,
-    log_file::mapped_file::default_impl_refactor::LocalMappedFile,
+    log_file::mapped_file::MappedFile,
     message_encoder::message_ext_encoder::MessageExtEncoder,
     message_store::default_message_store::{CommitLogDispatcherDefault, DefaultMessageStore},
     queue::ConsumeQueueStoreTrait,
@@ -182,7 +182,7 @@ impl CommitLog {
         if let Some(result) = put_message_result {
             return result;
         }
-        msg.encoded_buff = encoder.byte_buf();
+        msg.encoded_buff = Some(encoder.byte_buf());
 
         //let mut mapped_file_guard = self.mapped_file_queue.write().await;
         // let mapped_file = match mapped_file_guard.get_last_mapped_file() {
@@ -195,12 +195,12 @@ impl CommitLog {
             Some(mapped_file) => mapped_file,
         };
         let topic_queue_key = generate_key(&msg);
-        let mut put_message_context = PutMessageContext::new(topic_queue_key);
+        let put_message_context = PutMessageContext::new(topic_queue_key);
 
         let result = mapped_file.append_message(
             msg,
             self.append_message_callback.as_ref(),
-            &mut put_message_context,
+            &put_message_context,
         );
 
         match result.status {
@@ -268,7 +268,7 @@ impl CommitLog {
             let do_dispatch = false;
             let mut current_pos = 0usize;
             loop {
-                let (msg, size) = self.get_simple_message_bytes(current_pos, mapped_file);
+                let (msg, size) = self.get_simple_message_bytes(current_pos, mapped_file.as_ref());
                 if msg.is_none() {
                     break;
                 }
@@ -349,10 +349,10 @@ impl CommitLog {
         });*/
     }
 
-    fn get_simple_message_bytes(
+    fn get_simple_message_bytes<MF: MappedFile>(
         &self,
         position: usize,
-        mapped_file: &LocalMappedFile,
+        mapped_file: &MF,
     ) -> (Option<Bytes>, usize) {
         let mut bytes = mapped_file.get_bytes(position, 4);
         match bytes {

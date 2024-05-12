@@ -17,6 +17,7 @@
 
 use std::{fs::File, io};
 
+use bytes::Bytes;
 use rocketmq_common::common::message::{
     message_batch::MessageExtBatch, message_single::MessageExtBrokerInner,
 };
@@ -26,7 +27,7 @@ use crate::{
         append_message_callback::AppendMessageCallback,
         compaction_append_msg_callback::CompactionAppendMsgCallback,
         message_result::AppendMessageResult, put_message_context::PutMessageContext,
-        select_result::SelectMappedBufferResult, transient_store_pool::TransientStorePool,
+        select_result::SelectMappedBufferResult,
     },
     config::flush_disk_type::FlushDiskType,
 };
@@ -34,18 +35,18 @@ use crate::{
 pub(crate) mod default_impl;
 pub mod default_impl_refactor;
 
-pub trait MappedFileBak {
+pub trait MappedFile {
     /// Returns the file name of the `MappedFile`.
-    fn get_file_name(&self) -> &str;
+    fn get_file_name(&self) -> String;
 
     /// Change the file name of the `MappedFile`.
     fn rename_to(&mut self, file_name: &str) -> bool;
 
     /// Returns the file size of the `MappedFile`.
-    fn get_file_size(&self) -> usize;
+    fn get_file_size(&self) -> u64;
 
-    /// Returns the `FileChannel` behind the `MappedFile`.
-    fn get_file_channel(&self) -> io::Result<&File>;
+    // Returns the `FileChannel` behind the `MappedFile`.
+    //fn get_file_channel(&self) -> io::Result<&File>;
 
     /// Returns true if this `MappedFile` is full and no new messages can be added.
     fn is_full(&self) -> bool;
@@ -55,18 +56,18 @@ pub trait MappedFileBak {
     fn is_available(&self) -> bool;
 
     /// Appends a message object to the current `MappedFile` with a specific callback.
-    fn append_message(
-        &mut self,
-        message: &MessageExtBrokerInner,
-        message_callback: &dyn AppendMessageCallback,
+    fn append_message<AMC: AppendMessageCallback>(
+        &self,
+        message: MessageExtBrokerInner,
+        message_callback: &AMC,
         put_message_context: &PutMessageContext,
     ) -> AppendMessageResult;
 
     /// Appends a batch message object to the current `MappedFile` with a specific callback.
-    fn append_messages(
+    fn append_messages<AMC: AppendMessageCallback>(
         &mut self,
         message: &MessageExtBatch,
-        message_callback: &dyn AppendMessageCallback,
+        message_callback: &AMC,
         put_message_context: &PutMessageContext,
     ) -> AppendMessageResult;
 
@@ -76,21 +77,22 @@ pub trait MappedFileBak {
         cb: &dyn CompactionAppendMsgCallback,
     ) -> AppendMessageResult;
 
-    /// Appends a raw message data represents by a byte array to the current `MappedFile`.
-    fn append_message_byte_array(&mut self, data: &[u8]) -> bool;
+    fn get_bytes(&self, pos: usize, size: usize) -> Option<bytes::Bytes>;
 
     /// Appends a raw message data represents by a byte buffer to the current `MappedFile`.
-    fn append_message_bytes(&mut self, data: &mut bytes::Bytes) -> bool;
+    fn append_message_bytes(&self, data: &bytes::Bytes) -> bool {
+        self.append_message_offset_length(data, 0, data.len())
+    }
 
     /// Appends a raw message data represents by a byte array to the current `MappedFile`,
     /// starting at the given offset in the array.
-    fn append_message_offset_length(&mut self, data: &[u8], offset: usize, length: usize) -> bool;
+    fn append_message_offset_length(&self, data: &Bytes, offset: usize, length: usize) -> bool;
 
     /// Returns the global offset of the current `MappedFile`, it's a long value of the file name.
-    fn get_file_from_offset(&self) -> i64;
+    fn get_file_from_offset(&self) -> u64;
 
     /// Flushes the data in cache to disk immediately.
-    fn flush(&mut self, flush_least_pages: usize) -> usize;
+    fn flush(&mut self, flush_least_pages: i32) -> i32;
 
     /// Flushes the data in the secondary cache to page cache or disk immediately.
     fn commit(&mut self, commit_least_pages: usize) -> usize;
@@ -116,7 +118,7 @@ pub trait MappedFileBak {
     fn get_last_modified_timestamp(&self) -> i64;
 
     /// Get data from a certain pos offset with size byte
-    fn get_data(&self, pos: usize, size: usize, byte_buffer: &mut bytes::Bytes) -> bool;
+    fn get_data(&self, pos: usize, size: usize) -> Option<bytes::Bytes>;
 
     /// Destroys the file and delete it from the file system.
     fn destroy(&self, interval_forcibly: i64) -> bool;
@@ -138,22 +140,25 @@ pub trait MappedFileBak {
     fn set_first_create_in_queue(&mut self, first_create_in_queue: bool);
 
     /// Returns the flushed position of this mapped file.
-    fn get_flushed_position(&self) -> usize;
+    fn get_flushed_position(&self) -> i32;
 
     /// Sets the flushed position of this mapped file.
-    fn set_flushed_position(&mut self, flushed_position: usize);
+    fn set_flushed_position(&self, flushed_position: i32);
 
     /// Returns the wrote position of this mapped file.
-    fn get_wrote_position(&self) -> usize;
+    fn get_wrote_position(&self) -> i32;
 
     /// Sets the wrote position of this mapped file.
-    fn set_wrote_position(&mut self, wrote_position: usize);
+    fn set_wrote_position(&self, wrote_position: i32);
 
     /// Returns the current max readable position of this mapped file.
-    fn get_read_position(&self) -> usize;
+    fn get_read_position(&self) -> i32;
 
     /// Sets the committed position of this mapped file.
-    fn set_committed_position(&mut self, committed_position: usize);
+    fn set_committed_position(&self, committed_position: i32);
+
+    /// Returns the committed position of this mapped file.
+    fn get_committed_position(&self) -> i32;
 
     /// Lock the mapped byte buffer
     fn mlock(&self);
@@ -189,14 +194,12 @@ pub trait MappedFileBak {
     fn get_last_flush_time(&self) -> i64;
 
     /// Init mapped file
-    fn init(
+    /*    fn init(
         &mut self,
         file_name: &str,
         file_size: usize,
         transient_store_pool: &TransientStorePool,
-    ) -> io::Result<()>;
-
-    fn iterator(&self, pos: usize) -> Box<dyn Iterator<Item = SelectMappedBufferResult>>;
+    ) -> io::Result<()>;*/
 
     /// Check mapped file is loaded to memory with given position and size
     fn is_loaded(&self, position: i64, size: usize) -> bool;

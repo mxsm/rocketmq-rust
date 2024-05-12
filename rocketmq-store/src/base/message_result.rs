@@ -109,9 +109,9 @@ impl PutMessageResult {
 }
 
 /// Represents the result of getting a message.
-pub struct GetMessageResult<'a> {
+pub struct GetMessageResult {
     /// The list of mapped buffer results.
-    pub message_mapped_list: Vec<SelectMappedBufferResult<'a>>,
+    pub message_mapped_list: Vec<SelectMappedBufferResult>,
     /// The list of message buffers.
     pub message_buffer_list: Vec<Vec<u8>>, /* Using Vec<u8> as a simplified representation of
                                             * ByteBuffer in Rust */

@@ -28,6 +28,7 @@ use crate::{
     config::message_store_config::MessageStoreConfig,
     consume_queue::mapped_file_queue::MappedFileQueue,
     filter::MessageFilter,
+    log_file::mapped_file::MappedFile,
     queue::{
         consume_queue_ext::ConsumeQueueExt, queue_offset_operator::QueueOffsetOperator,
         ConsumeQueueTrait, CqUnit, FileQueueLifeCycle,

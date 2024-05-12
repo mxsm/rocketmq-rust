@@ -17,16 +17,17 @@
 
 use std::{
     fs::{File, OpenOptions},
+    io::Write,
     path::PathBuf,
-    sync::atomic::{AtomicI32, AtomicI64},
+    sync::atomic::{AtomicBool, AtomicI32, AtomicI64, Ordering},
 };
 
-use bytes::Bytes;
+use bytes::{BufMut, Bytes, BytesMut};
 use memmap2::MmapMut;
 use rocketmq_common::common::message::{
     message_batch::MessageExtBatch, message_single::MessageExtBrokerInner,
 };
-use tracing::error;
+use tracing::{debug, error, info, warn};
 
 use crate::{
     base::{
@@ -37,29 +38,35 @@ use crate::{
         transient_store_pool::TransientStorePool,
     },
     config::flush_disk_type::FlushDiskType,
-    log_file::mapped_file::MappedFileBak,
+    log_file::mapped_file::MappedFile,
 };
 
+const OS_PAGE_SIZE: u64 = 1024 * 4;
+
+static TOTAL_MAPPED_VIRTUAL_MEMORY: AtomicI64 = AtomicI64::new(0);
+static TOTAL_MAPPED_FILES: AtomicI32 = AtomicI32::new(0);
+
 pub struct DefaultMappedFile {
-    pub(crate) file: File,
-    // pub(crate) file_channel: FileChannel,
-    pub(crate) mmapped_file: MmapMut,
-    pub(crate) transient_store_pool: Option<TransientStorePool>,
-    pub(crate) file_name: String,
-    pub(crate) file_from_offset: i64,
-    pub(crate) mapped_byte_buffer: Option<bytes::Bytes>,
-    pub(crate) wrote_position: AtomicI32,
-    pub(crate) committed_position: AtomicI32,
-    pub(crate) flushed_position: AtomicI32,
-    pub(crate) file_size: u64,
-    pub(crate) store_timestamp: AtomicI64,
-    pub(crate) first_create_in_queue: bool,
-    pub(crate) last_flush_time: u64,
-    // pub(crate) mapped_byte_buffer_wait_to_clean: Option<MappedByteBuffer>,
-    pub(crate) swap_map_time: u64,
-    pub(crate) mapped_byte_buffer_access_count_since_last_swap: AtomicI64,
-    pub(crate) start_timestamp: u64,
-    pub(crate) stop_timestamp: u64,
+    reference_resource: ReferenceResource,
+    file: File,
+    //  file_channel: FileChannel,
+    mmapped_file: parking_lot::Mutex<MmapMut>,
+    transient_store_pool: Option<TransientStorePool>,
+    file_name: String,
+    file_from_offset: u64,
+    mapped_byte_buffer: Option<bytes::Bytes>,
+    wrote_position: AtomicI32,
+    committed_position: AtomicI32,
+    flushed_position: AtomicI32,
+    file_size: u64,
+    store_timestamp: AtomicI64,
+    first_create_in_queue: bool,
+    last_flush_time: u64,
+    //  mapped_byte_buffer_wait_to_clean: Option<MappedByteBuffer>,
+    swap_map_time: u64,
+    mapped_byte_buffer_access_count_since_last_swap: AtomicI64,
+    start_timestamp: u64,
+    stop_timestamp: u64,
 }
 
 impl Default for DefaultMappedFile {
@@ -71,11 +78,26 @@ impl Default for DefaultMappedFile {
 impl DefaultMappedFile {
     pub fn new(file_name: String, file_size: u64) -> Self {
         let file_from_offset = Self::get_file_from_offset(&file_name);
-        let file = Self::build_file(&file_name, file_size);
+        let path_buf = PathBuf::from(file_name.clone());
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path_buf)
+            .unwrap();
+        file.set_len(file_size).unwrap();
+
         let mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
         Self {
+            reference_resource: ReferenceResource {
+                ref_count: AtomicI64::new(1),
+                available: AtomicBool::new(true),
+                cleanup_over: AtomicBool::new(false),
+                first_shutdown_timestamp: AtomicI64::new(0),
+            },
             file,
-            mmapped_file: mmap,
+            mmapped_file: parking_lot::Mutex::new(mmap),
             file_name,
             file_from_offset,
             mapped_byte_buffer: None,
@@ -94,13 +116,13 @@ impl DefaultMappedFile {
         }
     }
 
-    fn get_file_from_offset(file_name: &String) -> i64 {
+    fn get_file_from_offset(file_name: &String) -> u64 {
         let file_from_offset = PathBuf::from(file_name.to_owned())
             .file_name()
             .unwrap()
             .to_str()
             .unwrap()
-            .parse::<i64>()
+            .parse::<u64>()
             .unwrap();
         file_from_offset
     }
@@ -125,9 +147,24 @@ impl DefaultMappedFile {
         transient_store_pool: TransientStorePool,
     ) -> Self {
         let file_from_offset = Self::get_file_from_offset(&file_name);
-        let file = Self::build_file(&file_name, file_size);
+        let path_buf = PathBuf::from(file_name.clone());
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path_buf)
+            .unwrap();
+        file.set_len(file_size).unwrap();
+
         let mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
         Self {
+            reference_resource: ReferenceResource {
+                ref_count: AtomicI64::new(1),
+                available: AtomicBool::new(true),
+                cleanup_over: AtomicBool::new(false),
+                first_shutdown_timestamp: AtomicI64::new(0),
+            },
             file,
             file_name,
             file_from_offset,
@@ -144,53 +181,67 @@ impl DefaultMappedFile {
             start_timestamp: 0,
             transient_store_pool: Some(transient_store_pool),
             stop_timestamp: 0,
-            mmapped_file: mmap,
+            mmapped_file: parking_lot::Mutex::new(mmap),
         }
     }
 }
 
 #[allow(unused_variables)]
-impl MappedFileBak for DefaultMappedFile {
-    fn get_file_name(&self) -> &str {
-        todo!()
+impl MappedFile for DefaultMappedFile {
+    fn get_file_name(&self) -> String {
+        self.file_name.clone()
     }
 
     fn rename_to(&mut self, file_name: &str) -> bool {
         todo!()
     }
 
-    fn get_file_size(&self) -> usize {
-        todo!()
-    }
-
-    fn get_file_channel(&self) -> std::io::Result<&File> {
-        todo!()
+    fn get_file_size(&self) -> u64 {
+        self.file_size
     }
 
     fn is_full(&self) -> bool {
-        todo!()
+        self.file_size == self.wrote_position.load(Ordering::Relaxed) as u64
     }
 
     fn is_available(&self) -> bool {
         todo!()
     }
 
-    fn append_message(
-        &mut self,
-        message: &MessageExtBrokerInner,
-        message_callback: &dyn AppendMessageCallback,
+    fn append_message<AMC: AppendMessageCallback>(
+        &self,
+        message: MessageExtBrokerInner,
+        message_callback: &AMC,
         put_message_context: &PutMessageContext,
     ) -> AppendMessageResult {
-        todo!()
+        let mut message = message;
+        let current_pos = self.wrote_position.load(Ordering::Relaxed) as u64;
+        if current_pos >= self.file_size {
+            error!(
+                "MappedFile.appendMessage return null, wrotePosition: {} fileSize: {}",
+                current_pos, self.file_size
+            );
+            return AppendMessageResult {
+                status: AppendMessageStatus::UnknownError,
+                ..Default::default()
+            };
+        }
+        message_callback.do_append(
+            self.file_from_offset as i64,
+            self,
+            (self.file_size - current_pos) as i32,
+            &mut message,
+            put_message_context,
+        )
     }
 
-    fn append_messages(
+    fn append_messages<AMC: AppendMessageCallback>(
         &mut self,
         message: &MessageExtBatch,
-        message_callback: &dyn AppendMessageCallback,
+        message_callback: &AMC,
         put_message_context: &PutMessageContext,
     ) -> AppendMessageResult {
-        todo!()
+        unimplemented!()
     }
 
     fn append_message_compaction(
@@ -201,24 +252,61 @@ impl MappedFileBak for DefaultMappedFile {
         todo!()
     }
 
-    fn append_message_byte_array(&mut self, data: &[u8]) -> bool {
-        todo!()
+    fn get_bytes(&self, pos: usize, size: usize) -> Option<bytes::Bytes> {
+        if pos + size > self.file_size as usize {
+            return None;
+        }
+        Some(Bytes::copy_from_slice(
+            &self.mmapped_file.lock()[pos..pos + size],
+        ))
     }
 
-    fn append_message_bytes(&mut self, data: &mut Bytes) -> bool {
-        todo!()
+    fn append_message_offset_length(&self, data: &Bytes, offset: usize, length: usize) -> bool {
+        let current_pos = self.wrote_position.load(Ordering::Relaxed) as usize;
+        if current_pos + length <= self.file_size as usize {
+            match (&mut self.mmapped_file.lock()[current_pos..]).write_all(data.as_ref()) {
+                Ok(_) => {
+                    self.wrote_position
+                        .fetch_add(length as i32, Ordering::SeqCst);
+                    true
+                }
+                Err(_) => {
+                    error!("append_message_offset_length write_all error");
+                    false
+                }
+            }
+        } else {
+            false
+        }
     }
 
-    fn append_message_offset_length(&mut self, data: &[u8], offset: usize, length: usize) -> bool {
-        todo!()
-    }
-
-    fn get_file_from_offset(&self) -> i64 {
+    fn get_file_from_offset(&self) -> u64 {
         self.file_from_offset
     }
 
-    fn flush(&mut self, flush_least_pages: usize) -> usize {
-        todo!()
+    fn flush(&mut self, flush_least_pages: i32) -> i32 {
+        if self.is_able_to_flush(flush_least_pages) {
+            if self.reference_resource.hold() {
+                let value = self.get_read_position();
+                if self.transient_store_pool.is_none() {
+                    self.mmapped_file
+                        .lock()
+                        .flush()
+                        .expect("Error occurred when force data to disk.");
+                } else {
+                    unimplemented!()
+                }
+                self.flushed_position.store(value, Ordering::SeqCst);
+            } else {
+                warn!(
+                    "in flush, hold failed, flush offset = {}",
+                    self.flushed_position.load(Ordering::Relaxed)
+                );
+                self.flushed_position
+                    .store(self.get_read_position(), Ordering::SeqCst);
+            }
+        }
+        self.get_flushed_position()
     }
 
     fn commit(&mut self, commit_least_pages: usize) -> usize {
@@ -249,8 +337,29 @@ impl MappedFileBak for DefaultMappedFile {
         todo!()
     }
 
-    fn get_data(&self, pos: usize, size: usize, byte_buffer: &mut Bytes) -> bool {
-        todo!()
+    fn get_data(&self, pos: usize, size: usize) -> Option<bytes::Bytes> {
+        let read_position = self.get_read_position();
+        let read_end_position = pos + size;
+        if read_end_position <= read_position as usize {
+            if self.hold() {
+                let mut buffer = BytesMut::with_capacity(size);
+                buffer.put(&self.mmapped_file.lock()[pos..read_end_position]);
+                Some(buffer.freeze())
+            } else {
+                debug!(
+                    "matched, but hold failed, request pos: {}, fileFromOffset: {}",
+                    pos, self.file_from_offset
+                );
+                None
+            }
+        } else {
+            warn!(
+                "selectMappedBuffer request pos invalid, request pos: {}, size:{}, \
+                 fileFromOffset: {}",
+                pos, size, self.file_from_offset
+            );
+            None
+        }
     }
 
     fn destroy(&self, interval_forcibly: i64) -> bool {
@@ -258,48 +367,98 @@ impl MappedFileBak for DefaultMappedFile {
     }
 
     fn shutdown(&self, interval_forcibly: i64) {
-        todo!()
+        if self.reference_resource.available.load(Ordering::Relaxed) {
+            self.reference_resource
+                .available
+                .store(false, Ordering::Relaxed);
+            self.reference_resource.first_shutdown_timestamp.store(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as i64,
+                Ordering::Relaxed,
+            );
+            self.release();
+        } else if self.reference_resource.get_ref_count() > 0
+            && (std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as i64
+                - self
+                    .reference_resource
+                    .first_shutdown_timestamp
+                    .load(Ordering::Relaxed))
+                >= interval_forcibly
+        {
+            self.reference_resource.ref_count.store(
+                -1000 - self.reference_resource.get_ref_count(),
+                Ordering::Relaxed,
+            );
+            self.release();
+        }
     }
 
     fn release(&self) {
-        todo!()
+        let value = self
+            .reference_resource
+            .ref_count
+            .fetch_sub(1, Ordering::SeqCst)
+            - 1;
+        if value > 0 {
+            return;
+        }
+        self.reference_resource
+            .cleanup_over
+            .store(self.cleanup(value), Ordering::SeqCst);
     }
 
     fn hold(&self) -> bool {
-        todo!()
+        self.reference_resource.hold()
     }
 
     fn is_first_create_in_queue(&self) -> bool {
-        todo!()
+        self.first_create_in_queue
     }
 
     fn set_first_create_in_queue(&mut self, first_create_in_queue: bool) {
-        todo!()
+        self.first_create_in_queue = first_create_in_queue
     }
 
-    fn get_flushed_position(&self) -> usize {
-        todo!()
+    fn get_flushed_position(&self) -> i32 {
+        self.flushed_position.load(Ordering::Relaxed)
     }
 
-    fn set_flushed_position(&mut self, flushed_position: usize) {
-        todo!()
+    fn set_flushed_position(&self, flushed_position: i32) {
+        self.flushed_position
+            .store(flushed_position, Ordering::SeqCst)
     }
 
-    fn get_wrote_position(&self) -> usize {
+    fn get_wrote_position(&self) -> i32 {
         self.wrote_position
-            .load(std::sync::atomic::Ordering::Relaxed) as usize
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    fn set_wrote_position(&mut self, wrote_position: usize) {
-        todo!()
+    fn set_wrote_position(&self, wrote_position: i32) {
+        self.wrote_position.store(wrote_position, Ordering::SeqCst)
     }
 
-    fn get_read_position(&self) -> usize {
-        todo!()
+    fn get_read_position(&self) -> i32 {
+        match self.transient_store_pool {
+            None => self.wrote_position.load(Ordering::Relaxed),
+            Some(_) => {
+                //need to optimize
+                self.wrote_position.load(Ordering::Relaxed)
+            }
+        }
     }
 
-    fn set_committed_position(&mut self, committed_position: usize) {
-        todo!()
+    fn set_committed_position(&self, committed_position: i32) {
+        self.committed_position
+            .store(committed_position, Ordering::SeqCst)
+    }
+
+    fn get_committed_position(&self) -> i32 {
+        self.committed_position.load(Ordering::Relaxed)
     }
 
     fn mlock(&self) {
@@ -346,18 +505,14 @@ impl MappedFileBak for DefaultMappedFile {
         todo!()
     }
 
-    fn init(
+    /*    fn init(
         &mut self,
         file_name: &str,
         file_size: usize,
         transient_store_pool: &TransientStorePool,
     ) -> std::io::Result<()> {
         todo!()
-    }
-
-    fn iterator(&self, pos: usize) -> Box<dyn Iterator<Item = SelectMappedBufferResult>> {
-        todo!()
-    }
+    }*/
 
     fn is_loaded(&self, position: i64, size: usize) -> bool {
         todo!()
@@ -366,7 +521,7 @@ impl MappedFileBak for DefaultMappedFile {
 
 #[allow(unused_variables)]
 impl DefaultMappedFile {
-    fn append_message_inner(
+    /*    fn append_message_inner(
         &mut self,
         message: &mut MessageExtBrokerInner,
         append_message_callback: &mut dyn AppendMessageCallback,
@@ -404,5 +559,80 @@ impl DefaultMappedFile {
         put_message_context: &PutMessageContext,
     ) -> AppendMessageResult {
         unimplemented!()
+    }*/
+
+    fn is_able_to_flush(&self, flush_least_pages: i32) -> bool {
+        if self.is_full() {
+            return true;
+        }
+        let flush = self.flushed_position.load(Ordering::Relaxed);
+        let write = self.get_read_position();
+        if flush_least_pages > 0 {
+            return (write - flush) / OS_PAGE_SIZE as i32 >= flush_least_pages;
+        }
+        write > flush
+    }
+
+    fn cleanup(&self, current_ref: i64) -> bool {
+        if self.is_available() {
+            error!(
+                "this file[REF:{}] {} have not shutdown, stop unmapping.",
+                self.file_name, current_ref
+            );
+            return false;
+        }
+
+        if self.reference_resource.is_cleanup_over() {
+            error!(
+                "this file[REF:{}]  {} have cleanup, do not do it again.",
+                self.file_name, current_ref
+            );
+            return true;
+        }
+        TOTAL_MAPPED_VIRTUAL_MEMORY.fetch_sub(self.file_size as i64, Ordering::Relaxed);
+        TOTAL_MAPPED_FILES.fetch_sub(1, Ordering::Relaxed);
+        info!("unmap file[REF:{}] {} OK", current_ref, self.file_name);
+        true
+    }
+}
+
+pub struct ReferenceResource {
+    ref_count: AtomicI64,
+    available: AtomicBool,
+    cleanup_over: AtomicBool,
+    first_shutdown_timestamp: AtomicI64,
+}
+
+impl ReferenceResource {
+    pub fn new() -> Self {
+        Self {
+            ref_count: AtomicI64::new(1),
+            available: AtomicBool::new(true),
+            cleanup_over: AtomicBool::new(false),
+            first_shutdown_timestamp: AtomicI64::new(0),
+        }
+    }
+
+    pub fn hold(&self) -> bool {
+        if self.is_available() {
+            if self.ref_count.fetch_add(1, Ordering::Relaxed) + 1 > 0 {
+                return true;
+            } else {
+                self.ref_count.fetch_sub(1, Ordering::Relaxed);
+            }
+        }
+        false
+    }
+
+    pub fn is_available(&self) -> bool {
+        self.available.load(Ordering::Relaxed)
+    }
+
+    pub fn get_ref_count(&self) -> i64 {
+        self.ref_count.load(Ordering::Relaxed)
+    }
+
+    pub fn is_cleanup_over(&self) -> bool {
+        self.ref_count.load(Ordering::Relaxed) <= 0 && self.cleanup_over.load(Ordering::Relaxed)
     }
 }
