@@ -127,6 +127,9 @@ impl CommitLog {
         result
     }
 
+    pub fn shutdown(&mut self) {}
+
+    pub fn destroy(&mut self) {}
     /*    pub fn set_local_file_message_store(
         &mut self,
         local_file_message_store: Weak<Mutex<LocalFileMessageStore>>,
@@ -280,7 +283,6 @@ impl CommitLog {
                     true,
                     &message_store_config,
                 );
-                println!("{}", dispatch_request);
                 current_pos += size;
                 if dispatch_request.success && dispatch_request.msg_size > 0 {
                     last_valid_msg_phy_offset = process_offset + mapped_file_offset;
@@ -402,7 +404,6 @@ fn check_message_and_return_size(
     read_body: bool,
     message_store_config: &Arc<MessageStoreConfig>,
 ) -> DispatchRequest {
-    info!("check_message_and_return_size");
     let total_size = bytes.get_i32();
     let magic_code = bytes.get_i32();
     if magic_code == MESSAGE_MAGIC_CODE || magic_code == MESSAGE_MAGIC_CODE_V2 {

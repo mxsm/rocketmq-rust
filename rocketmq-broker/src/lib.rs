@@ -21,6 +21,7 @@ pub use broker_bootstrap::{BrokerBootstrap, Builder};
 
 pub mod command;
 
+mod broker;
 mod broker_bootstrap;
 mod broker_path_config_helper;
 mod broker_runtime;

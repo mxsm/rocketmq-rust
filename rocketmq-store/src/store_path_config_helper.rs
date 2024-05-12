@@ -76,7 +76,6 @@ pub fn get_delay_offset_store_path(root_dir: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
 
     use super::*;
 

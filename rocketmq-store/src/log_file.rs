@@ -39,6 +39,8 @@ pub trait RocketMQMessageStore: Clone {
     /// Throws an `Exception` if there is any error.
     fn start(&mut self) -> Result<(), Box<dyn std::error::Error>>;
 
+    fn shutdown(&mut self);
+
     fn set_confirm_offset(&mut self, phy_offset: i64);
 
     fn get_max_phy_offset(&self) -> i64;

@@ -20,8 +20,9 @@ use std::{
     collections::HashMap,
     error::Error,
     fs,
+    path::PathBuf,
     sync::{
-        atomic::{AtomicI64, Ordering},
+        atomic::{AtomicBool, AtomicI64, Ordering},
         Arc,
     },
     time::Instant,
@@ -57,6 +58,7 @@ use crate::{
         build_consume_queue::CommitLogDispatcherBuildConsumeQueue,
         local_file_consume_queue_store::ConsumeQueueStore, ConsumeQueueStoreTrait,
     },
+    store::running_flags::RunningFlags,
     store_path_config_helper::{get_abort_file, get_store_checkpoint},
 };
 
@@ -77,6 +79,8 @@ pub struct DefaultMessageStore {
     dispatcher: CommitLogDispatcherDefault,
     broker_init_max_offset: Arc<AtomicI64>,
     state_machine_version: Arc<AtomicI64>,
+    shutdown: Arc<AtomicBool>,
+    running_flags: Arc<RunningFlags>,
 }
 
 impl Clone for DefaultMessageStore {
@@ -96,6 +100,8 @@ impl Clone for DefaultMessageStore {
             dispatcher: self.dispatcher.clone(),
             broker_init_max_offset: self.broker_init_max_offset.clone(),
             state_machine_version: self.state_machine_version.clone(),
+            shutdown: self.shutdown.clone(),
+            running_flags: self.running_flags.clone(),
         }
     }
 }
@@ -141,6 +147,8 @@ impl DefaultMessageStore {
             dispatcher,
             broker_init_max_offset: Arc::new(AtomicI64::new(-1)),
             state_machine_version: Arc::new(AtomicI64::new(0)),
+            shutdown: Arc::new(AtomicBool::new(false)),
+            running_flags: Arc::new(RunningFlags::new()),
         }
     }
 }
@@ -268,6 +276,17 @@ impl DefaultMessageStore {
     pub fn consume_queue_store_mut(&mut self) -> &mut ConsumeQueueStore {
         &mut self.consume_queue_store
     }
+
+    fn delete_file(&mut self, file_name: String) {
+        match fs::remove_file(PathBuf::from(file_name.as_str())) {
+            Ok(_) => {
+                info!("delete OK, file:{}", file_name);
+            }
+            Err(err) => {
+                error!("delete error, file:{}, {:?}", file_name, err);
+            }
+        }
+    }
 }
 
 impl MessageStore for DefaultMessageStore {
@@ -326,6 +345,20 @@ impl MessageStore for DefaultMessageStore {
     fn start(&mut self) -> Result<(), Box<dyn Error>> {
         self.create_temp_file();
         Ok(())
+    }
+
+    fn shutdown(&mut self) {
+        if !self.shutdown.load(Ordering::Relaxed) {
+            self.shutdown.store(true, Ordering::SeqCst);
+            self.commit_log.shutdown();
+
+            if self.running_flags.is_writeable() {
+                //delete abort file
+                self.delete_file(get_abort_file(
+                    self.message_store_config.store_path_root_dir.as_str(),
+                ))
+            }
+        }
     }
 
     fn set_confirm_offset(&mut self, phy_offset: i64) {
