@@ -15,7 +15,9 @@
  * limitations under the License.
  */
 
-use chrono::{Datelike, TimeZone, Timelike, Utc};
+use std::path::PathBuf;
+
+use chrono::{DateTime, Datelike, TimeZone, Timelike, Utc};
 
 const HEX_ARRAY: [char; 16] = [
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F',
@@ -84,9 +86,24 @@ pub fn time_millis_to_human_string3(t: i64) -> String {
     )
 }
 
+pub fn time_millis_to_human_string(t: i64) -> String {
+    let dt = DateTime::<Utc>::from_timestamp_millis(t);
+    dt.as_ref().unwrap().format("%Y%m%d%H%M%S%3f").to_string()
+}
+
 pub fn offset_to_file_name(offset: u64) -> String {
     format!("{:020}", offset)
 }
+
+/*pub fn ensure_dir_ok(dir: impl AsRef<PathBuf>) -> Result<(), std::io::Error> {
+    match dir.as_ref().exists() {
+        true => Ok(()),
+        false => Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("{:?}", dir.as_ref()),
+        )),
+    }
+}*/
 
 #[cfg(test)]
 mod tests {

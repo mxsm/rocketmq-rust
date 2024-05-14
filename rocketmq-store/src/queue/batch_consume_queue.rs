@@ -211,6 +211,14 @@ impl ConsumeQueueTrait for BatchConsumeQueue {
         todo!()
     }
 
+    fn get_cq_unit_and_store_time(&self, index: i64) -> Option<(CqUnit, i64)> {
+        todo!()
+    }
+
+    fn get_earliest_unit_and_store_time(&self) -> Option<(CqUnit, i64)> {
+        todo!()
+    }
+
     fn get_earliest_unit(&self) -> CqUnit {
         todo!()
     }
@@ -271,7 +279,7 @@ impl ConsumeQueueTrait for BatchConsumeQueue {
         todo!()
     }
 
-    fn put_message_position_info_wrapper(&self, request: DispatchRequest) {
+    fn put_message_position_info_wrapper(&mut self, request: &DispatchRequest) {
         todo!()
     }
 

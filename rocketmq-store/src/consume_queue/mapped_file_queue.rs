@@ -161,7 +161,7 @@ impl MappedFileQueue {
         self.mapped_files.last().cloned()
     }
 
-    pub async fn get_last_mapped_file_mut_start_offset(
+    pub fn get_last_mapped_file_mut_start_offset(
         &mut self,
         start_offset: u64,
         need_create: bool,

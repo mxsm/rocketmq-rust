@@ -30,7 +30,7 @@ use rocketmq_common::common::{
 
 use crate::{
     base::{dispatch_request::DispatchRequest, swappable::Swappable},
-    consume_queue::consume_queue_ext::ConsumeQueueExtCqExtUnit,
+    consume_queue::consume_queue_ext::CqExtUnit,
     filter::MessageFilter,
     queue::queue_offset_operator::QueueOffsetOperator,
 };
@@ -85,7 +85,7 @@ pub struct CqUnit {
     pub pos: i64,
     pub batch_num: i16,
     pub tags_code: i64,
-    pub cq_ext_unit: Option<ConsumeQueueExtCqExtUnit>,
+    pub cq_ext_unit: Option<CqExtUnit>,
     pub native_buffer: Vec<u8>,
     pub compacted_offset: i32,
 }
@@ -168,12 +168,28 @@ pub trait ConsumeQueueStoreTrait: Send + Sync {
     ///
     /// `request`: Dispatch request.
     /// Throws RocksDBException only in rocksdb mode.
-    fn put_message_position_info_wrapper_single(&self, request: DispatchRequest);
+    fn put_message_position_info_wrapper(&self, request: &DispatchRequest);
+
+    fn put_message_position_info_wrapper_with_cq(
+        &self,
+        consume_queue: &mut dyn ConsumeQueueTrait,
+        request: &DispatchRequest,
+    );
+
+    fn range_query(
+        &self,
+        topic: &str,
+        queue_id: i32,
+        start_index: i64,
+        num: i32,
+    ) -> Option<Vec<bytes::Bytes>>;
+
+    fn get_signal(&self, topic: &str, queue_id: i32, start_index: i64) -> Option<bytes::Bytes>;
 
     /// Increase queue offset.
     /// `msg`: Message itself.
     /// `message_num`: Message number.
-    fn increase_queue_offset(&mut self, msg: MessageExtBrokerInner, message_num: i16);
+    fn increase_queue_offset(&mut self, msg: &MessageExtBrokerInner, message_num: i16);
 
     /// Increase lmq offset.
     /// `queue_key`: Queue key.
@@ -258,12 +274,11 @@ pub trait ConsumeQueueTrait: Send + Sync + FileQueueLifeCycle {
     /// Get cq unit at specified index.
     fn get(&self, index: i64) -> CqUnit;
 
+    fn get_cq_unit_and_store_time(&self, index: i64) -> Option<(CqUnit, i64)>;
+
     /// Get earliest cq unit.
-    /*    fn get_earliest_unit_and_store_time(
-            &self,
-            index: i64,
-        ) -> Result<Pair<CqUnit, i64>, RocksDBException>;
-    */
+    fn get_earliest_unit_and_store_time(&self) -> Option<(CqUnit, i64)>;
+
     /// Get earliest cq unit.
     fn get_earliest_unit(&self) -> CqUnit;
 
@@ -314,7 +329,7 @@ pub trait ConsumeQueueTrait: Send + Sync + FileQueueLifeCycle {
     fn correct_min_offset(&self, min_commit_log_offset: i64);
 
     /// Do dispatch.
-    fn put_message_position_info_wrapper(&self, request: DispatchRequest);
+    fn put_message_position_info_wrapper(&mut self, request: &DispatchRequest);
 
     /// Assign queue offset.
     /*    fn assign_queue_offset(

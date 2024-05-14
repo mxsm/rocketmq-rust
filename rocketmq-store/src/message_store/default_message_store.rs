@@ -71,7 +71,7 @@ pub struct DefaultMessageStore {
     //message_store_runtime: Option<RocketMQRuntime>,
     commit_log: CommitLog,
     compaction_service: CompactionService,
-    store_checkpoint: Option<StoreCheckpoint>,
+    store_checkpoint: Option<Arc<StoreCheckpoint>>,
     master_flushed_offset: Arc<AtomicI64>,
     index_service: IndexService,
     allocate_mapped_file_service: Arc<AllocateMappedFileService>,
@@ -112,18 +112,29 @@ impl DefaultMessageStore {
         broker_config: Arc<BrokerConfig>,
     ) -> Self {
         let index_service = IndexService {};
+        let running_flags = Arc::new(RunningFlags::new());
+        let store_checkpoint = Arc::new(
+            StoreCheckpoint::new(get_store_checkpoint(
+                message_store_config.store_path_root_dir.as_str(),
+            ))
+            .unwrap(),
+        );
         let build_index =
             CommitLogDispatcherBuildIndex::new(index_service.clone(), message_store_config.clone());
         let topic_config_table = Arc::new(parking_lot::Mutex::new(HashMap::new()));
-        let consume_queue_store =
-            ConsumeQueueStore::new(message_store_config.clone(), topic_config_table.clone());
+        let consume_queue_store = ConsumeQueueStore::new(
+            message_store_config.clone(),
+            topic_config_table.clone(),
+            running_flags.clone(),
+            store_checkpoint.clone(),
+        );
         let build_consume_queue =
             CommitLogDispatcherBuildConsumeQueue::new(consume_queue_store.clone());
         let dispatcher = CommitLogDispatcherDefault {
             build_index,
             build_consume_queue,
         };
-        let store_checkpoint = StoreCheckpoint {};
+
         let commit_log = CommitLog::new(
             message_store_config.clone(),
             broker_config.clone(),
@@ -148,7 +159,7 @@ impl DefaultMessageStore {
             broker_init_max_offset: Arc::new(AtomicI64::new(-1)),
             state_machine_version: Arc::new(AtomicI64::new(0)),
             shutdown: Arc::new(AtomicBool::new(false)),
-            running_flags: Arc::new(RunningFlags::new()),
+            running_flags,
         }
     }
 }
@@ -301,12 +312,12 @@ impl MessageStore for DefaultMessageStore {
             },
             self.message_store_config.store_path_root_dir
         );
-        //load Commit log
+        //load Commit log-- init commit mapped file queue
         let mut result = self.commit_log.load();
         if !result {
             return result;
         }
-        // load Consume Queue
+        // load Consume Queue-- init Consume log mapped file queue
         result &= self.consume_queue_store.load();
 
         if self.message_store_config.enable_compaction {
@@ -317,13 +328,13 @@ impl MessageStore for DefaultMessageStore {
         }
 
         if result {
-            self.store_checkpoint = Some(StoreCheckpoint::new(get_store_checkpoint(
+            /*self.store_checkpoint = Some(StoreCheckpoint::new(get_store_checkpoint(
                 self.message_store_config.store_path_root_dir.as_str(),
-            )));
+            )));*/
             let checkpoint = self.store_checkpoint.as_ref().unwrap();
             self.master_flushed_offset =
-                Arc::new(AtomicI64::new(checkpoint.get_master_flushed_offset()));
-            self.set_confirm_offset(checkpoint.get_confirm_phy_offset());
+                Arc::new(AtomicI64::new(checkpoint.master_flushed_offset() as i64));
+            self.set_confirm_offset(checkpoint.confirm_phy_offset() as i64);
             result = self.index_service.load(last_exit_ok);
             self.recover(last_exit_ok).await;
             info!(

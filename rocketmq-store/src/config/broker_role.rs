@@ -18,8 +18,7 @@ use std::fmt;
 
 use serde::{Deserialize, Deserializer};
 
-#[allow(dead_code)]
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone, Default, Eq, PartialEq)]
 pub enum BrokerRole {
     #[default]
     AsyncMaster,

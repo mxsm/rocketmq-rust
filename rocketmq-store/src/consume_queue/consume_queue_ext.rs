@@ -15,4 +15,34 @@
  * limitations under the License.
  */
 
-pub struct ConsumeQueueExtCqExtUnit {}
+const MIN_EXT_UNIT_SIZE: i16 = 2  // size, 32k max
+ + 8 * 2 // msg time + tagCode
+  + 2; // bitMapSize
+const MAX_EXT_UNIT_SIZE: i16 = i16::MAX;
+
+#[derive(Clone, Default)]
+pub struct CqExtUnit {
+    size: i16,
+    tags_code: i64,
+    msg_store_time: i64,
+    bit_map_size: i16,
+    filter_bit_map: Option<Vec<u8>>,
+}
+
+impl CqExtUnit {
+    pub fn new(tags_code: i64, msg_store_time: i64, filter_bit_map: Option<Vec<u8>>) -> Self {
+        let bit_map_size = if let Some(val) = filter_bit_map.as_ref() {
+            val.len() as i16
+        } else {
+            0
+        };
+        let size = MIN_EXT_UNIT_SIZE + bit_map_size;
+        Self {
+            size,
+            tags_code,
+            msg_store_time,
+            bit_map_size,
+            filter_bit_map,
+        }
+    }
+}

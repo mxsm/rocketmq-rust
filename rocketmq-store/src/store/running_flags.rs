@@ -28,6 +28,12 @@ const DISK_FULL_BIT: u32 = 1 << 4;
 const FENCED_BIT: u32 = 1 << 5;
 const LOGIC_DISK_FULL_BIT: u32 = 1 << 6;
 
+impl Default for RunningFlags {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RunningFlags {
     pub fn new() -> Self {
         Self {

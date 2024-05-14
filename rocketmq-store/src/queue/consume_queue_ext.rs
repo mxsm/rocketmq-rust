@@ -18,7 +18,7 @@ use std::path::PathBuf;
 
 use tracing::info;
 
-use crate::consume_queue::mapped_file_queue::MappedFileQueue;
+use crate::consume_queue::{consume_queue_ext::CqExtUnit, mapped_file_queue::MappedFileQueue};
 
 const END_BLANK_DATA_LENGTH: usize = 4;
 
@@ -81,4 +81,8 @@ impl ConsumeQueueExt {
     }
 
     pub fn recover(&mut self) {}
+
+    pub fn put(&self, cq_ext_unit: CqExtUnit) -> i64 {
+        unimplemented!()
+    }
 }
