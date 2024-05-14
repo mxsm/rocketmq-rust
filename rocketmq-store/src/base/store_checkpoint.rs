@@ -15,21 +15,151 @@
  * limitations under the License.
  */
 
-#[derive(Default, Clone)]
-pub struct StoreCheckpoint {}
+use std::{
+    fs::{File, OpenOptions},
+    io::Write,
+    path::Path,
+    sync::atomic::{AtomicU64, Ordering},
+};
+
+use memmap2::MmapMut;
+use tracing::info;
+
+use crate::log_file::mapped_file::default_impl::OS_PAGE_SIZE;
+
+pub struct StoreCheckpoint {
+    file: File,
+    mmap: parking_lot::Mutex<MmapMut>,
+    physic_msg_timestamp: AtomicU64,
+    logics_msg_timestamp: AtomicU64,
+    index_msg_timestamp: AtomicU64,
+    master_flushed_offset: AtomicU64,
+    confirm_phy_offset: AtomicU64,
+}
 
 impl StoreCheckpoint {
-    pub fn new(_scp_path: String) -> Self {
-        Self {}
+    pub fn new<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path.as_ref())?;
+
+        let mmap = unsafe { MmapMut::map_mut(&file)? };
+        let _ = file.set_len(OS_PAGE_SIZE);
+        if file.metadata()?.len() > 0 {
+            let buffer = &mmap[..8];
+            let physic_msg_timestamp = u64::from_ne_bytes(buffer.try_into().unwrap());
+            let logics_msg_timestamp = u64::from_ne_bytes(mmap[8..16].try_into().unwrap());
+            let index_msg_timestamp = u64::from_ne_bytes(mmap[16..24].try_into().unwrap());
+            let master_flushed_offset = u64::from_ne_bytes(mmap[24..32].try_into().unwrap());
+            let confirm_phy_offset = u64::from_ne_bytes(mmap[32..40].try_into().unwrap());
+
+            info!("store checkpoint file exists, {}", path.as_ref().display());
+            info!("physicMsgTimestamp: {}", physic_msg_timestamp);
+            info!("logicsMsgTimestamp: {}", logics_msg_timestamp);
+            info!("indexMsgTimestamp: {}", index_msg_timestamp);
+            info!("masterFlushedOffset: {}", master_flushed_offset);
+            info!("confirmPhyOffset: {}", confirm_phy_offset);
+
+            Ok(Self {
+                file,
+                mmap: parking_lot::Mutex::new(mmap),
+                physic_msg_timestamp: AtomicU64::new(physic_msg_timestamp),
+                logics_msg_timestamp: AtomicU64::new(logics_msg_timestamp),
+                index_msg_timestamp: AtomicU64::new(index_msg_timestamp),
+                master_flushed_offset: AtomicU64::new(master_flushed_offset),
+                confirm_phy_offset: AtomicU64::new(confirm_phy_offset),
+            })
+        } else {
+            //info!("store checkpoint file not exists, {}", path.as_ref());
+            Ok(Self {
+                file,
+                mmap: parking_lot::Mutex::new(mmap),
+                physic_msg_timestamp: AtomicU64::new(0),
+                logics_msg_timestamp: AtomicU64::new(0),
+                index_msg_timestamp: AtomicU64::new(0),
+                master_flushed_offset: AtomicU64::new(0),
+                confirm_phy_offset: AtomicU64::new(0),
+            })
+        }
     }
 
-    pub fn get_master_flushed_offset(&self) -> i64 {
-        -1
+    fn flush(&self) -> std::io::Result<()> {
+        let mut buffer = &mut self.mmap.lock()[..8];
+        buffer.write_all(
+            self.physic_msg_timestamp
+                .load(Ordering::Relaxed)
+                .to_ne_bytes()
+                .as_ref(),
+        )?;
+        buffer.write_all(
+            self.logics_msg_timestamp
+                .load(Ordering::Relaxed)
+                .to_ne_bytes()
+                .as_ref(),
+        )?;
+        buffer.write_all(
+            self.index_msg_timestamp
+                .load(Ordering::Relaxed)
+                .to_ne_bytes()
+                .as_ref(),
+        )?;
+        buffer.write_all(
+            self.master_flushed_offset
+                .load(Ordering::Relaxed)
+                .to_ne_bytes()
+                .as_ref(),
+        )?;
+        buffer.write_all(
+            self.confirm_phy_offset
+                .load(Ordering::Relaxed)
+                .to_ne_bytes()
+                .as_ref(),
+        )?;
+        self.mmap.lock().flush()?;
+        Ok(())
     }
 
-    pub fn get_confirm_phy_offset(&self) -> i64 {
-        -1
+    fn shutdown(&self) -> std::io::Result<()> {
+        self.flush()
     }
 
-    pub fn set_confirm_phy_offset(&mut self, _confirm_phy_offset: i64) {}
+    pub fn set_physic_msg_timestamp(&self, physic_msg_timestamp: u64) {
+        self.physic_msg_timestamp
+            .store(physic_msg_timestamp, Ordering::Relaxed);
+    }
+    pub fn set_logics_msg_timestamp(&self, logics_msg_timestamp: u64) {
+        self.logics_msg_timestamp
+            .store(logics_msg_timestamp, Ordering::Relaxed);
+    }
+    pub fn set_index_msg_timestamp(&self, index_msg_timestamp: u64) {
+        self.index_msg_timestamp
+            .store(index_msg_timestamp, Ordering::Relaxed);
+    }
+    pub fn set_master_flushed_offset(&self, master_flushed_offset: u64) {
+        self.master_flushed_offset
+            .store(master_flushed_offset, Ordering::Relaxed);
+    }
+    pub fn set_confirm_phy_offset(&self, confirm_phy_offset: u64) {
+        self.confirm_phy_offset
+            .store(confirm_phy_offset, Ordering::Relaxed);
+    }
+
+    pub fn physic_msg_timestamp(&self) -> u64 {
+        self.physic_msg_timestamp.load(Ordering::Relaxed)
+    }
+    pub fn logics_msg_timestamp(&self) -> u64 {
+        self.logics_msg_timestamp.load(Ordering::Relaxed)
+    }
+    pub fn index_msg_timestamp(&self) -> u64 {
+        self.index_msg_timestamp.load(Ordering::Relaxed)
+    }
+    pub fn master_flushed_offset(&self) -> u64 {
+        self.master_flushed_offset.load(Ordering::Relaxed)
+    }
+    pub fn confirm_phy_offset(&self) -> u64 {
+        self.confirm_phy_offset.load(Ordering::Relaxed)
+    }
 }

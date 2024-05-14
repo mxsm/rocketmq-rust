@@ -14,9 +14,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
+
 use crate::{
     base::{commit_log_dispatcher::CommitLogDispatcher, dispatch_request::DispatchRequest},
-    queue::local_file_consume_queue_store::ConsumeQueueStore,
+    queue::{local_file_consume_queue_store::ConsumeQueueStore, ConsumeQueueStoreTrait},
 };
 
 #[derive(Clone)]
@@ -34,7 +36,13 @@ impl CommitLogDispatcherBuildConsumeQueue {
 
 impl CommitLogDispatcher for CommitLogDispatcherBuildConsumeQueue {
     fn dispatch(&mut self, dispatch_request: &DispatchRequest) {
-        self.consume_queue_store
-            .put_message_position_info_wrapper(dispatch_request);
+        let tran_type = MessageSysFlag::get_transaction_value(dispatch_request.sys_flag);
+        match tran_type {
+            MessageSysFlag::TRANSACTION_NOT_TYPE | MessageSysFlag::TRANSACTION_COMMIT_TYPE => {
+                self.consume_queue_store
+                    .put_message_position_info_wrapper(dispatch_request);
+            }
+            _ => {}
+        }
     }
 }

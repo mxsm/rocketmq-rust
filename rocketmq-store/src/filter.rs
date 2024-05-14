@@ -17,7 +17,7 @@
 
 use std::collections::HashMap;
 
-use crate::consume_queue::consume_queue_ext::ConsumeQueueExtCqExtUnit;
+use crate::consume_queue::consume_queue_ext::CqExtUnit;
 
 /// Represents a message filter.
 pub trait MessageFilter {
@@ -26,7 +26,7 @@ pub trait MessageFilter {
     fn is_matched_by_consume_queue(
         &self,
         tags_code: Option<i64>,
-        cq_ext_unit: Option<&ConsumeQueueExtCqExtUnit>,
+        cq_ext_unit: Option<&CqExtUnit>,
     ) -> bool;
 
     /// Matches by message content which is stored in the commit log.

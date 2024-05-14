@@ -17,6 +17,8 @@
 
 use std::{collections::HashMap, sync::Arc};
 
+use tracing::info;
+
 pub struct QueueOffsetOperator {
     topic_queue_table: Arc<parking_lot::Mutex<HashMap<String, i64>>>,
     batch_topic_queue_table: Arc<parking_lot::Mutex<HashMap<String, i64>>>,
@@ -106,7 +108,7 @@ impl QueueOffsetOperator {
         let mut lmq_topic_queue_table = self.lmq_topic_queue_table.lock();
         lmq_topic_queue_table.remove(&topic_queue_key);
 
-        println!(
+        info!(
             "removeQueueFromTopicQueueTable OK Topic: {} QueueId: {}",
             topic, queue_id
         );

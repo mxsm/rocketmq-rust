@@ -41,7 +41,7 @@ use crate::{
     log_file::mapped_file::MappedFile,
 };
 
-const OS_PAGE_SIZE: u64 = 1024 * 4;
+pub const OS_PAGE_SIZE: u64 = 1024 * 4;
 
 static TOTAL_MAPPED_VIRTUAL_MEMORY: AtomicI64 = AtomicI64::new(0);
 static TOTAL_MAPPED_FILES: AtomicI32 = AtomicI32::new(0);

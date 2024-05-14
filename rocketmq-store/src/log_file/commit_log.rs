@@ -86,7 +86,7 @@ pub struct CommitLog {
     //local_file_message_store: Option<Weak<Mutex<LocalFileMessageStore>>>,
     dispatcher: CommitLogDispatcherDefault,
     confirm_offset: i64,
-    store_checkpoint: StoreCheckpoint,
+    store_checkpoint: Arc<StoreCheckpoint>,
     append_message_callback: Arc<DefaultAppendMessageCallback>,
 }
 
@@ -95,7 +95,7 @@ impl CommitLog {
         message_store_config: Arc<MessageStoreConfig>,
         broker_config: Arc<BrokerConfig>,
         dispatcher: &CommitLogDispatcherDefault,
-        store_checkpoint: StoreCheckpoint,
+        store_checkpoint: Arc<StoreCheckpoint>,
         topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
     ) -> Self {
         let enabled_append_prop_crc = message_store_config.enabled_append_prop_crc;
@@ -139,7 +139,8 @@ impl CommitLog {
 
     pub fn set_confirm_offset(&mut self, phy_offset: i64) {
         self.confirm_offset = phy_offset;
-        self.store_checkpoint.set_confirm_phy_offset(phy_offset);
+        self.store_checkpoint
+            .set_confirm_phy_offset(phy_offset as u64);
     }
 
     pub async fn put_message(&mut self, msg: MessageExtBrokerInner) -> PutMessageResult {
@@ -193,7 +194,6 @@ impl CommitLog {
             None => self
                 .mapped_file_queue
                 .get_last_mapped_file_mut_start_offset(0, true)
-                .await
                 .unwrap(),
             Some(mapped_file) => mapped_file,
         };
@@ -336,7 +336,7 @@ impl CommitLog {
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
-                      files"
+                        files"
             );
             self.mapped_file_queue.set_flushed_where(0);
             self.mapped_file_queue.set_committed_where(0);
