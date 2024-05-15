@@ -223,6 +223,18 @@ impl CommitLog {
         }
     }
 
+    fn on_commit_log_dispatch(
+        &mut self,
+        request: &DispatchRequest,
+        do_dispatch: bool,
+        is_recover: bool,
+        is_file_end: bool,
+    ) {
+        if do_dispatch && !is_file_end {
+            self.dispatcher.dispatch(request);
+        }
+    }
+
     pub fn is_multi_dispatch_msg(msg_inner: &MessageExtBrokerInner) -> bool {
         msg_inner
             .property(MessageConst::PROPERTY_INNER_MULTI_DISPATCH)
@@ -268,6 +280,7 @@ impl CommitLog {
             //When recovering, the maximum value obtained when getting get_confirm_offset is
             // the file size of the latest file plus the value resolved from the file name.
             let mut last_valid_msg_phy_offset = self.get_confirm_offset() as u64;
+            // normal recover doesn't require dispatching
             let do_dispatch = false;
             let mut current_pos = 0usize;
             loop {
@@ -287,11 +300,12 @@ impl CommitLog {
                 if dispatch_request.success && dispatch_request.msg_size > 0 {
                     last_valid_msg_phy_offset = process_offset + mapped_file_offset;
                     mapped_file_offset += dispatch_request.msg_size as u64;
-                    self.dispatcher.dispatch(&dispatch_request);
+                    self.on_commit_log_dispatch(&dispatch_request, do_dispatch, true, false);
                 } else if dispatch_request.success && dispatch_request.msg_size == 0 {
                     // Come the end of the file, switch to the next file Since the
                     // return 0 representatives met last hole,
                     // this can not be included in truncate offset
+                    self.on_commit_log_dispatch(&dispatch_request, do_dispatch, true, true);
                     index += 1;
                     if index >= mapped_files_inner.len() {
                         info!(
@@ -324,7 +338,13 @@ impl CommitLog {
                 self.set_confirm_offset(last_valid_msg_phy_offset as i64);
             }
 
-            if max_phy_offset_of_consume_queue as u64 > process_offset {
+            // Clear ConsumeQueue redundant data
+            if max_phy_offset_of_consume_queue as u64 >= process_offset {
+                warn!(
+                    "maxPhyOffsetOfConsumeQueue({}) >= processOffset({}), truncate dirty logic \
+                     files",
+                    max_phy_offset_of_consume_queue, process_offset
+                );
                 message_store.truncate_dirty_logic_files(process_offset as i64)
             }
             self.mapped_file_queue
@@ -336,7 +356,7 @@ impl CommitLog {
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
-                        files"
+                         files"
             );
             self.mapped_file_queue.set_flushed_where(0);
             self.mapped_file_queue.set_committed_where(0);
@@ -557,7 +577,7 @@ fn check_message_and_return_size(
         ..DispatchRequest::default()
     };
     set_batch_size_if_needed(&properties_map, &mut dispatch_request);
-    dispatch_request.properties_map = properties_map;
+    dispatch_request.properties_map = Some(properties_map);
     dispatch_request
 }
 

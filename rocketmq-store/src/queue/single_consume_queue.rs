@@ -120,9 +120,9 @@ impl ConsumeQueue {
         *self.max_physic_offset.lock() = max_physic_offset;
     }
 
-    pub fn truncate_dirty_logic_files_handler(&self, phy_offset: i64, delete_file: bool) {
+    pub fn truncate_dirty_logic_files_handler(&mut self, phy_offset: i64, delete_file: bool) {
         self.set_max_physic_offset(phy_offset);
-        let mut max_ext_addr = -1i64;
+        let mut max_ext_addr = 1i64;
         let mut should_delete_file = false;
         let mapped_file_size = self.mapped_file_size;
         loop {
@@ -148,7 +148,7 @@ impl ConsumeQueue {
                 let size = byte_buffer.get_i32();
                 let tags_code = byte_buffer.get_i64();
                 if 0 == index {
-                    if offset > phy_offset {
+                    if offset >= phy_offset {
                         should_delete_file = true;
                         break;
                     } else {
@@ -184,8 +184,10 @@ impl ConsumeQueue {
                 if delete_file {
                     self.mapped_file_queue.delete_last_mapped_file();
                 } else {
-                    self.mapped_file_queue
-                        .delete_expired_file(vec![self.mapped_file_queue.get_last_mapped_file()]);
+                    self.mapped_file_queue.delete_expired_file(vec![self
+                        .mapped_file_queue
+                        .get_last_mapped_file()
+                        .unwrap()]);
                 }
             }
         }
@@ -321,7 +323,7 @@ impl FileQueueLifeCycle for ConsumeQueue {
         if mapped_files.is_empty() {
             return;
         }
-        let mut index = (mapped_files.len()) as i32 - 1;
+        let mut index = (mapped_files.len()) as i32 - 3;
         if index < 0 {
             index = 0;
         }
@@ -351,7 +353,7 @@ impl FileQueueLifeCycle for ConsumeQueue {
                     if Self::is_ext_addr(tags_code) {
                         max_ext_addr = tags_code;
                     }
-                    println!("offset {}, size {}, tags_code {}", offset, size, tags_code);
+                    //println!("offset {}, size {}, tags_code {}", offset, size, tags_code);
                 } else {
                     info!(
                         "recover current consume queue file over,  {}, {} {} {}",
@@ -417,7 +419,7 @@ impl FileQueueLifeCycle for ConsumeQueue {
         todo!()
     }
 
-    fn truncate_dirty_logic_files(&self, max_commit_log_pos: i64) {
+    fn truncate_dirty_logic_files(&mut self, max_commit_log_pos: i64) {
         self.truncate_dirty_logic_files_handler(max_commit_log_pos, true);
     }
 
@@ -545,7 +547,7 @@ impl ConsumeQueueTrait for ConsumeQueue {
                 let ext_addr = self.consume_queue_ext.as_ref().unwrap().put(CqExtUnit::new(
                     tags_code,
                     request.store_timestamp,
-                    Some(request.bit_map.clone()),
+                    request.bit_map.clone(),
                 ));
 
                 if Self::is_ext_addr(ext_addr) {

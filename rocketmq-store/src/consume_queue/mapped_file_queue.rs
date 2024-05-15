@@ -52,21 +52,6 @@ pub struct MappedFileQueue {
     pub(crate) store_timestamp: Arc<AtomicU64>,
 }
 
-/*impl Swappable for MappedFileQueue {
-    fn swap_map(
-        &self,
-        _reserve_num: i32,
-        _force_swap_interval_ms: i64,
-        _normal_swap_interval_ms: i64,
-    ) {
-        todo!()
-    }
-
-    fn clean_swapped_map(&self, _force_clean_swap_interval_ms: i64) {
-        todo!()
-    }
-}*/
-
 impl MappedFileQueue {
     pub fn new(
         store_path: String,
@@ -115,17 +100,23 @@ impl MappedFileQueue {
                 && files.len() == index
             {
                 if let Err(err) = fs::remove_file(file) {
-                    warn!("{} size is 0, auto delete. is_ok: {}", file.display(), err);
+                    warn!(
+                        "{} size is 0, auto delete. is_ok: false, err: {}",
+                        file.display(),
+                        err
+                    );
+                } else {
+                    warn!("{} size is 0, auto delete. is_ok: true", file.display());
                 }
                 continue;
             }
 
-            if file.metadata().map(|metadata| metadata.len()).unwrap_or(0) != self.mapped_file_size
-            {
+            let file_size = file.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+            if file_size != self.mapped_file_size {
                 warn!(
                     "{} {} length not matched message store config value, please check it manually",
                     file.display(),
-                    file.metadata().map(|metadata| metadata.len()).unwrap_or(0)
+                    file_size
                 );
                 return false;
             }
@@ -133,7 +124,9 @@ impl MappedFileQueue {
             let mapped_file =
                 DefaultMappedFile::new(file.to_string_lossy().to_string(), self.mapped_file_size);
             // Set wrote, flushed, committed positions for mapped_file
-
+            mapped_file.set_wrote_position(self.mapped_file_size as i32);
+            mapped_file.set_flushed_position(self.mapped_file_size as i32);
+            mapped_file.set_committed_position(self.mapped_file_size as i32);
             self.mapped_files.push(Arc::new(mapped_file));
             // self.mapped_files
             //     .push(mapped_file);
@@ -142,20 +135,6 @@ impl MappedFileQueue {
 
         true
     }
-
-    // pub fn get_last_mapped_file_mut(&mut self) -> Option<&mut LocalMappedFile>{
-    //     if self.mapped_files.is_empty() {
-    //         return None;
-    //     }
-    //     self.mapped_files.last_mut()
-    // }
-
-    // pub fn get_last_mapped_file(&mut self) -> Option<&LocalMappedFile>{
-    //     if self.mapped_files.is_empty() {
-    //         return None;
-    //     }
-    //     self.mapped_files.last()
-    // }
 
     pub fn get_last_mapped_file(&self) -> Option<Arc<DefaultMappedFile>> {
         if self.mapped_files.is_empty() {
@@ -237,39 +216,53 @@ impl MappedFileQueue {
             .store(committed_where as u64, Ordering::SeqCst);
     }
 
-    pub fn truncate_dirty_files(&mut self, offset: i64) {}
+    pub fn truncate_dirty_files(&mut self, offset: i64) {
+        let mut will_remove_files = Vec::new();
+        for mapped_file in self.mapped_files.iter() {
+            let file_tail_offset = mapped_file.get_file_from_offset() + self.mapped_file_size;
+            if file_tail_offset as i64 <= offset {
+                mapped_file.set_wrote_position((offset % self.mapped_file_size as i64) as i32);
+                mapped_file.set_committed_position((offset % self.mapped_file_size as i64) as i32);
+                mapped_file.set_flushed_position((offset % self.mapped_file_size as i64) as i32);
+            } else {
+                mapped_file.destroy(1000);
+                will_remove_files.push(mapped_file.clone());
+            }
+        }
+    }
 
     pub fn get_max_offset(&self) -> i64 {
-        /*let handle = Handle::current();
-        let mapped_file = self.get_last_mapped_file();
-        std::thread::spawn(move || {
-            handle.block_on(async move {
-                match mapped_file {
-                    None => 0,
-                    Some(value) => {
-                        let file = value.lock().await;
-                        file.get_file_from_offset() as i64 + file.get_read_position() as i64
-                    }
-                }
-            })
-        })
-        .join()
-        .unwrap()*/
         match self.get_last_mapped_file() {
             None => 0,
             Some(file) => file.get_file_from_offset() as i64 + file.get_read_position() as i64,
         }
     }
 
-    pub fn delete_last_mapped_file(&self) {
-        unimplemented!()
+    pub fn delete_last_mapped_file(&mut self) {
+        if let Some(last_mapped_file) = self.get_last_mapped_file() {
+            last_mapped_file.destroy(1000);
+            self.mapped_files
+                .retain(|mf| mf.as_ref() != last_mapped_file.as_ref());
+            info!(
+                "on recover, destroy a logic mapped file {}",
+                last_mapped_file.get_file_name()
+            );
+        }
     }
 
-    pub(crate) fn delete_expired_file(&self, files: Vec<Option<Arc<DefaultMappedFile>>>) {}
+    pub(crate) fn delete_expired_file(&mut self, files: Vec<Arc<DefaultMappedFile>>) {
+        let mut files = files;
+        if !files.is_empty() {
+            files.retain(|mf| self.mapped_files.contains(mf));
+            self.mapped_files.retain(|mf| !files.contains(mf));
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::ptr;
+
     use super::*;
 
     #[test]

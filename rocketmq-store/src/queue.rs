@@ -58,7 +58,7 @@ pub trait FileQueueLifeCycle: Swappable {
 
     /// Truncate dirty logic files starting at max commit log position.
     /// `max_commit_log_pos`: Max commit log position.
-    fn truncate_dirty_logic_files(&self, max_commit_log_pos: i64);
+    fn truncate_dirty_logic_files(&mut self, max_commit_log_pos: i64);
 
     /// Delete expired files ending at min commit log position.
     /// `min_commit_log_pos`: Min commit log position.

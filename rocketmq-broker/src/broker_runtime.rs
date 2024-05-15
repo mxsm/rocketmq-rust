@@ -171,7 +171,9 @@ impl BrokerRuntime {
 
     pub fn shutdown(&mut self) {
         self.broker_out_api.shutdown();
-        self.message_store.as_mut().unwrap().shutdown();
+        if let Some(message_store) = &mut self.message_store {
+            message_store.shutdown()
+        }
         if let Some(runtime) = self.broker_runtime.take() {
             runtime.shutdown();
         }
@@ -213,15 +215,16 @@ impl BrokerRuntime {
         self.recover_initialize_service().await
     }
 
+    ///Load the original configuration data from the corresponding configuration files located
+    /// under the ${HOME}\config directory.
     fn initialize_metadata(&self) -> bool {
         info!("======Starting initialize metadata========");
-
         self.topic_config_manager.load()
-            & self.topic_queue_mapping_manager.load()
-            & self.consumer_offset_manager.load()
-            & self.subscription_group_manager.load()
-            & self.consumer_filter_manager.load()
-            & self.consumer_order_info_manager.load()
+            && self.topic_queue_mapping_manager.load()
+            && self.consumer_offset_manager.load()
+            && self.subscription_group_manager.load()
+            && self.consumer_filter_manager.load()
+            && self.consumer_order_info_manager.load()
     }
 
     async fn initialize_message_store(&mut self) -> bool {

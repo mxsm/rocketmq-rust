@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-use std::str::FromStr;
+use std::{fmt, str::FromStr};
 
 use anyhow::anyhow;
 
@@ -25,6 +25,16 @@ pub enum CQType {
     SimpleCQ,
     BatchCQ,
     RocksDBCQ,
+}
+
+impl fmt::Display for CQType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            CQType::SimpleCQ => write!(f, "SimpleCQ"),
+            CQType::BatchCQ => write!(f, "BatchCQ"),
+            CQType::RocksDBCQ => write!(f, "RocksDBCQ"),
+        }
+    }
 }
 
 impl FromStr for CQType {

@@ -25,15 +25,15 @@ use crate::FileUtils;
 pub trait ConfigManager {
     fn load(&self) -> bool {
         let file_name = self.config_file_path();
-        info!("Config file Path: {}", file_name);
         let result = FileUtils::file_to_string(file_name.as_str());
         match result {
             Ok(ref content) => {
                 if content.is_empty() {
-                    warn!("load back config file");
+                    warn!("load bak config file");
                     self.load_bak()
                 } else {
                     self.decode(content);
+                    info!("load Config file: {} -----OK", file_name);
                     true
                 }
             }
@@ -48,9 +48,11 @@ pub trait ConfigManager {
         {
             if !content.is_empty() {
                 self.decode(content);
+                info!("load Config file: {}.bak -----OK", file_name);
             }
             true
         } else {
+            error!("load Config file: {}.bak -----Failed", file_name);
             false
         };
     }

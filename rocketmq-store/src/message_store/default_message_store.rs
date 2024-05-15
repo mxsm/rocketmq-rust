@@ -336,6 +336,8 @@ impl MessageStore for DefaultMessageStore {
                 Arc::new(AtomicI64::new(checkpoint.master_flushed_offset() as i64));
             self.set_confirm_offset(checkpoint.confirm_phy_offset() as i64);
             result = self.index_service.load(last_exit_ok);
+
+            //recover commit log and consume queue
             self.recover(last_exit_ok).await;
             info!(
                 "message store recover end, and the max phy offset = {}",
