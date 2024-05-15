@@ -26,6 +26,7 @@ use rocketmq_common::{
     },
     utils::queue_type_utils::QueueTypeUtils,
 };
+use tracing::info;
 
 use crate::{
     base::{dispatch_request::DispatchRequest, store_checkpoint::StoreCheckpoint},
@@ -102,12 +103,12 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     fn load(&mut self) -> bool {
-        self.load_consume_queue(
+        self.load_consume_queues(
             get_store_path_consume_queue(
                 self.inner.message_store_config.store_path_root_dir.as_str(),
             ),
             CQType::SimpleCQ,
-        ) & self.load_consume_queue(
+        ) & self.load_consume_queues(
             get_store_path_batch_consume_queue(
                 self.inner.message_store_config.store_path_root_dir.as_str(),
             ),
@@ -124,10 +125,10 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
         for (_topic, consume_queue_table) in mutex.iter_mut() {
             for (_queue_id, consume_queue) in consume_queue_table.iter_mut() {
                 //consume_queue.lock().recover();
-                let guard = consume_queue.lock();
-                let queue_id = guard.get_queue_id();
-                let topic = guard.get_topic();
-                drop(guard);
+                let lock = consume_queue.lock();
+                let queue_id = lock.get_queue_id();
+                let topic = lock.get_topic();
+                drop(lock);
                 let file_queue_life_cycle = self.get_life_cycle(topic.as_str(), queue_id);
                 file_queue_life_cycle.lock().recover();
             }
@@ -183,9 +184,7 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     fn truncate_dirty(&self, offset_to_truncate: i64) {
-        let guard = self.inner.consume_queue_table.lock();
-        let cloned = guard.clone();
-        drop(guard);
+        let cloned = self.inner.consume_queue_table.lock().clone();
         for consume_queue_table in cloned.values() {
             for logic in consume_queue_table.values() {
                 let lock = logic.lock();
@@ -348,7 +347,7 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
 }
 
 impl ConsumeQueueStore {
-    fn load_consume_queue(&mut self, store_path: String, cq_type: CQType) -> bool {
+    fn load_consume_queues(&mut self, store_path: String, cq_type: CQType) -> bool {
         let dir = Path::new(&store_path);
         if let Ok(ls) = fs::read_dir(dir) {
             let dirs: Vec<_> = ls
@@ -385,6 +384,7 @@ impl ConsumeQueueStore {
                 }
             }
         }
+        info!("load {} all over, OK", cq_type);
         true
     }
 
@@ -405,7 +405,16 @@ impl ConsumeQueueStore {
         topic_table.insert(queue_id, Arc::new(parking_lot::Mutex::new(consume_queue)));
     }
 
-    fn queue_type_should_be(&self, topic: &str, cq_type: CQType) {}
+    fn queue_type_should_be(&self, topic: &str, cq_type: CQType) {
+        let option = self.topic_config_table.lock().get(topic).cloned();
+        let act = QueueTypeUtils::get_cq_type(&option);
+        if act != cq_type {
+            panic!(
+                "The queue type of topic: {} should be {}, but is {}",
+                topic, cq_type, act
+            );
+        }
+    }
 
     /*fn truncate_dirty_logic_files(&self, consume_queue: &dyn ConsumeQueueTrait, phy_offset: i64) {
         let file_queue_life_cycle = self.get_life_cycle(

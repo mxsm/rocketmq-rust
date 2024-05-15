@@ -35,17 +35,15 @@ pub fn get_sharding_key_index(sharding_key: &str, index_size: usize) -> usize {
     hash % index_size
 }
 
-#[allow(clippy::manual_unwrap_or_default)]
 pub fn get_sharding_key_index_by_msg(msg: &MessageExt, index_size: usize) -> usize {
-    let sharding_key = match msg
+    let sharding_key = msg
         .message
         .properties
         .get(MessageConst::PROPERTY_SHARDING_KEY)
-    {
-        Some(key) => key,
-        None => "",
-    };
-    get_sharding_key_index(sharding_key, index_size)
+        .cloned()
+        .unwrap_or_default();
+
+    get_sharding_key_index(sharding_key.as_str(), index_size)
 }
 
 pub fn get_sharding_key_indexes(msgs: &[MessageExt], index_size: usize) -> HashSet<usize> {

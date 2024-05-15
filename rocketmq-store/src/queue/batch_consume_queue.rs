@@ -162,7 +162,7 @@ impl FileQueueLifeCycle for BatchConsumeQueue {
         todo!()
     }
 
-    fn truncate_dirty_logic_files(&self, max_commit_log_pos: i64) {
+    fn truncate_dirty_logic_files(&mut self, max_commit_log_pos: i64) {
         todo!()
     }
 

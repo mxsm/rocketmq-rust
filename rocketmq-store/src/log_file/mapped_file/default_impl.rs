@@ -19,6 +19,7 @@ use std::{
     fs::{File, OpenOptions},
     io::Write,
     path::PathBuf,
+    ptr,
     sync::atomic::{AtomicBool, AtomicI32, AtomicI64, Ordering},
 };
 
@@ -67,6 +68,12 @@ pub struct DefaultMappedFile {
     mapped_byte_buffer_access_count_since_last_swap: AtomicI64,
     start_timestamp: u64,
     stop_timestamp: u64,
+}
+
+impl PartialEq for DefaultMappedFile {
+    fn eq(&self, other: &Self) -> bool {
+        ptr::eq(self as *const Self, other as *const Self)
+    }
 }
 
 impl Default for DefaultMappedFile {
@@ -363,7 +370,7 @@ impl MappedFile for DefaultMappedFile {
     }
 
     fn destroy(&self, interval_forcibly: i64) -> bool {
-        todo!()
+        true
     }
 
     fn shutdown(&self, interval_forcibly: i64) {

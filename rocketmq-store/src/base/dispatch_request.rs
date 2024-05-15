@@ -20,7 +20,7 @@ use std::{
     fmt::{Display, Formatter},
 };
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct DispatchRequest {
     pub topic: String,
     pub queue_id: i32,
@@ -34,13 +34,39 @@ pub struct DispatchRequest {
     pub uniq_key: Option<String>,
     pub sys_flag: i32,
     pub prepared_transaction_offset: i64,
-    pub properties_map: HashMap<String, String>,
-    pub bit_map: Vec<u8>,
+    pub properties_map: Option<HashMap<String, String>>,
+    pub bit_map: Option<Vec<u8>>,
     pub buffer_size: i32,
     pub msg_base_offset: i64,
     pub batch_size: i16,
     pub next_reput_from_offset: i64,
-    pub offset_id: String,
+    pub offset_id: Option<String>,
+}
+
+impl Default for DispatchRequest {
+    fn default() -> Self {
+        Self {
+            topic: "".to_string(),
+            queue_id: 0,
+            commit_log_offset: 0,
+            msg_size: 0,
+            tags_code: 0,
+            store_timestamp: 0,
+            consume_queue_offset: 0,
+            keys: "".to_string(),
+            success: false,
+            uniq_key: None,
+            sys_flag: 0,
+            prepared_transaction_offset: 0,
+            properties_map: None,
+            bit_map: None,
+            buffer_size: -1,
+            msg_base_offset: -1,
+            batch_size: 1,
+            next_reput_from_offset: -1,
+            offset_id: None,
+        }
+    }
 }
 
 impl Display for DispatchRequest {
@@ -51,7 +77,7 @@ impl Display for DispatchRequest {
              tags_code: {}, store_timestamp: {}, consume_queue_offset: {}, keys: {}, success: {}, \
              uniq_key: {:?}, sys_flag: {}, prepared_transaction_offset: {}, properties_map: {:?}, \
              bit_map: {:?}, buffer_size: {}, msg_base_offset: {}, batch_size: {}, \
-             next_reput_from_offset: {}, offset_id: {} }}",
+             next_reput_from_offset: {}, offset_id: {:?} }}",
             self.topic,
             self.queue_id,
             self.commit_log_offset,
