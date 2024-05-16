@@ -144,7 +144,17 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     fn destroy(&self) {
-        todo!()
+        let mutex = self.inner.consume_queue_table.lock().clone();
+        for consume_queue_table in mutex.values() {
+            for consume_queue in consume_queue_table.values() {
+                let lock = consume_queue.lock();
+                let queue_id = lock.get_queue_id();
+                let topic = lock.get_topic();
+                drop(lock);
+                let file_queue_life_cycle = self.get_life_cycle(topic.as_str(), queue_id);
+                file_queue_life_cycle.lock().destroy();
+            }
+        }
     }
 
     fn destroy_consume_queue(&self, consume_queue: &dyn ConsumeQueueTrait) {
@@ -384,7 +394,7 @@ impl ConsumeQueueStore {
                 }
             }
         }
-        info!("load {} all over, OK", cq_type);
+        info!("load {:?} all over, OK", cq_type);
         true
     }
 
@@ -410,7 +420,7 @@ impl ConsumeQueueStore {
         let act = QueueTypeUtils::get_cq_type(&option);
         if act != cq_type {
             panic!(
-                "The queue type of topic: {} should be {}, but is {}",
+                "The queue type of topic: {} should be {:?}, but is {:?}",
                 topic, cq_type, act
             );
         }

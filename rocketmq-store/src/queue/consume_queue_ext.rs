@@ -85,4 +85,8 @@ impl ConsumeQueueExt {
     pub fn put(&self, cq_ext_unit: CqExtUnit) -> i64 {
         unimplemented!()
     }
+
+    pub fn destroy(&mut self) {
+        self.mapped_file_queue.destroy();
+    }
 }

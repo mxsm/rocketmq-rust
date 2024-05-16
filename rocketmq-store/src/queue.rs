@@ -54,7 +54,7 @@ pub trait FileQueueLifeCycle: Swappable {
     fn flush(&self, flush_least_pages: i32) -> bool;
 
     /// Destroy files.
-    fn destroy(&self);
+    fn destroy(&mut self);
 
     /// Truncate dirty logic files starting at max commit log position.
     /// `max_commit_log_pos`: Max commit log position.
