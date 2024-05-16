@@ -158,7 +158,7 @@ impl FileQueueLifeCycle for BatchConsumeQueue {
         todo!()
     }
 
-    fn destroy(&self) {
+    fn destroy(&mut self) {
         todo!()
     }
 

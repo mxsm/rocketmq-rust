@@ -50,11 +50,11 @@ impl StoreCheckpoint {
         let _ = file.set_len(OS_PAGE_SIZE);
         if file.metadata()?.len() > 0 {
             let buffer = &mmap[..8];
-            let physic_msg_timestamp = u64::from_ne_bytes(buffer.try_into().unwrap());
-            let logics_msg_timestamp = u64::from_ne_bytes(mmap[8..16].try_into().unwrap());
-            let index_msg_timestamp = u64::from_ne_bytes(mmap[16..24].try_into().unwrap());
-            let master_flushed_offset = u64::from_ne_bytes(mmap[24..32].try_into().unwrap());
-            let confirm_phy_offset = u64::from_ne_bytes(mmap[32..40].try_into().unwrap());
+            let physic_msg_timestamp = u64::from_be_bytes(buffer.try_into().unwrap());
+            let logics_msg_timestamp = u64::from_be_bytes(mmap[8..16].try_into().unwrap());
+            let index_msg_timestamp = u64::from_be_bytes(mmap[16..24].try_into().unwrap());
+            let master_flushed_offset = u64::from_be_bytes(mmap[24..32].try_into().unwrap());
+            let confirm_phy_offset = u64::from_be_bytes(mmap[32..40].try_into().unwrap());
 
             info!("store checkpoint file exists, {}", path.as_ref().display());
             info!("physicMsgTimestamp: {}", physic_msg_timestamp);
@@ -91,31 +91,31 @@ impl StoreCheckpoint {
         buffer.write_all(
             self.physic_msg_timestamp
                 .load(Ordering::Relaxed)
-                .to_ne_bytes()
+                .to_be_bytes()
                 .as_ref(),
         )?;
         buffer.write_all(
             self.logics_msg_timestamp
                 .load(Ordering::Relaxed)
-                .to_ne_bytes()
+                .to_be_bytes()
                 .as_ref(),
         )?;
         buffer.write_all(
             self.index_msg_timestamp
                 .load(Ordering::Relaxed)
-                .to_ne_bytes()
+                .to_be_bytes()
                 .as_ref(),
         )?;
         buffer.write_all(
             self.master_flushed_offset
                 .load(Ordering::Relaxed)
-                .to_ne_bytes()
+                .to_be_bytes()
                 .as_ref(),
         )?;
         buffer.write_all(
             self.confirm_phy_offset
                 .load(Ordering::Relaxed)
-                .to_ne_bytes()
+                .to_be_bytes()
                 .as_ref(),
         )?;
         self.mmap.lock().flush()?;
@@ -161,5 +161,18 @@ impl StoreCheckpoint {
     }
     pub fn confirm_phy_offset(&self) -> u64 {
         self.confirm_phy_offset.load(Ordering::Relaxed)
+    }
+
+    pub fn get_min_timestamp(&self) -> u64 {
+        let min = self
+            .physic_msg_timestamp
+            .load(Ordering::Relaxed)
+            .min(self.logics_msg_timestamp.load(Ordering::Relaxed));
+        let min = min - 1000 * 3;
+        min.max(0)
+    }
+    pub fn get_min_timestamp_index(&self) -> u64 {
+        self.get_min_timestamp()
+            .min(self.index_msg_timestamp.load(Ordering::Relaxed))
     }
 }

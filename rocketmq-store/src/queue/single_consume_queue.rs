@@ -14,7 +14,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicI64, Ordering},
+        Arc,
+    },
+};
 
 use bytes::{Buf, BufMut, BytesMut};
 use rocketmq_common::common::{
@@ -63,8 +69,8 @@ pub struct ConsumeQueue {
     queue_id: i32,
     store_path: String,
     mapped_file_size: i32,
-    max_physic_offset: Arc<parking_lot::Mutex<i64>>,
-    min_logic_offset: Arc<parking_lot::Mutex<i64>>,
+    max_physic_offset: Arc<AtomicI64>,
+    min_logic_offset: Arc<AtomicI64>,
     consume_queue_ext: Option<ConsumeQueueExt>,
     running_flags: Arc<RunningFlags>,
     store_checkpoint: Arc<StoreCheckpoint>,
@@ -106,8 +112,8 @@ impl ConsumeQueue {
             queue_id,
             store_path,
             mapped_file_size,
-            max_physic_offset: Arc::new(parking_lot::Mutex::new(-1)),
-            min_logic_offset: Arc::new(parking_lot::Mutex::new(0)),
+            max_physic_offset: Arc::new(AtomicI64::new(-1)),
+            min_logic_offset: Arc::new(AtomicI64::new(0)),
             consume_queue_ext,
             running_flags,
             store_checkpoint,
@@ -117,7 +123,8 @@ impl ConsumeQueue {
 
 impl ConsumeQueue {
     pub fn set_max_physic_offset(&self, max_physic_offset: i64) {
-        *self.max_physic_offset.lock() = max_physic_offset;
+        self.max_physic_offset
+            .store(max_physic_offset, std::sync::atomic::Ordering::SeqCst);
     }
 
     pub fn truncate_dirty_logic_files_handler(&mut self, phy_offset: i64, delete_file: bool) {
@@ -239,7 +246,8 @@ impl ConsumeQueue {
                 && cq_offset != 0
                 && mapped_file.get_wrote_position() == 0
             {
-                *self.min_logic_offset.lock() = expect_logic_offset;
+                self.min_logic_offset
+                    .store(expect_logic_offset, Ordering::SeqCst);
                 self.mapped_file_queue
                     .set_flushed_where(expect_logic_offset);
                 self.mapped_file_queue
@@ -415,8 +423,13 @@ impl FileQueueLifeCycle for ConsumeQueue {
         todo!()
     }
 
-    fn destroy(&self) {
-        todo!()
+    fn destroy(&mut self) {
+        self.set_max_physic_offset(-1);
+        self.min_logic_offset.store(0, Ordering::SeqCst);
+        self.mapped_file_queue.destroy();
+        if self.is_ext_read_enable() {
+            self.consume_queue_ext.as_mut().unwrap().destroy();
+        }
     }
 
     fn truncate_dirty_logic_files(&mut self, max_commit_log_pos: i64) {
@@ -514,7 +527,7 @@ impl ConsumeQueueTrait for ConsumeQueue {
     }
 
     fn get_max_physic_offset(&self) -> i64 {
-        *self.max_physic_offset.lock()
+        self.max_physic_offset.load(Ordering::Relaxed)
     }
 
     fn get_min_logic_offset(&self) -> i64 {

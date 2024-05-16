@@ -220,7 +220,8 @@ impl DefaultMessageStore {
         if last_exit_ok {
             self.recover_normally(max_phy_offset_of_consume_queue).await;
         } else {
-            self.recover_abnormally(max_phy_offset_of_consume_queue);
+            self.recover_abnormally(max_phy_offset_of_consume_queue)
+                .await;
         }
         let recover_commit_log = Instant::now()
             .saturating_duration_since(recover_commit_log_start)
@@ -249,7 +250,11 @@ impl DefaultMessageStore {
             .await;
     }
 
-    pub fn recover_abnormally(&mut self, max_phy_offset_of_consume_queue: i64) {}
+    pub async fn recover_abnormally(&mut self, max_phy_offset_of_consume_queue: i64) {
+        self.commit_log
+            .recover_abnormally(max_phy_offset_of_consume_queue, self.clone())
+            .await;
+    }
 
     fn is_recover_concurrently(&self) -> bool {
         self.broker_config.recover_concurrently
@@ -380,7 +385,7 @@ impl MessageStore for DefaultMessageStore {
     }
 
     fn get_max_phy_offset(&self) -> i64 {
-        -1
+        self.commit_log.get_max_offset()
     }
 
     fn set_broker_init_max_offset(&mut self, broker_init_max_offset: i64) {

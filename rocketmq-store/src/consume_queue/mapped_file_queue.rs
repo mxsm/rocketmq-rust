@@ -206,12 +206,12 @@ impl MappedFileQueue {
         self.mapped_files.len()
     }
 
-    pub fn set_flushed_where(&mut self, flushed_where: i64) {
+    pub fn set_flushed_where(&self, flushed_where: i64) {
         self.flushed_where
             .store(flushed_where as u64, Ordering::SeqCst);
     }
 
-    pub fn set_committed_where(&mut self, committed_where: i64) {
+    pub fn set_committed_where(&self, committed_where: i64) {
         self.committed_where
             .store(committed_where as u64, Ordering::SeqCst);
     }
@@ -220,13 +220,17 @@ impl MappedFileQueue {
         let mut will_remove_files = Vec::new();
         for mapped_file in self.mapped_files.iter() {
             let file_tail_offset = mapped_file.get_file_from_offset() + self.mapped_file_size;
-            if file_tail_offset as i64 <= offset {
-                mapped_file.set_wrote_position((offset % self.mapped_file_size as i64) as i32);
-                mapped_file.set_committed_position((offset % self.mapped_file_size as i64) as i32);
-                mapped_file.set_flushed_position((offset % self.mapped_file_size as i64) as i32);
-            } else {
-                mapped_file.destroy(1000);
-                will_remove_files.push(mapped_file.clone());
+            if file_tail_offset as i64 > offset {
+                if offset >= mapped_file.get_file_from_offset() as i64 {
+                    mapped_file.set_wrote_position((offset % self.mapped_file_size as i64) as i32);
+                    mapped_file
+                        .set_committed_position((offset % self.mapped_file_size as i64) as i32);
+                    mapped_file
+                        .set_flushed_position((offset % self.mapped_file_size as i64) as i32);
+                } else {
+                    mapped_file.destroy(1000);
+                    will_remove_files.push(mapped_file.clone());
+                }
             }
         }
     }
@@ -255,6 +259,18 @@ impl MappedFileQueue {
         if !files.is_empty() {
             files.retain(|mf| self.mapped_files.contains(mf));
             self.mapped_files.retain(|mf| !files.contains(mf));
+        }
+    }
+
+    pub fn destroy(&mut self) {
+        for mapped_file in self.mapped_files.iter() {
+            mapped_file.destroy(1000 * 3);
+        }
+        self.mapped_files.clear();
+        self.set_flushed_where(0);
+        let path = PathBuf::from(&self.store_path);
+        if path.is_dir() {
+            let _ = fs::remove_dir_all(path);
         }
     }
 }
