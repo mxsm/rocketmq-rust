@@ -15,16 +15,21 @@
  * limitations under the License.
  */
 
+use std::sync::Arc;
+
+use crate::log_file::mapped_file::default_impl::DefaultMappedFile;
+
 /// Represents the result of selecting a mapped buffer.
 pub struct SelectMappedBufferResult {
     /// The start offset.
-    pub start_offset: i64,
+    pub start_offset: u64,
     /// The ByteBuffer.
-    pub byte_buffer: Vec<u8>, // Using Vec<u8> as a simplified representation of ByteBuffer in Rust
+    //  pub byte_buffer: Vec<u8>, // Using Vec<u8> as a simplified representation of ByteBuffer in
+    // Rust
     /// The size.
     pub size: i32,
     /// The mapped file.
-    //pub mapped_file: Option<&'a dyn MappedFile>,
-    /// Indicates whether the buffer is in the cache.
+    pub mapped_file: Option<Arc<DefaultMappedFile>>,
+    /// Whether the buffer is in cache.
     pub is_in_cache: bool,
 }

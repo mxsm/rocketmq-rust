@@ -48,6 +48,7 @@ use crate::{
         message_result::PutMessageResult,
         message_status_enum::{AppendMessageStatus, PutMessageStatus},
         put_message_context::PutMessageContext,
+        select_result::SelectMappedBufferResult,
         store_checkpoint::StoreCheckpoint,
         swappable::Swappable,
     },
@@ -360,7 +361,7 @@ impl CommitLog {
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
-                          files"
+                           files"
             );
             self.mapped_file_queue.set_flushed_where(0);
             self.mapped_file_queue.set_committed_where(0);
@@ -539,7 +540,7 @@ impl CommitLog {
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
-                          files"
+                           files"
             );
             self.mapped_file_queue.set_flushed_where(0);
             self.mapped_file_queue.set_committed_where(0);
@@ -551,6 +552,44 @@ impl CommitLog {
     pub fn get_max_offset(&self) -> i64 {
         self.mapped_file_queue.get_max_offset()
     }
+
+    pub fn get_min_offset(&self) -> i64 {
+        match self.mapped_file_queue.get_first_mapped_file() {
+            None => -1,
+            Some(mapped_file) => {
+                if mapped_file.is_available() {
+                    mapped_file.get_file_from_offset() as i64
+                } else {
+                    self.roll_next_file(mapped_file.get_file_from_offset() as i64)
+                }
+            }
+        }
+    }
+
+    pub fn roll_next_file(&self, offset: i64) -> i64 {
+        let mapped_file_size = self.message_store_config.mapped_file_size_commit_log as i64;
+        offset + mapped_file_size - (offset % mapped_file_size)
+    }
+
+    pub fn get_data(&self, offset: i64) -> Option<SelectMappedBufferResult> {
+        self.get_data_with_option(offset, offset == 0)
+    }
+    pub fn get_data_with_option(
+        &self,
+        offset: i64,
+        return_first_on_not_found: bool,
+    ) -> Option<SelectMappedBufferResult> {
+        let mapped_file_size = self.message_store_config.mapped_file_size_commit_log as i64;
+        let mapped_file = self
+            .mapped_file_queue
+            .find_mapped_file_by_offset(offset, return_first_on_not_found);
+        if let Some(mapped_file) = mapped_file {
+            let pos = (offset % mapped_file_size) as i32;
+            DefaultMappedFile::select_mapped_buffer(mapped_file, pos)
+        } else {
+            None
+        }
+    }
 }
 
 fn generate_key(msg: &MessageExtBrokerInner) -> String {
@@ -561,7 +600,7 @@ fn generate_key(msg: &MessageExtBrokerInner) -> String {
     topic_queue_key
 }
 
-fn check_message_and_return_size(
+pub fn check_message_and_return_size(
     bytes: &mut Bytes,
     check_crc: bool,
     check_dup_info: bool,

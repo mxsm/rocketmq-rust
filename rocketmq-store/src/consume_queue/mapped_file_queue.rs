@@ -143,6 +143,13 @@ impl MappedFileQueue {
         self.mapped_files.last().cloned()
     }
 
+    pub fn get_first_mapped_file(&self) -> Option<Arc<DefaultMappedFile>> {
+        if self.mapped_files.is_empty() {
+            return None;
+        }
+        self.mapped_files.first().cloned()
+    }
+
     pub fn get_last_mapped_file_mut_start_offset(
         &mut self,
         start_offset: u64,
@@ -271,6 +278,50 @@ impl MappedFileQueue {
         let path = PathBuf::from(&self.store_path);
         if path.is_dir() {
             let _ = fs::remove_dir_all(path);
+        }
+    }
+
+    pub fn find_mapped_file_by_offset(
+        &self,
+        offset: i64,
+        return_first_on_not_found: bool,
+    ) -> Option<Arc<DefaultMappedFile>> {
+        let first_mapped_file = self.get_first_mapped_file();
+        let last_mapped_file = self.get_last_mapped_file();
+        if first_mapped_file.is_some() && last_mapped_file.is_some() {
+            if offset < first_mapped_file.as_ref().unwrap().get_file_from_offset() as i64
+                || offset
+                    >= last_mapped_file.as_ref().unwrap().get_file_from_offset() as i64
+                        + self.mapped_file_size as i64
+            {
+                None
+            } else {
+                let index = offset as usize / self.mapped_file_size as usize
+                    - first_mapped_file.as_ref().unwrap().get_file_from_offset() as usize
+                        / self.mapped_file_size as usize;
+                let target_file = self.mapped_files.get(index).cloned();
+                if target_file.is_some()
+                    && offset >= target_file.as_ref().unwrap().get_file_from_offset() as i64
+                {
+                    return target_file;
+                }
+                for index in 0..self.mapped_files.len() {
+                    let mapped_file = self.mapped_files.get(index).unwrap();
+                    if offset >= mapped_file.get_file_from_offset() as i64
+                        && offset
+                            < mapped_file.get_file_from_offset() as i64
+                                + self.mapped_file_size as i64
+                    {
+                        return Some(mapped_file.clone());
+                    }
+                }
+                if return_first_on_not_found {
+                    return first_mapped_file;
+                }
+                None
+            }
+        } else {
+            None
         }
     }
 }

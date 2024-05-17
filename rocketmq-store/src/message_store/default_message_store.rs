@@ -25,9 +25,11 @@ use std::{
         atomic::{AtomicBool, AtomicI64, Ordering},
         Arc,
     },
-    time::Instant,
+    thread,
+    time::{Duration, Instant},
 };
 
+use bytes::Buf;
 use log::info;
 use rocketmq_common::{
     common::{
@@ -40,6 +42,7 @@ use rocketmq_common::{
     utils::queue_type_utils::QueueTypeUtils,
     FileUtils::string_to_file,
 };
+use tokio::{runtime::Handle, sync::mpsc::Sender};
 use tracing::{error, warn};
 
 use crate::{
@@ -49,11 +52,11 @@ use crate::{
         message_result::PutMessageResult, message_status_enum::PutMessageStatus,
         store_checkpoint::StoreCheckpoint,
     },
-    config::message_store_config::MessageStoreConfig,
+    config::{broker_role::BrokerRole, message_store_config::MessageStoreConfig},
     hook::put_message_hook::BoxedPutMessageHook,
     index::{index_dispatch::CommitLogDispatcherBuildIndex, index_service::IndexService},
     kv::compaction_service::CompactionService,
-    log_file::{commit_log::CommitLog, MessageStore},
+    log_file::{commit_log, commit_log::CommitLog, mapped_file::MappedFile, MessageStore},
     queue::{
         build_consume_queue::CommitLogDispatcherBuildConsumeQueue,
         local_file_consume_queue_store::ConsumeQueueStore, ConsumeQueueStoreTrait,
@@ -81,6 +84,8 @@ pub struct DefaultMessageStore {
     state_machine_version: Arc<AtomicI64>,
     shutdown: Arc<AtomicBool>,
     running_flags: Arc<RunningFlags>,
+    //reput_message_service: Arc<parking_lot::Mutex<ReputMessageService>>,
+    reput_message_service: ReputMessageService,
 }
 
 impl Clone for DefaultMessageStore {
@@ -102,6 +107,7 @@ impl Clone for DefaultMessageStore {
             state_machine_version: self.state_machine_version.clone(),
             shutdown: self.shutdown.clone(),
             running_flags: self.running_flags.clone(),
+            reput_message_service: self.reput_message_service.clone(),
         }
     }
 }
@@ -160,6 +166,10 @@ impl DefaultMessageStore {
             state_machine_version: Arc::new(AtomicI64::new(0)),
             shutdown: Arc::new(AtomicBool::new(false)),
             running_flags,
+            reput_message_service: ReputMessageService {
+                tx: None,
+                reput_from_offset: None,
+            },
         }
     }
 }
@@ -362,12 +372,22 @@ impl MessageStore for DefaultMessageStore {
 
     fn start(&mut self) -> Result<(), Box<dyn Error>> {
         self.create_temp_file();
+
+        self.reput_message_service
+            .set_reput_from_offset(self.commit_log.get_confirm_offset());
+        self.reput_message_service.start(
+            Arc::new(self.commit_log.clone()),
+            self.message_store_config.clone(),
+            self.dispatcher.clone(),
+        );
+
         Ok(())
     }
 
     fn shutdown(&mut self) {
         if !self.shutdown.load(Ordering::Relaxed) {
             self.shutdown.store(true, Ordering::SeqCst);
+            self.reput_message_service.shutdown();
             self.commit_log.shutdown();
 
             if self.running_flags.is_writeable() {
@@ -432,6 +452,10 @@ impl MessageStore for DefaultMessageStore {
         }
         self.commit_log.put_message(msg).await
     }
+
+    fn truncate_files(&mut self, offset_to_truncate: i64) -> bool {
+        unimplemented!()
+    }
 }
 
 #[derive(Clone)]
@@ -444,5 +468,188 @@ impl CommitLogDispatcher for CommitLogDispatcherDefault {
     fn dispatch(&mut self, dispatch_request: &DispatchRequest) {
         self.build_index.dispatch(dispatch_request);
         self.build_consume_queue.dispatch(dispatch_request);
+    }
+}
+#[derive(Clone)]
+struct ReputMessageService {
+    tx: Option<Arc<Sender<()>>>,
+    reput_from_offset: Option<i64>,
+}
+
+impl ReputMessageService {
+    pub fn set_reput_from_offset(&mut self, reput_from_offset: i64) {
+        self.reput_from_offset = Some(reput_from_offset);
+    }
+
+    pub fn start(
+        &mut self,
+        commit_log: Arc<CommitLog>,
+        message_store_config: Arc<MessageStoreConfig>,
+        dispatcher: CommitLogDispatcherDefault,
+    ) {
+        let mut inner = ReputMessageServiceInner {
+            reput_from_offset: Arc::new(AtomicI64::new(self.reput_from_offset.unwrap())),
+            commit_log,
+            message_store_config,
+            dispatcher,
+        };
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        self.tx = Some(Arc::new(tx));
+        let handle = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_millis(1));
+            loop {
+                tokio::select! {
+                    _ = inner.do_reput() =>{
+
+                    }
+                    _ = interval.tick() => {
+
+                    }
+                    _ = rx.recv() => {
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
+    pub fn shutdown(&mut self) {
+        let handle = Handle::current();
+        let tx_option = self.tx.take();
+        let _ = thread::spawn(move || {
+            handle.block_on(async move {
+                if let Some(tx) = tx_option {
+                    tokio::select! {
+                      _ =  tx.send(()) =>{
+
+                        }
+                    }
+                }
+            });
+        })
+        .join();
+    }
+}
+
+//Construct a consumer queue and index file.
+struct ReputMessageServiceInner {
+    reput_from_offset: Arc<AtomicI64>,
+    commit_log: Arc<CommitLog>,
+    message_store_config: Arc<MessageStoreConfig>,
+    dispatcher: CommitLogDispatcherDefault,
+}
+
+impl ReputMessageServiceInner {
+    pub async fn do_reput(&mut self) {
+        let reput_from_offset = self.reput_from_offset.load(Ordering::Relaxed);
+        if reput_from_offset < self.commit_log.get_min_offset() {
+            warn!(
+                "The reputFromOffset={} is smaller than minPyOffset={}, this usually indicate \
+                 that the dispatch behind too much and the commitlog has expired.",
+                reput_from_offset,
+                self.commit_log.get_min_offset()
+            );
+            self.reput_from_offset
+                .store(self.commit_log.get_min_offset(), Ordering::SeqCst);
+        }
+        let mut do_next = true;
+        while do_next && self.is_commit_log_available() {
+            let result = self.commit_log.get_data(reput_from_offset);
+
+            if result.is_none() {
+                break;
+            }
+            let result = result.unwrap();
+            self.reput_from_offset
+                .store(result.start_offset as i64, Ordering::Release);
+            let mut read_size = 0i32;
+            let mapped_file = result.mapped_file.as_ref().unwrap();
+            let start_pos = (result.start_offset % mapped_file.get_file_size()) as i32;
+            loop {
+                let size = mapped_file.get_bytes((start_pos + read_size) as usize, 4);
+                if size.is_none() {
+                    do_next = false;
+                    break;
+                }
+                let mut bytes = mapped_file.get_data(
+                    (start_pos + read_size) as usize,
+                    size.unwrap().get_i32() as usize,
+                );
+                if bytes.is_none() {
+                    do_next = false;
+                    break;
+                }
+
+                let dispatch_request = commit_log::check_message_and_return_size(
+                    bytes.as_mut().unwrap(),
+                    false,
+                    false,
+                    false,
+                    &self.message_store_config,
+                );
+                if self.reput_from_offset.load(Ordering::Relaxed) + dispatch_request.msg_size as i64
+                    > self.commit_log.get_confirm_offset()
+                {
+                    do_next = false;
+                    break;
+                }
+
+                if dispatch_request.success {
+                    match dispatch_request.msg_size.cmp(&0) {
+                        std::cmp::Ordering::Greater => {
+                            self.dispatcher.dispatch(&dispatch_request);
+                            self.reput_from_offset
+                                .fetch_add(dispatch_request.msg_size as i64, Ordering::AcqRel);
+                            read_size += dispatch_request.msg_size;
+                            if !self.message_store_config.duplication_enable
+                                && self.message_store_config.broker_role == BrokerRole::Slave
+                            {
+                                unimplemented!()
+                            }
+                        }
+                        std::cmp::Ordering::Equal => {
+                            self.reput_from_offset.store(
+                                self.commit_log
+                                    .roll_next_file(self.reput_from_offset.load(Ordering::Relaxed)),
+                                Ordering::SeqCst,
+                            );
+                        }
+                        std::cmp::Ordering::Less => {}
+                    }
+                } else if dispatch_request.msg_size > 0 {
+                    error!(
+                        "[BUG]read total count not equals msg total size. reputFromOffset={}",
+                        self.reput_from_offset.load(Ordering::Relaxed)
+                    );
+                    self.reput_from_offset
+                        .fetch_add(dispatch_request.msg_size as i64, Ordering::SeqCst);
+                } else {
+                    do_next = false;
+                    if self.message_store_config.enable_dledger_commit_log {
+                        unimplemented!()
+                    }
+                }
+
+                if !(read_size < result.size
+                    && self.reput_from_offset.load(Ordering::Relaxed)
+                        < self.commit_log.get_confirm_offset()
+                    && do_next)
+                {
+                    break;
+                }
+            }
+        }
+    }
+
+    fn is_commit_log_available(&self) -> bool {
+        self.reput_from_offset.load(Ordering::Relaxed) < self.commit_log.get_confirm_offset()
+    }
+    pub fn reput_from_offset(&self) -> i64 {
+        self.reput_from_offset.load(Ordering::Relaxed)
+    }
+
+    pub fn set_reput_from_offset(&mut self, reput_from_offset: i64) {
+        self.reput_from_offset
+            .store(reput_from_offset, Ordering::SeqCst);
     }
 }

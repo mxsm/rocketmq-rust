@@ -19,7 +19,10 @@ use std::{
     fs::{File, OpenOptions},
     io::Write,
     path::PathBuf,
-    sync::atomic::{AtomicI32, Ordering},
+    sync::{
+        atomic::{AtomicI32, Ordering},
+        Arc,
+    },
 };
 
 use bytes::{Bytes, BytesMut};
@@ -281,7 +284,7 @@ impl MappedFile for LocalMappedFile {
         todo!()
     }
 
-    fn select_mapped_buffer(&self, pos: usize) -> SelectMappedBufferResult {
+    fn select_mapped_buffer(self: Arc<Self>, pos: i32) -> Option<SelectMappedBufferResult> {
         todo!()
     }
 
