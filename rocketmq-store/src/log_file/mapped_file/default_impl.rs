@@ -20,10 +20,13 @@ use std::{
     io::Write,
     path::PathBuf,
     ptr,
-    sync::atomic::{AtomicBool, AtomicI32, AtomicI64, Ordering},
+    sync::{
+        atomic::{AtomicBool, AtomicI32, AtomicI64, Ordering},
+        Arc,
+    },
 };
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Bytes, BytesMut};
 use memmap2::MmapMut;
 use rocketmq_common::common::message::{
     message_batch::MessageExtBatch, message_single::MessageExtBrokerInner,
@@ -212,7 +215,7 @@ impl MappedFile for DefaultMappedFile {
     }
 
     fn is_available(&self) -> bool {
-        todo!()
+        self.reference_resource.available.load(Ordering::Relaxed)
     }
 
     fn append_message<AMC: AppendMessageCallback>(
@@ -324,8 +327,18 @@ impl MappedFile for DefaultMappedFile {
         todo!()
     }
 
-    fn select_mapped_buffer(&self, pos: usize) -> SelectMappedBufferResult {
-        todo!()
+    fn select_mapped_buffer(self: Arc<Self>, pos: i32) -> Option<SelectMappedBufferResult> {
+        let read_position = self.get_read_position();
+        if pos < read_position && read_position > 0 && self.hold() {
+            Some(SelectMappedBufferResult {
+                start_offset: self.get_file_from_offset() + pos as u64,
+                size: read_position - pos,
+                mapped_file: Some(self),
+                is_in_cache: false,
+            })
+        } else {
+            None
+        }
     }
 
     fn get_mapped_byte_buffer(&self) -> Bytes {
@@ -349,8 +362,7 @@ impl MappedFile for DefaultMappedFile {
         let read_end_position = pos + size;
         if read_end_position <= read_position as usize {
             if self.hold() {
-                let mut buffer = BytesMut::with_capacity(size);
-                buffer.put(&self.mmapped_file.lock()[pos..read_end_position]);
+                let buffer = BytesMut::from(&self.mmapped_file.lock()[pos..read_end_position]);
                 Some(buffer.freeze())
             } else {
                 debug!(

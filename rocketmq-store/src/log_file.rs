@@ -54,4 +54,6 @@ pub trait RocketMQMessageStore: Clone {
     fn get_state_machine_version(&self) -> i64;
 
     async fn put_message(&mut self, msg: MessageExtBrokerInner) -> PutMessageResult;
+
+    fn truncate_files(&mut self, offset_to_truncate: i64) -> bool;
 }

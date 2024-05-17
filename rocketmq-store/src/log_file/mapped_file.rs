@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-use std::{fs::File, io};
+use std::{fs::File, io, sync::Arc};
 
 use bytes::Bytes;
 use rocketmq_common::common::message::{
@@ -103,7 +103,7 @@ pub trait MappedFile {
 
     /// Selects a slice of the mapped byte buffer's sub-region behind the mapped file, starting at
     /// the given position.
-    fn select_mapped_buffer(&self, pos: usize) -> SelectMappedBufferResult;
+    fn select_mapped_buffer(self: Arc<Self>, pos: i32) -> Option<SelectMappedBufferResult>;
 
     /// Returns the mapped byte buffer behind the mapped file.
     fn get_mapped_byte_buffer(&self) -> bytes::Bytes;
