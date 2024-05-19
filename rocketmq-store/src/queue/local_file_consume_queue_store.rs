@@ -170,7 +170,7 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     fn check_self(&self) {
-        todo!()
+        println!("ConsumeQueueStore::check_self unimplemented");
     }
 
     fn delete_expired_file(

@@ -590,6 +590,10 @@ impl CommitLog {
             None
         }
     }
+
+    pub fn check_self(&self) {
+        self.mapped_file_queue.check_self();
+    }
 }
 
 fn generate_key(msg: &MessageExtBrokerInner) -> String {

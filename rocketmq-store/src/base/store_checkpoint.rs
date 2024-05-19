@@ -86,7 +86,7 @@ impl StoreCheckpoint {
         }
     }
 
-    fn flush(&self) -> std::io::Result<()> {
+    pub fn flush(&self) -> std::io::Result<()> {
         let mut buffer = &mut self.mmap.lock()[..8];
         buffer.write_all(
             self.physic_msg_timestamp
@@ -122,7 +122,7 @@ impl StoreCheckpoint {
         Ok(())
     }
 
-    fn shutdown(&self) -> std::io::Result<()> {
+    pub fn shutdown(&self) -> std::io::Result<()> {
         self.flush()
     }
 
