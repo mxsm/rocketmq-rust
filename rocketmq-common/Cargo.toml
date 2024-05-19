@@ -50,3 +50,4 @@ chrono = "0.4.38"
 log = "0.4.20"
 
 parking_lot = { workspace = true }
+once_cell = { workspace = true }

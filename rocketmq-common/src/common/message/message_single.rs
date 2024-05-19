@@ -25,6 +25,7 @@ use bytes::{Buf, BufMut};
 
 use crate::{
     common::{
+        hasher::string_hasher::JavaStringHasher,
         message::{MessageConst, MessageTrait, MessageVersion},
         sys_flag::message_sys_flag::MessageSysFlag,
         TopicFilterType,
@@ -414,13 +415,11 @@ impl MessageExtBrokerInner {
         self.message_ext_inner.queue_offset()
     }
 
-    pub fn tags_string2tags_code(_filter: &TopicFilterType, tags: &str) -> u64 {
+    pub fn tags_string2tags_code(_filter: &TopicFilterType, tags: &str) -> i64 {
         if tags.is_empty() {
             return 0;
         }
-        let mut hasher = DefaultHasher::new();
-        tags.hash(&mut hasher);
-        hasher.finish()
+        JavaStringHasher::new().hash_str(tags) as i64
     }
 
     pub fn get_tags(&self) -> Option<String> {
@@ -444,7 +443,5 @@ pub fn tags_string2tags_code(tags: Option<&String>) -> i64 {
     if tags.is_empty() {
         return 0;
     }
-    let mut hasher = DefaultHasher::new();
-    tags.hash(&mut hasher);
-    hasher.finish() as i64
+    JavaStringHasher::new().hash_str(tags.as_str()) as i64
 }

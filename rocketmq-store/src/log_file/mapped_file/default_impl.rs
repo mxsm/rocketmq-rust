@@ -28,8 +28,9 @@ use std::{
 
 use bytes::{Bytes, BytesMut};
 use memmap2::MmapMut;
-use rocketmq_common::common::message::{
-    message_batch::MessageExtBatch, message_single::MessageExtBrokerInner,
+use rocketmq_common::{
+    common::message::{message_batch::MessageExtBatch, message_single::MessageExtBrokerInner},
+    UtilAll::ensure_dir_ok,
 };
 use tracing::{debug, error, info, warn};
 
@@ -89,6 +90,7 @@ impl DefaultMappedFile {
     pub fn new(file_name: String, file_size: u64) -> Self {
         let file_from_offset = Self::get_file_from_offset(&file_name);
         let path_buf = PathBuf::from(file_name.clone());
+        ensure_dir_ok(path_buf.parent().unwrap().to_str().unwrap());
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -236,13 +238,16 @@ impl MappedFile for DefaultMappedFile {
                 ..Default::default()
             };
         }
-        message_callback.do_append(
+        let result = message_callback.do_append(
             self.file_from_offset as i64,
             self,
             (self.file_size - current_pos) as i32,
             &mut message,
             put_message_context,
-        )
+        );
+        self.store_timestamp
+            .store(message.store_timestamp(), Ordering::Release);
+        result
     }
 
     fn append_messages<AMC: AppendMessageCallback>(
@@ -463,10 +468,10 @@ impl MappedFile for DefaultMappedFile {
 
     fn get_read_position(&self) -> i32 {
         match self.transient_store_pool {
-            None => self.wrote_position.load(Ordering::Relaxed),
+            None => self.wrote_position.load(Ordering::Acquire),
             Some(_) => {
                 //need to optimize
-                self.wrote_position.load(Ordering::Relaxed)
+                self.wrote_position.load(Ordering::Acquire)
             }
         }
     }

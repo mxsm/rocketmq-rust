@@ -209,7 +209,7 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     fn put_message_position_info_wrapper(&self, request: &DispatchRequest) {
         let cq = self.find_or_create_consume_queue(request.topic.as_str(), request.queue_id);
         self.put_message_position_info_wrapper_with_cq(cq.lock().as_mut(), request);
-        println!("put_message_position_info_wrapper-----{}", request.topic)
+        // println!("put_message_position_info_wrapper-----{}", request.topic)
     }
 
     fn put_message_position_info_wrapper_with_cq(

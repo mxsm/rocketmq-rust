@@ -33,6 +33,7 @@ pub mod consumer;
 mod faq;
 pub mod filter;
 pub mod future;
+pub mod hasher;
 pub mod macros;
 pub mod message;
 pub mod mix_all;
