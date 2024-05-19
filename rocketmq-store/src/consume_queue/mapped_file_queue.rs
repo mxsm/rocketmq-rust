@@ -82,7 +82,9 @@ impl MappedFileQueue {
         true
     }
 
-    pub fn check_self(&self) {}
+    pub fn check_self(&self) {
+        println!("mapped_file_queue check self unimplemented")
+    }
 
     pub fn do_load(&mut self, files: Vec<std::path::PathBuf>) -> bool {
         // Ascending order sorting

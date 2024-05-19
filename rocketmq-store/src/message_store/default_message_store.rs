@@ -86,6 +86,9 @@ pub struct DefaultMessageStore {
     running_flags: Arc<RunningFlags>,
     //reput_message_service: Arc<parking_lot::Mutex<ReputMessageService>>,
     reput_message_service: ReputMessageService,
+    clean_commit_log_service: Arc<CleanCommitLogService>,
+    correct_logic_offset_service: Arc<CorrectLogicOffsetService>,
+    clean_consume_queue_service: Arc<CleanConsumeQueueService>,
 }
 
 impl Clone for DefaultMessageStore {
@@ -108,6 +111,9 @@ impl Clone for DefaultMessageStore {
             shutdown: self.shutdown.clone(),
             running_flags: self.running_flags.clone(),
             reput_message_service: self.reput_message_service.clone(),
+            clean_commit_log_service: self.clean_commit_log_service.clone(),
+            correct_logic_offset_service: self.correct_logic_offset_service.clone(),
+            clean_consume_queue_service: self.clean_consume_queue_service.clone(),
         }
     }
 }
@@ -170,6 +176,9 @@ impl DefaultMessageStore {
                 tx: None,
                 reput_from_offset: None,
             },
+            clean_commit_log_service: Arc::new(CleanCommitLogService {}),
+            correct_logic_offset_service: Arc::new(CorrectLogicOffsetService {}),
+            clean_consume_queue_service: Arc::new(CleanConsumeQueueService {}),
         }
     }
 }
@@ -313,6 +322,64 @@ impl DefaultMessageStore {
             }
         }
     }
+
+    fn add_schedule_task(&self) {
+        // clean files  Periodically
+        let clean_commit_log_service_arc = self.clean_commit_log_service.clone();
+        let clean_resource_interval = self.message_store_config.clean_resource_interval as u64;
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_millis(1000 * 60));
+            interval.tick().await;
+            let mut interval =
+                tokio::time::interval(Duration::from_millis(clean_resource_interval));
+            loop {
+                clean_commit_log_service_arc.run();
+                interval.tick().await;
+            }
+        });
+
+        let message_store = self.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
+            interval.tick().await;
+            let mut interval = tokio::time::interval(Duration::from_secs(10 * 60));
+            loop {
+                message_store.check_self();
+                interval.tick().await;
+            }
+        });
+
+        // store check point flush
+        let store_checkpoint_arc = self.store_checkpoint.clone().unwrap();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(1));
+            interval.tick().await;
+            let mut interval = tokio::time::interval(Duration::from_secs(1));
+            loop {
+                let _ = store_checkpoint_arc.flush();
+                interval.tick().await;
+            }
+        });
+
+        let correct_logic_offset_service_arc = self.correct_logic_offset_service.clone();
+        let clean_consume_queue_service_arc = self.clean_consume_queue_service.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_millis(1000 * 60));
+            interval.tick().await;
+            let mut interval =
+                tokio::time::interval(Duration::from_millis(clean_resource_interval));
+            loop {
+                correct_logic_offset_service_arc.run();
+                clean_consume_queue_service_arc.run();
+                interval.tick().await;
+            }
+        });
+    }
+
+    fn check_self(&self) {
+        self.commit_log.check_self();
+        self.consume_queue_store.check_self();
+    }
 }
 
 impl MessageStore for DefaultMessageStore {
@@ -343,9 +410,6 @@ impl MessageStore for DefaultMessageStore {
         }
 
         if result {
-            /*self.store_checkpoint = Some(StoreCheckpoint::new(get_store_checkpoint(
-                self.message_store_config.store_path_root_dir.as_str(),
-            )));*/
             let checkpoint = self.store_checkpoint.as_ref().unwrap();
             self.master_flushed_offset =
                 Arc::new(AtomicI64::new(checkpoint.master_flushed_offset() as i64));
@@ -381,6 +445,8 @@ impl MessageStore for DefaultMessageStore {
             self.dispatcher.clone(),
         );
 
+        self.add_schedule_task();
+
         Ok(())
     }
 
@@ -400,8 +466,7 @@ impl MessageStore for DefaultMessageStore {
     }
 
     fn set_confirm_offset(&mut self, phy_offset: i64) {
-
-        // self.commit_log.set_confirm_offset(phy_offset);
+        self.commit_log.set_confirm_offset(phy_offset);
     }
 
     fn get_max_phy_offset(&self) -> i64 {
@@ -664,5 +729,29 @@ impl ReputMessageServiceInner {
     pub fn set_reput_from_offset(&mut self, reput_from_offset: i64) {
         self.reput_from_offset
             .store(reput_from_offset, Ordering::SeqCst);
+    }
+}
+
+struct CleanCommitLogService {}
+
+impl CleanCommitLogService {
+    fn run(&self) {
+        info!("clean commit log service run unimplemented!")
+    }
+}
+
+struct CleanConsumeQueueService {}
+
+impl CleanConsumeQueueService {
+    fn run(&self) {
+        println!("clean consume queue service run unimplemented!")
+    }
+}
+
+struct CorrectLogicOffsetService {}
+
+impl CorrectLogicOffsetService {
+    fn run(&self) {
+        println!("correct logic offset service run unimplemented!")
     }
 }
