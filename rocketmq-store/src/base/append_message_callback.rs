@@ -16,7 +16,7 @@
  */
 use std::{collections::HashMap, sync::Arc};
 
-use bytes::{Bytes, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 use rocketmq_common::{
     common::{
         attribute::cq_type::CQType,
@@ -36,7 +36,7 @@ use crate::{
     },
     config::message_store_config::MessageStoreConfig,
     log_file::{
-        commit_log::{CommitLog, CRC32_RESERVED_LEN},
+        commit_log::{CommitLog, BLANK_MAGIC_CODE, CRC32_RESERVED_LEN},
         mapped_file::MappedFile,
     },
 };
@@ -101,7 +101,7 @@ pub trait AppendMessageCallback {
 const END_FILE_MIN_BLANK_LENGTH: i32 = 4 + 4;
 
 pub(crate) struct DefaultAppendMessageCallback {
-    msg_store_item_memory: bytes::BytesMut,
+    //msg_store_item_memory: bytes::BytesMut,
     crc32_reserved_length: i32,
     message_store_config: Arc<MessageStoreConfig>,
     topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
@@ -113,9 +113,9 @@ impl DefaultAppendMessageCallback {
         topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
     ) -> Self {
         Self {
-            msg_store_item_memory: bytes::BytesMut::with_capacity(
+            /*            msg_store_item_memory: bytes::BytesMut::with_capacity(
                 END_FILE_MIN_BLANK_LENGTH as usize,
-            ),
+            ),*/
             crc32_reserved_length: CRC32_RESERVED_LEN,
             message_store_config,
             topic_config_table,
@@ -178,19 +178,14 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         match MessageSysFlag::get_transaction_value(msg_inner.sys_flag()) {
             MessageSysFlag::TRANSACTION_PREPARED_TYPE
             | MessageSysFlag::TRANSACTION_ROLLBACK_TYPE => queue_offset = 0,
-            // MessageSysFlag::TRANSACTION_NOT_TYPE | MessageSysFlag::TRANSACTION_COMMIT_TYPE | _ =>
-            // {}
             _ => {}
         }
 
         if (msg_len + END_FILE_MIN_BLANK_LENGTH) > max_blank {
-            /*self.msg_store_item_memory.borrow_mut().clear();
-            self.msg_store_item_memory.borrow_mut().put_i32(max_blank);
-            self.msg_store_item_memory
-                .borrow_mut()
-                .put_i32(BLANK_MAGIC_CODE);
-            let bytes = self.msg_store_item_memory.borrow_mut().split().freeze();
-            mapped_file.append_message_bytes(&bytes);*/
+            let mut bytes = BytesMut::with_capacity(END_FILE_MIN_BLANK_LENGTH as usize);
+            bytes.put_i32(max_blank);
+            bytes.put_i32(BLANK_MAGIC_CODE);
+            mapped_file.append_message_bytes(&bytes.freeze());
             return AppendMessageResult {
                 status: AppendMessageStatus::EndOfFile,
                 wrote_offset,
@@ -198,14 +193,15 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
                 msg_id,
                 store_timestamp: msg_inner.store_timestamp(),
                 logics_offset: queue_offset,
+                msg_num: message_num as i32,
                 ..Default::default()
             };
         }
 
         let mut pos = 4 + 4 + 4 + 4 + 4;
-        pre_encode_buffer[pos..(pos + 8)].copy_from_slice(&queue_offset.to_le_bytes());
+        pre_encode_buffer[pos..(pos + 8)].copy_from_slice(&queue_offset.to_be_bytes());
         pos += 8;
-        pre_encode_buffer[pos..(pos + 8)].copy_from_slice(&wrote_offset.to_le_bytes());
+        pre_encode_buffer[pos..(pos + 8)].copy_from_slice(&wrote_offset.to_be_bytes());
         let ip_len = if msg_inner.sys_flag() & MessageSysFlag::BORNHOST_V6_FLAG == 0 {
             4 + 4
         } else {
@@ -213,7 +209,7 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         };
         pos += 8 + 4 + 8 + ip_len;
         pre_encode_buffer[pos..(pos + 8)]
-            .copy_from_slice(&msg_inner.store_timestamp().to_le_bytes());
+            .copy_from_slice(&msg_inner.store_timestamp().to_be_bytes());
 
         // msg_inner.encoded_buff = pre_encode_buffer;
         let bytes = Bytes::from(pre_encode_buffer);
@@ -225,6 +221,7 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
             msg_id,
             store_timestamp: msg_inner.store_timestamp(),
             logics_offset: queue_offset,
+            msg_num: message_num as i32,
             ..Default::default()
         }
     }

@@ -15,9 +15,16 @@
  * limitations under the License.
  */
 
-use std::path::PathBuf;
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+};
 
 use chrono::{DateTime, Datelike, TimeZone, Timelike, Utc};
+use once_cell::sync::Lazy;
+use tracing::info;
+
+use crate::common::mix_all::MULTI_PATH_SPLITTER;
 
 const HEX_ARRAY: [char; 16] = [
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F',
@@ -95,16 +102,28 @@ pub fn offset_to_file_name(offset: u64) -> String {
     format!("{:020}", offset)
 }
 
-/*pub fn ensure_dir_ok(dir: impl AsRef<PathBuf>) -> Result<(), std::io::Error> {
-    match dir.as_ref().exists() {
-        true => Ok(()),
-        false => Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("{:?}", dir.as_ref()),
-        )),
+pub fn ensure_dir_ok(dir_name: &str) {
+    if !dir_name.is_empty() {
+        let multi_path_splitter = MULTI_PATH_SPLITTER.as_str();
+        if dir_name.contains(multi_path_splitter) {
+            for dir in dir_name.trim().split(&multi_path_splitter) {
+                create_dir_if_not_exist(dir);
+            }
+        } else {
+            create_dir_if_not_exist(dir_name);
+        }
     }
-}*/
+}
 
+fn create_dir_if_not_exist(dir_name: &str) {
+    let path = Path::new(dir_name);
+    if !path.exists() {
+        match fs::create_dir_all(path) {
+            Ok(_) => info!("{} mkdir OK", dir_name),
+            Err(_) => info!("{} mkdir Failed", dir_name),
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

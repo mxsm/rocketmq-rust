@@ -294,7 +294,11 @@ impl MappedFileQueue {
                     >= last_mapped_file.as_ref().unwrap().get_file_from_offset() as i64
                         + self.mapped_file_size as i64
             {
-                None
+                if return_first_on_not_found {
+                    first_mapped_file
+                } else {
+                    None
+                }
             } else {
                 let index = offset as usize / self.mapped_file_size as usize
                     - first_mapped_file.as_ref().unwrap().get_file_from_offset() as usize

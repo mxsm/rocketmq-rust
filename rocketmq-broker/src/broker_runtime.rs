@@ -174,6 +174,7 @@ impl BrokerRuntime {
         if let Some(message_store) = &mut self.message_store {
             message_store.shutdown()
         }
+
         if let Some(runtime) = self.broker_runtime.take() {
             runtime.shutdown();
         }

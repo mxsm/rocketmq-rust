@@ -124,7 +124,7 @@ impl ConsumeQueue {
 impl ConsumeQueue {
     pub fn set_max_physic_offset(&self, max_physic_offset: i64) {
         self.max_physic_offset
-            .store(max_physic_offset, std::sync::atomic::Ordering::SeqCst);
+            .store(max_physic_offset, std::sync::atomic::Ordering::Release);
     }
 
     pub fn truncate_dirty_logic_files_handler(&mut self, phy_offset: i64, delete_file: bool) {
@@ -226,9 +226,11 @@ impl ConsumeQueue {
     ) -> bool {
         if offset + size as i64 <= self.get_max_physic_offset() {
             warn!(
-                "Maybe try to build consume queue repeatedly maxPhysicOffset={} phyOffset={}",
+                "Maybe try to build consume queue repeatedly maxPhysicOffset={} phyOffset={}, \
+                 size={}",
                 self.get_max_physic_offset(),
-                offset
+                offset,
+                size
             );
             return true;
         }
@@ -527,7 +529,7 @@ impl ConsumeQueueTrait for ConsumeQueue {
     }
 
     fn get_max_physic_offset(&self) -> i64 {
-        self.max_physic_offset.load(Ordering::Relaxed)
+        self.max_physic_offset.load(Ordering::Acquire)
     }
 
     fn get_min_logic_offset(&self) -> i64 {

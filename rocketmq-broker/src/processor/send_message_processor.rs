@@ -291,7 +291,7 @@ impl<MS: MessageStore + Send + Clone> SendMessageProcessor<MS> {
         message_ext.tags_code = MessageExtBrokerInner::tags_string2tags_code(
             &topic_config.topic_filter_type,
             message_ext.get_tags().unwrap_or("".to_string()).as_str(),
-        ) as i64;
+        );
 
         message_ext.message_ext_inner.born_timestamp = request_header.born_timestamp;
         message_ext.message_ext_inner.born_host = ctx.remoting_address();
