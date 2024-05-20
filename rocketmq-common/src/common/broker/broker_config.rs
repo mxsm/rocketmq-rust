@@ -84,8 +84,6 @@ impl BrokerIdentity {
 pub struct BrokerConfig {
     pub broker_identity: BrokerIdentity,
 
-    pub topic_config: TopicConfig,
-
     pub topic_queue_config: TopicQueueConfig,
 
     pub timer_wheel_config: TimerWheelConfig,
@@ -101,7 +99,7 @@ pub struct BrokerConfig {
     pub broker_name: String,
     pub region_id: String,
     pub trace_on: bool,
-    pub broker_permission: i8,
+    pub broker_permission: u32,
     pub async_send_enable: bool,
     pub store_path_root_dir: String,
     pub enable_split_registration: bool,
@@ -114,6 +112,8 @@ pub struct BrokerConfig {
     pub start_accept_send_request_time_stamp: i64,
     pub auto_create_topic_enable: bool,
     pub enable_single_topic_register: bool,
+    pub broker_topic_enable: bool,
+    pub cluster_topic_enable: bool,
 }
 
 impl Default for BrokerConfig {
@@ -126,7 +126,6 @@ impl Default for BrokerConfig {
 
         BrokerConfig {
             broker_identity,
-            topic_config: TopicConfig::default(),
             topic_queue_config: TopicQueueConfig::default(),
             timer_wheel_config: TimerWheelConfig::default(),
             broker_server_config: Default::default(),
@@ -156,6 +155,8 @@ impl Default for BrokerConfig {
             start_accept_send_request_time_stamp: 0,
             auto_create_topic_enable: true,
             enable_single_topic_register: false,
+            broker_topic_enable: true,
+            cluster_topic_enable: true,
         }
     }
 }
@@ -189,7 +190,7 @@ impl BrokerConfig {
         self.region_id.clone()
     }
 
-    pub fn broker_permission(&self) -> i8 {
+    pub fn broker_permission(&self) -> u32 {
         self.broker_permission
     }
 }
@@ -201,24 +202,6 @@ fn default_broker_name() -> String {
 
     // Placeholder value for demonstration
     String::from("DefaultBrokerName")
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TopicConfig {
-    pub auto_create_topic_enable: bool,
-    pub cluster_topic_enable: bool,
-    pub broker_topic_enable: bool,
-}
-
-impl Default for TopicConfig {
-    fn default() -> Self {
-        TopicConfig {
-            auto_create_topic_enable: true,
-            cluster_topic_enable: true,
-            broker_topic_enable: true,
-        }
-    }
 }
 
 #[derive(Debug, Deserialize)]

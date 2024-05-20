@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
- use std::{
+use std::{
     fs::{File, OpenOptions},
     io::Write,
     path::Path,

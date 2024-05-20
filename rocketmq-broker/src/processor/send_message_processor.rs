@@ -223,7 +223,7 @@ impl<MS: MessageStore + Send + Clone> SendMessageProcessor<MS> {
             .unwrap();
         let mut queue_id = request_header.queue_id;
         if queue_id < 0 {
-            queue_id = self.inner.random_queue_id(topic_config.write_queue_nums) as i32;
+            queue_id = self.inner.random_queue_id(topic_config.write_queue_nums()) as i32;
         }
 
         let mut message_ext = MessageExtBrokerInner::default();
@@ -289,7 +289,7 @@ impl<MS: MessageStore + Send + Clone> SendMessageProcessor<MS> {
             }
         }
         message_ext.tags_code = MessageExtBrokerInner::tags_string2tags_code(
-            &topic_config.topic_filter_type,
+            &topic_config.topic_filter_type(),
             message_ext.get_tags().unwrap_or("".to_string()).as_str(),
         );
 

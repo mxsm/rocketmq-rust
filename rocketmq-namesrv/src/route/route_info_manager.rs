@@ -445,7 +445,7 @@ impl RouteInfoManager {
                 // No master
                 for queue_data in &topic_route_data.queue_datas {
                     if queue_data.broker_name() == broker_data.broker_name() {
-                        if !PermName::is_writeable(queue_data.perm() as i8) {
+                        if !PermName::is_writeable(queue_data.perm()) {
                             if let Some(min_broker_id) =
                                 broker_data.broker_addrs().keys().cloned().min()
                             {
@@ -561,11 +561,14 @@ impl RouteInfoManager {
             let mut queue_data_map_inner = HashMap::new();
             info!(
                 "new topic registered, {} {:?}",
-                &topic_config.topic_name, &queue_data
+                topic_config.topic_name().unwrap(),
+                &queue_data
             );
             queue_data_map_inner.insert(broker_name.to_string(), queue_data);
-            self.topic_queue_table
-                .insert(topic_config.topic_name.clone(), queue_data_map_inner);
+            self.topic_queue_table.insert(
+                topic_config.topic_name().unwrap().clone(),
+                queue_data_map_inner,
+            );
         }
     }
 
