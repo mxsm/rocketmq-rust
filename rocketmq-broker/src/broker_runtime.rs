@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-use std::{
+ use std::{
     collections::HashMap,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -234,6 +234,7 @@ impl BrokerRuntime {
             let message_store = DefaultMessageStore::new(
                 self.message_store_config.clone(),
                 self.broker_config.clone(),
+                self.topic_config_manager.topic_config_table.clone(),
             );
             self.topic_config_manager.message_store = Some(message_store.clone());
             self.message_store = Some(message_store);

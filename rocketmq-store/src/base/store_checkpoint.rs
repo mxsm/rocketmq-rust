@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-use std::{
+ use std::{
     fs::{File, OpenOptions},
     io::Write,
     path::Path,
@@ -23,6 +23,7 @@ use std::{
 };
 
 use memmap2::MmapMut;
+use rocketmq_common::UtilAll::ensure_dir_ok;
 use tracing::info;
 
 use crate::log_file::mapped_file::default_impl::OS_PAGE_SIZE;
@@ -39,15 +40,15 @@ pub struct StoreCheckpoint {
 
 impl StoreCheckpoint {
     pub fn new<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
+        ensure_dir_ok(path.as_ref().parent().unwrap().to_str().unwrap());
         let file = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .truncate(false)
             .open(path.as_ref())?;
-
-        let mmap = unsafe { MmapMut::map_mut(&file)? };
         let _ = file.set_len(OS_PAGE_SIZE);
+        let mmap = unsafe { MmapMut::map_mut(&file)? };
         if file.metadata()?.len() > 0 {
             let buffer = &mmap[..8];
             let physic_msg_timestamp = u64::from_be_bytes(buffer.try_into().unwrap());
