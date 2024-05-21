@@ -18,7 +18,7 @@ impl QueueTypeUtils {
                 let default_value = TopicAttributes::QUEUE_TYPE_ATTRIBUTE.get_default_value();
 
                 let attribute_name = TopicAttributes::QUEUE_TYPE_ATTRIBUTE.get_name();
-                match config.attributes().get(attribute_name) {
+                match config.attributes.get(attribute_name) {
                     Some(value) => value
                         .parse()
                         .unwrap_or(default_value.parse().unwrap_or(CQType::SimpleCQ)),

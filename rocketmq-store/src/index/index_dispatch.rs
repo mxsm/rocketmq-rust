@@ -15,34 +15,33 @@
  * limitations under the License.
  */
 
- use std::sync::Arc;
+use std::sync::Arc;
 
- use crate::{
-     base::{commit_log_dispatcher::CommitLogDispatcher, dispatch_request::DispatchRequest},
-     config::message_store_config::MessageStoreConfig,
-     index::index_service::IndexService,
- };
- 
- #[derive(Clone)]
- pub struct CommitLogDispatcherBuildIndex {
-     index_service: IndexService,
-     message_store_config: Arc<MessageStoreConfig>,
- }
- 
- impl CommitLogDispatcherBuildIndex {
-     pub fn new(index_service: IndexService, message_store_config: Arc<MessageStoreConfig>) -> Self {
-         Self {
-             index_service,
-             message_store_config,
-         }
-     }
- }
- 
- impl CommitLogDispatcher for CommitLogDispatcherBuildIndex {
-     fn dispatch(&self, dispatch_request: &DispatchRequest) {
-         if self.message_store_config.message_index_enable {
-             self.index_service.build_index(dispatch_request);
-         }
-     }
- }
- 
+use crate::{
+    base::{commit_log_dispatcher::CommitLogDispatcher, dispatch_request::DispatchRequest},
+    config::message_store_config::MessageStoreConfig,
+    index::index_service::IndexService,
+};
+
+#[derive(Clone)]
+pub struct CommitLogDispatcherBuildIndex {
+    index_service: IndexService,
+    message_store_config: Arc<MessageStoreConfig>,
+}
+
+impl CommitLogDispatcherBuildIndex {
+    pub fn new(index_service: IndexService, message_store_config: Arc<MessageStoreConfig>) -> Self {
+        Self {
+            index_service,
+            message_store_config,
+        }
+    }
+}
+
+impl CommitLogDispatcher for CommitLogDispatcherBuildIndex {
+    fn dispatch(&self, dispatch_request: &DispatchRequest) {
+        if self.message_store_config.message_index_enable {
+            self.index_service.build_index(dispatch_request);
+        }
+    }
+}

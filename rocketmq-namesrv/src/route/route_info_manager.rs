@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
- use std::{
+use std::{
     collections::{HashMap, HashSet},
     net::SocketAddr,
     sync::Arc,
