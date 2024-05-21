@@ -75,15 +75,15 @@ mod tests {
 
     #[test]
     fn test_perm_2_string() {
-        assert_eq!(PermName::perm_2_string(0).as_str(), "---");
-        assert_eq!(PermName::perm_2_string(PermName::PERM_READ).as_str(), "R--");
+        assert_eq!(PermName::perm2string(0).as_str(), "---");
+        assert_eq!(PermName::perm2string(PermName::PERM_READ).as_str(), "R--");
         assert_eq!(
-            PermName::perm_2_string(PermName::PERM_READ | PermName::PERM_WRITE).as_str(),
+            PermName::perm2string(PermName::PERM_READ | PermName::PERM_WRITE).as_str(),
             "RW-"
         );
 
         assert_eq!(
-            PermName::perm_2_string(
+            PermName::perm2string(
                 PermName::PERM_READ | PermName::PERM_WRITE | PermName::PERM_INHERIT
             ),
             "RWX"
@@ -146,15 +146,15 @@ mod tests {
 
     #[test]
     fn test_is_inherit() {
-        assert!(!PermName::is_inherit(0));
-        assert!(PermName::is_inherit(PermName::PERM_INHERIT));
-        assert!(!PermName::is_inherit(
+        assert!(!PermName::is_inherited(0));
+        assert!(PermName::is_inherited(PermName::PERM_INHERIT));
+        assert!(!PermName::is_inherited(
             PermName::PERM_READ | PermName::PERM_WRITE
         ));
-        assert!(!PermName::is_inherit(
+        assert!(!PermName::is_inherited(
             PermName::PERM_READ | PermName::PERM_WRITE | PermName::PERM_PRIORITY
         ));
-        assert!(PermName::is_inherit(
+        assert!(PermName::is_inherited(
             PermName::PERM_READ
                 | PermName::PERM_WRITE
                 | PermName::PERM_PRIORITY

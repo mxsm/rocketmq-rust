@@ -350,7 +350,7 @@ mod tests {
             ..MappedFileQueue::default()
         };
         assert!(queue.load());
-        assert!(queue.mapped_files.is_empty());
+        assert!(queue.mapped_files.read().is_empty());
     }
 
     #[test]
@@ -366,7 +366,7 @@ mod tests {
             ..MappedFileQueue::default()
         };
         assert!(queue.load());
-        assert_eq!(queue.mapped_files.len(), 1);
+        assert_eq!(queue.mapped_files.read().len(), 1);
     }
 
     #[test]
@@ -380,7 +380,7 @@ mod tests {
             ..MappedFileQueue::default()
         };
         assert!(queue.load());
-        assert!(queue.mapped_files.is_empty());
+        assert!(queue.mapped_files.read().is_empty());
     }
 
     #[test]
@@ -394,7 +394,7 @@ mod tests {
             ..MappedFileQueue::default()
         };
         assert!(!queue.load());
-        assert!(queue.mapped_files.is_empty());
+        assert!(queue.mapped_files.read().is_empty());
     }
 
     #[test]
@@ -409,6 +409,6 @@ mod tests {
             ..MappedFileQueue::default()
         };
         assert!(queue.load());
-        assert_eq!(queue.mapped_files.len(), 1);
+        assert_eq!(queue.mapped_files.read().len(), 1);
     }
 }
