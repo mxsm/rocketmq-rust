@@ -158,7 +158,7 @@ impl DefaultRequestProcessor {
 
         if value.is_some() {
             return RemotingCommand::create_response_command()
-                .set_command_custom_header(Some(Box::new(GetKVConfigResponseHeader::new(value))));
+                .set_command_custom_header(GetKVConfigResponseHeader::new(value));
         }
         RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::SystemError)
             .set_remark(Some(format!(
@@ -199,9 +199,8 @@ impl DefaultRequestProcessor {
             &request_header.cluster_name,
             &request_header.broker_addr,
         );
-        let mut command = RemotingCommand::create_response_command().set_command_custom_header(
-            Some(Box::new(QueryDataVersionResponseHeader::new(changed))),
-        );
+        let mut command = RemotingCommand::create_response_command()
+            .set_command_custom_header(QueryDataVersionResponseHeader::new(changed));
         if let Some(value) = rim_write.query_broker_topic_config(
             request_header.cluster_name.as_str(),
             request_header.broker_addr.as_str(),
@@ -308,10 +307,10 @@ impl DefaultRequestProcessor {
         let register_broker_result = result.unwrap();
         response_command
             .set_code(RemotingSysResponseCode::Success)
-            .set_command_custom_header(Some(Box::new(RegisterBrokerResponseHeader::new(
+            .set_command_custom_header(RegisterBrokerResponseHeader::new(
                 Some(register_broker_result.ha_server_addr),
                 Some(register_broker_result.master_addr),
-            ))))
+            ))
     }
 
     fn process_unregister_broker(&self, request: RemotingCommand) -> RemotingCommand {
@@ -372,9 +371,8 @@ impl DefaultRequestProcessor {
             .route_info_manager
             .write()
             .wipe_write_perm_of_broker_by_lock(request_header.broker_name.as_str());
-        RemotingCommand::create_response_command().set_command_custom_header(Some(Box::new(
-            WipeWritePermOfBrokerResponseHeader::new(wipe_topic_cnt),
-        )))
+        RemotingCommand::create_response_command()
+            .set_command_custom_header(WipeWritePermOfBrokerResponseHeader::new(wipe_topic_cnt))
     }
 
     fn add_write_perm_of_broker(&self, request: RemotingCommand) -> RemotingCommand {
@@ -385,9 +383,8 @@ impl DefaultRequestProcessor {
             .route_info_manager
             .write()
             .add_write_perm_of_broker_by_lock(request_header.broker_name.as_str());
-        RemotingCommand::create_response_command().set_command_custom_header(Some(Box::new(
-            AddWritePermOfBrokerResponseHeader::new(add_topic_cnt),
-        )))
+        RemotingCommand::create_response_command()
+            .set_command_custom_header(AddWritePermOfBrokerResponseHeader::new(add_topic_cnt))
     }
 
     fn get_all_topic_list_from_nameserver(&self, _request: RemotingCommand) -> RemotingCommand {

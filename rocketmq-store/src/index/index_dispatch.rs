@@ -39,7 +39,7 @@ impl CommitLogDispatcherBuildIndex {
 }
 
 impl CommitLogDispatcher for CommitLogDispatcherBuildIndex {
-    fn dispatch(&mut self, dispatch_request: &DispatchRequest) {
+    fn dispatch(&self, dispatch_request: &DispatchRequest) {
         if self.message_store_config.message_index_enable {
             self.index_service.build_index(dispatch_request);
         }

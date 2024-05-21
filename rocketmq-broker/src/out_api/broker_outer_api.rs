@@ -184,7 +184,8 @@ impl BrokerOuterAPI {
         topic_config: TopicConfig,
         timeout_mills: u64,
     ) {
-        let request_header = RegisterTopicRequestHeader::new(topic_config.topic_name.clone());
+        let request_header =
+            RegisterTopicRequestHeader::new(topic_config.topic_name.as_ref().unwrap());
         let queue_data = QueueData::new(
             broker_name.clone(),
             topic_config.read_queue_nums,

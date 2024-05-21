@@ -41,10 +41,10 @@ use tracing::{info, warn};
 use crate::{broker_path_config_helper::get_topic_config_path, broker_runtime::BrokerRuntimeInner};
 
 pub(crate) struct TopicConfigManager {
-    pub topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
+    topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
     data_version: Arc<parking_lot::Mutex<DataVersion>>,
     broker_config: Arc<BrokerConfig>,
-    pub message_store: Option<DefaultMessageStore>,
+    message_store: Option<DefaultMessageStore>,
     topic_config_table_lock: Arc<parking_lot::ReentrantMutex<()>>,
     broker_runtime_inner: Arc<BrokerRuntimeInner>,
 }
@@ -63,6 +63,8 @@ impl Clone for TopicConfigManager {
 }
 
 impl TopicConfigManager {
+    const SCHEDULE_TOPIC_QUEUE_NUM: u32 = 18;
+
     pub fn new(
         broker_config: Arc<BrokerConfig>,
         broker_runtime_inner: Arc<BrokerRuntimeInner>,
@@ -82,36 +84,34 @@ impl TopicConfigManager {
     fn init(&mut self) {
         //SELF_TEST_TOPIC
         {
-            self.topic_config_table.lock().insert(
-                TopicValidator::RMQ_SYS_SELF_TEST_TOPIC.to_string(),
-                TopicConfig::new_with(TopicValidator::RMQ_SYS_SELF_TEST_TOPIC, 1, 1),
-            );
+            self.put_topic_config(TopicConfig::with_queues(
+                TopicValidator::RMQ_SYS_SELF_TEST_TOPIC,
+                1,
+                1,
+            ));
         }
 
         //auto create topic setting
         {
-            if self.broker_config.topic_config.auto_create_topic_enable {
+            if self.broker_config.auto_create_topic_enable {
                 let default_topic_queue_nums = self
                     .broker_config
                     .topic_queue_config
                     .default_topic_queue_nums;
-                self.topic_config_table.lock().insert(
-                    TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC.to_string(),
-                    TopicConfig::new_with_perm(
-                        TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC,
-                        default_topic_queue_nums,
-                        default_topic_queue_nums,
-                        (PermName::PERM_INHERIT | PermName::PERM_READ | PermName::PERM_WRITE)
-                            as u32,
-                    ),
-                );
+                self.put_topic_config(TopicConfig::with_perm(
+                    TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC,
+                    default_topic_queue_nums,
+                    default_topic_queue_nums,
+                    PermName::PERM_INHERIT | PermName::PERM_READ | PermName::PERM_WRITE,
+                ));
             }
         }
         {
-            self.topic_config_table.lock().insert(
-                TopicValidator::RMQ_SYS_BENCHMARK_TOPIC.to_string(),
-                TopicConfig::new_with(TopicValidator::RMQ_SYS_BENCHMARK_TOPIC, 1024, 1024),
-            );
+            self.put_topic_config(TopicConfig::with_queues(
+                TopicValidator::RMQ_SYS_BENCHMARK_TOPIC,
+                1024,
+                1024,
+            ));
         }
         {
             let topic = self
@@ -119,46 +119,46 @@ impl TopicConfigManager {
                 .broker_identity
                 .broker_cluster_name
                 .to_string();
-            let mut config = TopicConfig::new(topic.to_string());
+            let mut config = TopicConfig::new(topic);
             let mut perm = PermName::PERM_INHERIT;
-            if self.broker_config.topic_config.cluster_topic_enable {
+            if self.broker_config.cluster_topic_enable {
                 perm |= PermName::PERM_READ | PermName::PERM_WRITE;
             }
-            config.perm = perm as u32;
-            self.topic_config_table.lock().insert(topic, config);
+            config.perm = perm;
+            self.put_topic_config(config);
         }
 
         {
             let topic = self.broker_config.broker_identity.broker_name.to_string();
-            let mut config = TopicConfig::new_with(topic.to_string(), 1, 1);
+            let mut config = TopicConfig::new(topic);
             let mut perm = PermName::PERM_INHERIT;
-            if self.broker_config.topic_config.broker_topic_enable {
+            if self.broker_config.broker_topic_enable {
                 perm |= PermName::PERM_READ | PermName::PERM_WRITE;
             }
-            config.perm = perm as u32;
-            self.topic_config_table.lock().insert(topic, config);
+            config.perm = perm;
+            self.put_topic_config(config);
         }
 
         {
-            self.topic_config_table.lock().insert(
-                TopicValidator::RMQ_SYS_OFFSET_MOVED_EVENT.to_string(),
-                TopicConfig::new_with(TopicValidator::RMQ_SYS_OFFSET_MOVED_EVENT, 1, 1),
-            );
+            self.put_topic_config(TopicConfig::with_queues(
+                TopicValidator::RMQ_SYS_OFFSET_MOVED_EVENT,
+                1,
+                1,
+            ));
         }
 
         {
-            self.topic_config_table.lock().insert(
-                TopicValidator::RMQ_SYS_SCHEDULE_TOPIC.to_string(),
-                TopicConfig::new_with(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC, 18, 18),
-            );
+            self.put_topic_config(TopicConfig::with_queues(
+                TopicValidator::RMQ_SYS_SCHEDULE_TOPIC,
+                Self::SCHEDULE_TOPIC_QUEUE_NUM,
+                Self::SCHEDULE_TOPIC_QUEUE_NUM,
+            ));
         }
 
         {
             if self.broker_config.trace_topic_enable {
                 let topic = self.broker_config.msg_trace_topic_name.clone();
-                self.topic_config_table
-                    .lock()
-                    .insert(topic.clone(), TopicConfig::new_with(topic, 1, 1));
+                self.put_topic_config(TopicConfig::with_queues(topic, 1, 1));
             }
         }
 
@@ -168,9 +168,7 @@ impl TopicConfigManager {
                 self.broker_config.broker_identity.broker_name,
                 mix_all::REPLY_TOPIC_POSTFIX
             );
-            self.topic_config_table
-                .lock()
-                .insert(topic.clone(), TopicConfig::new_with(topic, 1, 1));
+            self.put_topic_config(TopicConfig::with_queues(topic, 1, 1));
         }
 
         {
@@ -179,9 +177,12 @@ impl TopicConfigManager {
                 "rmq_sys_REVIVE_LOG_{}",
                 self.broker_config.broker_identity.broker_cluster_name
             );
-            self.topic_config_table
-                .lock()
-                .insert(topic.clone(), TopicConfig::new_with(topic, 1, 1));
+
+            self.put_topic_config(TopicConfig::with_queues(
+                topic,
+                self.broker_config.revive_queue_num,
+                self.broker_config.revive_queue_num,
+            ));
         }
 
         {
@@ -190,24 +191,23 @@ impl TopicConfigManager {
                 TopicValidator::SYNC_BROKER_MEMBER_GROUP_PREFIX,
                 self.broker_config.broker_identity.broker_name,
             );
-            self.topic_config_table.lock().insert(
-                topic.clone(),
-                TopicConfig::new_with_perm(topic, 1, 1, PermName::PERM_INHERIT as u32),
-            );
+            self.put_topic_config(TopicConfig::with_perm(topic, 1, 1, PermName::PERM_INHERIT));
         }
 
         {
-            self.topic_config_table.lock().insert(
-                TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC.to_string(),
-                TopicConfig::new_with(TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC, 1, 1),
-            );
+            self.put_topic_config(TopicConfig::with_queues(
+                TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC,
+                1,
+                1,
+            ));
         }
 
         {
-            self.topic_config_table.lock().insert(
-                TopicValidator::RMQ_SYS_TRANS_OP_HALF_TOPIC.to_string(),
-                TopicConfig::new_with(TopicValidator::RMQ_SYS_TRANS_OP_HALF_TOPIC, 1, 1),
-            );
+            self.put_topic_config(TopicConfig::with_queues(
+                TopicValidator::RMQ_SYS_TRANS_OP_HALF_TOPIC,
+                1,
+                1,
+            ));
         }
     }
 
@@ -249,9 +249,10 @@ impl TopicConfigManager {
     }
 
     pub(crate) fn put_topic_config(&self, topic_config: TopicConfig) -> Option<TopicConfig> {
-        self.topic_config_table
-            .lock()
-            .insert(topic_config.topic_name.clone(), topic_config)
+        self.topic_config_table.lock().insert(
+            topic_config.topic_name.as_ref().unwrap().clone(),
+            topic_config,
+        )
     }
 
     pub fn create_topic_in_send_message_method(
@@ -275,13 +276,13 @@ impl TopicConfigManager {
             let topic_config = if default_topic_config.is_some() {
                 //default topic
                 if default_topic == TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC
-                    && self.broker_config.auto_create_topic_enable
+                    && !self.broker_config.auto_create_topic_enable
                 {
                     default_topic_config.as_mut().unwrap().perm =
-                        (PermName::PERM_READ | PermName::PERM_WRITE) as u32;
+                        PermName::PERM_READ | PermName::PERM_WRITE;
                 }
 
-                if PermName::is_inherit(default_topic_config.as_ref().unwrap().perm as i8) {
+                if PermName::is_inherited(default_topic_config.as_ref().unwrap().perm) {
                     topic_config = Some(TopicConfig::new(topic));
                     let mut queue_nums = client_default_topic_queue_nums
                         .min(default_topic_config.as_ref().unwrap().write_queue_nums as i32);
@@ -292,7 +293,7 @@ impl TopicConfigManager {
                     ref_topic_config.write_queue_nums = queue_nums as u32;
                     ref_topic_config.read_queue_nums = queue_nums as u32;
                     let mut perm = default_topic_config.as_ref().unwrap().perm;
-                    perm &= !(PermName::PERM_INHERIT as u32);
+                    perm &= !PermName::PERM_INHERIT;
                     ref_topic_config.perm = perm;
                     ref_topic_config.topic_sys_flag = topic_sys_flag;
                     ref_topic_config.topic_filter_type =
@@ -344,7 +345,7 @@ impl TopicConfigManager {
         &mut self,
         topic: &str,
         client_default_topic_queue_nums: i32,
-        perm: i8,
+        perm: u32,
         is_order: bool,
         topic_sys_flag: u32,
     ) -> Option<TopicConfig> {
@@ -370,7 +371,7 @@ impl TopicConfigManager {
             if let Some(ref mut config) = topic_config {
                 config.read_queue_nums = client_default_topic_queue_nums as u32;
                 config.write_queue_nums = client_default_topic_queue_nums as u32;
-                config.perm = perm as u32;
+                config.perm = perm;
                 config.topic_sys_flag = topic_sys_flag;
                 config.order = is_order;
                 info!("create new topic {:?}", config);
@@ -416,11 +417,11 @@ impl TopicConfigManager {
 
     pub fn update_topic_config(&mut self, topic_config: &mut TopicConfig) {
         let new_attributes = Self::request(topic_config);
-        let current_attributes = self.current(topic_config.topic_name.as_str());
+        let current_attributes = self.current(topic_config.topic_name.as_ref().unwrap().as_str());
         let create = self
             .topic_config_table
             .lock()
-            .get(topic_config.topic_name.as_str())
+            .get(topic_config.topic_name.as_ref().unwrap().as_str())
             .is_none();
         let final_attributes =
             alter_current_attributes(create, ALL.clone(), new_attributes, current_attributes);
@@ -443,7 +444,10 @@ impl TopicConfigManager {
                 .unwrap()
                 .get_state_machine_version(),
         );
-        self.persist_with_topic(topic_config.topic_name.as_str(), topic_config.clone());
+        self.persist_with_topic(
+            topic_config.topic_name.as_ref().unwrap().as_str(),
+            topic_config.clone(),
+        );
     }
 
     fn request(topic_config: &TopicConfig) -> HashMap<String, String> {
@@ -456,6 +460,20 @@ impl TopicConfigManager {
             None => HashMap::new(),
             Some(config) => config.attributes.clone(),
         }
+    }
+
+    pub fn topic_config_table(&self) -> Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>> {
+        self.topic_config_table.clone()
+    }
+
+    pub fn set_topic_config_table(
+        &mut self,
+        topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
+    ) {
+        self.topic_config_table = topic_config_table;
+    }
+    pub fn set_message_store(&mut self, message_store: Option<DefaultMessageStore>) {
+        self.message_store = message_store;
     }
 }
 

@@ -88,14 +88,26 @@ pub struct RemotingCommand {
     #[serde(skip)]
     suspended: bool,
     #[serde(skip)]
-    command_custom_header: Option<Box<dyn CommandCustomHeader + Send + 'static>>,
+    command_custom_header: Option<Arc<dyn CommandCustomHeader + Send + Sync + 'static>>,
     #[serde(rename = "serializeTypeCurrentRPC")]
     serialize_type: SerializeType,
 }
 
 impl Clone for RemotingCommand {
     fn clone(&self) -> Self {
-        unimplemented!()
+        Self {
+            code: self.code,
+            language: self.language,
+            version: self.version,
+            opaque: self.opaque,
+            flag: self.flag,
+            remark: self.remark.clone(),
+            ext_fields: self.ext_fields.clone(),
+            body: self.body.clone(),
+            suspended: self.suspended,
+            command_custom_header: self.command_custom_header.clone(),
+            serialize_type: self.serialize_type,
+        }
     }
 }
 
@@ -126,11 +138,11 @@ impl RemotingCommand {
 impl RemotingCommand {
     pub fn create_request_command(
         code: impl Into<i32>,
-        header: impl CommandCustomHeader + Send + 'static,
+        header: impl CommandCustomHeader + Sync + Send + 'static,
     ) -> Self {
         let mut command = Self::default()
             .set_code(code.into())
-            .set_command_custom_header(Some(Box::new(header)));
+            .set_command_custom_header(header);
         set_cmd_version(&mut command);
         command
     }
@@ -159,19 +171,20 @@ impl RemotingCommand {
     }
 
     pub fn create_response_command_with_header(
-        header: impl CommandCustomHeader + Send + 'static,
+        header: impl CommandCustomHeader + Sync + Send + 'static,
     ) -> Self {
         Self::default()
             .set_code(RemotingSysResponseCode::Success)
-            .set_command_custom_header(Some(Box::new(header)))
+            .set_command_custom_header(header)
             .mark_response_type()
     }
 
     pub fn set_command_custom_header(
         mut self,
-        command_custom_header: Option<Box<dyn CommandCustomHeader + Send + 'static>>,
+        //command_custom_header: Option<Box<dyn CommandCustomHeader + Send + 'static>>,
+        command_custom_header: impl CommandCustomHeader + Send + Sync + 'static,
     ) -> Self {
-        self.command_custom_header = command_custom_header;
+        self.command_custom_header = Some(Arc::new(command_custom_header));
         if let Some(cch) = &self.command_custom_header {
             let option = cch.to_map();
 
@@ -302,9 +315,7 @@ impl RemotingCommand {
     pub fn suspended(&self) -> bool {
         self.suspended
     }
-    pub fn command_custom_header(&self) -> &Option<Box<dyn CommandCustomHeader + Send + 'static>> {
-        &self.command_custom_header
-    }
+
     pub fn serialize_type(&self) -> SerializeType {
         self.serialize_type
     }

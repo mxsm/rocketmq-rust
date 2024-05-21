@@ -270,7 +270,8 @@ impl CommitLog {
         let message_store_config = self.message_store_config.clone();
         let broker_config = self.broker_config.clone();
         // let mut mapped_file_queue = mapped_files.write().await;
-        let mapped_files_inner = self.mapped_file_queue.get_mapped_files();
+        let mapped_files = self.mapped_file_queue.get_mapped_files();
+        let mapped_files_inner = mapped_files.read();
         if !mapped_files_inner.is_empty() {
             // Began to recover from the last third file
             let mut index = (mapped_files_inner.len() as i32) - 3;
@@ -361,7 +362,7 @@ impl CommitLog {
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
-                           files"
+                            files"
             );
             self.mapped_file_queue.set_flushed_where(0);
             self.mapped_file_queue.set_committed_where(0);
@@ -411,7 +412,8 @@ impl CommitLog {
         //let message_store_config = self.message_store_config.clone();
         let broker_config = self.broker_config.clone();
         // let mut mapped_file_queue = mapped_files.write().await;
-        let mapped_files_inner = self.mapped_file_queue.get_mapped_files();
+        let binding = self.mapped_file_queue.get_mapped_files();
+        let mapped_files_inner = binding.read();
         if !mapped_files_inner.is_empty() {
             // Began to recover from the last third file
             let mut index = (mapped_files_inner.len() as i32) - 1;
@@ -540,7 +542,7 @@ impl CommitLog {
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
-                           files"
+                            files"
             );
             self.mapped_file_queue.set_flushed_where(0);
             self.mapped_file_queue.set_committed_where(0);

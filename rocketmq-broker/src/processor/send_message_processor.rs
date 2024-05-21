@@ -342,57 +342,57 @@ impl<MS: MessageStore + Send + Clone> SendMessageProcessor<MS> {
         let mut response = response;
         let mut send_ok = false;
         match put_message_result.put_message_status() {
-             rocketmq_store::base::message_status_enum::PutMessageStatus::PutOk => {
-                 send_ok = true;
-                 response = response.set_code(RemotingSysResponseCode::Success);
-             },
-             rocketmq_store::base::message_status_enum::PutMessageStatus::FlushDiskTimeout => {
-                 send_ok = true;
-                 response = response.set_code(ResponseCode::FlushDiskTimeout);
-             },
-             rocketmq_store::base::message_status_enum::PutMessageStatus::FlushSlaveTimeout => {
-                 send_ok = true;
-                 response = response.set_code(ResponseCode::FlushSlaveTimeout);
-             },
-             rocketmq_store::base::message_status_enum::PutMessageStatus::SlaveNotAvailable =>{
-                 send_ok = true;
-                 response = response.set_code(ResponseCode::SlaveNotAvailable);
-             },
-             rocketmq_store::base::message_status_enum::PutMessageStatus::ServiceNotAvailable => {
-                 response = response.set_code(ResponseCode::ServiceNotAvailable).set_remark(Some("service not available now. It may be caused by one of the following reasons: the broker's disk is full %s, messages are put to the slave, message store has been shut down, etc.".to_string()));
-             },
-             rocketmq_store::base::message_status_enum::PutMessageStatus::CreateMappedFileFailed => {
-                 response = response.set_code(RemotingSysResponseCode::SystemError).set_remark(Some("create mapped file failed, server is busy or broken.".to_string()));
-             },
-             rocketmq_store::base::message_status_enum::PutMessageStatus::MessageIllegal |
-             rocketmq_store::base::message_status_enum::PutMessageStatus::PropertiesSizeExceeded => {
-                 response = response.set_code(ResponseCode::MessageIllegal).set_remark(Some("the message is illegal, maybe msg body or properties length not matched. msg body length limit B, msg properties length limit 32KB.".to_string()));
-             },
-             rocketmq_store::base::message_status_enum::PutMessageStatus::OsPageCacheBusy =>{
-                 response = response.set_code(RemotingSysResponseCode::SystemError).set_remark(Some("[PC_SYNCHRONIZED]broker busy, start flow control for a while".to_string()));
-             },
-             rocketmq_store::base::message_status_enum::PutMessageStatus::UnknownError => {
-                 response = response.set_code(RemotingSysResponseCode::SystemError).set_remark(Some("UNKNOWN_ERROR".to_string()));
-             },
-             rocketmq_store::base::message_status_enum::PutMessageStatus::InSyncReplicasNotEnough => {
-                 response = response.set_code(RemotingSysResponseCode::SystemError).set_remark(Some("in-sync replicas not enough".to_string()));
-             },
-             rocketmq_store::base::message_status_enum::PutMessageStatus::LmqConsumeQueueNumExceeded => {
-                 response = response.set_code(RemotingSysResponseCode::SystemError).set_remark(Some("[LMQ_CONSUME_QUEUE_NUM_EXCEEDED]broker config enableLmq and enableMultiDispatch, lmq consumeQueue num exceed maxLmqConsumeQueueNum config num, default limit 2w.".to_string()));
-             },
-             rocketmq_store::base::message_status_enum::PutMessageStatus::WheelTimerFlowControl => {
-                 response = response.set_code(RemotingSysResponseCode::SystemError).set_remark(Some("timer message is under flow control, max num limit is %d or the current value is greater than %d and less than %d, trigger random flow control".to_string()));
-             },
-             rocketmq_store::base::message_status_enum::PutMessageStatus::WheelTimerMsgIllegal => {
-                 response = response.set_code(ResponseCode::MessageIllegal).set_remark(Some("timer message illegal, the delay time should not be bigger than the max delay %dms; or if set del msg, the delay time should be bigger than the current time".to_string()));
-             },
-             rocketmq_store::base::message_status_enum::PutMessageStatus::WheelTimerNotEnable => {
-                 response = response.set_code(RemotingSysResponseCode::SystemError).set_remark(Some("accurate timer message is not enabled, timerWheelEnable is %s".to_string()));
-             },
-             _ => {
-                 response = response.set_code(RemotingSysResponseCode::SystemError).set_remark(Some("UNKNOWN_ERROR DEFAULT".to_string()));
-             }
-         }
+              rocketmq_store::base::message_status_enum::PutMessageStatus::PutOk => {
+                  send_ok = true;
+                  response = response.set_code(RemotingSysResponseCode::Success);
+              },
+              rocketmq_store::base::message_status_enum::PutMessageStatus::FlushDiskTimeout => {
+                  send_ok = true;
+                  response = response.set_code(ResponseCode::FlushDiskTimeout);
+              },
+              rocketmq_store::base::message_status_enum::PutMessageStatus::FlushSlaveTimeout => {
+                  send_ok = true;
+                  response = response.set_code(ResponseCode::FlushSlaveTimeout);
+              },
+              rocketmq_store::base::message_status_enum::PutMessageStatus::SlaveNotAvailable =>{
+                  send_ok = true;
+                  response = response.set_code(ResponseCode::SlaveNotAvailable);
+              },
+              rocketmq_store::base::message_status_enum::PutMessageStatus::ServiceNotAvailable => {
+                  response = response.set_code(ResponseCode::ServiceNotAvailable).set_remark(Some("service not available now. It may be caused by one of the following reasons: the broker's disk is full %s, messages are put to the slave, message store has been shut down, etc.".to_string()));
+              },
+              rocketmq_store::base::message_status_enum::PutMessageStatus::CreateMappedFileFailed => {
+                  response = response.set_code(RemotingSysResponseCode::SystemError).set_remark(Some("create mapped file failed, server is busy or broken.".to_string()));
+              },
+              rocketmq_store::base::message_status_enum::PutMessageStatus::MessageIllegal |
+              rocketmq_store::base::message_status_enum::PutMessageStatus::PropertiesSizeExceeded => {
+                  response = response.set_code(ResponseCode::MessageIllegal).set_remark(Some("the message is illegal, maybe msg body or properties length not matched. msg body length limit B, msg properties length limit 32KB.".to_string()));
+              },
+              rocketmq_store::base::message_status_enum::PutMessageStatus::OsPageCacheBusy =>{
+                  response = response.set_code(RemotingSysResponseCode::SystemError).set_remark(Some("[PC_SYNCHRONIZED]broker busy, start flow control for a while".to_string()));
+              },
+              rocketmq_store::base::message_status_enum::PutMessageStatus::UnknownError => {
+                  response = response.set_code(RemotingSysResponseCode::SystemError).set_remark(Some("UNKNOWN_ERROR".to_string()));
+              },
+              rocketmq_store::base::message_status_enum::PutMessageStatus::InSyncReplicasNotEnough => {
+                  response = response.set_code(RemotingSysResponseCode::SystemError).set_remark(Some("in-sync replicas not enough".to_string()));
+              },
+              rocketmq_store::base::message_status_enum::PutMessageStatus::LmqConsumeQueueNumExceeded => {
+                  response = response.set_code(RemotingSysResponseCode::SystemError).set_remark(Some("[LMQ_CONSUME_QUEUE_NUM_EXCEEDED]broker config enableLmq and enableMultiDispatch, lmq consumeQueue num exceed maxLmqConsumeQueueNum config num, default limit 2w.".to_string()));
+              },
+              rocketmq_store::base::message_status_enum::PutMessageStatus::WheelTimerFlowControl => {
+                  response = response.set_code(RemotingSysResponseCode::SystemError).set_remark(Some("timer message is under flow control, max num limit is %d or the current value is greater than %d and less than %d, trigger random flow control".to_string()));
+              },
+              rocketmq_store::base::message_status_enum::PutMessageStatus::WheelTimerMsgIllegal => {
+                  response = response.set_code(ResponseCode::MessageIllegal).set_remark(Some("timer message illegal, the delay time should not be bigger than the max delay %dms; or if set del msg, the delay time should be bigger than the current time".to_string()));
+              },
+              rocketmq_store::base::message_status_enum::PutMessageStatus::WheelTimerNotEnable => {
+                  response = response.set_code(RemotingSysResponseCode::SystemError).set_remark(Some("accurate timer message is not enabled, timerWheelEnable is %s".to_string()));
+              },
+              _ => {
+                  response = response.set_code(RemotingSysResponseCode::SystemError).set_remark(Some("UNKNOWN_ERROR DEFAULT".to_string()));
+              }
+          }
 
         let binding = HashMap::new();
         let ext_fields = request.ext_fields().unwrap_or(&binding);
@@ -421,7 +421,7 @@ impl<MS: MessageStore + Send + Clone> SendMessageProcessor<MS> {
                     .logics_offset,
             );
             //response_header.set_transaction_id();
-            response = response.set_command_custom_header(Some(Box::new(response_header)));
+            response = response.set_command_custom_header(response_header);
             Some(response)
         } else {
             unimplemented!()

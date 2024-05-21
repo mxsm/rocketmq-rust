@@ -35,7 +35,7 @@ impl CommitLogDispatcherBuildConsumeQueue {
 }
 
 impl CommitLogDispatcher for CommitLogDispatcherBuildConsumeQueue {
-    fn dispatch(&mut self, dispatch_request: &DispatchRequest) {
+    fn dispatch(&self, dispatch_request: &DispatchRequest) {
         let tran_type = MessageSysFlag::get_transaction_value(dispatch_request.sys_flag);
         match tran_type {
             MessageSysFlag::TRANSACTION_NOT_TYPE | MessageSysFlag::TRANSACTION_COMMIT_TYPE => {

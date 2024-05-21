@@ -41,6 +41,7 @@ use rocketmq_common::{
     },
     utils::queue_type_utils::QueueTypeUtils,
     FileUtils::string_to_file,
+    UtilAll::ensure_dir_ok,
 };
 use tokio::{runtime::Handle, sync::mpsc::Sender};
 use tracing::{error, warn};
@@ -62,7 +63,9 @@ use crate::{
         local_file_consume_queue_store::ConsumeQueueStore, ConsumeQueueStoreTrait,
     },
     store::running_flags::RunningFlags,
-    store_path_config_helper::{get_abort_file, get_store_checkpoint},
+    store_path_config_helper::{
+        get_abort_file, get_store_checkpoint, get_store_path_consume_queue,
+    },
 };
 
 ///Using local files to store message data, which is also the default method.
@@ -122,6 +125,7 @@ impl DefaultMessageStore {
     pub fn new(
         message_store_config: Arc<MessageStoreConfig>,
         broker_config: Arc<BrokerConfig>,
+        topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
     ) -> Self {
         let index_service = IndexService {};
         let running_flags = Arc::new(RunningFlags::new());
@@ -133,7 +137,7 @@ impl DefaultMessageStore {
         );
         let build_index =
             CommitLogDispatcherBuildIndex::new(index_service.clone(), message_store_config.clone());
-        let topic_config_table = Arc::new(parking_lot::Mutex::new(HashMap::new()));
+        // let topic_config_table = Arc::new(parking_lot::Mutex::new(HashMap::new()));
         let consume_queue_store = ConsumeQueueStore::new(
             message_store_config.clone(),
             topic_config_table.clone(),
@@ -142,9 +146,9 @@ impl DefaultMessageStore {
         );
         let build_consume_queue =
             CommitLogDispatcherBuildConsumeQueue::new(consume_queue_store.clone());
+
         let dispatcher = CommitLogDispatcherDefault {
-            build_index,
-            build_consume_queue,
+            dispatcher_vec: Arc::new(vec![Box::new(build_consume_queue), Box::new(build_index)]),
         };
 
         let commit_log = CommitLog::new(
@@ -154,6 +158,11 @@ impl DefaultMessageStore {
             store_checkpoint.clone(),
             topic_config_table.clone(),
         );
+
+        ensure_dir_ok(message_store_config.store_path_root_dir.as_str());
+        ensure_dir_ok(Self::get_store_path_physic(&message_store_config).as_str());
+        ensure_dir_ok(Self::get_store_path_logic(&message_store_config).as_str());
+
         Self {
             message_store_config: message_store_config.clone(),
             broker_config,
@@ -180,6 +189,19 @@ impl DefaultMessageStore {
             correct_logic_offset_service: Arc::new(CorrectLogicOffsetService {}),
             clean_consume_queue_service: Arc::new(CleanConsumeQueueService {}),
         }
+    }
+
+    pub fn get_store_path_physic(message_store_config: &Arc<MessageStoreConfig>) -> String {
+        match message_store_config.enable_dledger_commit_log {
+            true => {
+                unimplemented!("dledger commit log is not supported yet")
+            }
+            false => message_store_config.get_store_path_commit_log(),
+        }
+    }
+
+    pub fn get_store_path_logic(message_store_config: &Arc<MessageStoreConfig>) -> String {
+        get_store_path_consume_queue(message_store_config.store_path_root_dir.as_str())
     }
 }
 
@@ -445,7 +467,7 @@ impl MessageStore for DefaultMessageStore {
             self.dispatcher.clone(),
         );
 
-        self.add_schedule_task();
+        //self.add_schedule_task();
 
         Ok(())
     }
@@ -519,14 +541,18 @@ impl MessageStore for DefaultMessageStore {
 
 #[derive(Clone)]
 pub struct CommitLogDispatcherDefault {
-    build_index: CommitLogDispatcherBuildIndex,
-    build_consume_queue: CommitLogDispatcherBuildConsumeQueue,
+    /*build_index: CommitLogDispatcherBuildIndex,
+    build_consume_queue: CommitLogDispatcherBuildConsumeQueue,*/
+    dispatcher_vec: Arc<Vec<Box<dyn CommitLogDispatcher>>>,
 }
 
 impl CommitLogDispatcher for CommitLogDispatcherDefault {
-    fn dispatch(&mut self, dispatch_request: &DispatchRequest) {
-        self.build_index.dispatch(dispatch_request);
-        self.build_consume_queue.dispatch(dispatch_request);
+    fn dispatch(&self, dispatch_request: &DispatchRequest) {
+        /*self.build_index.dispatch(dispatch_request);
+        self.build_consume_queue.dispatch(dispatch_request);*/
+        for dispatcher in self.dispatcher_vec.iter() {
+            dispatcher.dispatch(dispatch_request);
+        }
     }
 }
 #[derive(Clone)]
@@ -555,12 +581,11 @@ impl ReputMessageService {
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
         self.tx = Some(Arc::new(tx));
         let handle = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_millis(1));
-            let mut break_flag;
+            let mut interval = tokio::time::interval(Duration::from_millis(2000));
+            let mut break_flag = false;
             loop {
-                inner.do_reput().await;
-                interval.tick().await;
                 tokio::select! {
+                    _ = inner.do_reput() => {}
                     _ = rx.recv() => {
                         let mut index = 0;
                         while index < 50 && inner.is_commit_log_available() {
@@ -582,6 +607,7 @@ impl ReputMessageService {
                 if break_flag {
                     break;
                 }
+                interval.tick().await;
             }
         });
     }
@@ -628,7 +654,6 @@ impl ReputMessageServiceInner {
         let mut do_next = true;
         while do_next && self.is_commit_log_available() {
             let result = self.commit_log.get_data(reput_from_offset);
-
             if result.is_none() {
                 break;
             }
@@ -667,10 +692,6 @@ impl ReputMessageServiceInner {
                     do_next = false;
                     break;
                 }
-                println!(
-                    "=============================read_size={}",
-                    dispatch_request.msg_size
-                );
                 if dispatch_request.success {
                     match dispatch_request.msg_size.cmp(&0) {
                         std::cmp::Ordering::Greater => {

@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-use std::fmt;
+use std::{fmt, str::FromStr};
 
 pub use faq::FAQUrl;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -49,6 +49,32 @@ pub enum TopicFilterType {
     #[default]
     SingleTag,
     MultiTag,
+}
+
+impl From<&str> for TopicFilterType {
+    fn from(s: &str) -> TopicFilterType {
+        match s {
+            "SINGLE_TAG" => TopicFilterType::SingleTag,
+            "MULTI_TAG" => TopicFilterType::MultiTag,
+            _ => TopicFilterType::SingleTag,
+        }
+    }
+}
+
+impl From<String> for TopicFilterType {
+    fn from(s: String) -> TopicFilterType {
+        TopicFilterType::from(s.as_str())
+    }
+}
+
+impl From<i32> for TopicFilterType {
+    fn from(i: i32) -> TopicFilterType {
+        match i {
+            0 => TopicFilterType::SingleTag,
+            1 => TopicFilterType::MultiTag,
+            _ => TopicFilterType::SingleTag,
+        }
+    }
 }
 
 impl Serialize for TopicFilterType {

@@ -127,10 +127,7 @@ mod tests {
             .set_opaque(1)
             .set_flag(1)
             .set_body(Some(Bytes::from("body")))
-            .set_command_custom_header(Some(Box::new(GetRouteInfoRequestHeader::new(
-                "1111",
-                Some(true),
-            ))))
+            .set_command_custom_header(GetRouteInfoRequestHeader::new("1111", Some(true)))
             .set_remark(Some("remark".to_string()));
         println!("{}", serde_json::to_string(&command).unwrap());
         let mut encoder = RemotingCommandCodec::new();
