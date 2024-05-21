@@ -16,5 +16,6 @@
  */
 
 pub mod index_dispatch;
-pub mod index_service;
+pub mod index_file;
 pub mod index_header;
+pub mod index_service;

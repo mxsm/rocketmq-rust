@@ -92,7 +92,7 @@ pub trait MappedFile {
     fn get_file_from_offset(&self) -> u64;
 
     /// Flushes the data in cache to disk immediately.
-    fn flush(&mut self, flush_least_pages: i32) -> i32;
+    fn flush(&self, flush_least_pages: i32) -> i32;
 
     /// Flushes the data in the secondary cache to page cache or disk immediately.
     fn commit(&mut self, commit_least_pages: usize) -> usize;

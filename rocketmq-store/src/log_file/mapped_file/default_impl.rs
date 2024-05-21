@@ -299,7 +299,7 @@ impl MappedFile for DefaultMappedFile {
         self.file_from_offset
     }
 
-    fn flush(&mut self, flush_least_pages: i32) -> i32 {
+    fn flush(&self, flush_least_pages: i32) -> i32 {
         if self.is_able_to_flush(flush_least_pages) {
             if self.reference_resource.hold() {
                 let value = self.get_read_position();
