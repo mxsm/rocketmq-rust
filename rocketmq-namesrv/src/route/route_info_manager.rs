@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-use std::{
+ use std::{
     collections::{HashMap, HashSet},
     net::SocketAddr,
     sync::Arc,
@@ -264,12 +264,12 @@ impl RouteInfoManager {
                             &broker_addr,
                             data_version,
                             &broker_name,
-                            &topic_config.topic_name,
+                            topic_config.topic_name.as_ref().unwrap(),
                         ))
                         && is_prime_slave
                         && broker_data.enable_acting_master()
                     {
-                        config.perm &= !(PermName::PERM_WRITE as u32);
+                        config.perm &= !PermName::PERM_WRITE;
                     }
                     self.create_and_update_queue_data(&broker_name, config);
                 }
@@ -542,7 +542,9 @@ impl RouteInfoManager {
             topic_config.topic_sys_flag,
         );
 
-        let queue_data_map = self.topic_queue_table.get_mut(&topic_config.topic_name);
+        let queue_data_map = self
+            .topic_queue_table
+            .get_mut(topic_config.topic_name.as_ref().unwrap());
         if let Some(queue_data_map_inner) = queue_data_map {
             let existed_qd = queue_data_map_inner.get(broker_name);
             if existed_qd.is_none() {
@@ -552,7 +554,9 @@ impl RouteInfoManager {
                 if unwrap != &queue_data {
                     info!(
                         "topic changed, {} OLD: {:?} NEW: {:?}",
-                        &topic_config.topic_name, unwrap, queue_data
+                        topic_config.topic_name.as_ref().unwrap(),
+                        unwrap,
+                        queue_data
                     );
                     queue_data_map_inner.insert(broker_name.to_string(), queue_data);
                 }
@@ -561,12 +565,12 @@ impl RouteInfoManager {
             let mut queue_data_map_inner = HashMap::new();
             info!(
                 "new topic registered, {} {:?}",
-                topic_config.topic_name().unwrap(),
+                topic_config.topic_name.as_ref().unwrap(),
                 &queue_data
             );
             queue_data_map_inner.insert(broker_name.to_string(), queue_data);
             self.topic_queue_table.insert(
-                topic_config.topic_name().unwrap().clone(),
+                topic_config.topic_name.as_ref().unwrap().clone(),
                 queue_data_map_inner,
             );
         }
@@ -670,10 +674,10 @@ impl RouteInfoManager {
             let mut perm = qd.perm;
             match request_code {
                 RequestCode::WipeWritePermOfBroker => {
-                    perm &= !PermName::PERM_WRITE as u32;
+                    perm &= !PermName::PERM_WRITE;
                 }
                 RequestCode::AddWritePermOfBroker => {
-                    perm = (PermName::PERM_READ | PermName::PERM_WRITE) as u32;
+                    perm = PermName::PERM_READ | PermName::PERM_WRITE;
                 }
                 _ => {}
             }
@@ -1054,7 +1058,7 @@ impl RouteInfoManager {
                             // Update the queue data's permission, assuming PermName is an enum
                             // For simplicity, I'm using 0 as PERM_WRITE value, please replace it
                             // with the actual value
-                            queue_data.perm &= !PermName::PERM_WRITE as u32
+                            queue_data.perm &= !PermName::PERM_WRITE
                         }
                     }
                 }

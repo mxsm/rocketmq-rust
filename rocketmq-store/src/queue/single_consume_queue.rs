@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::{
+ use std::{
     path::PathBuf,
     sync::{
         atomic::{AtomicI64, Ordering},
@@ -329,7 +329,8 @@ impl FileQueueLifeCycle for ConsumeQueue {
     }
 
     fn recover(&mut self) {
-        let mapped_files = self.mapped_file_queue.get_mapped_files();
+        let binding = self.mapped_file_queue.get_mapped_files();
+        let mapped_files = binding.read();
         if mapped_files.is_empty() {
             return;
         }

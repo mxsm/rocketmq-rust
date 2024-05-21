@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-use std::{
+ use std::{
     collections::HashMap,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -365,13 +365,16 @@ impl BrokerRuntime {
                     topic_name: topic_config.topic_name.clone(),
                     read_queue_nums: topic_config.read_queue_nums,
                     write_queue_nums: topic_config.write_queue_nums,
-                    perm: topic_config.perm & self.broker_config.broker_permission as u32,
+                    perm: topic_config.perm & self.broker_config.broker_permission,
                     ..TopicConfig::default()
                 }
             } else {
                 topic_config.clone()
             };
-            topic_config_table.insert(new_topic_config.topic_name.clone(), new_topic_config);
+            topic_config_table.insert(
+                new_topic_config.topic_name.as_ref().unwrap().clone(),
+                new_topic_config,
+            );
         }
 
         // Handle split registration logic
@@ -494,7 +497,7 @@ impl BrokerRuntimeInner {
         if !PermName::is_writeable(self.broker_config.broker_permission)
             || !PermName::is_readable(self.broker_config.broker_permission)
         {
-            topic_config.perm &= self.broker_config.broker_permission as u32;
+            topic_config.perm &= self.broker_config.broker_permission;
         }
         self.broker_out_api
             .register_single_topic_all(
@@ -525,14 +528,14 @@ impl BrokerRuntimeInner {
                     || !PermName::is_readable(self.broker_config.broker_permission)
                 {
                     TopicConfig {
-                        perm: topic_config.perm() & self.broker_config.broker_permission as u32,
+                        perm: topic_config.perm & self.broker_config.broker_permission,
                         ..topic_config.clone()
                     }
                 } else {
                     topic_config.clone()
                 };
             topic_config_table.insert(
-                register_topic_config.topic_name().cloned().unwrap(),
+                register_topic_config.topic_name.as_ref().unwrap().clone(),
                 register_topic_config,
             );
         }
@@ -541,10 +544,10 @@ impl BrokerRuntimeInner {
         for topic_config in topic_config_list {
             if let Some(ref value) = self
                 .topic_queue_mapping_manager
-                .get_topic_queue_mapping(topic_config.topic_name().unwrap().as_str())
+                .get_topic_queue_mapping(topic_config.topic_name.as_ref().unwrap().as_str())
             {
                 topic_queue_mapping_info_map.insert(
-                    topic_config.topic_name().cloned().unwrap(),
+                    topic_config.topic_name.as_ref().unwrap().clone(),
                     TopicQueueMappingDetail::clone_as_mapping_info(value),
                 );
             }

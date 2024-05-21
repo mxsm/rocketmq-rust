@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-use std::{
+ use std::{
     fs,
     path::{Path, PathBuf},
     sync::{
@@ -25,6 +25,7 @@ use std::{
 };
 
 use log::warn;
+use parking_lot::RwLock;
 use rocketmq_common::UtilAll::offset_to_file_name;
 use tracing::info;
 
@@ -41,7 +42,8 @@ pub struct MappedFileQueue {
     //pub(crate) mapped_files: Arc<Mutex<Vec<LocalMappedFile>>>,
     //pub(crate) mapped_files: Vec<Arc<Mutex<LocalMappedFile>>>,
     //pub(crate) mapped_files: Vec<Arc<LocalMappedFile>>,
-    pub(crate) mapped_files: Vec<Arc<DefaultMappedFile>>,
+    //pub(crate) mapped_files: Vec<Arc<DefaultMappedFile>>,
+    pub(crate) mapped_files: Arc<RwLock<Vec<Arc<DefaultMappedFile>>>>,
     //  pub(crate) mapped_files: Vec<LocalMappedFile>,
     pub(crate) allocate_mapped_file_service: Option<AllocateMappedFileService>,
 
@@ -61,7 +63,7 @@ impl MappedFileQueue {
         MappedFileQueue {
             store_path,
             mapped_file_size,
-            mapped_files: Vec::new(),
+            mapped_files: Arc::new(RwLock::new(Vec::new())),
             allocate_mapped_file_service,
             flushed_where: Arc::new(AtomicU64::new(0)),
             committed_where: Arc::new(AtomicU64::new(0)),
@@ -129,7 +131,7 @@ impl MappedFileQueue {
             mapped_file.set_wrote_position(self.mapped_file_size as i32);
             mapped_file.set_flushed_position(self.mapped_file_size as i32);
             mapped_file.set_committed_position(self.mapped_file_size as i32);
-            self.mapped_files.push(Arc::new(mapped_file));
+            self.mapped_files.write().push(Arc::new(mapped_file));
             // self.mapped_files
             //     .push(mapped_file);
             info!("load {} OK", file.display());
@@ -139,17 +141,17 @@ impl MappedFileQueue {
     }
 
     pub fn get_last_mapped_file(&self) -> Option<Arc<DefaultMappedFile>> {
-        if self.mapped_files.is_empty() {
+        if self.mapped_files.read().is_empty() {
             return None;
         }
-        self.mapped_files.last().cloned()
+        self.mapped_files.read().last().cloned()
     }
 
     pub fn get_first_mapped_file(&self) -> Option<Arc<DefaultMappedFile>> {
-        if self.mapped_files.is_empty() {
+        if self.mapped_files.read().is_empty() {
             return None;
         }
-        self.mapped_files.first().cloned()
+        self.mapped_files.read().first().cloned()
     }
 
     pub fn get_last_mapped_file_mut_start_offset(
@@ -199,20 +201,20 @@ impl MappedFileQueue {
             }
         };
 
-        if self.mapped_files.is_empty() {
+        if self.mapped_files.read().is_empty() {
             mapped_file.set_first_create_in_queue(true);
         }
         let inner = Arc::new(mapped_file);
-        self.mapped_files.push(inner.clone());
+        self.mapped_files.write().push(inner.clone());
         Some(inner)
     }
 
-    pub fn get_mapped_files(&self) -> Vec<Arc<DefaultMappedFile>> {
-        self.mapped_files.to_vec()
+    pub fn get_mapped_files(&self) -> Arc<RwLock<Vec<Arc<DefaultMappedFile>>>> {
+        self.mapped_files.clone()
     }
 
     pub fn get_mapped_files_size(&self) -> usize {
-        self.mapped_files.len()
+        self.mapped_files.read().len()
     }
 
     pub fn set_flushed_where(&self, flushed_where: i64) {
@@ -227,7 +229,7 @@ impl MappedFileQueue {
 
     pub fn truncate_dirty_files(&mut self, offset: i64) {
         let mut will_remove_files = Vec::new();
-        for mapped_file in self.mapped_files.iter() {
+        for mapped_file in self.mapped_files.read().iter() {
             let file_tail_offset = mapped_file.get_file_from_offset() + self.mapped_file_size;
             if file_tail_offset as i64 > offset {
                 if offset >= mapped_file.get_file_from_offset() as i64 {
@@ -255,6 +257,7 @@ impl MappedFileQueue {
         if let Some(last_mapped_file) = self.get_last_mapped_file() {
             last_mapped_file.destroy(1000);
             self.mapped_files
+                .write()
                 .retain(|mf| mf.as_ref() != last_mapped_file.as_ref());
             info!(
                 "on recover, destroy a logic mapped file {}",
@@ -265,17 +268,18 @@ impl MappedFileQueue {
 
     pub(crate) fn delete_expired_file(&mut self, files: Vec<Arc<DefaultMappedFile>>) {
         let mut files = files;
+        let read_guard = self.mapped_files.read();
         if !files.is_empty() {
-            files.retain(|mf| self.mapped_files.contains(mf));
-            self.mapped_files.retain(|mf| !files.contains(mf));
+            files.retain(|mf| read_guard.contains(mf));
+            self.mapped_files.write().retain(|mf| !files.contains(mf));
         }
     }
 
     pub fn destroy(&mut self) {
-        for mapped_file in self.mapped_files.iter() {
+        for mapped_file in self.mapped_files.read().iter() {
             mapped_file.destroy(1000 * 3);
         }
-        self.mapped_files.clear();
+        self.mapped_files.write().clear();
         self.set_flushed_where(0);
         let path = PathBuf::from(&self.store_path);
         if path.is_dir() {
@@ -305,14 +309,15 @@ impl MappedFileQueue {
                 let index = offset as usize / self.mapped_file_size as usize
                     - first_mapped_file.as_ref().unwrap().get_file_from_offset() as usize
                         / self.mapped_file_size as usize;
-                let target_file = self.mapped_files.get(index).cloned();
+                let read_guard = self.mapped_files.read();
+                let target_file = read_guard.get(index).cloned();
                 if target_file.is_some()
                     && offset >= target_file.as_ref().unwrap().get_file_from_offset() as i64
                 {
                     return target_file;
                 }
-                for index in 0..self.mapped_files.len() {
-                    let mapped_file = self.mapped_files.get(index).unwrap();
+                for index in 0..read_guard.len() {
+                    let mapped_file = read_guard.get(index).unwrap();
                     if offset >= mapped_file.get_file_from_offset() as i64
                         && offset
                             < mapped_file.get_file_from_offset() as i64

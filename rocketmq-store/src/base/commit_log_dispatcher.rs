@@ -18,5 +18,5 @@
 use crate::base::dispatch_request::DispatchRequest;
 
 pub trait CommitLogDispatcher: Send + Clone {
-    fn dispatch(&mut self, dispatch_request: &DispatchRequest);
+    fn dispatch(&self, dispatch_request: &DispatchRequest);
 }

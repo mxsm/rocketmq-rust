@@ -15,121 +15,122 @@
  * limitations under the License.
  */
 
-use std::{fmt, str::FromStr};
+ use std::{fmt, str::FromStr};
 
-pub use faq::FAQUrl;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-pub use crate::common::sys_flag::topic_sys_flag as TopicSysFlag;
-
-pub mod attribute;
-pub mod boundary_type;
-pub mod broker;
-pub mod compression;
-pub mod config;
-pub mod config_manager;
-pub mod constant;
-pub mod consumer;
-mod faq;
-pub mod filter;
-pub mod future;
-pub mod hasher;
-pub mod macros;
-pub mod message;
-pub mod mix_all;
-pub mod mq_version;
-pub mod namesrv;
-pub mod server;
-pub mod sys_flag;
-pub mod thread;
-pub mod topic;
-
-#[derive(Debug, Clone, Default, Eq, PartialEq, Copy)]
-pub enum TopicFilterType {
-    #[default]
-    SingleTag,
-    MultiTag,
-}
-
-impl From<&str> for TopicFilterType {
-    fn from(s: &str) -> TopicFilterType {
-        match s {
-            "SINGLE_TAG" => TopicFilterType::SingleTag,
-            "MULTI_TAG" => TopicFilterType::MultiTag,
-            _ => TopicFilterType::SingleTag,
-        }
-    }
-}
-
-impl From<String> for TopicFilterType {
-    fn from(s: String) -> TopicFilterType {
-        TopicFilterType::from(s.as_str())
-    }
-}
-
-impl From<i32> for TopicFilterType {
-    fn from(i: i32) -> TopicFilterType {
-        match i {
-            0 => TopicFilterType::SingleTag,
-            1 => TopicFilterType::MultiTag,
-            _ => TopicFilterType::SingleTag,
-        }
-    }
-}
-
-impl Serialize for TopicFilterType {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let value = match self {
-            TopicFilterType::SingleTag => "SINGLE_TAG",
-            TopicFilterType::MultiTag => "MULTI_TAG",
-        };
-        serializer.serialize_str(value)
-    }
-}
-
-impl<'de> Deserialize<'de> for TopicFilterType {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct TopicFilterTypeVisitor;
-
-        impl<'de> serde::de::Visitor<'de> for TopicFilterTypeVisitor {
-            type Value = TopicFilterType;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a string representing TopicFilterType")
-            }
-
-            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                match value {
-                    "SINGLE_TAG" => Ok(TopicFilterType::SingleTag),
-                    "MULTI_TAG" => Ok(TopicFilterType::MultiTag),
-                    _ => Err(serde::de::Error::unknown_variant(
-                        value,
-                        &["SingleTag", "MultiTag"],
-                    )),
-                }
-            }
-        }
-
-        deserializer.deserialize_str(TopicFilterTypeVisitor)
-    }
-}
-
-pub struct Pair<T, U> {
-    pub left: T,
-    pub right: U,
-}
-
-impl<T, U> Pair<T, U> {
-    pub fn new(left: T, right: U) -> Self {
-        Self { left, right }
-    }
-}
+ pub use faq::FAQUrl;
+ use serde::{Deserialize, Deserializer, Serialize, Serializer};
+ 
+ pub use crate::common::sys_flag::topic_sys_flag as TopicSysFlag;
+ 
+ pub mod attribute;
+ pub mod boundary_type;
+ pub mod broker;
+ pub mod compression;
+ pub mod config;
+ pub mod config_manager;
+ pub mod constant;
+ pub mod consumer;
+ mod faq;
+ pub mod filter;
+ pub mod future;
+ pub mod hasher;
+ pub mod macros;
+ pub mod message;
+ pub mod mix_all;
+ pub mod mq_version;
+ pub mod namesrv;
+ pub mod server;
+ pub mod sys_flag;
+ pub mod thread;
+ pub mod topic;
+ 
+ #[derive(Debug, Clone, Default, Eq, PartialEq, Copy)]
+ pub enum TopicFilterType {
+     #[default]
+     SingleTag,
+     MultiTag,
+ }
+ 
+ impl From<&str> for TopicFilterType {
+     fn from(s: &str) -> TopicFilterType {
+         match s {
+             "SINGLE_TAG" => TopicFilterType::SingleTag,
+             "MULTI_TAG" => TopicFilterType::MultiTag,
+             _ => TopicFilterType::SingleTag,
+         }
+     }
+ }
+ 
+ impl From<String> for TopicFilterType {
+     fn from(s: String) -> TopicFilterType {
+         TopicFilterType::from(s.as_str())
+     }
+ }
+ 
+ impl From<i32> for TopicFilterType {
+     fn from(i: i32) -> TopicFilterType {
+         match i {
+             0 => TopicFilterType::SingleTag,
+             1 => TopicFilterType::MultiTag,
+             _ => TopicFilterType::SingleTag,
+         }
+     }
+ }
+ 
+ impl Serialize for TopicFilterType {
+     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+     where
+         S: Serializer,
+     {
+         let value = match self {
+             TopicFilterType::SingleTag => "SINGLE_TAG",
+             TopicFilterType::MultiTag => "MULTI_TAG",
+         };
+         serializer.serialize_str(value)
+     }
+ }
+ 
+ impl<'de> Deserialize<'de> for TopicFilterType {
+     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+     where
+         D: Deserializer<'de>,
+     {
+         struct TopicFilterTypeVisitor;
+ 
+         impl<'de> serde::de::Visitor<'de> for TopicFilterTypeVisitor {
+             type Value = TopicFilterType;
+ 
+             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                 formatter.write_str("a string representing TopicFilterType")
+             }
+ 
+             fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+             where
+                 E: serde::de::Error,
+             {
+                 match value {
+                     "SINGLE_TAG" => Ok(TopicFilterType::SingleTag),
+                     "MULTI_TAG" => Ok(TopicFilterType::MultiTag),
+                     _ => Err(serde::de::Error::unknown_variant(
+                         value,
+                         &["SingleTag", "MultiTag"],
+                     )),
+                 }
+             }
+         }
+ 
+         deserializer.deserialize_str(TopicFilterTypeVisitor)
+     }
+ }
+ 
+ pub struct Pair<T, U> {
+     pub left: T,
+     pub right: U,
+ }
+ 
+ impl<T, U> Pair<T, U> {
+     pub fn new(left: T, right: U) -> Self {
+         Self { left, right }
+     }
+ }
+ 

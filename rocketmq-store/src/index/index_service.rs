@@ -29,7 +29,7 @@ impl IndexService {
         true
     }
 
-    pub fn build_index(&mut self, dispatch_request: &DispatchRequest) {
+    pub fn build_index(&self, dispatch_request: &DispatchRequest) {
         println!(
             "=========================build index:{}",
             dispatch_request.msg_size

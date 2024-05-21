@@ -14,10 +14,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::{
+ use std::{
     collections::HashMap,
+    fmt,
     fmt::{Display, Formatter},
-    sync::atomic::{AtomicI64, Ordering},
+    sync::{
+        atomic::{AtomicI64, Ordering},
+        Arc,
+    },
     time::SystemTime,
 };
 
@@ -25,7 +29,12 @@ use rocketmq_common::{
     common::{mix_all, topic::TopicValidator},
     utils::time_utils,
 };
-use serde::{de, Deserialize, Serialize};
+use serde::{
+    de,
+    de::{MapAccess, Visitor},
+    ser::SerializeStruct,
+    Deserialize, Deserializer, Serialize, Serializer,
+};
 
 use crate::RocketMQSerializable;
 
@@ -173,14 +182,91 @@ impl SerializeType {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug)]
 pub struct DataVersion {
-    #[serde(rename = "stateVersion")]
     state_version: i64,
     timestamp: i64,
-    counter: i64,
-    #[serde(skip)]
-    counter_inner: AtomicI64,
+    counter: Arc<AtomicI64>,
+}
+
+impl Serialize for DataVersion {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_struct("DataVersion", 3)?;
+        state.serialize_field("stateVersion", &self.state_version)?;
+        state.serialize_field("timestamp", &self.timestamp)?;
+        state.serialize_field("counter", &self.counter.load(Ordering::SeqCst))?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for DataVersion {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        enum Field {
+            StateVersion,
+            Timestamp,
+            Counter,
+        }
+
+        struct DataVersionVisitor;
+
+        impl<'de> Visitor<'de> for DataVersionVisitor {
+            type Value = DataVersion;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("struct DataVersion")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> Result<DataVersion, V::Error>
+            where
+                V: MapAccess<'de>,
+            {
+                let mut state_version = None;
+                let mut timestamp = None;
+                let mut counter = None;
+                while let Some(key) = map.next_key()? {
+                    match key {
+                        Field::StateVersion => {
+                            if state_version.is_some() {
+                                return Err(de::Error::duplicate_field("stateVersion"));
+                            }
+                            state_version = Some(map.next_value()?);
+                        }
+                        Field::Timestamp => {
+                            if timestamp.is_some() {
+                                return Err(de::Error::duplicate_field("timestamp"));
+                            }
+                            timestamp = Some(map.next_value()?);
+                        }
+                        Field::Counter => {
+                            if counter.is_some() {
+                                return Err(de::Error::duplicate_field("counter"));
+                            }
+                            counter = Some(map.next_value()?);
+                        }
+                    }
+                }
+                let state_version =
+                    state_version.ok_or_else(|| de::Error::missing_field("stateVersion"))?;
+                let timestamp = timestamp.ok_or_else(|| de::Error::missing_field("timestamp"))?;
+                let counter = counter.ok_or_else(|| de::Error::missing_field("counter"))?;
+                Ok(DataVersion {
+                    state_version,
+                    timestamp,
+                    counter: Arc::new(AtomicI64::new(counter)),
+                })
+            }
+        }
+
+        const FIELDS: &[&str] = &["stateVersion", "timestamp", "counter"];
+        deserializer.deserialize_struct("DataVersion", FIELDS, DataVersionVisitor)
+    }
 }
 
 impl RemotingSerializable for DataVersion {
@@ -192,8 +278,7 @@ impl Clone for DataVersion {
         DataVersion {
             state_version: self.state_version,
             timestamp: self.timestamp,
-            counter: self.counter,
-            counter_inner: AtomicI64::new(self.counter_inner.load(Ordering::Relaxed)),
+            counter: self.counter.clone(),
         }
     }
 }
@@ -202,7 +287,7 @@ impl PartialEq for DataVersion {
     fn eq(&self, other: &Self) -> bool {
         self.state_version == other.state_version
             && self.timestamp == other.timestamp
-            && self.counter == other.counter
+            && self.counter.load(Ordering::Relaxed) == other.counter.load(Ordering::Relaxed)
     }
 }
 
@@ -222,16 +307,14 @@ impl DataVersion {
         DataVersion {
             state_version: 0,
             timestamp,
-            counter: 0,
-            counter_inner: AtomicI64::new(0),
+            counter: Arc::new(AtomicI64::new(0)),
         }
     }
 
     pub fn assign_new_one(&mut self, data_version: &DataVersion) {
         self.timestamp = data_version.timestamp;
         self.state_version = data_version.state_version;
-        self.counter = data_version.counter;
-        self.counter_inner = AtomicI64::new(data_version.counter_inner.load(Ordering::Relaxed));
+        self.counter = Arc::new(AtomicI64::new(data_version.counter.load(Ordering::SeqCst)));
     }
 
     pub fn get_state_version(&self) -> i64 {
@@ -245,11 +328,11 @@ impl DataVersion {
     }
 
     pub fn get_counter(&self) -> i64 {
-        self.counter_inner.load(Ordering::Relaxed)
+        self.counter.load(Ordering::Relaxed)
     }
 
     pub fn increment_counter(&self) -> i64 {
-        self.counter_inner.fetch_add(1, Ordering::Relaxed)
+        self.counter.fetch_add(1, Ordering::Relaxed) + 1
     }
     pub fn state_version(&self) -> i64 {
         self.state_version
@@ -258,10 +341,7 @@ impl DataVersion {
         self.timestamp
     }
     pub fn counter(&self) -> i64 {
-        self.counter
-    }
-    pub fn counter_inner(&self) -> &AtomicI64 {
-        &self.counter_inner
+        self.counter.load(Ordering::Relaxed)
     }
 
     pub fn next_version(&mut self) {
@@ -271,14 +351,13 @@ impl DataVersion {
     pub fn next_version_with(&mut self, state_version: i64) {
         self.timestamp = time_utils::get_current_millis() as i64;
         self.state_version = state_version;
-        self.counter_inner.fetch_add(1, Ordering::SeqCst);
-        self.counter = self.counter_inner.load(Ordering::Relaxed)
+        self.counter.fetch_add(1, Ordering::SeqCst);
     }
 }
 
 impl Display for DataVersion {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let counter_value = self.counter_inner.load(Ordering::SeqCst);
+        let counter_value = self.counter.load(Ordering::SeqCst);
         write!(
             f,
             "State Version: {}, Timestamp: {}, Counter: {}",
