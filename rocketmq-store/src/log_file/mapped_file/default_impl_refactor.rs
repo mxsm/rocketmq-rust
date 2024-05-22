@@ -272,7 +272,7 @@ impl MappedFile for LocalMappedFile {
         todo!()
     }
 
-    fn flush(&mut self, flush_least_pages: i32) -> i32 {
+    fn flush(&self, flush_least_pages: i32) -> i32 {
         todo!()
     }
 

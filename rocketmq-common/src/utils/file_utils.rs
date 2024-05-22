@@ -21,7 +21,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use parking_lot::Mutex;
 use tracing::warn;
+
+static LOCK: Mutex<()> = Mutex::new(());
 
 pub fn file_to_string(file_name: &str) -> Result<String, io::Error> {
     if !PathBuf::from(file_name).exists() {
@@ -47,6 +50,8 @@ pub fn file_to_string_impl(file: &File) -> Result<String, io::Error> {
 }
 
 pub fn string_to_file(str_content: &str, file_name: &str) -> io::Result<()> {
+    let lock = LOCK.lock();
+
     let bak_file = format!("{}.bak", file_name);
 
     // Read previous content and create a backup
@@ -56,7 +61,7 @@ pub fn string_to_file(str_content: &str, file_name: &str) -> io::Result<()> {
 
     // Write new content to the file
     string_to_file_not_safe(str_content, file_name)?;
-
+    drop(lock);
     Ok(())
 }
 
