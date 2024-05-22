@@ -16,7 +16,7 @@
  */
 use std::{collections::HashMap, sync::Arc};
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{BufMut, BytesMut};
 use rocketmq_common::{
     common::{
         attribute::cq_type::CQType,
@@ -212,7 +212,7 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
             .copy_from_slice(&msg_inner.store_timestamp().to_be_bytes());
 
         // msg_inner.encoded_buff = pre_encode_buffer;
-        let bytes = Bytes::from(pre_encode_buffer);
+        let bytes = pre_encode_buffer.freeze();
         mapped_file.append_message_bytes(&bytes);
         AppendMessageResult {
             status: AppendMessageStatus::PutOk,
