@@ -227,7 +227,7 @@ impl MappedFile for DefaultMappedFile {
         put_message_context: &PutMessageContext,
     ) -> AppendMessageResult {
         let mut message = message;
-        let current_pos = self.wrote_position.load(Ordering::Relaxed) as u64;
+        let current_pos = self.wrote_position.load(Ordering::Acquire) as u64;
         if current_pos >= self.file_size {
             error!(
                 "MappedFile.appendMessage return null, wrotePosition: {} fileSize: {}",
