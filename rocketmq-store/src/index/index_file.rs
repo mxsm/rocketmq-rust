@@ -26,6 +26,20 @@ use crate::{
 };
 
 const HASH_SLOT_SIZE: usize = 4;
+
+/**
+ * Each index's store unit. Format:
+ * <pre>
+ * ┌───────────────┬───────────────────────────────┬───────────────┬───────────────┐
+ * │ Key HashCode  │        Physical Offset        │   Time Diff   │ Next Index Pos│
+ * │   (4 Bytes)   │          (8 Bytes)            │   (4 Bytes)   │   (4 Bytes)   │
+ * ├───────────────┴───────────────────────────────┴───────────────┴───────────────┤
+ * │                                 Index Store Unit                              │
+ * │                                                                               │
+ * </pre>
+ * Each index's store unit. Size:
+ * Key HashCode(4) + Physical Offset(8) + Time Diff(4) + Next Index Pos(4) = 20 Bytes
+ */
 const INDEX_SIZE: usize = 20;
 const INVALID_INDEX: i32 = 0;
 
@@ -35,6 +49,12 @@ pub struct IndexFile {
     file_total_size: usize,
     mapped_file: Arc<DefaultMappedFile>,
     index_header: IndexHeader,
+}
+
+impl PartialEq for IndexFile {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self as *const IndexFile, other as *const IndexFile)
+    }
 }
 
 impl IndexFile {

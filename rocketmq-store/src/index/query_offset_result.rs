@@ -15,8 +15,34 @@
  * limitations under the License.
  */
 
-pub mod index_dispatch;
-pub mod index_file;
-pub mod index_header;
-pub mod index_service;
-pub mod query_offset_result;
+pub struct QueryOffsetResult {
+    phy_offsets: Vec<i64>,
+    index_last_update_timestamp: i64,
+    index_last_update_phyoffset: i64,
+}
+
+impl QueryOffsetResult {
+    pub fn new(
+        phy_offsets: Vec<i64>,
+        index_last_update_timestamp: i64,
+        index_last_update_phyoffset: i64,
+    ) -> Self {
+        QueryOffsetResult {
+            phy_offsets,
+            index_last_update_timestamp,
+            index_last_update_phyoffset,
+        }
+    }
+
+    pub fn get_phy_offsets(&self) -> &Vec<i64> {
+        &self.phy_offsets
+    }
+
+    pub fn get_index_last_update_timestamp(&self) -> i64 {
+        self.index_last_update_timestamp
+    }
+
+    pub fn get_index_last_update_phyoffset(&self) -> i64 {
+        self.index_last_update_phyoffset
+    }
+}

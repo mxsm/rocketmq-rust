@@ -127,7 +127,6 @@ impl DefaultMessageStore {
         broker_config: Arc<BrokerConfig>,
         topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
     ) -> Self {
-        let index_service = IndexService {};
         let running_flags = Arc::new(RunningFlags::new());
         let store_checkpoint = Arc::new(
             StoreCheckpoint::new(get_store_checkpoint(
@@ -135,6 +134,8 @@ impl DefaultMessageStore {
             ))
             .unwrap(),
         );
+        let index_service =
+            IndexService::new(message_store_config.clone(), store_checkpoint.clone());
         let build_index =
             CommitLogDispatcherBuildIndex::new(index_service.clone(), message_store_config.clone());
         // let topic_config_table = Arc::new(parking_lot::Mutex::new(HashMap::new()));

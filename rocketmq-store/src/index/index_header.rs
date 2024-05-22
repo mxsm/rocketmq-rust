@@ -58,7 +58,7 @@ impl IndexHeader {
     }
 
     pub fn load(&self) {
-        let mut buffer = self.mapped_file.get_data(0, INDEX_HEADER_SIZE).unwrap();
+        let mut buffer = self.mapped_file.get_bytes(0, INDEX_HEADER_SIZE).unwrap();
         self.begin_timestamp
             .store(buffer.get_i64(), Ordering::SeqCst);
         self.end_timestamp.store(buffer.get_i64(), Ordering::SeqCst);
