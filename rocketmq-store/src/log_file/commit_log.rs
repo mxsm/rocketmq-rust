@@ -15,7 +15,12 @@
  * limitations under the License.
  */
 
-use std::{cell::Cell, collections::HashMap, mem, sync::Arc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    mem,
+    sync::Arc,
+};
 
 use bytes::{Buf, Bytes};
 use rocketmq_common::{
@@ -71,16 +76,52 @@ pub const BLANK_MAGIC_CODE: i32 = -875286124;
 pub const CRC32_RESERVED_LEN: i32 = (MessageConst::PROPERTY_CRC32.len() + 1 + 10 + 1) as i32;
 
 struct PutMessageThreadLocal {
-    encoder: Cell<Option<MessageExtEncoder>>,
-    key: Cell<Option<String>>,
+    encoder: RefCell<Option<MessageExtEncoder>>,
+    key: RefCell<String>,
 }
 
-// thread_local! {
-//     static PUT_MESSAGE_THREAD_LOCAL: Arc<PutMessageThreadLocal> = Arc::new(PutMessageThreadLocal{
-//         encoder: Cell::new(None),
-//         key: Cell::new(None),
-//     });
-// }
+thread_local! {
+    static PUT_MESSAGE_THREAD_LOCAL: PutMessageThreadLocal = PutMessageThreadLocal{
+        encoder: RefCell::new(None),
+        key: RefCell::new(String::new()),
+    };
+}
+
+fn encode_message_ext(
+    message_ext: &MessageExtBrokerInner,
+    message_store_config: &Arc<MessageStoreConfig>,
+) -> Option<PutMessageResult> {
+    PUT_MESSAGE_THREAD_LOCAL.with(
+        |thread_local| match thread_local.encoder.borrow_mut().as_mut() {
+            None => {
+                thread_local
+                    .encoder
+                    .replace(Some(MessageExtEncoder::new(Arc::clone(
+                        message_store_config,
+                    ))));
+                thread_local
+                    .encoder
+                    .borrow_mut()
+                    .as_mut()
+                    .unwrap()
+                    .encode(message_ext)
+            }
+
+            Some(encoder) => encoder.encode(message_ext),
+        },
+    )
+}
+
+fn generate_key(msg: &MessageExtBrokerInner) -> String {
+    PUT_MESSAGE_THREAD_LOCAL.with(|thead_local| {
+        let mut topic_queue_key = thead_local.key.borrow_mut();
+        topic_queue_key.clear();
+        topic_queue_key.push_str(msg.topic());
+        topic_queue_key.push('-');
+        topic_queue_key.push_str(msg.queue_id().to_string().as_str());
+        topic_queue_key.to_string()
+    })
+}
 
 #[derive(Clone)]
 pub struct CommitLog {
@@ -93,6 +134,7 @@ pub struct CommitLog {
     confirm_offset: i64,
     store_checkpoint: Arc<StoreCheckpoint>,
     append_message_callback: Arc<DefaultAppendMessageCallback>,
+    put_message_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl CommitLog {
@@ -119,6 +161,7 @@ impl CommitLog {
                 message_store_config,
                 topic_config_table,
             )),
+            put_message_lock: Arc::new(Default::default()),
         }
     }
 }
@@ -186,6 +229,8 @@ impl CommitLog {
             msg.with_store_host_v6_flag();
         }
 
+        let topic_queue_key = generate_key(&msg);
+
         let mut encoder = MessageExtEncoder::new(self.message_store_config.clone());
         let put_message_result = encoder.encode(&msg);
         if let Some(result) = put_message_result {
@@ -202,7 +247,7 @@ impl CommitLog {
                 .unwrap(),
             Some(mapped_file) => mapped_file,
         };
-        let topic_queue_key = generate_key(&msg);
+
         let put_message_context = PutMessageContext::new(topic_queue_key);
 
         let result = mapped_file.append_message(
@@ -596,14 +641,6 @@ impl CommitLog {
     pub fn check_self(&self) {
         self.mapped_file_queue.check_self();
     }
-}
-
-fn generate_key(msg: &MessageExtBrokerInner) -> String {
-    let mut topic_queue_key = String::new();
-    topic_queue_key.push_str(msg.topic());
-    topic_queue_key.push('-');
-    topic_queue_key.push_str(msg.queue_id().to_string().as_str());
-    topic_queue_key
 }
 
 pub fn check_message_and_return_size(
