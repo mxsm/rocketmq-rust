@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-use std::{cell::Cell, collections::HashMap, mem, ops::Deref, sync::Arc};
+use std::{cell::Cell, collections::HashMap, mem, sync::Arc};
 
 use bytes::{Buf, Bytes};
 use rocketmq_common::{
@@ -157,9 +157,9 @@ impl CommitLog {
             msg.message_ext_inner
                 .message
                 .body
-                .clone()
-                .expect("REASON")
-                .deref(),
+                .as_ref()
+                .unwrap()
+                .as_ref(),
         );
         if !self.enabled_append_prop_crc {
             msg.delete_property(MessageConst::PROPERTY_CRC32);
