@@ -170,7 +170,7 @@ impl DefaultMessageStore {
             put_message_hook_list: Arc::new(vec![]),
             topic_config_table,
             // message_store_runtime: Some(RocketMQRuntime::new_multi(10, "message-store-thread")),
-            commit_log: commit_log.clone(),
+            commit_log: commit_log,
             compaction_service: Default::default(),
             store_checkpoint: Some(store_checkpoint),
             master_flushed_offset: Arc::new(AtomicI64::new(-1)),
@@ -666,7 +666,6 @@ impl ReputMessageServiceInner {
             let start_pos = (result.start_offset % mapped_file.get_file_size()) as i32;
             loop {
                 let size = mapped_file.get_bytes((start_pos + read_size) as usize, 4);
-                println!("read_size={}", read_size);
                 if size.is_none() {
                     do_next = false;
                     break;

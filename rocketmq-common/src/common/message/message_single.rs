@@ -436,6 +436,10 @@ impl MessageExtBrokerInner {
     pub fn is_wait_store_msg_ok(&self) -> bool {
         self.message_ext_inner.message.is_wait_store_msg_ok()
     }
+
+    pub fn body_len(&self) -> usize {
+        self.message_ext_inner.message.body.as_ref().unwrap().len()
+    }
 }
 
 pub fn parse_topic_filter_type(sys_flag: i32) -> TopicFilterType {

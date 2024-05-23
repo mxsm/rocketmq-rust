@@ -15,12 +15,7 @@
  * limitations under the License.
  */
 
-use std::{
-    cell::{Cell, RefCell},
-    collections::HashMap,
-    mem,
-    sync::Arc,
-};
+use std::{cell::Cell, collections::HashMap, mem, sync::Arc};
 
 use bytes::{Buf, Bytes, BytesMut};
 use rocketmq_common::{
@@ -43,6 +38,7 @@ use rocketmq_common::{
     },
     UtilAll::time_millis_to_human_string,
 };
+use tokio::time::Instant;
 use tracing::{error, info, warn};
 
 use crate::{
@@ -76,14 +72,14 @@ pub const BLANK_MAGIC_CODE: i32 = -875286124;
 pub const CRC32_RESERVED_LEN: i32 = (MessageConst::PROPERTY_CRC32.len() + 1 + 10 + 1) as i32;
 
 struct PutMessageThreadLocal {
-    encoder: RefCell<Option<MessageExtEncoder>>,
-    key: RefCell<String>,
+    encoder: Cell<Option<MessageExtEncoder>>,
+    key: Cell<String>,
 }
 
 thread_local! {
     static PUT_MESSAGE_THREAD_LOCAL: PutMessageThreadLocal = PutMessageThreadLocal{
-        encoder: RefCell::new(None),
-        key: RefCell::new(String::new()),
+        encoder: Cell::new(None),
+        key: Cell::new(String::new()),
     };
 }
 
@@ -91,29 +87,34 @@ fn encode_message_ext(
     message_ext: &MessageExtBrokerInner,
     message_store_config: &Arc<MessageStoreConfig>,
 ) -> (Option<PutMessageResult>, BytesMut) {
-    PUT_MESSAGE_THREAD_LOCAL.with(
-        |thread_local| match thread_local.encoder.borrow_mut().as_mut() {
-            None => {
-                let mut encoder = MessageExtEncoder::new(Arc::clone(message_store_config));
-                let result = encoder.encode(message_ext);
-                let bytes_mut = encoder.byte_buf();
-                thread_local.encoder.replace(Some(encoder));
-                (result, bytes_mut)
-            }
+    PUT_MESSAGE_THREAD_LOCAL.with(|thread_local| match thread_local.encoder.take() {
+        None => {
+            let mut encoder = MessageExtEncoder::new(Arc::clone(message_store_config));
+            let result = encoder.encode(message_ext);
+            let bytes_mut = encoder.byte_buf();
+            thread_local.encoder.set(Some(encoder));
+            (result, bytes_mut)
+        }
 
-            Some(encoder) => (encoder.encode(message_ext), encoder.byte_buf()),
-        },
-    )
+        Some(mut encoder) => {
+            let result = encoder.encode(message_ext);
+            let bytes_mut = encoder.byte_buf();
+            thread_local.encoder.set(Some(encoder));
+            (result, bytes_mut)
+        }
+    })
 }
 
 fn generate_key(msg: &MessageExtBrokerInner) -> String {
     PUT_MESSAGE_THREAD_LOCAL.with(|thead_local| {
-        let mut topic_queue_key = thead_local.key.borrow_mut();
+        let mut topic_queue_key = thead_local.key.take();
         topic_queue_key.clear();
         topic_queue_key.push_str(msg.topic());
         topic_queue_key.push('-');
         topic_queue_key.push_str(msg.queue_id().to_string().as_str());
-        topic_queue_key.to_string()
+        let key_return = topic_queue_key.to_string();
+        thead_local.key.set(topic_queue_key);
+        key_return
     })
 }
 
@@ -225,7 +226,7 @@ impl CommitLog {
 
         let topic_queue_key = generate_key(&msg);
 
-        let mut unlock_mapped_file = None;
+        let mut _unlock_mapped_file = None;
         let mut mapped_file = self.mapped_file_queue.get_last_mapped_file();
         let curr_offset = if let Some(ref mapped_file_inner) = mapped_file {
             mapped_file_inner.get_wrote_position() as u64 + mapped_file_inner.get_file_from_offset()
@@ -240,16 +241,11 @@ impl CommitLog {
             unimplemented!("slave acting master not support HA")
         }
 
-        let need_assign_offset = if self.message_store_config.duplication_enable
-            && self.message_store_config.broker_role != BrokerRole::Slave
-        {
-            false
-        } else {
-            true
-        };
+        let need_assign_offset = !(self.message_store_config.duplication_enable
+            && self.message_store_config.broker_role != BrokerRole::Slave);
 
         if need_assign_offset {
-            println!("assign offset");
+            //  println!("assign offset");
         }
 
         let (put_message_result, encoded_buff) =
@@ -260,7 +256,7 @@ impl CommitLog {
         msg.encoded_buff = Some(encoded_buff);
         let put_message_context = PutMessageContext::new(topic_queue_key);
         let lock = self.put_message_lock.lock().await;
-
+        let start_time = Instant::now();
         // Here settings are stored timestamp, in order to ensure an orderly global
         if !self.message_store_config.duplication_enable {
             msg.message_ext_inner.store_timestamp = time_utils::get_current_millis() as i64;
@@ -282,25 +278,31 @@ impl CommitLog {
             self.append_message_callback.as_ref(),
             &put_message_context,
         );
-
+        /*        println!(
+            "====================write offset {}  {}",
+            result.wrote_offset, result.logics_offset
+        );*/
         let put_message_result = match result.status {
             AppendMessageStatus::PutOk => {
+                //onCommitLogAppend(msg, result, mappedFile); in java not support this version
                 PutMessageResult::new_append_result(PutMessageStatus::PutOk, Some(result))
             }
             AppendMessageStatus::EndOfFile => {
                 //onCommitLogAppend(msg, result, mappedFile); in java not support this version
-                unlock_mapped_file = mapped_file;
+                _unlock_mapped_file = mapped_file;
                 mapped_file = self
                     .mapped_file_queue
                     .get_last_mapped_file_mut_start_offset(0, true);
                 if mapped_file.is_none() {
-                    drop(lock);
                     error!(
                         "create mapped file error, topic: {}  clientAddr: {}",
                         msg.topic(),
                         msg.born_host()
                     );
-                    return PutMessageResult::new_default(PutMessageStatus::CreateMappedFileFailed);
+                    return PutMessageResult::new_append_result(
+                        PutMessageStatus::CreateMappedFileFailed,
+                        Some(result),
+                    );
                 }
                 let result = mapped_file.as_ref().unwrap().append_message(
                     &mut msg,
@@ -324,7 +326,15 @@ impl CommitLog {
                 PutMessageResult::new_append_result(PutMessageStatus::UnknownError, Some(result))
             }
         };
-
+        let elapsed_time_in_lock = start_time.elapsed().as_nanos() as u64;
+        drop(lock);
+        println!("============================={}", elapsed_time_in_lock);
+        /*        info!(
+            "[NOTIFYME]putMessage in lock cost time(ms)={}, bodyLength={} AppendMessageResult={:?}",
+            elapsed_time_in_lock,
+            msg.body_len(),
+            put_message_result.append_message_result().as_ref().unwrap(),
+        );*/
         if put_message_result.put_message_status() == PutMessageStatus::PutOk {
             self.handle_disk_flush_and_ha(put_message_result, msg, need_ack_nums, need_handle_ha)
                 .await
@@ -340,7 +350,7 @@ impl CommitLog {
         need_ack_nums: u32,
         need_handle_ha: bool,
     ) -> PutMessageResult {
-        unimplemented!()
+        put_message_result
     }
 
     fn need_handle_ha(&self, msg_inner: &MessageExtBrokerInner) -> bool {
@@ -359,7 +369,7 @@ impl CommitLog {
             return false;
         }
 
-        return true;
+        true
     }
 
     fn on_commit_log_dispatch(
