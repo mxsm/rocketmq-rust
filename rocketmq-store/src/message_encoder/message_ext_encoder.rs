@@ -222,7 +222,7 @@ impl MessageExtEncoder {
         } else {
             self.byte_buf.put_u8(topic_length as u8);
         }
-        self.byte_buf.put_slice(topic_data);
+        self.byte_buf.put(topic_data);
 
         None
     }
@@ -240,7 +240,7 @@ impl MessageExtEncoder {
         let properties_data = msg_inner.properties_string().as_bytes();
         let need_append_last_property_separator = self.crc32_reserved_length > 0
             && !properties_data.is_empty()
-            && properties_data[properties_data.len() - 1..][0] == 2u8;
+            && properties_data[properties_data.len() - 1..][0] != 2u8;
 
         let properties_length = properties_data.len()
             + if need_append_last_property_separator {
@@ -347,7 +347,7 @@ impl MessageExtEncoder {
             .put_i64(msg_inner.prepared_transaction_offset());
 
         // 15 BODY
-        self.byte_buf.put_i32(body_length.try_into().unwrap());
+        self.byte_buf.put_i32(body_length as i32);
         if let Some(body) = msg_inner.body() {
             if body_length > 0 {
                 self.byte_buf.put(body);
@@ -365,13 +365,14 @@ impl MessageExtEncoder {
         // 17 PROPERTIES
         self.byte_buf.put_u16(properties_length as u16);
         if properties_length > self.crc32_reserved_length as usize {
-            self.byte_buf.put_slice(properties_data);
+            self.byte_buf.put(properties_data);
         }
         if need_append_last_property_separator {
             self.byte_buf
-                .put_u8(MessageDecoder::PROPERTY_SEPARATOR as u32 as u8);
+                .put_u8(MessageDecoder::PROPERTY_SEPARATOR as u8);
         }
         // 18 CRC32
+        self.byte_buf.advance(self.crc32_reserved_length as usize);
         None
     }
 

@@ -222,11 +222,10 @@ impl MappedFile for DefaultMappedFile {
 
     fn append_message<AMC: AppendMessageCallback>(
         &self,
-        message: MessageExtBrokerInner,
+        message: &mut MessageExtBrokerInner,
         message_callback: &AMC,
         put_message_context: &PutMessageContext,
     ) -> AppendMessageResult {
-        let mut message = message;
         let current_pos = self.wrote_position.load(Ordering::Acquire) as u64;
         if current_pos >= self.file_size {
             error!(
@@ -242,7 +241,7 @@ impl MappedFile for DefaultMappedFile {
             self.file_from_offset as i64,
             self,
             (self.file_size - current_pos) as i32,
-            &mut message,
+            message,
             put_message_context,
         );
         self.store_timestamp

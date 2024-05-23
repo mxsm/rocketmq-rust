@@ -236,7 +236,7 @@ impl MappedFile for LocalMappedFile {
 
     fn append_message<AMC: AppendMessageCallback>(
         &self,
-        message: MessageExtBrokerInner,
+        message: &mut MessageExtBrokerInner,
         message_callback: &AMC,
         put_message_context: &PutMessageContext,
     ) -> AppendMessageResult {

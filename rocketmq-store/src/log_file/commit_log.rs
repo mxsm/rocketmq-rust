@@ -22,7 +22,7 @@ use std::{
     sync::Arc,
 };
 
-use bytes::{Buf, Bytes};
+use bytes::{Buf, Bytes, BytesMut};
 use rocketmq_common::{
     common::{
         attribute::cq_type::CQType,
@@ -57,7 +57,7 @@ use crate::{
         store_checkpoint::StoreCheckpoint,
         swappable::Swappable,
     },
-    config::message_store_config::MessageStoreConfig,
+    config::{broker_role::BrokerRole, message_store_config::MessageStoreConfig},
     consume_queue::mapped_file_queue::MappedFileQueue,
     log_file::mapped_file::{default_impl::DefaultMappedFile, MappedFile},
     message_encoder::message_ext_encoder::MessageExtEncoder,
@@ -90,24 +90,18 @@ thread_local! {
 fn encode_message_ext(
     message_ext: &MessageExtBrokerInner,
     message_store_config: &Arc<MessageStoreConfig>,
-) -> Option<PutMessageResult> {
+) -> (Option<PutMessageResult>, BytesMut) {
     PUT_MESSAGE_THREAD_LOCAL.with(
         |thread_local| match thread_local.encoder.borrow_mut().as_mut() {
             None => {
-                thread_local
-                    .encoder
-                    .replace(Some(MessageExtEncoder::new(Arc::clone(
-                        message_store_config,
-                    ))));
-                thread_local
-                    .encoder
-                    .borrow_mut()
-                    .as_mut()
-                    .unwrap()
-                    .encode(message_ext)
+                let mut encoder = MessageExtEncoder::new(Arc::clone(message_store_config));
+                let result = encoder.encode(message_ext);
+                let bytes_mut = encoder.byte_buf();
+                thread_local.encoder.replace(Some(encoder));
+                (result, bytes_mut)
             }
 
-            Some(encoder) => encoder.encode(message_ext),
+            Some(encoder) => (encoder.encode(message_ext), encoder.byte_buf()),
         },
     )
 }
@@ -231,37 +225,96 @@ impl CommitLog {
 
         let topic_queue_key = generate_key(&msg);
 
-        let mut encoder = MessageExtEncoder::new(self.message_store_config.clone());
-        let put_message_result = encoder.encode(&msg);
+        let mut unlock_mapped_file = None;
+        let mut mapped_file = self.mapped_file_queue.get_last_mapped_file();
+        let curr_offset = if let Some(ref mapped_file_inner) = mapped_file {
+            mapped_file_inner.get_wrote_position() as u64 + mapped_file_inner.get_file_from_offset()
+        } else {
+            0
+        };
+        let need_ack_nums = self.message_store_config.in_sync_replicas;
+        let need_handle_ha = self.need_handle_ha(&msg);
+        if need_handle_ha && self.broker_config.enable_controller_mode {
+            unimplemented!("controller mode not support HA")
+        } else if need_handle_ha && self.broker_config.enable_slave_acting_master {
+            unimplemented!("slave acting master not support HA")
+        }
+
+        let need_assign_offset = if self.message_store_config.duplication_enable
+            && self.message_store_config.broker_role != BrokerRole::Slave
+        {
+            false
+        } else {
+            true
+        };
+
+        if need_assign_offset {
+            println!("assign offset");
+        }
+
+        let (put_message_result, encoded_buff) =
+            encode_message_ext(&msg, &self.message_store_config);
         if let Some(result) = put_message_result {
             return result;
         }
-        msg.encoded_buff = Some(encoder.byte_buf());
-
-        //let mut mapped_file_guard = self.mapped_file_queue.write().await;
-        // let mapped_file = match mapped_file_guard.get_last_mapped_file() {
-        let mapped_file = match self.mapped_file_queue.get_last_mapped_file() {
-            None => self
-                .mapped_file_queue
-                .get_last_mapped_file_mut_start_offset(0, true)
-                .unwrap(),
-            Some(mapped_file) => mapped_file,
-        };
-
+        msg.encoded_buff = Some(encoded_buff);
         let put_message_context = PutMessageContext::new(topic_queue_key);
+        let lock = self.put_message_lock.lock().await;
 
-        let result = mapped_file.append_message(
-            msg,
+        // Here settings are stored timestamp, in order to ensure an orderly global
+        if !self.message_store_config.duplication_enable {
+            msg.message_ext_inner.store_timestamp = time_utils::get_current_millis() as i64;
+        }
+
+        if mapped_file.is_none() || mapped_file.as_ref().unwrap().is_full() {
+            mapped_file = self
+                .mapped_file_queue
+                .get_last_mapped_file_mut_start_offset(0, true);
+        }
+
+        if mapped_file.is_none() {
+            drop(lock);
+            return PutMessageResult::new_default(PutMessageStatus::CreateMappedFileFailed);
+        }
+
+        let result = mapped_file.as_ref().unwrap().append_message(
+            &mut msg,
             self.append_message_callback.as_ref(),
             &put_message_context,
         );
 
-        match result.status {
+        let put_message_result = match result.status {
             AppendMessageStatus::PutOk => {
                 PutMessageResult::new_append_result(PutMessageStatus::PutOk, Some(result))
             }
             AppendMessageStatus::EndOfFile => {
-                unimplemented!()
+                //onCommitLogAppend(msg, result, mappedFile); in java not support this version
+                unlock_mapped_file = mapped_file;
+                mapped_file = self
+                    .mapped_file_queue
+                    .get_last_mapped_file_mut_start_offset(0, true);
+                if mapped_file.is_none() {
+                    drop(lock);
+                    error!(
+                        "create mapped file error, topic: {}  clientAddr: {}",
+                        msg.topic(),
+                        msg.born_host()
+                    );
+                    return PutMessageResult::new_default(PutMessageStatus::CreateMappedFileFailed);
+                }
+                let result = mapped_file.as_ref().unwrap().append_message(
+                    &mut msg,
+                    self.append_message_callback.as_ref(),
+                    &put_message_context,
+                );
+                if AppendMessageStatus::PutOk == result.status {
+                    PutMessageResult::new_append_result(PutMessageStatus::PutOk, Some(result))
+                } else {
+                    PutMessageResult::new_append_result(
+                        PutMessageStatus::UnknownError,
+                        Some(result),
+                    )
+                }
             }
             AppendMessageStatus::MessageSizeExceeded
             | AppendMessageStatus::PropertiesSizeExceeded => {
@@ -270,7 +323,43 @@ impl CommitLog {
             AppendMessageStatus::UnknownError => {
                 PutMessageResult::new_append_result(PutMessageStatus::UnknownError, Some(result))
             }
+        };
+
+        if put_message_result.put_message_status() == PutMessageStatus::PutOk {
+            self.handle_disk_flush_and_ha(put_message_result, msg, need_ack_nums, need_handle_ha)
+                .await
+        } else {
+            put_message_result
         }
+    }
+
+    async fn handle_disk_flush_and_ha(
+        &self,
+        put_message_result: PutMessageResult,
+        msg: MessageExtBrokerInner,
+        need_ack_nums: u32,
+        need_handle_ha: bool,
+    ) -> PutMessageResult {
+        unimplemented!()
+    }
+
+    fn need_handle_ha(&self, msg_inner: &MessageExtBrokerInner) -> bool {
+        if !msg_inner.is_wait_store_msg_ok() {
+            /*
+             No need to sync messages that special config to extra broker slaves.
+             @see MessageConst.PROPERTY_WAIT_STORE_MSG_OK
+            */
+            return false;
+        }
+        if self.message_store_config.duplication_enable {
+            return false;
+        }
+        if BrokerRole::SyncMaster != self.message_store_config.broker_role {
+            // No need to check ha in async or slave broker
+            return false;
+        }
+
+        return true;
     }
 
     fn on_commit_log_dispatch(

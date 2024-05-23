@@ -76,6 +76,13 @@ impl Message {
     pub fn get_tags(&self) -> Option<String> {
         self.get_property(MessageConst::PROPERTY_TAGS)
     }
+
+    pub fn is_wait_store_msg_ok(&self) -> bool {
+        match self.get_property(MessageConst::PROPERTY_WAIT_STORE_MSG_OK) {
+            None => true,
+            Some(value) => value.parse().unwrap_or(true),
+        }
+    }
 }
 
 #[allow(unused_variables)]
@@ -424,6 +431,10 @@ impl MessageExtBrokerInner {
 
     pub fn get_tags(&self) -> Option<String> {
         self.message_ext_inner.get_tags()
+    }
+
+    pub fn is_wait_store_msg_ok(&self) -> bool {
+        self.message_ext_inner.message.is_wait_store_msg_ok()
     }
 }
 
