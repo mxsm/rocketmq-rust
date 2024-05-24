@@ -19,14 +19,11 @@ use std::{collections::HashMap, sync::Arc};
 use bytes::{BufMut, BytesMut};
 use rocketmq_common::{
     common::{
-
         config::TopicConfig,
-        message::{
-            message_batch::MessageExtBatch, message_single::MessageExtBrokerInner,
-        },
+        message::{message_batch::MessageExtBatch, message_single::MessageExtBrokerInner},
         sys_flag::message_sys_flag::MessageSysFlag,
     },
-    utils::{message_utils},
+    utils::message_utils,
 };
 
 use crate::{
