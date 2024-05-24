@@ -19,14 +19,11 @@ use std::{collections::HashMap, sync::Arc};
 use bytes::{BufMut, BytesMut};
 use rocketmq_common::{
     common::{
-        attribute::cq_type::CQType,
         config::TopicConfig,
-        message::{
-            message_batch::MessageExtBatch, message_single::MessageExtBrokerInner, MessageConst,
-        },
+        message::{message_batch::MessageExtBatch, message_single::MessageExtBrokerInner},
         sys_flag::message_sys_flag::MessageSysFlag,
     },
-    utils::{message_utils, queue_type_utils::QueueTypeUtils},
+    utils::message_utils,
 };
 
 use crate::{
@@ -36,7 +33,7 @@ use crate::{
     },
     config::message_store_config::MessageStoreConfig,
     log_file::{
-        commit_log::{CommitLog, BLANK_MAGIC_CODE, CRC32_RESERVED_LEN},
+        commit_log::{get_message_num, CommitLog, BLANK_MAGIC_CODE, CRC32_RESERVED_LEN},
         mapped_file::MappedFile,
     },
 };
@@ -123,30 +120,6 @@ impl DefaultAppendMessageCallback {
     }
 }
 
-impl DefaultAppendMessageCallback {
-    fn get_message_num(&self, msg_inner: &MessageExtBrokerInner) -> i16 {
-        let mut message_num = 1i16;
-        let cq_type = self.get_cq_type(msg_inner);
-        if MessageSysFlag::check(msg_inner.sys_flag(), MessageSysFlag::INNER_BATCH_FLAG)
-            || CQType::BatchCQ == cq_type
-        {
-            if let Some(key) = msg_inner.property(MessageConst::PROPERTY_INNER_NUM) {
-                message_num = key.parse::<i16>().unwrap_or(1);
-            }
-        }
-        message_num
-    }
-
-    fn get_cq_type(&self, msg_inner: &MessageExtBrokerInner) -> CQType {
-        let topic_config = self
-            .topic_config_table
-            .lock()
-            .get(msg_inner.message_ext_inner.topic())
-            .cloned();
-        QueueTypeUtils::get_cq_type(&topic_config)
-    }
-}
-
 #[allow(unused_variables)]
 impl AppendMessageCallback for DefaultAppendMessageCallback {
     fn do_append<MF: MappedFile>(
@@ -166,7 +139,7 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
             }*/
         }
 
-        let msg_len = i32::from_le_bytes(pre_encode_buffer[0..4].try_into().unwrap());
+        let msg_len = i32::from_be_bytes(pre_encode_buffer[0..4].try_into().unwrap());
         let wrote_offset = file_from_offset + mapped_file.get_wrote_position() as i64;
 
         let msg_id =
@@ -174,7 +147,7 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
 
         let mut queue_offset = msg_inner.queue_offset();
         //let message_num = CommitLog::get_message_num(msg_inner);
-        let message_num = self.get_message_num(msg_inner);
+        let message_num = get_message_num(&self.topic_config_table, msg_inner);
         match MessageSysFlag::get_transaction_value(msg_inner.sys_flag()) {
             MessageSysFlag::TRANSACTION_PREPARED_TYPE
             | MessageSysFlag::TRANSACTION_ROLLBACK_TYPE => queue_offset = 0,

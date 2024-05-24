@@ -15,9 +15,9 @@
  * limitations under the License.
  */
 
-use std::{cell::Cell, collections::HashMap, mem, ops::Deref, sync::Arc};
+use std::{cell::Cell, collections::HashMap, mem, sync::Arc};
 
-use bytes::{Buf, Bytes};
+use bytes::{Buf, Bytes, BytesMut};
 use rocketmq_common::{
     common::{
         attribute::cq_type::CQType,
@@ -30,7 +30,7 @@ use rocketmq_common::{
         mix_all,
         sys_flag::message_sys_flag::MessageSysFlag,
     },
-    utils::time_utils,
+    utils::{queue_type_utils::QueueTypeUtils, time_utils},
     CRC32Utils::crc32,
     MessageDecoder::{
         string_to_message_properties, MESSAGE_MAGIC_CODE_POSITION, MESSAGE_MAGIC_CODE_V2,
@@ -38,6 +38,7 @@ use rocketmq_common::{
     },
     UtilAll::time_millis_to_human_string,
 };
+use tokio::time::Instant;
 use tracing::{error, info, warn};
 
 use crate::{
@@ -52,12 +53,12 @@ use crate::{
         store_checkpoint::StoreCheckpoint,
         swappable::Swappable,
     },
-    config::message_store_config::MessageStoreConfig,
+    config::{broker_role::BrokerRole, message_store_config::MessageStoreConfig},
     consume_queue::mapped_file_queue::MappedFileQueue,
     log_file::mapped_file::{default_impl::DefaultMappedFile, MappedFile},
     message_encoder::message_ext_encoder::MessageExtEncoder,
     message_store::default_message_store::{CommitLogDispatcherDefault, DefaultMessageStore},
-    queue::ConsumeQueueStoreTrait,
+    queue::{local_file_consume_queue_store::ConsumeQueueStore, ConsumeQueueStoreTrait},
 };
 
 // Message's MAGIC CODE daa320a7
@@ -72,15 +73,79 @@ pub const CRC32_RESERVED_LEN: i32 = (MessageConst::PROPERTY_CRC32.len() + 1 + 10
 
 struct PutMessageThreadLocal {
     encoder: Cell<Option<MessageExtEncoder>>,
-    key: Cell<Option<String>>,
+    key: Cell<String>,
 }
 
-// thread_local! {
-//     static PUT_MESSAGE_THREAD_LOCAL: Arc<PutMessageThreadLocal> = Arc::new(PutMessageThreadLocal{
-//         encoder: Cell::new(None),
-//         key: Cell::new(None),
-//     });
-// }
+thread_local! {
+    static PUT_MESSAGE_THREAD_LOCAL: PutMessageThreadLocal = PutMessageThreadLocal{
+        encoder: Cell::new(None),
+        key: Cell::new(String::new()),
+    };
+}
+
+fn encode_message_ext(
+    message_ext: &MessageExtBrokerInner,
+    message_store_config: &Arc<MessageStoreConfig>,
+) -> (Option<PutMessageResult>, BytesMut) {
+    PUT_MESSAGE_THREAD_LOCAL.with(|thread_local| match thread_local.encoder.take() {
+        None => {
+            let mut encoder = MessageExtEncoder::new(Arc::clone(message_store_config));
+            let result = encoder.encode(message_ext);
+            let bytes_mut = encoder.byte_buf();
+            thread_local.encoder.set(Some(encoder));
+            (result, bytes_mut)
+        }
+
+        Some(mut encoder) => {
+            let result = encoder.encode(message_ext);
+            let bytes_mut = encoder.byte_buf();
+            thread_local.encoder.set(Some(encoder));
+            (result, bytes_mut)
+        }
+    })
+}
+
+fn generate_key(msg: &MessageExtBrokerInner) -> String {
+    PUT_MESSAGE_THREAD_LOCAL.with(|thead_local| {
+        let mut topic_queue_key = thead_local.key.take();
+        topic_queue_key.clear();
+        topic_queue_key.push_str(msg.topic());
+        topic_queue_key.push('-');
+        topic_queue_key.push_str(msg.queue_id().to_string().as_str());
+        let key_return = topic_queue_key.to_string();
+        thead_local.key.set(topic_queue_key);
+        key_return
+    })
+}
+
+pub fn get_cq_type(
+    topic_config_table: &Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
+    msg_inner: &MessageExtBrokerInner,
+) -> CQType {
+    let option = topic_config_table.lock().get(msg_inner.topic()).cloned();
+    QueueTypeUtils::get_cq_type(&option)
+}
+
+pub fn get_message_num(
+    topic_config_table: &Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
+    msg_inner: &MessageExtBrokerInner,
+) -> i16 {
+    let mut message_num = 1i16;
+    let cq_type = get_cq_type(topic_config_table, msg_inner);
+    if MessageSysFlag::check(msg_inner.sys_flag(), MessageSysFlag::INNER_BATCH_FLAG)
+        || cq_type == CQType::BatchCQ
+    {
+        if let Some(num) = msg_inner
+            .message_ext_inner
+            .message
+            .get_property(MessageConst::PROPERTY_INNER_NUM)
+        {
+            message_num = num.parse().unwrap_or(1i16);
+        }
+    }
+    // message_num
+    message_num
+}
 
 #[derive(Clone)]
 pub struct CommitLog {
@@ -93,6 +158,9 @@ pub struct CommitLog {
     confirm_offset: i64,
     store_checkpoint: Arc<StoreCheckpoint>,
     append_message_callback: Arc<DefaultAppendMessageCallback>,
+    put_message_lock: Arc<tokio::sync::Mutex<()>>,
+    topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
+    consume_queue_store: ConsumeQueueStore,
 }
 
 impl CommitLog {
@@ -102,6 +170,7 @@ impl CommitLog {
         dispatcher: &CommitLogDispatcherDefault,
         store_checkpoint: Arc<StoreCheckpoint>,
         topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
+        consume_queue_store: ConsumeQueueStore,
     ) -> Self {
         let enabled_append_prop_crc = message_store_config.enabled_append_prop_crc;
         let store_path = message_store_config.get_store_path_commit_log();
@@ -117,8 +186,11 @@ impl CommitLog {
             store_checkpoint,
             append_message_callback: Arc::new(DefaultAppendMessageCallback::new(
                 message_store_config,
-                topic_config_table,
+                topic_config_table.clone(),
             )),
+            put_message_lock: Arc::new(Default::default()),
+            topic_config_table,
+            consume_queue_store,
         }
     }
 }
@@ -157,9 +229,9 @@ impl CommitLog {
             msg.message_ext_inner
                 .message
                 .body
-                .clone()
-                .expect("REASON")
-                .deref(),
+                .as_ref()
+                .unwrap()
+                .as_ref(),
         );
         if !self.enabled_append_prop_crc {
             msg.delete_property(MessageConst::PROPERTY_CRC32);
@@ -186,37 +258,95 @@ impl CommitLog {
             msg.with_store_host_v6_flag();
         }
 
-        let mut encoder = MessageExtEncoder::new(self.message_store_config.clone());
-        let put_message_result = encoder.encode(&msg);
+        let topic_queue_key = generate_key(&msg);
+
+        let mut _unlock_mapped_file = None;
+        let mut mapped_file = self.mapped_file_queue.get_last_mapped_file();
+        let curr_offset = if let Some(ref mapped_file_inner) = mapped_file {
+            mapped_file_inner.get_wrote_position() as u64 + mapped_file_inner.get_file_from_offset()
+        } else {
+            0
+        };
+        let need_ack_nums = self.message_store_config.in_sync_replicas;
+        let need_handle_ha = self.need_handle_ha(&msg);
+        if need_handle_ha && self.broker_config.enable_controller_mode {
+            unimplemented!("controller mode not support HA")
+        } else if need_handle_ha && self.broker_config.enable_slave_acting_master {
+            unimplemented!("slave acting master not support HA")
+        }
+
+        let need_assign_offset = !(self.message_store_config.duplication_enable
+            && self.message_store_config.broker_role != BrokerRole::Slave);
+
+        if need_assign_offset {
+            //  println!("assign offset");
+        }
+
+        let (put_message_result, encoded_buff) =
+            encode_message_ext(&msg, &self.message_store_config);
         if let Some(result) = put_message_result {
             return result;
         }
-        msg.encoded_buff = Some(encoder.byte_buf());
-
-        //let mut mapped_file_guard = self.mapped_file_queue.write().await;
-        // let mapped_file = match mapped_file_guard.get_last_mapped_file() {
-        let mapped_file = match self.mapped_file_queue.get_last_mapped_file() {
-            None => self
-                .mapped_file_queue
-                .get_last_mapped_file_mut_start_offset(0, true)
-                .unwrap(),
-            Some(mapped_file) => mapped_file,
-        };
-        let topic_queue_key = generate_key(&msg);
+        msg.encoded_buff = Some(encoded_buff);
         let put_message_context = PutMessageContext::new(topic_queue_key);
+        let lock = self.put_message_lock.lock().await;
+        let start_time = Instant::now();
+        // Here settings are stored timestamp, in order to ensure an orderly global
+        if !self.message_store_config.duplication_enable {
+            msg.message_ext_inner.store_timestamp = time_utils::get_current_millis() as i64;
+        }
 
-        let result = mapped_file.append_message(
-            msg,
+        if mapped_file.is_none() || mapped_file.as_ref().unwrap().is_full() {
+            mapped_file = self
+                .mapped_file_queue
+                .get_last_mapped_file_mut_start_offset(0, true);
+        }
+
+        if mapped_file.is_none() {
+            drop(lock);
+            return PutMessageResult::new_default(PutMessageStatus::CreateMappedFileFailed);
+        }
+
+        let result = mapped_file.as_ref().unwrap().append_message(
+            &mut msg,
             self.append_message_callback.as_ref(),
             &put_message_context,
         );
-
-        match result.status {
+        let put_message_result = match result.status {
             AppendMessageStatus::PutOk => {
+                //onCommitLogAppend(msg, result, mappedFile); in java not support this version
                 PutMessageResult::new_append_result(PutMessageStatus::PutOk, Some(result))
             }
             AppendMessageStatus::EndOfFile => {
-                unimplemented!()
+                //onCommitLogAppend(msg, result, mappedFile); in java not support this version
+                _unlock_mapped_file = mapped_file;
+                mapped_file = self
+                    .mapped_file_queue
+                    .get_last_mapped_file_mut_start_offset(0, true);
+                if mapped_file.is_none() {
+                    error!(
+                        "create mapped file error, topic: {}  clientAddr: {}",
+                        msg.topic(),
+                        msg.born_host()
+                    );
+                    return PutMessageResult::new_append_result(
+                        PutMessageStatus::CreateMappedFileFailed,
+                        Some(result),
+                    );
+                }
+                let result = mapped_file.as_ref().unwrap().append_message(
+                    &mut msg,
+                    self.append_message_callback.as_ref(),
+                    &put_message_context,
+                );
+                if AppendMessageStatus::PutOk == result.status {
+                    PutMessageResult::new_append_result(PutMessageStatus::PutOk, Some(result))
+                } else {
+                    PutMessageResult::new_append_result(
+                        PutMessageStatus::UnknownError,
+                        Some(result),
+                    )
+                }
             }
             AppendMessageStatus::MessageSizeExceeded
             | AppendMessageStatus::PropertiesSizeExceeded => {
@@ -225,7 +355,66 @@ impl CommitLog {
             AppendMessageStatus::UnknownError => {
                 PutMessageResult::new_append_result(PutMessageStatus::UnknownError, Some(result))
             }
+        };
+        let elapsed_time_in_lock = start_time.elapsed().as_millis() as u64;
+        drop(lock);
+        if elapsed_time_in_lock > 100 {
+            warn!(
+                "[NOTIFYME]putMessage in lock cost time(ms)={}, bodyLength={} \
+                 AppendMessageResult={:?}",
+                elapsed_time_in_lock,
+                msg.body_len(),
+                put_message_result.append_message_result().as_ref().unwrap(),
+            );
         }
+
+        if put_message_result.put_message_status() == PutMessageStatus::PutOk {
+            let message_num = get_message_num(&self.topic_config_table, &msg);
+            self.increase_offset(&msg, message_num);
+            self.handle_disk_flush_and_ha(put_message_result, msg, need_ack_nums, need_handle_ha)
+                .await
+        } else {
+            put_message_result
+        }
+    }
+
+    fn increase_offset(&self, msg: &MessageExtBrokerInner, message_num: i16) {
+        let tran_type = MessageSysFlag::get_transaction_value(msg.sys_flag());
+        if MessageSysFlag::TRANSACTION_NOT_TYPE == tran_type
+            || MessageSysFlag::TRANSACTION_COMMIT_TYPE == tran_type
+        {
+            self.consume_queue_store
+                .increase_queue_offset(msg, message_num);
+        }
+    }
+
+    async fn handle_disk_flush_and_ha(
+        &self,
+        put_message_result: PutMessageResult,
+        msg: MessageExtBrokerInner,
+        need_ack_nums: u32,
+        need_handle_ha: bool,
+    ) -> PutMessageResult {
+        put_message_result
+    }
+
+    fn need_handle_ha(&self, msg_inner: &MessageExtBrokerInner) -> bool {
+        if !msg_inner.is_wait_store_msg_ok() {
+            /*
+             No need to sync messages that special config to extra broker slaves.
+             @see MessageConst.PROPERTY_WAIT_STORE_MSG_OK
+            */
+            return false;
+        }
+        if self.message_store_config.duplication_enable {
+            return false;
+        }
+        if BrokerRole::SyncMaster != self.message_store_config.broker_role {
+            // No need to check ha in async or slave broker
+            return false;
+        }
+
+        true
     }
 
     fn on_commit_log_dispatch(
@@ -247,17 +436,6 @@ impl CommitLog {
             && msg_inner
                 .topic()
                 .starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX)
-    }
-
-    pub fn get_message_num(&self, _msg_inner: &MessageExtBrokerInner) -> i16 {
-        // let mut message_num = 1i16;
-
-        // message_num
-        1
-    }
-
-    fn get_cq_type(&self, _msg_inner: MessageExtBrokerInner) -> CQType {
-        CQType::SimpleCQ
     }
 
     pub async fn recover_normally(
@@ -362,7 +540,7 @@ impl CommitLog {
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
-                            files"
+                             files"
             );
             self.mapped_file_queue.set_flushed_where(0);
             self.mapped_file_queue.set_committed_where(0);
@@ -542,7 +720,7 @@ impl CommitLog {
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
-                            files"
+                             files"
             );
             self.mapped_file_queue.set_flushed_where(0);
             self.mapped_file_queue.set_committed_where(0);
@@ -596,14 +774,6 @@ impl CommitLog {
     pub fn check_self(&self) {
         self.mapped_file_queue.check_self();
     }
-}
-
-fn generate_key(msg: &MessageExtBrokerInner) -> String {
-    let mut topic_queue_key = String::new();
-    topic_queue_key.push_str(msg.topic());
-    topic_queue_key.push('-');
-    topic_queue_key.push_str(msg.queue_id().to_string().as_str());
-    topic_queue_key
 }
 
 pub fn check_message_and_return_size(

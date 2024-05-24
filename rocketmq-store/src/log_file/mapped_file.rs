@@ -58,7 +58,7 @@ pub trait MappedFile {
     /// Appends a message object to the current `MappedFile` with a specific callback.
     fn append_message<AMC: AppendMessageCallback>(
         &self,
-        message: MessageExtBrokerInner,
+        message: &mut MessageExtBrokerInner,
         message_callback: &AMC,
         put_message_context: &PutMessageContext,
     ) -> AppendMessageResult;

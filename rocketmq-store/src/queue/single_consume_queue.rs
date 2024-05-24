@@ -124,7 +124,7 @@ impl ConsumeQueue {
 impl ConsumeQueue {
     pub fn set_max_physic_offset(&self, max_physic_offset: i64) {
         self.max_physic_offset
-            .store(max_physic_offset, std::sync::atomic::Ordering::Release);
+            .store(max_physic_offset, std::sync::atomic::Ordering::SeqCst);
     }
 
     pub fn truncate_dirty_logic_files_handler(&mut self, phy_offset: i64, delete_file: bool) {
@@ -530,7 +530,7 @@ impl ConsumeQueueTrait for ConsumeQueue {
     }
 
     fn get_max_physic_offset(&self) -> i64 {
-        self.max_physic_offset.load(Ordering::Acquire)
+        self.max_physic_offset.load(Ordering::SeqCst)
     }
 
     fn get_min_logic_offset(&self) -> i64 {
@@ -610,11 +610,14 @@ impl ConsumeQueueTrait for ConsumeQueue {
 
     fn increase_queue_offset(
         &self,
-        queue_offset_assigner: QueueOffsetOperator,
-        msg: MessageExtBrokerInner,
+        queue_offset_assigner: &QueueOffsetOperator,
+        msg: &MessageExtBrokerInner,
         message_num: i16,
     ) {
-        todo!()
+        queue_offset_assigner.increase_queue_offset(
+            format!("{}-{}", msg.topic(), msg.queue_id()).as_str(),
+            message_num,
+        );
     }
 
     fn estimate_message_count(&self, from: i64, to: i64, filter: &dyn MessageFilter) -> i64 {

@@ -285,8 +285,8 @@ impl ConsumeQueueTrait for BatchConsumeQueue {
 
     fn increase_queue_offset(
         &self,
-        queue_offset_assigner: QueueOffsetOperator,
-        msg: MessageExtBrokerInner,
+        queue_offset_assigner: &QueueOffsetOperator,
+        msg: &MessageExtBrokerInner,
         message_num: i16,
     ) {
         todo!()

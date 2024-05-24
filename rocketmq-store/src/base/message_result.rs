@@ -21,7 +21,7 @@ use crate::base::{
 };
 
 /// Represents the result of an append message operation.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AppendMessageResult {
     /// Return code.
     pub status: AppendMessageStatus,
@@ -43,7 +43,7 @@ pub struct AppendMessageResult {
     pub msg_num: i32,
 }
 
-#[derive(Default)]
+#[derive(Default, Debug, Clone)]
 pub struct PutMessageResult {
     put_message_status: PutMessageStatus,
     append_message_result: Option<AppendMessageResult>,
