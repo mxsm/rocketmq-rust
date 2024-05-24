@@ -82,3 +82,41 @@ fn write_string_to_file(file: &File, data: &str, _encoding: &str) -> io::Result<
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_file_to_string() {
+        // Create a temporary file for testing
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        let file_path = temp_file.path().to_str().unwrap();
+
+        // Write some content to the file
+        let content = "Hello, World!";
+        std::fs::write(file_path, content).unwrap();
+
+        // Call the file_to_string function
+        let result = file_to_string(file_path);
+
+        // Check if the result is Ok and contains the expected content
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), content);
+    }
+
+    #[test]
+    fn test_string_to_file() {
+        // Create a temporary file for testing
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        let file_path = temp_file.path().to_str().unwrap();
+
+        // Call the string_to_file function
+        let content = "Hello, World!";
+        let result = string_to_file(content, file_path);
+
+        // Check if the result is Ok and the file was created with the expected content
+        assert!(result.is_ok());
+        assert_eq!(std::fs::read_to_string(file_path).unwrap(), content);
+    }
+}
