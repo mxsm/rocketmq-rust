@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-use std::{
+ use std::{
     collections::BTreeMap,
     path::PathBuf,
     sync::{atomic::AtomicI64, Arc},
@@ -285,8 +285,8 @@ impl ConsumeQueueTrait for BatchConsumeQueue {
 
     fn increase_queue_offset(
         &self,
-        queue_offset_assigner: QueueOffsetOperator,
-        msg: MessageExtBrokerInner,
+        queue_offset_assigner: &QueueOffsetOperator,
+        msg: &MessageExtBrokerInner,
         message_num: i16,
     ) {
         todo!()

@@ -610,11 +610,14 @@ impl ConsumeQueueTrait for ConsumeQueue {
 
     fn increase_queue_offset(
         &self,
-        queue_offset_assigner: QueueOffsetOperator,
-        msg: MessageExtBrokerInner,
+        queue_offset_assigner: &QueueOffsetOperator,
+        msg: &MessageExtBrokerInner,
         message_num: i16,
     ) {
-        todo!()
+        queue_offset_assigner.increase_queue_offset(
+            format!("{}-{}", msg.topic(), msg.queue_id()).as_str(),
+            message_num,
+        );
     }
 
     fn estimate_message_count(&self, from: i64, to: i64, filter: &dyn MessageFilter) -> i64 {

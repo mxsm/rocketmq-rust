@@ -189,7 +189,7 @@ pub trait ConsumeQueueStoreTrait: Send + Sync {
     /// Increase queue offset.
     /// `msg`: Message itself.
     /// `message_num`: Message number.
-    fn increase_queue_offset(&mut self, msg: &MessageExtBrokerInner, message_num: i16);
+    fn increase_queue_offset(&self, msg: &MessageExtBrokerInner, message_num: i16);
 
     /// Increase lmq offset.
     /// `queue_key`: Queue key.
@@ -341,8 +341,8 @@ pub trait ConsumeQueueTrait: Send + Sync + FileQueueLifeCycle {
     /// Increase queue offset.
     fn increase_queue_offset(
         &self,
-        queue_offset_assigner: QueueOffsetOperator,
-        msg: MessageExtBrokerInner,
+        queue_offset_assigner: &QueueOffsetOperator,
+        msg: &MessageExtBrokerInner,
         message_num: i16,
     );
 

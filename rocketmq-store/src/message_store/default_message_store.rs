@@ -158,6 +158,7 @@ impl DefaultMessageStore {
             &dispatcher,
             store_checkpoint.clone(),
             topic_config_table.clone(),
+            consume_queue_store.clone(),
         );
 
         ensure_dir_ok(message_store_config.store_path_root_dir.as_str());
@@ -170,7 +171,7 @@ impl DefaultMessageStore {
             put_message_hook_list: Arc::new(vec![]),
             topic_config_table,
             // message_store_runtime: Some(RocketMQRuntime::new_multi(10, "message-store-thread")),
-            commit_log: commit_log,
+            commit_log,
             compaction_service: Default::default(),
             store_checkpoint: Some(store_checkpoint),
             master_flushed_offset: Arc::new(AtomicI64::new(-1)),
