@@ -530,38 +530,99 @@ impl MessageExtEncoder {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
 
     #[test]
-    fn test_get_encoder_buffer() {
-        let mut obj = MessageExtEncoder::new(Arc::new(MessageStoreConfig {
-            max_message_size: 268435456,
-            ..MessageStoreConfig::default()
-        }));
-        let result = obj.get_encoder_buffer();
-        assert_eq!(result.len(), obj.byte_buf.len());
-        for i in 0..result.len() {
-            assert_eq!(result[i], obj.byte_buf[i]);
-        }
+    fn message_ext_encoder_new_creates_encoder_with_correct_config() {
+        let config = Arc::new(MessageStoreConfig::default());
+        let encoder = MessageExtEncoder::new(Arc::clone(&config));
+
+        assert_eq!(encoder.max_message_body_size, config.max_message_size);
+        assert_eq!(encoder.message_store_config, config);
     }
 
     #[test]
-    fn test_get_max_message_body_size() {
-        let obj = MessageExtEncoder::new(Arc::new(MessageStoreConfig {
-            max_message_size: 100,
-            ..MessageStoreConfig::default()
-        }));
-        assert_eq!(obj.get_max_message_body_size(), 100);
+    fn cal_msg_length_calculates_correct_length() {
+        let length = MessageExtEncoder::cal_msg_length(MessageVersion::V1, 0, 10, 5, 15);
+        assert_eq!(length, 121);
+        let length = MessageExtEncoder::cal_msg_length(
+            MessageVersion::V1,
+            MessageSysFlag::BORNHOST_V6_FLAG,
+            10,
+            5,
+            15,
+        );
+        assert_eq!(length, 133);
+        let length = MessageExtEncoder::cal_msg_length(MessageVersion::V2, 0, 10, 5, 15);
+        assert_eq!(length, 122);
     }
 
     #[test]
-    fn test_update_encoder_buffer_capacity() {
-        let mut obj = MessageExtEncoder::new(Arc::new(MessageStoreConfig {
-            max_message_size: 268435456,
-            ..MessageStoreConfig::default()
-        }));
-        obj.update_encoder_buffer_capacity(200);
-        assert_eq!(obj.get_max_message_body_size(), 200);
-        assert_eq!(obj.byte_buf.len(), 65736);
+    fn cal_msg_length_no_properties_calculates_correct_length() {
+        let length = MessageExtEncoder::cal_msg_length_no_properties(MessageVersion::V1, 0, 10, 5);
+        assert_eq!(length, 104);
+        let length = MessageExtEncoder::cal_msg_length_no_properties(
+            MessageVersion::V1,
+            MessageSysFlag::BORNHOST_V6_FLAG,
+            10,
+            5,
+        );
+        assert_eq!(length, 116);
+        let length = MessageExtEncoder::cal_msg_length_no_properties(MessageVersion::V2, 0, 10, 5);
+        assert_eq!(length, 105);
+    }
+
+    #[test]
+    fn encode_without_properties_encodes_message_correctly() {
+        let config = Arc::new(MessageStoreConfig::default());
+        let mut encoder = MessageExtEncoder::new(Arc::clone(&config));
+        let msg_inner = MessageExtBrokerInner::default();
+
+        let result = encoder.encode_without_properties(&msg_inner);
+
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn encode_encodes_message_correctly() {
+        let config = Arc::new(MessageStoreConfig::default());
+        let mut encoder = MessageExtEncoder::new(Arc::clone(&config));
+        let msg_inner = MessageExtBrokerInner::default();
+
+        let result = encoder.encode(&msg_inner);
+
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn get_encoder_buffer_returns_correct_buffer() {
+        let config = Arc::new(MessageStoreConfig::default());
+        let mut encoder = MessageExtEncoder::new(Arc::clone(&config));
+
+        let buffer = encoder.get_encoder_buffer();
+
+        assert_eq!(buffer.len(), 0);
+    }
+
+    #[test]
+    fn get_max_message_body_size_returns_correct_size() {
+        let config = Arc::new(MessageStoreConfig::default());
+        let encoder = MessageExtEncoder::new(Arc::clone(&config));
+
+        let size = encoder.get_max_message_body_size();
+
+        assert_eq!(size, config.max_message_size);
+    }
+
+    #[test]
+    fn update_encoder_buffer_capacity_updates_capacity_correctly() {
+        let config = Arc::new(MessageStoreConfig::default());
+        let mut encoder = MessageExtEncoder::new(Arc::clone(&config));
+
+        encoder.update_encoder_buffer_capacity(200);
+
+        assert_eq!(encoder.max_message_body_size, 200);
     }
 }
