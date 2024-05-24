@@ -279,7 +279,7 @@ impl CommitLog {
             && self.message_store_config.broker_role != BrokerRole::Slave);
 
         if need_assign_offset {
-            //  println!("assign offset");
+            self.assign_offset(&mut msg);
         }
 
         let (put_message_result, encoded_buff) =
@@ -385,6 +385,15 @@ impl CommitLog {
         {
             self.consume_queue_store
                 .increase_queue_offset(msg, message_num);
+        }
+    }
+
+    fn assign_offset(&self, msg: &mut MessageExtBrokerInner) {
+        let tran_type = MessageSysFlag::get_transaction_value(msg.sys_flag());
+        if MessageSysFlag::TRANSACTION_NOT_TYPE == tran_type
+            || MessageSysFlag::TRANSACTION_COMMIT_TYPE == tran_type
+        {
+            self.consume_queue_store.assign_queue_offset(msg);
         }
     }
 

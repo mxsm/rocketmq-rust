@@ -620,6 +620,16 @@ impl ConsumeQueueTrait for ConsumeQueue {
         );
     }
 
+    fn assign_queue_offset(
+        &self,
+        queue_offset_operator: &QueueOffsetOperator,
+        msg: &mut MessageExtBrokerInner,
+    ) {
+        let queue_offset = queue_offset_operator
+            .get_queue_offset(format!("{}-{}", msg.topic(), msg.queue_id()).as_str());
+        msg.message_ext_inner.queue_offset = queue_offset;
+    }
+
     fn estimate_message_count(&self, from: i64, to: i64, filter: &dyn MessageFilter) -> i64 {
         todo!()
     }
