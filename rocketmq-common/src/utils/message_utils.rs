@@ -98,17 +98,61 @@ pub fn parse_message_id(_msg_id: impl Into<String>) -> (SocketAddr, i64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::message::message_single::MessageExt;
+
+    #[test]
+    fn test_get_sharding_key_index() {
+        let sharding_key = "example_key";
+        let index_size = 10;
+        let result = get_sharding_key_index(sharding_key, index_size);
+        assert!(result < index_size);
+    }
+
+    #[test]
+    fn test_get_sharding_key_index_by_msg() {
+        let mut message = MessageExt::default();
+        message.message.properties.insert(
+            MessageConst::PROPERTY_SHARDING_KEY.to_owned(),
+            "example_key".to_owned(),
+        );
+        let index_size = 10;
+        let result = get_sharding_key_index_by_msg(&message, index_size);
+        assert!(result < index_size);
+    }
+
+    #[test]
+    fn test_get_sharding_key_indexes() {
+        let mut messages = Vec::new();
+        let mut message1 = MessageExt::default();
+        message1.message.properties.insert(
+            MessageConst::PROPERTY_SHARDING_KEY.to_owned(),
+            "key1".to_owned(),
+        );
+        messages.push(message1);
+        let mut message2 = MessageExt::default();
+        message2.message.properties.insert(
+            MessageConst::PROPERTY_SHARDING_KEY.to_owned(),
+            "key2".to_owned(),
+        );
+        messages.push(message2);
+        let index_size = 10;
+        let result = get_sharding_key_indexes(&messages, index_size);
+        assert_eq!(result.len(), 2);
+    }
 
     #[test]
     fn test_delete_property() {
-        assert_eq!(
-            delete_property("aa\u{0001}bb\u{0002}cc\u{0001}bb\u{0002}", "a"),
-            "aa\u{0001}bb"
-        );
+        let properties_string = "aa\u{0001}bb\u{0002}cc\u{0001}bb\u{0002}";
+        let name = "a";
+        let result = delete_property(properties_string, name);
+        assert_eq!(result, "aa\u{0001}bb");
     }
 
     #[test]
     fn test_build_message_id() {
-        println!("{}", build_message_id("127.0.0.1:12".parse().unwrap(), 1))
+        let socket_addr = "127.0.0.1:12".parse().unwrap();
+        let wrote_offset = 1;
+        let result = build_message_id(socket_addr, wrote_offset);
+        assert_eq!(result, "7F0000010000000C0000000000000001");
     }
 }
