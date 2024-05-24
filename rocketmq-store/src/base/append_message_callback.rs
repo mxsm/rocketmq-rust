@@ -166,7 +166,7 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
             }*/
         }
 
-        let msg_len = i32::from_le_bytes(pre_encode_buffer[0..4].try_into().unwrap());
+        let msg_len = i32::from_be_bytes(pre_encode_buffer[0..4].try_into().unwrap());
         let wrote_offset = file_from_offset + mapped_file.get_wrote_position() as i64;
 
         let msg_id =
