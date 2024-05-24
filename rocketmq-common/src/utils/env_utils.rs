@@ -61,3 +61,67 @@ impl EnvUtils {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_property_existing_variable() {
+        // Set up
+        let key = "HOME";
+        let expected_value = "/home/user";
+
+        std::env::set_var(key, expected_value);
+
+        // Test
+        let result = EnvUtils::get_property(key);
+
+        // Assert
+        assert_eq!(result, Some(expected_value.to_string()));
+    }
+
+    #[test]
+    fn test_get_property_non_existing_variable() {
+        // Set up
+        let key = "NON_EXISTING_VARIABLE";
+
+        // Test
+        let result = EnvUtils::get_property(key);
+
+        // Assert
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_get_rocketmq_home_existing_variable() {
+        // Set up
+        let expected_value = "/path/to/rocketmq_home";
+
+        std::env::set_var(ROCKETMQ_HOME_ENV, expected_value);
+
+        // Test
+        let result = EnvUtils::get_rocketmq_home();
+
+        // Assert
+        assert_eq!(result, expected_value.to_string());
+    }
+
+    #[test]
+    fn test_get_rocketmq_home_non_existing_variable() {
+        // Set up
+        std::env::remove_var(ROCKETMQ_HOME_ENV);
+
+        // Test
+        let result = EnvUtils::get_rocketmq_home();
+
+        // Assert
+        assert_eq!(
+            result,
+            std::env::current_dir()
+                .unwrap()
+                .to_string_lossy()
+                .to_string()
+        );
+    }
+}
