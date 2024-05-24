@@ -292,6 +292,14 @@ impl ConsumeQueueTrait for BatchConsumeQueue {
         todo!()
     }
 
+    fn assign_queue_offset(
+        &self,
+        queue_offset_operator: &QueueOffsetOperator,
+        msg: &mut MessageExtBrokerInner,
+    ) {
+        todo!()
+    }
+
     fn estimate_message_count(&self, from: i64, to: i64, filter: &dyn MessageFilter) -> i64 {
         todo!()
     }

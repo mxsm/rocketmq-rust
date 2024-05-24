@@ -244,6 +244,13 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
         );
     }
 
+    fn assign_queue_offset(&self, msg: &mut MessageExtBrokerInner) {
+        let consume_queue = self.find_or_create_consume_queue(msg.topic(), msg.queue_id());
+        consume_queue
+            .lock()
+            .assign_queue_offset(&self.inner.queue_offset_operator, msg);
+    }
+
     fn increase_lmq_offset(&mut self, queue_key: &str, message_num: i16) {
         todo!()
     }
