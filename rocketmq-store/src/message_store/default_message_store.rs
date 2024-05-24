@@ -654,7 +654,9 @@ impl ReputMessageServiceInner {
         }
         let mut do_next = true;
         while do_next && self.is_commit_log_available() {
-            let result = self.commit_log.get_data(self.reput_from_offset.load(Ordering::Acquire));
+            let result = self
+                .commit_log
+                .get_data(self.reput_from_offset.load(Ordering::Acquire));
             if result.is_none() {
                 break;
             }

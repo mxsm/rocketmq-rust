@@ -326,15 +326,18 @@ impl CommitLog {
                 PutMessageResult::new_append_result(PutMessageStatus::UnknownError, Some(result))
             }
         };
-        let elapsed_time_in_lock = start_time.elapsed().as_nanos() as u64;
+        let elapsed_time_in_lock = start_time.elapsed().as_millis() as u64;
         drop(lock);
-        println!("============================={}", elapsed_time_in_lock);
-        /*        info!(
-            "[NOTIFYME]putMessage in lock cost time(ms)={}, bodyLength={} AppendMessageResult={:?}",
-            elapsed_time_in_lock,
-            msg.body_len(),
-            put_message_result.append_message_result().as_ref().unwrap(),
-        );*/
+        if elapsed_time_in_lock > 100 {
+            warn!(
+                "[NOTIFYME]putMessage in lock cost time(ms)={}, bodyLength={} \
+                 AppendMessageResult={:?}",
+                elapsed_time_in_lock,
+                msg.body_len(),
+                put_message_result.append_message_result().as_ref().unwrap(),
+            );
+        }
+
         if put_message_result.put_message_status() == PutMessageStatus::PutOk {
             self.handle_disk_flush_and_ha(put_message_result, msg, need_ack_nums, need_handle_ha)
                 .await
