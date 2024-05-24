@@ -30,7 +30,7 @@ lazy_static! {
     static ref USER_HOME: PathBuf = dirs::home_dir().unwrap();
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageStoreConfig {
     pub store_path_root_dir: String,
