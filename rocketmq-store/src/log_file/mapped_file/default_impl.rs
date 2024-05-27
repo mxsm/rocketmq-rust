@@ -327,8 +327,33 @@ impl MappedFile for DefaultMappedFile {
         todo!()
     }
 
-    fn select_mapped_buffer_size(&self, pos: usize, size: usize) -> SelectMappedBufferResult {
-        todo!()
+    fn select_mapped_buffer_size(
+        self: Arc<Self>,
+        pos: i32,
+        size: i32,
+    ) -> Option<SelectMappedBufferResult> {
+        let read_position = self.get_read_position();
+        if pos + size <= read_position {
+            if self.hold() {
+                self.mapped_byte_buffer_access_count_since_last_swap
+                    .fetch_add(1, Ordering::SeqCst);
+                Some(SelectMappedBufferResult {
+                    start_offset: self.file_from_offset + pos as u64,
+                    size,
+                    mapped_file: Some(self),
+                    is_in_cache: false,
+                })
+            } else {
+                None
+            }
+        } else {
+            warn!(
+                "selectMappedBuffer request pos invalid, request pos: {}, size:{}, \
+                 fileFromOffset: {}",
+                pos, size, self.file_from_offset
+            );
+            None
+        }
     }
 
     fn select_mapped_buffer(self: Arc<Self>, pos: i32) -> Option<SelectMappedBufferResult> {

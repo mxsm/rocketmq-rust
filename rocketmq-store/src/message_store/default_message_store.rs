@@ -141,6 +141,7 @@ impl DefaultMessageStore {
         // let topic_config_table = Arc::new(parking_lot::Mutex::new(HashMap::new()));
         let consume_queue_store = ConsumeQueueStore::new(
             message_store_config.clone(),
+            broker_config.clone(),
             topic_config_table.clone(),
             running_flags.clone(),
             store_checkpoint.clone(),
@@ -285,7 +286,11 @@ impl DefaultMessageStore {
         );
     }
 
-    pub fn recover_topic_queue_table(&mut self) {}
+    pub fn recover_topic_queue_table(&mut self) {
+        let min_phy_offset = self.commit_log.get_min_offset();
+        self.consume_queue_store
+            .recover_offset_table(min_phy_offset);
+    }
 
     pub async fn recover_normally(&mut self, max_phy_offset_of_consume_queue: i64) {
         self.commit_log

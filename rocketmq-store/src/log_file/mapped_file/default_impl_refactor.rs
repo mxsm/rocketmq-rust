@@ -280,7 +280,11 @@ impl MappedFile for LocalMappedFile {
         todo!()
     }
 
-    fn select_mapped_buffer_size(&self, pos: usize, size: usize) -> SelectMappedBufferResult {
+    fn select_mapped_buffer_size(
+        self: Arc<Self>,
+        pos: i32,
+        size: i32,
+    ) -> Option<SelectMappedBufferResult> {
         todo!()
     }
 

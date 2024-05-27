@@ -506,7 +506,7 @@ impl ConsumeQueueTrait for ConsumeQueue {
     }
 
     fn get_min_offset_in_queue(&self) -> i64 {
-        todo!()
+        self.min_logic_offset.load(Ordering::Acquire) / CQ_STORE_UNIT_SIZE as i64
     }
 
     fn get_max_offset_in_queue(&self) -> i64 {
@@ -550,7 +550,80 @@ impl ConsumeQueueTrait for ConsumeQueue {
     }
 
     fn correct_min_offset(&self, min_commit_log_offset: i64) {
-        todo!()
+        if min_commit_log_offset >= self.mapped_file_queue.et_logic_offset() {
+            info!(
+                "ConsumeQueue[Topic={}, queue-id={}] contains no valid entries",
+                self.topic, self.queue_id
+            );
+            return;
+        }
+        // Check whether the consume queue maps no valid data at all. This check may cost 1 IO
+        // operation. The rationale is that consume queue always preserves the last file. In
+        // case there are many deprecated topics, This check would save a lot of efforts.
+        let last_mapped_file = self.mapped_file_queue.get_last_mapped_file();
+        if last_mapped_file.is_none() {
+            return;
+        }
+        let last_mapped_file = last_mapped_file.unwrap();
+        let max_readable_position = last_mapped_file.get_read_position();
+        let last_record = MappedFile::select_mapped_buffer_size(
+            last_mapped_file,
+            max_readable_position - CQ_STORE_UNIT_SIZE,
+            CQ_STORE_UNIT_SIZE,
+        );
+        if let Some(last_record) = last_record {
+            let mut bytes = last_record
+                .mapped_file
+                .as_ref()
+                .unwrap()
+                .get_bytes(last_record.start_offset, last_record.size)
+                .unwrap();
+            let commit_log_offset = bytes.get_i64();
+            if commit_log_offset < min_commit_log_offset {
+                self.min_logic_offset.store(
+                    max_readable_position + last_mapped_file.get_file_from_offset(),
+                    Ordering::SeqCst,
+                );
+                info!(
+                    "ConsumeQueue[topic={}, queue-id={}] contains no valid entries. Min-offset is \
+                     assigned as: {}.",
+                    self.topic,
+                    self.queue_id,
+                    self.get_min_offset_in_queue()
+                );
+                return;
+            }
+        }
+
+        let mapped_file = self.mapped_file_queue.get_first_mapped_file();
+        let mut min_ext_addr = 1i64;
+        if let Some(mapped_file) = mapped_file {
+            // Search from previous min logical offset. Typically, a consume queue file segment
+            // contains 300,000 entries searching from previous position saves
+            // significant amount of comparisons and IOs
+            let mut intact = true; // Assume previous value is still valid
+            let mut start = self.min_logic_offset.load(Ordering::Acquire)
+                - mapped_file.get_file_from_offset() as i64;
+            if start < 0 {
+                intact = false;
+                start = 0;
+            }
+            if start > mapped_file.get_file_size() as i64 {
+                error!(
+                    "[Bug][InconsistentState] ConsumeQueue file {} should have been deleted",
+                    mapped_file.get_file_name()
+                );
+                return;
+            }
+            MappedFile::select_mapped_buffer(mapped_file.clone(), start as i32);
+        }
+
+        if self.is_ext_read_enable() {
+            self.consume_queue_ext
+                .as_ref()
+                .unwrap()
+                .truncate_by_min_address(min_ext_addr);
+        }
     }
 
     fn put_message_position_info_wrapper(&mut self, request: &DispatchRequest) {

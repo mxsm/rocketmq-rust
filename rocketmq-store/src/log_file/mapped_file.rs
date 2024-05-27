@@ -99,7 +99,11 @@ pub trait MappedFile {
 
     /// Selects a slice of the mapped byte buffer's sub-region behind the mapped file, starting at
     /// the given position.
-    fn select_mapped_buffer_size(&self, pos: usize, size: usize) -> SelectMappedBufferResult;
+    fn select_mapped_buffer_size(
+        self: Arc<Self>,
+        pos: i32,
+        size: i32,
+    ) -> Option<SelectMappedBufferResult>;
 
     /// Selects a slice of the mapped byte buffer's sub-region behind the mapped file, starting at
     /// the given position.
