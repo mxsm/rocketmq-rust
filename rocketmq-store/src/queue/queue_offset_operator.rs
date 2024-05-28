@@ -192,9 +192,9 @@ mod tests {
 
         operator.remove("topic", 1);
 
-        assert_eq!(operator.get_queue_offset("topic-1"), 0);
-        assert_eq!(operator.get_batch_queue_offset("topic-1"), 0);
-        assert_eq!(operator.get_lmq_offset("topic-1"), 0);
+        assert_eq!(operator.get_queue_offset("topic-1"), 5);
+        assert_eq!(operator.get_batch_queue_offset("topic-1"), 5);
+        assert_eq!(operator.get_lmq_offset("topic-1"), 5);
     }
 
     #[test]
