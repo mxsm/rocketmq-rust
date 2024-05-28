@@ -281,7 +281,12 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     fn set_topic_queue_table(&mut self, topic_queue_table: HashMap<String, i64>) {
-        todo!()
+        self.inner
+            .queue_offset_operator
+            .set_topic_queue_table(topic_queue_table.clone());
+        self.inner
+            .queue_offset_operator
+            .set_lmq_topic_queue_table(topic_queue_table);
     }
 
     fn remove_topic_queue_table(&mut self, topic: &str, queue_id: i32) {
@@ -394,14 +399,6 @@ impl ConsumeQueueStore {
         consume_queue.correct_min_offset(min_commit_log_offset)
     }
 
-    pub fn set_topic_queue_table(&self, topic_queue_table: HashMap<String, i64>) {
-        self.inner
-            .queue_offset_operator
-            .set_topic_queue_table(topic_queue_table.clone());
-        self.inner
-            .queue_offset_operator
-            .set_lmq_topic_queue_table(topic_queue_table);
-    }
     pub fn set_batch_topic_queue_table(&self, batch_topic_queue_table: HashMap<String, i64>) {
         self.inner
             .queue_offset_operator

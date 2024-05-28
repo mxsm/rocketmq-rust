@@ -27,7 +27,7 @@ use rocketmq_common::common::{
     attribute::cq_type::CQType, boundary_type::BoundaryType,
     message::message_single::MessageExtBrokerInner,
 };
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     base::{
@@ -239,7 +239,7 @@ impl ConsumeQueue {
         bytes.put_i32(size);
         bytes.put_i64(tags_code);
 
-        let expect_logic_offset = cq_offset + CQ_STORE_UNIT_SIZE as i64;
+        let expect_logic_offset = cq_offset * CQ_STORE_UNIT_SIZE as i64;
         if let Some(mapped_file) = self
             .mapped_file_queue
             .get_last_mapped_file_mut_start_offset(expect_logic_offset as u64, true)
@@ -510,7 +510,7 @@ impl ConsumeQueueTrait for ConsumeQueue {
     }
 
     fn get_max_offset_in_queue(&self) -> i64 {
-        todo!()
+        self.mapped_file_queue.get_max_offset() / CQ_STORE_UNIT_SIZE as i64
     }
 
     fn get_message_total_in_queue(&self) -> i64 {
@@ -538,7 +538,7 @@ impl ConsumeQueueTrait for ConsumeQueue {
     }
 
     fn get_cq_type(&self) -> CQType {
-        todo!()
+        CQType::SimpleCQ
     }
 
     fn get_total_size(&self) -> i64 {
@@ -550,7 +550,7 @@ impl ConsumeQueueTrait for ConsumeQueue {
     }
 
     fn correct_min_offset(&self, min_commit_log_offset: i64) {
-        if min_commit_log_offset >= self.mapped_file_queue.et_logic_offset() {
+        if min_commit_log_offset >= self.mapped_file_queue.get_max_offset() {
             info!(
                 "ConsumeQueue[Topic={}, queue-id={}] contains no valid entries",
                 self.topic, self.queue_id
@@ -567,7 +567,7 @@ impl ConsumeQueueTrait for ConsumeQueue {
         let last_mapped_file = last_mapped_file.unwrap();
         let max_readable_position = last_mapped_file.get_read_position();
         let last_record = MappedFile::select_mapped_buffer_size(
-            last_mapped_file,
+            last_mapped_file.clone(),
             max_readable_position - CQ_STORE_UNIT_SIZE,
             CQ_STORE_UNIT_SIZE,
         );
@@ -576,12 +576,12 @@ impl ConsumeQueueTrait for ConsumeQueue {
                 .mapped_file
                 .as_ref()
                 .unwrap()
-                .get_bytes(last_record.start_offset, last_record.size)
+                .get_bytes(last_record.start_offset as usize, last_record.size as usize)
                 .unwrap();
             let commit_log_offset = bytes.get_i64();
             if commit_log_offset < min_commit_log_offset {
                 self.min_logic_offset.store(
-                    max_readable_position + last_mapped_file.get_file_from_offset(),
+                    max_readable_position as i64 + last_mapped_file.get_file_from_offset() as i64,
                     Ordering::SeqCst,
                 );
                 info!(
@@ -615,7 +615,71 @@ impl ConsumeQueueTrait for ConsumeQueue {
                 );
                 return;
             }
-            MappedFile::select_mapped_buffer(mapped_file.clone(), start as i32);
+            let result = MappedFile::select_mapped_buffer(mapped_file.clone(), start as i32);
+            if result.is_none() {
+                warn!(
+                    "[Bug] Failed to scan consume queue entries from file on correcting min \
+                     offset: {}",
+                    mapped_file.get_file_name()
+                );
+                return;
+            }
+            let result = result.unwrap();
+            if result.size == 0 {
+                debug!(
+                    "ConsumeQueue[topic={}, queue-id={}] contains no valid entries",
+                    self.topic, self.queue_id
+                );
+                return;
+            }
+            let mapped = result.mapped_file.as_ref().unwrap();
+            let commit_log_offset = mapped
+                .get_bytes(result.start_offset as usize, 8)
+                .unwrap()
+                .get_i64();
+            if intact && commit_log_offset >= min_commit_log_offset {
+                info!(
+                    "Abort correction as previous min-offset points to {}, which is greater than \
+                     {}",
+                    commit_log_offset, min_commit_log_offset
+                );
+                return;
+            }
+            let mut low = 0;
+            let mut high = result.size - CQ_STORE_UNIT_SIZE;
+            loop {
+                if high - low <= CQ_STORE_UNIT_SIZE {
+                    break;
+                }
+                let mid = (low + high) / 2 / CQ_STORE_UNIT_SIZE * CQ_STORE_UNIT_SIZE;
+                let commit_log_offset = mapped.get_bytes(mid as usize, 8).unwrap().get_i64();
+
+                match commit_log_offset.cmp(&min_commit_log_offset) {
+                    std::cmp::Ordering::Greater => high = mid,
+                    std::cmp::Ordering::Equal => {
+                        low = mid;
+                        high = mid;
+                        break;
+                    }
+                    std::cmp::Ordering::Less => low = mid,
+                }
+            }
+            let mut i = low;
+            while i <= high {
+                let offset_py = mapped.get_bytes(i as usize, 8).unwrap().get_i64();
+                let tags_code = mapped.get_bytes((i + 12) as usize, 8).unwrap().get_i64();
+                if offset_py >= min_commit_log_offset {
+                    self.min_logic_offset.store(
+                        mapped.get_file_from_offset() as i64 + i as i64 + start,
+                        Ordering::SeqCst,
+                    );
+                    if Self::is_ext_addr(tags_code) {
+                        min_ext_addr = tags_code;
+                    }
+                    break;
+                }
+                i += CQ_STORE_UNIT_SIZE;
+            }
         }
 
         if self.is_ext_read_enable() {
@@ -699,7 +763,7 @@ impl ConsumeQueueTrait for ConsumeQueue {
         msg: &mut MessageExtBrokerInner,
     ) {
         let queue_offset = queue_offset_operator
-            .get_queue_offset(format!("{}-{}", msg.topic(), msg.queue_id()).as_str());
+            .get_queue_offset(format!("{}_{}", msg.topic(), msg.queue_id()).as_str());
         msg.message_ext_inner.queue_offset = queue_offset;
     }
 
