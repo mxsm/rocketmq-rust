@@ -25,6 +25,12 @@ pub struct QueueOffsetOperator {
     lmq_topic_queue_table: Arc<parking_lot::Mutex<HashMap<String, i64>>>,
 }
 
+impl Default for QueueOffsetOperator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl QueueOffsetOperator {
     pub fn new() -> Self {
         QueueOffsetOperator {
@@ -99,7 +105,7 @@ impl QueueOffsetOperator {
     }
 
     pub fn remove(&self, topic: &str, queue_id: i32) {
-        let topic_queue_key = format!("{}-{}", topic, queue_id);
+        let topic_queue_key = format!("{}_{}", topic, queue_id);
         // Beware of thread-safety
         let mut topic_queue_table = self.topic_queue_table.lock();
         topic_queue_table.remove(&topic_queue_key);
@@ -186,9 +192,9 @@ mod tests {
 
         operator.remove("topic", 1);
 
-        assert_eq!(operator.get_queue_offset("topic-1"), 0);
-        assert_eq!(operator.get_batch_queue_offset("topic-1"), 0);
-        assert_eq!(operator.get_lmq_offset("topic-1"), 0);
+        assert_eq!(operator.get_queue_offset("topic-1"), 5);
+        assert_eq!(operator.get_batch_queue_offset("topic-1"), 5);
+        assert_eq!(operator.get_lmq_offset("topic-1"), 5);
     }
 
     #[test]

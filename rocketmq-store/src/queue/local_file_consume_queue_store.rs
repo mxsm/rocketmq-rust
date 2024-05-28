@@ -21,7 +21,7 @@ use std::{collections::HashMap, fs, path::Path, sync::Arc};
 use bytes::Bytes;
 use rocketmq_common::{
     common::{
-        attribute::cq_type::CQType, config::TopicConfig,
+        attribute::cq_type::CQType, broker::broker_config::BrokerConfig, config::TopicConfig,
         message::message_single::MessageExtBrokerInner,
     },
     utils::queue_type_utils::QueueTypeUtils,
@@ -54,6 +54,7 @@ type ConsumeQueueTable = parking_lot::Mutex<
 struct ConsumeQueueStoreInner {
     // commit_log: Arc<Mutex<CommitLog>>,
     pub(crate) message_store_config: Arc<MessageStoreConfig>,
+    pub(crate) broker_config: Arc<BrokerConfig>,
     pub(crate) queue_offset_operator: QueueOffsetOperator,
     pub(crate) consume_queue_table: ConsumeQueueTable,
 }
@@ -71,6 +72,7 @@ impl ConsumeQueueStoreInner {
 impl ConsumeQueueStore {
     pub fn new(
         message_store_config: Arc<MessageStoreConfig>,
+        broker_config: Arc<BrokerConfig>,
         topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
         running_flags: Arc<RunningFlags>,
         store_checkpoint: Arc<StoreCheckpoint>,
@@ -79,6 +81,7 @@ impl ConsumeQueueStore {
             inner: Arc::new(ConsumeQueueStoreInner {
                 //commit_log,
                 message_store_config,
+                broker_config,
                 queue_offset_operator: QueueOffsetOperator::new(),
                 consume_queue_table: parking_lot::Mutex::new(HashMap::new()),
             }),
@@ -87,13 +90,6 @@ impl ConsumeQueueStore {
             topic_config_table,
         }
     }
-
-    /*    pub fn put_message_position_info_wrapper(&mut self, dispatch_request: &DispatchRequest) {
-        println!(
-            "put_message_position_info_wrapper-----{}",
-            dispatch_request.topic
-        )
-    }*/
 }
 
 #[allow(unused_variables)]
@@ -260,11 +256,37 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     fn recover_offset_table(&mut self, min_phy_offset: i64) {
-        todo!()
+        let mut cq_offset_table = HashMap::with_capacity(1024);
+        let mut bcq_offset_table = HashMap::with_capacity(1024);
+        for (topic, consume_queue_table) in self.inner.consume_queue_table.lock().iter_mut() {
+            for (queue_id, consume_queue) in consume_queue_table.iter_mut() {
+                let guard = consume_queue.lock();
+                let key = format!("{}_{}", guard.get_topic(), guard.get_queue_id());
+                let max_offset_in_queue = guard.get_max_offset_in_queue();
+                if guard.get_cq_type() == CQType::SimpleCQ {
+                    cq_offset_table.insert(key, max_offset_in_queue);
+                } else {
+                    bcq_offset_table.insert(key, max_offset_in_queue);
+                }
+                self.correct_min_offset(&**guard, min_phy_offset)
+            }
+        }
+        if self.inner.message_store_config.duplication_enable
+            || self.inner.broker_config.enable_controller_mode
+        {
+            unimplemented!()
+        }
+        self.set_topic_queue_table(cq_offset_table);
+        self.set_batch_topic_queue_table(bcq_offset_table);
     }
 
     fn set_topic_queue_table(&mut self, topic_queue_table: HashMap<String, i64>) {
-        todo!()
+        self.inner
+            .queue_offset_operator
+            .set_topic_queue_table(topic_queue_table.clone());
+        self.inner
+            .queue_offset_operator
+            .set_lmq_topic_queue_table(topic_queue_table);
     }
 
     fn remove_topic_queue_table(&mut self, topic: &str, queue_id: i32) {
@@ -369,6 +391,20 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
 }
 
 impl ConsumeQueueStore {
+    pub fn correct_min_offset(
+        &self,
+        consume_queue: &dyn ConsumeQueueTrait,
+        min_commit_log_offset: i64,
+    ) {
+        consume_queue.correct_min_offset(min_commit_log_offset)
+    }
+
+    pub fn set_batch_topic_queue_table(&self, batch_topic_queue_table: HashMap<String, i64>) {
+        self.inner
+            .queue_offset_operator
+            .set_batch_topic_queue_table(batch_topic_queue_table)
+    }
+
     fn load_consume_queues(&mut self, store_path: String, cq_type: CQType) -> bool {
         let dir = Path::new(&store_path);
         if let Ok(ls) = fs::read_dir(dir) {

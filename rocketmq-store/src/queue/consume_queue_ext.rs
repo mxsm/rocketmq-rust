@@ -67,6 +67,7 @@ impl ConsumeQueueExt {
 
 impl ConsumeQueueExt {
     pub fn truncate_by_max_address(&self, max_address: i64) {}
+    pub fn truncate_by_min_address(&self, min_address: i64) {}
 
     pub fn load(&mut self) -> bool {
         let result = self.mapped_file_queue.load();
