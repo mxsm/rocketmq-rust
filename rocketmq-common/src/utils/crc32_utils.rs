@@ -22,8 +22,30 @@ pub fn crc32(buf: &[u8]) -> u32 {
     //crc32fast::hash(buf)
     let mut hasher = Hasher::new();
     hasher.update(buf);
-    let checksum = hasher.finalize();
-    checksum & 0x7FFFFFFF
+    hasher.finalize()
+}
+
+pub fn crc32_bytes_offset(array: &[u8], offset: usize, length: usize) -> u32 {
+    if !array.is_empty() && offset < array.len() && offset + length <= array.len() {
+        let mut hasher = Hasher::new();
+        hasher.update(&array[offset..offset + length]);
+        return hasher.finalize();
+    }
+    0
+}
+
+pub fn crc32_bytebuffer(byte_buffer: &mut Vec<u8>) -> u32 {
+    let mut hasher = Hasher::new();
+    hasher.update(byte_buffer.as_slice());
+    hasher.finalize()
+}
+
+pub fn crc32_bytebuffers(byte_buffers: &mut Vec<Vec<u8>>) -> u32 {
+    let mut hasher = Hasher::new();
+    for buffer in byte_buffers {
+        hasher.update(buffer.as_slice());
+    }
+    hasher.finalize()
 }
 
 #[cfg(test)]
@@ -31,14 +53,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_crc32_negative() {
+    fn crc32_calculates_correct_checksum() {
         let buf = [1, 2, 3, 4, 5];
-        assert_ne!(crc32(&buf), 0xFFFFFFFF);
+        assert_eq!(crc32(&buf), 1191942644);
     }
 
     #[test]
-    fn test_crc32_empty_buffer() {
+    fn crc32_bytes_offset_calculates_correct_checksum() {
+        let buf = [1, 2, 3, 4, 5];
+        assert_eq!(crc32_bytes_offset(&buf, 1, 3), 3498416806);
+    }
+
+    #[test]
+    fn crc32_bytes_offset_returns_zero_for_empty_array() {
         let buf: [u8; 0] = [];
-        assert_eq!(crc32(&buf), 0);
+        assert_eq!(crc32_bytes_offset(&buf, 0, 0), 0);
+    }
+
+    #[test]
+    fn crc32_bytebuffer_calculates_correct_checksum() {
+        let mut buf = vec![1, 2, 3, 4, 5];
+        assert_eq!(crc32_bytebuffer(&mut buf), 1191942644);
+    }
+
+    #[test]
+    fn crc32_bytebuffers_calculates_correct_checksum() {
+        let mut bufs = vec![vec![1, 2, 3], vec![4, 5]];
+        assert_eq!(crc32_bytebuffers(&mut bufs), 1191942644);
     }
 }
