@@ -476,20 +476,8 @@ impl TopicConfigManager {
 //Fully implemented will be removed
 #[allow(unused_variables)]
 impl ConfigManager for TopicConfigManager {
-    fn decode0(&mut self, key: &[u8], body: &[u8]) {
-        todo!()
-    }
-
-    fn stop(&mut self) -> bool {
-        todo!()
-    }
-
     fn config_file_path(&self) -> String {
         get_topic_config_path(self.broker_config.store_path_root_dir.as_str())
-    }
-
-    fn encode(&mut self) -> String {
-        todo!()
     }
 
     fn encode_pretty(&self, pretty_format: bool) -> String {
