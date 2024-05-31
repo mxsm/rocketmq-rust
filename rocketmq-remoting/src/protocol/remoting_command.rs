@@ -238,6 +238,13 @@ impl RemotingCommand {
         }
         self
     }
+
+    pub fn set_body_mut_ref(&mut self, body: Option<impl Into<Bytes>>) {
+        if let Some(value) = body {
+            self.body = Some(value.into());
+        }
+    }
+
     pub fn set_suspended(mut self, suspended: bool) -> Self {
         self.suspended = suspended;
         self
