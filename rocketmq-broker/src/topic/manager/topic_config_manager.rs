@@ -35,7 +35,6 @@ use rocketmq_remoting::protocol::{
 use rocketmq_store::{
     log_file::MessageStore, message_store::default_message_store::DefaultMessageStore,
 };
-use tokio::runtime::Handle;
 use tracing::{info, warn};
 
 use crate::{broker_path_config_helper::get_topic_config_path, broker_runtime::BrokerRuntimeInner};
@@ -400,18 +399,15 @@ impl TopicConfigManager {
     fn register_broker_data(&mut self, topic_config: &TopicConfig) {
         let broker_config = self.broker_config.clone();
         let broker_runtime_inner = self.broker_runtime_inner.clone();
-        let topic_config_inner = topic_config.clone();
-        let handle = Handle::current();
-        std::thread::spawn(move || {
-            handle.block_on(async move {
-                if broker_config.enable_single_topic_register {
-                    broker_runtime_inner
-                        .register_single_topic_all(topic_config_inner)
-                        .await;
-                } else {
-                    unimplemented!()
-                }
-            });
+        let topic_config_clone = topic_config.clone();
+        tokio::spawn(async move {
+            if broker_config.enable_single_topic_register {
+                broker_runtime_inner
+                    .register_single_topic_all(topic_config_clone)
+                    .await;
+            } else {
+                unimplemented!()
+            }
         });
     }
 
