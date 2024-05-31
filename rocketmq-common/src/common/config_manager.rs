@@ -23,6 +23,16 @@ use crate::FileUtils;
 
 // Define the trait ConfigManager
 pub trait ConfigManager {
+    /// Loads the configuration from a file.
+    ///
+    /// This method attempts to load the configuration from a file whose path is returned by
+    /// `config_file_path`. If the file content is empty, it attempts to load from a backup
+    /// file. If the file content is not empty, it decodes the content and logs a success
+    /// message.
+    ///
+    /// # Returns
+    /// * `true` if the configuration is successfully loaded and decoded.
+    /// * `false` if the configuration loading fails.
     fn load(&self) -> bool {
         let file_name = self.config_file_path();
         let result = FileUtils::file_to_string(file_name.as_str());
@@ -41,6 +51,15 @@ pub trait ConfigManager {
         }
     }
 
+    /// Loads the configuration from a backup file.
+    ///
+    /// This method attempts to load the configuration from a backup file whose path is returned by
+    /// `config_file_path` with ".bak" appended. If the file content is not empty, it decodes
+    /// the content and logs a success message.
+    ///
+    /// # Returns
+    /// * `true` if the configuration is successfully loaded and decoded.
+    /// * `false` if the configuration loading fails.
     fn load_bak(&self) -> bool {
         let file_name = self.config_file_path();
         return if let Ok(ref content) =
@@ -57,12 +76,27 @@ pub trait ConfigManager {
         };
     }
 
+    /// Persists the configuration with a topic.
+    ///
+    /// This method persists the configuration with a given topic.
+    /// The actual implementation is delegated to the `persist` method.
     fn persist_with_topic<T>(&mut self, _topic_name: &str, _t: T) {
         self.persist()
     }
+
+    /// Persists the configuration with a map.
+    ///
+    /// This method persists the configuration with a given map.
+    /// The actual implementation is delegated to the `persist` method.
     fn persist_map<T>(&mut self, _m: &HashMap<String, T>) {
         self.persist()
     }
+
+    /// Persists the configuration.
+    ///
+    /// This method persists the configuration to a file whose path is returned by
+    /// `config_file_path`. If the encoded configuration is not empty, it writes the
+    /// configuration to the file.
     fn persist(&self) {
         let json = self.encode_pretty(true);
         if !json.is_empty() {
@@ -72,12 +106,49 @@ pub trait ConfigManager {
             }
         }
     }
-    fn decode0(&mut self, key: &[u8], body: &[u8]);
-    fn stop(&mut self) -> bool;
+
+    /// Decodes the configuration.
+    ///
+    /// This method is a placeholder for decoding the configuration.
+    /// The actual implementation should be provided by the implementer of the trait.
+    fn decode0(&mut self, _key: &[u8], _body: &[u8]) {
+        //nothing to do
+    }
+
+    /// Stops the configuration manager.
+    ///
+    /// This method is a placeholder for stopping the configuration manager.
+    /// The actual implementation should be provided by the implementer of the trait.
+    ///
+    /// # Returns
+    /// * `true` by default.
+    fn stop(&mut self) -> bool {
+        true
+    }
+
+    /// Returns the path of the configuration file.
+    ///
+    /// This method is a placeholder for returning the path of the configuration file.
+    /// The actual implementation should be provided by the implementer of the trait.
     fn config_file_path(&self) -> String;
+
+    /// Encodes the configuration.
+    ///
+    /// This method is a placeholder for encoding the configuration.
+    /// The actual implementation should be provided by the implementer of the trait.
     fn encode(&mut self) -> String {
         self.encode_pretty(false)
     }
+
+    /// Encodes the configuration with pretty format.
+    ///
+    /// This method is a placeholder for encoding the configuration with pretty format.
+    /// The actual implementation should be provided by the implementer of the trait.
     fn encode_pretty(&self, pretty_format: bool) -> String;
+
+    /// Decodes the configuration from a JSON string.
+    ///
+    /// This method is a placeholder for decoding the configuration from a JSON string.
+    /// The actual implementation should be provided by the implementer of the trait.
     fn decode(&self, json_string: &str);
 }
