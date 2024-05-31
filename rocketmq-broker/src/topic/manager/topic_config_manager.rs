@@ -497,8 +497,8 @@ impl ConfigManager for TopicConfigManager {
         if json_string.is_empty() {
             return;
         }
-        let wrapper =
-            serde_json::from_str::<TopicConfigSerializeWrapper>(json_string).unwrap_or_default();
+        let wrapper = serde_json::from_str::<TopicConfigSerializeWrapper>(json_string)
+            .expect("Decode TopicConfigSerializeWrapper from json failed");
         if let Some(value) = wrapper.data_version() {
             self.data_version.lock().assign_new_one(value);
         }

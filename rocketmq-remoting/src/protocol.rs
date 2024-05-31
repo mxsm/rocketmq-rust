@@ -16,7 +16,6 @@
  */
 use std::{
     collections::HashMap,
-    fmt,
     fmt::{Display, Formatter},
     sync::{
         atomic::{AtomicI64, Ordering},
@@ -29,12 +28,7 @@ use rocketmq_common::{
     common::{mix_all, topic::TopicValidator},
     utils::time_utils,
 };
-use serde::{
-    de,
-    de::{MapAccess, Visitor},
-    ser::SerializeStruct,
-    Deserialize, Deserializer, Serialize, Serializer,
-};
+use serde::{de, ser::SerializeStruct, Deserialize, Serialize, Serializer};
 
 use crate::RocketMQSerializable;
 
@@ -205,67 +199,22 @@ impl Serialize for DataVersion {
 impl<'de> Deserialize<'de> for DataVersion {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
-        D: Deserializer<'de>,
+        D: serde::Deserializer<'de>,
     {
         #[derive(Deserialize)]
-        enum Field {
-            StateVersion,
-            Timestamp,
-            Counter,
+        #[serde(rename_all = "camelCase")]
+        struct DataVersionHelper {
+            state_version: i64,
+            timestamp: i64,
+            counter: i64,
         }
 
-        struct DataVersionVisitor;
-
-        impl<'de> Visitor<'de> for DataVersionVisitor {
-            type Value = DataVersion;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("struct DataVersion")
-            }
-
-            fn visit_map<V>(self, mut map: V) -> Result<DataVersion, V::Error>
-            where
-                V: MapAccess<'de>,
-            {
-                let mut state_version = None;
-                let mut timestamp = None;
-                let mut counter = None;
-                while let Some(key) = map.next_key()? {
-                    match key {
-                        Field::StateVersion => {
-                            if state_version.is_some() {
-                                return Err(de::Error::duplicate_field("stateVersion"));
-                            }
-                            state_version = Some(map.next_value()?);
-                        }
-                        Field::Timestamp => {
-                            if timestamp.is_some() {
-                                return Err(de::Error::duplicate_field("timestamp"));
-                            }
-                            timestamp = Some(map.next_value()?);
-                        }
-                        Field::Counter => {
-                            if counter.is_some() {
-                                return Err(de::Error::duplicate_field("counter"));
-                            }
-                            counter = Some(map.next_value()?);
-                        }
-                    }
-                }
-                let state_version =
-                    state_version.ok_or_else(|| de::Error::missing_field("stateVersion"))?;
-                let timestamp = timestamp.ok_or_else(|| de::Error::missing_field("timestamp"))?;
-                let counter = counter.ok_or_else(|| de::Error::missing_field("counter"))?;
-                Ok(DataVersion {
-                    state_version,
-                    timestamp,
-                    counter: Arc::new(AtomicI64::new(counter)),
-                })
-            }
-        }
-
-        const FIELDS: &[&str] = &["stateVersion", "timestamp", "counter"];
-        deserializer.deserialize_struct("DataVersion", FIELDS, DataVersionVisitor)
+        let helper = DataVersionHelper::deserialize(deserializer)?;
+        Ok(DataVersion {
+            state_version: helper.state_version,
+            timestamp: helper.timestamp,
+            counter: Arc::new(AtomicI64::new(helper.counter)),
+        })
     }
 }
 
@@ -582,6 +531,163 @@ mod tests {
     use super::*;
 
     #[test]
+    fn without_namespace_returns_original_when_empty() {
+        assert_eq!(NamespaceUtil::without_namespace(""), "");
+    }
+
+    #[test]
+    fn without_namespace_returns_original_when_system_resource() {
+        assert_eq!(NamespaceUtil::without_namespace("SYS_TOPIC"), "SYS_TOPIC");
+    }
+
+    #[test]
+    fn without_namespace_removes_namespace() {
+        assert_eq!(
+            NamespaceUtil::without_namespace("my_namespace%my_resource"),
+            "my_resource"
+        );
+    }
+
+    #[test]
+    fn without_namespace_with_namespace_returns_original_when_empty() {
+        assert_eq!(
+            NamespaceUtil::without_namespace_with_namespace("", "my_namespace"),
+            ""
+        );
+    }
+
+    #[test]
+    fn without_namespace_with_namespace_removes_namespace() {
+        assert_eq!(
+            NamespaceUtil::without_namespace_with_namespace(
+                "my_namespace%my_resource",
+                "my_namespace"
+            ),
+            "my_resource"
+        );
+    }
+
+    #[test]
+    fn wrap_namespace_returns_original_when_empty() {
+        assert_eq!(NamespaceUtil::wrap_namespace("my_namespace", ""), "");
+    }
+
+    #[test]
+    fn wrap_namespace_adds_namespace() {
+        assert_eq!(
+            NamespaceUtil::wrap_namespace("my_namespace", "my_resource"),
+            "my_namespace%my_resource"
+        );
+    }
+
+    #[test]
+    fn is_already_with_namespace_returns_false_when_empty() {
+        assert_eq!(
+            NamespaceUtil::is_already_with_namespace("", "my_namespace"),
+            false
+        );
+    }
+
+    #[test]
+    fn is_already_with_namespace_returns_true_when_with_namespace() {
+        assert_eq!(
+            NamespaceUtil::is_already_with_namespace("my_namespace%my_resource", "my_namespace"),
+            true
+        );
+    }
+
+    #[test]
+    fn wrap_namespace_and_retry_returns_none_when_empty() {
+        assert_eq!(
+            NamespaceUtil::wrap_namespace_and_retry("my_namespace", ""),
+            None
+        );
+    }
+
+    #[test]
+    fn wrap_namespace_and_retry_adds_namespace_and_retry() {
+        assert_eq!(
+            NamespaceUtil::wrap_namespace_and_retry("my_namespace", "my_group"),
+            Some("%RETRY%my_namespace%my_group".to_string())
+        );
+    }
+
+    #[test]
+    fn get_namespace_from_resource_returns_blank_when_empty() {
+        assert_eq!(NamespaceUtil::get_namespace_from_resource(""), "");
+    }
+
+    #[test]
+    fn get_namespace_from_resource_returns_namespace() {
+        assert_eq!(
+            NamespaceUtil::get_namespace_from_resource("my_namespace%my_resource"),
+            "my_namespace"
+        );
+    }
+
+    #[test]
+    fn without_retry_and_dlq_returns_original_when_empty() {
+        assert_eq!(NamespaceUtil::without_retry_and_dlq(""), "");
+    }
+
+    #[test]
+    fn without_retry_and_dlq_removes_retry_and_dlq() {
+        assert_eq!(
+            NamespaceUtil::without_retry_and_dlq("RETRY_GROUP_TOPIC_PREFIXmy_resource"),
+            "RETRY_GROUP_TOPIC_PREFIXmy_resource"
+        );
+        assert_eq!(
+            NamespaceUtil::without_retry_and_dlq("DLQ_GROUP_TOPIC_PREFIXmy_resource"),
+            "DLQ_GROUP_TOPIC_PREFIXmy_resource"
+        );
+    }
+
+    #[test]
+    fn is_system_resource_returns_false_when_empty() {
+        assert_eq!(NamespaceUtil::is_system_resource(""), false);
+    }
+
+    #[test]
+    fn is_system_resource_returns_true_when_system_resource() {
+        assert_eq!(NamespaceUtil::is_system_resource("CID_RMQ_SYS_"), true);
+        assert_eq!(NamespaceUtil::is_system_resource("TBW102"), true);
+    }
+
+    #[test]
+    fn is_retry_topic_returns_false_when_empty() {
+        assert_eq!(NamespaceUtil::is_retry_topic(""), false);
+    }
+
+    #[test]
+    fn is_retry_topic_returns_true_when_retry_topic() {
+        assert_eq!(
+            NamespaceUtil::is_retry_topic("RETRY_GROUP_TOPIC_PREFIXmy_topic"),
+            false
+        );
+        assert_eq!(
+            NamespaceUtil::is_retry_topic("%RETRY%RETRY_GROUP_TOPIC_PREFIXmy_topic"),
+            true
+        );
+    }
+
+    #[test]
+    fn is_dlq_topic_returns_false_when_empty() {
+        assert_eq!(NamespaceUtil::is_dlq_topic(""), false);
+    }
+
+    #[test]
+    fn is_dlq_topic_returns_true_when_dlq_topic() {
+        assert_eq!(
+            NamespaceUtil::is_dlq_topic("DLQ_GROUP_TOPIC_PREFIXmy_topic"),
+            false
+        );
+        assert_eq!(
+            NamespaceUtil::is_dlq_topic("%DLQ%DLQ_GROUP_TOPIC_PREFIXmy_topic"),
+            true
+        );
+    }
+
+    #[test]
     fn test_remoting_command_type() {
         // Test RemotingCommandType::value_of
         assert_eq!(
@@ -636,5 +742,66 @@ mod tests {
             Some(LanguageCode::DOTNET),
             LanguageCode::get_code_from_name("DOTNET")
         );
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::sync::atomic::Ordering;
+
+        use super::*;
+
+        #[test]
+        fn data_version_serialization_deserialization() {
+            let mut data_version = DataVersion::new();
+            data_version.set_state_version(10);
+            let serialized = serde_json::to_string(&data_version).unwrap();
+            let deserialized: DataVersion = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(data_version.state_version, deserialized.state_version);
+            assert_eq!(data_version.timestamp, deserialized.timestamp);
+            assert_eq!(
+                data_version.counter.load(Ordering::SeqCst),
+                deserialized.counter.load(Ordering::SeqCst)
+            );
+        }
+
+        #[test]
+        fn data_version_counter_increment() {
+            let data_version = DataVersion::new();
+            let initial_counter = data_version.counter.load(Ordering::SeqCst);
+            data_version.increment_counter();
+            assert_eq!(
+                initial_counter + 1,
+                data_version.counter.load(Ordering::SeqCst)
+            );
+        }
+
+        #[test]
+        fn data_version_next_version() {
+            let mut data_version = DataVersion::new();
+            let initial_state_version = data_version.state_version;
+            let initial_timestamp = data_version.timestamp;
+            let initial_counter = data_version.counter.load(Ordering::SeqCst);
+            data_version.next_version();
+            assert_eq!(initial_state_version, data_version.state_version);
+            assert!(data_version.timestamp == initial_timestamp);
+            assert_eq!(
+                initial_counter + 1,
+                data_version.counter.load(Ordering::SeqCst)
+            );
+        }
+
+        #[test]
+        fn data_version_next_version_with_state() {
+            let mut data_version = DataVersion::new();
+            let initial_timestamp = data_version.timestamp;
+            let initial_counter = data_version.counter.load(Ordering::SeqCst);
+            data_version.next_version_with(20);
+            assert_eq!(20, data_version.state_version);
+            assert!(data_version.timestamp == initial_timestamp);
+            assert_eq!(
+                initial_counter + 1,
+                data_version.counter.load(Ordering::SeqCst)
+            );
+        }
     }
 }
