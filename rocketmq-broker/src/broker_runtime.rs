@@ -175,6 +175,10 @@ impl BrokerRuntime {
             message_store.shutdown()
         }
 
+        self.topic_config_manager.persist();
+        info!("[Broker shutdown]TopicConfigManager persist success");
+        let _ = self.topic_config_manager.stop();
+
         if let Some(runtime) = self.broker_runtime.take() {
             runtime.shutdown();
         }
