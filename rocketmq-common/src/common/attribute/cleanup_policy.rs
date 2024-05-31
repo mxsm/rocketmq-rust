@@ -15,9 +15,41 @@
  * limitations under the License.
  */
 
+use std::{fmt, str::FromStr};
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum CleanupPolicy {
     #[default]
     DELETE,
     COMPACTION,
+}
+
+impl fmt::Display for CleanupPolicy {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            CleanupPolicy::DELETE => write!(f, "DELETE"),
+            CleanupPolicy::COMPACTION => write!(f, "COMPACTION"),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ParseCleanupPolicyError;
+
+impl fmt::Display for ParseCleanupPolicyError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "invalid cleanup policy")
+    }
+}
+
+impl FromStr for CleanupPolicy {
+    type Err = ParseCleanupPolicyError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_uppercase().as_str() {
+            "DELETE" => Ok(CleanupPolicy::DELETE),
+            "COMPACTION" => Ok(CleanupPolicy::COMPACTION),
+            _ => Err(ParseCleanupPolicyError),
+        }
+    }
 }
