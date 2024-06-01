@@ -176,24 +176,15 @@ impl RemotingClient for RocketmqDefaultClient {
         timeout_millis: u64,
     ) -> Result<RemotingCommand, RemotingError> {
         let client = self.get_and_create_client(addr.clone());
-        /*if let Ok(resp) = time::timeout(Duration::from_millis(timeout_millis), async {
-            client.lock().await.send_read(request).await.unwrap()
-        })
-        .await*/
-
-        match tokio::spawn(async move {
-            match time::timeout(Duration::from_millis(timeout_millis), async move {
-                client.lock().await.send_read(request).await.unwrap()
-            })
-            .await
-            {
-                Ok(result) => Ok(result),
-                Err(err) => Err(RemotingError::RemoteException(err.to_string())),
-            }
+        match time::timeout(Duration::from_millis(timeout_millis), async move {
+            client.lock().await.send_read(request).await
         })
         .await
         {
-            Ok(result) => result,
+            Ok(result) => match result {
+                Ok(response) => Ok(response),
+                Err(err) => Err(RemotingError::RemoteException(err.to_string())),
+            },
             Err(err) => Err(RemotingError::RemoteException(err.to_string())),
         }
     }

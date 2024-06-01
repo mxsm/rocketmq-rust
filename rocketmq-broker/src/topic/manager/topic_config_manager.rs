@@ -262,81 +262,62 @@ impl TopicConfigManager {
         client_default_topic_queue_nums: i32,
         topic_sys_flag: u32,
     ) -> Option<TopicConfig> {
-        let mut create_new = false;
-        let lock = self
+        let (topic_config, create_new) = if let Some(_lock) = self
             .topic_config_table_lock
-            .try_lock_for(Duration::from_secs(3));
-        let topic_config = if lock.is_some() {
-            let mut topic_config = self.get_topic_config(topic);
-            if topic_config.is_some() {
-                return topic_config;
+            .try_lock_for(Duration::from_secs(3))
+        {
+            if let Some(topic_config) = self.get_topic_config(topic) {
+                return Some(topic_config);
             }
-            let mut default_topic_config = self.get_topic_config(default_topic);
-            let topic_config = if default_topic_config.is_some() {
-                //default topic
+
+            if let Some(mut default_topic_config) = self.get_topic_config(default_topic) {
                 if default_topic == TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC
                     && !self.broker_config.auto_create_topic_enable
                 {
-                    default_topic_config.as_mut().unwrap().perm =
-                        PermName::PERM_READ | PermName::PERM_WRITE;
+                    default_topic_config.perm = PermName::PERM_READ | PermName::PERM_WRITE;
                 }
 
-                if PermName::is_inherited(default_topic_config.as_ref().unwrap().perm) {
-                    topic_config = Some(TopicConfig::new(topic));
-                    let mut queue_nums = client_default_topic_queue_nums
-                        .min(default_topic_config.as_ref().unwrap().write_queue_nums as i32);
-                    if queue_nums < 0 {
-                        queue_nums = 0;
-                    }
-                    let ref_topic_config = topic_config.as_mut().unwrap();
-                    ref_topic_config.write_queue_nums = queue_nums as u32;
-                    ref_topic_config.read_queue_nums = queue_nums as u32;
-                    let mut perm = default_topic_config.as_ref().unwrap().perm;
-                    perm &= !PermName::PERM_INHERIT;
-                    ref_topic_config.perm = perm;
-                    ref_topic_config.topic_sys_flag = topic_sys_flag;
-                    ref_topic_config.topic_filter_type =
-                        default_topic_config.as_ref().unwrap().topic_filter_type
-                } else {
-                    warn!(
-                        "Create new topic failed, because the default topic[{}] has no perm [{}] \
-                         producer:[{}]",
-                        default_topic,
-                        default_topic_config.as_ref().unwrap().perm,
-                        remote_address
-                    );
-                }
-
-                if topic_config.is_some() {
+                if PermName::is_inherited(default_topic_config.perm) {
+                    let mut topic_config = TopicConfig::new(topic);
+                    let queue_nums = client_default_topic_queue_nums
+                        .min(default_topic_config.write_queue_nums as i32)
+                        .max(0);
+                    topic_config.write_queue_nums = queue_nums as u32;
+                    topic_config.read_queue_nums = queue_nums as u32;
+                    topic_config.perm = default_topic_config.perm & !PermName::PERM_INHERIT;
+                    topic_config.topic_sys_flag = topic_sys_flag;
+                    topic_config.topic_filter_type = default_topic_config.topic_filter_type;
                     info!(
                         "Create new topic by default topic:[{}] config:[{:?}] producer:[{}]",
-                        default_topic,
-                        topic_config.as_ref().unwrap(),
-                        remote_address
+                        default_topic, topic_config, remote_address
                     );
-                    let _ = self.put_topic_config(topic_config.clone().unwrap());
+                    self.put_topic_config(topic_config.clone());
                     self.data_version.lock().next_version_with(
                         self.message_store
                             .as_ref()
                             .unwrap()
                             .get_state_machine_version(),
                     );
-                    create_new = true;
                     self.persist();
+                    (Some(topic_config), true)
+                } else {
+                    warn!(
+                        "Create new topic failed, because the default topic[{}] has no perm [{}] \
+                         producer:[{}]",
+                        default_topic, default_topic_config.perm, remote_address
+                    );
+                    (None, false)
                 }
-                topic_config
             } else {
-                None
-            };
-            topic_config
+                (None, false)
+            }
         } else {
-            None
+            (None, false)
         };
-        drop(lock);
+
         if create_new {
             self.register_broker_data(topic_config.as_ref().unwrap());
         }
-
         topic_config
     }
 
@@ -348,52 +329,46 @@ impl TopicConfigManager {
         is_order: bool,
         topic_sys_flag: u32,
     ) -> Option<TopicConfig> {
-        let mut topic_config = self.get_topic_config(topic);
-        if let Some(ref mut config) = topic_config {
+        if let Some(ref mut config) = self.get_topic_config(topic) {
             if is_order != config.order {
                 config.order = is_order;
                 self.update_topic_config(config);
             }
-            return topic_config;
+            return Some(config.clone());
         }
-        let mut create_new = false;
 
-        let lock = self
+        let (topic_config, create_new) = if let Some(_lock) = self
             .topic_config_table_lock
-            .try_lock_for(Duration::from_secs(3));
-        let topic_config_result = if lock.is_some() {
-            topic_config = self.get_topic_config(topic);
-            if topic_config.is_some() {
-                return topic_config;
+            .try_lock_for(Duration::from_secs(3))
+        {
+            if let Some(config) = self.get_topic_config(topic) {
+                return Some(config);
             }
-            topic_config = Some(TopicConfig::new(topic));
-            if let Some(ref mut config) = topic_config {
-                config.read_queue_nums = client_default_topic_queue_nums as u32;
-                config.write_queue_nums = client_default_topic_queue_nums as u32;
-                config.perm = perm;
-                config.topic_sys_flag = topic_sys_flag;
-                config.order = is_order;
-                info!("create new topic {:?}", config);
-                self.put_topic_config(config.clone());
-                create_new = true;
-                self.data_version.lock().next_version_with(
-                    self.message_store
-                        .as_ref()
-                        .unwrap()
-                        .get_state_machine_version(),
-                );
-                self.persist();
-            }
-            topic_config
-        } else {
-            None
-        };
-        drop(lock);
-        if create_new {
-            self.register_broker_data(topic_config_result.as_ref().unwrap());
-        }
 
-        topic_config_result
+            let mut config = TopicConfig::new(topic);
+            config.read_queue_nums = client_default_topic_queue_nums as u32;
+            config.write_queue_nums = client_default_topic_queue_nums as u32;
+            config.perm = perm;
+            config.topic_sys_flag = topic_sys_flag;
+            config.order = is_order;
+
+            self.put_topic_config(config.clone());
+            self.data_version.lock().next_version_with(
+                self.message_store
+                    .as_ref()
+                    .unwrap()
+                    .get_state_machine_version(),
+            );
+            self.persist();
+            (Some(config), true)
+        } else {
+            (None, false)
+        };
+
+        if create_new {
+            self.register_broker_data(topic_config.as_ref().unwrap());
+        }
+        topic_config
     }
 
     fn register_broker_data(&mut self, topic_config: &TopicConfig) {
@@ -470,6 +445,52 @@ impl TopicConfigManager {
     }
     pub fn set_message_store(&mut self, message_store: Option<DefaultMessageStore>) {
         self.message_store = message_store;
+    }
+
+    pub fn create_topic_of_tran_check_max_time(
+        &mut self,
+        client_default_topic_queue_nums: i32,
+        perm: u32,
+    ) -> Option<TopicConfig> {
+        if let Some(ref mut config) =
+            self.get_topic_config(TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC)
+        {
+            return Some(config.clone());
+        }
+
+        let (topic_config, create_new) = if let Some(_lock) = self
+            .topic_config_table_lock
+            .try_lock_for(Duration::from_secs(3))
+        {
+            if let Some(config) =
+                self.get_topic_config(TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC)
+            {
+                return Some(config);
+            }
+
+            let mut config = TopicConfig::new(TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC);
+            config.read_queue_nums = client_default_topic_queue_nums as u32;
+            config.write_queue_nums = client_default_topic_queue_nums as u32;
+            config.perm = perm;
+            config.topic_sys_flag = 0;
+            info!("create new topic {:?}", config);
+            self.put_topic_config(config.clone());
+            self.data_version.lock().next_version_with(
+                self.message_store
+                    .as_ref()
+                    .unwrap()
+                    .get_state_machine_version(),
+            );
+            self.persist();
+            (Some(config), true)
+        } else {
+            (None, false)
+        };
+
+        if create_new {
+            self.register_broker_data(topic_config.as_ref().unwrap());
+        }
+        topic_config
     }
 }
 
