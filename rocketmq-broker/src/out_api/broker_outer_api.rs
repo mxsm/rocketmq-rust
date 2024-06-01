@@ -69,6 +69,26 @@ impl BrokerOuterAPI {
             name_server_address: None,
         }
     }
+
+    fn create_request(broker_name: String, topic_config: TopicConfig) -> RemotingCommand {
+        let request_header =
+            RegisterTopicRequestHeader::new(topic_config.topic_name.as_ref().unwrap());
+        let queue_data = QueueData::new(
+            broker_name.clone(),
+            topic_config.read_queue_nums,
+            topic_config.write_queue_nums,
+            topic_config.perm,
+            topic_config.topic_sys_flag,
+        );
+        let topic_route_data = TopicRouteData {
+            queue_datas: vec![queue_data],
+            ..Default::default()
+        };
+        let topic_route_body = topic_route_data.encode();
+
+        RemotingCommand::create_request_command(RequestCode::RegisterTopicInNamesrv, request_header)
+            .set_body(Some(topic_route_body))
+    }
 }
 
 impl BrokerOuterAPI {
@@ -184,26 +204,7 @@ impl BrokerOuterAPI {
         topic_config: TopicConfig,
         timeout_mills: u64,
     ) {
-        let request_header =
-            RegisterTopicRequestHeader::new(topic_config.topic_name.as_ref().unwrap());
-        let queue_data = QueueData::new(
-            broker_name.clone(),
-            topic_config.read_queue_nums,
-            topic_config.write_queue_nums,
-            topic_config.perm,
-            topic_config.topic_sys_flag,
-        );
-        let topic_route_data = TopicRouteData {
-            queue_datas: vec![queue_data],
-            ..Default::default()
-        };
-        let topic_route_body = topic_route_data.encode();
-
-        let request = RemotingCommand::create_request_command(
-            RequestCode::RegisterTopicInNamesrv,
-            request_header,
-        )
-        .set_body(Some(topic_route_body));
+        let request = Self::create_request(broker_name, topic_config);
         let name_server_address_list = self.remoting_client.get_available_name_srv_list();
         let mut handle_vec = Vec::with_capacity(name_server_address_list.len());
         for namesrv_addr in name_server_address_list.iter() {
