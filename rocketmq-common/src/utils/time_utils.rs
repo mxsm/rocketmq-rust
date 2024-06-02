@@ -21,3 +21,45 @@ pub fn get_current_millis() -> u64 {
         .unwrap()
         .as_millis() as u64
 }
+
+pub fn get_current_nano() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    use super::*;
+
+    #[test]
+    fn get_current_millis_returns_correct_value() {
+        let before = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let current = get_current_millis();
+        let after = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        assert!(current >= before && current <= after);
+    }
+
+    #[test]
+    fn get_current_nano_returns_correct_value() {
+        let before = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
+        let current = get_current_nano();
+        let after = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
+        assert!(current >= before && current <= after);
+    }
+}

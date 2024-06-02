@@ -22,6 +22,7 @@ use rocketmq_common::{
 use crate::base::message_result::PutMessageResult;
 
 pub mod commit_log;
+pub mod flush_manager_impl;
 pub mod mapped_file;
 
 #[allow(async_fn_in_trait)]

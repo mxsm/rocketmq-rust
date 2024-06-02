@@ -25,8 +25,6 @@ use std::{
 };
 
 use parking_lot::Mutex;
-use rocketmq_common::common::thread::thread_service::ThreadService;
-use tracing::{error, warn};
 
 use crate::log_file::mapped_file::default_impl_refactor::LocalMappedFile;
 
@@ -64,7 +62,7 @@ impl AllocateMappedFileService {
     }
 }
 
-impl ThreadService for AllocateMappedFileService {
+/*impl ThreadService for AllocateMappedFileService {
     fn start(&self) {
         let service_name = self.get_service_name();
         let builder = std::thread::Builder::new().name(service_name);
@@ -106,7 +104,7 @@ impl ThreadService for AllocateMappedFileService {
     fn get_service_name(&self) -> String {
         "AllocateMappedFileService".to_string()
     }
-}
+}*/
 
 struct AllocateRequest {
     file_path: String,

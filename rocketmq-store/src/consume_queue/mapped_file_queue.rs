@@ -70,7 +70,9 @@ impl MappedFileQueue {
             store_timestamp: Arc::new(AtomicU64::new(0)),
         }
     }
+}
 
+impl MappedFileQueue {
     pub fn load(&mut self) -> bool {
         //list dir files
         let dir = Path::new(&self.store_path);
@@ -334,6 +336,37 @@ impl MappedFileQueue {
         } else {
             None
         }
+    }
+
+    pub fn get_flushed_where(&self) -> i64 {
+        self.flushed_where.load(Ordering::Acquire) as i64
+    }
+
+    pub fn set_store_timestamp(&self, store_timestamp: u64) {
+        self.store_timestamp
+            .store(store_timestamp, Ordering::Release);
+    }
+
+    pub fn get_store_timestamp(&self) -> u64 {
+        self.store_timestamp.load(Ordering::Acquire)
+    }
+
+    pub fn flush(&self, flush_least_pages: i32) -> bool {
+        let mut result = true;
+        let flushed_where = self.get_flushed_where();
+        if let Some(mapped_file) =
+            self.find_mapped_file_by_offset(flushed_where, flushed_where == 0)
+        {
+            let tmp_time_stamp = mapped_file.get_store_timestamp();
+            let offset = mapped_file.flush(flush_least_pages);
+            let whered = mapped_file.get_file_from_offset() + offset as u64;
+            result = whered == self.get_flushed_where() as u64;
+            self.set_flushed_where(whered as i64);
+            if flush_least_pages == 0 {
+                self.set_store_timestamp(tmp_time_stamp as u64);
+            }
+        }
+        result
     }
 }
 
