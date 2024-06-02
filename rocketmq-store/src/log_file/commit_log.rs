@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-use std::{cell::Cell, collections::HashMap, mem, sync::Arc};
+use std::{cell::Cell, collections::HashMap, mem, sync::Arc, thread};
 
 use bytes::{Buf, Bytes, BytesMut};
 use rocketmq_common::{
@@ -38,7 +38,7 @@ use rocketmq_common::{
     },
     UtilAll::time_millis_to_human_string,
 };
-use tokio::time::Instant;
+use tokio::{runtime::Handle, time::Instant};
 use tracing::{error, info, warn};
 
 use crate::{
@@ -46,7 +46,8 @@ use crate::{
         append_message_callback::DefaultAppendMessageCallback,
         commit_log_dispatcher::CommitLogDispatcher,
         dispatch_request::DispatchRequest,
-        message_result::PutMessageResult,
+        flush_manager::FlushManager,
+        message_result::{AppendMessageResult, PutMessageResult},
         message_status_enum::{AppendMessageStatus, PutMessageStatus},
         put_message_context::PutMessageContext,
         select_result::SelectMappedBufferResult,
@@ -55,7 +56,10 @@ use crate::{
     },
     config::{broker_role::BrokerRole, message_store_config::MessageStoreConfig},
     consume_queue::mapped_file_queue::MappedFileQueue,
-    log_file::mapped_file::{default_impl::DefaultMappedFile, MappedFile},
+    log_file::{
+        flush_manager_impl::defalut_flush_manager::DefaultFlushManager,
+        mapped_file::{default_impl::DefaultMappedFile, MappedFile},
+    },
     message_encoder::message_ext_encoder::MessageExtEncoder,
     message_store::default_message_store::{CommitLogDispatcherDefault, DefaultMessageStore},
     queue::{local_file_consume_queue_store::ConsumeQueueStore, ConsumeQueueStoreTrait},
@@ -161,6 +165,8 @@ pub struct CommitLog {
     put_message_lock: Arc<tokio::sync::Mutex<()>>,
     topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
     consume_queue_store: ConsumeQueueStore,
+    flush_manager: Arc<tokio::sync::Mutex<DefaultFlushManager>>,
+    //flush_manager: Arc<parking_lot::Mutex<DefaultFlushManager>>,
 }
 
 impl CommitLog {
@@ -175,22 +181,33 @@ impl CommitLog {
         let enabled_append_prop_crc = message_store_config.enabled_append_prop_crc;
         let store_path = message_store_config.get_store_path_commit_log();
         let mapped_file_size = message_store_config.mapped_file_size_commit_log;
+        let mapped_file_queue = MappedFileQueue::new(store_path, mapped_file_size as u64, None);
         Self {
-            mapped_file_queue: MappedFileQueue::new(store_path, mapped_file_size as u64, None),
+            mapped_file_queue: mapped_file_queue.clone(),
             message_store_config: message_store_config.clone(),
             broker_config,
             enabled_append_prop_crc,
             //local_file_message_store: None,
             dispatcher: dispatcher.clone(),
             confirm_offset: -1,
-            store_checkpoint,
+            store_checkpoint: store_checkpoint.clone(),
             append_message_callback: Arc::new(DefaultAppendMessageCallback::new(
-                message_store_config,
+                message_store_config.clone(),
                 topic_config_table.clone(),
             )),
             put_message_lock: Arc::new(Default::default()),
             topic_config_table,
             consume_queue_store,
+            flush_manager: Arc::new(tokio::sync::Mutex::new(DefaultFlushManager::new(
+                message_store_config,
+                mapped_file_queue,
+                store_checkpoint,
+            ))),
+            /*flush_manager: Arc::new(parking_lot::Mutex::new(DefaultFlushManager::new(
+                message_store_config,
+                mapped_file_queue,
+                store_checkpoint,
+            ))),*/
         }
     }
 }
@@ -202,6 +219,16 @@ impl CommitLog {
         self.mapped_file_queue.check_self();
         info!("load commit log {}", if result { "OK" } else { "Failed" });
         result
+    }
+
+    pub fn start(&mut self) {
+        let handle = Handle::current();
+        let flush_manager = self.flush_manager.clone();
+        thread::spawn(move || {
+            handle.block_on(async move {
+                flush_manager.lock().await.start();
+            });
+        });
     }
 
     pub fn shutdown(&mut self) {}
@@ -398,13 +425,28 @@ impl CommitLog {
     }
 
     async fn handle_disk_flush_and_ha(
-        &self,
+        &mut self,
         put_message_result: PutMessageResult,
         msg: MessageExtBrokerInner,
         need_ack_nums: u32,
         need_handle_ha: bool,
     ) -> PutMessageResult {
+        let flush_result = self
+            .handle_disk_flush(put_message_result.append_message_result().unwrap(), &msg)
+            .await;
         put_message_result
+    }
+
+    async fn handle_disk_flush(
+        &self,
+        put_message_result: &AppendMessageResult,
+        msg: &MessageExtBrokerInner,
+    ) -> PutMessageStatus {
+        self.flush_manager
+            .lock()
+            .await
+            .handle_disk_flush(put_message_result, msg)
+            .await
     }
 
     fn need_handle_ha(&self, msg_inner: &MessageExtBrokerInner) -> bool {

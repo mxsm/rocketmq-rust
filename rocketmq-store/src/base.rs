@@ -22,6 +22,7 @@ pub mod append_message_callback;
 pub mod commit_log_dispatcher;
 pub mod compaction_append_msg_callback;
 pub(crate) mod dispatch_request;
+pub mod flush_manager;
 pub mod message_result;
 pub mod message_status_enum;
 pub mod put_message_context;

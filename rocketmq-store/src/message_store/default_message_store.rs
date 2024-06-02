@@ -37,7 +37,7 @@ use rocketmq_common::{
         config::TopicConfig,
         message::{message_single::MessageExtBrokerInner, MessageConst},
         sys_flag::message_sys_flag::MessageSysFlag,
-        thread::thread_service::ThreadService,
+        //thread::thread_service_tokio::ThreadService,
     },
     utils::queue_type_utils::QueueTypeUtils,
     FileUtils::string_to_file,
@@ -458,7 +458,7 @@ impl MessageStore for DefaultMessageStore {
         info!("load over, and the max phy offset = {}", max_offset);
 
         if !result {
-            self.allocate_mapped_file_service.shutdown();
+            // self.allocate_mapped_file_service.shutdown();
         }
         result
     }
@@ -473,6 +473,8 @@ impl MessageStore for DefaultMessageStore {
             self.message_store_config.clone(),
             self.dispatcher.clone(),
         );
+
+        self.commit_log.start();
 
         //self.add_schedule_task();
 

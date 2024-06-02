@@ -52,3 +52,6 @@ log = "0.4.20"
 parking_lot = { workspace = true }
 once_cell = { workspace = true }
 tempfile = "3.10.1"
+trait-variant.workspace = true
+[dev-dependencies]
+mockall = "0.12.1"
