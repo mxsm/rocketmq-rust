@@ -20,6 +20,7 @@ use rocketmq_common::TimeUtils::get_current_nano;
 
 use crate::base::message_status_enum::PutMessageStatus;
 
+#[derive(Debug)]
 pub(crate) struct GroupCommitRequest {
     pub(crate) next_offset: i64,
     pub(crate) flush_ok: Option<PutMessageStatus>,

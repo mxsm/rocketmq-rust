@@ -276,7 +276,7 @@ impl MappedFile for LocalMappedFile {
         todo!()
     }
 
-    fn commit(&mut self, commit_least_pages: usize) -> usize {
+    fn commit(&self, commit_least_pages: i32) -> i32 {
         todo!()
     }
 
