@@ -16,8 +16,10 @@
  */
 use std::sync::Arc;
 
-use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
-use tokio::time;
+use rocketmq_common::{
+    common::message::message_single::MessageExtBrokerInner, TimeUtils::get_current_millis,
+};
+use tokio::{sync::Notify, time};
 
 use crate::{
     base::{
@@ -45,12 +47,22 @@ impl DefaultFlushManager {
     ) -> Self {
         let (group_commit_service, flush_real_time_service) =
             match message_store_config.flush_disk_type {
-                FlushDiskType::SyncFlush => (Some(GroupCommitService{
-                    store_checkpoint,
-                    rx_out: None,
-                    tx_in: None,
-                }), None),
-                FlushDiskType::AsyncFlush => (None, Some(FlushRealTimeService {  })),
+                FlushDiskType::SyncFlush => (
+                    Some(GroupCommitService {
+                        store_checkpoint,
+                        rx_out: None,
+                        tx_in: None,
+                    }),
+                    None,
+                ),
+                FlushDiskType::AsyncFlush => (
+                    None,
+                    Some(FlushRealTimeService {
+                        message_store_config: message_store_config.clone(),
+                        store_checkpoint,
+                        notified: Arc::new(Notify::new()),
+                    }),
+                ),
             };
 
         let commit_real_time_service = if message_store_config.transient_store_pool_enable {
@@ -72,7 +84,10 @@ impl DefaultFlushManager {
 impl FlushManager for DefaultFlushManager {
     fn start(&mut self) {
         if let Some(ref mut group_commit_service) = self.group_commit_service {
-            group_commit_service.start(self.mapped_file_queue.take().unwrap());
+            group_commit_service.start(self.mapped_file_queue.clone().unwrap());
+        }
+        if let Some(ref mut flush_real_time_service) = self.flush_real_time_service {
+            flush_real_time_service.start(self.mapped_file_queue.clone().unwrap());
         }
     }
 
@@ -108,7 +123,14 @@ impl FlushManager for DefaultFlushManager {
                             .unwrap_or(PutMessageStatus::FlushDiskTimeout)
                     })
             }
-            FlushDiskType::AsyncFlush => PutMessageStatus::PutOk,
+            FlushDiskType::AsyncFlush => {
+                self.flush_real_time_service
+                    .as_mut()
+                    .unwrap()
+                    .flush_disk()
+                    .await;
+                PutMessageStatus::PutOk
+            }
         }
     }
 }
@@ -166,6 +188,58 @@ impl GroupCommitService {
     }
 }
 
-struct FlushRealTimeService {}
+struct FlushRealTimeService {
+    message_store_config: Arc<MessageStoreConfig>,
+    store_checkpoint: Arc<StoreCheckpoint>,
+    notified: Arc<Notify>,
+}
+
+impl FlushRealTimeService {
+    async fn flush_disk(&mut self) {
+        if !self.message_store_config.flush_commit_log_timed {
+            self.notified.notified().await;
+        }
+    }
+
+    fn start(&mut self, mapped_file_queue: MappedFileQueue) {
+        let message_store_config = self.message_store_config.clone();
+        let store_checkpoint = self.store_checkpoint.clone();
+        let notified = self.notified.clone();
+        tokio::spawn(async move {
+            let mut last_flush_timestamp = 0;
+            loop {
+                let flush_commit_log_timed = message_store_config.flush_commit_log_timed;
+                let interval = message_store_config.flush_interval_commit_log;
+                let mut flush_physic_queue_least_pages =
+                    message_store_config.flush_commit_log_least_pages;
+                let flush_physic_queue_thorough_interval =
+                    message_store_config.flush_commit_log_thorough_interval;
+                //let mut print_flush_progress = false;
+
+                let current_time_millis = get_current_millis();
+                if current_time_millis
+                    >= last_flush_timestamp + flush_physic_queue_thorough_interval as u64
+                {
+                    last_flush_timestamp = current_time_millis;
+                    flush_physic_queue_least_pages = 0;
+                }
+                if flush_commit_log_timed {
+                    time::sleep(time::Duration::from_millis(interval as u64)).await;
+                } else {
+                    tokio::select! {
+                        _ = notified.notified() => {}
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(interval as u64)) => {}
+                    }
+                }
+
+                mapped_file_queue.flush(flush_physic_queue_least_pages);
+                let store_timestamp = mapped_file_queue.get_store_timestamp();
+                if store_timestamp > 0 {
+                    store_checkpoint.set_physic_msg_timestamp(store_timestamp);
+                }
+            }
+        });
+    }
+}
 
 struct CommitRealTimeService {}
