@@ -45,8 +45,12 @@ impl DefaultFlushManager {
     ) -> Self {
         let (group_commit_service, flush_real_time_service) =
             match message_store_config.flush_disk_type {
-                FlushDiskType::SyncFlush => (None, None),
-                FlushDiskType::AsyncFlush => (None, None),
+                FlushDiskType::SyncFlush => (Some(GroupCommitService{
+                    store_checkpoint,
+                    rx_out: None,
+                    tx_in: None,
+                }), None),
+                FlushDiskType::AsyncFlush => (None, Some(FlushRealTimeService {  })),
             };
 
         let commit_real_time_service = if message_store_config.transient_store_pool_enable {
