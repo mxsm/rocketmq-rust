@@ -148,6 +148,9 @@ impl GroupCommitService {
                             }
                             mapped_file_queue.flush(0);
                             flush_ok = mapped_file_queue.get_flushed_where() >= request.next_offset;
+                            if flush_ok {
+                                break;
+                            }
                             time::sleep(time::Duration::from_millis(1)).await;
                         }
                         request.flush_ok = Some(if flush_ok {
