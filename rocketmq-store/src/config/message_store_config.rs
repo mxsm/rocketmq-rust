@@ -299,7 +299,7 @@ impl Default for MessageStoreConfig {
             ha_master_address: None,
             ha_max_gap_not_in_sync: 0,
             broker_role: Default::default(),
-            flush_disk_type: Default::default(),
+            flush_disk_type: FlushDiskType::SyncFlush,
             sync_flush_timeout: 1000 * 5,
             put_message_timeout: 0,
             slave_timeout: 0,

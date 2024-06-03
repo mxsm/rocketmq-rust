@@ -168,9 +168,9 @@ impl StoreCheckpoint {
         let min = self
             .physic_msg_timestamp
             .load(Ordering::Relaxed)
-            .min(self.logics_msg_timestamp.load(Ordering::Relaxed));
+            .min(self.logics_msg_timestamp.load(Ordering::Relaxed)) as i64;
         let min = min - 1000 * 3;
-        min.max(0)
+        min.max(0) as u64
     }
     pub fn get_min_timestamp_index(&self) -> u64 {
         self.get_min_timestamp()

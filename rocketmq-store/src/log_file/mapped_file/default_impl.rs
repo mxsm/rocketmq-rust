@@ -379,7 +379,7 @@ impl MappedFile for DefaultMappedFile {
     }
 
     fn get_store_timestamp(&self) -> i64 {
-        todo!()
+        self.store_timestamp.load(Ordering::Relaxed)
     }
 
     fn get_last_modified_timestamp(&self) -> i64 {
