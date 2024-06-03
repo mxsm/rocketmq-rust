@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-use std::{cell::Cell, collections::HashMap, mem, sync::Arc, thread};
+use std::{cell::Cell, collections::HashMap, mem, sync::Arc};
 
 use bytes::{Buf, Bytes, BytesMut};
 use rocketmq_common::{
@@ -38,7 +38,7 @@ use rocketmq_common::{
     },
     UtilAll::time_millis_to_human_string,
 };
-use tokio::{runtime::Handle, time::Instant};
+use tokio::time::Instant;
 use tracing::{error, info, warn};
 
 use crate::{
@@ -222,12 +222,14 @@ impl CommitLog {
     }
 
     pub fn start(&mut self) {
-        let handle = Handle::current();
         let flush_manager = self.flush_manager.clone();
-        thread::spawn(move || {
-            handle.block_on(async move {
-                flush_manager.lock().await.start();
-            });
+        tokio::spawn(async move {
+            let flush_manager_weak = Arc::downgrade(&flush_manager);
+            let mut guard = flush_manager.lock().await;
+            if let Some(service) = guard.commit_real_time_service_mut() {
+                service.set_flush_manager(Some(flush_manager_weak))
+            }
+            guard.start();
         });
     }
 

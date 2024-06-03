@@ -14,12 +14,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use rocketmq_common::{
     common::message::message_single::MessageExtBrokerInner, TimeUtils::get_current_millis,
 };
-use tokio::{sync::Notify, time};
+use tokio::{
+    sync::{Mutex, Notify},
+    time,
+};
 
 use crate::{
     base::{
@@ -70,6 +73,7 @@ impl DefaultFlushManager {
                 message_store_config: message_store_config.clone(),
                 store_checkpoint,
                 notified: Arc::new(Default::default()),
+                flush_manager: None,
             })
         } else {
             None
@@ -82,6 +86,16 @@ impl DefaultFlushManager {
             commit_real_time_service,
             mapped_file_queue: Some(mapped_file_queue),
         }
+    }
+}
+
+impl DefaultFlushManager {
+    pub(crate) fn commit_real_time_service(&self) -> Option<&CommitRealTimeService> {
+        self.commit_real_time_service.as_ref()
+    }
+
+    pub(crate) fn commit_real_time_service_mut(&mut self) -> Option<&mut CommitRealTimeService> {
+        self.commit_real_time_service.as_mut()
     }
 }
 
@@ -287,10 +301,11 @@ impl FlushRealTimeService {
     pub fn shutdown(&mut self) {}
 }
 
-struct CommitRealTimeService {
+pub(crate) struct CommitRealTimeService {
     message_store_config: Arc<MessageStoreConfig>,
     store_checkpoint: Arc<StoreCheckpoint>,
     notified: Arc<Notify>,
+    flush_manager: Option<Weak<Mutex<DefaultFlushManager>>>,
 }
 
 impl CommitRealTimeService {
@@ -303,6 +318,7 @@ impl CommitRealTimeService {
         let message_store_config = self.message_store_config.clone();
         let store_checkpoint = self.store_checkpoint.clone();
         let notified = self.notified.clone();
+        let flush_manager = self.flush_manager.clone();
         tokio::spawn(async move {
             let mut last_commit_timestamp = 0;
             loop {
@@ -322,6 +338,9 @@ impl CommitRealTimeService {
                 let result = mapped_file_queue.commit(commit_data_least_pages);
                 if !result {
                     last_commit_timestamp = get_current_millis();
+                    if let Some(flush_manager) = flush_manager.as_ref().unwrap().upgrade() {
+                        flush_manager.lock().await.wake_up_flush();
+                    }
                 }
 
                 tokio::select! {
@@ -333,4 +352,8 @@ impl CommitRealTimeService {
     }
 
     pub fn shutdown(&mut self) {}
+
+    pub fn set_flush_manager(&mut self, flush_manager: Option<Weak<Mutex<DefaultFlushManager>>>) {
+        self.flush_manager = flush_manager;
+    }
 }
