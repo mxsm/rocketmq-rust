@@ -95,7 +95,7 @@ pub trait MappedFile {
     fn flush(&self, flush_least_pages: i32) -> i32;
 
     /// Flushes the data in the secondary cache to page cache or disk immediately.
-    fn commit(&mut self, commit_least_pages: usize) -> usize;
+    fn commit(&self, commit_least_pages: i32) -> i32;
 
     /// Selects a slice of the mapped byte buffer's sub-region behind the mapped file, starting at
     /// the given position.

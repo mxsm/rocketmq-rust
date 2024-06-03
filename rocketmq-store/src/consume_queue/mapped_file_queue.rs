@@ -86,6 +86,24 @@ impl MappedFileQueue {
         true
     }
 
+    pub fn commit(&self, commit_least_pages: i32) -> bool {
+        let mut result = true;
+        let committed_where = self.get_committed_where();
+        if let Some(mapped_file) =
+            self.find_mapped_file_by_offset(committed_where, committed_where == 0)
+        {
+            let offset = mapped_file.commit(commit_least_pages);
+            let whered = mapped_file.get_file_from_offset() + offset as u64;
+            result = whered == self.get_committed_where() as u64;
+            self.set_committed_where(whered as i64);
+        }
+        result
+    }
+
+    pub fn get_committed_where(&self) -> i64 {
+        self.committed_where.load(Ordering::Acquire) as i64
+    }
+
     pub fn check_self(&self) {
         println!("mapped_file_queue check self unimplemented")
     }

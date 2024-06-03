@@ -323,8 +323,8 @@ impl MappedFile for DefaultMappedFile {
         self.get_flushed_position()
     }
 
-    fn commit(&mut self, commit_least_pages: usize) -> usize {
-        todo!()
+    fn commit(&self, commit_least_pages: i32) -> i32 {
+        0
     }
 
     fn select_mapped_buffer_size(
