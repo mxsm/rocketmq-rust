@@ -261,7 +261,7 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
         for (topic, consume_queue_table) in self.inner.consume_queue_table.lock().iter_mut() {
             for (queue_id, consume_queue) in consume_queue_table.iter_mut() {
                 let guard = consume_queue.lock();
-                let key = format!("{}_{}", guard.get_topic(), guard.get_queue_id());
+                let key = format!("{}-{}", guard.get_topic(), guard.get_queue_id());
                 let max_offset_in_queue = guard.get_max_offset_in_queue();
                 if guard.get_cq_type() == CQType::SimpleCQ {
                     cq_offset_table.insert(key, max_offset_in_queue);

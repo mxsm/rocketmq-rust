@@ -763,7 +763,7 @@ impl ConsumeQueueTrait for ConsumeQueue {
         msg: &mut MessageExtBrokerInner,
     ) {
         let queue_offset = queue_offset_operator
-            .get_queue_offset(format!("{}_{}", msg.topic(), msg.queue_id()).as_str());
+            .get_queue_offset(format!("{}-{}", msg.topic(), msg.queue_id()).as_str());
         msg.message_ext_inner.queue_offset = queue_offset;
     }
 
