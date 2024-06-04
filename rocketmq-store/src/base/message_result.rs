@@ -106,6 +106,19 @@ impl PutMessageResult {
     pub fn remote_put(&self) -> bool {
         self.remote_put
     }
+
+    pub fn set_put_message_status(&mut self, put_message_status: PutMessageStatus) {
+        self.put_message_status = put_message_status;
+    }
+    pub fn set_append_message_result(
+        &mut self,
+        append_message_result: Option<AppendMessageResult>,
+    ) {
+        self.append_message_result = append_message_result;
+    }
+    pub fn set_remote_put(&mut self, remote_put: bool) {
+        self.remote_put = remote_put;
+    }
 }
 
 /// Represents the result of getting a message.
