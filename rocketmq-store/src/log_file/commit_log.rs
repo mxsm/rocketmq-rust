@@ -428,15 +428,61 @@ impl CommitLog {
 
     async fn handle_disk_flush_and_ha(
         &mut self,
-        put_message_result: PutMessageResult,
+        mut put_message_result: PutMessageResult,
         msg: MessageExtBrokerInner,
         need_ack_nums: u32,
         need_handle_ha: bool,
     ) -> PutMessageResult {
-        let flush_result = self
-            .handle_disk_flush(put_message_result.append_message_result().unwrap(), &msg)
-            .await;
+        let commit_log = Arc::new(self.clone());
+        let commit_log_cloned = commit_log.clone();
+        let put_message_result_clone =
+            Arc::new(put_message_result.append_message_result().unwrap().clone());
+        let put_message_result_cloned = put_message_result_clone.clone();
+        let disk_flush_handle = tokio::spawn(async move {
+            commit_log
+                .handle_disk_flush(put_message_result_clone.as_ref(), &msg)
+                .await
+        });
+
+        let replica_result_handle = tokio::spawn(async move {
+            if need_handle_ha {
+                commit_log_cloned
+                    .handle_ha(put_message_result_cloned.as_ref(), need_ack_nums)
+                    .await
+            } else {
+                PutMessageStatus::PutOk
+            }
+        });
+
+        match disk_flush_handle.await {
+            Ok(status) => {
+                put_message_result.set_put_message_status(status);
+                if status == PutMessageStatus::PutOk {
+                    if let Ok(replica_status) = replica_result_handle.await {
+                        put_message_result.set_put_message_status(replica_status);
+                    }
+                }
+            }
+            Err(error) => {
+                put_message_result.set_put_message_status(PutMessageStatus::FlushDiskTimeout);
+            }
+        }
+
         put_message_result
+    }
+
+    async fn handle_ha(
+        &self,
+        put_message_result: &AppendMessageResult,
+        need_ack_nums: u32,
+    ) -> PutMessageStatus {
+        if need_ack_nums <= 1 {
+            return PutMessageStatus::PutOk;
+        }
+
+        //HA service to do unimplemented
+
+        PutMessageStatus::PutOk
     }
 
     async fn handle_disk_flush(
@@ -593,7 +639,7 @@ impl CommitLog {
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
-                             files"
+                              files"
             );
             self.mapped_file_queue.set_flushed_where(0);
             self.mapped_file_queue.set_committed_where(0);
@@ -773,7 +819,7 @@ impl CommitLog {
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
-                             files"
+                              files"
             );
             self.mapped_file_queue.set_flushed_where(0);
             self.mapped_file_queue.set_committed_where(0);
