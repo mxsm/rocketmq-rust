@@ -11,8 +11,8 @@ readme.workspace = true
 description.workspace = true
 
 [dependencies]
-rocketmq-common = { version = "0.2.0", path = "../rocketmq-common" }
-rocketmq-store = { version = "0.2.0", path = "../rocketmq-store" }
+rocketmq-common = { version = "0.3.0", path = "../rocketmq-common" }
+rocketmq-store = { version = "0.3.0", path = "../rocketmq-store" }
 
 
 clap = { version = "4.2.7", features = ["derive"] }
