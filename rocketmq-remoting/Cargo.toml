@@ -12,8 +12,8 @@ readme = "README.md"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-rocketmq-common = { version = "0.3.0",path = "../rocketmq-common" }
-rocketmq-macros = { version = "0.3.0",path = "../rocketmq-macros" }
+rocketmq-common = { workspace = true }
+rocketmq-macros = { workspace = true }
 
 anyhow.workspace = true
 bytes.workspace = true
