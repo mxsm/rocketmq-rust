@@ -17,13 +17,13 @@ default = ["local_file_store"]
 local_file_store = ["rocketmq-store/local_file_store"]
 
 [dependencies]
-rocketmq-rust = { version = "0.2.0", path = "../rocketmq" }
-rocketmq-common = { version = "0.2.0", path = "../rocketmq-common" }
-rocketmq-remoting = { version = "0.2.0", path = "../rocketmq-remoting" }
-rocketmq-store = { version = "0.2.0", path = "../rocketmq-store", default-features = true }
-rocketmq-filter = { version = "0.2.0", path = "../rocketmq-filter" }
-rocketmq-macros = { version = "0.2.0", path = "../rocketmq-macros" }
-rocketmq-runtime = { version = "0.2.0", path = "../rocketmq-runtime" }
+rocketmq-rust = { version = "0.3.0", path = "../rocketmq" }
+rocketmq-common = { version = "0.3.0", path = "../rocketmq-common" }
+rocketmq-remoting = { version = "0.3.0", path = "../rocketmq-remoting" }
+rocketmq-store = { version = "0.3.0", path = "../rocketmq-store", default-features = true }
+rocketmq-filter = { version = "0.3.0", path = "../rocketmq-filter" }
+rocketmq-macros = { version = "0.3.0", path = "../rocketmq-macros" }
+rocketmq-runtime = { version = "0.3.0", path = "../rocketmq-runtime" }
 
 anyhow.workspace = true
 env_logger.workspace = true
