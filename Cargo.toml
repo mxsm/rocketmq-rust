@@ -24,6 +24,17 @@ description = """
 Unofficial Rust implementation of Apache RocketMQ
 """
 [workspace.dependencies]
+rocketmq-common = { version = "0.3.0", path = "./rocketmq-common" }
+rocketmq-runtime = { version = "0.3.0", path = "./rocketmq-runtime" }
+rocketmq-macros = { version = "0.3.0", path = "./rocketmq-macros" }
+rocketmq-rust = { version = "0.3.0", path = "./rocketmq" }
+rocketmq-filter = { version = "0.3.0", path = "./rocketmq-filter" }
+rocketmq-store = { version = "0.3.0", path = "./rocketmq-store", default-features = true }
+rocketmq-remoting = { version = "0.3.0", path = "./rocketmq-remoting" }
+rocketmq-cli = { version = "0.3.0", path = "./rocketmq-cli" }
+rocketmq-namesrv = { version = "0.3.0", path = "./rocketmq-namesrv" }
+rocketmq-broker = { version = "0.3.0", path = "./rocketmq-broker" }
+
 tokio = { version = "1.35", features = ["full"] }
 tokio-util = { version = "0.7.10", features = ["full"] }
 tokio-stream = { version = "0.1.14", features = ["full"] }
