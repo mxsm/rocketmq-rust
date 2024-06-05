@@ -18,16 +18,20 @@
 use std::{collections::HashMap, sync::Arc};
 
 use rocketmq_common::common::{broker::broker_config::BrokerConfig, config_manager::ConfigManager};
-use rocketmq_remoting::protocol::{
-    body::topic_info_wrapper::topic_queue_wrapper::TopicQueueMappingSerializeWrapper,
-    header::message_operation_header::TopicRequestHeaderTrait,
-    remoting_command::RemotingCommand,
-    static_topic::{
-        topic_queue_mapping_context::TopicQueueMappingContext,
-        topic_queue_mapping_detail::TopicQueueMappingDetail,
+use rocketmq_remoting::{
+    code::response_code::ResponseCode,
+    protocol::{
+        body::topic_info_wrapper::topic_queue_wrapper::TopicQueueMappingSerializeWrapper,
+        header::message_operation_header::TopicRequestHeaderTrait,
+        remoting_command::RemotingCommand,
+        static_topic::{
+            topic_queue_mapping_context::TopicQueueMappingContext,
+            topic_queue_mapping_detail::TopicQueueMappingDetail,
+        },
+        DataVersion, RemotingSerializable,
     },
-    DataVersion,
 };
+use tracing::{info, warn};
 
 use crate::broker_path_config_helper::get_topic_queue_mapping_path;
 
@@ -166,15 +170,45 @@ impl TopicQueueMappingManager {
 
     pub(crate) fn rewrite_request_for_static_topic(
         &self,
-        _request_header: &impl TopicRequestHeaderTrait,
-        _mapping_context: &TopicQueueMappingContext,
+        request_header: &TopicQueueRequestHeader,
+        mapping_context: &TopicQueueMappingContext,
     ) -> Option<RemotingCommand> {
-        //TODO
+        if mapping_context.mapping_detail.is_none() {
+            return None;
+        }
+        let mapping_detail = mapping_context.mapping_detail.as_ref().unwrap();
+        if !mapping_context.is_leader() {
+            RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::NotLeaderForQueue,
+                format!("{}-{} does not exit in request process of current broker {}", request_header.topic(), request_header.(), self.broker_config.broker_name),
+            )
+        }
+
         None
     }
 
     pub fn get_topic_queue_mapping(&self, topic: &str) -> Option<TopicQueueMappingDetail> {
         self.topic_queue_mapping_table.lock().get(topic).cloned()
+    }
+
+    pub fn delete(&self, topic: &str) {
+        let old = self.topic_queue_mapping_table.lock().remove(topic);
+        match old {
+            None => {
+                warn!(
+                    "delete topic queue mapping failed, static topic: {} not exists",
+                    topic
+                )
+            }
+            Some(value) => {
+                info!(
+                    "delete topic queue mapping OK, static topic queue mapping: {:?}",
+                    value
+                );
+                self.data_version.lock().next_version();
+                self.persist();
+            }
+        }
     }
 }
 
@@ -192,13 +226,15 @@ impl ConfigManager for TopicQueueMappingManager {
     fn config_file_path(&self) -> String {
         get_topic_queue_mapping_path(self.broker_config.store_path_root_dir.as_str())
     }
-
-    fn encode(&mut self) -> String {
-        todo!()
-    }
-
     fn encode_pretty(&self, pretty_format: bool) -> String {
-        todo!()
+        let wrapper = TopicQueueMappingSerializeWrapper::new(
+            Some(self.topic_queue_mapping_table.lock().clone()),
+            Some(self.data_version.lock().clone()),
+        );
+        match pretty_format {
+            true => wrapper.to_json_pretty(),
+            false => wrapper.to_json(),
+        }
     }
 
     fn decode(&self, json_string: &str) {

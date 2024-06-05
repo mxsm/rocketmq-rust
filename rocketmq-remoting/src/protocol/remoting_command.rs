@@ -164,6 +164,16 @@ impl RemotingCommand {
         Self::default().set_code(code).mark_response_type()
     }
 
+    pub fn create_response_command_with_code_remark(
+        code: impl Into<i32>,
+        remark: impl Into<String>,
+    ) -> Self {
+        Self::default()
+            .set_code(code)
+            .set_remark(Some(remark.into()))
+            .mark_response_type()
+    }
+
     pub fn create_response_command() -> Self {
         Self::default()
             .set_code(RemotingSysResponseCode::Success)

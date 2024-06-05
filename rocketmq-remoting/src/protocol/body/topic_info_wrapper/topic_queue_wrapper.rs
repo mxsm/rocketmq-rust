@@ -32,6 +32,18 @@ pub struct TopicQueueMappingSerializeWrapper {
 }
 
 impl TopicQueueMappingSerializeWrapper {
+    pub fn new(
+        topic_queue_mapping_info_map: Option<HashMap<String, TopicQueueMappingDetail>>,
+        data_version: Option<DataVersion>,
+    ) -> Self {
+        Self {
+            topic_queue_mapping_info_map,
+            data_version,
+        }
+    }
+}
+
+impl TopicQueueMappingSerializeWrapper {
     pub fn topic_queue_mapping_info_map(
         &self,
     ) -> Option<&HashMap<String, TopicQueueMappingDetail>> {
