@@ -259,6 +259,7 @@ impl SendMessageProcessorInner {
                 "Sending message to topic[{}] is forbidden.",
                 request_header.topic.as_str()
             )));
+            return;
         }
         let mut topic_config = self
             .topic_config_manager
