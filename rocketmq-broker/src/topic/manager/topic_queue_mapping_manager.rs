@@ -55,9 +55,7 @@ impl TopicQueueMappingManager {
         request_header: &mut impl TopicRequestHeaderTrait,
         mapping_context: &TopicQueueMappingContext,
     ) -> Option<RemotingCommand> {
-        if mapping_context.mapping_detail.as_ref()? {
-            return None;
-        }
+        mapping_context.mapping_detail.as_ref()?;
 
         if !mapping_context.is_leader() {
             let mapping_detail = mapping_context.mapping_detail.as_ref().unwrap();
