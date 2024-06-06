@@ -58,7 +58,7 @@ impl TopicQueueMappingManager {
         if mapping_context.mapping_detail.is_none() {
             return None;
         }
-        
+
         if !mapping_context.is_leader() {
             let mapping_detail = mapping_context.mapping_detail.as_ref().unwrap();
             return Some(RemotingCommand::create_response_command_with_code_remark(
@@ -67,7 +67,11 @@ impl TopicQueueMappingManager {
                     "{}-{:?} does not exit in request process of current broker {}",
                     request_header.topic(),
                     request_header.queue_id(),
-                    mapping_detail.topic_queue_mapping_info.bname.clone().unwrap_or_default()
+                    mapping_detail
+                        .topic_queue_mapping_info
+                        .bname
+                        .clone()
+                        .unwrap_or_default()
                 ),
             ));
         }
@@ -77,10 +81,7 @@ impl TopicQueueMappingManager {
     }
 }
 
-
 impl TopicQueueMappingManager {
-
-
     pub(crate) fn build_topic_queue_mapping_context(
         &self,
         request_header: &impl TopicRequestHeaderTrait,
@@ -101,8 +102,6 @@ impl TopicQueueMappingManager {
         let topic = request_header.topic();
 
         let mut global_id: Option<i32> = request_header.queue_id();
-        
-
 
         if let Some(mapping_detail) = self.topic_queue_mapping_table.lock().get(&topic) {
             // it is not static topic
@@ -195,8 +194,6 @@ impl TopicQueueMappingManager {
         }
     }
 
-
-
     pub fn get_topic_queue_mapping(&self, topic: &str) -> Option<TopicQueueMappingDetail> {
         self.topic_queue_mapping_table.lock().get(topic).cloned()
     }
@@ -223,16 +220,7 @@ impl TopicQueueMappingManager {
 }
 
 //Fully implemented will be removed
-#[allow(unused_variables)]
 impl ConfigManager for TopicQueueMappingManager {
-    fn decode0(&mut self, key: &[u8], body: &[u8]) {
-        todo!()
-    }
-
-    fn stop(&mut self) -> bool {
-        todo!()
-    }
-
     fn config_file_path(&self) -> String {
         get_topic_queue_mapping_path(self.broker_config.store_path_root_dir.as_str())
     }

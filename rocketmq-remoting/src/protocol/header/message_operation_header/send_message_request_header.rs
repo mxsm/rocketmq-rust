@@ -136,12 +136,12 @@ impl TopicRequestHeaderTrait for SendMessageRequestHeader {
     fn with_oneway(&mut self, oneway: bool) {
         self.oway = Some(oneway);
     }
-    
+
     fn queue_id(&self) -> Option<i32> {
         self.queue_id
     }
-    
-    fn set_queue_id(&mut self,queue_id:Option<i32>) {
+
+    fn set_queue_id(&mut self, queue_id: Option<i32>) {
         self.queue_id = queue_id;
     }
 }
@@ -162,49 +162,58 @@ pub struct SendMessageRequestHeaderV2 {
 
     // producerGroup
     pub a: String,
-    
-     // topic
+
+    // topic
     pub b: String,
-   
+
     // defaultTopic
     pub c: String,
-   
+
     // defaultTopicQueueNums
     pub d: i32,
-   
+
     // queueId
     pub e: Option<i32>,
-   
+
     //sysFlag
     pub f: i32,
-   
+
     // bornTimestamp
     pub g: i64,
-   
-   // flag
+
+    // flag
     pub h: i32,
-    
+
     // properties
     pub i: Option<String>,
-    
+
     // reconsumeTimes
     pub j: Option<i32>,
-    
+
     // unitMode
     pub k: Option<bool>,
-    
-     // consumeRetryTimes
+
+    // consumeRetryTimes
     pub l: Option<i32>,
-   
+
     // batch
     pub m: Option<bool>,
-   
-   // brokerName
-    pub n: Option<String>, 
+
+    // brokerName
+    pub n: Option<String>,
 }
 
 impl SendMessageRequestHeaderV2 {
-    pub fn new(a: String, b: String, c: String, d: i32, e: Option<i32>, f: i32, g: i64, h: i32) -> Self {
+    pub fn new(
+        a: String,
+        b: String,
+        c: String,
+        d: i32,
+        e: Option<i32>,
+        f: i32,
+        g: i64,
+        h: i32,
+    ) -> Self {
         SendMessageRequestHeaderV2 {
             ns: None,
             nsd: None,
@@ -300,12 +309,12 @@ impl TopicRequestHeaderTrait for SendMessageRequestHeaderV2 {
     fn with_oneway(&mut self, oneway: bool) {
         self.oway = Some(oneway);
     }
-    
+
     fn queue_id(&self) -> Option<i32> {
         self.e
     }
-    
-    fn set_queue_id(&mut self,queue_id:Option<i32>) {
+
+    fn set_queue_id(&mut self, queue_id: Option<i32>) {
         self.e = queue_id;
     }
 }

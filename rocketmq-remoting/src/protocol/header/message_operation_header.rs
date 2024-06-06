@@ -44,5 +44,5 @@ pub trait TopicRequestHeaderTrait {
 
     fn queue_id(&self) -> Option<i32>;
 
-    fn set_queue_id(&mut self,queue_id:Option<i32>);
+    fn set_queue_id(&mut self, queue_id: Option<i32>);
 }

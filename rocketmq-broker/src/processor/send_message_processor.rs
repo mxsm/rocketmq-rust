@@ -101,7 +101,10 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
                 let mapping_context = self
                     .topic_queue_mapping_manager
                     .build_topic_queue_mapping_context(&request_header, true);
-                let rewrite_result = TopicQueueMappingManager::rewrite_request_for_static_topic(&mut request_header, &mapping_context);
+                let rewrite_result = TopicQueueMappingManager::rewrite_request_for_static_topic(
+                    &mut request_header,
+                    &mapping_context,
+                );
                 if let Some(rewrite_result) = rewrite_result {
                     return Some(rewrite_result);
                 }
