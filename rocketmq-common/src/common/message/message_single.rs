@@ -83,6 +83,13 @@ impl Message {
             Some(value) => value.parse().unwrap_or(true),
         }
     }
+
+    pub fn get_delay_time_level(&self) -> i32 {
+        match self.properties.get(MessageConst::PROPERTY_DELAY_TIME_LEVEL) {
+            Some(t) => t.parse::<i32>().unwrap_or(0),
+            None => 0,
+        }
+    }
 }
 
 #[allow(unused_variables)]

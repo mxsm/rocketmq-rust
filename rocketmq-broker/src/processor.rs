@@ -35,7 +35,8 @@ use rocketmq_remoting::{
     },
     protocol::{
         header::message_operation_header::{
-            send_message_request_header::SendMessageRequestHeader, TopicRequestHeaderTrait,
+            send_message_request_header::SendMessageRequestHeader,
+            send_message_response_header::SendMessageResponseHeader, TopicRequestHeaderTrait,
         },
         remoting_command::RemotingCommand,
         NamespaceUtil,
@@ -49,7 +50,7 @@ use tracing::{info, warn};
 
 use self::client_manage_processor::ClientManageProcessor;
 use crate::{
-    mqtrace::send_message_context::SendMessageContext,
+    mqtrace::{send_message_context::SendMessageContext, send_message_hook::SendMessageHook},
     processor::{
         admin_broker_processor::AdminBrokerProcessor, send_message_processor::SendMessageProcessor,
     },
@@ -76,7 +77,6 @@ where
     pub(crate) admin_broker_processor: AdminBrokerProcessor,
     pub(crate) client_manage_processor: ClientManageProcessor,
 }
-
 impl<MS: Clone> Clone for BrokerRequestProcessor<MS> {
     fn clone(&self) -> Self {
         Self {
@@ -120,9 +120,38 @@ impl<MS: MessageStore + Send + Sync + 'static> RequestProcessor for BrokerReques
 pub(crate) struct SendMessageProcessorInner {
     pub(crate) broker_config: Arc<BrokerConfig>,
     pub(crate) topic_config_manager: TopicConfigManager,
+    pub(crate) send_message_hook_vec: Arc<parking_lot::RwLock<Vec<Box<dyn SendMessageHook>>>>,
 }
 
 impl SendMessageProcessorInner {
+    pub(crate) fn execute_send_message_hook_before(&self, context: &SendMessageContext) {
+        for hook in self.send_message_hook_vec.read().iter() {
+            hook.send_message_before(context);
+        }
+    }
+
+    pub(crate) fn execute_send_message_hook_after(
+        &self,
+        response: Option<&mut RemotingCommand>,
+        context: &mut SendMessageContext,
+    ) {
+        for hook in self.send_message_hook_vec.read().iter() {
+            if let Some(ref response) = response {
+                if let Some(ref header) =
+                    response.decode_command_custom_header::<SendMessageResponseHeader>()
+                {
+                    context.msg_id = header.msg_id().to_string();
+                    context.queue_id = Some(header.queue_id());
+                    context.queue_offset = Some(header.queue_offset());
+                    context.code = response.code();
+                    context.error_msg = response.remark().unwrap_or(&"".to_string()).to_string();
+                }
+            }
+
+            hook.send_message_after(context);
+        }
+    }
+
     pub(crate) fn consumer_send_msg_back(
         &self,
         _ctx: &ConnectionHandlerContext,
@@ -230,6 +259,7 @@ impl SendMessageProcessorInner {
                 "Sending message to topic[{}] is forbidden.",
                 request_header.topic.as_str()
             )));
+            return;
         }
         let mut topic_config = self
             .topic_config_manager

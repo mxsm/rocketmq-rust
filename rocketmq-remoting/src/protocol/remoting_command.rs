@@ -320,8 +320,8 @@ impl RemotingCommand {
     pub fn flag(&self) -> i32 {
         self.flag
     }
-    pub fn remark(&self) -> &Option<String> {
-        &self.remark
+    pub fn remark(&self) -> Option<&String> {
+        self.remark.as_ref()
     }
     pub fn ext_fields(&self) -> Option<&HashMap<String, String>> {
         self.ext_fields.as_ref()
