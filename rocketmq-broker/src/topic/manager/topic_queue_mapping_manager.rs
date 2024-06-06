@@ -55,7 +55,7 @@ impl TopicQueueMappingManager {
         request_header: &mut impl TopicRequestHeaderTrait,
         mapping_context: &TopicQueueMappingContext,
     ) -> Option<RemotingCommand> {
-        if mapping_context.mapping_detail.is_none() {
+        if mapping_context.mapping_detail.as_ref()? {
             return None;
         }
 
