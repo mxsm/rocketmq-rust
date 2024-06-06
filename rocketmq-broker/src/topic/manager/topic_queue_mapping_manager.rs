@@ -51,6 +51,36 @@ impl TopicQueueMappingManager {
         }
     }
 
+    pub(crate) fn rewrite_request_for_static_topic(
+        request_header: &mut impl TopicRequestHeaderTrait,
+        mapping_context: &TopicQueueMappingContext,
+    ) -> Option<RemotingCommand> {
+        if mapping_context.mapping_detail.is_none() {
+            return None;
+        }
+        
+        if !mapping_context.is_leader() {
+            let mapping_detail = mapping_context.mapping_detail.as_ref().unwrap();
+            return Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::NotLeaderForQueue,
+                format!(
+                    "{}-{} does not exit in request process of current broker {}",
+                    request_header.topic(),
+                    request_header.queue_id(),
+                    mapping_detail.topic_queue_mapping_info.bname.clone().unwrap_or_default()
+                ),
+            ));
+        }
+        let mapping_item = mapping_context.leader_item.as_ref().unwrap();
+        request_header.set_queue_id(mapping_item.queue_id);
+        None
+    }
+}
+
+
+impl TopicQueueMappingManager {
+
+
     pub(crate) fn build_topic_queue_mapping_context(
         &self,
         request_header: &impl TopicRequestHeaderTrait,
@@ -168,24 +198,7 @@ impl TopicQueueMappingManager {
         }
     }
 
-    pub(crate) fn rewrite_request_for_static_topic(
-        &self,
-        request_header: &TopicQueueRequestHeader,
-        mapping_context: &TopicQueueMappingContext,
-    ) -> Option<RemotingCommand> {
-        if mapping_context.mapping_detail.is_none() {
-            return None;
-        }
-        let mapping_detail = mapping_context.mapping_detail.as_ref().unwrap();
-        if !mapping_context.is_leader() {
-            RemotingCommand::create_response_command_with_code_remark(
-                ResponseCode::NotLeaderForQueue,
-                format!("{}-{} does not exit in request process of current broker {}", request_header.topic(), request_header.(), self.broker_config.broker_name),
-            )
-        }
 
-        None
-    }
 
     pub fn get_topic_queue_mapping(&self, topic: &str) -> Option<TopicQueueMappingDetail> {
         self.topic_queue_mapping_table.lock().get(topic).cloned()

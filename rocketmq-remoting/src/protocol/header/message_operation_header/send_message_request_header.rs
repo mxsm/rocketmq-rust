@@ -136,6 +136,14 @@ impl TopicRequestHeaderTrait for SendMessageRequestHeader {
     fn with_oneway(&mut self, oneway: bool) {
         self.oway = Some(oneway);
     }
+    
+    fn queue_id(&self) -> i32 {
+        self.queue_id
+    }
+    
+    fn set_queue_id(&mut self,queue_id:i32) {
+        self.queue_id = queue_id;
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, RemotingSerializable, RequestHeaderCodec)]
@@ -277,6 +285,14 @@ impl TopicRequestHeaderTrait for SendMessageRequestHeaderV2 {
 
     fn with_oneway(&mut self, oneway: bool) {
         self.oway = Some(oneway);
+    }
+    
+    fn queue_id(&self) -> i32 {
+        self.f
+    }
+    
+    fn set_queue_id(&mut self,queue_id:i32) {
+        self.f = queue_id;
     }
 }
 
