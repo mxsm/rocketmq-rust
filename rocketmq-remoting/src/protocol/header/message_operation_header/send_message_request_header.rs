@@ -248,7 +248,7 @@ impl SendMessageRequestHeaderV2 {
             topic: self.b.clone(),
             default_topic: self.c.clone(),
             default_topic_queue_nums: self.d,
-            queue_id: self.e.clone(),
+            queue_id: self.e,
             sys_flag: self.f,
             born_timestamp: self.g,
             flag: self.h,
