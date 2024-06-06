@@ -26,7 +26,6 @@ use rocketmq_common::{
             message_single::{MessageExt, MessageExtBrokerInner},
             MessageConst,
         },
-        mix_all::RETRY_GROUP_TOPIC_PREFIX,
         topic::TopicValidator,
     },
     utils::{message_utils, util_all},
@@ -213,30 +212,6 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
         let mut response = self.pre_send(ctx.as_ref(), request.as_ref(), &request_header);
         if response.code() != -1 {
             return Some(response);
-        }
-
-        if request_header.topic.len() > i8::MAX as usize {
-            return Some(
-                response
-                    .set_code(ResponseCode::MessageIllegal)
-                    .set_remark(Some(format!(
-                        "message topic length too long {}",
-                        request_header.topic().len()
-                    ))),
-            );
-        }
-
-        if !request_header.topic.is_empty()
-            && request_header.topic.starts_with(RETRY_GROUP_TOPIC_PREFIX)
-        {
-            return Some(
-                response
-                    .set_code(ResponseCode::MessageIllegal)
-                    .set_remark(Some(format!(
-                        "batch request does not support retry group  {}",
-                        request_header.topic()
-                    ))),
-            );
         }
 
         let mut topic_config = self
