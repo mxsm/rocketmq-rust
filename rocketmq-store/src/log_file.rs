@@ -27,7 +27,7 @@ pub mod mapped_file;
 
 #[allow(async_fn_in_trait)]
 #[trait_variant::make(MessageStore: Send)]
-pub trait RocketMQMessageStore: Clone {
+pub trait RocketMQMessageStore: Clone + 'static {
     /// Load previously stored messages.
     ///
     /// Returns `true` if success; `false` otherwise.

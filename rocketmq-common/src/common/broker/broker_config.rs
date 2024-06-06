@@ -116,6 +116,7 @@ pub struct BrokerConfig {
     pub cluster_topic_enable: bool,
     pub revive_queue_num: u32,
     pub enable_slave_acting_master: bool,
+    pub reject_transaction_message: bool,
 }
 
 impl Default for BrokerConfig {
@@ -161,6 +162,7 @@ impl Default for BrokerConfig {
             cluster_topic_enable: true,
             revive_queue_num: 8,
             enable_slave_acting_master: false,
+            reject_transaction_message: false,
         }
     }
 }
