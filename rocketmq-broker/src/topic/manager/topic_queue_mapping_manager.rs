@@ -253,3 +253,60 @@ impl ConfigManager for TopicQueueMappingManager {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use rocketmq_common::common::broker::broker_config::BrokerConfig;
+
+    use super::*;
+
+    #[test]
+    fn new_creates_default_manager() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let manager = TopicQueueMappingManager::new(broker_config.clone());
+
+        assert_eq!(Arc::ptr_eq(&manager.broker_config, &broker_config), true);
+        assert_eq!(manager.data_version.lock().get_state_version(), 0);
+        assert_eq!(manager.topic_queue_mapping_table.lock().len(), 0);
+    }
+
+    #[test]
+    fn get_topic_queue_mapping_returns_none_for_non_existent_topic() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let manager = TopicQueueMappingManager::new(broker_config);
+
+        assert!(manager
+            .get_topic_queue_mapping("non_existent_topic")
+            .is_none());
+    }
+
+    #[test]
+    fn get_topic_queue_mapping_returns_mapping_for_existing_topic() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let manager = TopicQueueMappingManager::new(broker_config);
+        let detail = TopicQueueMappingDetail::default();
+        manager
+            .topic_queue_mapping_table
+            .lock()
+            .insert("existing_topic".to_string(), detail.clone());
+
+        assert!(manager.get_topic_queue_mapping("existing_topic").is_some());
+    }
+
+    #[test]
+    fn delete_removes_existing_topic() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let manager = TopicQueueMappingManager::new(broker_config);
+        let detail = TopicQueueMappingDetail::default();
+        manager
+            .topic_queue_mapping_table
+            .lock()
+            .insert("existing_topic".to_string(), detail.clone());
+
+        manager.delete("existing_topic");
+
+        assert!(manager.get_topic_queue_mapping("existing_topic").is_none());
+    }
+}
