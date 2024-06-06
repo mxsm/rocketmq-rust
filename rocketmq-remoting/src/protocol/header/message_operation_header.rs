@@ -41,4 +41,8 @@ pub trait TopicRequestHeaderTrait {
     fn oneway(&self) -> Option<bool>;
 
     fn with_oneway(&mut self, oneway: bool);
+
+    fn queue_id(&self) -> Option<i32>;
+
+    fn set_queue_id(&mut self, queue_id: Option<i32>);
 }

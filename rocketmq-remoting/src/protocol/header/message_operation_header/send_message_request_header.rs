@@ -43,7 +43,7 @@ pub struct SendMessageRequestHeader {
     pub topic: String,
     pub default_topic: String,
     pub default_topic_queue_nums: i32,
-    pub queue_id: i32,
+    pub queue_id: Option<i32>,
     pub sys_flag: i32,
     pub born_timestamp: i64,
     pub flag: i32,
@@ -60,7 +60,7 @@ impl SendMessageRequestHeader {
         topic: String,
         default_topic: String,
         default_topic_queue_nums: i32,
-        queue_id: i32,
+        queue_id: Option<i32>,
         sys_flag: i32,
         born_timestamp: i64,
         flag: i32,
@@ -136,6 +136,14 @@ impl TopicRequestHeaderTrait for SendMessageRequestHeader {
     fn with_oneway(&mut self, oneway: bool) {
         self.oway = Some(oneway);
     }
+
+    fn queue_id(&self) -> Option<i32> {
+        self.queue_id
+    }
+
+    fn set_queue_id(&mut self, queue_id: Option<i32>) {
+        self.queue_id = queue_id;
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, RemotingSerializable, RequestHeaderCodec)]
@@ -152,37 +160,60 @@ pub struct SendMessageRequestHeaderV2 {
 
     pub lo: Option<bool>,
 
-    pub a: String,
     // producerGroup
-    pub b: String,
+    pub a: String,
+
     // topic
-    pub c: String,
+    pub b: String,
+
     // defaultTopic
-    pub d: i32,
+    pub c: String,
+
     // defaultTopicQueueNums
-    pub e: i32,
+    pub d: i32,
+
     // queueId
+    pub e: Option<i32>,
+
+    //sysFlag
     pub f: i32,
-    // sysFlag
-    pub g: i64,
+
     // bornTimestamp
-    pub h: i32,
+    pub g: i64,
+
     // flag
-    pub i: Option<String>,
+    pub h: i32,
+
     // properties
-    pub j: Option<i32>,
+    pub i: Option<String>,
+
     // reconsumeTimes
-    pub k: Option<bool>,
+    pub j: Option<i32>,
+
     // unitMode
-    pub l: Option<i32>,
+    pub k: Option<bool>,
+
     // consumeRetryTimes
-    pub m: Option<bool>,
+    pub l: Option<i32>,
+
     // batch
-    pub n: Option<String>, // brokerName
+    pub m: Option<bool>,
+
+    // brokerName
+    pub n: Option<String>,
 }
 
 impl SendMessageRequestHeaderV2 {
-    pub fn new(a: String, b: String, c: String, d: i32, e: i32, f: i32, g: i64, h: i32) -> Self {
+    pub fn new(
+        a: String,
+        b: String,
+        c: String,
+        d: i32,
+        e: Option<i32>,
+        f: i32,
+        g: i64,
+        h: i32,
+    ) -> Self {
         SendMessageRequestHeaderV2 {
             ns: None,
             nsd: None,
@@ -278,6 +309,14 @@ impl TopicRequestHeaderTrait for SendMessageRequestHeaderV2 {
     fn with_oneway(&mut self, oneway: bool) {
         self.oway = Some(oneway);
     }
+
+    fn queue_id(&self) -> Option<i32> {
+        self.e
+    }
+
+    fn set_queue_id(&mut self, queue_id: Option<i32>) {
+        self.e = queue_id;
+    }
 }
 
 pub fn parse_request_header(request: &RemotingCommand) -> Option<SendMessageRequestHeader> {
@@ -307,7 +346,7 @@ mod tests {
             String::from("topic"),
             String::from("default_topic"),
             1,
-            0,
+            Some(0),
             0,
             0,
             0,
@@ -316,7 +355,7 @@ mod tests {
         assert_eq!(header.topic, "topic");
         assert_eq!(header.default_topic, "default_topic");
         assert_eq!(header.default_topic_queue_nums, 1);
-        assert_eq!(header.queue_id, 0);
+        assert_eq!(header.queue_id, Some(0));
         assert_eq!(header.sys_flag, 0);
         assert_eq!(header.born_timestamp, 0);
         assert_eq!(header.flag, 0);
@@ -329,7 +368,7 @@ mod tests {
             String::from("topic"),
             String::from("default_topic"),
             1,
-            0,
+            Some(0),
             0,
             0,
             0,
@@ -338,7 +377,7 @@ mod tests {
         assert_eq!(header_v2.b, "topic");
         assert_eq!(header_v2.c, "default_topic");
         assert_eq!(header_v2.d, 1);
-        assert_eq!(header_v2.e, 0);
+        assert_eq!(header_v2.e, Some(0));
         assert_eq!(header_v2.f, 0);
         assert_eq!(header_v2.g, 0);
         assert_eq!(header_v2.h, 0);
@@ -351,7 +390,7 @@ mod tests {
             String::from("topic"),
             String::from("default_topic"),
             1,
-            0,
+            Some(0),
             0,
             0,
             0,
@@ -361,7 +400,7 @@ mod tests {
         assert_eq!(header_v1.topic, "topic");
         assert_eq!(header_v1.default_topic, "default_topic");
         assert_eq!(header_v1.default_topic_queue_nums, 1);
-        assert_eq!(header_v1.queue_id, 0);
+        assert_eq!(header_v1.queue_id, Some(0));
         assert_eq!(header_v1.sys_flag, 0);
         assert_eq!(header_v1.born_timestamp, 0);
         assert_eq!(header_v1.flag, 0);

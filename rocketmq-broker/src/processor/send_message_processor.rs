@@ -101,9 +101,10 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
                 let mapping_context = self
                     .topic_queue_mapping_manager
                     .build_topic_queue_mapping_context(&request_header, true);
-                let rewrite_result = self
-                    .topic_queue_mapping_manager
-                    .rewrite_request_for_static_topic(&request_header, &mapping_context);
+                let rewrite_result = TopicQueueMappingManager::rewrite_request_for_static_topic(
+                    &mut request_header,
+                    &mapping_context,
+                );
                 if let Some(rewrite_result) = rewrite_result {
                     return Some(rewrite_result);
                 }
@@ -222,13 +223,13 @@ impl<MS: MessageStore + Send + Clone> SendMessageProcessor<MS> {
             .select_topic_config(request_header.topic().as_str())
             .unwrap();
         let mut queue_id = request_header.queue_id;
-        if queue_id < 0 {
-            queue_id = self.inner.random_queue_id(topic_config.write_queue_nums) as i32;
+        if queue_id.is_none() || queue_id.unwrap() < 0 {
+            queue_id = Some(self.inner.random_queue_id(topic_config.write_queue_nums) as i32);
         }
 
         let mut message_ext = MessageExtBrokerInner::default();
         message_ext.message_ext_inner.message.topic = request_header.topic().to_string();
-        message_ext.message_ext_inner.queue_id = queue_id;
+        message_ext.message_ext_inner.queue_id = *queue_id.as_ref().unwrap();
         let mut ori_props =
             MessageDecoder::string_to_message_properties(request_header.properties.as_ref());
         if self.handle_retry_and_dlq(
@@ -321,7 +322,7 @@ impl<MS: MessageStore + Send + Clone> SendMessageProcessor<MS> {
             response,
             &request,
             topic.as_str(),
-            queue_id,
+            *queue_id.as_ref().unwrap(),
         )
     }
 

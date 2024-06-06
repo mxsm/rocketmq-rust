@@ -18,16 +18,20 @@
 use std::{collections::HashMap, sync::Arc};
 
 use rocketmq_common::common::{broker::broker_config::BrokerConfig, config_manager::ConfigManager};
-use rocketmq_remoting::protocol::{
-    body::topic_info_wrapper::topic_queue_wrapper::TopicQueueMappingSerializeWrapper,
-    header::message_operation_header::TopicRequestHeaderTrait,
-    remoting_command::RemotingCommand,
-    static_topic::{
-        topic_queue_mapping_context::TopicQueueMappingContext,
-        topic_queue_mapping_detail::TopicQueueMappingDetail,
+use rocketmq_remoting::{
+    code::response_code::ResponseCode,
+    protocol::{
+        body::topic_info_wrapper::topic_queue_wrapper::TopicQueueMappingSerializeWrapper,
+        header::message_operation_header::TopicRequestHeaderTrait,
+        remoting_command::RemotingCommand,
+        static_topic::{
+            topic_queue_mapping_context::TopicQueueMappingContext,
+            topic_queue_mapping_detail::TopicQueueMappingDetail,
+        },
+        DataVersion, RemotingSerializable,
     },
-    DataVersion,
 };
+use tracing::{info, warn};
 
 use crate::broker_path_config_helper::get_topic_queue_mapping_path;
 
@@ -47,6 +51,35 @@ impl TopicQueueMappingManager {
         }
     }
 
+    pub(crate) fn rewrite_request_for_static_topic(
+        request_header: &mut impl TopicRequestHeaderTrait,
+        mapping_context: &TopicQueueMappingContext,
+    ) -> Option<RemotingCommand> {
+        mapping_context.mapping_detail.as_ref()?;
+
+        if !mapping_context.is_leader() {
+            let mapping_detail = mapping_context.mapping_detail.as_ref().unwrap();
+            return Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::NotLeaderForQueue,
+                format!(
+                    "{}-{:?} does not exit in request process of current broker {}",
+                    request_header.topic(),
+                    request_header.queue_id(),
+                    mapping_detail
+                        .topic_queue_mapping_info
+                        .bname
+                        .clone()
+                        .unwrap_or_default()
+                ),
+            ));
+        }
+        let mapping_item = mapping_context.leader_item.as_ref().unwrap();
+        request_header.set_queue_id(Some(mapping_item.queue_id));
+        None
+    }
+}
+
+impl TopicQueueMappingManager {
     pub(crate) fn build_topic_queue_mapping_context(
         &self,
         request_header: &impl TopicRequestHeaderTrait,
@@ -66,13 +99,8 @@ impl TopicQueueMappingManager {
         }
         let topic = request_header.topic();
 
-        let mut global_id: Option<i32> = None;
-        /*if let Some(header) = request_header
-            .as_any()
-            .downcast_ref::<TopicQueueRequestHeaderT>()
-        {
-            global_id = header.queue_id;
-        }*/
+        let mut global_id: Option<i32> = request_header.queue_id();
+
         if let Some(mapping_detail) = self.topic_queue_mapping_table.lock().get(&topic) {
             // it is not static topic
             if mapping_detail
@@ -164,41 +192,45 @@ impl TopicQueueMappingManager {
         }
     }
 
-    pub(crate) fn rewrite_request_for_static_topic(
-        &self,
-        _request_header: &impl TopicRequestHeaderTrait,
-        _mapping_context: &TopicQueueMappingContext,
-    ) -> Option<RemotingCommand> {
-        //TODO
-        None
-    }
-
     pub fn get_topic_queue_mapping(&self, topic: &str) -> Option<TopicQueueMappingDetail> {
         self.topic_queue_mapping_table.lock().get(topic).cloned()
+    }
+
+    pub fn delete(&self, topic: &str) {
+        let old = self.topic_queue_mapping_table.lock().remove(topic);
+        match old {
+            None => {
+                warn!(
+                    "delete topic queue mapping failed, static topic: {} not exists",
+                    topic
+                )
+            }
+            Some(value) => {
+                info!(
+                    "delete topic queue mapping OK, static topic queue mapping: {:?}",
+                    value
+                );
+                self.data_version.lock().next_version();
+                self.persist();
+            }
+        }
     }
 }
 
 //Fully implemented will be removed
-#[allow(unused_variables)]
 impl ConfigManager for TopicQueueMappingManager {
-    fn decode0(&mut self, key: &[u8], body: &[u8]) {
-        todo!()
-    }
-
-    fn stop(&mut self) -> bool {
-        todo!()
-    }
-
     fn config_file_path(&self) -> String {
         get_topic_queue_mapping_path(self.broker_config.store_path_root_dir.as_str())
     }
-
-    fn encode(&mut self) -> String {
-        todo!()
-    }
-
     fn encode_pretty(&self, pretty_format: bool) -> String {
-        todo!()
+        let wrapper = TopicQueueMappingSerializeWrapper::new(
+            Some(self.topic_queue_mapping_table.lock().clone()),
+            Some(self.data_version.lock().clone()),
+        );
+        match pretty_format {
+            true => wrapper.to_json_pretty(),
+            false => wrapper.to_json(),
+        }
     }
 
     fn decode(&self, json_string: &str) {
@@ -217,5 +249,62 @@ impl ConfigManager for TopicQueueMappingManager {
                     .insert(key.clone(), value.clone());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use rocketmq_common::common::broker::broker_config::BrokerConfig;
+
+    use super::*;
+
+    #[test]
+    fn new_creates_default_manager() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let manager = TopicQueueMappingManager::new(broker_config.clone());
+
+        assert_eq!(Arc::ptr_eq(&manager.broker_config, &broker_config), true);
+        assert_eq!(manager.data_version.lock().get_state_version(), 0);
+        assert_eq!(manager.topic_queue_mapping_table.lock().len(), 0);
+    }
+
+    #[test]
+    fn get_topic_queue_mapping_returns_none_for_non_existent_topic() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let manager = TopicQueueMappingManager::new(broker_config);
+
+        assert!(manager
+            .get_topic_queue_mapping("non_existent_topic")
+            .is_none());
+    }
+
+    #[test]
+    fn get_topic_queue_mapping_returns_mapping_for_existing_topic() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let manager = TopicQueueMappingManager::new(broker_config);
+        let detail = TopicQueueMappingDetail::default();
+        manager
+            .topic_queue_mapping_table
+            .lock()
+            .insert("existing_topic".to_string(), detail.clone());
+
+        assert!(manager.get_topic_queue_mapping("existing_topic").is_some());
+    }
+
+    #[test]
+    fn delete_removes_existing_topic() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let manager = TopicQueueMappingManager::new(broker_config);
+        let detail = TopicQueueMappingDetail::default();
+        manager
+            .topic_queue_mapping_table
+            .lock()
+            .insert("existing_topic".to_string(), detail.clone());
+
+        manager.delete("existing_topic");
+
+        assert!(manager.get_topic_queue_mapping("existing_topic").is_none());
     }
 }

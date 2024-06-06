@@ -47,3 +47,25 @@ impl TopicQueueMappingContext {
         }
     }
 }
+
+impl TopicQueueMappingContext {
+    pub fn is_leader(&self) -> bool {
+        if let Some(leader_item) = &self.leader_item {
+            match leader_item.bname {
+                None => {
+                    return false;
+                }
+                Some(ref broker_name) => match self.mapping_detail.as_ref() {
+                    None => return false,
+                    Some(inner) => match inner.topic_queue_mapping_info.bname {
+                        None => return false,
+                        Some(ref inner_bname) => {
+                            return inner_bname == broker_name;
+                        }
+                    },
+                },
+            }
+        }
+        false
+    }
+}
