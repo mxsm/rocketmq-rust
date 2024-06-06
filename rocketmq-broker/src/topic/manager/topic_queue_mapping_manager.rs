@@ -64,7 +64,7 @@ impl TopicQueueMappingManager {
             return Some(RemotingCommand::create_response_command_with_code_remark(
                 ResponseCode::NotLeaderForQueue,
                 format!(
-                    "{}-{} does not exit in request process of current broker {}",
+                    "{}-{:?} does not exit in request process of current broker {}",
                     request_header.topic(),
                     request_header.queue_id(),
                     mapping_detail.topic_queue_mapping_info.bname.clone().unwrap_or_default()
@@ -72,7 +72,7 @@ impl TopicQueueMappingManager {
             ));
         }
         let mapping_item = mapping_context.leader_item.as_ref().unwrap();
-        request_header.set_queue_id(mapping_item.queue_id);
+        request_header.set_queue_id(Some(mapping_item.queue_id));
         None
     }
 }
@@ -100,13 +100,10 @@ impl TopicQueueMappingManager {
         }
         let topic = request_header.topic();
 
-        let mut global_id: Option<i32> = None;
-        /*if let Some(header) = request_header
-            .as_any()
-            .downcast_ref::<TopicQueueRequestHeaderT>()
-        {
-            global_id = header.queue_id;
-        }*/
+        let mut global_id: Option<i32> = request_header.queue_id();
+        
+
+
         if let Some(mapping_detail) = self.topic_queue_mapping_table.lock().get(&topic) {
             // it is not static topic
             if mapping_detail

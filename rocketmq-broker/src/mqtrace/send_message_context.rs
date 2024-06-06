@@ -74,8 +74,8 @@ impl SendMessageContext {
     pub fn broker_addr(&mut self, broker_addr: String) {
         self.broker_addr = broker_addr;
     }
-    pub fn queue_id(&mut self, queue_id: i32) {
-        self.queue_id = Some(queue_id);
+    pub fn queue_id(&mut self, queue_id: Option<i32>) {
+        self.queue_id = queue_id;
     }
     pub fn queue_offset(&mut self, queue_offset: i64) {
         self.queue_offset = Some(queue_offset);

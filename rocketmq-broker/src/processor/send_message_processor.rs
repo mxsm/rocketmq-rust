@@ -220,13 +220,13 @@ impl<MS: MessageStore + Send + Clone> SendMessageProcessor<MS> {
             .select_topic_config(request_header.topic().as_str())
             .unwrap();
         let mut queue_id = request_header.queue_id;
-        if queue_id < 0 {
-            queue_id = self.inner.random_queue_id(topic_config.write_queue_nums) as i32;
+        if queue_id.is_none() || queue_id.unwrap() < 0 {
+            queue_id = Some(self.inner.random_queue_id(topic_config.write_queue_nums) as i32);
         }
 
         let mut message_ext = MessageExtBrokerInner::default();
         message_ext.message_ext_inner.message.topic = request_header.topic().to_string();
-        message_ext.message_ext_inner.queue_id = queue_id;
+        message_ext.message_ext_inner.queue_id = *queue_id.as_ref().unwrap();
         let mut ori_props =
             MessageDecoder::string_to_message_properties(request_header.properties.as_ref());
         if self.handle_retry_and_dlq(
@@ -319,7 +319,7 @@ impl<MS: MessageStore + Send + Clone> SendMessageProcessor<MS> {
             response,
             &request,
             topic.as_str(),
-            queue_id,
+            *queue_id.as_ref().unwrap(),
         )
     }
 
