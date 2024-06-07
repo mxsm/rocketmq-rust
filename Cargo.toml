@@ -67,3 +67,5 @@ dirs = "5.0"
 trait-variant = "0.1.2"
 
 once_cell = "1.19.0"
+
+mockall = "0.12.1"

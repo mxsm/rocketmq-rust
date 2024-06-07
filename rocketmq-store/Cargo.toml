@@ -61,3 +61,4 @@ memmap2 = "0.9.4"
 trait-variant.workspace = true
 [dev-dependencies]
 tempfile = "3.10.0"
+mockall = { workspace = true }

@@ -15,7 +15,12 @@
  * limitations under the License.
  */
 
-use std::{cell::Cell, collections::HashMap, mem, sync::Arc};
+use std::{
+    cell::Cell,
+    collections::HashMap,
+    mem,
+    sync::{atomic::AtomicU64, Arc},
+};
 
 use bytes::{Buf, Bytes, BytesMut};
 use rocketmq_common::{
@@ -167,6 +172,7 @@ pub struct CommitLog {
     consume_queue_store: ConsumeQueueStore,
     flush_manager: Arc<tokio::sync::Mutex<DefaultFlushManager>>,
     //flush_manager: Arc<parking_lot::Mutex<DefaultFlushManager>>,
+    begin_time_in_lock: Arc<AtomicU64>,
 }
 
 impl CommitLog {
@@ -203,11 +209,7 @@ impl CommitLog {
                 mapped_file_queue,
                 store_checkpoint,
             ))),
-            /*flush_manager: Arc::new(parking_lot::Mutex::new(DefaultFlushManager::new(
-                message_store_config,
-                mapped_file_queue,
-                store_checkpoint,
-            ))),*/
+            begin_time_in_lock: Arc::new(AtomicU64::new(0)),
         }
     }
 }
@@ -319,6 +321,10 @@ impl CommitLog {
         msg.encoded_buff = Some(encoded_buff);
         let put_message_context = PutMessageContext::new(topic_queue_key);
         let lock = self.put_message_lock.lock().await;
+        self.begin_time_in_lock.store(
+            time_utils::get_current_millis(),
+            std::sync::atomic::Ordering::Release,
+        );
         let start_time = Instant::now();
         // Here settings are stored timestamp, in order to ensure an orderly global
         if !self.message_store_config.duplication_enable {
@@ -333,6 +339,13 @@ impl CommitLog {
 
         if mapped_file.is_none() {
             drop(lock);
+            error!(
+                "create mapped file error, topic: {}  clientAddr: {}",
+                msg.topic(),
+                msg.born_host()
+            );
+            self.begin_time_in_lock
+                .store(0, std::sync::atomic::Ordering::Release);
             return PutMessageResult::new_default(PutMessageStatus::CreateMappedFileFailed);
         }
 
@@ -353,6 +366,8 @@ impl CommitLog {
                     .mapped_file_queue
                     .get_last_mapped_file_mut_start_offset(0, true);
                 if mapped_file.is_none() {
+                    self.begin_time_in_lock
+                        .store(0, std::sync::atomic::Ordering::Release);
                     error!(
                         "create mapped file error, topic: {}  clientAddr: {}",
                         msg.topic(),
@@ -379,15 +394,21 @@ impl CommitLog {
             }
             AppendMessageStatus::MessageSizeExceeded
             | AppendMessageStatus::PropertiesSizeExceeded => {
+                self.begin_time_in_lock
+                    .store(0, std::sync::atomic::Ordering::Release);
                 PutMessageResult::new_append_result(PutMessageStatus::MessageIllegal, Some(result))
             }
             AppendMessageStatus::UnknownError => {
+                self.begin_time_in_lock
+                    .store(0, std::sync::atomic::Ordering::Release);
                 PutMessageResult::new_append_result(PutMessageStatus::UnknownError, Some(result))
             }
         };
         let elapsed_time_in_lock = start_time.elapsed().as_millis() as u64;
         drop(lock);
-        if elapsed_time_in_lock > 100 {
+        self.begin_time_in_lock
+            .store(0, std::sync::atomic::Ordering::Release);
+        if elapsed_time_in_lock > 500 {
             warn!(
                 "[NOTIFYME]putMessage in lock cost time(ms)={}, bodyLength={} \
                  AppendMessageResult={:?}",
@@ -872,6 +893,10 @@ impl CommitLog {
 
     pub fn check_self(&self) {
         self.mapped_file_queue.check_self();
+    }
+
+    pub fn begin_time_in_lock(&self) -> &Arc<AtomicU64> {
+        &self.begin_time_in_lock
     }
 }
 

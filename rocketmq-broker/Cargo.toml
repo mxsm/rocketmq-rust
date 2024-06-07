@@ -56,6 +56,9 @@ dirs.workspace = true
 
 local-ip-address = "0.6.1"
 
+[dev-dependencies]
+mockall = "0.12.1"
+
 [[bin]]
 name = "rocketmq-broker-rust"
 path = "src/bin/broker_bootstrap_server.rs"

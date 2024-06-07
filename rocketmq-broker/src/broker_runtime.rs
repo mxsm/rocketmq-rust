@@ -47,6 +47,10 @@ use crate::{
     broker::broker_hook::BrokerShutdownHook,
     client::manager::producer_manager::ProducerManager,
     filter::manager::consumer_filter_manager::ConsumerFilterManager,
+    hook::{
+        batch_check_before_put_message::BatchCheckBeforePutMessageHook,
+        check_before_put_message::CheckBeforePutMessageHook,
+    },
     offset::manager::{
         consumer_offset_manager::ConsumerOffsetManager,
         consumer_order_info_manager::ConsumerOrderInfoManager,
@@ -260,6 +264,7 @@ impl BrokerRuntime {
             unimplemented!()
         }
         if self.message_store.is_some() {
+            self.register_message_store_hook();
             self.message_store.as_mut().unwrap().load().await;
         }
 
@@ -277,6 +282,18 @@ impl BrokerRuntime {
             self.initial_rpc_hooks();
         }
         result
+    }
+
+    pub fn register_message_store_hook(&mut self) {
+        if let Some(ref mut message_store) = self.message_store {
+            message_store.set_put_message_hook(Box::new(CheckBeforePutMessageHook::new(
+                message_store.clone(),
+                self.message_store_config.clone(),
+            )));
+            message_store.set_put_message_hook(Box::new(BatchCheckBeforePutMessageHook::new(
+                self.topic_config_manager.topic_config_table(),
+            )));
+        }
     }
 
     fn initialize_remoting_server(&mut self) {

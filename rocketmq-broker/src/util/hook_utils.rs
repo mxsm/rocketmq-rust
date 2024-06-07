@@ -132,11 +132,11 @@ impl HookUtils {
                 PutMessageStatus::MessageIllegal,
             ));
         }
-        /*if message_store.is_os_page_cache_busy() {
-            return return Some(PutMessageResult::new_default(
+        if message_store.is_os_page_cache_busy() {
+            return Some(PutMessageResult::new_default(
                 PutMessageStatus::OsPageCacheBusy,
             ));
-        }*/
+        }
 
         None
     }
@@ -399,10 +399,12 @@ impl HookUtils {
 mod tests {
     use std::{collections::HashMap, error::Error, sync::Arc};
 
+    use parking_lot::RwLock;
     use rocketmq_common::common::{config::TopicConfig, message::message_single::MessageExt};
     use rocketmq_store::{
         base::{message_result::PutMessageResult, message_status_enum::PutMessageStatus},
         config::message_store_config::MessageStoreConfig,
+        hook::put_message_hook::BoxedPutMessageHook,
         log_file::MessageStore,
         store::running_flags::RunningFlags,
     };
@@ -463,6 +465,14 @@ mod tests {
 
         fn is_shutdown(&self) -> bool {
             false
+        }
+
+        fn get_put_message_hook_list(&self) -> Arc<RwLock<Vec<BoxedPutMessageHook>>> {
+            todo!()
+        }
+
+        fn set_put_message_hook(&self, put_message_hook: BoxedPutMessageHook) {
+            todo!()
         }
         // Implement required methods...
     }
