@@ -25,6 +25,18 @@ pub struct ScheduleMessageService {
     pub(crate) broker_config: Arc<BrokerConfig>,
 }
 
+impl ScheduleMessageService {
+    pub fn delay_level2queue_id(delay_level: i32) -> i32 {
+        delay_level - 1
+    }
+}
+
+impl ScheduleMessageService {
+    pub fn get_max_delay_level(&self) -> i32 {
+        0
+    }
+}
+
 impl ConfigManager for ScheduleMessageService {
     fn decode0(&mut self, _key: &[u8], _body: &[u8]) {
         todo!()

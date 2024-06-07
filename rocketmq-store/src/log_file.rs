@@ -19,7 +19,7 @@ use rocketmq_common::{
     common::message::message_single::MessageExtBrokerInner, TimeUtils::get_current_millis,
 };
 
-use crate::base::message_result::PutMessageResult;
+use crate::{base::message_result::PutMessageResult, store::running_flags::RunningFlags};
 
 pub mod commit_log;
 pub mod flush_manager_impl;
@@ -57,4 +57,12 @@ pub trait RocketMQMessageStore: Clone + 'static {
     async fn put_message(&mut self, msg: MessageExtBrokerInner) -> PutMessageResult;
 
     fn truncate_files(&mut self, offset_to_truncate: i64) -> bool;
+
+    fn is_os_page_cache_busy(&self) -> bool {
+        false
+    }
+
+    fn get_running_flags(&self) -> &RunningFlags;
+
+    fn is_shutdown(&self) -> bool;
 }
