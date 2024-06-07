@@ -546,6 +546,15 @@ impl MessageStore for DefaultMessageStore {
     fn truncate_files(&mut self, offset_to_truncate: i64) -> bool {
         unimplemented!()
     }
+
+    fn get_running_flags(&self) -> &RunningFlags {
+        self.running_flags.as_ref()
+    }
+
+    fn is_shutdown(&self) -> bool {
+        // todo!()
+        false
+    }
 }
 
 #[derive(Clone)]

@@ -90,6 +90,13 @@ impl Message {
             None => 0,
         }
     }
+
+    pub fn set_delay_time_level(&mut self, level: i32) {
+        self.properties.insert(
+            MessageConst::PROPERTY_DELAY_TIME_LEVEL.to_string(),
+            level.to_string(),
+        );
+    }
 }
 
 #[allow(unused_variables)]

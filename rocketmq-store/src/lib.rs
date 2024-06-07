@@ -30,6 +30,6 @@ pub mod message_store;
 mod queue;
 pub(crate) mod services;
 pub mod status;
-mod store;
+pub mod store;
 pub mod store_path_config_helper;
 pub mod timer;
