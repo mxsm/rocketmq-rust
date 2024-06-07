@@ -501,7 +501,7 @@ mod tests {
 
         assert_eq!(
             result.unwrap().put_message_status(),
-            PutMessageStatus::ServiceNotAvailable
+            PutMessageStatus::MessageIllegal
         );
     }
 
