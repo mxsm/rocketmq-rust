@@ -31,6 +31,7 @@ use std::{
 
 use bytes::Buf;
 use log::info;
+use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_common::{
     common::{
         broker::broker_config::BrokerConfig,
@@ -72,7 +73,7 @@ use crate::{
 pub struct DefaultMessageStore {
     message_store_config: Arc<MessageStoreConfig>,
     broker_config: Arc<BrokerConfig>,
-    put_message_hook_list: Arc<Vec<BoxedPutMessageHook>>,
+    put_message_hook_list: Arc<parking_lot::RwLock<Vec<BoxedPutMessageHook>>>,
     topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
     //message_store_runtime: Option<RocketMQRuntime>,
     commit_log: CommitLog,
@@ -169,7 +170,7 @@ impl DefaultMessageStore {
         Self {
             message_store_config: message_store_config.clone(),
             broker_config,
-            put_message_hook_list: Arc::new(vec![]),
+            put_message_hook_list: Arc::new(parking_lot::RwLock::new(vec![])),
             topic_config_table,
             // message_store_runtime: Some(RocketMQRuntime::new_multi(10, "message-store-thread")),
             commit_log,
@@ -514,7 +515,7 @@ impl MessageStore for DefaultMessageStore {
     }
 
     async fn put_message(&mut self, msg: MessageExtBrokerInner) -> PutMessageResult {
-        for hook in self.put_message_hook_list.iter() {
+        for hook in self.put_message_hook_list.read().iter() {
             if let Some(result) = hook.execute_before_put_message(&msg.message_ext_inner) {
                 return result;
             }
@@ -547,6 +548,12 @@ impl MessageStore for DefaultMessageStore {
         unimplemented!()
     }
 
+    fn is_os_page_cache_busy(&self) -> bool {
+        let begin = self.commit_log.begin_time_in_lock().load(Ordering::Relaxed);
+        let diff = get_current_millis() - begin;
+        diff < 10000000 && diff > self.message_store_config.os_page_cache_busy_timeout_mills
+    }
+
     fn get_running_flags(&self) -> &RunningFlags {
         self.running_flags.as_ref()
     }
@@ -554,6 +561,14 @@ impl MessageStore for DefaultMessageStore {
     fn is_shutdown(&self) -> bool {
         // todo!()
         false
+    }
+
+    fn get_put_message_hook_list(&self) -> Arc<parking_lot::RwLock<Vec<BoxedPutMessageHook>>> {
+        self.put_message_hook_list.clone()
+    }
+
+    fn set_put_message_hook(&self, put_message_hook: BoxedPutMessageHook) {
+        self.put_message_hook_list.write().push(put_message_hook);
     }
 }
 

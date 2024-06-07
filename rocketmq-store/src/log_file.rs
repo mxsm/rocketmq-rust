@@ -15,17 +15,21 @@
  * limitations under the License.
  */
 
+use std::sync::Arc;
+
 use rocketmq_common::{
     common::message::message_single::MessageExtBrokerInner, TimeUtils::get_current_millis,
 };
 
-use crate::{base::message_result::PutMessageResult, store::running_flags::RunningFlags};
+use crate::{
+    base::message_result::PutMessageResult, hook::put_message_hook::BoxedPutMessageHook,
+    store::running_flags::RunningFlags,
+};
 
 pub mod commit_log;
 pub mod flush_manager_impl;
 pub mod mapped_file;
 
-#[allow(async_fn_in_trait)]
 #[trait_variant::make(MessageStore: Send)]
 pub trait RocketMQMessageStore: Clone + 'static {
     /// Load previously stored messages.
@@ -65,4 +69,8 @@ pub trait RocketMQMessageStore: Clone + 'static {
     fn get_running_flags(&self) -> &RunningFlags;
 
     fn is_shutdown(&self) -> bool;
+
+    fn get_put_message_hook_list(&self) -> Arc<parking_lot::RwLock<Vec<BoxedPutMessageHook>>>;
+
+    fn set_put_message_hook(&self, put_message_hook: BoxedPutMessageHook);
 }
