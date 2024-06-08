@@ -93,7 +93,6 @@ impl<'de> Deserialize<'de> for ConsumeFromWhere {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
