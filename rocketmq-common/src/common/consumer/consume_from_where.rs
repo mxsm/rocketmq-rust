@@ -92,3 +92,31 @@ impl<'de> Deserialize<'de> for ConsumeFromWhere {
         deserializer.deserialize_str(ConsumeFromWhereVisitor)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn serialize_consume_from_where() {
+        let consume_from_where = ConsumeFromWhere::ConsumeFromLastOffset;
+        let serialized = serde_json::to_string(&consume_from_where).unwrap();
+        assert_eq!(serialized, "\"CONSUME_FROM_LAST_OFFSET\"");
+    }
+
+    #[test]
+    fn deserialize_consume_from_where() {
+        let data = json!("CONSUME_FROM_LAST_OFFSET");
+        let consume_from_where: ConsumeFromWhere = serde_json::from_value(data).unwrap();
+        assert_eq!(consume_from_where, ConsumeFromWhere::ConsumeFromLastOffset);
+    }
+
+    #[test]
+    fn deserialize_invalid_consume_from_where() {
+        let data = json!("INVALID_VALUE");
+        let result: Result<ConsumeFromWhere, _> = serde_json::from_value(data);
+        assert!(result.is_err());
+    }
+}
