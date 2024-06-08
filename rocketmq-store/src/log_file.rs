@@ -23,7 +23,7 @@ use rocketmq_common::{
 
 use crate::{
     base::message_result::PutMessageResult, hook::put_message_hook::BoxedPutMessageHook,
-    store::running_flags::RunningFlags,
+    stats::broker_stats_manager::BrokerStatsManager, store::running_flags::RunningFlags,
 };
 
 pub mod commit_log;
@@ -73,4 +73,6 @@ pub trait RocketMQMessageStore: Clone + 'static {
     fn get_put_message_hook_list(&self) -> Arc<parking_lot::RwLock<Vec<BoxedPutMessageHook>>>;
 
     fn set_put_message_hook(&self, put_message_hook: BoxedPutMessageHook);
+
+    fn get_broker_stats_manager(&self) -> Option<Arc<BrokerStatsManager>>;
 }

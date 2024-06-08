@@ -144,6 +144,7 @@ impl StatsItem {
                 cs_list_hour_clone.clone(),
             );
         });
+
         thread::spawn(move || loop {
             let sleep_time = Self::compute_next_morning_time_millis()
                 - SystemTime::now()

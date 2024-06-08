@@ -18,6 +18,7 @@ pub mod call_snapshot;
 pub mod moment_stats_item;
 pub mod moment_stats_item_set;
 pub mod stats_item;
+pub mod stats_item_set;
 pub mod stats_snapshot;
 
 pub struct Stats;
