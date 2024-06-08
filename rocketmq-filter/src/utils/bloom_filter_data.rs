@@ -42,3 +42,54 @@ impl BloomFilterData {
         self.bit_num
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_creates_bloom_filter_data_with_given_values() {
+        let bit_pos = vec![1, 2, 3];
+        let bit_num = 10;
+        let bloom_filter_data = BloomFilterData::new(bit_pos.clone(), bit_num);
+
+        assert_eq!(bloom_filter_data.bit_pos(), &bit_pos);
+        assert_eq!(bloom_filter_data.bit_num(), bit_num);
+    }
+
+    #[test]
+    fn set_bit_pos_updates_bit_pos() {
+        let mut bloom_filter_data = BloomFilterData::new(vec![1, 2, 3], 10);
+        let new_bit_pos = vec![4, 5, 6];
+
+        bloom_filter_data.set_bit_pos(new_bit_pos.clone());
+
+        assert_eq!(bloom_filter_data.bit_pos(), &new_bit_pos);
+    }
+
+    #[test]
+    fn set_bit_num_updates_bit_num() {
+        let mut bloom_filter_data = BloomFilterData::new(vec![1, 2, 3], 10);
+        let new_bit_num = 20;
+
+        bloom_filter_data.set_bit_num(new_bit_num);
+
+        assert_eq!(bloom_filter_data.bit_num(), new_bit_num);
+    }
+
+    #[test]
+    fn bit_pos_returns_bit_pos() {
+        let bit_pos = vec![1, 2, 3];
+        let bloom_filter_data = BloomFilterData::new(bit_pos.clone(), 10);
+
+        assert_eq!(bloom_filter_data.bit_pos(), &bit_pos);
+    }
+
+    #[test]
+    fn bit_num_returns_bit_num() {
+        let bit_num = 10;
+        let bloom_filter_data = BloomFilterData::new(vec![1, 2, 3], bit_num);
+
+        assert_eq!(bloom_filter_data.bit_num(), bit_num);
+    }
+}
