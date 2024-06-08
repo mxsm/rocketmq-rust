@@ -40,6 +40,7 @@ pub mod mix_all;
 pub mod mq_version;
 pub mod namesrv;
 pub mod server;
+pub mod stats;
 pub mod sys_flag;
 pub mod thread;
 pub mod topic;
