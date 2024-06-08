@@ -1,4 +1,3 @@
-
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
@@ -16,48 +15,47 @@
  * limitations under the License.
  */
 
- #[derive(Debug, PartialEq, Copy, Clone)]
- pub struct CallSnapshot {
-     timestamp: u64,
-     times: u64,
-     value: u64,
- }
- 
- impl CallSnapshot {
-     pub fn new(timestamp: u64, times: u64, value: u64) -> Self {
-         CallSnapshot {
-             timestamp,
-             times,
-             value,
-         }
-     }
- 
-     // Getter for timestamp
-     pub fn get_timestamp(&self) -> u64 {
-         self.timestamp
-     }
- 
-     // Getter for times
-     pub fn get_times(&self) -> u64 {
-         self.times
-     }
- 
-     // Getter for value
-     pub fn get_value(&self) -> u64 {
-         self.value
-     }
- }
- 
- #[cfg(test)]
- mod tests {
-     use super::*;
- 
-     #[test]
-     fn call_snapshot_initializes_correctly() {
-         let snapshot = CallSnapshot::new(100, 200, 300);
-         assert_eq!(snapshot.get_timestamp(), 100);
-         assert_eq!(snapshot.get_times(), 200);
-         assert_eq!(snapshot.get_value(), 300);
-     }
- }
- 
+#[derive(Debug, PartialEq, Copy, Clone)]
+pub struct CallSnapshot {
+    timestamp: u64,
+    times: u64,
+    value: u64,
+}
+
+impl CallSnapshot {
+    pub fn new(timestamp: u64, times: u64, value: u64) -> Self {
+        CallSnapshot {
+            timestamp,
+            times,
+            value,
+        }
+    }
+
+    // Getter for timestamp
+    pub fn get_timestamp(&self) -> u64 {
+        self.timestamp
+    }
+
+    // Getter for times
+    pub fn get_times(&self) -> u64 {
+        self.times
+    }
+
+    // Getter for value
+    pub fn get_value(&self) -> u64 {
+        self.value
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn call_snapshot_initializes_correctly() {
+        let snapshot = CallSnapshot::new(100, 200, 300);
+        assert_eq!(snapshot.get_timestamp(), 100);
+        assert_eq!(snapshot.get_times(), 200);
+        assert_eq!(snapshot.get_value(), 300);
+    }
+}
