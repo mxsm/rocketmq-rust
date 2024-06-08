@@ -39,7 +39,7 @@ use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_store::{
     base::store_enum::StoreType, config::message_store_config::MessageStoreConfig,
     log_file::MessageStore, message_store::default_message_store::DefaultMessageStore,
-    timer::timer_message_store::TimerMessageStore,
+    stats::broker_stats_manager::BrokerStatsManager, timer::timer_message_store::TimerMessageStore,
 };
 use tracing::{info, warn};
 
@@ -91,6 +91,7 @@ pub(crate) struct BrokerRuntime {
     drop: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
     shutdown_hook: Option<BrokerShutdownHook>,
+    broker_stats_manager: Arc<BrokerStatsManager>,
 }
 
 impl Clone for BrokerRuntime {
@@ -114,6 +115,7 @@ impl Clone for BrokerRuntime {
             drop: self.drop.clone(),
             shutdown: self.shutdown.clone(),
             shutdown_hook: self.shutdown_hook.clone(),
+            broker_stats_manager: self.broker_stats_manager.clone(),
         }
     }
 }
@@ -139,7 +141,7 @@ impl BrokerRuntime {
             server_config: server_config.clone(),
             topic_queue_mapping_manager: topic_queue_mapping_manager.clone(),
         });
-
+        let broker_stats_manager = Arc::new(BrokerStatsManager::new(broker_config.clone()));
         Self {
             broker_config: broker_config.clone(),
             message_store_config,
@@ -162,6 +164,7 @@ impl BrokerRuntime {
             drop: Arc::new(AtomicBool::new(false)),
             shutdown: Arc::new(AtomicBool::new(false)),
             shutdown_hook: None,
+            broker_stats_manager,
         }
     }
 
@@ -243,6 +246,7 @@ impl BrokerRuntime {
                 self.message_store_config.clone(),
                 self.broker_config.clone(),
                 self.topic_config_manager.topic_config_table(),
+                Some(self.broker_stats_manager.clone()),
             );
             self.topic_config_manager
                 .set_message_store(Some(message_store.clone()));

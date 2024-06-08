@@ -43,9 +43,7 @@ use rocketmq_remoting::{
     },
     runtime::{processor::RequestProcessor, server::ConnectionHandlerContext},
 };
-use rocketmq_store::{
-    log_file::MessageStore, status::manager::broker_stats_manager::BrokerStatsManager,
-};
+use rocketmq_store::{log_file::MessageStore, stats::broker_stats_manager::BrokerStatsManager};
 use tracing::{info, warn};
 
 use self::client_manage_processor::ClientManageProcessor;

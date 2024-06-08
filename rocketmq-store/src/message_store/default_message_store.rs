@@ -63,6 +63,7 @@ use crate::{
         build_consume_queue::CommitLogDispatcherBuildConsumeQueue,
         local_file_consume_queue_store::ConsumeQueueStore, ConsumeQueueStoreTrait,
     },
+    stats::broker_stats_manager::BrokerStatsManager,
     store::running_flags::RunningFlags,
     store_path_config_helper::{
         get_abort_file, get_store_checkpoint, get_store_path_consume_queue,
@@ -93,6 +94,7 @@ pub struct DefaultMessageStore {
     clean_commit_log_service: Arc<CleanCommitLogService>,
     correct_logic_offset_service: Arc<CorrectLogicOffsetService>,
     clean_consume_queue_service: Arc<CleanConsumeQueueService>,
+    broker_stats_manager: Option<Arc<BrokerStatsManager>>,
 }
 
 impl Clone for DefaultMessageStore {
@@ -118,6 +120,7 @@ impl Clone for DefaultMessageStore {
             clean_commit_log_service: self.clean_commit_log_service.clone(),
             correct_logic_offset_service: self.correct_logic_offset_service.clone(),
             clean_consume_queue_service: self.clean_consume_queue_service.clone(),
+            broker_stats_manager: self.broker_stats_manager.clone(),
         }
     }
 }
@@ -127,6 +130,7 @@ impl DefaultMessageStore {
         message_store_config: Arc<MessageStoreConfig>,
         broker_config: Arc<BrokerConfig>,
         topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
+        broker_stats_manager: Option<Arc<BrokerStatsManager>>,
     ) -> Self {
         let running_flags = Arc::new(RunningFlags::new());
         let store_checkpoint = Arc::new(
@@ -192,6 +196,7 @@ impl DefaultMessageStore {
             clean_commit_log_service: Arc::new(CleanCommitLogService {}),
             correct_logic_offset_service: Arc::new(CorrectLogicOffsetService {}),
             clean_consume_queue_service: Arc::new(CleanConsumeQueueService {}),
+            broker_stats_manager,
         }
     }
 
@@ -569,6 +574,10 @@ impl MessageStore for DefaultMessageStore {
 
     fn set_put_message_hook(&self, put_message_hook: BoxedPutMessageHook) {
         self.put_message_hook_list.write().push(put_message_hook);
+    }
+
+    fn get_broker_stats_manager(&self) -> Option<Arc<BrokerStatsManager>> {
+        self.broker_stats_manager.clone()
     }
 }
 

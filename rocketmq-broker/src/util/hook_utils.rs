@@ -406,6 +406,7 @@ mod tests {
         config::message_store_config::MessageStoreConfig,
         hook::put_message_hook::BoxedPutMessageHook,
         log_file::MessageStore,
+        stats::broker_stats_manager::BrokerStatsManager,
         store::running_flags::RunningFlags,
     };
 
@@ -472,6 +473,10 @@ mod tests {
         }
 
         fn set_put_message_hook(&self, put_message_hook: BoxedPutMessageHook) {
+            todo!()
+        }
+
+        fn get_broker_stats_manager(&self) -> Option<Arc<BrokerStatsManager>> {
             todo!()
         }
         // Implement required methods...

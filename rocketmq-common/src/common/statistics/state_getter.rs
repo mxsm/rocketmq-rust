@@ -20,7 +20,7 @@
 ///
 /// This trait is used to determine whether a specific instance, identified by its `instance_id`,
 /// `group`, and `topic`, is online.
-pub trait StateGetter {
+pub trait StateGetter: Send + Sync + 'static {
     /// Checks if the specified instance is online.
     ///
     /// # Arguments

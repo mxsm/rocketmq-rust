@@ -17,7 +17,7 @@
 use std::{any::Any, collections::HashMap};
 
 use rocketmq_common::common::message::message_enum::MessageType;
-use rocketmq_store::status::StatsType;
+use rocketmq_store::stats::stats_type::StatsType;
 
 #[derive(Debug, Default)]
 pub struct SendMessageContext {

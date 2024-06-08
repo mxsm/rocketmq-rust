@@ -49,7 +49,7 @@ use rocketmq_remoting::{
 };
 use rocketmq_store::{
     base::message_result::PutMessageResult, log_file::MessageStore,
-    status::manager::broker_stats_manager::BrokerStatsManager,
+    stats::broker_stats_manager::BrokerStatsManager,
 };
 use tracing::debug;
 

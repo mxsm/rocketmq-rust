@@ -14,22 +14,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#![allow(dead_code)]
-#![allow(unused_variables)]
 
-pub mod base;
-pub mod config;
-mod consume_queue;
-mod filter;
-pub mod hook;
-mod index;
-mod kv;
-pub mod log_file;
-pub(crate) mod message_encoder;
-pub mod message_store;
-mod queue;
-pub(crate) mod services;
-pub mod stats;
-pub mod store;
-pub mod store_path_config_helper;
-pub mod timer;
+/// `Interceptor` is a trait that provides a common interface for objects that can intercept and
+/// modify a sequence of integers. It provides two methods: `inc` and `reset`.
+pub trait Interceptor {
+    /// The `inc` method accepts a vector of i64 integers, `deltas`, and applies some operation to
+    /// them. The specifics of the operation are determined by the implementing type.
+    ///
+    /// # Arguments
+    ///
+    /// * `deltas` - A vector of i64 integers to be intercepted and modified.
+    fn inc(&self, deltas: Vec<i64>);
+
+    /// The `reset` method resets the state of the implementing object. The specifics of what
+    /// "resetting" means are determined by the implementing type.
+    fn reset(&self);
+}
