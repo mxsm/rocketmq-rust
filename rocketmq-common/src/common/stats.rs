@@ -16,6 +16,7 @@
  */
 
 pub mod moment_stats_item;
+pub mod stats_snapshot;
 
 pub struct Stats;
 
