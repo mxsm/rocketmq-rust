@@ -74,3 +74,45 @@ impl StatsSnapshot {
         self.times = times;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stats_snapshot_initializes_correctly() {
+        let snapshot = StatsSnapshot::new();
+        assert_eq!(snapshot.get_sum(), 0);
+        assert_eq!(snapshot.get_tps(), 0.0);
+        assert_eq!(snapshot.get_times(), 0);
+        assert_eq!(snapshot.get_avgpt(), 0.0);
+    }
+
+    #[test]
+    fn stats_snapshot_updates_sum_correctly() {
+        let mut snapshot = StatsSnapshot::new();
+        snapshot.set_sum(100);
+        assert_eq!(snapshot.get_sum(), 100);
+    }
+
+    #[test]
+    fn stats_snapshot_updates_tps_correctly() {
+        let mut snapshot = StatsSnapshot::new();
+        snapshot.set_tps(1.5);
+        assert_eq!(snapshot.get_tps(), 1.5);
+    }
+
+    #[test]
+    fn stats_snapshot_updates_avgpt_correctly() {
+        let mut snapshot = StatsSnapshot::new();
+        snapshot.set_avgpt(2.5);
+        assert_eq!(snapshot.get_avgpt(), 2.5);
+    }
+
+    #[test]
+    fn stats_snapshot_updates_times_correctly() {
+        let mut snapshot = StatsSnapshot::new();
+        snapshot.set_times(200);
+        assert_eq!(snapshot.get_times(), 200);
+    }
+}
