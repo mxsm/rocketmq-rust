@@ -109,7 +109,7 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
         match request_code {
             RequestCode::ConsumerSendMsgBack => self.inner.consumer_send_msg_back(&ctx, &request),
             _ => {
-                let mut request_header = parse_request_header(&request).unwrap();
+                let mut request_header = parse_request_header(&request)?;
                 let mapping_context = self
                     .topic_queue_mapping_manager
                     .build_topic_queue_mapping_context(&request_header, true);
