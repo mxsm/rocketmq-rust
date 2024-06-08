@@ -22,6 +22,12 @@ pub struct StatsSnapshot {
     avgpt: f64,
 }
 
+impl Default for StatsSnapshot {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StatsSnapshot {
     pub fn new() -> Self {
         StatsSnapshot {
