@@ -15,6 +15,8 @@
  * limitations under the License.
  */
 
+pub mod moment_stats_item;
+
 pub struct Stats;
 
 impl Stats {

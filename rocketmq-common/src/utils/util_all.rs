@@ -18,7 +18,7 @@
 use std::{
     env, fs,
     path::{Path, PathBuf},
-    time::Instant,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use chrono::{DateTime, Datelike, Local, TimeZone, Timelike, Utc};
@@ -222,6 +222,16 @@ fn create_dir_if_not_exist(dir_name: &str) {
         }
     }
 }
+
+pub fn compute_next_minutes_time_millis() -> u64 {
+    let now = SystemTime::now();
+    let duration_since_epoch = now.duration_since(UNIX_EPOCH).unwrap();
+    let millis_since_epoch = duration_since_epoch.as_millis() as u64;
+
+    let millis_in_minute = 60 * 1000;
+    ((millis_since_epoch / millis_in_minute) + 1) * millis_in_minute
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Instant;
@@ -281,5 +291,17 @@ mod tests {
         ensure_dir_ok(dir_name);
         assert_eq!(is_path_exists(dir_name), true);
         std::fs::remove_dir(dir_name).unwrap();
+    }
+
+    #[test]
+    fn test_compute_next_minutes_time_millis() {
+        let next_minute = compute_next_minutes_time_millis();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        assert!(next_minute > now);
+        assert_eq!(next_minute % (60 * 1000), 0);
     }
 }
