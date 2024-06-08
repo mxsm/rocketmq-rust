@@ -27,6 +27,7 @@ use tracing::info;
 
 use crate::{TimeUtils::get_current_millis, UtilAll::compute_next_minutes_time_millis};
 
+#[derive(Clone)]
 pub struct MomentStatsItem {
     value: Arc<AtomicI64>,
     stats_name: String,

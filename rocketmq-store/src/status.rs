@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 pub mod manager;
+pub mod state_getter;
 
 #[derive(Debug, PartialEq, Copy, Clone, Default)]
 pub enum StatsType {
