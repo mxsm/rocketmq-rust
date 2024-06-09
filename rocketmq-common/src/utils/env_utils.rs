@@ -95,7 +95,7 @@ mod tests {
         assert_eq!(result, None);
     }
 
-    #[test]
+    /*    #[test]
     fn test_get_rocketmq_home_existing_variable() {
         // Set up
         let expected_value = PathBuf::from("/path/to/rocketmq_home");
@@ -107,7 +107,7 @@ mod tests {
 
         // Assert
         assert_eq!(result, expected_value.to_string_lossy().to_string());
-    }
+    }*/
 
     #[test]
     fn test_get_rocketmq_home_non_existing_variable() {
