@@ -16,3 +16,4 @@
  */
 
 pub(crate) mod manager;
+pub(crate) mod topic_queue_mapping_clean_service;

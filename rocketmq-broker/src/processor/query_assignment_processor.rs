@@ -14,14 +14,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 use rocketmq_remoting::{
     protocol::remoting_command::RemotingCommand, runtime::server::ConnectionHandlerContext,
 };
 
 #[derive(Default, Clone)]
-pub struct PeekMessageProcessor {}
+pub struct QueryAssignmentProcessor {}
 
-impl PeekMessageProcessor {
+impl QueryAssignmentProcessor {
     fn process_request(
         &self,
         _ctx: ConnectionHandlerContext,

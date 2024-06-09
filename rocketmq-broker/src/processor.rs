@@ -50,7 +50,17 @@ use self::client_manage_processor::ClientManageProcessor;
 use crate::{
     mqtrace::{send_message_context::SendMessageContext, send_message_hook::SendMessageHook},
     processor::{
-        admin_broker_processor::AdminBrokerProcessor, send_message_processor::SendMessageProcessor,
+        ack_message_processor::AckMessageProcessor, admin_broker_processor::AdminBrokerProcessor,
+        change_invisible_time_processor::ChangeInvisibleTimeProcessor,
+        consumer_manage_processor::ConsumerManageProcessor,
+        end_transaction_processor::EndTransactionProcessor,
+        notification_processor::NotificationProcessor,
+        peek_message_processor::PeekMessageProcessor, polling_info_processor::PollingInfoProcessor,
+        pop_message_processor::PopMessageProcessor, pull_message_processor::PullMessageProcessor,
+        query_assignment_processor::QueryAssignmentProcessor,
+        query_message_processor::QueryMessageProcessor,
+        reply_message_processor::ReplyMessageProcessor,
+        send_message_processor::SendMessageProcessor,
     },
     topic::manager::topic_config_manager::TopicConfigManager,
 };
@@ -59,11 +69,15 @@ pub(crate) mod ack_message_processor;
 pub(crate) mod admin_broker_processor;
 pub(crate) mod change_invisible_time_processor;
 pub(crate) mod client_manage_processor;
+pub(crate) mod consumer_manage_processor;
+pub(crate) mod end_transaction_processor;
 pub(crate) mod notification_processor;
 pub(crate) mod peek_message_processor;
 pub(crate) mod polling_info_processor;
 pub(crate) mod pop_message_processor;
 pub(crate) mod pull_message_processor;
+pub(crate) mod query_assignment_processor;
+pub(crate) mod query_message_processor;
 pub(crate) mod reply_message_processor;
 pub(crate) mod send_message_processor;
 
@@ -72,15 +86,39 @@ where
     MS: Clone,
 {
     pub(crate) send_message_processor: SendMessageProcessor<MS>,
-    pub(crate) admin_broker_processor: AdminBrokerProcessor,
+    pub(crate) pull_message_processor: PullMessageProcessor,
+    pub(crate) peek_message_processor: PeekMessageProcessor,
+    pub(crate) pop_message_processor: PopMessageProcessor,
+    pub(crate) ack_message_processor: AckMessageProcessor,
+    pub(crate) change_invisible_time_processor: ChangeInvisibleTimeProcessor,
+    pub(crate) notification_processor: NotificationProcessor,
+    pub(crate) polling_info_processor: PollingInfoProcessor,
+    pub(crate) reply_message_processor: ReplyMessageProcessor,
+    pub(crate) query_message_processor: QueryMessageProcessor,
     pub(crate) client_manage_processor: ClientManageProcessor,
+    pub(crate) consumer_manage_processor: ConsumerManageProcessor,
+    pub(crate) query_assignment_processor: QueryAssignmentProcessor,
+    pub(crate) end_transaction_processor: EndTransactionProcessor,
+    pub(crate) admin_broker_processor: AdminBrokerProcessor,
 }
 impl<MS: Clone> Clone for BrokerRequestProcessor<MS> {
     fn clone(&self) -> Self {
         Self {
             send_message_processor: self.send_message_processor.clone(),
+            pull_message_processor: self.pull_message_processor.clone(),
+            peek_message_processor: self.peek_message_processor.clone(),
+            pop_message_processor: self.pop_message_processor.clone(),
+            ack_message_processor: self.ack_message_processor.clone(),
+            change_invisible_time_processor: self.change_invisible_time_processor.clone(),
+            notification_processor: self.notification_processor.clone(),
+            polling_info_processor: self.polling_info_processor.clone(),
+            reply_message_processor: self.reply_message_processor.clone(),
             admin_broker_processor: self.admin_broker_processor.clone(),
             client_manage_processor: self.client_manage_processor.clone(),
+            consumer_manage_processor: self.consumer_manage_processor.clone(),
+            query_assignment_processor: self.query_assignment_processor.clone(),
+            query_message_processor: self.query_message_processor.clone(),
+            end_transaction_processor: self.end_transaction_processor.clone(),
         }
     }
 }

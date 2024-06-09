@@ -16,7 +16,7 @@
  */
 use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ReplyMessageProcessor {}
 
 impl ReplyMessageProcessor {
