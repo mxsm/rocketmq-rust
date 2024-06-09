@@ -62,7 +62,7 @@ impl StatisticsItem {
 
     pub fn inc_items(&self, item_incs: Vec<i64>) {
         let len = std::cmp::min(item_incs.len(), self.item_accumulates.len());
-        for i in 0..len {
+        for (i, _item) in item_incs.iter().enumerate().take(len) {
             self.item_accumulates[i].fetch_add(item_incs[i], Ordering::SeqCst);
         }
 
