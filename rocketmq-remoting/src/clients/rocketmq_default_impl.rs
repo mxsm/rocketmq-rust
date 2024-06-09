@@ -71,9 +71,7 @@ impl RocketmqDefaultClient {
 
 #[allow(unused_variables)]
 impl RemotingService for RocketmqDefaultClient {
-    async fn start(&self) {
-        todo!()
-    }
+    async fn start(&self) {}
 
     fn shutdown(&mut self) {
         todo!()

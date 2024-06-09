@@ -92,6 +92,10 @@ impl BrokerOuterAPI {
 }
 
 impl BrokerOuterAPI {
+    pub async fn start(&self) {
+        self.remoting_client.start().await;
+    }
+
     pub fn update_name_server_address_list(&self, addrs: String) {
         let addr_vec = addrs
             .split("';'")
@@ -224,4 +228,6 @@ impl BrokerOuterAPI {
     }
 
     pub fn shutdown(&self) {}
+
+    pub fn refresh_metadata(&self) {}
 }

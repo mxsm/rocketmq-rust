@@ -18,7 +18,7 @@
 use std::{
     collections::HashMap,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
     time::Duration,
@@ -106,6 +106,8 @@ pub(crate) struct BrokerRuntime {
     broker_stats_manager: Arc<BrokerStatsManager>,
     topic_queue_mapping_clean_service: Option<Arc<TopicQueueMappingCleanService>>,
     update_master_haserver_addr_periodically: bool,
+    should_start_time: Arc<AtomicU64>,
+    is_isolated: Arc<AtomicBool>,
 }
 
 impl Clone for BrokerRuntime {
@@ -133,6 +135,8 @@ impl Clone for BrokerRuntime {
             broker_stats_manager: self.broker_stats_manager.clone(),
             topic_queue_mapping_clean_service: self.topic_queue_mapping_clean_service.clone(),
             update_master_haserver_addr_periodically: self.update_master_haserver_addr_periodically,
+            should_start_time: self.should_start_time.clone(),
+            is_isolated: self.is_isolated.clone(),
         }
     }
 }
@@ -185,6 +189,8 @@ impl BrokerRuntime {
             broker_stats_manager,
             topic_queue_mapping_clean_service: None,
             update_master_haserver_addr_periodically: false,
+            should_start_time: Arc::new(AtomicU64::new(0)),
+            is_isolated: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -471,36 +477,70 @@ impl BrokerRuntime {
 
     fn protect_broker(&mut self) {}
 
-    pub async fn start(&mut self) {
+    fn start_basic_service(&mut self) {
         self.message_store
             .as_mut()
             .unwrap()
             .start()
             .expect("Message store start error");
+
+        //start broker server
         let request_processor = self.init_processor();
         let server = RocketMQServer::new(self.server_config.clone());
-        let server_future = server.run(request_processor);
-        self.register_broker_all(true, false, true).await;
-        let mut cloned_broker_runtime = self.clone();
+        tokio::spawn(async move { server.run(request_processor).await });
+    }
 
+    pub async fn start(&mut self) {
+        self.should_start_time.store(
+            (get_current_millis() as i64 + self.message_store_config.disappear_time_after_start)
+                as u64,
+            Ordering::Release,
+        );
+        if self.message_store_config.total_replicas > 1
+            && self.broker_config.enable_slave_acting_master
+        {
+            self.is_isolated.store(true, Ordering::Release);
+        }
+
+        self.broker_out_api.start().await;
+        self.start_basic_service();
+
+        if !self.is_isolated.load(Ordering::Acquire)
+            && !self.message_store_config.enable_dledger_commit_log
+            && !self.broker_config.duplication_enable
+        {
+            self.register_broker_all(true, false, true).await;
+        }
+
+        let mut cloned_broker_runtime = self.clone();
+        let should_start_time = self.should_start_time.clone();
+        let is_isolated = self.is_isolated.clone();
+        let broker_config = self.broker_config.clone();
         self.broker_runtime
             .as_ref()
             .unwrap()
             .get_handle()
             .spawn(async move {
-                let period = Duration::from_secs(10);
-                let initial_delay = Some(Duration::from_secs(60));
-                // initial delay
-                if let Some(initial_delay_inner) = initial_delay {
-                    tokio::time::sleep(initial_delay_inner).await;
-                }
-
+                let period = Duration::from_millis(
+                    10000.max(60000.min(broker_config.register_name_server_period)),
+                );
+                let initial_delay = Duration::from_secs(10);
+                tokio::time::sleep(initial_delay).await;
                 loop {
+                    let start_time = should_start_time.load(Ordering::Relaxed);
+                    if get_current_millis() < start_time {
+                        info!("Register to namesrv after {}", start_time);
+                        continue;
+                    }
+                    if is_isolated.load(Ordering::Relaxed) {
+                        info!("Skip register for broker is isolated");
+                        continue;
+                    }
                     // record current execution time
                     let current_execution_time = tokio::time::Instant::now();
                     // execute task
                     cloned_broker_runtime
-                        .register_broker_all(true, false, true)
+                        .register_broker_all(true, false, broker_config.force_register)
                         .await;
                     // Calculate the time of the next execution
                     let next_execution_time = current_execution_time + period;
@@ -512,8 +552,50 @@ impl BrokerRuntime {
                 }
             });
 
-        server_future.await;
+        if self.broker_config.enable_slave_acting_master {
+            self.schedule_send_heartbeat();
+        }
+
+        if self.broker_config.enable_controller_mode {
+            self.schedule_send_heartbeat();
+        }
+
+        if self.broker_config.skip_pre_online {
+            self.start_service_without_condition();
+        }
+
+        let broker_out_api = self.broker_out_api.clone();
+        self.broker_runtime
+            .as_ref()
+            .unwrap()
+            .get_handle()
+            .spawn(async move {
+                let period = Duration::from_secs(5);
+                let initial_delay = Duration::from_secs(10);
+                tokio::time::sleep(initial_delay).await;
+                loop {
+                    // record current execution time
+                    let current_execution_time = tokio::time::Instant::now();
+                    // execute task
+                    broker_out_api.refresh_metadata();
+                    // Calculate the time of the next execution
+                    let next_execution_time = current_execution_time + period;
+
+                    // Wait until the next execution
+                    let delay =
+                        next_execution_time.saturating_duration_since(tokio::time::Instant::now());
+                    tokio::time::sleep(delay).await;
+                }
+            });
+        log::info!(
+            "Rocketmq Broker({} ----Rust) start success",
+            self.broker_config.broker_identity.broker_name
+        );
     }
+
+    pub(crate) fn schedule_send_heartbeat(&mut self) {}
+
+    pub(crate) fn start_service_without_condition(&mut self) {}
 
     /// Register broker to name server
     pub(crate) async fn register_broker_all(
