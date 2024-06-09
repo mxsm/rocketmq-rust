@@ -14,7 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-mod interceptor;
+pub mod interceptor;
 pub mod state_getter;
 pub mod statistics_brief;
 pub mod statistics_item;
+pub mod statistics_item_formatter;

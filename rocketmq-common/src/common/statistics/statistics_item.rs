@@ -22,7 +22,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::common::statistics::interceptor::Interceptor;
+use crate::{common::statistics::interceptor::Interceptor, TimeUtils::get_current_millis};
 
 pub struct StatisticsItem {
     stat_kind: String,
@@ -42,12 +42,7 @@ impl StatisticsItem {
 
         let item_accumulates = item_names.iter().map(|_| AtomicI64::new(0)).collect();
         let invoke_times = AtomicI64::new(0);
-        let last_timestamp = AtomicU64::new(
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-        );
+        let last_timestamp = AtomicU64::new(get_current_millis());
 
         Self {
             stat_kind: stat_kind.to_string(),
@@ -67,13 +62,8 @@ impl StatisticsItem {
         }
 
         self.invoke_times.fetch_add(1, Ordering::SeqCst);
-        self.last_timestamp.store(
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-            Ordering::SeqCst,
-        );
+        self.last_timestamp
+            .store(get_current_millis(), Ordering::SeqCst);
 
         if let Some(ref interceptor) = self.interceptor {
             interceptor.inc(item_incs);
