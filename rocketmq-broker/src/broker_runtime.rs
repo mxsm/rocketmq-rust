@@ -342,9 +342,7 @@ impl BrokerRuntime {
         }
     }
 
-    fn initialize_scheduled_tasks(&mut self) {
-
-    }
+    fn initialize_scheduled_tasks(&mut self) {}
 
     fn initial_transaction(&mut self) {}
 
