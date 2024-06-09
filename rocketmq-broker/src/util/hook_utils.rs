@@ -479,6 +479,10 @@ mod tests {
         fn get_broker_stats_manager(&self) -> Option<Arc<BrokerStatsManager>> {
             todo!()
         }
+
+        fn dispatch_behind_bytes(&self) {
+            todo!()
+        }
         // Implement required methods...
     }
 

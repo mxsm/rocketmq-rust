@@ -75,4 +75,6 @@ pub trait RocketMQMessageStore: Clone + 'static {
     fn set_put_message_hook(&self, put_message_hook: BoxedPutMessageHook);
 
     fn get_broker_stats_manager(&self) -> Option<Arc<BrokerStatsManager>>;
+
+    fn dispatch_behind_bytes(&self);
 }

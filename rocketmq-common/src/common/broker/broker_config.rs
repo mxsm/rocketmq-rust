@@ -118,6 +118,7 @@ pub struct BrokerConfig {
     pub enable_slave_acting_master: bool,
     pub reject_transaction_message: bool,
     pub enable_detail_stat: bool,
+    pub flush_consumer_offset_interval: u64,
 }
 
 impl Default for BrokerConfig {
@@ -165,6 +166,7 @@ impl Default for BrokerConfig {
             enable_slave_acting_master: false,
             reject_transaction_message: false,
             enable_detail_stat: true,
+            flush_consumer_offset_interval: 1000 * 5,
         }
     }
 }
