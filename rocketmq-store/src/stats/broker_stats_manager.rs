@@ -18,16 +18,16 @@ use std::{collections::HashMap, sync::Arc};
 
 use rocketmq_common::common::{
     broker::broker_config::BrokerConfig,
-    statistics::state_getter::StateGetter,
+    statistics::{state_getter::StateGetter, statistics_item_formatter::StatisticsItemFormatter},
     stats::{moment_stats_item_set::MomentStatsItemSet, stats_item_set::StatsItemSet, Stats},
 };
 
 pub struct BrokerStatsManager {
-    stats_table: Arc<HashMap<String, StatsItemSet>>,
+    stats_table: Arc<parking_lot::RwLock<HashMap<String, StatsItemSet>>>,
     cluster_name: String,
     enable_queue_stat: bool,
-    moment_stats_item_set_fall_size: MomentStatsItemSet,
-    moment_stats_item_set_fall_time: MomentStatsItemSet,
+    moment_stats_item_set_fall_size: Option<Arc<MomentStatsItemSet>>,
+    moment_stats_item_set_fall_time: Option<Arc<MomentStatsItemSet>>,
     producer_state_getter: Option<Arc<Box<dyn StateGetter>>>,
     consumer_state_getter: Option<Arc<Box<dyn StateGetter>>>,
     broker_config: Option<Arc<BrokerConfig>>,
@@ -95,11 +95,7 @@ impl BrokerStatsManager {
 
 impl BrokerStatsManager {
     pub fn new(broker_config: Arc<BrokerConfig>) -> Self {
-        let stats_table = Arc::new(HashMap::new());
-        let moment_stats_item_set_fall_size =
-            MomentStatsItemSet::new(Stats::GROUP_GET_FALL_SIZE.to_string());
-        let moment_stats_item_set_fall_time =
-            MomentStatsItemSet::new(Stats::GROUP_GET_FALL_TIME.to_string());
+        let stats_table = Arc::new(parking_lot::RwLock::new(HashMap::new()));
         let enable_queue_stat = broker_config.enable_detail_stat;
         let cluster_name = broker_config
             .broker_identity
@@ -109,15 +105,269 @@ impl BrokerStatsManager {
             stats_table,
             cluster_name,
             enable_queue_stat,
-            moment_stats_item_set_fall_size,
-            moment_stats_item_set_fall_time,
+            moment_stats_item_set_fall_size: None,
+            moment_stats_item_set_fall_time: None,
             producer_state_getter: None,
             consumer_state_getter: None,
             broker_config: None,
         }
     }
 
-    pub fn get_stats_table(&self) -> Arc<HashMap<String, StatsItemSet>> {
+    pub fn new_with_name(cluster_name: String, enable_queue_stat: bool) -> Self {
+        let stats_table = Arc::new(parking_lot::RwLock::new(HashMap::new()));
+        let moment_stats_item_set_fall_size =
+            MomentStatsItemSet::new(Stats::GROUP_GET_FALL_SIZE.to_string());
+        let moment_stats_item_set_fall_time =
+            MomentStatsItemSet::new(Stats::GROUP_GET_FALL_TIME.to_string());
+        BrokerStatsManager {
+            stats_table,
+            cluster_name,
+            enable_queue_stat,
+            moment_stats_item_set_fall_size: None,
+            moment_stats_item_set_fall_time: None,
+            producer_state_getter: None,
+            consumer_state_getter: None,
+            broker_config: None,
+        }
+    }
+
+    pub fn init(&mut self) {
+        self.moment_stats_item_set_fall_size = Some(Arc::new(MomentStatsItemSet::new(
+            Stats::GROUP_GET_FALL_SIZE.to_string(),
+        )));
+
+        self.moment_stats_item_set_fall_time = Some(Arc::new(MomentStatsItemSet::new(
+            Stats::GROUP_GET_FALL_TIME.to_string(),
+        )));
+
+        let enable_queue_stat = true; // replace with actual condition
+
+        if enable_queue_stat {
+            self.stats_table.write().insert(
+                Stats::QUEUE_PUT_NUMS.to_string(),
+                StatsItemSet::new(Stats::QUEUE_PUT_NUMS.to_string()),
+            );
+            self.stats_table.write().insert(
+                Stats::QUEUE_PUT_SIZE.to_string(),
+                StatsItemSet::new(Stats::QUEUE_PUT_SIZE.to_string()),
+            );
+            self.stats_table.write().insert(
+                Stats::QUEUE_GET_NUMS.to_string(),
+                StatsItemSet::new(Stats::QUEUE_GET_NUMS.to_string()),
+            );
+            self.stats_table.write().insert(
+                Stats::QUEUE_GET_SIZE.to_string(),
+                StatsItemSet::new(Stats::QUEUE_GET_SIZE.to_string()),
+            );
+        }
+
+        self.stats_table.write().insert(
+            Stats::TOPIC_PUT_NUMS.to_string(),
+            StatsItemSet::new(Stats::TOPIC_PUT_NUMS.to_string()),
+        );
+        self.stats_table.write().insert(
+            Stats::TOPIC_PUT_SIZE.to_string(),
+            StatsItemSet::new(Stats::TOPIC_PUT_SIZE.to_string()),
+        );
+        self.stats_table.write().insert(
+            Stats::GROUP_GET_NUMS.to_string(),
+            StatsItemSet::new(Stats::GROUP_GET_NUMS.to_string()),
+        );
+        self.stats_table.write().insert(
+            Stats::GROUP_GET_SIZE.to_string(),
+            StatsItemSet::new(Stats::GROUP_GET_SIZE.to_string()),
+        );
+        self.stats_table.write().insert(
+            Self::GROUP_ACK_NUMS.to_string(),
+            StatsItemSet::new(Self::GROUP_ACK_NUMS.to_string()),
+        );
+        self.stats_table.write().insert(
+            Self::GROUP_CK_NUMS.to_string(),
+            StatsItemSet::new(Self::GROUP_CK_NUMS.to_string()),
+        );
+        self.stats_table.write().insert(
+            Stats::GROUP_GET_LATENCY.to_string(),
+            StatsItemSet::new(Stats::GROUP_GET_LATENCY.to_string()),
+        );
+        self.stats_table.write().insert(
+            Self::TOPIC_PUT_LATENCY.to_string(),
+            StatsItemSet::new(Self::TOPIC_PUT_LATENCY.to_string()),
+        );
+        self.stats_table.write().insert(
+            Stats::SNDBCK_PUT_NUMS.to_string(),
+            StatsItemSet::new(Stats::SNDBCK_PUT_NUMS.to_string()),
+        );
+        self.stats_table.write().insert(
+            Self::DLQ_PUT_NUMS.to_string(),
+            StatsItemSet::new(Self::DLQ_PUT_NUMS.to_string()),
+        );
+        self.stats_table.write().insert(
+            Stats::BROKER_PUT_NUMS.to_string(),
+            StatsItemSet::new(Stats::BROKER_PUT_NUMS.to_string()),
+        );
+        self.stats_table.write().insert(
+            Stats::BROKER_GET_NUMS.to_string(),
+            StatsItemSet::new(Stats::BROKER_GET_NUMS.to_string()),
+        );
+        self.stats_table.write().insert(
+            Self::BROKER_ACK_NUMS.to_string(),
+            StatsItemSet::new(Self::BROKER_ACK_NUMS.to_string()),
+        );
+        self.stats_table.write().insert(
+            Self::BROKER_CK_NUMS.to_string(),
+            StatsItemSet::new(Self::BROKER_CK_NUMS.to_string()),
+        );
+        self.stats_table.write().insert(
+            Self::BROKER_GET_NUMS_WITHOUT_SYSTEM_TOPIC.to_string(),
+            StatsItemSet::new(Self::BROKER_GET_NUMS_WITHOUT_SYSTEM_TOPIC.to_string()),
+        );
+        self.stats_table.write().insert(
+            Self::BROKER_PUT_NUMS_WITHOUT_SYSTEM_TOPIC.to_string(),
+            StatsItemSet::new(Self::BROKER_PUT_NUMS_WITHOUT_SYSTEM_TOPIC.to_string()),
+        );
+        self.stats_table.write().insert(
+            Stats::GROUP_GET_FROM_DISK_NUMS.to_string(),
+            StatsItemSet::new(Stats::GROUP_GET_FROM_DISK_NUMS.to_string()),
+        );
+        self.stats_table.write().insert(
+            Stats::GROUP_GET_FROM_DISK_SIZE.to_string(),
+            StatsItemSet::new(Stats::GROUP_GET_FROM_DISK_SIZE.to_string()),
+        );
+        self.stats_table.write().insert(
+            Stats::BROKER_GET_FROM_DISK_NUMS.to_string(),
+            StatsItemSet::new(Stats::BROKER_GET_FROM_DISK_NUMS.to_string()),
+        );
+        self.stats_table.write().insert(
+            Stats::BROKER_GET_FROM_DISK_SIZE.to_string(),
+            StatsItemSet::new(Stats::BROKER_GET_FROM_DISK_SIZE.to_string()),
+        );
+        self.stats_table.write().insert(
+            Self::SNDBCK2DLQ_TIMES.to_string(),
+            StatsItemSet::new(Self::SNDBCK2DLQ_TIMES.to_string()),
+        );
+        self.stats_table.write().insert(
+            Stats::COMMERCIAL_SEND_TIMES.to_string(),
+            StatsItemSet::new(Stats::COMMERCIAL_SEND_TIMES.to_string()),
+        );
+        self.stats_table.write().insert(
+            Stats::COMMERCIAL_RCV_TIMES.to_string(),
+            StatsItemSet::new(Stats::COMMERCIAL_RCV_TIMES.to_string()),
+        );
+        self.stats_table.write().insert(
+            Stats::COMMERCIAL_SEND_SIZE.to_string(),
+            StatsItemSet::new(Stats::COMMERCIAL_SEND_SIZE.to_string()),
+        );
+        self.stats_table.write().insert(
+            Stats::COMMERCIAL_RCV_SIZE.to_string(),
+            StatsItemSet::new(Stats::COMMERCIAL_RCV_SIZE.to_string()),
+        );
+        self.stats_table.write().insert(
+            Stats::COMMERCIAL_RCV_EPOLLS.to_string(),
+            StatsItemSet::new(Stats::COMMERCIAL_RCV_EPOLLS.to_string()),
+        );
+        self.stats_table.write().insert(
+            Stats::COMMERCIAL_SNDBCK_TIMES.to_string(),
+            StatsItemSet::new(Stats::COMMERCIAL_SNDBCK_TIMES.to_string()),
+        );
+        self.stats_table.write().insert(
+            Stats::COMMERCIAL_PERM_FAILURES.to_string(),
+            StatsItemSet::new(Stats::COMMERCIAL_PERM_FAILURES.to_string()),
+        );
+        self.stats_table.write().insert(
+            Self::CONSUMER_REGISTER_TIME.to_string(),
+            StatsItemSet::new(Self::CONSUMER_REGISTER_TIME.to_string()),
+        );
+        self.stats_table.write().insert(
+            Self::PRODUCER_REGISTER_TIME.to_string(),
+            StatsItemSet::new(Self::PRODUCER_REGISTER_TIME.to_string()),
+        );
+        self.stats_table.write().insert(
+            Self::CHANNEL_ACTIVITY.to_string(),
+            StatsItemSet::new(Self::CHANNEL_ACTIVITY.to_string()),
+        );
+
+        let formatter = StatisticsItemFormatter;
+
+        /*        self.account_stat_manager.set_brief_meta(vec![
+            Pair::of("RT.to_string(), vec![[50, 50], [100, 10], [1000, 10]]),
+            Pair::of("INNER_RT", vec![[10, 10], [100, 10], [1000, 10]]),
+        ]);*/
+
+        /*        let _item_names = vec![
+            "MSG_NUM",
+            "SUCCESS_MSG_NUM",
+            "FAILURE_MSG_NUM",
+            "COMMERCIAL_MSG_NUM",
+            "SUCCESS_REQ_NUM",
+            "FAILURE_REQ_NUM",
+            "MSG_SIZE",
+            "SUCCESS_MSG_SIZE",
+            "FAILURE_MSG_SIZE",
+            "RT",
+            "INNER_RT",
+        ];*/
+
+        /*self.account_stat_manager
+            .add_statistics_kind_meta(create_statistics_kind_meta(
+                "ACCOUNT_SEND",
+                item_names.clone(),
+                self.account_executor.clone(),
+                formatter,
+                "ACCOUNT_LOG",
+                "ACCOUNT_STAT_INVERTAL",
+            ));
+        self.account_stat_manager
+            .add_statistics_kind_meta(create_statistics_kind_meta(
+                "ACCOUNT_RCV",
+                item_names.clone(),
+                self.account_executor.clone(),
+                formatter,
+                "ACCOUNT_LOG",
+                "ACCOUNT_STAT_INVERTAL",
+            ));
+        self.account_stat_manager
+            .add_statistics_kind_meta(create_statistics_kind_meta(
+                "ACCOUNT_SEND_BACK",
+                item_names.clone(),
+                self.account_executor.clone(),
+                formatter,
+                "ACCOUNT_LOG",
+                "ACCOUNT_STAT_INVERTAL",
+            ));
+        self.account_stat_manager
+            .add_statistics_kind_meta(create_statistics_kind_meta(
+                "ACCOUNT_SEND_BACK_TO_DLQ",
+                item_names.clone(),
+                self.account_executor.clone(),
+                formatter,
+                "ACCOUNT_LOG",
+                "ACCOUNT_STAT_INVERTAL",
+            ));
+        self.account_stat_manager
+            .add_statistics_kind_meta(create_statistics_kind_meta(
+                "ACCOUNT_SEND_REJ",
+                item_names.clone(),
+                self.account_executor.clone(),
+                formatter,
+                "ACCOUNT_LOG",
+                "ACCOUNT_STAT_INVERTAL",
+            ));
+        self.account_stat_manager
+            .add_statistics_kind_meta(create_statistics_kind_meta(
+                "ACCOUNT_REV_REJ",
+                item_names.clone(),
+                self.account_executor.clone(),
+                formatter,
+                "ACCOUNT_LOG",
+                "ACCOUNT_STAT_INVERTAL",
+            ));
+
+        let state_getter = Box::new(StatisticsItemStateGetter);
+        self.account_stat_manager
+            .set_statistics_item_state_getter(state_getter);*/
+    }
+
+    pub fn get_stats_table(&self) -> Arc<parking_lot::RwLock<HashMap<String, StatsItemSet>>> {
         Arc::clone(&self.stats_table)
     }
 
@@ -129,12 +379,12 @@ impl BrokerStatsManager {
         self.enable_queue_stat
     }
 
-    pub fn get_moment_stats_item_set_fall_size(&self) -> &MomentStatsItemSet {
-        &self.moment_stats_item_set_fall_size
+    pub fn get_moment_stats_item_set_fall_size(&self) -> Option<Arc<MomentStatsItemSet>> {
+        self.moment_stats_item_set_fall_size.clone()
     }
 
-    pub fn get_moment_stats_item_set_fall_time(&self) -> &MomentStatsItemSet {
-        &self.moment_stats_item_set_fall_time
+    pub fn get_moment_stats_item_set_fall_time(&self) -> Option<Arc<MomentStatsItemSet>> {
+        self.moment_stats_item_set_fall_time.clone()
     }
 
     pub fn get_broker_puts_num_without_system_topic(&self) -> u64 {

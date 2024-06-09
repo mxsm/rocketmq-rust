@@ -104,8 +104,8 @@ impl StatisticsItem {
         &self.invoke_times
     }
 
-    pub fn last_timestamp(&self) -> &AtomicU64 {
-        &self.last_timestamp
+    pub fn last_timestamp(&self) -> u64 {
+        self.last_timestamp.load(Ordering::Relaxed)
     }
 
     pub fn item_accumulate(&self, item_name: &str) -> Option<&AtomicI64> {

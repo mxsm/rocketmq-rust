@@ -14,11 +14,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#[derive(Debug)]
-pub struct StatsItemSet {}
+use crate::common::statistics::statistics_item::StatisticsItem;
 
-impl StatsItemSet {
-    pub fn new(_stats_name: String) -> Self {
-        StatsItemSet {}
+pub struct StatisticsItemScheduledPrinter;
+
+impl StatisticsItemScheduledPrinter {
+    pub fn schedule(&self, _statistics_item: &StatisticsItem) {
+        unimplemented!()
+    }
+
+    pub fn remove(&self, _statistics_item: &StatisticsItem) {
+        unimplemented!()
     }
 }

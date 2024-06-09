@@ -19,3 +19,7 @@ pub mod state_getter;
 pub mod statistics_brief;
 pub mod statistics_item;
 pub mod statistics_item_formatter;
+pub mod statistics_item_scheduled_printer;
+pub mod statistics_item_state_getter;
+pub mod statistics_kind_meta;
+pub mod statistics_manager;
