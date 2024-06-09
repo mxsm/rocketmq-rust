@@ -18,7 +18,7 @@ use rocketmq_remoting::{
     protocol::remoting_command::RemotingCommand, runtime::server::ConnectionHandlerContext,
 };
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct PullMessageProcessor {}
 
 impl PullMessageProcessor {

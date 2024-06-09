@@ -62,9 +62,12 @@ use crate::{
     },
     schedule::schedule_message_service::ScheduleMessageService,
     subscription::manager::subscription_group_manager::SubscriptionGroupManager,
-    topic::manager::{
-        topic_config_manager::TopicConfigManager,
-        topic_queue_mapping_manager::TopicQueueMappingManager,
+    topic::{
+        manager::{
+            topic_config_manager::TopicConfigManager,
+            topic_queue_mapping_manager::TopicQueueMappingManager,
+        },
+        topic_queue_mapping_clean_service::TopicQueueMappingCleanService,
     },
 };
 
@@ -92,6 +95,7 @@ pub(crate) struct BrokerRuntime {
     shutdown: Arc<AtomicBool>,
     shutdown_hook: Option<BrokerShutdownHook>,
     broker_stats_manager: Arc<BrokerStatsManager>,
+    topic_queue_mapping_clean_service: Option<Arc<TopicQueueMappingCleanService>>,
 }
 
 impl Clone for BrokerRuntime {
@@ -116,6 +120,7 @@ impl Clone for BrokerRuntime {
             shutdown: self.shutdown.clone(),
             shutdown_hook: self.shutdown_hook.clone(),
             broker_stats_manager: self.broker_stats_manager.clone(),
+            topic_queue_mapping_clean_service: self.topic_queue_mapping_clean_service.clone(),
         }
     }
 }
@@ -165,6 +170,7 @@ impl BrokerRuntime {
             shutdown: Arc::new(AtomicBool::new(false)),
             shutdown_hook: None,
             broker_stats_manager,
+            topic_queue_mapping_clean_service: None,
         }
     }
 
@@ -284,6 +290,7 @@ impl BrokerRuntime {
             self.initial_transaction();
             self.initial_acl();
             self.initial_rpc_hooks();
+            self.initial_request_pipeline();
         }
         result
     }
@@ -305,7 +312,9 @@ impl BrokerRuntime {
         // fast broker server implementation in future versions
     }
 
-    fn initialize_resources(&mut self) {}
+    fn initialize_resources(&mut self) {
+        self.topic_queue_mapping_clean_service = Some(Arc::new(TopicQueueMappingCleanService));
+    }
 
     fn init_processor(&self) -> BrokerRequestProcessor<DefaultMessageStore> {
         let send_message_processor = SendMessageProcessor::<DefaultMessageStore>::new(
@@ -316,18 +325,33 @@ impl BrokerRuntime {
         );
         BrokerRequestProcessor {
             send_message_processor,
+            pull_message_processor: Default::default(),
+            peek_message_processor: Default::default(),
+            pop_message_processor: Default::default(),
+            ack_message_processor: Default::default(),
+            change_invisible_time_processor: Default::default(),
+            notification_processor: Default::default(),
+            polling_info_processor: Default::default(),
+            reply_message_processor: Default::default(),
             admin_broker_processor: Default::default(),
             client_manage_processor: ClientManageProcessor::new(self.producer_manager.clone()),
+            consumer_manage_processor: Default::default(),
+            query_assignment_processor: Default::default(),
+            query_message_processor: Default::default(),
+            end_transaction_processor: Default::default(),
         }
     }
 
-    fn initialize_scheduled_tasks(&mut self) {}
+    fn initialize_scheduled_tasks(&mut self) {
+
+    }
 
     fn initial_transaction(&mut self) {}
 
     fn initial_acl(&mut self) {}
 
     fn initial_rpc_hooks(&mut self) {}
+    fn initial_request_pipeline(&mut self) {}
 
     pub async fn start(&mut self) {
         self.message_store
