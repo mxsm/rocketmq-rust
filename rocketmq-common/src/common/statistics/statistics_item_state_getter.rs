@@ -14,11 +14,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#[derive(Debug)]
-pub struct StatsItemSet {}
+use crate::common::statistics::statistics_item::StatisticsItem;
 
-impl StatsItemSet {
-    pub fn new(_stats_name: String) -> Self {
-        StatsItemSet {}
-    }
+/// `StatisticsItemStateGetter` is a trait that provides a common interface for objects that can
+/// determine the online status of a `StatisticsItem`.
+pub trait StatisticsItemStateGetter {
+    /// The `online` method accepts a reference to a `StatisticsItem` and returns a boolean
+    /// indicating whether the item is online or not.
+    ///
+    /// # Arguments
+    ///
+    /// * `item` - A reference to a `StatisticsItem` whose online status is to be determined.
+    ///
+    /// # Returns
+    ///
+    /// * `bool` - A boolean indicating whether the `StatisticsItem` is online (`true`) or not
+    ///   (`false`).
+    fn online(&self, item: &StatisticsItem) -> bool;
 }
