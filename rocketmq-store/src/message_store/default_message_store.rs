@@ -579,6 +579,8 @@ impl MessageStore for DefaultMessageStore {
     fn get_broker_stats_manager(&self) -> Option<Arc<BrokerStatsManager>> {
         self.broker_stats_manager.clone()
     }
+
+    fn dispatch_behind_bytes(&self) {}
 }
 
 #[derive(Clone)]

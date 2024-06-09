@@ -232,6 +232,15 @@ pub fn compute_next_minutes_time_millis() -> u64 {
     ((millis_since_epoch / millis_in_minute) + 1) * millis_in_minute
 }
 
+pub fn compute_next_morning_time_millis() -> u64 {
+    let now = Local::now();
+    let tomorrow = now.date_naive().succ_opt().unwrap();
+    let next_morning = Local
+        .with_ymd_and_hms(tomorrow.year(), tomorrow.month(), tomorrow.day(), 0, 0, 0)
+        .unwrap();
+    next_morning.timestamp_millis() as u64
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Instant;
@@ -303,5 +312,16 @@ mod tests {
 
         assert!(next_minute > now);
         assert_eq!(next_minute % (60 * 1000), 0);
+    }
+
+    #[test]
+    fn compute_next_morning_time_millis_returns_correct_time() {
+        let now = Local::now();
+        let next_morning = compute_next_morning_time_millis();
+        let expected_next_morning = Local
+            .ymd(now.year(), now.month(), now.day() + 1)
+            .and_hms(0, 0, 0)
+            .timestamp_millis();
+        assert_eq!(next_morning, expected_next_morning as u64);
     }
 }

@@ -24,9 +24,13 @@ use std::{
     time::Duration,
 };
 
-use rocketmq_common::common::{
-    broker::broker_config::BrokerConfig, config::TopicConfig, config_manager::ConfigManager,
-    constant::PermName, server::config::ServerConfig,
+use rocketmq_common::{
+    common::{
+        broker::broker_config::BrokerConfig, config::TopicConfig, config_manager::ConfigManager,
+        constant::PermName, server::config::ServerConfig,
+    },
+    TimeUtils::get_current_millis,
+    UtilAll::compute_next_morning_time_millis,
 };
 use rocketmq_remoting::{
     protocol::{
@@ -37,9 +41,12 @@ use rocketmq_remoting::{
 };
 use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_store::{
-    base::store_enum::StoreType, config::message_store_config::MessageStoreConfig,
-    log_file::MessageStore, message_store::default_message_store::DefaultMessageStore,
-    stats::broker_stats_manager::BrokerStatsManager, timer::timer_message_store::TimerMessageStore,
+    base::store_enum::StoreType,
+    config::message_store_config::MessageStoreConfig,
+    log_file::MessageStore,
+    message_store::default_message_store::DefaultMessageStore,
+    stats::{broker_stats::BrokerStats, broker_stats_manager::BrokerStatsManager},
+    timer::timer_message_store::TimerMessageStore,
 };
 use tracing::{info, warn};
 
@@ -83,6 +90,8 @@ pub(crate) struct BrokerRuntime {
     consumer_order_info_manager: Arc<ConsumerOrderInfoManager>,
     #[cfg(feature = "local_file_store")]
     message_store: Option<DefaultMessageStore>,
+    #[cfg(feature = "local_file_store")]
+    broker_stats: Option<Arc<BrokerStats<DefaultMessageStore>>>,
     //message_store: Option<Arc<Mutex<LocalFileMessageStore>>>,
     schedule_message_service: ScheduleMessageService,
     timer_message_store: Option<TimerMessageStore>,
@@ -96,6 +105,7 @@ pub(crate) struct BrokerRuntime {
     shutdown_hook: Option<BrokerShutdownHook>,
     broker_stats_manager: Arc<BrokerStatsManager>,
     topic_queue_mapping_clean_service: Option<Arc<TopicQueueMappingCleanService>>,
+    update_master_haserver_addr_periodically: bool,
 }
 
 impl Clone for BrokerRuntime {
@@ -111,6 +121,7 @@ impl Clone for BrokerRuntime {
             consumer_filter_manager: Arc::new(Default::default()),
             consumer_order_info_manager: Arc::new(Default::default()),
             message_store: self.message_store.clone(),
+            broker_stats: self.broker_stats.clone(),
             schedule_message_service: Default::default(),
             timer_message_store: self.timer_message_store.clone(),
             broker_out_api: self.broker_out_api.clone(),
@@ -121,6 +132,7 @@ impl Clone for BrokerRuntime {
             shutdown_hook: self.shutdown_hook.clone(),
             broker_stats_manager: self.broker_stats_manager.clone(),
             topic_queue_mapping_clean_service: self.topic_queue_mapping_clean_service.clone(),
+            update_master_haserver_addr_periodically: self.update_master_haserver_addr_periodically,
         }
     }
 }
@@ -161,6 +173,7 @@ impl BrokerRuntime {
             consumer_filter_manager: Arc::new(Default::default()),
             consumer_order_info_manager: Arc::new(Default::default()),
             message_store: None,
+            broker_stats: None,
             schedule_message_service: Default::default(),
             timer_message_store: None,
             broker_out_api: broker_outer_api,
@@ -171,6 +184,7 @@ impl BrokerRuntime {
             shutdown_hook: None,
             broker_stats_manager,
             topic_queue_mapping_clean_service: None,
+            update_master_haserver_addr_periodically: false,
         }
     }
 
@@ -256,6 +270,7 @@ impl BrokerRuntime {
             );
             self.topic_config_manager
                 .set_message_store(Some(message_store.clone()));
+            self.broker_stats = Some(Arc::new(BrokerStats::new(Arc::new(message_store.clone()))));
             self.message_store = Some(message_store);
         } else if self.message_store_config.store_type == StoreType::RocksDB {
             info!("Use RocksDB as message store");
@@ -342,7 +357,110 @@ impl BrokerRuntime {
         }
     }
 
-    fn initialize_scheduled_tasks(&mut self) {}
+    fn initialize_scheduled_tasks(&mut self) {
+        let initial_delay = compute_next_morning_time_millis() - get_current_millis();
+        let period = Duration::from_days(1).as_millis() as u64;
+        let broker_stats = self.broker_stats.clone();
+        self.broker_runtime
+            .as_ref()
+            .unwrap()
+            .get_handle()
+            .spawn(async move {
+                info!("BrokerStats Start scheduled task");
+                tokio::time::sleep(Duration::from_millis(initial_delay)).await;
+                loop {
+                    let current_execution_time = tokio::time::Instant::now();
+                    broker_stats.as_ref().unwrap().record();
+                    let next_execution_time =
+                        current_execution_time + Duration::from_millis(period);
+                    let delay =
+                        next_execution_time.saturating_duration_since(tokio::time::Instant::now());
+                    tokio::time::sleep(delay).await;
+                }
+            });
+
+        let consumer_offset_manager = self.consumer_offset_manager.clone();
+        let flush_consumer_offset_interval = self.broker_config.flush_consumer_offset_interval;
+        self.broker_runtime
+            .as_ref()
+            .unwrap()
+            .get_handle()
+            .spawn(async move {
+                info!("Consumer offset manager Start scheduled task");
+                tokio::time::sleep(Duration::from_millis(1000 * 10)).await;
+                loop {
+                    let current_execution_time = tokio::time::Instant::now();
+                    consumer_offset_manager.persist();
+                    let next_execution_time = current_execution_time
+                        + Duration::from_millis(flush_consumer_offset_interval);
+                    let delay =
+                        next_execution_time.saturating_duration_since(tokio::time::Instant::now());
+                    tokio::time::sleep(delay).await;
+                }
+            });
+
+        let consumer_filter_manager = self.consumer_filter_manager.clone();
+        let consumer_order_info_manager = self.consumer_order_info_manager.clone();
+        self.broker_runtime
+            .as_ref()
+            .unwrap()
+            .get_handle()
+            .spawn(async move {
+                info!("consumer filter manager Start scheduled task");
+                info!("consumer order info manager Start scheduled task");
+                tokio::time::sleep(Duration::from_millis(1000 * 10)).await;
+                loop {
+                    let current_execution_time = tokio::time::Instant::now();
+                    consumer_filter_manager.persist();
+                    consumer_order_info_manager.persist();
+                    let next_execution_time =
+                        current_execution_time + Duration::from_millis(1000 * 10);
+                    let delay =
+                        next_execution_time.saturating_duration_since(tokio::time::Instant::now());
+                    tokio::time::sleep(delay).await;
+                }
+            });
+
+        let mut runtime = self.clone();
+        self.broker_runtime
+            .as_ref()
+            .unwrap()
+            .get_handle()
+            .spawn(async move {
+                info!("Protect broker Start scheduled task");
+                tokio::time::sleep(Duration::from_mins(3)).await;
+                loop {
+                    let current_execution_time = tokio::time::Instant::now();
+                    runtime.protect_broker();
+                    let next_execution_time = current_execution_time + Duration::from_mins(3);
+                    let delay =
+                        next_execution_time.saturating_duration_since(tokio::time::Instant::now());
+                    tokio::time::sleep(delay).await;
+                }
+            });
+
+        let message_store = self.message_store.clone();
+        self.broker_runtime
+            .as_ref()
+            .unwrap()
+            .get_handle()
+            .spawn(async move {
+                info!("Message store dispatch_behind_bytes Start scheduled task");
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                loop {
+                    let current_execution_time = tokio::time::Instant::now();
+                    message_store.as_ref().unwrap().dispatch_behind_bytes();
+                    let next_execution_time = current_execution_time + Duration::from_secs(60);
+                    let delay =
+                        next_execution_time.saturating_duration_since(tokio::time::Instant::now());
+                    tokio::time::sleep(delay).await;
+                }
+            });
+
+        if self.broker_config.enable_controller_mode {
+            self.update_master_haserver_addr_periodically = true;
+        }
+    }
 
     fn initial_transaction(&mut self) {}
 
@@ -350,6 +468,8 @@ impl BrokerRuntime {
 
     fn initial_rpc_hooks(&mut self) {}
     fn initial_request_pipeline(&mut self) {}
+
+    fn protect_broker(&mut self) {}
 
     pub async fn start(&mut self) {
         self.message_store

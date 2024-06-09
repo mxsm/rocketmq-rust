@@ -46,7 +46,7 @@ impl ConfigManager for ConsumerFilterManager {
     }
 
     fn encode_pretty(&self, pretty_format: bool) -> String {
-        todo!()
+        "".to_string()
     }
 
     fn decode(&self, json_string: &str) {}
