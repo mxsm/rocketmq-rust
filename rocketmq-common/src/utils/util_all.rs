@@ -322,6 +322,6 @@ mod tests {
             .ymd(now.year(), now.month(), now.day() + 1)
             .and_hms(0, 0, 0)
             .timestamp_millis();
-        assert_eq!(next_morning, expected_next_morning);
+        assert_eq!(next_morning, expected_next_morning as u64);
     }
 }
