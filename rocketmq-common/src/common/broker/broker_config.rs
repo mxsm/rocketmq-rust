@@ -15,11 +15,25 @@
  * limitations under the License.
  */
 
+use lazy_static::lazy_static;
 use serde::Deserialize;
 
 use crate::common::{
     constant::PermName, mix_all, server::config::ServerConfig, topic::TopicValidator,
 };
+
+const DEFAULT_CLUSTER_NAME: &str = "DefaultCluster";
+
+lazy_static! {
+    pub static ref LOCAL_HOST_NAME: Option<String> = match hostname::get() {
+        Ok(hostname) => {
+            Some(hostname.to_string_lossy().to_string())
+        }
+        Err(_) => {
+            None
+        }
+    };
+}
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -34,7 +48,7 @@ pub struct BrokerIdentity {
 impl BrokerIdentity {
     pub fn new() -> Self {
         let broker_name = default_broker_name();
-        let broker_cluster_name = String::from("DefaultCluster");
+        let broker_cluster_name = String::from(DEFAULT_CLUSTER_NAME);
         let broker_id = mix_all::MASTER_ID;
         let is_broker_container = false;
 
@@ -119,6 +133,9 @@ pub struct BrokerConfig {
     pub reject_transaction_message: bool,
     pub enable_detail_stat: bool,
     pub flush_consumer_offset_interval: u64,
+    pub force_register: bool,
+    pub register_name_server_period: u64,
+    pub skip_pre_online: bool,
 }
 
 impl Default for BrokerConfig {
@@ -140,7 +157,7 @@ impl Default for BrokerConfig {
             trace_topic_enable: false,
             msg_trace_topic_name: TopicValidator::RMQ_SYS_TRACE_TOPIC.to_string(),
             enable_controller_mode: false,
-            broker_name: "".to_string(),
+            broker_name: default_broker_name(),
             region_id: mix_all::DEFAULT_TRACE_REGION_ID.to_string(),
             trace_on: true,
             broker_permission: PermName::PERM_WRITE | PermName::PERM_READ,
@@ -167,6 +184,9 @@ impl Default for BrokerConfig {
             reject_transaction_message: false,
             enable_detail_stat: true,
             flush_consumer_offset_interval: 1000 * 5,
+            force_register: true,
+            register_name_server_period: 1000 * 30,
+            skip_pre_online: false,
         }
     }
 }
@@ -205,13 +225,10 @@ impl BrokerConfig {
     }
 }
 
-fn default_broker_name() -> String {
-    // Implement logic to obtain default broker name
-    // For example, use local hostname
-    // ...
-
-    // Placeholder value for demonstration
-    String::from("DefaultBrokerName")
+pub fn default_broker_name() -> String {
+    LOCAL_HOST_NAME
+        .clone()
+        .unwrap_or_else(|| "DEFAULT_BROKER".to_string())
 }
 
 #[derive(Debug, Deserialize)]

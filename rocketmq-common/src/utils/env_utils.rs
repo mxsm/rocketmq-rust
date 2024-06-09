@@ -64,6 +64,8 @@ impl EnvUtils {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
 
     #[test]
@@ -96,15 +98,15 @@ mod tests {
     #[test]
     fn test_get_rocketmq_home_existing_variable() {
         // Set up
-        let expected_value = "/path/to/rocketmq_home";
+        let expected_value = PathBuf::from("/path/to/rocketmq_home");
 
-        std::env::set_var(ROCKETMQ_HOME_ENV, expected_value);
+        std::env::set_var(ROCKETMQ_HOME_ENV, expected_value.clone());
 
         // Test
         let result = EnvUtils::get_rocketmq_home();
 
         // Assert
-        assert_eq!(result, expected_value.to_string());
+        assert_eq!(result, expected_value.to_string_lossy().to_string());
     }
 
     #[test]

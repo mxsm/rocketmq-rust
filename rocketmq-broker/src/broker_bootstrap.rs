@@ -17,7 +17,6 @@
 
 use rocketmq_common::common::{broker::broker_config::BrokerConfig, server::config::ServerConfig};
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
-use tokio::select;
 use tracing::error;
 
 use crate::broker_runtime::BrokerRuntime;
@@ -32,12 +31,7 @@ impl BrokerBootstrap {
             error!("initialize fail");
             return;
         }
-
-        select! {
-            _ = self.start() =>{
-
-            }
-        }
+        let (_start_result, _ctrl_c) = tokio::join!(self.start(), tokio::signal::ctrl_c());
     }
 
     async fn initialize(&mut self) -> bool {
