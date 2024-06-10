@@ -44,7 +44,7 @@ impl Client {
     /// A new `Client` instance wrapped in a `Result`. Returns an error if the connection fails.
     pub async fn connect<T: tokio::net::ToSocketAddrs>(addr: T) -> anyhow::Result<Client> {
         let tcp_stream = tokio::net::TcpStream::connect(addr).await?;
-        let socket_addr = tcp_stream.peer_addr().unwrap();
+        let socket_addr = tcp_stream.peer_addr()?;
         Ok(Client {
             connection: Connection::new(tcp_stream, socket_addr),
         })

@@ -15,13 +15,18 @@
  * limitations under the License.
  */
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
 use rocketmq_common::TokioExecutorService;
 use tokio::runtime::Handle;
+use tokio::task;
 use tokio::time;
+use tracing::debug;
+use tracing::error;
 use tracing::info;
+use tracing::warn;
 
 use crate::clients::Client;
 use crate::clients::RemotingClient;
@@ -38,10 +43,10 @@ pub struct RocketmqDefaultClient {
     //cache connection
     connection_tables:
         Arc<parking_lot::Mutex<HashMap<String /* ip:port */, Arc<tokio::sync::Mutex<Client>>>>>,
-    namesrv_addr_list: Arc<parking_lot::Mutex<Vec<String>>>,
+    namesrv_addr_list: Arc<parking_lot::RwLock<Vec<String>>>,
     namesrv_addr_choosed: Arc<parking_lot::Mutex<Option<String>>>,
+    available_namesrv_addr_set: Arc<parking_lot::RwLock<HashSet<String>>>,
 }
-
 impl RocketmqDefaultClient {
     pub fn new(tokio_client_config: Arc<TokioClientConfig>) -> Self {
         Self {
@@ -49,33 +54,83 @@ impl RocketmqDefaultClient {
             connection_tables: Arc::new(parking_lot::Mutex::new(Default::default())),
             namesrv_addr_list: Arc::new(Default::default()),
             namesrv_addr_choosed: Arc::new(Default::default()),
+            available_namesrv_addr_set: Arc::new(Default::default()),
         }
     }
 }
 
 impl RocketmqDefaultClient {
-    fn get_and_create_client(&self, addr: String) -> Arc<tokio::sync::Mutex<Client>> {
-        let mut mutex_guard = self.connection_tables.lock();
-        if mutex_guard.contains_key(&addr) {
-            return mutex_guard.get(&addr).unwrap().clone();
-        }
+    fn get_and_create_client(&self, addr: String) -> Option<Arc<tokio::sync::Mutex<Client>>> {
+        let mut connection_tables = self.connection_tables.lock();
+        match connection_tables.get(&addr) {
+            None => {
+                let addr_inner = addr.clone();
+                let handle = Handle::current();
 
-        let addr_inner = addr.clone();
-        let handle = Handle::current();
-        let client = std::thread::spawn(move || {
-            handle.block_on(async move { Client::connect(addr_inner).await.unwrap() })
-        })
-        .join()
-        .unwrap();
-        // let client = Client::connect(addr_inner).await.unwrap();
-        mutex_guard.insert(addr.clone(), Arc::new(tokio::sync::Mutex::new(client)));
-        mutex_guard.get(&addr).unwrap().clone()
+                match std::thread::spawn(move || {
+                    handle.block_on(async move { Client::connect(addr_inner).await })
+                })
+                .join()
+                {
+                    Ok(client_inner) => match client_inner {
+                        Ok(client_r) => {
+                            let client = Arc::new(tokio::sync::Mutex::new(client_r));
+                            connection_tables.insert(addr, client.clone());
+                            Some(client)
+                        }
+                        Err(_) => {
+                            error!("getAndCreateClient connect to {} failed", addr);
+                            None
+                        }
+                    },
+                    Err(_) => {
+                        error!("getAndCreateClient connect to {} failed", addr);
+                        None
+                    }
+                }
+            }
+            Some(conn) => Some(conn.clone()),
+        }
+    }
+
+    fn scan_available_name_srv(&self) {
+        if self.namesrv_addr_list.read().is_empty() {
+            debug!("scanAvailableNameSrv addresses of name server is null!");
+            return;
+        }
+        for address in self.available_namesrv_addr_set.read().iter() {
+            if !self.namesrv_addr_list.read().contains(address) {
+                warn!("scanAvailableNameSrv remove invalid address {}", address);
+                self.available_namesrv_addr_set.write().remove(address);
+            }
+        }
+        for namesrv_addr in self.namesrv_addr_list.read().iter() {
+            let client = self.get_and_create_client(namesrv_addr.clone());
+            match client {
+                None => {
+                    self.available_namesrv_addr_set.write().remove(namesrv_addr);
+                }
+                Some(_) => {
+                    self.available_namesrv_addr_set
+                        .write()
+                        .insert(namesrv_addr.clone());
+                }
+            }
+        }
     }
 }
 
 #[allow(unused_variables)]
 impl RemotingService for RocketmqDefaultClient {
-    async fn start(&self) {}
+    async fn start(&self) {
+        let client = self.clone();
+        let handle = task::spawn(async move {
+            loop {
+                client.scan_available_name_srv();
+                time::sleep(Duration::from_millis(1)).await;
+            }
+        });
+    }
 
     fn shutdown(&mut self) {
         todo!()
@@ -93,7 +148,7 @@ impl RemotingService for RocketmqDefaultClient {
 #[allow(unused_variables)]
 impl RemotingClient for RocketmqDefaultClient {
     fn update_name_server_address_list(&self, addrs: Vec<String>) {
-        let mut old = self.namesrv_addr_list.lock();
+        let mut old = self.namesrv_addr_list.write();
         let mut update = false;
 
         if !addrs.is_empty() {
@@ -139,13 +194,15 @@ impl RemotingClient for RocketmqDefaultClient {
     }
 
     fn get_name_server_address_list(&self) -> Vec<String> {
-        /*let cloned = self.namesrv_addr_list.clone();
-        Handle::current().block_on(async move { cloned.lock().await.clone() })*/
-        self.namesrv_addr_list.lock().clone()
+        self.namesrv_addr_list.read().clone()
     }
 
     fn get_available_name_srv_list(&self) -> Vec<String> {
-        vec!["127.0.0.1:9876".to_string()]
+        self.available_namesrv_addr_set
+            .read()
+            .clone()
+            .into_iter()
+            .collect()
     }
 
     fn invoke_sync(
@@ -153,22 +210,24 @@ impl RemotingClient for RocketmqDefaultClient {
         addr: String,
         request: RemotingCommand,
         timeout_millis: u64,
-    ) -> RemotingCommand {
-        let client = self.get_and_create_client(addr.clone());
+    ) -> Result<RemotingCommand, RemotingError> {
+        let client = self.get_and_create_client(addr.clone()).unwrap();
         let handle = Handle::current();
-        std::thread::spawn(move || {
-            handle.block_on(async move { client.lock().await.send_read(request).await.unwrap() })
+        match std::thread::spawn(move || {
+            handle.block_on(async move { client.lock().await.send_read(request).await })
         })
         .join()
-        .unwrap()
-
-        /*if let Ok(result) = timeout(Duration::from_millis(timeout_millis), async {
-            client.lock().await.send_read(request).await.unwrap()
-        }) {
-            result
-        } else {
-            RemotingCommand::create_response_command()
-        }*/
+        {
+            Ok(cmd) => match cmd {
+                Ok(cmd_inner) => Ok(cmd_inner),
+                Err(_) => Err(RemotingError::RemoteException(
+                    "invoke sync error".to_string(),
+                )),
+            },
+            Err(_) => Err(RemotingError::RemoteException(
+                "invoke sync error".to_string(),
+            )),
+        }
     }
 
     async fn invoke_async(
@@ -177,7 +236,7 @@ impl RemotingClient for RocketmqDefaultClient {
         request: RemotingCommand,
         timeout_millis: u64,
     ) -> Result<RemotingCommand, RemotingError> {
-        let client = self.get_and_create_client(addr.clone());
+        let client = self.get_and_create_client(addr.clone()).unwrap();
         match time::timeout(Duration::from_millis(timeout_millis), async move {
             client.lock().await.send_read(request).await
         })
@@ -197,12 +256,7 @@ impl RemotingClient for RocketmqDefaultClient {
         request: RemotingCommand,
         timeout_millis: u64,
     ) -> Result<(), RemotingError> {
-        let client = self.get_and_create_client(addr.clone());
-        /*        let _ = time::timeout(Duration::from_millis(timeout_millis), async move {
-            client.lock().await.send(request).await.unwrap()
-        })
-        .await;*/
-
+        let client = self.get_and_create_client(addr.clone()).unwrap();
         tokio::spawn(async move {
             match time::timeout(Duration::from_millis(timeout_millis), async move {
                 client.lock().await.send(request).await.unwrap()

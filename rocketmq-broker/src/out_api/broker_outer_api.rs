@@ -16,6 +16,7 @@
  */
 use std::sync::Arc;
 
+use dns_lookup::lookup_host;
 use rocketmq_common::common::broker::broker_config::BrokerIdentity;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::utils::crc32_utils;
@@ -34,6 +35,8 @@ use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::remoting::RemotingService;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_remoting::runtime::RPCHook;
+use tracing::error;
+use tracing::info;
 
 #[derive(Clone)]
 pub struct BrokerOuterAPI {
@@ -97,6 +100,12 @@ impl BrokerOuterAPI {
             .collect::<Vec<String>>();
         self.remoting_client
             .update_name_server_address_list(addr_vec)
+    }
+
+    pub fn update_name_server_address_list_by_dns_lookup(&self, domain: String) {
+        let address_list = dns_lookup_address_by_domain(domain.as_str());
+        self.remoting_client
+            .update_name_server_address_list(address_list);
     }
 
     pub async fn register_broker_all(
@@ -224,4 +233,63 @@ impl BrokerOuterAPI {
     pub fn shutdown(&self) {}
 
     pub fn refresh_metadata(&self) {}
+}
+
+fn dns_lookup_address_by_domain(domain: &str) -> Vec<String> {
+    let mut address_list = Vec::new();
+    // Ensure logging is initialized
+
+    match domain.find(':') {
+        Some(index) => {
+            let (domain_str, port_str) = domain.split_at(index);
+            match lookup_host(domain_str) {
+                Ok(addresses) => {
+                    for address in addresses {
+                        address_list.push(format!("{}{}", address, port_str));
+                    }
+                    info!(
+                        "DNS lookup address by domain success, domain={}, result={:?}",
+                        domain, address_list
+                    );
+                }
+                Err(e) => {
+                    error!(
+                        "DNS lookup address by domain error, domain={}, error={}",
+                        domain, e
+                    );
+                }
+            }
+        }
+        None => {
+            error!("Invalid domain format, missing port: {}", domain);
+        }
+    }
+
+    address_list
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dns_lookup_address_by_domain_returns_correct_addresses() {
+        let domain = "localhost:8080";
+        let addresses = dns_lookup_address_by_domain(domain);
+        assert!(addresses.contains(&"127.0.0.1:8080".to_string()));
+    }
+
+    #[test]
+    fn dns_lookup_address_by_domain_handles_invalid_domain() {
+        let domain = "invalid_domain";
+        let addresses = dns_lookup_address_by_domain(domain);
+        assert!(addresses.is_empty());
+    }
+
+    #[test]
+    fn dns_lookup_address_by_domain_handles_domain_without_port() {
+        let domain = "localhost";
+        let addresses = dns_lookup_address_by_domain(domain);
+        assert!(addresses.is_empty());
+    }
 }

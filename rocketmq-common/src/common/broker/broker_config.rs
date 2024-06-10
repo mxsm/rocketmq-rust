@@ -20,6 +20,7 @@ use serde::Deserialize;
 
 use crate::common::constant::PermName;
 use crate::common::mix_all;
+use crate::common::mix_all::NAMESRV_ADDR_PROPERTY;
 use crate::common::server::config::ServerConfig;
 use crate::common::topic::TopicValidator;
 
@@ -34,6 +35,8 @@ lazy_static! {
             None
         }
     };
+    pub static ref NAMESRV_ADDR: Option<String> =
+        std::env::var(NAMESRV_ADDR_PROPERTY).map_or(Some("127.0.0.1:9876".to_string()), Some);
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -137,6 +140,8 @@ pub struct BrokerConfig {
     pub force_register: bool,
     pub register_name_server_period: u64,
     pub skip_pre_online: bool,
+    pub namesrv_addr: Option<String>,
+    pub fetch_name_srv_addr_by_dns_lookup: bool,
 }
 
 impl Default for BrokerConfig {
@@ -188,6 +193,8 @@ impl Default for BrokerConfig {
             force_register: true,
             register_name_server_period: 1000 * 30,
             skip_pre_online: false,
+            namesrv_addr: NAMESRV_ADDR.clone(),
+            fetch_name_srv_addr_by_dns_lookup: false,
         }
     }
 }
