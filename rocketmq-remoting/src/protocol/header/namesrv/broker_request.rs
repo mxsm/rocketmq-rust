@@ -17,9 +17,11 @@
 
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
-use crate::protocol::command_custom_header::{CommandCustomHeader, FromMap};
+use crate::protocol::command_custom_header::CommandCustomHeader;
+use crate::protocol::command_custom_header::FromMap;
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -31,10 +33,10 @@ pub struct UnRegisterBrokerRequestHeader {
 }
 
 impl UnRegisterBrokerRequestHeader {
-    const BROKER_NAME: &'static str = "brokerName";
     const BROKER_ADDR: &'static str = "brokerAddr";
-    const CLUSTER_NAME: &'static str = "clusterName";
     const BROKER_ID: &'static str = "brokerId";
+    const BROKER_NAME: &'static str = "brokerName";
+    const CLUSTER_NAME: &'static str = "clusterName";
 
     pub fn new(
         broker_name: impl Into<String>,
@@ -93,15 +95,15 @@ pub struct BrokerHeartbeatRequestHeader {
 }
 
 impl BrokerHeartbeatRequestHeader {
-    const CLUSTER_NAME: &'static str = "clusterName";
     const BROKER_ADDR: &'static str = "brokerAddr";
-    const BROKER_NAME: &'static str = "brokerName";
     const BROKER_ID: &'static str = "brokerId";
-    const EPOCH: &'static str = "epoch";
-    const MAX_OFFSET: &'static str = "maxOffset";
+    const BROKER_NAME: &'static str = "brokerName";
+    const CLUSTER_NAME: &'static str = "clusterName";
     const CONFIRM_OFFSET: &'static str = "confirmOffset";
-    const HEARTBEAT_TIMEOUT_MILLS: &'static str = "heartbeatTimeoutMills";
     const ELECTION_PRIORITY: &'static str = "electionPriority";
+    const EPOCH: &'static str = "epoch";
+    const HEARTBEAT_TIMEOUT_MILLS: &'static str = "heartbeatTimeoutMills";
+    const MAX_OFFSET: &'static str = "maxOffset";
 
     pub fn new(
         cluster_name: impl Into<String>,
@@ -197,9 +199,8 @@ pub struct GetBrokerMemberGroupRequestHeader {
 }
 
 impl GetBrokerMemberGroupRequestHeader {
-    const CLUSTER_NAME: &'static str = "clusterName";
-
     const BROKER_NAME: &'static str = "brokerName";
+    const CLUSTER_NAME: &'static str = "clusterName";
 
     pub fn new(cluster_name: impl Into<String>, broker_name: impl Into<String>) -> Self {
         Self {

@@ -15,60 +15,60 @@
  * limitations under the License.
  */
 
-use std::{
-    cell::Cell,
-    collections::HashMap,
-    mem,
-    sync::{atomic::AtomicU64, Arc},
-};
+use std::cell::Cell;
+use std::collections::HashMap;
+use std::mem;
+use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
 
-use bytes::{Buf, Bytes, BytesMut};
-use rocketmq_common::{
-    common::{
-        attribute::cq_type::CQType,
-        broker::broker_config::BrokerConfig,
-        config::TopicConfig,
-        message::{
-            message_single::{tags_string2tags_code, MessageExtBrokerInner},
-            MessageConst, MessageVersion,
-        },
-        mix_all,
-        sys_flag::message_sys_flag::MessageSysFlag,
-    },
-    utils::{queue_type_utils::QueueTypeUtils, time_utils},
-    CRC32Utils::crc32,
-    MessageDecoder::{
-        string_to_message_properties, MESSAGE_MAGIC_CODE_POSITION, MESSAGE_MAGIC_CODE_V2,
-        SYSFLAG_POSITION,
-    },
-    UtilAll::time_millis_to_human_string,
-};
+use bytes::Buf;
+use bytes::Bytes;
+use bytes::BytesMut;
+use rocketmq_common::common::attribute::cq_type::CQType;
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_common::common::config::TopicConfig;
+use rocketmq_common::common::message::message_single::tags_string2tags_code;
+use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
+use rocketmq_common::common::message::MessageConst;
+use rocketmq_common::common::message::MessageVersion;
+use rocketmq_common::common::mix_all;
+use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
+use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
+use rocketmq_common::utils::time_utils;
+use rocketmq_common::CRC32Utils::crc32;
+use rocketmq_common::MessageDecoder::string_to_message_properties;
+use rocketmq_common::MessageDecoder::MESSAGE_MAGIC_CODE_POSITION;
+use rocketmq_common::MessageDecoder::MESSAGE_MAGIC_CODE_V2;
+use rocketmq_common::MessageDecoder::SYSFLAG_POSITION;
+use rocketmq_common::UtilAll::time_millis_to_human_string;
 use tokio::time::Instant;
-use tracing::{error, info, warn};
+use tracing::error;
+use tracing::info;
+use tracing::warn;
 
-use crate::{
-    base::{
-        append_message_callback::DefaultAppendMessageCallback,
-        commit_log_dispatcher::CommitLogDispatcher,
-        dispatch_request::DispatchRequest,
-        flush_manager::FlushManager,
-        message_result::{AppendMessageResult, PutMessageResult},
-        message_status_enum::{AppendMessageStatus, PutMessageStatus},
-        put_message_context::PutMessageContext,
-        select_result::SelectMappedBufferResult,
-        store_checkpoint::StoreCheckpoint,
-        swappable::Swappable,
-    },
-    config::{broker_role::BrokerRole, message_store_config::MessageStoreConfig},
-    consume_queue::mapped_file_queue::MappedFileQueue,
-    log_file::{
-        flush_manager_impl::defalut_flush_manager::DefaultFlushManager,
-        mapped_file::{default_impl::DefaultMappedFile, MappedFile},
-    },
-    message_encoder::message_ext_encoder::MessageExtEncoder,
-    message_store::default_message_store::{CommitLogDispatcherDefault, DefaultMessageStore},
-    queue::{local_file_consume_queue_store::ConsumeQueueStore, ConsumeQueueStoreTrait},
-};
+use crate::base::append_message_callback::DefaultAppendMessageCallback;
+use crate::base::commit_log_dispatcher::CommitLogDispatcher;
+use crate::base::dispatch_request::DispatchRequest;
+use crate::base::flush_manager::FlushManager;
+use crate::base::message_result::AppendMessageResult;
+use crate::base::message_result::PutMessageResult;
+use crate::base::message_status_enum::AppendMessageStatus;
+use crate::base::message_status_enum::PutMessageStatus;
+use crate::base::put_message_context::PutMessageContext;
+use crate::base::select_result::SelectMappedBufferResult;
+use crate::base::store_checkpoint::StoreCheckpoint;
+use crate::base::swappable::Swappable;
+use crate::config::broker_role::BrokerRole;
+use crate::config::message_store_config::MessageStoreConfig;
+use crate::consume_queue::mapped_file_queue::MappedFileQueue;
+use crate::log_file::flush_manager_impl::defalut_flush_manager::DefaultFlushManager;
+use crate::log_file::mapped_file::default_impl::DefaultMappedFile;
+use crate::log_file::mapped_file::MappedFile;
+use crate::message_encoder::message_ext_encoder::MessageExtEncoder;
+use crate::message_store::default_message_store::CommitLogDispatcherDefault;
+use crate::message_store::default_message_store::DefaultMessageStore;
+use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
+use crate::queue::ConsumeQueueStoreTrait;
 
 // Message's MAGIC CODE daa320a7
 pub const MESSAGE_MAGIC_CODE: i32 = -626843481;
@@ -238,6 +238,7 @@ impl CommitLog {
     pub fn shutdown(&mut self) {}
 
     pub fn destroy(&mut self) {}
+
     /*    pub fn set_local_file_message_store(
         &mut self,
         local_file_message_store: Weak<Mutex<LocalFileMessageStore>>,
@@ -874,6 +875,7 @@ impl CommitLog {
     pub fn get_data(&self, offset: i64) -> Option<SelectMappedBufferResult> {
         self.get_data_with_option(offset, offset == 0)
     }
+
     pub fn get_data_with_option(
         &self,
         offset: i64,

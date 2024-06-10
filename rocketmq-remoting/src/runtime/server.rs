@@ -15,22 +15,27 @@
  * limitations under the License.
  */
 
-use std::{future::Future, net::SocketAddr, sync::Arc, time::Duration};
+use std::future::Future;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
 
 use futures::SinkExt;
 use rocketmq_common::common::server::config::ServerConfig;
-use tokio::{
-    net::{TcpListener, TcpStream},
-    sync::{broadcast, mpsc, Semaphore},
-    time,
-};
+use tokio::net::TcpListener;
+use tokio::net::TcpStream;
+use tokio::sync::broadcast;
+use tokio::sync::mpsc;
+use tokio::sync::Semaphore;
+use tokio::time;
 use tokio_stream::StreamExt;
-use tracing::{error, info, warn};
+use tracing::error;
+use tracing::info;
+use tracing::warn;
 
-use crate::{
-    connection::Connection, protocol::remoting_command::RemotingCommand,
-    runtime::processor::RequestProcessor,
-};
+use crate::connection::Connection;
+use crate::protocol::remoting_command::RemotingCommand;
+use crate::runtime::processor::RequestProcessor;
 
 /// Default limit the max number of connections.
 const DEFAULT_MAX_CONNECTIONS: usize = 1000;

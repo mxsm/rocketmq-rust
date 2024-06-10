@@ -15,15 +15,17 @@
  * limitations under the License.
  */
 
-use std::{collections::HashMap, ops::Deref, sync::Arc};
+use std::collections::HashMap;
+use std::ops::Deref;
+use std::sync::Arc;
 
-use rocketmq_common::common::{broker::broker_config::BrokerConfig, config_manager::ConfigManager};
-use serde::{Deserialize, Serialize};
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_common::common::config_manager::ConfigManager;
+use serde::Deserialize;
+use serde::Serialize;
 
-use crate::{
-    broker_path_config_helper::get_consumer_order_info_path,
-    offset::manager::consumer_order_info_lock_manager::ConsumerOrderInfoLockManager,
-};
+use crate::broker_path_config_helper::get_consumer_order_info_path;
+use crate::offset::manager::consumer_order_info_lock_manager::ConsumerOrderInfoLockManager;
 
 #[derive(Default)]
 pub(crate) struct ConsumerOrderInfoManager {

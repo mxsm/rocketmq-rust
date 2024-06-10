@@ -17,10 +17,9 @@
 
 use std::str::FromStr;
 
-use crate::{
-    common::{attribute::cleanup_policy::CleanupPolicy, config::TopicConfig},
-    TopicAttributes,
-};
+use crate::common::attribute::cleanup_policy::CleanupPolicy;
+use crate::common::config::TopicConfig;
+use crate::TopicAttributes;
 
 pub fn is_compaction(topic_config: &Option<TopicConfig>) -> bool {
     match topic_config {
@@ -51,7 +50,8 @@ pub fn get_delete_policy(topic_config: Option<&TopicConfig>) -> CleanupPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::{attribute::cleanup_policy::CleanupPolicy, config::TopicConfig};
+    use crate::common::attribute::cleanup_policy::CleanupPolicy;
+    use crate::common::config::TopicConfig;
 
     #[test]
     fn is_compaction_returns_true_when_cleanup_policy_is_compaction() {

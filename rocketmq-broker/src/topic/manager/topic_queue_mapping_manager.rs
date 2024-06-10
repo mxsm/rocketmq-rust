@@ -15,23 +15,21 @@
  * limitations under the License.
  */
 
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
+use std::sync::Arc;
 
-use rocketmq_common::common::{broker::broker_config::BrokerConfig, config_manager::ConfigManager};
-use rocketmq_remoting::{
-    code::response_code::ResponseCode,
-    protocol::{
-        body::topic_info_wrapper::topic_queue_wrapper::TopicQueueMappingSerializeWrapper,
-        header::message_operation_header::TopicRequestHeaderTrait,
-        remoting_command::RemotingCommand,
-        static_topic::{
-            topic_queue_mapping_context::TopicQueueMappingContext,
-            topic_queue_mapping_detail::TopicQueueMappingDetail,
-        },
-        DataVersion, RemotingSerializable,
-    },
-};
-use tracing::{info, warn};
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_common::common::config_manager::ConfigManager;
+use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_queue_wrapper::TopicQueueMappingSerializeWrapper;
+use rocketmq_remoting::protocol::header::message_operation_header::TopicRequestHeaderTrait;
+use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
+use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
+use rocketmq_remoting::protocol::DataVersion;
+use rocketmq_remoting::protocol::RemotingSerializable;
+use tracing::info;
+use tracing::warn;
 
 use crate::broker_path_config_helper::get_topic_queue_mapping_path;
 
@@ -222,6 +220,7 @@ impl ConfigManager for TopicQueueMappingManager {
     fn config_file_path(&self) -> String {
         get_topic_queue_mapping_path(self.broker_config.store_path_root_dir.as_str())
     }
+
     fn encode_pretty(&self, pretty_format: bool) -> String {
         let wrapper = TopicQueueMappingSerializeWrapper::new(
             Some(self.topic_queue_mapping_table.lock().clone()),

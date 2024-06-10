@@ -15,22 +15,27 @@
  * limitations under the License.
  */
 
-use std::{fs, path::Path, sync::Arc, thread, time::Duration};
+use std::fs;
+use std::path::Path;
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 
 use parking_lot::RwLock;
-use rocketmq_common::{
-    common::{message::MessageConst, sys_flag::message_sys_flag::MessageSysFlag},
-    TimeUtils::get_current_millis,
-    UtilAll::time_millis_to_human_string,
-};
-use tracing::{error, info, warn};
+use rocketmq_common::common::message::MessageConst;
+use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
+use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::UtilAll::time_millis_to_human_string;
+use tracing::error;
+use tracing::info;
+use tracing::warn;
 
-use crate::{
-    base::{dispatch_request::DispatchRequest, store_checkpoint::StoreCheckpoint},
-    config::message_store_config::MessageStoreConfig,
-    index::{index_file::IndexFile, query_offset_result::QueryOffsetResult},
-    store_path_config_helper::get_store_path_index,
-};
+use crate::base::dispatch_request::DispatchRequest;
+use crate::base::store_checkpoint::StoreCheckpoint;
+use crate::config::message_store_config::MessageStoreConfig;
+use crate::index::index_file::IndexFile;
+use crate::index::query_offset_result::QueryOffsetResult;
+use crate::store_path_config_helper::get_store_path_index;
 
 const MAX_TRY_IDX_CREATE: i32 = 3;
 

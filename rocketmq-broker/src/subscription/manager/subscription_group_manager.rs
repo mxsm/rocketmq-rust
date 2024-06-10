@@ -15,13 +15,15 @@
  * limitations under the License.
  */
 
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
+use std::sync::Arc;
 
-use rocketmq_common::common::{broker::broker_config::BrokerConfig, config_manager::ConfigManager};
-use rocketmq_remoting::protocol::{
-    subscription::subscription_group_config::SubscriptionGroupConfig, DataVersion,
-};
-use serde::{Deserialize, Serialize};
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_common::common::config_manager::ConfigManager;
+use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+use rocketmq_remoting::protocol::DataVersion;
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::broker_path_config_helper::get_subscription_group_path;
 
@@ -91,6 +93,7 @@ impl SubscriptionGroupWrapper {
     pub fn subscription_group_table(&self) -> &HashMap<String, SubscriptionGroupConfig> {
         &self.subscription_group_table
     }
+
     pub fn forbidden_table(&self) -> &HashMap<String, HashMap<String, i32>> {
         &self.forbidden_table
     }

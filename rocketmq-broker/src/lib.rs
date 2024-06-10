@@ -17,7 +17,8 @@
 #![allow(dead_code)]
 #![feature(duration_constructors)]
 
-pub use broker_bootstrap::{BrokerBootstrap, Builder};
+pub use broker_bootstrap::BrokerBootstrap;
+pub use broker_bootstrap::Builder;
 
 pub mod command;
 

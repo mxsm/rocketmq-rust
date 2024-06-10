@@ -14,10 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use crate::protocol::static_topic::{
-    logic_queue_mapping_item::LogicQueueMappingItem,
-    topic_queue_mapping_detail::TopicQueueMappingDetail,
-};
+use crate::protocol::static_topic::logic_queue_mapping_item::LogicQueueMappingItem;
+use crate::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 
 #[derive(Default)]
 pub struct TopicQueueMappingContext {

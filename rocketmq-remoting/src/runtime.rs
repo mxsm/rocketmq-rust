@@ -15,9 +15,11 @@
  * limitations under the License.
  */
 
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
+use std::sync::Arc;
 
-use crate::{protocol::remoting_command::RemotingCommand, runtime::processor::RequestProcessor};
+use crate::protocol::remoting_command::RemotingCommand;
+use crate::runtime::processor::RequestProcessor;
 
 pub mod config;
 pub mod processor;

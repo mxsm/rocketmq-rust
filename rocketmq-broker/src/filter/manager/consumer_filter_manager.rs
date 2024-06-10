@@ -17,7 +17,8 @@
 
 use std::sync::Arc;
 
-use rocketmq_common::common::{broker::broker_config::BrokerConfig, config_manager::ConfigManager};
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_common::common::config_manager::ConfigManager;
 
 use crate::broker_path_config_helper::get_consumer_filter_path;
 

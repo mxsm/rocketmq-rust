@@ -15,10 +15,9 @@
  * limitations under the License.
  */
 use clap::Parser;
-use rocketmq_cli::{
-    command_line::{Commands, RootCli},
-    content_show::print_content,
-};
+use rocketmq_cli::command_line::Commands;
+use rocketmq_cli::command_line::RootCli;
+use rocketmq_cli::content_show::print_content;
 
 fn main() {
     let cli = RootCli::parse();

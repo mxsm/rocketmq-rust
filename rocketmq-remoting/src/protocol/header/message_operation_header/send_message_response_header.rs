@@ -16,8 +16,10 @@
  */
 use std::collections::HashMap;
 
-use rocketmq_macros::{RemotingSerializable, RequestHeaderCodec};
-use serde::{Deserialize, Serialize};
+use rocketmq_macros::RemotingSerializable;
+use rocketmq_macros::RequestHeaderCodec;
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::protocol::FastCodesHeader;
 
@@ -71,15 +73,19 @@ impl SendMessageResponseHeader {
     pub fn set_msg_id(&mut self, msg_id: impl Into<String>) {
         self.msg_id = msg_id.into();
     }
+
     pub fn set_queue_id(&mut self, queue_id: i32) {
         self.queue_id = queue_id;
     }
+
     pub fn set_queue_offset(&mut self, queue_offset: i64) {
         self.queue_offset = queue_offset;
     }
+
     pub fn set_transaction_id(&mut self, transaction_id: Option<String>) {
         self.transaction_id = transaction_id;
     }
+
     pub fn set_batch_uniq_id(&mut self, batch_uniq_id: Option<String>) {
         self.batch_uniq_id = batch_uniq_id;
     }

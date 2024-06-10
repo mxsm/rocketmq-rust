@@ -15,11 +15,12 @@
  * limitations under the License.
  */
 
-use std::{
-    fs::File,
-    io::{self, Read, Write},
-    path::{Path, PathBuf},
-};
+use std::fs::File;
+use std::io::Read;
+use std::io::Write;
+use std::io::{self};
+use std::path::Path;
+use std::path::PathBuf;
 
 use parking_lot::Mutex;
 use tracing::warn;

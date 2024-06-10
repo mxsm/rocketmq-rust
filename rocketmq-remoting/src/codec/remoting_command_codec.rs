@@ -15,13 +15,15 @@
  * limitations under the License.
  */
 
-use bytes::{Buf, BufMut, BytesMut};
-use tokio_util::codec::{Decoder, Encoder};
+use bytes::Buf;
+use bytes::BufMut;
+use bytes::BytesMut;
+use tokio_util::codec::Decoder;
+use tokio_util::codec::Encoder;
 
-use crate::{
-    error::{RemotingError, RemotingError::RemotingCommandDecoderError},
-    protocol::remoting_command::RemotingCommand,
-};
+use crate::error::RemotingError;
+use crate::error::RemotingError::RemotingCommandDecoderError;
+use crate::protocol::remoting_command::RemotingCommand;
 
 /// Encodes a `RemotingCommand` into a `BytesMut` buffer.
 ///
@@ -59,8 +61,8 @@ impl RemotingCommandCodec {
 }
 
 impl Decoder for RemotingCommandCodec {
-    type Item = RemotingCommand;
     type Error = RemotingError;
+    type Item = RemotingCommand;
 
     /// Decodes a `RemotingCommand` from a `BytesMut` buffer.
     ///
@@ -185,7 +187,8 @@ mod tests {
     use bytes::Bytes;
 
     use super::*;
-    use crate::protocol::{header::client_request_header::GetRouteInfoRequestHeader, LanguageCode};
+    use crate::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+    use crate::protocol::LanguageCode;
 
     #[tokio::test]
     async fn decode_handles_insufficient_data() {

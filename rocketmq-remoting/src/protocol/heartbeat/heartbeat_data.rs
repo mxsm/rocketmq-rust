@@ -16,12 +16,12 @@
  */
 use std::collections::HashSet;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
-use crate::protocol::{
-    heartbeat::{consumer_data::ConsumerData, producer_data::ProducerData},
-    RemotingSerializable,
-};
+use crate::protocol::heartbeat::consumer_data::ConsumerData;
+use crate::protocol::heartbeat::producer_data::ProducerData;
+use crate::protocol::RemotingSerializable;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]

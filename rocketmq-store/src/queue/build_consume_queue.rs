@@ -16,10 +16,10 @@
  */
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 
-use crate::{
-    base::{commit_log_dispatcher::CommitLogDispatcher, dispatch_request::DispatchRequest},
-    queue::{local_file_consume_queue_store::ConsumeQueueStore, ConsumeQueueStoreTrait},
-};
+use crate::base::commit_log_dispatcher::CommitLogDispatcher;
+use crate::base::dispatch_request::DispatchRequest;
+use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
+use crate::queue::ConsumeQueueStoreTrait;
 
 #[derive(Clone)]
 pub struct CommitLogDispatcherBuildConsumeQueue {

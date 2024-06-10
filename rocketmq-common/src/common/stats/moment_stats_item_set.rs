@@ -14,18 +14,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::Mutex;
 
 use dashmap::DashMap;
-use tokio::{
-    task,
-    time::{interval, Duration},
-};
+use tokio::task;
+use tokio::time::interval;
+use tokio::time::Duration;
 
-use crate::{
-    common::stats::moment_stats_item::MomentStatsItem, TimeUtils::get_current_millis,
-    UtilAll::compute_next_minutes_time_millis,
-};
+use crate::common::stats::moment_stats_item::MomentStatsItem;
+use crate::TimeUtils::get_current_millis;
+use crate::UtilAll::compute_next_minutes_time_millis;
 
 #[derive(Clone)]
 pub struct MomentStatsItemSet {

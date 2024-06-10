@@ -18,9 +18,10 @@
 use lazy_static::lazy_static;
 use serde::Deserialize;
 
-use crate::common::{
-    constant::PermName, mix_all, server::config::ServerConfig, topic::TopicValidator,
-};
+use crate::common::constant::PermName;
+use crate::common::mix_all;
+use crate::common::server::config::ServerConfig;
+use crate::common::topic::TopicValidator;
 
 const DEFAULT_CLUSTER_NAME: &str = "DefaultCluster";
 

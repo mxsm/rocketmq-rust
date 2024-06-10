@@ -17,7 +17,8 @@
 use std::collections::HashMap;
 
 use rocketmq_remoting::protocol::DataVersion;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,6 +31,7 @@ impl DelayOffsetSerializeWrapper {
     pub fn offset_table(&self) -> &HashMap<i32, i64> {
         &self.offset_table
     }
+
     pub fn data_version(&self) -> &DataVersion {
         &self.data_version
     }

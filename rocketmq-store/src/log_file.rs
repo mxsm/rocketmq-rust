@@ -17,14 +17,13 @@
 
 use std::sync::Arc;
 
-use rocketmq_common::{
-    common::message::message_single::MessageExtBrokerInner, TimeUtils::get_current_millis,
-};
+use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
+use rocketmq_common::TimeUtils::get_current_millis;
 
-use crate::{
-    base::message_result::PutMessageResult, hook::put_message_hook::BoxedPutMessageHook,
-    stats::broker_stats_manager::BrokerStatsManager, store::running_flags::RunningFlags,
-};
+use crate::base::message_result::PutMessageResult;
+use crate::hook::put_message_hook::BoxedPutMessageHook;
+use crate::stats::broker_stats_manager::BrokerStatsManager;
+use crate::store::running_flags::RunningFlags;
 
 pub mod commit_log;
 pub mod flush_manager_impl;

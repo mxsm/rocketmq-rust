@@ -17,7 +17,8 @@
 
 use std::sync::Arc;
 
-use rocketmq_common::common::{broker::broker_config::BrokerConfig, config_manager::ConfigManager};
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_store::store_path_config_helper::get_delay_offset_store_path;
 
 #[derive(Default, Clone)]

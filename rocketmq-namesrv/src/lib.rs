@@ -17,11 +17,9 @@
 
 #![allow(dead_code)]
 
-pub use self::{
-    kvconfig::kvconfig_mananger::KVConfigManager,
-    namesrv_config_parse::parse_command_and_config_file,
-    route::route_info_manager::RouteInfoManager,
-};
+pub use self::kvconfig::kvconfig_mananger::KVConfigManager;
+pub use self::namesrv_config_parse::parse_command_and_config_file;
+pub use self::route::route_info_manager::RouteInfoManager;
 
 pub mod bootstrap;
 mod kvconfig;

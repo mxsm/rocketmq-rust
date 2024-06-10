@@ -17,7 +17,9 @@
 
 use std::collections::HashMap;
 
-use tracing::{error, info, warn};
+use tracing::error;
+use tracing::info;
+use tracing::warn;
 
 use crate::FileUtils;
 

@@ -17,12 +17,11 @@
 
 use bytes::Bytes;
 use rocketmq_common::common::mq_version::RocketMqVersion;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
-use crate::protocol::{
-    body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper,
-    RemotingSerializable,
-};
+use crate::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
+use crate::protocol::RemotingSerializable;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct RegisterBrokerBody {
@@ -46,6 +45,7 @@ impl RegisterBrokerBody {
     pub fn topic_config_serialize_wrapper(&self) -> &TopicConfigAndMappingSerializeWrapper {
         &self.topic_config_serialize_wrapper
     }
+
     pub fn filter_server_list(&self) -> &Vec<String> {
         &self.filter_server_list
     }

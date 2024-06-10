@@ -18,11 +18,11 @@
 use std::collections::HashMap;
 
 use rocketmq_macros::RemotingSerializable;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
-use crate::protocol::{
-    static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail, DataVersion,
-};
+use crate::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
+use crate::protocol::DataVersion;
 
 #[derive(Clone, Debug, Serialize, Deserialize, RemotingSerializable, Default)]
 #[serde(rename_all = "camelCase")]
@@ -52,6 +52,7 @@ impl TopicQueueMappingSerializeWrapper {
             Some(value) => Some(value),
         }
     }
+
     pub fn data_version(&self) -> Option<&DataVersion> {
         match &self.data_version {
             None => None,

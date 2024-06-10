@@ -20,11 +20,10 @@ use std::path::PathBuf;
 use lazy_static::lazy_static;
 use serde::Deserialize;
 
-use crate::{
-    base::store_enum::StoreType,
-    config::{broker_role::BrokerRole, flush_disk_type::FlushDiskType},
-    queue::single_consume_queue::CQ_STORE_UNIT_SIZE,
-};
+use crate::base::store_enum::StoreType;
+use crate::config::broker_role::BrokerRole;
+use crate::config::flush_disk_type::FlushDiskType;
+use crate::queue::single_consume_queue::CQ_STORE_UNIT_SIZE;
 
 lazy_static! {
     static ref USER_HOME: PathBuf = dirs::home_dir().unwrap();

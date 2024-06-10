@@ -15,14 +15,14 @@
  * limitations under the License.
  */
 
-use std::{
-    cmp,
-    future::Future,
-    sync::atomic::{AtomicUsize, Ordering},
-    time::Duration,
-};
+use std::cmp;
+use std::future::Future;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
 
-use tokio::{runtime::Handle, task::JoinHandle};
+use tokio::runtime::Handle;
+use tokio::task::JoinHandle;
 
 pub struct TokioExecutorService {
     inner: tokio::runtime::Runtime,
@@ -38,6 +38,7 @@ impl TokioExecutorService {
     pub fn shutdown(self) {
         self.inner.shutdown_background();
     }
+
     pub fn shutdown_timeout(self, timeout: Duration) {
         self.inner.shutdown_timeout(timeout);
     }

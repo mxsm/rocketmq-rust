@@ -18,9 +18,11 @@
 use std::collections::HashMap;
 
 use anyhow::Error;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
-use crate::protocol::command_custom_header::{CommandCustomHeader, FromMap};
+use crate::protocol::command_custom_header::CommandCustomHeader;
+use crate::protocol::command_custom_header::FromMap;
 
 /// Represents the header for a broker registration request.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -62,15 +64,15 @@ pub struct RegisterBrokerRequestHeader {
 }
 
 impl RegisterBrokerRequestHeader {
-    const BROKER_NAME: &'static str = "brokerName";
-    const BROKER_ADDR: &'static str = "brokerAddr";
-    const CLUSTER_NAME: &'static str = "clusterName";
-    const HA_SERVER_ADDR: &'static str = "haServerAddr";
-    const BROKER_ID: &'static str = "brokerId";
-    const HEARTBEAT_TIMEOUT_MILLIS: &'static str = "heartbeatTimeoutMillis";
-    const ENABLE_ACTING_MASTER: &'static str = "enableActingMaster";
-    const COMPRESSED: &'static str = "compressed";
     const BODY_CRC32: &'static str = "bodyCrc32";
+    const BROKER_ADDR: &'static str = "brokerAddr";
+    const BROKER_ID: &'static str = "brokerId";
+    const BROKER_NAME: &'static str = "brokerName";
+    const CLUSTER_NAME: &'static str = "clusterName";
+    const COMPRESSED: &'static str = "compressed";
+    const ENABLE_ACTING_MASTER: &'static str = "enableActingMaster";
+    const HA_SERVER_ADDR: &'static str = "haServerAddr";
+    const HEARTBEAT_TIMEOUT_MILLIS: &'static str = "heartbeatTimeoutMillis";
 
     /// Creates a new instance of `RegisterBrokerRequestHeader`.
     ///

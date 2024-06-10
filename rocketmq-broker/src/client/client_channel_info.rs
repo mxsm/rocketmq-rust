@@ -46,15 +46,19 @@ impl ClientChannelInfo {
     pub fn socket_addr(&self) -> &String {
         &self.socket_addr
     }
+
     pub fn client_id(&self) -> &String {
         &self.client_id
     }
+
     pub fn language(&self) -> LanguageCode {
         self.language
     }
+
     pub fn version(&self) -> i32 {
         self.version
     }
+
     pub fn last_update_timestamp(&self) -> i64 {
         self.last_update_timestamp
     }
@@ -62,15 +66,19 @@ impl ClientChannelInfo {
     pub fn set_socket_addr(&mut self, socket_addr: String) {
         self.socket_addr = socket_addr;
     }
+
     pub fn set_client_id(&mut self, client_id: String) {
         self.client_id = client_id;
     }
+
     pub fn set_language(&mut self, language: LanguageCode) {
         self.language = language;
     }
+
     pub fn set_version(&mut self, version: i32) {
         self.version = version;
     }
+
     pub fn set_last_update_timestamp(&mut self, last_update_timestamp: i64) {
         self.last_update_timestamp = last_update_timestamp;
     }

@@ -15,7 +15,8 @@
  * limitations under the License.
  */
 
-use std::{fmt::Debug, path::PathBuf};
+use std::fmt::Debug;
+use std::path::PathBuf;
 
 use config::Config;
 use serde::Deserialize;

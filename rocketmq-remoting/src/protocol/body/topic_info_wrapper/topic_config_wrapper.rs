@@ -17,15 +17,13 @@
 use std::collections::HashMap;
 
 use rocketmq_common::common::config::TopicConfig;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
-use crate::protocol::{
-    static_topic::{
-        topic_queue_info::TopicQueueMappingInfo,
-        topic_queue_mapping_detail::TopicQueueMappingDetail,
-    },
-    DataVersion, RemotingSerializable,
-};
+use crate::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
+use crate::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
+use crate::protocol::DataVersion;
+use crate::protocol::RemotingSerializable;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TopicConfigAndMappingSerializeWrapper {
@@ -47,15 +45,19 @@ impl TopicConfigAndMappingSerializeWrapper {
     pub fn topic_queue_mapping_info_map(&self) -> &HashMap<String, TopicQueueMappingInfo> {
         &self.topic_queue_mapping_info_map
     }
+
     pub fn topic_queue_mapping_detail_map(&self) -> &HashMap<String, TopicQueueMappingDetail> {
         &self.topic_queue_mapping_detail_map
     }
+
     pub fn mapping_data_version(&self) -> &DataVersion {
         &self.mapping_data_version
     }
+
     pub fn topic_config_table(&self) -> &Option<HashMap<String, TopicConfig>> {
         &self.topic_config_table
     }
+
     pub fn data_version(&self) -> &Option<DataVersion> {
         &self.data_version
     }

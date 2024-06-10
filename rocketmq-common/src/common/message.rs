@@ -15,12 +15,12 @@
  * limitations under the License.
  */
 
-use std::{
-    collections::{HashMap, HashSet},
-    string::ToString,
-};
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::string::ToString;
 
-use bytes::{Buf, Bytes};
+use bytes::Buf;
+use bytes::Bytes;
 use lazy_static::lazy_static;
 
 pub mod message_accessor;
@@ -132,92 +132,86 @@ impl MessageVersion {
 pub struct MessageConst;
 
 impl MessageConst {
-    pub const PROPERTY_KEYS: &'static str = "KEYS";
-    pub const PROPERTY_TAGS: &'static str = "TAGS";
-    pub const PROPERTY_WAIT_STORE_MSG_OK: &'static str = "WAIT";
-    pub const PROPERTY_DELAY_TIME_LEVEL: &'static str = "DELAY";
-    pub const PROPERTY_RETRY_TOPIC: &'static str = "RETRY_TOPIC";
-    pub const PROPERTY_REAL_TOPIC: &'static str = "REAL_TOPIC";
-    pub const PROPERTY_REAL_QUEUE_ID: &'static str = "REAL_QID";
-    pub const PROPERTY_TRANSACTION_PREPARED: &'static str = "TRAN_MSG";
-    pub const PROPERTY_PRODUCER_GROUP: &'static str = "PGROUP";
-    pub const PROPERTY_MIN_OFFSET: &'static str = "MIN_OFFSET";
-    pub const PROPERTY_MAX_OFFSET: &'static str = "MAX_OFFSET";
-    pub const PROPERTY_BUYER_ID: &'static str = "BUYER_ID";
-    pub const PROPERTY_ORIGIN_MESSAGE_ID: &'static str = "ORIGIN_MESSAGE_ID";
-    pub const PROPERTY_TRANSFER_FLAG: &'static str = "TRANSFER_FLAG";
-    pub const PROPERTY_CORRECTION_FLAG: &'static str = "CORRECTION_FLAG";
-    pub const PROPERTY_MQ2_FLAG: &'static str = "MQ2_FLAG";
-    pub const PROPERTY_RECONSUME_TIME: &'static str = "RECONSUME_TIME";
-    pub const PROPERTY_MSG_REGION: &'static str = "MSG_REGION";
-    pub const PROPERTY_TRACE_SWITCH: &'static str = "TRACE_ON";
-    pub const PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX: &'static str = "UNIQ_KEY";
-    pub const PROPERTY_EXTEND_UNIQ_INFO: &'static str = "EXTEND_UNIQ_INFO";
-    pub const PROPERTY_MAX_RECONSUME_TIMES: &'static str = "MAX_RECONSUME_TIMES";
-    pub const PROPERTY_CONSUME_START_TIMESTAMP: &'static str = "CONSUME_START_TIME";
-    pub const PROPERTY_INNER_NUM: &'static str = "INNER_NUM";
-    pub const PROPERTY_INNER_BASE: &'static str = "INNER_BASE";
     pub const DUP_INFO: &'static str = "DUP_INFO";
-    pub const PROPERTY_CHECK_IMMUNITY_TIME_IN_SECONDS: &'static str =
-        "CHECK_IMMUNITY_TIME_IN_SECONDS";
-    pub const PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET: &'static str =
-        "TRAN_PREPARED_QUEUE_OFFSET";
-    pub const PROPERTY_TRANSACTION_ID: &'static str = "__transactionId__";
-    pub const PROPERTY_TRANSACTION_CHECK_TIMES: &'static str = "TRANSACTION_CHECK_TIMES";
-    pub const PROPERTY_INSTANCE_ID: &'static str = "INSTANCE_ID";
-    pub const PROPERTY_CORRELATION_ID: &'static str = "CORRELATION_ID";
-    pub const PROPERTY_MESSAGE_REPLY_TO_CLIENT: &'static str = "REPLY_TO_CLIENT";
-    pub const PROPERTY_MESSAGE_TTL: &'static str = "TTL";
-    pub const PROPERTY_REPLY_MESSAGE_ARRIVE_TIME: &'static str = "ARRIVE_TIME";
-    pub const PROPERTY_PUSH_REPLY_TIME: &'static str = "PUSH_REPLY_TIME";
-    pub const PROPERTY_CLUSTER: &'static str = "CLUSTER";
-    pub const PROPERTY_MESSAGE_TYPE: &'static str = "MSG_TYPE";
-    pub const PROPERTY_POP_CK: &'static str = "POP_CK";
-    pub const PROPERTY_POP_CK_OFFSET: &'static str = "POP_CK_OFFSET";
-    pub const PROPERTY_FIRST_POP_TIME: &'static str = "1ST_POP_TIME";
-    pub const PROPERTY_SHARDING_KEY: &'static str = "__SHARDINGKEY";
-    pub const PROPERTY_FORWARD_QUEUE_ID: &'static str = "PROPERTY_FORWARD_QUEUE_ID";
-    pub const PROPERTY_REDIRECT: &'static str = "REDIRECT";
-    pub const PROPERTY_INNER_MULTI_DISPATCH: &'static str = "INNER_MULTI_DISPATCH";
-    pub const PROPERTY_INNER_MULTI_QUEUE_OFFSET: &'static str = "INNER_MULTI_QUEUE_OFFSET";
-    pub const PROPERTY_TRACE_CONTEXT: &'static str = "TRACE_CONTEXT";
-    pub const PROPERTY_TIMER_DELAY_SEC: &'static str = "TIMER_DELAY_SEC";
-    pub const PROPERTY_TIMER_DELIVER_MS: &'static str = "TIMER_DELIVER_MS";
+    pub const KEY_SEPARATOR: &'static str = " ";
     pub const PROPERTY_BORN_HOST: &'static str = "__BORNHOST";
     pub const PROPERTY_BORN_TIMESTAMP: &'static str = "BORN_TIMESTAMP";
-
+    pub const PROPERTY_BUYER_ID: &'static str = "BUYER_ID";
+    pub const PROPERTY_CHECK_IMMUNITY_TIME_IN_SECONDS: &'static str =
+        "CHECK_IMMUNITY_TIME_IN_SECONDS";
+    pub const PROPERTY_CLUSTER: &'static str = "CLUSTER";
+    pub const PROPERTY_CONSUME_START_TIMESTAMP: &'static str = "CONSUME_START_TIME";
+    pub const PROPERTY_CORRECTION_FLAG: &'static str = "CORRECTION_FLAG";
+    pub const PROPERTY_CORRELATION_ID: &'static str = "CORRELATION_ID";
+    pub const PROPERTY_CRC32: &'static str = "__CRC32#";
+    pub const PROPERTY_DELAY_TIME_LEVEL: &'static str = "DELAY";
+    pub const PROPERTY_DLQ_ORIGIN_MESSAGE_ID: &'static str = "DLQ_ORIGIN_MESSAGE_ID";
+    /**
+     * properties for DLQ
+     */
+    pub const PROPERTY_DLQ_ORIGIN_TOPIC: &'static str = "DLQ_ORIGIN_TOPIC";
+    pub const PROPERTY_EXTEND_UNIQ_INFO: &'static str = "EXTEND_UNIQ_INFO";
+    pub const PROPERTY_FIRST_POP_TIME: &'static str = "1ST_POP_TIME";
+    pub const PROPERTY_FORWARD_QUEUE_ID: &'static str = "PROPERTY_FORWARD_QUEUE_ID";
+    pub const PROPERTY_INNER_BASE: &'static str = "INNER_BASE";
+    pub const PROPERTY_INNER_MULTI_DISPATCH: &'static str = "INNER_MULTI_DISPATCH";
+    pub const PROPERTY_INNER_MULTI_QUEUE_OFFSET: &'static str = "INNER_MULTI_QUEUE_OFFSET";
+    pub const PROPERTY_INNER_NUM: &'static str = "INNER_NUM";
+    pub const PROPERTY_INSTANCE_ID: &'static str = "INSTANCE_ID";
+    pub const PROPERTY_KEYS: &'static str = "KEYS";
+    pub const PROPERTY_MAX_OFFSET: &'static str = "MAX_OFFSET";
+    pub const PROPERTY_MAX_RECONSUME_TIMES: &'static str = "MAX_RECONSUME_TIMES";
+    pub const PROPERTY_MESSAGE_REPLY_TO_CLIENT: &'static str = "REPLY_TO_CLIENT";
+    pub const PROPERTY_MESSAGE_TTL: &'static str = "TTL";
+    pub const PROPERTY_MESSAGE_TYPE: &'static str = "MSG_TYPE";
+    pub const PROPERTY_MIN_OFFSET: &'static str = "MIN_OFFSET";
+    pub const PROPERTY_MQ2_FLAG: &'static str = "MQ2_FLAG";
+    pub const PROPERTY_MSG_REGION: &'static str = "MSG_REGION";
+    pub const PROPERTY_ORIGIN_MESSAGE_ID: &'static str = "ORIGIN_MESSAGE_ID";
+    pub const PROPERTY_POP_CK: &'static str = "POP_CK";
+    pub const PROPERTY_POP_CK_OFFSET: &'static str = "POP_CK_OFFSET";
+    pub const PROPERTY_PRODUCER_GROUP: &'static str = "PGROUP";
+    pub const PROPERTY_PUSH_REPLY_TIME: &'static str = "PUSH_REPLY_TIME";
+    pub const PROPERTY_REAL_QUEUE_ID: &'static str = "REAL_QID";
+    pub const PROPERTY_REAL_TOPIC: &'static str = "REAL_TOPIC";
+    pub const PROPERTY_RECONSUME_TIME: &'static str = "RECONSUME_TIME";
+    pub const PROPERTY_REDIRECT: &'static str = "REDIRECT";
+    pub const PROPERTY_REPLY_MESSAGE_ARRIVE_TIME: &'static str = "ARRIVE_TIME";
+    pub const PROPERTY_RETRY_TOPIC: &'static str = "RETRY_TOPIC";
+    pub const PROPERTY_SHARDING_KEY: &'static str = "__SHARDINGKEY";
+    pub const PROPERTY_TAGS: &'static str = "TAGS";
+    pub const PROPERTY_TIMER_DELAY_LEVEL: &'static str = "TIMER_DELAY_LEVEL";
+    pub const PROPERTY_TIMER_DELAY_MS: &'static str = "TIMER_DELAY_MS";
+    pub const PROPERTY_TIMER_DELAY_SEC: &'static str = "TIMER_DELAY_SEC";
+    pub const PROPERTY_TIMER_DELIVER_MS: &'static str = "TIMER_DELIVER_MS";
+    pub const PROPERTY_TIMER_DEL_UNIQKEY: &'static str = "TIMER_DEL_UNIQKEY";
+    pub const PROPERTY_TIMER_DEQUEUE_MS: &'static str = "TIMER_DEQUEUE_MS";
+    pub const PROPERTY_TIMER_ENQUEUE_MS: &'static str = "TIMER_ENQUEUE_MS";
+    pub const PROPERTY_TIMER_OUT_MS: &'static str = "TIMER_OUT_MS";
+    pub const PROPERTY_TIMER_ROLL_TIMES: &'static str = "TIMER_ROLL_TIMES";
+    pub const PROPERTY_TRACE_CONTEXT: &'static str = "TRACE_CONTEXT";
+    pub const PROPERTY_TRACE_SWITCH: &'static str = "TRACE_ON";
+    pub const PROPERTY_TRANSACTION_CHECK_TIMES: &'static str = "TRANSACTION_CHECK_TIMES";
+    pub const PROPERTY_TRANSACTION_ID: &'static str = "__transactionId__";
+    pub const PROPERTY_TRANSACTION_PREPARED: &'static str = "TRAN_MSG";
+    pub const PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET: &'static str =
+        "TRAN_PREPARED_QUEUE_OFFSET";
+    pub const PROPERTY_TRANSFER_FLAG: &'static str = "TRANSFER_FLAG";
+    /**
+     * the transient property key of groupSysFlag (set by the client when pulling messages)
+     */
+    pub const PROPERTY_TRANSIENT_GROUP_CONFIG: &'static str = "__RMQ.TRANSIENT.GROUP_SYS_FLAG";
     /**
      * property which name starts with "__RMQ.TRANSIENT." is called transient one that will not
      * be stored in broker disks.
      */
     pub const PROPERTY_TRANSIENT_PREFIX: &'static str = "__RMQ.TRANSIENT.";
-
     /**
      * the transient property key of topicSysFlag (set by the client when pulling messages)
      */
     pub const PROPERTY_TRANSIENT_TOPIC_CONFIG: &'static str = "__RMQ.TRANSIENT.TOPIC_SYS_FLAG";
-
-    /**
-     * the transient property key of groupSysFlag (set by the client when pulling messages)
-     */
-    pub const PROPERTY_TRANSIENT_GROUP_CONFIG: &'static str = "__RMQ.TRANSIENT.GROUP_SYS_FLAG";
-
-    pub const KEY_SEPARATOR: &'static str = " ";
-
-    pub const PROPERTY_TIMER_ENQUEUE_MS: &'static str = "TIMER_ENQUEUE_MS";
-    pub const PROPERTY_TIMER_DEQUEUE_MS: &'static str = "TIMER_DEQUEUE_MS";
-    pub const PROPERTY_TIMER_ROLL_TIMES: &'static str = "TIMER_ROLL_TIMES";
-    pub const PROPERTY_TIMER_OUT_MS: &'static str = "TIMER_OUT_MS";
-    pub const PROPERTY_TIMER_DEL_UNIQKEY: &'static str = "TIMER_DEL_UNIQKEY";
-    pub const PROPERTY_TIMER_DELAY_LEVEL: &'static str = "TIMER_DELAY_LEVEL";
-    pub const PROPERTY_TIMER_DELAY_MS: &'static str = "TIMER_DELAY_MS";
-    pub const PROPERTY_CRC32: &'static str = "__CRC32#";
-
-    /**
-     * properties for DLQ
-     */
-    pub const PROPERTY_DLQ_ORIGIN_TOPIC: &'static str = "DLQ_ORIGIN_TOPIC";
-    pub const PROPERTY_DLQ_ORIGIN_MESSAGE_ID: &'static str = "DLQ_ORIGIN_MESSAGE_ID";
+    pub const PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX: &'static str = "UNIQ_KEY";
+    pub const PROPERTY_WAIT_STORE_MSG_OK: &'static str = "WAIT";
 }
 
 lazy_static! {

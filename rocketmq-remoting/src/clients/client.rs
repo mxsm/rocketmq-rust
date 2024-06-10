@@ -17,9 +17,9 @@
 use futures_util::SinkExt;
 use tokio_stream::StreamExt;
 
-use crate::{
-    connection::Connection, error::RemotingError, protocol::remoting_command::RemotingCommand,
-};
+use crate::connection::Connection;
+use crate::error::RemotingError;
+use crate::protocol::remoting_command::RemotingCommand;
 
 pub struct Client {
     /// The TCP connection decorated with the rocketmq remoting protocol encoder / decoder

@@ -15,44 +15,43 @@
  * limitations under the License.
  */
 
-use std::{
-    collections::{HashMap, HashSet},
-    net::SocketAddr,
-    sync::Arc,
-    time::{Duration, SystemTime},
-};
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
+use std::time::SystemTime;
 
-use rocketmq_common::{
-    common::{
-        config::TopicConfig, constant::PermName, mix_all, namesrv::namesrv_config::NamesrvConfig,
-        topic::TopicValidator, TopicSysFlag,
-    },
-    TimeUtils,
-};
-use rocketmq_remoting::{
-    clients::RemoteClient,
-    code::request_code::RequestCode,
-    protocol::{
-        body::{
-            broker_body::{broker_member_group::BrokerMemberGroup, cluster_info::ClusterInfo},
-            topic::topic_list::TopicList,
-            topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper,
-        },
-        header::namesrv::{
-            broker_request::UnRegisterBrokerRequestHeader,
-            brokerid_change_request_header::NotifyMinBrokerIdChangeRequestHeader,
-        },
-        namesrv::RegisterBrokerResult,
-        remoting_command::RemotingCommand,
-        route::route_data_view::{BrokerData, QueueData, TopicRouteData},
-        static_topic::topic_queue_info::TopicQueueMappingInfo,
-        DataVersion,
-    },
-};
+use rocketmq_common::common::config::TopicConfig;
+use rocketmq_common::common::constant::PermName;
+use rocketmq_common::common::mix_all;
+use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
+use rocketmq_common::common::topic::TopicValidator;
+use rocketmq_common::common::TopicSysFlag;
+use rocketmq_common::TimeUtils;
+use rocketmq_remoting::clients::RemoteClient;
+use rocketmq_remoting::code::request_code::RequestCode;
+use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
+use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
+use rocketmq_remoting::protocol::body::topic::topic_list::TopicList;
+use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
+use rocketmq_remoting::protocol::header::namesrv::broker_request::UnRegisterBrokerRequestHeader;
+use rocketmq_remoting::protocol::header::namesrv::brokerid_change_request_header::NotifyMinBrokerIdChangeRequestHeader;
+use rocketmq_remoting::protocol::namesrv::RegisterBrokerResult;
+use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
+use rocketmq_remoting::protocol::route::route_data_view::QueueData;
+use rocketmq_remoting::protocol::route::route_data_view::TopicRouteData;
+use rocketmq_remoting::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
+use rocketmq_remoting::protocol::DataVersion;
 use tokio::sync::broadcast;
-use tracing::{debug, info, warn};
+use tracing::debug;
+use tracing::info;
+use tracing::warn;
 
-use crate::route_info::broker_addr_info::{BrokerAddrInfo, BrokerLiveInfo, BrokerStatusChangeInfo};
+use crate::route_info::broker_addr_info::BrokerAddrInfo;
+use crate::route_info::broker_addr_info::BrokerLiveInfo;
+use crate::route_info::broker_addr_info::BrokerStatusChangeInfo;
 
 const DEFAULT_BROKER_CHANNEL_EXPIRED_TIME: i64 = 1000 * 60 * 2;
 
@@ -864,6 +863,7 @@ impl RouteInfoManager {
             }
         }
     }
+
     fn on_connection_disconnected(&mut self, broker_addr_info: &BrokerAddrInfo) {
         let mut request_header = UnRegisterBrokerRequestHeader::default();
         let need_un_register =

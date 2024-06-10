@@ -14,14 +14,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::{collections::HashSet, hash::Hash};
+use std::collections::HashSet;
+use std::hash::Hash;
 
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
-use crate::protocol::heartbeat::{
-    consume_type::ConsumeType, message_model::MessageModel, subscription_data::SubscriptionData,
-};
+use crate::protocol::heartbeat::consume_type::ConsumeType;
+use crate::protocol::heartbeat::message_model::MessageModel;
+use crate::protocol::heartbeat::subscription_data::SubscriptionData;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]

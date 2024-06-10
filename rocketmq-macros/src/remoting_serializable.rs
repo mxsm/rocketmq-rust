@@ -17,7 +17,8 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, DeriveInput};
+use syn::parse_macro_input;
+use syn::DeriveInput;
 
 pub(crate) fn remoting_serializable_inner(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);

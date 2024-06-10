@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 
 use anyhow::Error;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
-use crate::protocol::command_custom_header::{CommandCustomHeader, FromMap};
+use crate::protocol::command_custom_header::CommandCustomHeader;
+use crate::protocol::command_custom_header::FromMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct NotifyMinBrokerIdChangeRequestHeader {
@@ -24,11 +26,11 @@ pub struct NotifyMinBrokerIdChangeRequestHeader {
 }
 
 impl NotifyMinBrokerIdChangeRequestHeader {
-    const MIN_BROKER_ID: &'static str = "minBrokerId";
     const BROKER_NAME: &'static str = "brokerName";
-    const MIN_BROKER_ADDR: &'static str = "minBrokerAddr";
-    const OFFLINE_BROKER_ADDR: &'static str = "offlineBrokerAddr";
     const HA_BROKER_ADDR: &'static str = "haBrokerAddr";
+    const MIN_BROKER_ADDR: &'static str = "minBrokerAddr";
+    const MIN_BROKER_ID: &'static str = "minBrokerId";
+    const OFFLINE_BROKER_ADDR: &'static str = "offlineBrokerAddr";
 
     pub fn new(
         min_broker_id: Option<i64>,

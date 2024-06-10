@@ -15,7 +15,8 @@
  * limitations under the License.
  */
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::protocol::body::kv_table::KVTable;
 

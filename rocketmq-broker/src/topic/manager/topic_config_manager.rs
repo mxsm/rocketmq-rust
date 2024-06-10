@@ -15,29 +15,31 @@
  * limitations under the License.
  */
 
-use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
 
-use rocketmq_common::{
-    common::{
-        attribute::attribute_util::alter_current_attributes, broker::broker_config::BrokerConfig,
-        config::TopicConfig, config_manager::ConfigManager, constant::PermName, mix_all,
-        topic::TopicValidator,
-    },
-    TopicAttributes::ALL,
-};
-use rocketmq_remoting::protocol::{
-    body::topic_info_wrapper::{
-        topic_config_wrapper::TopicConfigAndMappingSerializeWrapper, TopicConfigSerializeWrapper,
-    },
-    static_topic::topic_queue_info::TopicQueueMappingInfo,
-    DataVersion, RemotingSerializable,
-};
-use rocketmq_store::{
-    log_file::MessageStore, message_store::default_message_store::DefaultMessageStore,
-};
-use tracing::{info, warn};
+use rocketmq_common::common::attribute::attribute_util::alter_current_attributes;
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_common::common::config::TopicConfig;
+use rocketmq_common::common::config_manager::ConfigManager;
+use rocketmq_common::common::constant::PermName;
+use rocketmq_common::common::mix_all;
+use rocketmq_common::common::topic::TopicValidator;
+use rocketmq_common::TopicAttributes::ALL;
+use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
+use rocketmq_remoting::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper;
+use rocketmq_remoting::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
+use rocketmq_remoting::protocol::DataVersion;
+use rocketmq_remoting::protocol::RemotingSerializable;
+use rocketmq_store::log_file::MessageStore;
+use rocketmq_store::message_store::default_message_store::DefaultMessageStore;
+use tracing::info;
+use tracing::warn;
 
-use crate::{broker_path_config_helper::get_topic_config_path, broker_runtime::BrokerRuntimeInner};
+use crate::broker_path_config_helper::get_topic_config_path;
+use crate::broker_runtime::BrokerRuntimeInner;
 
 pub(crate) struct TopicConfigManager {
     topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
@@ -443,6 +445,7 @@ impl TopicConfigManager {
     ) {
         self.topic_config_table = topic_config_table;
     }
+
     pub fn set_message_store(&mut self, message_store: Option<DefaultMessageStore>) {
         self.message_store = message_store;
     }

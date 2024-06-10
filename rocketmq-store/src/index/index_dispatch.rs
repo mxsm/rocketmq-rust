@@ -17,11 +17,10 @@
 
 use std::sync::Arc;
 
-use crate::{
-    base::{commit_log_dispatcher::CommitLogDispatcher, dispatch_request::DispatchRequest},
-    config::message_store_config::MessageStoreConfig,
-    index::index_service::IndexService,
-};
+use crate::base::commit_log_dispatcher::CommitLogDispatcher;
+use crate::base::dispatch_request::DispatchRequest;
+use crate::config::message_store_config::MessageStoreConfig;
+use crate::index::index_service::IndexService;
 
 #[derive(Clone)]
 pub struct CommitLogDispatcherBuildIndex {

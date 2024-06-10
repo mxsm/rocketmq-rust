@@ -14,15 +14,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::{
-    sync::{
-        atomic::{AtomicI64, AtomicU64, Ordering},
-        Arc, Mutex,
-    },
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::sync::atomic::AtomicI64;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
-use crate::{common::statistics::interceptor::Interceptor, TimeUtils::get_current_millis};
+use crate::common::statistics::interceptor::Interceptor;
+use crate::TimeUtils::get_current_millis;
 
 pub struct StatisticsItem {
     stat_kind: String,
@@ -180,6 +181,7 @@ mod tests {
 
     impl Interceptor for TestInterceptor {
         fn inc(&self, _deltas: Vec<i64>) {}
+
         fn reset(&self) {}
     }
 

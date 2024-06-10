@@ -19,10 +19,9 @@ use std::collections::HashMap;
 
 use bytes::Bytes;
 
-use crate::common::message::{
-    message_single::{Message, MessageExtBrokerInner},
-    MessageTrait,
-};
+use crate::common::message::message_single::Message;
+use crate::common::message::message_single::MessageExtBrokerInner;
+use crate::common::message::MessageTrait;
 
 pub struct MessageBatch {
     pub messages: Vec<Message>,

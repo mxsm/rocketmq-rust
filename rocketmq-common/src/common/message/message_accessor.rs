@@ -14,7 +14,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use crate::common::message::{message_single::Message, MessageConst, MessageTrait};
+use crate::common::message::message_single::Message;
+use crate::common::message::MessageConst;
+use crate::common::message::MessageTrait;
 
 pub fn set_transfer_flag(msg: &mut Message, unit: &str) {
     msg.put_property(

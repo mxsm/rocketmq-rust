@@ -15,22 +15,20 @@
  * limitations under the License.
  */
 
-use std::{fs::File, io, sync::Arc};
+use std::fs::File;
+use std::io;
+use std::sync::Arc;
 
 use bytes::Bytes;
-use rocketmq_common::common::message::{
-    message_batch::MessageExtBatch, message_single::MessageExtBrokerInner,
-};
+use rocketmq_common::common::message::message_batch::MessageExtBatch;
+use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
 
-use crate::{
-    base::{
-        append_message_callback::AppendMessageCallback,
-        compaction_append_msg_callback::CompactionAppendMsgCallback,
-        message_result::AppendMessageResult, put_message_context::PutMessageContext,
-        select_result::SelectMappedBufferResult,
-    },
-    config::flush_disk_type::FlushDiskType,
-};
+use crate::base::append_message_callback::AppendMessageCallback;
+use crate::base::compaction_append_msg_callback::CompactionAppendMsgCallback;
+use crate::base::message_result::AppendMessageResult;
+use crate::base::put_message_context::PutMessageContext;
+use crate::base::select_result::SelectMappedBufferResult;
+use crate::config::flush_disk_type::FlushDiskType;
 
 pub(crate) mod default_impl;
 pub mod default_impl_refactor;

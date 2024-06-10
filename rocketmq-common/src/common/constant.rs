@@ -20,15 +20,14 @@ use std::ops::Deref;
 pub struct PermName;
 
 impl PermName {
+    pub const INDEX_PERM_INHERIT: u32 = 0;
     pub const INDEX_PERM_PRIORITY: u32 = 3;
     pub const INDEX_PERM_READ: u32 = 2;
     pub const INDEX_PERM_WRITE: u32 = 1;
-    pub const INDEX_PERM_INHERIT: u32 = 0;
-
+    pub const PERM_INHERIT: u32 = 0x1 << Self::INDEX_PERM_INHERIT;
     pub const PERM_PRIORITY: u32 = 0x1 << Self::INDEX_PERM_PRIORITY;
     pub const PERM_READ: u32 = 0x1 << Self::INDEX_PERM_READ;
     pub const PERM_WRITE: u32 = 0x1 << Self::INDEX_PERM_WRITE;
-    pub const PERM_INHERIT: u32 = 0x1 << Self::INDEX_PERM_INHERIT;
 
     pub fn perm2string(perm: u32) -> String {
         let mut sb = String::from("---");

@@ -17,7 +17,8 @@
 
 use std::str;
 
-use bytes::{BufMut, BytesMut};
+use bytes::BufMut;
+use bytes::BytesMut;
 
 pub fn write_str(buf: &mut BytesMut, use_short_length: bool, s: &str) {
     if use_short_length {

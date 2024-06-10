@@ -17,12 +17,11 @@
 
 use proc_macro::TokenStream;
 use quote::ToTokens;
-use syn::{PathArguments, Type};
+use syn::PathArguments;
+use syn::Type;
 
-use crate::{
-    remoting_serializable::remoting_serializable_inner,
-    request_header_custom::request_header_codec_inner,
-};
+use crate::remoting_serializable::remoting_serializable_inner;
+use crate::request_header_custom::request_header_codec_inner;
 
 mod remoting_serializable;
 mod request_header_custom;

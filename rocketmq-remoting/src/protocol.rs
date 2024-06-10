@@ -14,21 +14,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::{
-    collections::HashMap,
-    fmt::{Display, Formatter},
-    sync::{
-        atomic::{AtomicI64, Ordering},
-        Arc,
-    },
-    time::SystemTime,
-};
+use std::collections::HashMap;
+use std::fmt::Display;
+use std::fmt::Formatter;
+use std::sync::atomic::AtomicI64;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::time::SystemTime;
 
-use rocketmq_common::{
-    common::{mix_all, topic::TopicValidator},
-    utils::time_utils,
-};
-use serde::{de, ser::SerializeStruct, Deserialize, Serialize, Serializer};
+use rocketmq_common::common::mix_all;
+use rocketmq_common::common::topic::TopicValidator;
+use rocketmq_common::utils::time_utils;
+use serde::de;
+use serde::ser::SerializeStruct;
+use serde::Deserialize;
+use serde::Serialize;
+use serde::Serializer;
 
 use crate::RocketMQSerializable;
 
@@ -269,9 +270,11 @@ impl DataVersion {
     pub fn get_state_version(&self) -> i64 {
         self.state_version
     }
+
     pub fn set_state_version(&mut self, state_version: i64) {
         self.state_version = state_version;
     }
+
     pub fn get_timestamp(&self) -> i64 {
         self.timestamp
     }
@@ -283,12 +286,15 @@ impl DataVersion {
     pub fn increment_counter(&self) -> i64 {
         self.counter.fetch_add(1, Ordering::Relaxed) + 1
     }
+
     pub fn state_version(&self) -> i64 {
         self.state_version
     }
+
     pub fn timestamp(&self) -> i64 {
         self.timestamp
     }
+
     pub fn counter(&self) -> i64 {
         self.counter.load(Ordering::Relaxed)
     }
@@ -374,10 +380,10 @@ pub trait FastCodesHeader {
 pub struct NamespaceUtil;
 
 impl NamespaceUtil {
-    pub const NAMESPACE_SEPARATOR: char = '%';
-    pub const STRING_BLANK: &'static str = "";
-    pub const RETRY_PREFIX_LENGTH: usize = mix_all::RETRY_GROUP_TOPIC_PREFIX.len();
     pub const DLQ_PREFIX_LENGTH: usize = mix_all::DLQ_GROUP_TOPIC_PREFIX.len();
+    pub const NAMESPACE_SEPARATOR: char = '%';
+    pub const RETRY_PREFIX_LENGTH: usize = mix_all::RETRY_GROUP_TOPIC_PREFIX.len();
+    pub const STRING_BLANK: &'static str = "";
 
     pub fn without_namespace(resource_with_namespace: &str) -> String {
         if resource_with_namespace.is_empty()

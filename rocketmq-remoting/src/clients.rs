@@ -15,24 +15,22 @@
  * limitations under the License.
  */
 
-use std::{
-    collections::HashMap,
-    fmt::{Debug, Formatter},
-    sync::Arc,
-    time::Duration,
-};
+use std::collections::HashMap;
+use std::fmt::Debug;
+use std::fmt::Formatter;
+use std::sync::Arc;
+use std::time::Duration;
 
 pub use blocking_client::BlockingClient;
 pub use client::Client;
 use rocketmq_common::TokioExecutorService;
 
-use crate::{
-    error::RemotingError,
-    net::ResponseFuture,
-    protocol::remoting_command::RemotingCommand,
-    remoting::{InvokeCallback, RemotingService},
-    runtime::processor::RequestProcessor,
-};
+use crate::error::RemotingError;
+use crate::net::ResponseFuture;
+use crate::protocol::remoting_command::RemotingCommand;
+use crate::remoting::InvokeCallback;
+use crate::remoting::RemotingService;
+use crate::runtime::processor::RequestProcessor;
 
 mod async_client;
 mod blocking_client;

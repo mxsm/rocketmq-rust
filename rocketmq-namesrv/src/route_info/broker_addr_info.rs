@@ -1,11 +1,11 @@
-use std::{
-    collections::HashMap,
-    fmt::{Display, Formatter},
-    net::SocketAddr,
-};
+use std::collections::HashMap;
+use std::fmt::Display;
+use std::fmt::Formatter;
+use std::net::SocketAddr;
 
 use rocketmq_remoting::protocol::DataVersion;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub(crate) struct BrokerAddrInfo {
@@ -122,6 +122,7 @@ impl BrokerLiveInfo {
             remote_addr,
         }
     }
+
     pub fn data_version(&self) -> &DataVersion {
         &self.data_version
     }
@@ -129,9 +130,11 @@ impl BrokerLiveInfo {
     pub fn last_update_timestamp(&self) -> i64 {
         self.last_update_timestamp
     }
+
     pub fn heartbeat_timeout_millis(&self) -> i64 {
         self.heartbeat_timeout_millis
     }
+
     pub fn ha_server_addr(&self) -> &str {
         &self.ha_server_addr
     }

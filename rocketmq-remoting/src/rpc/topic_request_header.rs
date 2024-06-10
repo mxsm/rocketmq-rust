@@ -16,12 +16,12 @@
  */
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
-use crate::{
-    protocol::command_custom_header::{CommandCustomHeader, FromMap},
-    rpc::rpc_request_header::RpcRequestHeader,
-};
+use crate::protocol::command_custom_header::CommandCustomHeader;
+use crate::protocol::command_custom_header::FromMap;
+use crate::rpc::rpc_request_header::RpcRequestHeader;
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct TopicRequestHeader {

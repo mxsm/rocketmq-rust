@@ -16,26 +16,21 @@
  */
 use std::sync::Arc;
 
-use bytes::{Buf, BufMut};
-use rocketmq_common::{
-    common::{
-        message::{
-            message_batch::MessageExtBatch, message_single::MessageExtBrokerInner, MessageVersion,
-        },
-        sys_flag::message_sys_flag::MessageSysFlag,
-    },
-    MessageDecoder,
-};
+use bytes::Buf;
+use bytes::BufMut;
+use rocketmq_common::common::message::message_batch::MessageExtBatch;
+use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
+use rocketmq_common::common::message::MessageVersion;
+use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
+use rocketmq_common::MessageDecoder;
 use tracing::warn;
 
-use crate::{
-    base::{
-        message_result::PutMessageResult, message_status_enum::PutMessageStatus,
-        put_message_context::PutMessageContext,
-    },
-    config::message_store_config::MessageStoreConfig,
-    log_file::commit_log::{CommitLog, CRC32_RESERVED_LEN},
-};
+use crate::base::message_result::PutMessageResult;
+use crate::base::message_status_enum::PutMessageStatus;
+use crate::base::put_message_context::PutMessageContext;
+use crate::config::message_store_config::MessageStoreConfig;
+use crate::log_file::commit_log::CommitLog;
+use crate::log_file::commit_log::CRC32_RESERVED_LEN;
 
 pub struct MessageExtEncoder {
     byte_buf: bytes::BytesMut,
@@ -523,6 +518,7 @@ impl MessageExtEncoder {
         };
         self.byte_buf.resize(self.max_message_size as usize, 0);
     }
+
     pub fn byte_buf(&mut self) -> bytes::BytesMut {
         self.byte_buf.split()
     }

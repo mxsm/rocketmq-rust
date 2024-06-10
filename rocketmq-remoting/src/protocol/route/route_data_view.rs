@@ -17,11 +17,11 @@
 
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
-use crate::protocol::{
-    static_topic::topic_queue_info::TopicQueueMappingInfo, RemotingSerializable,
-};
+use crate::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
+use crate::protocol::RemotingSerializable;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrokerData {
@@ -51,18 +51,23 @@ impl BrokerData {
             enable_acting_master: false,
         }
     }
+
     pub fn set_cluster(&mut self, cluster: String) {
         self.cluster = cluster;
     }
+
     pub fn set_broker_name(&mut self, broker_name: String) {
         self.broker_name = broker_name;
     }
+
     pub fn set_broker_addrs(&mut self, broker_addrs: HashMap<i64, String>) {
         self.broker_addrs = broker_addrs;
     }
+
     pub fn set_zone_name(&mut self, zone_name: Option<String>) {
         self.zone_name = zone_name;
     }
+
     pub fn set_enable_acting_master(&mut self, enable_acting_master: bool) {
         self.enable_acting_master = enable_acting_master;
     }
@@ -70,15 +75,19 @@ impl BrokerData {
     pub fn cluster(&self) -> &str {
         &self.cluster
     }
+
     pub fn broker_name(&self) -> &str {
         &self.broker_name
     }
+
     pub fn broker_name_mut(&mut self) -> &str {
         &self.broker_name
     }
+
     pub fn broker_addrs(&self) -> &HashMap<i64, String> {
         &self.broker_addrs
     }
+
     pub fn broker_addrs_mut(&mut self) -> &mut HashMap<i64, String> {
         &mut self.broker_addrs
     }
@@ -87,9 +96,11 @@ impl BrokerData {
         self.broker_addrs
             .retain(|key, value| value != broker_addr || *key == broker_id);
     }
+
     pub fn zone_name(&self) -> &Option<String> {
         &self.zone_name
     }
+
     pub fn enable_acting_master(&self) -> bool {
         self.enable_acting_master
     }
@@ -124,18 +135,23 @@ impl QueueData {
             topic_sys_flag,
         }
     }
+
     pub fn broker_name(&self) -> &str {
         &self.broker_name
     }
+
     pub fn read_queue_nums(&self) -> u32 {
         self.read_queue_nums
     }
+
     pub fn write_queue_nums(&self) -> u32 {
         self.write_queue_nums
     }
+
     pub fn perm(&self) -> u32 {
         self.perm
     }
+
     pub fn topic_sys_flag(&self) -> u32 {
         self.topic_sys_flag
     }

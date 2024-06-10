@@ -15,11 +15,14 @@
  * limitations under the License.
  */
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::collections::HashSet;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
-use crate::protocol::{route::route_data_view::BrokerData, RemotingSerializable};
+use crate::protocol::route::route_data_view::BrokerData;
+use crate::protocol::RemotingSerializable;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ClusterInfo {

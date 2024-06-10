@@ -14,22 +14,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::{
-    collections::HashMap,
-    sync::Arc,
-    time::{Duration, SystemTime},
-};
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+use std::time::SystemTime;
 
 use parking_lot::RwLock;
-use tokio::{task, time::interval};
+use tokio::task;
+use tokio::time::interval;
 
-use crate::{
-    common::statistics::{
-        statistics_item::StatisticsItem, statistics_item_state_getter::StatisticsItemStateGetter,
-        statistics_kind_meta::StatisticsKindMeta,
-    },
-    TimeUtils::get_current_millis,
-};
+use crate::common::statistics::statistics_item::StatisticsItem;
+use crate::common::statistics::statistics_item_state_getter::StatisticsItemStateGetter;
+use crate::common::statistics::statistics_kind_meta::StatisticsKindMeta;
+use crate::TimeUtils::get_current_millis;
 
 type StatsTable = Arc<RwLock<HashMap<String, HashMap<String, Arc<StatisticsItem>>>>>;
 

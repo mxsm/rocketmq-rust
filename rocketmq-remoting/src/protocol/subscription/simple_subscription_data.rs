@@ -14,7 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Hash, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -38,12 +39,15 @@ impl SimpleSubscriptionData {
     pub fn topic(&self) -> &str {
         &self.topic
     }
+
     pub fn expression_type(&self) -> &str {
         &self.expression_type
     }
+
     pub fn expression(&self) -> &str {
         &self.expression
     }
+
     pub fn version(&self) -> u64 {
         self.version
     }

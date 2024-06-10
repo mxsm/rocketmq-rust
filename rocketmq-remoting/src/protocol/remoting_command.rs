@@ -14,27 +14,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::{
-    collections::HashMap,
-    sync::{
-        atomic::{AtomicI32, Ordering},
-        Arc, Once, RwLock,
-    },
-};
+use std::collections::HashMap;
+use std::sync::atomic::AtomicI32;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::sync::Once;
+use std::sync::RwLock;
 
 use bytes::Bytes;
 use lazy_static::lazy_static;
 use rocketmq_common::common::mq_version::RocketMqVersion;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
-use super::{RemotingCommandType, SerializeType};
-use crate::{
-    code::response_code::RemotingSysResponseCode,
-    protocol::{
-        command_custom_header::{CommandCustomHeader, FromMap},
-        LanguageCode,
-    },
-};
+use super::RemotingCommandType;
+use super::SerializeType;
+use crate::code::response_code::RemotingSysResponseCode;
+use crate::protocol::command_custom_header::CommandCustomHeader;
+use crate::protocol::command_custom_header::FromMap;
+use crate::protocol::LanguageCode;
 
 lazy_static! {
     static ref OPAQUE_COUNTER: Arc<AtomicI32> = Arc::new(AtomicI32::new(0));
@@ -131,8 +129,8 @@ impl Default for RemotingCommand {
 }
 
 impl RemotingCommand {
-    pub(crate) const RPC_TYPE: i32 = 0;
     pub(crate) const RPC_ONEWAY: i32 = 1;
+    pub(crate) const RPC_TYPE: i32 = 0;
 }
 
 impl RemotingCommand {
@@ -218,25 +216,31 @@ impl RemotingCommand {
         self.code = code.into();
         self
     }
+
     pub fn set_language(mut self, language: LanguageCode) -> Self {
         self.language = language;
         self
     }
+
     pub fn set_version(&mut self, version: i32) {
         self.version = version;
     }
+
     pub fn set_opaque(mut self, opaque: i32) -> Self {
         self.opaque = opaque;
         self
     }
+
     pub fn set_flag(mut self, flag: i32) -> Self {
         self.flag = flag;
         self
     }
+
     pub fn set_remark(mut self, remark: Option<String>) -> Self {
         self.remark = remark;
         self
     }
+
     pub fn set_ext_fields(mut self, ext_fields: HashMap<String, String>) -> Self {
         self.ext_fields = Some(ext_fields);
         self
@@ -259,6 +263,7 @@ impl RemotingCommand {
         self.suspended = suspended;
         self
     }
+
     pub fn set_serialize_type(mut self, serialize_type: SerializeType) -> Self {
         self.serialize_type = serialize_type;
         self
@@ -308,27 +313,35 @@ impl RemotingCommand {
     pub fn code(&self) -> i32 {
         self.code
     }
+
     pub fn language(&self) -> LanguageCode {
         self.language
     }
+
     pub fn version(&self) -> i32 {
         self.version
     }
+
     pub fn opaque(&self) -> i32 {
         self.opaque
     }
+
     pub fn flag(&self) -> i32 {
         self.flag
     }
+
     pub fn remark(&self) -> Option<&String> {
         self.remark.as_ref()
     }
+
     pub fn ext_fields(&self) -> Option<&HashMap<String, String>> {
         self.ext_fields.as_ref()
     }
+
     pub fn body(&self) -> &Option<Bytes> {
         &self.body
     }
+
     pub fn suspended(&self) -> bool {
         self.suspended
     }
@@ -364,6 +377,7 @@ impl RemotingCommand {
             RemotingCommandType::REQUEST
         }
     }
+
     pub fn with_opaque(&mut self, opaque: i32) -> &mut Self {
         self.opaque = opaque;
         self

@@ -17,9 +17,15 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{parse_macro_input, Data, DeriveInput, Fields, Ident};
+use syn::parse_macro_input;
+use syn::Data;
+use syn::DeriveInput;
+use syn::Fields;
+use syn::Ident;
 
-use crate::{get_type_name, is_option_type, snake_to_camel_case};
+use crate::get_type_name;
+use crate::is_option_type;
+use crate::snake_to_camel_case;
 
 pub(super) fn request_header_codec_inner(
     input: proc_macro::TokenStream,

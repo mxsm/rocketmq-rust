@@ -15,32 +15,25 @@
  * limitations under the License.
  */
 
-use std::{
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    time::Duration,
-};
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::time::Duration;
 
 use bytes::Bytes;
-use rocketmq_common::{
-    common::{namesrv::namesrv_config::NamesrvConfig, FAQUrl},
-    TimeUtils,
-};
-use rocketmq_remoting::{
-    code::response_code::{RemotingSysResponseCode, ResponseCode},
-    protocol::{
-        header::client_request_header::GetRouteInfoRequestHeader,
-        remoting_command::RemotingCommand, RemotingSerializable,
-    },
-    runtime::server::ConnectionHandlerContext,
-};
+use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
+use rocketmq_common::common::FAQUrl;
+use rocketmq_common::TimeUtils;
+use rocketmq_remoting::code::response_code::RemotingSysResponseCode;
+use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_remoting::protocol::RemotingSerializable;
+use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
 use tracing::warn;
 
-use crate::{
-    kvconfig::kvconfig_mananger::KVConfigManager, route::route_info_manager::RouteInfoManager,
-};
+use crate::kvconfig::kvconfig_mananger::KVConfigManager;
+use crate::route::route_info_manager::RouteInfoManager;
 
 pub struct ClientRequestProcessor {
     route_info_manager: Arc<parking_lot::RwLock<RouteInfoManager>>,

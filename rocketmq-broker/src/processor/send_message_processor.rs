@@ -15,52 +15,40 @@
  * limitations under the License.
  */
 
-use std::{collections::HashMap, net::SocketAddr, sync::Arc};
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::sync::Arc;
 
-use rocketmq_common::{
-    common::{
-        attribute::cleanup_policy::CleanupPolicy,
-        broker::broker_config::BrokerConfig,
-        message::{
-            message_client_id_setter,
-            message_single::{MessageExt, MessageExtBrokerInner},
-            MessageConst,
-        },
-        topic::TopicValidator,
-    },
-    utils::{message_utils, util_all},
-    CleanupPolicyUtils, MessageDecoder,
-};
-use rocketmq_remoting::{
-    code::{
-        request_code::RequestCode,
-        response_code::{RemotingSysResponseCode, ResponseCode},
-    },
-    protocol::{
-        header::message_operation_header::{
-            send_message_request_header::{parse_request_header, SendMessageRequestHeader},
-            send_message_response_header::SendMessageResponseHeader,
-            TopicRequestHeaderTrait,
-        },
-        remoting_command::RemotingCommand,
-        static_topic::topic_queue_mapping_context::TopicQueueMappingContext,
-    },
-    runtime::server::ConnectionHandlerContext,
-};
-use rocketmq_store::{
-    base::message_result::PutMessageResult, log_file::MessageStore,
-    stats::broker_stats_manager::BrokerStatsManager,
-};
+use rocketmq_common::common::attribute::cleanup_policy::CleanupPolicy;
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_common::common::message::message_client_id_setter;
+use rocketmq_common::common::message::message_single::MessageExt;
+use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
+use rocketmq_common::common::message::MessageConst;
+use rocketmq_common::common::topic::TopicValidator;
+use rocketmq_common::utils::message_utils;
+use rocketmq_common::utils::util_all;
+use rocketmq_common::CleanupPolicyUtils;
+use rocketmq_common::MessageDecoder;
+use rocketmq_remoting::code::request_code::RequestCode;
+use rocketmq_remoting::code::response_code::RemotingSysResponseCode;
+use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::parse_request_header;
+use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
+use rocketmq_remoting::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
+use rocketmq_remoting::protocol::header::message_operation_header::TopicRequestHeaderTrait;
+use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
+use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
+use rocketmq_store::base::message_result::PutMessageResult;
+use rocketmq_store::log_file::MessageStore;
+use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use tracing::debug;
 
-use crate::{
-    mqtrace::send_message_context::SendMessageContext,
-    processor::SendMessageProcessorInner,
-    topic::manager::{
-        topic_config_manager::TopicConfigManager,
-        topic_queue_mapping_manager::TopicQueueMappingManager,
-    },
-};
+use crate::mqtrace::send_message_context::SendMessageContext;
+use crate::processor::SendMessageProcessorInner;
+use crate::topic::manager::topic_config_manager::TopicConfigManager;
+use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
 
 pub struct SendMessageProcessor<MS>
 where
@@ -453,6 +441,7 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
             unimplemented!()
         }
     }
+
     pub fn pre_send(
         &mut self,
         ctx: &ConnectionHandlerContext<'_>,

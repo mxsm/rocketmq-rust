@@ -72,57 +72,73 @@ impl NettyServerConfig {
     pub fn set_bind_address(&mut self, bind_address: String) {
         self.bind_address = bind_address;
     }
+
     pub fn set_listen_port(&mut self, listen_port: i32) {
         self.listen_port = listen_port;
     }
+
     pub fn set_server_worker_threads(&mut self, server_worker_threads: i32) {
         self.server_worker_threads = server_worker_threads;
     }
+
     pub fn set_server_callback_executor_threads(&mut self, server_callback_executor_threads: i32) {
         self.server_callback_executor_threads = server_callback_executor_threads;
     }
+
     pub fn set_server_selector_threads(&mut self, server_selector_threads: i32) {
         self.server_selector_threads = server_selector_threads;
     }
+
     pub fn set_server_oneway_semaphore_value(&mut self, server_oneway_semaphore_value: i32) {
         self.server_oneway_semaphore_value = server_oneway_semaphore_value;
     }
+
     pub fn set_server_async_semaphore_value(&mut self, server_async_semaphore_value: i32) {
         self.server_async_semaphore_value = server_async_semaphore_value;
     }
+
     pub fn set_server_channel_max_idle_time_seconds(
         &mut self,
         server_channel_max_idle_time_seconds: i32,
     ) {
         self.server_channel_max_idle_time_seconds = server_channel_max_idle_time_seconds;
     }
+
     pub fn set_server_socket_snd_buf_size(&mut self, server_socket_snd_buf_size: i32) {
         self.server_socket_snd_buf_size = server_socket_snd_buf_size;
     }
+
     pub fn set_server_socket_rcv_buf_size(&mut self, server_socket_rcv_buf_size: i32) {
         self.server_socket_rcv_buf_size = server_socket_rcv_buf_size;
     }
+
     pub fn set_write_buffer_high_water_mark(&mut self, write_buffer_high_water_mark: i32) {
         self.write_buffer_high_water_mark = write_buffer_high_water_mark;
     }
+
     pub fn set_write_buffer_low_water_mark(&mut self, write_buffer_low_water_mark: i32) {
         self.write_buffer_low_water_mark = write_buffer_low_water_mark;
     }
+
     pub fn set_server_socket_backlog(&mut self, server_socket_backlog: i32) {
         self.server_socket_backlog = server_socket_backlog;
     }
+
     pub fn set_server_pooled_byte_buf_allocator_enable(
         &mut self,
         server_pooled_byte_buf_allocator_enable: bool,
     ) {
         self.server_pooled_byte_buf_allocator_enable = server_pooled_byte_buf_allocator_enable;
     }
+
     pub fn set_enable_shutdown_gracefully(&mut self, enable_shutdown_gracefully: bool) {
         self.enable_shutdown_gracefully = enable_shutdown_gracefully;
     }
+
     pub fn set_shutdown_wait_time_seconds(&mut self, shutdown_wait_time_seconds: i32) {
         self.shutdown_wait_time_seconds = shutdown_wait_time_seconds;
     }
+
     pub fn set_use_epoll_native_selector(&mut self, use_epoll_native_selector: bool) {
         self.use_epoll_native_selector = use_epoll_native_selector;
     }
@@ -132,51 +148,67 @@ impl NettyServerConfig {
     pub fn bind_address(&self) -> &str {
         &self.bind_address
     }
+
     pub fn listen_port(&self) -> i32 {
         self.listen_port
     }
+
     pub fn server_worker_threads(&self) -> i32 {
         self.server_worker_threads
     }
+
     pub fn server_callback_executor_threads(&self) -> i32 {
         self.server_callback_executor_threads
     }
+
     pub fn server_selector_threads(&self) -> i32 {
         self.server_selector_threads
     }
+
     pub fn server_oneway_semaphore_value(&self) -> i32 {
         self.server_oneway_semaphore_value
     }
+
     pub fn server_async_semaphore_value(&self) -> i32 {
         self.server_async_semaphore_value
     }
+
     pub fn server_channel_max_idle_time_seconds(&self) -> i32 {
         self.server_channel_max_idle_time_seconds
     }
+
     pub fn server_socket_snd_buf_size(&self) -> i32 {
         self.server_socket_snd_buf_size
     }
+
     pub fn server_socket_rcv_buf_size(&self) -> i32 {
         self.server_socket_rcv_buf_size
     }
+
     pub fn write_buffer_high_water_mark(&self) -> i32 {
         self.write_buffer_high_water_mark
     }
+
     pub fn write_buffer_low_water_mark(&self) -> i32 {
         self.write_buffer_low_water_mark
     }
+
     pub fn server_socket_backlog(&self) -> i32 {
         self.server_socket_backlog
     }
+
     pub fn server_pooled_byte_buf_allocator_enable(&self) -> bool {
         self.server_pooled_byte_buf_allocator_enable
     }
+
     pub fn enable_shutdown_gracefully(&self) -> bool {
         self.enable_shutdown_gracefully
     }
+
     pub fn shutdown_wait_time_seconds(&self) -> i32 {
         self.shutdown_wait_time_seconds
     }
+
     pub fn use_epoll_native_selector(&self) -> bool {
         self.use_epoll_native_selector
     }

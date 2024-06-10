@@ -15,24 +15,21 @@
  * limitations under the License.
  */
 
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
-};
+use std::fs;
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use log::warn;
 use parking_lot::RwLock;
 use rocketmq_common::UtilAll::offset_to_file_name;
 use tracing::info;
 
-use crate::{
-    log_file::mapped_file::{default_impl::DefaultMappedFile, MappedFile},
-    services::allocate_mapped_file_service::AllocateMappedFileService,
-};
+use crate::log_file::mapped_file::default_impl::DefaultMappedFile;
+use crate::log_file::mapped_file::MappedFile;
+use crate::services::allocate_mapped_file_service::AllocateMappedFileService;
 
 #[derive(Default, Clone)]
 pub struct MappedFileQueue {

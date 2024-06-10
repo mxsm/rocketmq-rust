@@ -15,14 +15,14 @@
  * limitations under the License.
  */
 
-use std::{
-    fmt::{Display, Formatter},
-    io,
-};
+use std::fmt::Display;
+use std::fmt::Formatter;
+use std::io;
 
 use thiserror::Error;
 
-use crate::error::RemotingError::{Io, RemotingCommandDecoderError};
+use crate::error::RemotingError::Io;
+use crate::error::RemotingError::RemotingCommandDecoderError;
 
 #[derive(Debug, Error)]
 pub enum RemotingError {

@@ -21,19 +21,18 @@ pub mod local_file_consume_queue_store;
 mod queue_offset_operator;
 pub mod single_consume_queue;
 
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
+use std::sync::Arc;
 
-use rocketmq_common::common::{
-    attribute::cq_type::CQType, boundary_type::BoundaryType,
-    message::message_single::MessageExtBrokerInner,
-};
+use rocketmq_common::common::attribute::cq_type::CQType;
+use rocketmq_common::common::boundary_type::BoundaryType;
+use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
 
-use crate::{
-    base::{dispatch_request::DispatchRequest, swappable::Swappable},
-    consume_queue::consume_queue_ext::CqExtUnit,
-    filter::MessageFilter,
-    queue::queue_offset_operator::QueueOffsetOperator,
-};
+use crate::base::dispatch_request::DispatchRequest;
+use crate::base::swappable::Swappable;
+use crate::consume_queue::consume_queue_ext::CqExtUnit;
+use crate::filter::MessageFilter;
+use crate::queue::queue_offset_operator::QueueOffsetOperator;
 
 /// FileQueueLifeCycle contains life cycle methods of ConsumerQueue that is directly implemented by
 /// FILE.
