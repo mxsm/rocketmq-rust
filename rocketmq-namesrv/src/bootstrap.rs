@@ -14,22 +14,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
 
-use rocketmq_common::common::{
-    namesrv::namesrv_config::NamesrvConfig, server::config::ServerConfig,
-};
+use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
+use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_remoting::runtime::server::RocketMQServer;
 use rocketmq_runtime::RocketMQRuntime;
-use tokio::{select, sync::broadcast};
+use tokio::select;
+use tokio::sync::broadcast;
 
-use crate::{
-    processor::{
-        default_request_processor::DefaultRequestProcessor, ClientRequestProcessor,
-        NameServerRequestProcessor,
-    },
-    KVConfigManager, RouteInfoManager,
-};
+use crate::processor::default_request_processor::DefaultRequestProcessor;
+use crate::processor::ClientRequestProcessor;
+use crate::processor::NameServerRequestProcessor;
+use crate::KVConfigManager;
+use crate::RouteInfoManager;
 
 pub struct NameServerBootstrap {
     name_server_runtime: NameServerRuntime,

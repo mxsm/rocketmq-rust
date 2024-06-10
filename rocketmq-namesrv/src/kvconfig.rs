@@ -18,7 +18,8 @@
 use std::collections::HashMap;
 
 use rocketmq_remoting::protocol::RemotingSerializable;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 pub mod kvconfig_mananger;
 

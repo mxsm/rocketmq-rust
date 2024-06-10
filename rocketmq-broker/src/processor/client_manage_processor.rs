@@ -15,22 +15,20 @@
  * limitations under the License.
  */
 
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
+use std::sync::Arc;
 
-use rocketmq_common::common::mix_all::{IS_SUB_CHANGE, IS_SUPPORT_HEART_BEAT_V2};
-use rocketmq_remoting::{
-    code::request_code::RequestCode,
-    protocol::{
-        header::unregister_client_request_header::UnregisterClientRequestHeader,
-        heartbeat::heartbeat_data::HeartbeatData, remoting_command::RemotingCommand,
-        RemotingSerializable,
-    },
-    runtime::server::ConnectionHandlerContext,
-};
+use rocketmq_common::common::mix_all::IS_SUB_CHANGE;
+use rocketmq_common::common::mix_all::IS_SUPPORT_HEART_BEAT_V2;
+use rocketmq_remoting::code::request_code::RequestCode;
+use rocketmq_remoting::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
+use rocketmq_remoting::protocol::heartbeat::heartbeat_data::HeartbeatData;
+use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_remoting::protocol::RemotingSerializable;
+use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
 
-use crate::client::{
-    client_channel_info::ClientChannelInfo, manager::producer_manager::ProducerManager,
-};
+use crate::client::client_channel_info::ClientChannelInfo;
+use crate::client::manager::producer_manager::ProducerManager;
 
 #[derive(Default, Clone)]
 pub struct ClientManageProcessor {

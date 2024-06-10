@@ -14,18 +14,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::{
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    thread::JoinHandle,
-};
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::thread::JoinHandle;
 
 use parking_lot::Mutex;
 use tracing::info;
 
-use crate::common::thread::{Runnable, ServiceThread};
+use crate::common::thread::Runnable;
+use crate::common::thread::ServiceThread;
 
 pub struct ServiceThreadStd {
     name: String,

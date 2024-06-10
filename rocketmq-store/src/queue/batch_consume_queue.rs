@@ -15,28 +15,26 @@
  * limitations under the License.
  */
 
-use std::{
-    collections::BTreeMap,
-    path::PathBuf,
-    sync::{atomic::AtomicI64, Arc},
-};
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::sync::atomic::AtomicI64;
+use std::sync::Arc;
 
-use rocketmq_common::common::{
-    attribute::cq_type::CQType, boundary_type::BoundaryType,
-    message::message_single::MessageExtBrokerInner,
-};
+use rocketmq_common::common::attribute::cq_type::CQType;
+use rocketmq_common::common::boundary_type::BoundaryType;
+use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
 use tracing::info;
 
-use crate::{
-    base::{dispatch_request::DispatchRequest, swappable::Swappable},
-    config::message_store_config::MessageStoreConfig,
-    consume_queue::mapped_file_queue::MappedFileQueue,
-    filter::MessageFilter,
-    log_file::mapped_file::default_impl_refactor::LocalMappedFile,
-    queue::{
-        queue_offset_operator::QueueOffsetOperator, ConsumeQueueTrait, CqUnit, FileQueueLifeCycle,
-    },
-};
+use crate::base::dispatch_request::DispatchRequest;
+use crate::base::swappable::Swappable;
+use crate::config::message_store_config::MessageStoreConfig;
+use crate::consume_queue::mapped_file_queue::MappedFileQueue;
+use crate::filter::MessageFilter;
+use crate::log_file::mapped_file::default_impl_refactor::LocalMappedFile;
+use crate::queue::queue_offset_operator::QueueOffsetOperator;
+use crate::queue::ConsumeQueueTrait;
+use crate::queue::CqUnit;
+use crate::queue::FileQueueLifeCycle;
 
 const CQ_STORE_UNIT_SIZE: i32 = 46;
 const MSG_TAG_OFFSET_INDEX: i32 = 12;

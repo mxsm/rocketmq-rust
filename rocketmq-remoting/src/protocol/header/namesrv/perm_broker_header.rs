@@ -16,9 +16,11 @@
  */
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
-use crate::protocol::command_custom_header::{CommandCustomHeader, FromMap};
+use crate::protocol::command_custom_header::CommandCustomHeader;
+use crate::protocol::command_custom_header::FromMap;
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -28,6 +30,7 @@ pub struct WipeWritePermOfBrokerRequestHeader {
 
 impl WipeWritePermOfBrokerRequestHeader {
     const BROKER_NAME: &'static str = "brokerName";
+
     pub fn new(broker_name: impl Into<String>) -> Self {
         Self {
             broker_name: broker_name.into(),
@@ -101,6 +104,7 @@ pub struct AddWritePermOfBrokerRequestHeader {
 
 impl AddWritePermOfBrokerRequestHeader {
     const BROKER_NAME: &'static str = "brokerName";
+
     pub fn new(broker_name: impl Into<String>) -> Self {
         Self {
             broker_name: broker_name.into(),

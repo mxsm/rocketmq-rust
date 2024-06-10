@@ -15,13 +15,14 @@
  * limitations under the License.
  */
 
-use std::{
-    pin::Pin,
-    sync::Arc,
-    task::{Context, Poll, Waker},
-};
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::Context;
+use std::task::Poll;
+use std::task::Waker;
 
-use tokio::sync::{mpsc, mpsc::Sender};
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::Sender;
 
 /// Enumeration representing the state of a CompletableFuture.
 #[derive(Copy, Clone, PartialEq)]

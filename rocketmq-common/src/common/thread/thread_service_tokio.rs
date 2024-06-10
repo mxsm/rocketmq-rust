@@ -14,19 +14,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::{
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    thread,
-};
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::thread;
 
-use tokio::{
-    runtime::Handle,
-    sync::{oneshot, Mutex, Notify},
-    task::JoinHandle,
-};
+use tokio::runtime::Handle;
+use tokio::sync::oneshot;
+use tokio::sync::Mutex;
+use tokio::sync::Notify;
+use tokio::task::JoinHandle;
 
 use crate::common::thread::Runnable;
 
@@ -126,7 +123,8 @@ impl ServiceThreadTokio {
 #[cfg(test)]
 mod tests {
     use mockall::automock;
-    use tokio::{time, time::timeout};
+    use tokio::time;
+    use tokio::time::timeout;
 
     use super::*;
 

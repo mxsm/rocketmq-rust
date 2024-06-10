@@ -14,11 +14,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::{
-    collections::{HashMap, HashSet},
-    string::ToString,
-    sync::Arc,
-};
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::string::ToString;
+use std::sync::Arc;
 
 use tracing::info;
 

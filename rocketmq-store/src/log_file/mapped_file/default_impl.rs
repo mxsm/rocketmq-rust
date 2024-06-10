@@ -15,36 +15,37 @@
  * limitations under the License.
  */
 
-use std::{
-    fs::{File, OpenOptions},
-    io::Write,
-    path::PathBuf,
-    ptr,
-    sync::{
-        atomic::{AtomicBool, AtomicI32, AtomicI64, Ordering},
-        Arc,
-    },
-};
+use std::fs::File;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::PathBuf;
+use std::ptr;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicI32;
+use std::sync::atomic::AtomicI64;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
+use bytes::BytesMut;
 use memmap2::MmapMut;
-use rocketmq_common::{
-    common::message::{message_batch::MessageExtBatch, message_single::MessageExtBrokerInner},
-    UtilAll::ensure_dir_ok,
-};
-use tracing::{debug, error, info, warn};
+use rocketmq_common::common::message::message_batch::MessageExtBatch;
+use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
+use rocketmq_common::UtilAll::ensure_dir_ok;
+use tracing::debug;
+use tracing::error;
+use tracing::info;
+use tracing::warn;
 
-use crate::{
-    base::{
-        append_message_callback::AppendMessageCallback,
-        compaction_append_msg_callback::CompactionAppendMsgCallback,
-        message_result::AppendMessageResult, message_status_enum::AppendMessageStatus,
-        put_message_context::PutMessageContext, select_result::SelectMappedBufferResult,
-        transient_store_pool::TransientStorePool,
-    },
-    config::flush_disk_type::FlushDiskType,
-    log_file::mapped_file::MappedFile,
-};
+use crate::base::append_message_callback::AppendMessageCallback;
+use crate::base::compaction_append_msg_callback::CompactionAppendMsgCallback;
+use crate::base::message_result::AppendMessageResult;
+use crate::base::message_status_enum::AppendMessageStatus;
+use crate::base::put_message_context::PutMessageContext;
+use crate::base::select_result::SelectMappedBufferResult;
+use crate::base::transient_store_pool::TransientStorePool;
+use crate::config::flush_disk_type::FlushDiskType;
+use crate::log_file::mapped_file::MappedFile;
 
 pub const OS_PAGE_SIZE: u64 = 1024 * 4;
 

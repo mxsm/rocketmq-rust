@@ -14,36 +14,39 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::{
-    path::PathBuf,
-    sync::{
-        atomic::{AtomicI64, Ordering},
-        Arc,
-    },
-};
+use std::path::PathBuf;
+use std::sync::atomic::AtomicI64;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
-use bytes::{Buf, BufMut, BytesMut};
-use rocketmq_common::common::{
-    attribute::cq_type::CQType, boundary_type::BoundaryType,
-    message::message_single::MessageExtBrokerInner,
-};
-use tracing::{debug, error, info, warn};
+use bytes::Buf;
+use bytes::BufMut;
+use bytes::BytesMut;
+use rocketmq_common::common::attribute::cq_type::CQType;
+use rocketmq_common::common::boundary_type::BoundaryType;
+use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
+use tracing::debug;
+use tracing::error;
+use tracing::info;
+use tracing::warn;
 
-use crate::{
-    base::{
-        dispatch_request::DispatchRequest, store_checkpoint::StoreCheckpoint, swappable::Swappable,
-    },
-    config::{broker_role::BrokerRole, message_store_config::MessageStoreConfig},
-    consume_queue::{consume_queue_ext::CqExtUnit, mapped_file_queue::MappedFileQueue},
-    filter::MessageFilter,
-    log_file::mapped_file::{default_impl::DefaultMappedFile, MappedFile},
-    queue::{
-        consume_queue_ext::ConsumeQueueExt, queue_offset_operator::QueueOffsetOperator,
-        ConsumeQueueTrait, CqUnit, FileQueueLifeCycle,
-    },
-    store::running_flags::RunningFlags,
-    store_path_config_helper::get_store_path_consume_queue_ext,
-};
+use crate::base::dispatch_request::DispatchRequest;
+use crate::base::store_checkpoint::StoreCheckpoint;
+use crate::base::swappable::Swappable;
+use crate::config::broker_role::BrokerRole;
+use crate::config::message_store_config::MessageStoreConfig;
+use crate::consume_queue::consume_queue_ext::CqExtUnit;
+use crate::consume_queue::mapped_file_queue::MappedFileQueue;
+use crate::filter::MessageFilter;
+use crate::log_file::mapped_file::default_impl::DefaultMappedFile;
+use crate::log_file::mapped_file::MappedFile;
+use crate::queue::consume_queue_ext::ConsumeQueueExt;
+use crate::queue::queue_offset_operator::QueueOffsetOperator;
+use crate::queue::ConsumeQueueTrait;
+use crate::queue::CqUnit;
+use crate::queue::FileQueueLifeCycle;
+use crate::store::running_flags::RunningFlags;
+use crate::store_path_config_helper::get_store_path_consume_queue_ext;
 
 ///
 /// ConsumeQueue's store unit. Format:
@@ -209,6 +212,7 @@ impl ConsumeQueue {
     pub fn is_ext_read_enable(&self) -> bool {
         self.consume_queue_ext.is_some()
     }
+
     pub fn is_ext_addr(tags_code: i64) -> bool {
         ConsumeQueueExt::is_ext_addr(tags_code)
     }

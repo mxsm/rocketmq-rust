@@ -91,17 +91,17 @@ lazy_static! {
 
 impl TopicValidator {
     pub const AUTO_CREATE_TOPIC_KEY_TOPIC: &'static str = "TBW102";
-    pub const RMQ_SYS_SCHEDULE_TOPIC: &'static str = "SCHEDULE_TOPIC_XXXX";
     pub const RMQ_SYS_BENCHMARK_TOPIC: &'static str = "BenchmarkTest";
-    pub const RMQ_SYS_TRANS_HALF_TOPIC: &'static str = "RMQ_SYS_TRANS_HALF_TOPIC";
-    pub const RMQ_SYS_TRACE_TOPIC: &'static str = "RMQ_SYS_TRACE_TOPIC";
-    pub const RMQ_SYS_TRANS_OP_HALF_TOPIC: &'static str = "RMQ_SYS_TRANS_OP_HALF_TOPIC";
-    pub const RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC: &'static str = "TRANS_CHECK_MAX_TIME_TOPIC";
-    pub const RMQ_SYS_SELF_TEST_TOPIC: &'static str = "SELF_TEST_TOPIC";
     pub const RMQ_SYS_OFFSET_MOVED_EVENT: &'static str = "OFFSET_MOVED_EVENT";
     pub const RMQ_SYS_ROCKSDB_OFFSET_TOPIC: &'static str = "CHECKPOINT_TOPIC";
-    pub const SYSTEM_TOPIC_PREFIX: &'static str = "rmq_sys_";
+    pub const RMQ_SYS_SCHEDULE_TOPIC: &'static str = "SCHEDULE_TOPIC_XXXX";
+    pub const RMQ_SYS_SELF_TEST_TOPIC: &'static str = "SELF_TEST_TOPIC";
+    pub const RMQ_SYS_TRACE_TOPIC: &'static str = "RMQ_SYS_TRACE_TOPIC";
+    pub const RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC: &'static str = "TRANS_CHECK_MAX_TIME_TOPIC";
+    pub const RMQ_SYS_TRANS_HALF_TOPIC: &'static str = "RMQ_SYS_TRANS_HALF_TOPIC";
+    pub const RMQ_SYS_TRANS_OP_HALF_TOPIC: &'static str = "RMQ_SYS_TRANS_OP_HALF_TOPIC";
     pub const SYNC_BROKER_MEMBER_GROUP_PREFIX: &'static str = "SYNC_BROKER_MEMBER_";
+    pub const SYSTEM_TOPIC_PREFIX: &'static str = "rmq_sys_";
 
     pub fn is_system_topic(topic: &str) -> bool {
         SYSTEM_TOPIC_SET.contains(topic) || topic.starts_with(Self::SYSTEM_TOPIC_PREFIX)

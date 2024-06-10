@@ -14,15 +14,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::{
-    collections::HashMap,
-    fmt::{Display, Formatter},
-    sync::{
-        mpsc,
-        mpsc::{Receiver, Sender},
-        Arc,
-    },
-};
+use std::collections::HashMap;
+use std::fmt::Display;
+use std::fmt::Formatter;
+use std::sync::mpsc;
+use std::sync::mpsc::Receiver;
+use std::sync::mpsc::Sender;
+use std::sync::Arc;
 
 use parking_lot::Mutex;
 

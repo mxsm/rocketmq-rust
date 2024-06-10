@@ -15,68 +15,52 @@
  * limitations under the License.
  */
 
-use std::{
-    collections::HashMap,
-    sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc,
-    },
-    time::Duration,
-};
+use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::time::Duration;
 
-use rocketmq_common::{
-    common::{
-        broker::broker_config::BrokerConfig, config::TopicConfig, config_manager::ConfigManager,
-        constant::PermName, server::config::ServerConfig,
-    },
-    TimeUtils::get_current_millis,
-    UtilAll::compute_next_morning_time_millis,
-};
-use rocketmq_remoting::{
-    protocol::{
-        body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper,
-        static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail, DataVersion,
-    },
-    runtime::{config::client_config::TokioClientConfig, server::RocketMQServer},
-};
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_common::common::config::TopicConfig;
+use rocketmq_common::common::config_manager::ConfigManager;
+use rocketmq_common::common::constant::PermName;
+use rocketmq_common::common::server::config::ServerConfig;
+use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::UtilAll::compute_next_morning_time_millis;
+use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
+use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
+use rocketmq_remoting::protocol::DataVersion;
+use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
+use rocketmq_remoting::runtime::server::RocketMQServer;
 use rocketmq_runtime::RocketMQRuntime;
-use rocketmq_store::{
-    base::store_enum::StoreType,
-    config::message_store_config::MessageStoreConfig,
-    log_file::MessageStore,
-    message_store::default_message_store::DefaultMessageStore,
-    stats::{broker_stats::BrokerStats, broker_stats_manager::BrokerStatsManager},
-    timer::timer_message_store::TimerMessageStore,
-};
-use tracing::{info, warn};
+use rocketmq_store::base::store_enum::StoreType;
+use rocketmq_store::config::message_store_config::MessageStoreConfig;
+use rocketmq_store::log_file::MessageStore;
+use rocketmq_store::message_store::default_message_store::DefaultMessageStore;
+use rocketmq_store::stats::broker_stats::BrokerStats;
+use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
+use rocketmq_store::timer::timer_message_store::TimerMessageStore;
+use tracing::info;
+use tracing::warn;
 
-use crate::{
-    broker::broker_hook::BrokerShutdownHook,
-    client::manager::producer_manager::ProducerManager,
-    filter::manager::consumer_filter_manager::ConsumerFilterManager,
-    hook::{
-        batch_check_before_put_message::BatchCheckBeforePutMessageHook,
-        check_before_put_message::CheckBeforePutMessageHook,
-    },
-    offset::manager::{
-        consumer_offset_manager::ConsumerOffsetManager,
-        consumer_order_info_manager::ConsumerOrderInfoManager,
-    },
-    out_api::broker_outer_api::BrokerOuterAPI,
-    processor::{
-        client_manage_processor::ClientManageProcessor,
-        send_message_processor::SendMessageProcessor, BrokerRequestProcessor,
-    },
-    schedule::schedule_message_service::ScheduleMessageService,
-    subscription::manager::subscription_group_manager::SubscriptionGroupManager,
-    topic::{
-        manager::{
-            topic_config_manager::TopicConfigManager,
-            topic_queue_mapping_manager::TopicQueueMappingManager,
-        },
-        topic_queue_mapping_clean_service::TopicQueueMappingCleanService,
-    },
-};
+use crate::broker::broker_hook::BrokerShutdownHook;
+use crate::client::manager::producer_manager::ProducerManager;
+use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
+use crate::hook::batch_check_before_put_message::BatchCheckBeforePutMessageHook;
+use crate::hook::check_before_put_message::CheckBeforePutMessageHook;
+use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
+use crate::offset::manager::consumer_order_info_manager::ConsumerOrderInfoManager;
+use crate::out_api::broker_outer_api::BrokerOuterAPI;
+use crate::processor::client_manage_processor::ClientManageProcessor;
+use crate::processor::send_message_processor::SendMessageProcessor;
+use crate::processor::BrokerRequestProcessor;
+use crate::schedule::schedule_message_service::ScheduleMessageService;
+use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
+use crate::topic::manager::topic_config_manager::TopicConfigManager;
+use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
+use crate::topic::topic_queue_mapping_clean_service::TopicQueueMappingCleanService;
 
 pub(crate) struct BrokerRuntime {
     broker_config: Arc<BrokerConfig>,
@@ -473,6 +457,7 @@ impl BrokerRuntime {
     fn initial_acl(&mut self) {}
 
     fn initial_rpc_hooks(&mut self) {}
+
     fn initial_request_pipeline(&mut self) {}
 
     fn protect_broker(&mut self) {}

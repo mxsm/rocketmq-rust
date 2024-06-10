@@ -14,23 +14,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::{
-    collections::HashMap,
-    net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6},
-    str,
-};
+use std::collections::HashMap;
+use std::net::Ipv4Addr;
+use std::net::Ipv6Addr;
+use std::net::SocketAddr;
+use std::net::SocketAddrV4;
+use std::net::SocketAddrV6;
+use std::str;
 
-use bytes::{Buf, Bytes};
+use bytes::Buf;
+use bytes::Bytes;
 
-use crate::{
-    common::{
-        compression::compression_type::CompressionType,
-        message::{message_single::MessageExt, MessageVersion},
-        sys_flag::message_sys_flag::MessageSysFlag,
-    },
-    CRC32Utils::crc32,
-    MessageUtils::build_message_id,
-};
+use crate::common::compression::compression_type::CompressionType;
+use crate::common::message::message_single::MessageExt;
+use crate::common::message::MessageVersion;
+use crate::common::sys_flag::message_sys_flag::MessageSysFlag;
+use crate::CRC32Utils::crc32;
+use crate::MessageUtils::build_message_id;
 
 pub const CHARSET_UTF8: &str = "UTF-8";
 pub const MESSAGE_MAGIC_CODE_POSITION: usize = 4;

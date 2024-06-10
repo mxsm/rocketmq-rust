@@ -14,16 +14,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use rocketmq_macros::{RemotingSerializable, RequestHeaderCodec};
-use serde::{Deserialize, Serialize};
+use rocketmq_macros::RemotingSerializable;
+use rocketmq_macros::RequestHeaderCodec;
+use serde::Deserialize;
+use serde::Serialize;
 
-use crate::{
-    code::request_code::RequestCode,
-    protocol::{
-        header::message_operation_header::TopicRequestHeaderTrait,
-        remoting_command::RemotingCommand,
-    },
-};
+use crate::code::request_code::RequestCode;
+use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
+use crate::protocol::remoting_command::RemotingCommand;
 
 #[derive(Debug, Clone, Serialize, Deserialize, RemotingSerializable, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]

@@ -15,10 +15,9 @@
  * limitations under the License.
  */
 
-use std::{
-    collections::HashMap,
-    fmt::{Display, Formatter},
-};
+use std::collections::HashMap;
+use std::fmt::Display;
+use std::fmt::Formatter;
 
 #[derive(Debug)]
 pub struct DispatchRequest {

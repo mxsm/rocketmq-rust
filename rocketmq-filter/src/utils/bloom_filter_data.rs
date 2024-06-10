@@ -14,7 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -31,6 +32,7 @@ impl BloomFilterData {
     pub fn set_bit_pos(&mut self, bit_pos: Vec<i32>) {
         self.bit_pos = bit_pos;
     }
+
     pub fn set_bit_num(&mut self, bit_num: u32) {
         self.bit_num = bit_num;
     }
@@ -38,6 +40,7 @@ impl BloomFilterData {
     pub fn bit_pos(&self) -> &Vec<i32> {
         &self.bit_pos
     }
+
     pub fn bit_num(&self) -> u32 {
         self.bit_num
     }

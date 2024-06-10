@@ -17,11 +17,10 @@
 
 use std::sync::Arc;
 
-use rocketmq_remoting::{
-    code::request_code::RequestCode,
-    protocol::remoting_command::RemotingCommand,
-    runtime::{processor::RequestProcessor, server::ConnectionHandlerContext},
-};
+use rocketmq_remoting::code::request_code::RequestCode;
+use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_remoting::runtime::processor::RequestProcessor;
+use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
 use tracing::info;
 
 pub use self::client_request_processor::ClientRequestProcessor;

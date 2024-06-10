@@ -17,9 +17,11 @@
 
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
-use crate::protocol::command_custom_header::{CommandCustomHeader, FromMap};
+use crate::protocol::command_custom_header::CommandCustomHeader;
+use crate::protocol::command_custom_header::FromMap;
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct PutKVConfigRequestHeader {
@@ -29,8 +31,8 @@ pub struct PutKVConfigRequestHeader {
 }
 
 impl PutKVConfigRequestHeader {
-    const NAMESPACE: &'static str = "namespace";
     const KEY: &'static str = "key";
+    const NAMESPACE: &'static str = "namespace";
     const VALUE: &'static str = "value";
 
     /// Creates a new instance of `PutKVConfigRequestHeader`.
@@ -88,8 +90,8 @@ pub struct GetKVConfigRequestHeader {
 }
 
 impl GetKVConfigRequestHeader {
-    const NAMESPACE: &'static str = "namespace";
     const KEY: &'static str = "key";
+    const NAMESPACE: &'static str = "namespace";
 
     pub fn new(namespace: impl Into<String>, key: impl Into<String>) -> Self {
         Self {
@@ -164,8 +166,8 @@ pub struct DeleteKVConfigRequestHeader {
 }
 
 impl DeleteKVConfigRequestHeader {
-    const NAMESPACE: &'static str = "namespace";
     const KEY: &'static str = "key";
+    const NAMESPACE: &'static str = "namespace";
 
     pub fn new(namespace: impl Into<String>, key: impl Into<String>) -> Self {
         Self {

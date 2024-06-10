@@ -17,12 +17,12 @@
 
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
-use crate::{
-    protocol::command_custom_header::{CommandCustomHeader, FromMap},
-    rpc::rpc_request_header::RpcRequestHeader,
-};
+use crate::protocol::command_custom_header::CommandCustomHeader;
+use crate::protocol::command_custom_header::FromMap;
+use crate::rpc::rpc_request_header::RpcRequestHeader;
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct UnregisterClientRequestHeader {
@@ -36,8 +36,8 @@ pub struct UnregisterClientRequestHeader {
 
 impl UnregisterClientRequestHeader {
     pub const CLIENT_ID: &'static str = "clientID";
-    pub const PRODUCER_GROUP: &'static str = "producerGroup";
     pub const CONSUMER_GROUP: &'static str = "consumerGroup";
+    pub const PRODUCER_GROUP: &'static str = "producerGroup";
 }
 
 impl FromMap for UnregisterClientRequestHeader {

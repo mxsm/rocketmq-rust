@@ -33,7 +33,8 @@
  */
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::Parser;
+use clap::Subcommand;
 
 #[derive(Parser, Debug)]
 #[command(author = "mxsm", version = "0.2.0", about = "RocketMQ CLI(Rust)")]

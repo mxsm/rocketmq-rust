@@ -15,7 +15,8 @@
  * limitations under the License.
  */
 
-use rocketmq_common::common::{broker::broker_config::BrokerConfig, server::config::ServerConfig};
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use tracing::error;
 
@@ -62,6 +63,7 @@ impl Builder {
         self.broker_config = broker_config;
         self
     }
+
     pub fn set_message_store_config(mut self, message_store_config: MessageStoreConfig) -> Self {
         self.message_store_config = message_store_config;
         self

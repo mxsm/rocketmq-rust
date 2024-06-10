@@ -15,7 +15,8 @@
  * limitations under the License.
  */
 
-use std::{fmt, str::FromStr};
+use std::fmt;
+use std::str::FromStr;
 
 use anyhow::anyhow;
 

@@ -15,21 +15,20 @@
  * limitations under the License.
  */
 
-use std::{
-    collections::LinkedList,
-    fmt,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
-    thread,
-    time::{Duration, SystemTime},
-};
+use std::collections::LinkedList;
+use std::fmt;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
+use std::time::SystemTime;
 
 use parking_lot::Mutex;
 use tracing::info;
 
-use crate::common::stats::{call_snapshot::CallSnapshot, stats_snapshot::StatsSnapshot};
+use crate::common::stats::call_snapshot::CallSnapshot;
+use crate::common::stats::stats_snapshot::StatsSnapshot;
 
 pub struct StatsItem {
     value: AtomicU64,
@@ -328,7 +327,8 @@ impl fmt::Debug for StatsItem {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::LinkedList, sync::Arc};
+    use std::collections::LinkedList;
+    use std::sync::Arc;
 
     use super::*;
 

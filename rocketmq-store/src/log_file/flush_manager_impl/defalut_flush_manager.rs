@@ -14,25 +14,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
+use std::sync::Weak;
 
-use rocketmq_common::{
-    common::message::message_single::MessageExtBrokerInner, TimeUtils::get_current_millis,
-};
-use tokio::{
-    sync::{Mutex, Notify},
-    time,
-};
+use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
+use rocketmq_common::TimeUtils::get_current_millis;
+use tokio::sync::Mutex;
+use tokio::sync::Notify;
+use tokio::time;
 
-use crate::{
-    base::{
-        flush_manager::FlushManager, message_result::AppendMessageResult,
-        message_status_enum::PutMessageStatus, store_checkpoint::StoreCheckpoint,
-    },
-    config::{flush_disk_type::FlushDiskType, message_store_config::MessageStoreConfig},
-    consume_queue::mapped_file_queue::MappedFileQueue,
-    log_file::flush_manager_impl::group_commit_request::GroupCommitRequest,
-};
+use crate::base::flush_manager::FlushManager;
+use crate::base::message_result::AppendMessageResult;
+use crate::base::message_status_enum::PutMessageStatus;
+use crate::base::store_checkpoint::StoreCheckpoint;
+use crate::config::flush_disk_type::FlushDiskType;
+use crate::config::message_store_config::MessageStoreConfig;
+use crate::consume_queue::mapped_file_queue::MappedFileQueue;
+use crate::log_file::flush_manager_impl::group_commit_request::GroupCommitRequest;
 
 pub struct DefaultFlushManager {
     group_commit_service: Option<GroupCommitService>,

@@ -17,9 +17,11 @@
 use std::collections::HashMap;
 
 use anyhow::Error;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
-use crate::protocol::command_custom_header::{CommandCustomHeader, FromMap};
+use crate::protocol::command_custom_header::CommandCustomHeader;
+use crate::protocol::command_custom_header::FromMap;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BrokerHeartbeatRequestHeader {
@@ -59,15 +61,15 @@ impl Default for BrokerHeartbeatRequestHeader {
 }
 
 impl BrokerHeartbeatRequestHeader {
-    const CLUSTER_NAME: &'static str = "clusterName";
     const BROKER_ADDR: &'static str = "brokerAddr";
-    const BROKER_NAME: &'static str = "brokerName";
     const BROKER_ID: &'static str = "brokerId";
-    const EPOCH: &'static str = "epoch";
-    const MAX_OFFSET: &'static str = "maxOffset";
+    const BROKER_NAME: &'static str = "brokerName";
+    const CLUSTER_NAME: &'static str = "clusterName";
     const CONFIRM_OFFSET: &'static str = "confirmOffset";
-    const HEARTBEAT_TIMEOUT_MILLIS: &'static str = "heartbeatTimeoutMills";
     const ELECTION_PRIORITY: &'static str = "electionPriority";
+    const EPOCH: &'static str = "epoch";
+    const HEARTBEAT_TIMEOUT_MILLIS: &'static str = "heartbeatTimeoutMills";
+    const MAX_OFFSET: &'static str = "maxOffset";
 
     pub fn new(
         cluster_name: String,

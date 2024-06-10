@@ -16,7 +16,8 @@
  */
 use std::fmt;
 
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
+use serde::Deserializer;
 
 #[derive(Debug, Copy, Clone, Default, Eq, PartialEq)]
 pub enum BrokerRole {

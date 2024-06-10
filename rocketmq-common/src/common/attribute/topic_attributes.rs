@@ -2,12 +2,10 @@ use std::collections::HashMap;
 
 use lazy_static::lazy_static;
 
-use crate::{
-    common::attribute::{
-        attribute_enum::EnumAttribute, topic_message_type::TopicMessageType, Attribute,
-    },
-    hashset,
-};
+use crate::common::attribute::attribute_enum::EnumAttribute;
+use crate::common::attribute::topic_message_type::TopicMessageType;
+use crate::common::attribute::Attribute;
+use crate::hashset;
 
 lazy_static! {
     pub static ref CLEANUP_POLICY_ATTRIBUTE: EnumAttribute = EnumAttribute {

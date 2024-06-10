@@ -17,7 +17,8 @@
 
 use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
 
-use crate::base::{message_result::AppendMessageResult, message_status_enum::PutMessageStatus};
+use crate::base::message_result::AppendMessageResult;
+use crate::base::message_status_enum::PutMessageStatus;
 
 /// The `RocketMQFlushManager` trait defines the operations for managing the flushing of messages to
 /// disk in RocketMQ.

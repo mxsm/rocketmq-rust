@@ -15,9 +15,11 @@
  * limitations under the License.
  */
 
-use std::{cmp::Ordering, fmt};
+use std::cmp::Ordering;
+use std::fmt;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct MessageQueue {

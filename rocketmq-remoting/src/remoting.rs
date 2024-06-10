@@ -15,7 +15,9 @@
  * limitations under the License.
  */
 
-use crate::{net::ResponseFuture, protocol::remoting_command::RemotingCommand, runtime::RPCHook};
+use crate::net::ResponseFuture;
+use crate::protocol::remoting_command::RemotingCommand;
+use crate::runtime::RPCHook;
 
 #[allow(async_fn_in_trait)]
 pub trait RemotingService: Send {

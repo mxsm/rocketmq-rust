@@ -15,41 +15,33 @@
  * limitations under the License.
  */
 
-use std::{
-    collections::HashMap,
-    sync::{
-        atomic::{AtomicI64, Ordering},
-        Arc,
-    },
-};
+use std::collections::HashMap;
+use std::sync::atomic::AtomicI64;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
-use rocketmq_common::{
-    common::{
-        config::TopicConfig,
-        message::{
-            message_single::{MessageExt, MessageExtBrokerInner},
-            MessageConst,
-        },
-        mix_all::RETRY_GROUP_TOPIC_PREFIX,
-        sys_flag::message_sys_flag::MessageSysFlag,
-        topic::TopicValidator,
-    },
-    utils::queue_type_utils::QueueTypeUtils,
-    MessageDecoder::message_properties_to_string,
-    TimeUtils::get_current_millis,
-};
-use rocketmq_store::{
-    base::{message_result::PutMessageResult, message_status_enum::PutMessageStatus},
-    config::{broker_role::BrokerRole, message_store_config::MessageStoreConfig},
-    log_file::MessageStore,
-    timer::{timer_message_store, timer_message_store::TimerMessageStore},
-};
-use tracing::{error, warn};
+use rocketmq_common::common::config::TopicConfig;
+use rocketmq_common::common::message::message_single::MessageExt;
+use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
+use rocketmq_common::common::message::MessageConst;
+use rocketmq_common::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
+use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
+use rocketmq_common::common::topic::TopicValidator;
+use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
+use rocketmq_common::MessageDecoder::message_properties_to_string;
+use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_store::base::message_result::PutMessageResult;
+use rocketmq_store::base::message_status_enum::PutMessageStatus;
+use rocketmq_store::config::broker_role::BrokerRole;
+use rocketmq_store::config::message_store_config::MessageStoreConfig;
+use rocketmq_store::log_file::MessageStore;
+use rocketmq_store::timer::timer_message_store;
+use rocketmq_store::timer::timer_message_store::TimerMessageStore;
+use tracing::error;
+use tracing::warn;
 
-use crate::{
-    out_api::broker_outer_api::BrokerOuterAPI,
-    schedule::schedule_message_service::ScheduleMessageService,
-};
+use crate::out_api::broker_outer_api::BrokerOuterAPI;
+use crate::schedule::schedule_message_service::ScheduleMessageService;
 
 static PRINT_TIMES: AtomicI64 = AtomicI64::new(0);
 const MAX_TOPIC_LENGTH: usize = 255;
@@ -397,18 +389,20 @@ impl HookUtils {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, error::Error, sync::Arc};
+    use std::collections::HashMap;
+    use std::error::Error;
+    use std::sync::Arc;
 
     use parking_lot::RwLock;
-    use rocketmq_common::common::{config::TopicConfig, message::message_single::MessageExt};
-    use rocketmq_store::{
-        base::{message_result::PutMessageResult, message_status_enum::PutMessageStatus},
-        config::message_store_config::MessageStoreConfig,
-        hook::put_message_hook::BoxedPutMessageHook,
-        log_file::MessageStore,
-        stats::broker_stats_manager::BrokerStatsManager,
-        store::running_flags::RunningFlags,
-    };
+    use rocketmq_common::common::config::TopicConfig;
+    use rocketmq_common::common::message::message_single::MessageExt;
+    use rocketmq_store::base::message_result::PutMessageResult;
+    use rocketmq_store::base::message_status_enum::PutMessageStatus;
+    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_store::hook::put_message_hook::BoxedPutMessageHook;
+    use rocketmq_store::log_file::MessageStore;
+    use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
+    use rocketmq_store::store::running_flags::RunningFlags;
 
     use super::*;
 

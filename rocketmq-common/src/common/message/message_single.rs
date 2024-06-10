@@ -15,23 +15,22 @@
  * limitations under the License.
  */
 
-use std::{
-    collections::HashMap,
-    hash::{DefaultHasher, Hash, Hasher},
-    net::SocketAddr,
-};
+use std::collections::HashMap;
+use std::hash::DefaultHasher;
+use std::hash::Hash;
+use std::hash::Hasher;
+use std::net::SocketAddr;
 
-use bytes::{Buf, BufMut};
+use bytes::Buf;
+use bytes::BufMut;
 
-use crate::{
-    common::{
-        hasher::string_hasher::JavaStringHasher,
-        message::{MessageConst, MessageTrait, MessageVersion},
-        sys_flag::message_sys_flag::MessageSysFlag,
-        TopicFilterType,
-    },
-    MessageUtils,
-};
+use crate::common::hasher::string_hasher::JavaStringHasher;
+use crate::common::message::MessageConst;
+use crate::common::message::MessageTrait;
+use crate::common::message::MessageVersion;
+use crate::common::sys_flag::message_sys_flag::MessageSysFlag;
+use crate::common::TopicFilterType;
+use crate::MessageUtils;
 
 #[derive(Clone, Debug, Default)]
 pub struct Message {
@@ -66,9 +65,11 @@ impl Message {
     pub fn topic(&self) -> &str {
         &self.topic
     }
+
     pub fn properties(&self) -> &HashMap<String, String> {
         &self.properties
     }
+
     pub fn transaction_id(&self) -> Option<&str> {
         self.transaction_id.as_deref()
     }
@@ -211,10 +212,12 @@ impl MessageExt {
     pub fn sys_flag(&self) -> i32 {
         self.sys_flag
     }
+
     #[inline]
     pub fn body_crc(&self) -> u32 {
         self.body_crc
     }
+
     #[inline]
     pub fn queue_id(&self) -> i32 {
         self.queue_id
@@ -227,30 +230,39 @@ impl MessageExt {
     pub fn message_inner(&self) -> &Message {
         &self.message
     }
+
     pub fn broker_name(&self) -> &str {
         &self.broker_name
     }
+
     pub fn store_size(&self) -> i32 {
         self.store_size
     }
+
     pub fn queue_offset(&self) -> i64 {
         self.queue_offset
     }
+
     pub fn born_timestamp(&self) -> i64 {
         self.born_timestamp
     }
+
     pub fn store_timestamp(&self) -> i64 {
         self.store_timestamp
     }
+
     pub fn msg_id(&self) -> &str {
         &self.msg_id
     }
+
     pub fn commit_log_offset(&self) -> i64 {
         self.commit_log_offset
     }
+
     pub fn reconsume_times(&self) -> i32 {
         self.reconsume_times
     }
+
     pub fn prepared_transaction_offset(&self) -> i64 {
         self.prepared_transaction_offset
     }
@@ -258,45 +270,59 @@ impl MessageExt {
     pub fn set_message_inner(&mut self, message_inner: Message) {
         self.message = message_inner;
     }
+
     pub fn set_broker_name(&mut self, broker_name: String) {
         self.broker_name = broker_name;
     }
+
     pub fn set_queue_id(&mut self, queue_id: i32) {
         self.queue_id = queue_id;
     }
+
     pub fn set_store_size(&mut self, store_size: i32) {
         self.store_size = store_size;
     }
+
     pub fn set_queue_offset(&mut self, queue_offset: i64) {
         self.queue_offset = queue_offset;
     }
+
     pub fn set_sys_flag(&mut self, sys_flag: i32) {
         self.sys_flag = sys_flag;
     }
+
     pub fn set_born_timestamp(&mut self, born_timestamp: i64) {
         self.born_timestamp = born_timestamp;
     }
+
     pub fn set_born_host(&mut self, born_host: SocketAddr) {
         self.born_host = born_host;
     }
+
     pub fn set_store_timestamp(&mut self, store_timestamp: i64) {
         self.store_timestamp = store_timestamp;
     }
+
     pub fn set_store_host(&mut self, store_host: SocketAddr) {
         self.store_host = store_host;
     }
+
     pub fn set_msg_id(&mut self, msg_id: String) {
         self.msg_id = msg_id;
     }
+
     pub fn set_commit_log_offset(&mut self, commit_log_offset: i64) {
         self.commit_log_offset = commit_log_offset;
     }
+
     pub fn set_body_crc(&mut self, body_crc: u32) {
         self.body_crc = body_crc;
     }
+
     pub fn set_reconsume_times(&mut self, reconsume_times: i32) {
         self.reconsume_times = reconsume_times;
     }
+
     pub fn set_prepared_transaction_offset(&mut self, prepared_transaction_offset: i64) {
         self.prepared_transaction_offset = prepared_transaction_offset;
     }
@@ -392,15 +418,19 @@ impl MessageExtBrokerInner {
     pub fn sys_flag(&self) -> i32 {
         self.message_ext_inner.sys_flag()
     }
+
     pub fn body_crc(&self) -> u32 {
         self.message_ext_inner.body_crc()
     }
+
     pub fn queue_id(&self) -> i32 {
         self.message_ext_inner.queue_id()
     }
+
     pub fn flag(&self) -> i32 {
         self.message_ext_inner.flag()
     }
+
     pub fn born_timestamp(&self) -> i64 {
         self.message_ext_inner.born_timestamp()
     }
@@ -420,6 +450,7 @@ impl MessageExtBrokerInner {
     pub fn reconsume_times(&self) -> i32 {
         self.message_ext_inner.reconsume_times()
     }
+
     pub fn prepared_transaction_offset(&self) -> i64 {
         self.message_ext_inner.prepared_transaction_offset()
     }

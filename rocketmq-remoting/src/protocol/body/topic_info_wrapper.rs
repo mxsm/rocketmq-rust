@@ -18,9 +18,11 @@
 use std::collections::HashMap;
 
 use rocketmq_common::common::config::TopicConfig;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
-use crate::protocol::{DataVersion, RemotingSerializable};
+use crate::protocol::DataVersion;
+use crate::protocol::RemotingSerializable;
 
 pub mod topic_config_wrapper;
 pub mod topic_queue_wrapper;
@@ -53,6 +55,7 @@ impl TopicConfigSerializeWrapper {
             Some(value) => Some(value),
         }
     }
+
     pub fn data_version(&self) -> Option<&DataVersion> {
         match &self.data_version {
             None => None,
@@ -66,6 +69,7 @@ impl TopicConfigSerializeWrapper {
     ) {
         self.topic_config_table = topic_config_table;
     }
+
     pub fn set_data_version(&mut self, data_version: Option<DataVersion>) {
         self.data_version = data_version;
     }

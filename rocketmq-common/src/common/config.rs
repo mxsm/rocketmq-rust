@@ -17,7 +17,8 @@
 
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 use super::TopicFilterType;
 use crate::common::constant::PermName;
@@ -51,9 +52,10 @@ impl Default for TopicConfig {
 }
 
 impl TopicConfig {
-    const SEPARATOR: &'static str = " ";
     const DEFAULT_READ_QUEUE_NUMS: u32 = 16;
     const DEFAULT_WRITE_QUEUE_NUMS: u32 = 16;
+    const SEPARATOR: &'static str = " ";
+
     pub fn new(topic_name: impl Into<String>) -> Self {
         TopicConfig {
             topic_name: Some(topic_name.into()),

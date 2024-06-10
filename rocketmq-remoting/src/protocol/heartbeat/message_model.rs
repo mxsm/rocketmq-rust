@@ -16,7 +16,10 @@
  */
 use std::fmt;
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::Deserialize;
+use serde::Deserializer;
+use serde::Serialize;
+use serde::Serializer;
 
 #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
 pub enum MessageModel {

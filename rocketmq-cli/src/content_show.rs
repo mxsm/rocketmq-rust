@@ -15,12 +15,14 @@
  * limitations under the License.
  */
 
-use std::{fs, path::PathBuf};
+use std::fs;
+use std::path::PathBuf;
 
 use bytes::Buf;
 use rocketmq_common::common::message::message_decoder;
 use rocketmq_store::log_file::mapped_file::default_impl_refactor::LocalMappedFile;
-use tabled::{Table, Tabled};
+use tabled::Table;
+use tabled::Tabled;
 
 pub fn print_content(from: Option<u32>, to: Option<u32>, path: Option<PathBuf>) {
     if path.is_none() {

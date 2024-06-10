@@ -14,19 +14,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::{
-    collections::{hash_map::DefaultHasher, HashSet},
-    hash::{Hash, Hasher},
-    net::SocketAddr,
-};
+use std::collections::hash_map::DefaultHasher;
+use std::collections::HashSet;
+use std::hash::Hash;
+use std::hash::Hasher;
+use std::net::SocketAddr;
 
 use bytes::BufMut;
 
-use crate::{
-    common::message::{message_single::MessageExt, MessageConst},
-    MessageDecoder::PROPERTY_SEPARATOR,
-    UtilAll::bytes_to_string,
-};
+use crate::common::message::message_single::MessageExt;
+use crate::common::message::MessageConst;
+use crate::MessageDecoder::PROPERTY_SEPARATOR;
+use crate::UtilAll::bytes_to_string;
 
 pub fn get_sharding_key_index(sharding_key: &str, index_size: usize) -> usize {
     let mut hasher = DefaultHasher::new();

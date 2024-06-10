@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
-use crate::protocol::static_topic::{
-    logic_queue_mapping_item::LogicQueueMappingItem, topic_queue_info::TopicQueueMappingInfo,
-};
+use crate::protocol::static_topic::logic_queue_mapping_item::LogicQueueMappingItem;
+use crate::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TopicQueueMappingDetail {

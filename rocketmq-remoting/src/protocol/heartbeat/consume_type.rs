@@ -16,7 +16,10 @@
  */
 use std::fmt;
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::Deserialize;
+use serde::Deserializer;
+use serde::Serialize;
+use serde::Serializer;
 
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]

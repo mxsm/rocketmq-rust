@@ -17,9 +17,11 @@
 
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
-use crate::protocol::command_custom_header::{CommandCustomHeader, FromMap};
+use crate::protocol::command_custom_header::CommandCustomHeader;
+use crate::protocol::command_custom_header::FromMap;
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct RpcRequestHeader {
@@ -38,9 +40,9 @@ pub struct RpcRequestHeader {
 }
 
 impl RpcRequestHeader {
+    pub const BROKER_NAME: &'static str = "brokerName";
     pub const NAMESPACE: &'static str = "namespace";
     pub const NAMESPACED: &'static str = "namespaced";
-    pub const BROKER_NAME: &'static str = "brokerName";
     pub const ONEWAY: &'static str = "oneway";
 
     pub fn new(

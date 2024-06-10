@@ -15,9 +15,8 @@
  * limitations under the License.
  */
 
-use crate::{
-    protocol::remoting_command::RemotingCommand, runtime::server::ConnectionHandlerContext,
-};
+use crate::protocol::remoting_command::RemotingCommand;
+use crate::runtime::server::ConnectionHandlerContext;
 
 /// Trait for processing requests.
 #[trait_variant::make(RequestProcessor: Send )]

@@ -17,9 +17,11 @@
 
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
-use crate::protocol::command_custom_header::{CommandCustomHeader, FromMap};
+use crate::protocol::command_custom_header::CommandCustomHeader;
+use crate::protocol::command_custom_header::FromMap;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GetRouteInfoRequestHeader {
@@ -30,8 +32,8 @@ pub struct GetRouteInfoRequestHeader {
 }
 
 impl GetRouteInfoRequestHeader {
-    const TOPIC: &'static str = "topic";
     const ACCEPT_STANDARD_JSON_ONLY: &'static str = "acceptStandardJsonOnly";
+    const TOPIC: &'static str = "topic";
 
     pub fn new(topic: impl Into<String>, accept_standard_json_only: Option<bool>) -> Self {
         GetRouteInfoRequestHeader {

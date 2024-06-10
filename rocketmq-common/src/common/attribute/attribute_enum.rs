@@ -16,7 +16,8 @@
  */
 use std::collections::HashSet;
 
-use crate::common::attribute::{Attribute, AttributeTrait};
+use crate::common::attribute::Attribute;
+use crate::common::attribute::AttributeTrait;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct EnumAttribute {

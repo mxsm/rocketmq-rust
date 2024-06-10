@@ -14,12 +14,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
+use std::sync::Arc;
 
-use rocketmq_common::common::{config::TopicConfig, message::message_single::MessageExt};
-use rocketmq_store::{
-    base::message_result::PutMessageResult, hook::put_message_hook::PutMessageHook,
-};
+use rocketmq_common::common::config::TopicConfig;
+use rocketmq_common::common::message::message_single::MessageExt;
+use rocketmq_store::base::message_result::PutMessageResult;
+use rocketmq_store::hook::put_message_hook::PutMessageHook;
 
 use crate::util::hook_utils::HookUtils;
 

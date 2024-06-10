@@ -16,30 +16,24 @@
  */
 use std::sync::Arc;
 
-use rocketmq_common::{
-    common::{broker::broker_config::BrokerIdentity, config::TopicConfig},
-    utils::crc32_utils,
-};
-use rocketmq_remoting::{
-    clients::{rocketmq_default_impl::RocketmqDefaultClient, RemotingClient},
-    code::request_code::RequestCode,
-    protocol::{
-        body::{
-            broker_body::register_broker_body::RegisterBrokerBody,
-            topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper,
-        },
-        header::namesrv::{
-            register_broker_header::RegisterBrokerRequestHeader,
-            topic_operation_header::RegisterTopicRequestHeader,
-        },
-        namesrv::RegisterBrokerResult,
-        remoting_command::RemotingCommand,
-        route::route_data_view::{QueueData, TopicRouteData},
-        RemotingSerializable,
-    },
-    remoting::RemotingService,
-    runtime::{config::client_config::TokioClientConfig, RPCHook},
-};
+use rocketmq_common::common::broker::broker_config::BrokerIdentity;
+use rocketmq_common::common::config::TopicConfig;
+use rocketmq_common::utils::crc32_utils;
+use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
+use rocketmq_remoting::clients::RemotingClient;
+use rocketmq_remoting::code::request_code::RequestCode;
+use rocketmq_remoting::protocol::body::broker_body::register_broker_body::RegisterBrokerBody;
+use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
+use rocketmq_remoting::protocol::header::namesrv::register_broker_header::RegisterBrokerRequestHeader;
+use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::RegisterTopicRequestHeader;
+use rocketmq_remoting::protocol::namesrv::RegisterBrokerResult;
+use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_remoting::protocol::route::route_data_view::QueueData;
+use rocketmq_remoting::protocol::route::route_data_view::TopicRouteData;
+use rocketmq_remoting::protocol::RemotingSerializable;
+use rocketmq_remoting::remoting::RemotingService;
+use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
+use rocketmq_remoting::runtime::RPCHook;
 
 #[derive(Clone)]
 pub struct BrokerOuterAPI {

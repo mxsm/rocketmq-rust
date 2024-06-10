@@ -1,6 +1,7 @@
 use std::str::FromStr;
 
-use crate::error::{RemotingError, RemotingError::FromStrError};
+use crate::error::RemotingError;
+use crate::error::RemotingError::FromStrError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum BrokerRequestCode {

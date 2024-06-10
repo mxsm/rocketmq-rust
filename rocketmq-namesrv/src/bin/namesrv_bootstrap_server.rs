@@ -18,11 +18,10 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use rocketmq_common::{
-    common::{namesrv::namesrv_config::NamesrvConfig, server::config::ServerConfig},
-    EnvUtils::EnvUtils,
-    ParseConfigFile,
-};
+use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
+use rocketmq_common::common::server::config::ServerConfig;
+use rocketmq_common::EnvUtils::EnvUtils;
+use rocketmq_common::ParseConfigFile;
 use rocketmq_namesrv::bootstrap::Builder;
 use rocketmq_rust::rocketmq;
 use tracing::info;

@@ -15,12 +15,12 @@
  * limitations under the License.
  */
 
-use std::{
-    fs::{File, OpenOptions},
-    io::Write,
-    path::Path,
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::fs::File;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::Path;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 use memmap2::MmapMut;
 use rocketmq_common::UtilAll::ensure_dir_ok;
@@ -131,18 +131,22 @@ impl StoreCheckpoint {
         self.physic_msg_timestamp
             .store(physic_msg_timestamp, Ordering::Relaxed);
     }
+
     pub fn set_logics_msg_timestamp(&self, logics_msg_timestamp: u64) {
         self.logics_msg_timestamp
             .store(logics_msg_timestamp, Ordering::Relaxed);
     }
+
     pub fn set_index_msg_timestamp(&self, index_msg_timestamp: u64) {
         self.index_msg_timestamp
             .store(index_msg_timestamp, Ordering::Relaxed);
     }
+
     pub fn set_master_flushed_offset(&self, master_flushed_offset: u64) {
         self.master_flushed_offset
             .store(master_flushed_offset, Ordering::Relaxed);
     }
+
     pub fn set_confirm_phy_offset(&self, confirm_phy_offset: u64) {
         self.confirm_phy_offset
             .store(confirm_phy_offset, Ordering::Relaxed);
@@ -151,15 +155,19 @@ impl StoreCheckpoint {
     pub fn physic_msg_timestamp(&self) -> u64 {
         self.physic_msg_timestamp.load(Ordering::Relaxed)
     }
+
     pub fn logics_msg_timestamp(&self) -> u64 {
         self.logics_msg_timestamp.load(Ordering::Relaxed)
     }
+
     pub fn index_msg_timestamp(&self) -> u64 {
         self.index_msg_timestamp.load(Ordering::Relaxed)
     }
+
     pub fn master_flushed_offset(&self) -> u64 {
         self.master_flushed_offset.load(Ordering::Relaxed)
     }
+
     pub fn confirm_phy_offset(&self) -> u64 {
         self.confirm_phy_offset.load(Ordering::Relaxed)
     }
@@ -172,6 +180,7 @@ impl StoreCheckpoint {
         let min = min - 1000 * 3;
         min.max(0) as u64
     }
+
     pub fn get_min_timestamp_index(&self) -> u64 {
         self.get_min_timestamp()
             .min(self.index_msg_timestamp.load(Ordering::Relaxed))

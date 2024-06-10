@@ -15,10 +15,14 @@
  * limitations under the License.
  */
 
-use std::{fmt, str::FromStr};
+use std::fmt;
+use std::str::FromStr;
 
 pub use faq::FAQUrl;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::Deserialize;
+use serde::Deserializer;
+use serde::Serialize;
+use serde::Serializer;
 
 pub use crate::common::sys_flag::topic_sys_flag as TopicSysFlag;
 

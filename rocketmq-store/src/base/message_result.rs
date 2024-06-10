@@ -15,10 +15,10 @@
  * limitations under the License.
  */
 
-use crate::base::{
-    message_status_enum::{AppendMessageStatus, GetMessageStatus, PutMessageStatus},
-    select_result::SelectMappedBufferResult,
-};
+use crate::base::message_status_enum::AppendMessageStatus;
+use crate::base::message_status_enum::GetMessageStatus;
+use crate::base::message_status_enum::PutMessageStatus;
+use crate::base::select_result::SelectMappedBufferResult;
 
 /// Represents the result of an append message operation.
 #[derive(Debug, Clone)]
@@ -100,9 +100,11 @@ impl PutMessageResult {
     pub fn put_message_status(&self) -> PutMessageStatus {
         self.put_message_status
     }
+
     pub fn append_message_result(&self) -> Option<&AppendMessageResult> {
         self.append_message_result.as_ref()
     }
+
     pub fn remote_put(&self) -> bool {
         self.remote_put
     }
@@ -110,12 +112,14 @@ impl PutMessageResult {
     pub fn set_put_message_status(&mut self, put_message_status: PutMessageStatus) {
         self.put_message_status = put_message_status;
     }
+
     pub fn set_append_message_result(
         &mut self,
         append_message_result: Option<AppendMessageResult>,
     ) {
         self.append_message_result = append_message_result;
     }
+
     pub fn set_remote_put(&mut self, remote_put: bool) {
         self.remote_put = remote_put;
     }

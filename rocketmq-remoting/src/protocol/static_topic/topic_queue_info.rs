@@ -18,7 +18,8 @@
 use std::collections::HashMap;
 
 use rocketmq_common::common::mix_all::METADATA_SCOPE_GLOBAL;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TopicQueueMappingInfo {

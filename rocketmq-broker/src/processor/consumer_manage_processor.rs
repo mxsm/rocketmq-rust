@@ -15,9 +15,8 @@
  * limitations under the License.
  */
 
-use rocketmq_remoting::{
-    protocol::remoting_command::RemotingCommand, runtime::server::ConnectionHandlerContext,
-};
+use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
 
 #[derive(Default, Clone)]
 pub struct ConsumerManageProcessor {}

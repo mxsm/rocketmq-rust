@@ -15,12 +15,12 @@
  * limitations under the License.
  */
 
-use std::{
-    collections::HashSet,
-    hash::{Hash, Hasher},
-};
+use std::collections::HashSet;
+use std::hash::Hash;
+use std::hash::Hasher;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

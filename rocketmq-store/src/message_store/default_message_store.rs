@@ -16,18 +16,17 @@
  */
 #![allow(unused_variables)]
 
-use std::{
-    collections::HashMap,
-    error::Error,
-    fs,
-    path::PathBuf,
-    sync::{
-        atomic::{AtomicBool, AtomicI64, Ordering},
-        Arc,
-    },
-    thread,
-    time::{Duration, Instant},
-};
+use std::collections::HashMap;
+use std::error::Error;
+use std::fs;
+use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicI64;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
+use std::time::Instant;
 
 use bytes::Buf;
 use log::info;
@@ -44,31 +43,35 @@ use rocketmq_common::{
     FileUtils::string_to_file,
     UtilAll::ensure_dir_ok,
 };
-use tokio::{runtime::Handle, sync::mpsc::Sender};
-use tracing::{error, warn};
+use tokio::runtime::Handle;
+use tokio::sync::mpsc::Sender;
+use tracing::error;
+use tracing::warn;
 
-use crate::{
-    base::{
-        allocate_mapped_file_service::AllocateMappedFileService,
-        commit_log_dispatcher::CommitLogDispatcher, dispatch_request::DispatchRequest,
-        message_result::PutMessageResult, message_status_enum::PutMessageStatus,
-        store_checkpoint::StoreCheckpoint,
-    },
-    config::{broker_role::BrokerRole, message_store_config::MessageStoreConfig},
-    hook::put_message_hook::BoxedPutMessageHook,
-    index::{index_dispatch::CommitLogDispatcherBuildIndex, index_service::IndexService},
-    kv::compaction_service::CompactionService,
-    log_file::{commit_log, commit_log::CommitLog, mapped_file::MappedFile, MessageStore},
-    queue::{
-        build_consume_queue::CommitLogDispatcherBuildConsumeQueue,
-        local_file_consume_queue_store::ConsumeQueueStore, ConsumeQueueStoreTrait,
-    },
-    stats::broker_stats_manager::BrokerStatsManager,
-    store::running_flags::RunningFlags,
-    store_path_config_helper::{
-        get_abort_file, get_store_checkpoint, get_store_path_consume_queue,
-    },
-};
+use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
+use crate::base::commit_log_dispatcher::CommitLogDispatcher;
+use crate::base::dispatch_request::DispatchRequest;
+use crate::base::message_result::PutMessageResult;
+use crate::base::message_status_enum::PutMessageStatus;
+use crate::base::store_checkpoint::StoreCheckpoint;
+use crate::config::broker_role::BrokerRole;
+use crate::config::message_store_config::MessageStoreConfig;
+use crate::hook::put_message_hook::BoxedPutMessageHook;
+use crate::index::index_dispatch::CommitLogDispatcherBuildIndex;
+use crate::index::index_service::IndexService;
+use crate::kv::compaction_service::CompactionService;
+use crate::log_file::commit_log;
+use crate::log_file::commit_log::CommitLog;
+use crate::log_file::mapped_file::MappedFile;
+use crate::log_file::MessageStore;
+use crate::queue::build_consume_queue::CommitLogDispatcherBuildConsumeQueue;
+use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
+use crate::queue::ConsumeQueueStoreTrait;
+use crate::stats::broker_stats_manager::BrokerStatsManager;
+use crate::store::running_flags::RunningFlags;
+use crate::store_path_config_helper::get_abort_file;
+use crate::store_path_config_helper::get_store_checkpoint;
+use crate::store_path_config_helper::get_store_path_consume_queue;
 
 ///Using local files to store message data, which is also the default method.
 pub struct DefaultMessageStore {
@@ -788,6 +791,7 @@ impl ReputMessageServiceInner {
     fn is_commit_log_available(&self) -> bool {
         self.reput_from_offset.load(Ordering::Relaxed) < self.commit_log.get_confirm_offset()
     }
+
     pub fn reput_from_offset(&self) -> i64 {
         self.reput_from_offset.load(Ordering::Relaxed)
     }

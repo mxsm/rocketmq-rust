@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 
-use crate::{
-    common::{attribute::cq_type::CQType, config::TopicConfig},
-    TopicAttributes,
-};
+use crate::common::attribute::cq_type::CQType;
+use crate::common::config::TopicConfig;
+use crate::TopicAttributes;
 
 pub struct QueueTypeUtils;
 

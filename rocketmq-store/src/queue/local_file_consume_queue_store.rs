@@ -16,28 +16,31 @@
  */
 #![allow(unused_variables)]
 
-use std::{collections::HashMap, fs, path::Path, sync::Arc};
+use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+use std::sync::Arc;
 
 use bytes::Bytes;
-use rocketmq_common::{
-    common::{
-        attribute::cq_type::CQType, broker::broker_config::BrokerConfig, config::TopicConfig,
-        message::message_single::MessageExtBrokerInner,
-    },
-    utils::queue_type_utils::QueueTypeUtils,
-};
+use rocketmq_common::common::attribute::cq_type::CQType;
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_common::common::config::TopicConfig;
+use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
+use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
 use tracing::info;
 
-use crate::{
-    base::{dispatch_request::DispatchRequest, store_checkpoint::StoreCheckpoint},
-    config::message_store_config::MessageStoreConfig,
-    queue::{
-        batch_consume_queue::BatchConsumeQueue, queue_offset_operator::QueueOffsetOperator,
-        single_consume_queue::ConsumeQueue, ConsumeQueueStoreTrait, ConsumeQueueTrait, CqUnit,
-    },
-    store::running_flags::RunningFlags,
-    store_path_config_helper::{get_store_path_batch_consume_queue, get_store_path_consume_queue},
-};
+use crate::base::dispatch_request::DispatchRequest;
+use crate::base::store_checkpoint::StoreCheckpoint;
+use crate::config::message_store_config::MessageStoreConfig;
+use crate::queue::batch_consume_queue::BatchConsumeQueue;
+use crate::queue::queue_offset_operator::QueueOffsetOperator;
+use crate::queue::single_consume_queue::ConsumeQueue;
+use crate::queue::ConsumeQueueStoreTrait;
+use crate::queue::ConsumeQueueTrait;
+use crate::queue::CqUnit;
+use crate::store::running_flags::RunningFlags;
+use crate::store_path_config_helper::get_store_path_batch_consume_queue;
+use crate::store_path_config_helper::get_store_path_consume_queue;
 
 #[derive(Clone)]
 pub struct ConsumeQueueStore {

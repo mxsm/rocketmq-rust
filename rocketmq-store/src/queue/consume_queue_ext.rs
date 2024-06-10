@@ -18,7 +18,8 @@ use std::path::PathBuf;
 
 use tracing::info;
 
-use crate::consume_queue::{consume_queue_ext::CqExtUnit, mapped_file_queue::MappedFileQueue};
+use crate::consume_queue::consume_queue_ext::CqExtUnit;
+use crate::consume_queue::mapped_file_queue::MappedFileQueue;
 
 const END_BLANK_DATA_LENGTH: usize = 4;
 
@@ -67,6 +68,7 @@ impl ConsumeQueueExt {
 
 impl ConsumeQueueExt {
     pub fn truncate_by_max_address(&self, max_address: i64) {}
+
     pub fn truncate_by_min_address(&self, min_address: i64) {}
 
     pub fn load(&mut self) -> bool {

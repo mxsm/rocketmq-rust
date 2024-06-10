@@ -15,33 +15,29 @@
  * limitations under the License.
  */
 
-use std::{
-    fs::{File, OpenOptions},
-    io::Write,
-    path::PathBuf,
-    sync::{
-        atomic::{AtomicI32, Ordering},
-        Arc,
-    },
-};
+use std::fs::File;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::PathBuf;
+use std::sync::atomic::AtomicI32;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
+use bytes::BytesMut;
 use memmap2::MmapMut;
-use rocketmq_common::common::message::{
-    message_batch::MessageExtBatch, message_single::MessageExtBrokerInner,
-};
+use rocketmq_common::common::message::message_batch::MessageExtBatch;
+use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
 use tracing::error;
 
-use crate::{
-    base::{
-        append_message_callback::AppendMessageCallback,
-        compaction_append_msg_callback::CompactionAppendMsgCallback,
-        message_result::AppendMessageResult, message_status_enum::AppendMessageStatus,
-        put_message_context::PutMessageContext, select_result::SelectMappedBufferResult,
-    },
-    config::flush_disk_type::FlushDiskType,
-    log_file::mapped_file::MappedFile,
-};
+use crate::base::append_message_callback::AppendMessageCallback;
+use crate::base::compaction_append_msg_callback::CompactionAppendMsgCallback;
+use crate::base::message_result::AppendMessageResult;
+use crate::base::message_status_enum::AppendMessageStatus;
+use crate::base::put_message_context::PutMessageContext;
+use crate::base::select_result::SelectMappedBufferResult;
+use crate::config::flush_disk_type::FlushDiskType;
+use crate::log_file::mapped_file::MappedFile;
 
 pub struct LocalMappedFile {
     //file information
@@ -96,12 +92,15 @@ impl LocalMappedFile {
     pub fn file_size(&self) -> u64 {
         self.file_size
     }
+
     pub fn wrote_position(&self) -> i32 {
         self.wrote_position.load(Ordering::Relaxed)
     }
+
     pub fn committed_position(&self) -> i32 {
         self.committed_position.load(Ordering::Relaxed)
     }
+
     pub fn flushed_position(&self) -> i32 {
         self.flushed_position.load(Ordering::Relaxed)
     }
@@ -134,10 +133,12 @@ impl LocalMappedFile {
     pub fn set_wrote_position(&self, wrote_position: i32) {
         self.wrote_position.store(wrote_position, Ordering::SeqCst);
     }
+
     pub fn set_committed_position(&self, committed_position: i32) {
         self.committed_position
             .store(committed_position, Ordering::SeqCst);
     }
+
     pub fn set_flushed_position(&self, flushed_position: i32) {
         self.flushed_position
             .store(flushed_position, Ordering::SeqCst);

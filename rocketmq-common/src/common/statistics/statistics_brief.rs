@@ -14,16 +14,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::{
-    cmp,
-    sync::{
-        atomic::{AtomicI32, AtomicI64, AtomicIsize, AtomicU64, AtomicUsize, Ordering},
-        Arc,
-    },
-    time::Duration,
-};
+use std::cmp;
+use std::sync::atomic::AtomicI32;
+use std::sync::atomic::AtomicI64;
+use std::sync::atomic::AtomicIsize;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::time::Duration;
 
-use tokio::{task, time::interval};
+use tokio::task;
+use tokio::time::interval;
 
 pub struct StatisticsBrief {
     top_percentile_meta: Vec<Vec<i64>>,
