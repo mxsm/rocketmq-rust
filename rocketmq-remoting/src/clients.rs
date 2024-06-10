@@ -91,7 +91,7 @@ pub trait RemotingClient: RemotingService {
         addr: String,
         request: RemotingCommand,
         timeout_millis: u64,
-    ) -> RemotingCommand;
+    ) -> Result<RemotingCommand, RemotingError>;
 
     async fn invoke_async(
         &mut self,

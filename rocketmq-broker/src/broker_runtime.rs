@@ -450,6 +450,30 @@ impl BrokerRuntime {
         if self.broker_config.enable_controller_mode {
             self.update_master_haserver_addr_periodically = true;
         }
+
+        if let Some(ref namesrv_address) = self.broker_config.namesrv_addr.clone() {
+            self.update_namesrv_addr();
+            info!(
+                "Set user specified name server address: {}",
+                namesrv_address
+            );
+            let mut broker_runtime = self.clone();
+            self.broker_runtime
+                .as_ref()
+                .unwrap()
+                .get_handle()
+                .spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(10)).await;
+                    loop {
+                        let current_execution_time = tokio::time::Instant::now();
+                        broker_runtime.update_namesrv_addr();
+                        let next_execution_time = current_execution_time + Duration::from_secs(60);
+                        let delay = next_execution_time
+                            .saturating_duration_since(tokio::time::Instant::now());
+                        tokio::time::sleep(delay).await;
+                    }
+                });
+        }
     }
 
     fn initial_transaction(&mut self) {}
@@ -473,6 +497,18 @@ impl BrokerRuntime {
         let request_processor = self.init_processor();
         let server = RocketMQServer::new(self.server_config.clone());
         tokio::spawn(async move { server.run(request_processor).await });
+    }
+
+    fn update_namesrv_addr(&mut self) {
+        if self.broker_config.fetch_name_srv_addr_by_dns_lookup {
+            if let Some(namesrv_addr) = &self.broker_config.namesrv_addr {
+                self.broker_out_api
+                    .update_name_server_address_list_by_dns_lookup(namesrv_addr.clone());
+            }
+        } else if let Some(namesrv_addr) = &self.broker_config.namesrv_addr {
+            self.broker_out_api
+                .update_name_server_address_list(namesrv_addr.clone());
+        }
     }
 
     pub async fn start(&mut self) {
@@ -572,7 +608,7 @@ impl BrokerRuntime {
                     tokio::time::sleep(delay).await;
                 }
             });
-        log::info!(
+        info!(
             "Rocketmq Broker({} ----Rust) start success",
             self.broker_config.broker_identity.broker_name
         );
