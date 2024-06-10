@@ -139,3 +139,54 @@ impl BrokerLiveInfo {
         &self.ha_server_addr
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::net::IpAddr;
+    use std::net::Ipv4Addr;
+    use std::net::SocketAddr;
+
+    use super::*;
+
+    #[test]
+    fn broker_addr_info_display_format() {
+        let broker_info = BrokerAddrInfo::new("TestCluster", "192.168.1.1");
+        assert_eq!(
+            format!("{}", broker_info),
+            "Cluster Name: TestCluster, Broker Address: 192.168.1.1"
+        );
+    }
+
+    #[test]
+    fn broker_status_change_info_display_format() {
+        let mut broker_addrs = HashMap::new();
+        broker_addrs.insert(1, "192.168.1.1".to_string());
+        let broker_status_info = BrokerStatusChangeInfo::new(
+            broker_addrs,
+            "192.168.1.2".to_string(),
+            "192.168.1.3".to_string(),
+        );
+        assert_eq!(
+            format!("{}", broker_status_info),
+            "Broker Addresses: {1: \"192.168.1.1\"}, Offline Broker Address: 192.168.1.2, HA \
+             Broker Address: 192.168.1.3"
+        );
+    }
+
+    #[test]
+    fn broker_live_info_properties() {
+        let data_version = DataVersion::new();
+        let broker_live_info = BrokerLiveInfo::new(
+            1000,
+            2000,
+            data_version.clone(),
+            "192.168.1.4".to_string(),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 5)), 8080),
+        );
+        assert_eq!(broker_live_info.last_update_timestamp(), 1000);
+        assert_eq!(broker_live_info.heartbeat_timeout_millis(), 2000);
+        assert_eq!(broker_live_info.data_version(), &data_version);
+        assert_eq!(broker_live_info.ha_server_addr(), "192.168.1.4");
+    }
+}
