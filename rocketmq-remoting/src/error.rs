@@ -15,42 +15,75 @@
  * limitations under the License.
  */
 
-use std::fmt::Display;
-use std::fmt::Formatter;
 use std::io;
 
 use thiserror::Error;
 
-use crate::error::RemotingError::Io;
-use crate::error::RemotingError::RemotingCommandDecoderError;
-
 #[derive(Debug, Error)]
 pub enum RemotingError {
-    RemotingCommandDecoderError(String),
-    RemotingCommandEncoderError(String),
+    #[error("{0}")]
     RemotingCommandException(String),
+    #[error("{0}")]
     FromStrError(String),
-    Io(io::Error),
+    #[error("{0:?}")]
+    Io(#[from] io::Error),
+    #[error("{0}")]
     RemoteException(String),
 }
 
-impl From<io::Error> for RemotingError {
+#[derive(Debug, Error)]
+#[error("{0}")]
+pub struct RemotingCommandDecoderError(pub String);
+impl From<io::Error> for RemotingCommandDecoderError {
     fn from(err: io::Error) -> Self {
-        Io(err)
+        RemotingCommandDecoderError(err.to_string())
+    }
+}
+#[derive(Debug, Error)]
+#[error("{0}")]
+pub struct RemotingCommandEncoderError(pub String);
+impl From<io::Error> for RemotingCommandEncoderError {
+    fn from(err: io::Error) -> Self {
+        RemotingCommandEncoderError(err.to_string())
     }
 }
 
-impl Display for RemotingError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RemotingCommandDecoderError(msg) => write!(f, "{}", msg),
-            Io(err) => write!(f, "{:?}", err),
-            RemotingError::RemotingCommandEncoderError(msg) => write!(f, "{}", msg),
-            RemotingError::FromStrError(msg) => {
-                write!(f, "{}", msg)
-            }
-            RemotingError::RemotingCommandException(msg) => write!(f, "{}", msg),
-            RemotingError::RemoteException(msg) => write!(f, "{}", msg),
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use super::*;
+
+    #[test]
+    fn remoting_command_decoder_error_from_io_error() {
+        let io_error = io::Error::new(io::ErrorKind::Other, "test error");
+        let decoder_error = RemotingCommandDecoderError::from(io_error);
+        assert_eq!(decoder_error.0, "test error");
+    }
+
+    #[test]
+    fn remoting_command_encoder_error_from_io_error() {
+        let io_error = io::Error::new(io::ErrorKind::Other, "test error");
+        let encoder_error = RemotingCommandEncoderError::from(io_error);
+        assert_eq!(encoder_error.0, "test error");
+    }
+
+    #[test]
+    fn remoting_error_from_io_error() {
+        let io_error = io::Error::new(io::ErrorKind::Other, "test error");
+        let remoting_error = RemotingError::from(io_error);
+        match remoting_error {
+            RemotingError::Io(error) => assert_eq!(error.to_string(), "test error"),
+            _ => panic!("Expected Io variant"),
+        }
+    }
+
+    #[test]
+    fn remoting_error_from_string() {
+        let remoting_error = RemotingError::RemotingCommandException("test error".to_string());
+        match remoting_error {
+            RemotingError::RemotingCommandException(error) => assert_eq!(error, "test error"),
+            _ => panic!("Expected RemotingCommandException variant"),
         }
     }
 }

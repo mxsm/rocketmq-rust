@@ -67,7 +67,7 @@ impl BlockingClient {
             .block_on(tokio::time::timeout(timeout, self.inner.send(request)))
         {
             Ok(Ok(_)) => Ok(()),
-            Ok(Err(err)) => Err(err.into()),
+            Ok(Err(err)) => Err(err),
             Err(err) => Err(err.into()),
         }
     }

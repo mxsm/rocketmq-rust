@@ -14,11 +14,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use anyhow::anyhow;
 use futures_util::SinkExt;
 use tokio_stream::StreamExt;
 
 use crate::connection::Connection;
-use crate::error::RemotingError;
 use crate::protocol::remoting_command::RemotingCommand;
 
 pub struct Client {
@@ -90,7 +90,7 @@ impl Client {
     /// # Returns
     ///
     /// A `Result` indicating success or failure in sending the request.
-    pub async fn send(&mut self, request: RemotingCommand) -> anyhow::Result<(), RemotingError> {
+    pub async fn send(&mut self, request: RemotingCommand) -> anyhow::Result<()> {
         self.connection.framed.send(request).await?;
         Ok(())
     }
@@ -101,8 +101,13 @@ impl Client {
     ///
     /// The `RemotingCommand` representing the response, wrapped in a `Result`. Returns an error if
     /// reading the response fails.
-    async fn read(&mut self) -> anyhow::Result<RemotingCommand, RemotingError> {
-        let response = self.connection.framed.next().await;
-        response.unwrap()
+    async fn read(&mut self) -> anyhow::Result<RemotingCommand> {
+        match self.connection.framed.next().await {
+            None => Err(anyhow!("Failed to read response")),
+            Some(result) => match result {
+                Ok(response) => Ok(response),
+                Err(err) => Err(anyhow!(err)),
+            },
+        }
     }
 }
