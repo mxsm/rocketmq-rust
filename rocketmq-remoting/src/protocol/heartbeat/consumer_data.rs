@@ -25,7 +25,7 @@ use crate::protocol::heartbeat::consume_type::ConsumeType;
 use crate::protocol::heartbeat::message_model::MessageModel;
 use crate::protocol::heartbeat::subscription_data::SubscriptionData;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ConsumerData {
     pub group_name: String,

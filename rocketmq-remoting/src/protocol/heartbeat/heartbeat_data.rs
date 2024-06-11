@@ -23,7 +23,7 @@ use crate::protocol::heartbeat::consumer_data::ConsumerData;
 use crate::protocol::heartbeat::producer_data::ProducerData;
 use crate::protocol::RemotingSerializable;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct HeartbeatData {
     #[serde(rename = "clientID")]

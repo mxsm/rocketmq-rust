@@ -21,8 +21,9 @@ use serde::Deserializer;
 use serde::Serialize;
 use serde::Serializer;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ConsumeFromWhere {
+    #[default]
     ConsumeFromLastOffset,
     ConsumeFromLastOffsetAndFromMinWhenBootFirst,
     ConsumeFromMinOffset,

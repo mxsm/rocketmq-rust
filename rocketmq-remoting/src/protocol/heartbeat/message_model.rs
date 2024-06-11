@@ -21,9 +21,10 @@ use serde::Deserializer;
 use serde::Serialize;
 use serde::Serializer;
 
-#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq, Default)]
 pub enum MessageModel {
     Broadcasting,
+    #[default]
     Clustering,
 }
 
