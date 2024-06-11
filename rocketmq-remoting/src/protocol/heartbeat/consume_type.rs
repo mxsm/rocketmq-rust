@@ -22,8 +22,9 @@ use serde::Serialize;
 use serde::Serializer;
 
 #[allow(clippy::enum_variant_names)]
-#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq, Default)]
 pub enum ConsumeType {
+    #[default]
     ConsumeActively,
     ConsumePassively,
     ConsumePop,
