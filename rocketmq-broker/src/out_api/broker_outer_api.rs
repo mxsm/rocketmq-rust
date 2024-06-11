@@ -23,9 +23,12 @@ use rocketmq_common::utils::crc32_utils;
 use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
 use rocketmq_remoting::code::request_code::RequestCode;
+use rocketmq_remoting::code::response_code::RemotingSysResponseCode;
 use rocketmq_remoting::protocol::body::broker_body::register_broker_body::RegisterBrokerBody;
+use rocketmq_remoting::protocol::body::kv_table::KVTable;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
 use rocketmq_remoting::protocol::header::namesrv::register_broker_header::RegisterBrokerRequestHeader;
+use rocketmq_remoting::protocol::header::namesrv::register_broker_header::RegisterBrokerResponseHeader;
 use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::RegisterTopicRequestHeader;
 use rocketmq_remoting::protocol::namesrv::RegisterBrokerResult;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
@@ -185,22 +188,41 @@ impl BrokerOuterAPI {
                 .set_body(Some(body.clone()));
 
         if oneway {
-            match self
-                .remoting_client
+            self.remoting_client
                 .invoke_oneway(namesrv_addr, request, timeout_mills)
-                .await
-            {
-                Ok(_) => return None,
-                Err(_) => {
-                    // Ignore
-                    return None;
+                .await;
+            return None;
+        }
+        match self
+            .remoting_client
+            .invoke_async(namesrv_addr.clone(), request, timeout_mills)
+            .await
+        {
+            Ok(response) => match From::from(response.code()) {
+                RemotingSysResponseCode::Success => {
+                    let register_broker_result =
+                        response.decode_command_custom_header::<RegisterBrokerResponseHeader>();
+                    let mut result = RegisterBrokerResult::default();
+                    if let Some(header) = register_broker_result {
+                        result.ha_server_addr =
+                            header.ha_server_addr.clone().unwrap_or("".to_string());
+                        result.master_addr = header.master_addr.clone().unwrap_or("".to_string());
+                    }
+                    if let Some(body) = response.body() {
+                        result.kv_table = KVTable::decode(body.as_ref());
+                    }
+                    Some(result)
                 }
+                _ => None,
+            },
+            Err(err) => {
+                error!(
+                    "Register broker to name server error, namesrv_addr={}, error={}",
+                    namesrv_addr, err
+                );
+                None
             }
         }
-        let _command = self
-            .remoting_client
-            .invoke_sync(namesrv_addr, request, timeout_mills);
-        Some(RegisterBrokerResult::default())
     }
 
     /// Register the topic route info of single topic to all name server nodes.
@@ -217,7 +239,7 @@ impl BrokerOuterAPI {
         for namesrv_addr in name_server_address_list.iter() {
             let cloned_request = request.clone();
             let addr = namesrv_addr.clone();
-            let mut client = self.remoting_client.clone();
+            let client = self.remoting_client.clone();
             let join_handle = tokio::spawn(async move {
                 client
                     .invoke_async(addr, cloned_request, timeout_mills)

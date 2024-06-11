@@ -94,19 +94,13 @@ pub trait RemotingClient: RemotingService {
     ) -> Result<RemotingCommand, RemotingError>;
 
     async fn invoke_async(
-        &mut self,
-        addr: String,
-        request: RemotingCommand,
-        timeout_millis: u64,
-        //invoke_callback: impl InvokeCallback,
-    ) -> Result<RemotingCommand, RemotingError>;
-
-    async fn invoke_oneway(
         &self,
         addr: String,
         request: RemotingCommand,
         timeout_millis: u64,
-    ) -> Result<(), RemotingError>;
+    ) -> Result<RemotingCommand, RemotingError>;
+
+    async fn invoke_oneway(&self, addr: String, request: RemotingCommand, timeout_millis: u64);
 
     /*    async fn invoke(
         &mut self,
