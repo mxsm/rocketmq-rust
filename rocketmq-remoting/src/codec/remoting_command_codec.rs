@@ -21,8 +21,8 @@ use bytes::BytesMut;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
-use crate::error::RemotingError;
-use crate::error::RemotingError::RemotingCommandDecoderError;
+use crate::error::RemotingCommandDecoderError;
+use crate::error::RemotingCommandEncoderError;
 use crate::protocol::remoting_command::RemotingCommand;
 
 /// Encodes a `RemotingCommand` into a `BytesMut` buffer.
@@ -61,7 +61,7 @@ impl RemotingCommandCodec {
 }
 
 impl Decoder for RemotingCommandCodec {
-    type Error = RemotingError;
+    type Error = RemotingCommandDecoderError;
     type Item = RemotingCommand;
 
     /// Decodes a `RemotingCommand` from a `BytesMut` buffer.
@@ -137,7 +137,7 @@ impl Decoder for RemotingCommandCodec {
 }
 
 impl Encoder<RemotingCommand> for RemotingCommandCodec {
-    type Error = RemotingError;
+    type Error = RemotingCommandEncoderError;
 
     /// Encodes a `RemotingCommand` into a `BytesMut` buffer.
     ///
