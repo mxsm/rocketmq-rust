@@ -28,10 +28,13 @@ use crate::protocol::RemotingSerializable;
 pub struct HeartbeatData {
     #[serde(rename = "clientID")]
     pub client_id: String,
+    #[serde(default)]
     pub producer_data_set: HashSet<ProducerData>,
+    #[serde(default)]
     pub consumer_data_set: HashSet<ConsumerData>,
+    #[serde(default)]
     pub heartbeat_fingerprint: i32,
-    #[serde(rename = "withoutSub")]
+    #[serde(rename = "withoutSub", default)]
     pub is_without_sub: bool,
 }
 
