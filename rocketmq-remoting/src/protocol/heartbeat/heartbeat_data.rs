@@ -41,3 +41,63 @@ pub struct HeartbeatData {
 impl RemotingSerializable for HeartbeatData {
     type Output = HeartbeatData;
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::*;
+
+    #[test]
+    fn heartbeat_data_serialization_deserialization() {
+        let mut producer_data_set = HashSet::new();
+        producer_data_set.insert(ProducerData::default());
+        let mut consumer_data_set = HashSet::new();
+        consumer_data_set.insert(ConsumerData::default());
+
+        let original = HeartbeatData {
+            client_id: "client1".to_string(),
+            producer_data_set,
+            consumer_data_set,
+            heartbeat_fingerprint: 123,
+            is_without_sub: false,
+        };
+
+        let serialized = original.encode();
+        let deserialized = HeartbeatData::decode(serialized.as_slice());
+
+        assert_eq!(original, deserialized);
+    }
+
+    #[test]
+    fn heartbeat_data_without_sub_serialization_deserialization() {
+        let original = HeartbeatData {
+            client_id: "client1".to_string(),
+            producer_data_set: HashSet::new(),
+            consumer_data_set: HashSet::new(),
+            heartbeat_fingerprint: 123,
+            is_without_sub: true,
+        };
+
+        let serialized = original.encode();
+        let deserialized = HeartbeatData::decode(serialized.as_slice());
+
+        assert_eq!(original, deserialized);
+    }
+
+    #[test]
+    fn heartbeat_data_with_empty_sets_serialization_deserialization() {
+        let original = HeartbeatData {
+            client_id: "client1".to_string(),
+            producer_data_set: HashSet::new(),
+            consumer_data_set: HashSet::new(),
+            heartbeat_fingerprint: 123,
+            is_without_sub: false,
+        };
+
+        let serialized = original.encode();
+        let deserialized = HeartbeatData::decode(serialized.as_slice());
+
+        assert_eq!(original, deserialized);
+    }
+}
