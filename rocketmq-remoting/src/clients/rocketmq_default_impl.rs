@@ -231,7 +231,7 @@ impl RemotingClient for RocketmqDefaultClient {
     }
 
     async fn invoke_async(
-        &mut self,
+        &self,
         addr: String,
         request: RemotingCommand,
         timeout_millis: u64,
@@ -250,16 +250,11 @@ impl RemotingClient for RocketmqDefaultClient {
         }
     }
 
-    async fn invoke_oneway(
-        &self,
-        addr: String,
-        request: RemotingCommand,
-        timeout_millis: u64,
-    ) -> Result<(), RemotingError> {
+    async fn invoke_oneway(&self, addr: String, request: RemotingCommand, timeout_millis: u64) {
         let client = self.get_and_create_client(addr.clone()).unwrap();
         tokio::spawn(async move {
             match time::timeout(Duration::from_millis(timeout_millis), async move {
-                client.lock().await.send(request).await.unwrap()
+                client.lock().await.send(request).await
             })
             .await
             {
@@ -267,7 +262,6 @@ impl RemotingClient for RocketmqDefaultClient {
                 Err(err) => Err(RemotingError::RemoteException(err.to_string())),
             }
         });
-        Ok(())
     }
 
     fn register_processor(
