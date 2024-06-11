@@ -19,7 +19,6 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rocketmq_common::TokioExecutorService;
 use tokio::runtime::Handle;
 use tokio::task;
 use tokio::time;
@@ -34,7 +33,6 @@ use crate::error::RemotingError;
 use crate::protocol::remoting_command::RemotingCommand;
 use crate::remoting::RemotingService;
 use crate::runtime::config::client_config::TokioClientConfig;
-use crate::runtime::processor::RequestProcessor;
 use crate::runtime::RPCHook;
 
 #[derive(Clone)]
@@ -205,31 +203,6 @@ impl RemotingClient for RocketmqDefaultClient {
             .collect()
     }
 
-    fn invoke_sync(
-        &self,
-        addr: String,
-        request: RemotingCommand,
-        timeout_millis: u64,
-    ) -> Result<RemotingCommand, RemotingError> {
-        let client = self.get_and_create_client(addr.clone()).unwrap();
-        let handle = Handle::current();
-        match std::thread::spawn(move || {
-            handle.block_on(async move { client.lock().await.send_read(request).await })
-        })
-        .join()
-        {
-            Ok(cmd) => match cmd {
-                Ok(cmd_inner) => Ok(cmd_inner),
-                Err(_) => Err(RemotingError::RemoteException(
-                    "invoke sync error".to_string(),
-                )),
-            },
-            Err(_) => Err(RemotingError::RemoteException(
-                "invoke sync error".to_string(),
-            )),
-        }
-    }
-
     async fn invoke_async(
         &self,
         addr: String,
@@ -262,19 +235,6 @@ impl RemotingClient for RocketmqDefaultClient {
                 Err(err) => Err(RemotingError::RemoteException(err.to_string())),
             }
         });
-    }
-
-    fn register_processor(
-        &mut self,
-        request_code: i32,
-        processor: impl RequestProcessor + Sync + 'static,
-        executor: Arc<TokioExecutorService>,
-    ) {
-        todo!()
-    }
-
-    fn set_callback_executor(&mut self, executor: Arc<TokioExecutorService>) {
-        todo!()
     }
 
     fn is_address_reachable(&mut self, addr: String) {
