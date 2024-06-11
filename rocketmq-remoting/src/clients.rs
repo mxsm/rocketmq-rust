@@ -86,13 +86,6 @@ pub trait RemotingClient: RemotingService {
 
     fn get_available_name_srv_list(&self) -> Vec<String>;
 
-    fn invoke_sync(
-        &self,
-        addr: String,
-        request: RemotingCommand,
-        timeout_millis: u64,
-    ) -> Result<RemotingCommand, RemotingError>;
-
     async fn invoke_async(
         &self,
         addr: String,
@@ -101,44 +94,6 @@ pub trait RemotingClient: RemotingService {
     ) -> Result<RemotingCommand, RemotingError>;
 
     async fn invoke_oneway(&self, addr: String, request: RemotingCommand, timeout_millis: u64);
-
-    /*    async fn invoke(
-        &mut self,
-        addr: String,
-        request: RemotingCommand,
-        timeout_millis: u64,
-    ) -> Result<RemotingCommand, Box<dyn std::error::Error>> {
-        let completable_future = CompletableFuture::new();
-        let sender = completable_future.get_sender();
-        match self
-            .invoke_async(
-                addr,
-                request,
-                timeout_millis,
-                |response: Option<RemotingCommand>,
-                 error: Option<Box<dyn std::error::Error>>,
-                 _response_future: Option<ResponseFuture>| {
-                    if let Some(response) = response {
-                        let _ = sender.blocking_send(response);
-                    } else if let Some(_error) = error {
-                    }
-                },
-            )
-            .await
-        {
-            Ok(_) => Ok(completable_future),
-            Err(err) => Err(err),
-        }
-    }*/
-
-    fn register_processor(
-        &mut self,
-        request_code: i32,
-        processor: impl RequestProcessor + Sync + 'static,
-        executor: Arc<TokioExecutorService>,
-    );
-
-    fn set_callback_executor(&mut self, executor: Arc<TokioExecutorService>);
 
     fn is_address_reachable(&mut self, addr: String);
 
