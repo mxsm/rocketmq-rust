@@ -452,10 +452,7 @@ mod tests {
             todo!()
         }
 
-        fn put_messages(
-            &mut self,
-            msg_batch: MessageExtBatch,
-        ) -> impl Future<Output = PutMessageResult> + Send {
+        async fn put_messages(&mut self, msg_batch: MessageExtBatch) -> PutMessageResult {
             todo!()
         }
 
