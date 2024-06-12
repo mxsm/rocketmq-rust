@@ -70,6 +70,7 @@ impl MessageTrait for MessageBatch {
 pub struct MessageExtBatch {
     pub message_ext_broker_inner: MessageExtBrokerInner,
     pub is_inner_batch: bool,
+    pub encoded_buff: Option<bytes::BytesMut>,
 }
 
 impl MessageExtBatch {

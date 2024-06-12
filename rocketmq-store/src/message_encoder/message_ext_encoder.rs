@@ -18,11 +18,14 @@ use std::sync::Arc;
 
 use bytes::Buf;
 use bytes::BufMut;
+use bytes::BytesMut;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
 use rocketmq_common::common::message::MessageVersion;
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
+use rocketmq_common::CRC32Utils::crc32;
 use rocketmq_common::MessageDecoder;
+use rocketmq_common::MessageDecoder::PROPERTY_SEPARATOR;
 use tracing::warn;
 
 use crate::base::message_result::PutMessageResult;
@@ -235,7 +238,7 @@ impl MessageExtEncoder {
         let properties_data = msg_inner.properties_string().as_bytes();
         let need_append_last_property_separator = self.crc32_reserved_length > 0
             && !properties_data.is_empty()
-            && properties_data[properties_data.len() - 1..][0] != 2u8;
+            && properties_data[properties_data.len() - 1..][0] != PROPERTY_SEPARATOR as u8;
 
         let properties_length = properties_data.len()
             + if need_append_last_property_separator {
@@ -373,18 +376,16 @@ impl MessageExtEncoder {
 
     pub fn encode_batch(
         &mut self,
-        _message_ext_batch: &MessageExtBatch,
-        _put_message_context: &mut PutMessageContext,
-    ) -> Option<bytes::Bytes> {
-        /*self.byte_buf.clear();
+        message_ext_batch: &MessageExtBatch,
+        put_message_context: &mut PutMessageContext,
+    ) -> Option<BytesMut> {
+        self.byte_buf.clear();
 
         let messages_byte_buff = message_ext_batch.wrap();
-        if messages_byte_buff.is_none() {
-            return None;
-        }
+        messages_byte_buff.as_ref()?;
         let mut messages_byte_buff = messages_byte_buff.unwrap();
-        let total_length = messages_byte_buff.len() as i32;
-        if total_length > self.max_message_body_size {
+        let total_length = messages_byte_buff.len();
+        if total_length > self.max_message_body_size as usize {
             warn!(
                 "message body size exceeded, msg body size: {}, maxMessageSize: {}",
                 total_length, self.max_message_body_size
@@ -392,15 +393,19 @@ impl MessageExtEncoder {
             return None;
         }
 
-        let batch_prop_str =
-            MessageDecoder::message_properties_to_string(message_ext_batch.getProperties());
+        let batch_prop_str = MessageDecoder::message_properties_to_string(
+            message_ext_batch
+                .message_ext_broker_inner
+                .message_ext_inner
+                .properties(),
+        );
         let batch_prop_data = batch_prop_str.as_bytes();
         let batch_prop_data_len = batch_prop_data.len();
-        if batch_prop_data_len > i16::MAX_VALUE as usize {
+        if batch_prop_data_len > i16::MAX as usize {
             warn!(
                 "Properties size of messageExtBatch exceeded, properties size: {}, maxSize: {}",
                 batch_prop_data_len,
-                i16::MAX_VALUE
+                i16::MAX
             );
             return None;
         }
@@ -414,74 +419,96 @@ impl MessageExtEncoder {
             let body_crc = messages_byte_buff.get_i32();
             let flag = messages_byte_buff.get_i32();
             let body_len = messages_byte_buff.get_i32();
-            let body_crc_calculated = crc32(messages_byte_buff.copy_to_bytes(body_len).as_ref());
-            messages_byte_buff.set_position((body_pos + body_len) as u64);
+            let body = messages_byte_buff.copy_to_bytes(body_len as usize);
+            let body_crc_calculated = crc32(body.as_ref());
             let properties_len = messages_byte_buff.get_i16();
-            let properties_pos = messages_byte_buff.position() as usize;
-            messages_byte_buff.set_position((properties_pos + properties_len) as u64);
+            let properties_body = messages_byte_buff.copy_to_bytes(properties_len as usize);
+            let current = total_length - messages_byte_buff.remaining();
             let need_append_last_property_separator = properties_len > 0
                 && batch_prop_len > 0
-                && messages_byte_buff.get((properties_pos + properties_len - 1) as usize)
-                    != MessageDecoder::PROPERTY_SEPARATOR;
-
-            let topic_data = message_ext_batch.get_topic().as_bytes();
+                && messages_byte_buff[total_length - 1..total_length][0]
+                    != PROPERTY_SEPARATOR as u8;
+            let topic_data = message_ext_batch
+                .message_ext_broker_inner
+                .topic()
+                .as_bytes();
             let topic_length = topic_data.len() as i32;
-            let total_prop_len = if need_append_last_property_separator {
-                properties_len + batch_prop_len as i32 + 1
+            let mut total_prop_len = if need_append_last_property_separator {
+                properties_len + batch_prop_len + 1
             } else {
-                properties_len + batch_prop_len as i32
+                properties_len + batch_prop_len
             };
 
             // Properties need to add crc32
-            let total_prop_len_with_crc32 = total_prop_len + self.crc32_reserved_length;
+            total_prop_len += self.crc32_reserved_length as i16;
             let msg_len = Self::cal_msg_length(
-                message_ext_batch.get_version(),
-                message_ext_batch.get_sys_flag(),
+                message_ext_batch.message_ext_broker_inner.version(),
+                message_ext_batch.message_ext_broker_inner.sys_flag(),
                 body_len,
                 topic_length,
-                total_prop_len_with_crc32,
+                total_prop_len as i32,
             );
 
+            // 1 TOTALSIZE
             self.byte_buf.put_i32(msg_len);
-            self.byte_buf.put_i32(magic_code);
+            // 2 MAGICCODE
+            self.byte_buf.put_i32(
+                message_ext_batch
+                    .message_ext_broker_inner
+                    .version()
+                    .get_magic_code(),
+            );
+            // 3 BODYCRC
             self.byte_buf.put_i32(body_crc);
-            self.byte_buf.put_i32(message_ext_batch.get_queue_id());
+            // 4 QUEUEID
+            self.byte_buf
+                .put_i32(message_ext_batch.message_ext_broker_inner.queue_id());
+            // 5 FLAG
             self.byte_buf.put_i32(flag);
+            // 6 QUEUEOFFSET
             self.byte_buf.put_i64(0);
+            // 7 PHYSICALOFFSET
             self.byte_buf.put_i64(0);
-            self.byte_buf.put_i32(message_ext_batch.get_sys_flag());
+            // 8 SYSFLAG
             self.byte_buf
-                .put_i64(message_ext_batch.get_born_timestamp());
-
-            self.byte_buf.put(born_host_bytes.array());
-
+                .put_i32(message_ext_batch.message_ext_broker_inner.sys_flag());
+            // 9 BORNTIMESTAMP
             self.byte_buf
-                .put_i64(message_ext_batch.get_store_timestamp());
-
-            self.byte_buf.put(store_host_bytes.array());
-
+                .put_i64(message_ext_batch.message_ext_broker_inner.born_timestamp());
+            // 10 BORNHOST
             self.byte_buf
-                .put_i32(message_ext_batch.get_reconsume_times());
-            self.byte_buf.put_i64(0); // Prepared Transaction Offset, batch does not support transaction
+                .put(message_ext_batch.message_ext_broker_inner.born_host_bytes());
+            // 11 STORETIMESTAMP
+            self.byte_buf
+                .put_i64(message_ext_batch.message_ext_broker_inner.store_timestamp());
+            // 12 STOREHOSTADDRESS
+            self.byte_buf.put(
+                message_ext_batch
+                    .message_ext_broker_inner
+                    .store_host_bytes(),
+            );
+            // 13 RECONSUMETIMES
+            self.byte_buf
+                .put_i32(message_ext_batch.message_ext_broker_inner.reconsume_times());
+            // Prepared Transaction Offset, batch does not support transaction
+            self.byte_buf.put_i64(0);
+            // 15 BODY
             self.byte_buf.put_i32(body_len);
             if body_len > 0 {
-                self.byte_buf
-                    .put(&messages_byte_buff.bytes()[body_pos..(body_pos + body_len) as usize]);
+                self.byte_buf.put(body);
             }
-
-            if message_ext_batch.get_version() == MessageVersion::MESSAGE_VERSION_V2 {
+            // 16 TOPIC
+            if message_ext_batch.message_ext_broker_inner.version() == MessageVersion::V2 {
                 self.byte_buf.put_i16(topic_length as i16);
             } else {
                 self.byte_buf.put_u8(topic_length as u8);
             }
             self.byte_buf.put(topic_data);
 
-            self.byte_buf.put_i16(total_prop_len as i16);
+            // 17 PROPERTIES
+            self.byte_buf.put_i16(total_prop_len);
             if properties_len > 0 {
-                self.byte_buf.put(
-                    &messages_byte_buff.bytes()
-                        [properties_pos..(properties_pos + properties_len) as usize],
-                );
+                self.byte_buf.put(properties_body);
             }
             if batch_prop_len > 0 {
                 if need_append_last_property_separator {
@@ -490,15 +517,13 @@ impl MessageExtEncoder {
                 }
                 self.byte_buf.put(batch_prop_data);
             }
-            self.byte_buf.set_writer_index(
-                (self.byte_buf.writer_index() + self.crc32_reserved_length) as usize,
-            );
+            // 18 CRC32
+            self.byte_buf.advance(self.crc32_reserved_length as usize);
         }
         put_message_context.set_batch_size(batch_size);
-        put_message_context.set_phy_pos(vec![0; batch_size]);
+        put_message_context.set_phy_pos(vec![0; batch_size as usize]);
 
-        self.byte_buf.nio_buffer()*/
-        unimplemented!()
+        Some(self.byte_buf.split())
     }
 
     pub fn get_encoder_buffer(&mut self) -> bytes::Bytes {

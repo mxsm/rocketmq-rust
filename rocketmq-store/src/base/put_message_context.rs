@@ -38,7 +38,7 @@ impl PutMessageContext {
         &self.phy_pos
     }
 
-    pub fn phy_pos(&mut self, phy_pos: Vec<i64>) {
+    pub fn set_phy_pos(&mut self, phy_pos: Vec<i64>) {
         self.phy_pos = phy_pos;
     }
 
@@ -46,7 +46,11 @@ impl PutMessageContext {
         self.batch_size
     }
 
-    pub fn batch_size(&mut self, batch_size: i32) {
+    pub fn set_batch_size(&mut self, batch_size: i32) {
         self.batch_size = batch_size;
+    }
+
+    pub fn set_topic_queue_table_key(&mut self, topic_queue_table_key: String) {
+        self.topic_queue_table_key = topic_queue_table_key;
     }
 }

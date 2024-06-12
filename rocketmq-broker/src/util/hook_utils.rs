@@ -391,10 +391,12 @@ impl HookUtils {
 mod tests {
     use std::collections::HashMap;
     use std::error::Error;
+    use std::future::Future;
     use std::sync::Arc;
 
     use parking_lot::RwLock;
     use rocketmq_common::common::config::TopicConfig;
+    use rocketmq_common::common::message::message_batch::MessageExtBatch;
     use rocketmq_common::common::message::message_single::MessageExt;
     use rocketmq_store::base::message_result::PutMessageResult;
     use rocketmq_store::base::message_status_enum::PutMessageStatus;
@@ -447,6 +449,10 @@ mod tests {
         }
 
         async fn put_message(&mut self, _msg: MessageExtBrokerInner) -> PutMessageResult {
+            todo!()
+        }
+
+        async fn put_messages(&mut self, msg_batch: MessageExtBatch) -> PutMessageResult {
             todo!()
         }
 

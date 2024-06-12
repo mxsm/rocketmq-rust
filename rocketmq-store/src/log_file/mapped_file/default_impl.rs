@@ -251,12 +251,34 @@ impl MappedFile for DefaultMappedFile {
     }
 
     fn append_messages<AMC: AppendMessageCallback>(
-        &mut self,
-        message: &MessageExtBatch,
+        &self,
+        message: &mut MessageExtBatch,
         message_callback: &AMC,
-        put_message_context: &PutMessageContext,
+        put_message_context: &mut PutMessageContext,
     ) -> AppendMessageResult {
-        unimplemented!()
+        let current_pos = self.wrote_position.load(Ordering::Acquire) as u64;
+        if current_pos >= self.file_size {
+            error!(
+                "MappedFile.appendMessage return null, wrotePosition: {} fileSize: {}",
+                current_pos, self.file_size
+            );
+            return AppendMessageResult {
+                status: AppendMessageStatus::UnknownError,
+                ..Default::default()
+            };
+        }
+        let result = message_callback.do_append_batch(
+            self.file_from_offset as i64,
+            self,
+            (self.file_size - current_pos) as i32,
+            message,
+            put_message_context,
+        );
+        self.store_timestamp.store(
+            message.message_ext_broker_inner.store_timestamp(),
+            Ordering::Release,
+        );
+        result
     }
 
     fn append_message_compaction(

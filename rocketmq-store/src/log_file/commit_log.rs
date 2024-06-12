@@ -27,6 +27,7 @@ use bytes::BytesMut;
 use rocketmq_common::common::attribute::cq_type::CQType;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config::TopicConfig;
+use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_single::tags_string2tags_code;
 use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
 use rocketmq_common::common::message::MessageConst;
@@ -40,6 +41,7 @@ use rocketmq_common::MessageDecoder::string_to_message_properties;
 use rocketmq_common::MessageDecoder::MESSAGE_MAGIC_CODE_POSITION;
 use rocketmq_common::MessageDecoder::MESSAGE_MAGIC_CODE_V2;
 use rocketmq_common::MessageDecoder::SYSFLAG_POSITION;
+use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_common::UtilAll::time_millis_to_human_string;
 use tokio::time::Instant;
 use tracing::error;
@@ -110,6 +112,27 @@ fn encode_message_ext(
             let bytes_mut = encoder.byte_buf();
             thread_local.encoder.set(Some(encoder));
             (result, bytes_mut)
+        }
+    })
+}
+
+fn encode_message_ext_batch(
+    message_ext_batch: &MessageExtBatch,
+    put_message_context: &mut PutMessageContext,
+    message_store_config: &Arc<MessageStoreConfig>,
+) -> Option<BytesMut> {
+    PUT_MESSAGE_THREAD_LOCAL.with(|thread_local| match thread_local.encoder.take() {
+        None => {
+            let mut encoder = MessageExtEncoder::new(Arc::clone(message_store_config));
+            let bytes_mut = encoder.encode_batch(message_ext_batch, put_message_context);
+            thread_local.encoder.set(Some(encoder));
+            bytes_mut
+        }
+
+        Some(mut encoder) => {
+            let bytes_mut = encoder.encode_batch(message_ext_batch, put_message_context);
+            thread_local.encoder.set(Some(encoder));
+            bytes_mut
         }
     })
 }
@@ -250,6 +273,187 @@ impl CommitLog {
         self.confirm_offset = phy_offset;
         self.store_checkpoint
             .set_confirm_phy_offset(phy_offset as u64);
+    }
+
+    pub async fn put_messages(&mut self, mut msg_batch: MessageExtBatch) -> PutMessageResult {
+        msg_batch
+            .message_ext_broker_inner
+            .message_ext_inner
+            .store_timestamp = get_current_millis() as i64;
+        let tran_type =
+            MessageSysFlag::get_transaction_value(msg_batch.message_ext_broker_inner.sys_flag());
+        if MessageSysFlag::TRANSACTION_NOT_TYPE == tran_type {
+            return PutMessageResult::new_default(PutMessageStatus::MessageIllegal);
+        }
+        if msg_batch
+            .message_ext_broker_inner
+            .message_ext_inner
+            .message
+            .get_delay_time_level()
+            > 0
+        {
+            return PutMessageResult::new_default(PutMessageStatus::MessageIllegal);
+        }
+
+        //setting ip type:IPV4 OR IPV6, default is ipv4
+        let born_host = msg_batch.message_ext_broker_inner.born_host();
+        if born_host.is_ipv6() {
+            msg_batch.message_ext_broker_inner.with_born_host_v6_flag();
+        }
+
+        let store_host = msg_batch.message_ext_broker_inner.store_host();
+        if store_host.is_ipv6() {
+            msg_batch.message_ext_broker_inner.with_store_host_v6_flag();
+        }
+
+        let mut _unlock_mapped_file = None;
+        let mut mapped_file = self.mapped_file_queue.get_last_mapped_file();
+        let curr_offset = if let Some(ref mapped_file_inner) = mapped_file {
+            mapped_file_inner.get_wrote_position() as u64 + mapped_file_inner.get_file_from_offset()
+        } else {
+            0
+        };
+        let need_ack_nums = self.message_store_config.in_sync_replicas;
+        let need_handle_ha = self.need_handle_ha(&msg_batch.message_ext_broker_inner);
+        if need_handle_ha && self.broker_config.enable_controller_mode {
+            unimplemented!("controller mode not support HA")
+        } else if need_handle_ha && self.broker_config.enable_slave_acting_master {
+            unimplemented!("slave acting master not support HA")
+        }
+        msg_batch.message_ext_broker_inner.version = MessageVersion::V1;
+        let auto_message_version_on_topic_len =
+            self.message_store_config.auto_message_version_on_topic_len;
+        if auto_message_version_on_topic_len
+            && msg_batch.message_ext_broker_inner.topic().len() > i8::MAX as usize
+        {
+            msg_batch.message_ext_broker_inner.version = MessageVersion::V2;
+        }
+        let mut put_message_context = PutMessageContext::default();
+        let encoded_buff = encode_message_ext_batch(
+            &msg_batch,
+            &mut put_message_context,
+            &self.message_store_config,
+        );
+
+        let topic_queue_key = generate_key(&msg_batch.message_ext_broker_inner);
+        put_message_context.set_topic_queue_table_key(topic_queue_key);
+        msg_batch.encoded_buff = encoded_buff;
+        self.assign_offset(&mut msg_batch.message_ext_broker_inner);
+
+        let lock = self.put_message_lock.lock().await;
+        self.begin_time_in_lock.store(
+            time_utils::get_current_millis(),
+            std::sync::atomic::Ordering::Release,
+        );
+        let start_time = Instant::now();
+        // Here settings are stored timestamp, in order to ensure an orderly global
+        msg_batch
+            .message_ext_broker_inner
+            .message_ext_inner
+            .store_timestamp = time_utils::get_current_millis() as i64;
+
+        if mapped_file.is_none() || mapped_file.as_ref().unwrap().is_full() {
+            mapped_file = self
+                .mapped_file_queue
+                .get_last_mapped_file_mut_start_offset(0, true);
+        }
+
+        if mapped_file.is_none() {
+            drop(lock);
+            error!(
+                "create mapped file error, topic: {}  clientAddr: {}",
+                msg_batch.message_ext_broker_inner.topic(),
+                msg_batch.message_ext_broker_inner.born_host()
+            );
+            self.begin_time_in_lock
+                .store(0, std::sync::atomic::Ordering::Release);
+            return PutMessageResult::new_default(PutMessageStatus::CreateMappedFileFailed);
+        }
+
+        let result = mapped_file.as_ref().unwrap().append_messages(
+            &mut msg_batch,
+            self.append_message_callback.as_ref(),
+            &mut put_message_context,
+        );
+        let put_message_result = match result.status {
+            AppendMessageStatus::PutOk => {
+                //onCommitLogAppend(msg, result, mappedFile); in java not support this version
+                PutMessageResult::new_append_result(PutMessageStatus::PutOk, Some(result))
+            }
+            AppendMessageStatus::EndOfFile => {
+                //onCommitLogAppend(msg, result, mappedFile); in java not support this version
+                _unlock_mapped_file = mapped_file;
+                mapped_file = self
+                    .mapped_file_queue
+                    .get_last_mapped_file_mut_start_offset(0, true);
+                if mapped_file.is_none() {
+                    self.begin_time_in_lock
+                        .store(0, std::sync::atomic::Ordering::Release);
+                    error!(
+                        "create mapped file error, topic: {}  clientAddr: {}",
+                        msg_batch.message_ext_broker_inner.topic(),
+                        msg_batch.message_ext_broker_inner.born_host()
+                    );
+                    return PutMessageResult::new_append_result(
+                        PutMessageStatus::CreateMappedFileFailed,
+                        Some(result),
+                    );
+                }
+                let result = mapped_file.as_ref().unwrap().append_messages(
+                    &mut msg_batch,
+                    self.append_message_callback.as_ref(),
+                    &mut put_message_context,
+                );
+                if AppendMessageStatus::PutOk == result.status {
+                    PutMessageResult::new_append_result(PutMessageStatus::PutOk, Some(result))
+                } else {
+                    PutMessageResult::new_append_result(
+                        PutMessageStatus::UnknownError,
+                        Some(result),
+                    )
+                }
+            }
+            AppendMessageStatus::MessageSizeExceeded
+            | AppendMessageStatus::PropertiesSizeExceeded => {
+                self.begin_time_in_lock
+                    .store(0, std::sync::atomic::Ordering::Release);
+                PutMessageResult::new_append_result(PutMessageStatus::MessageIllegal, Some(result))
+            }
+            AppendMessageStatus::UnknownError => {
+                self.begin_time_in_lock
+                    .store(0, std::sync::atomic::Ordering::Release);
+                PutMessageResult::new_append_result(PutMessageStatus::UnknownError, Some(result))
+            }
+        };
+        let elapsed_time_in_lock = start_time.elapsed().as_millis() as u64;
+        drop(lock);
+        self.begin_time_in_lock
+            .store(0, std::sync::atomic::Ordering::Release);
+        if elapsed_time_in_lock > 500 {
+            warn!(
+                "[NOTIFYME]putMessage in lock cost time(ms)={}, bodyLength={} \
+                 AppendMessageResult={:?}",
+                elapsed_time_in_lock,
+                msg_batch.message_ext_broker_inner.body_len(),
+                put_message_result.append_message_result().as_ref().unwrap(),
+            );
+        }
+
+        if put_message_result.put_message_status() == PutMessageStatus::PutOk {
+            self.increase_offset(
+                &msg_batch.message_ext_broker_inner,
+                put_message_context.get_batch_size() as i16,
+            );
+            self.handle_disk_flush_and_ha(
+                put_message_result,
+                msg_batch.message_ext_broker_inner,
+                need_ack_nums,
+                need_handle_ha,
+            )
+            .await
+        } else {
+            put_message_result
+        }
     }
 
     pub async fn put_message(&mut self, msg: MessageExtBrokerInner) -> PutMessageResult {
@@ -661,7 +865,7 @@ impl CommitLog {
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
-                              files"
+                               files"
             );
             self.mapped_file_queue.set_flushed_where(0);
             self.mapped_file_queue.set_committed_where(0);
@@ -841,7 +1045,7 @@ impl CommitLog {
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
-                              files"
+                               files"
             );
             self.mapped_file_queue.set_flushed_where(0);
             self.mapped_file_queue.set_committed_where(0);

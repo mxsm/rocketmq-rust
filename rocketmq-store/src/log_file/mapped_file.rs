@@ -63,10 +63,10 @@ pub trait MappedFile {
 
     /// Appends a batch message object to the current `MappedFile` with a specific callback.
     fn append_messages<AMC: AppendMessageCallback>(
-        &mut self,
-        message: &MessageExtBatch,
+        &self,
+        message: &mut MessageExtBatch,
         message_callback: &AMC,
-        put_message_context: &PutMessageContext,
+        put_message_context: &mut PutMessageContext,
     ) -> AppendMessageResult;
 
     fn append_message_compaction(
