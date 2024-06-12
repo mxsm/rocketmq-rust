@@ -493,10 +493,16 @@ impl BrokerRuntime {
             .start()
             .expect("Message store start error");
 
-        //start broker server
+        //start nomarl broker server
         let request_processor = self.init_processor();
+        let fast_request_processor = request_processor.clone();
         let server = RocketMQServer::new(self.server_config.clone());
         tokio::spawn(async move { server.run(request_processor).await });
+        //start fast broker server
+        let mut fast_server_config = (*self.server_config).clone();
+        fast_server_config.listen_port = self.server_config.listen_port - 2;
+        let fast_server = RocketMQServer::new(Arc::new(fast_server_config));
+        tokio::spawn(async move { fast_server.run(fast_request_processor).await });
     }
 
     fn update_namesrv_addr(&mut self) {
