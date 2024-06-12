@@ -334,7 +334,7 @@ impl Default for MessageStoreConfig {
             enable_async_reput: false,
             recheck_reput_offset_from_cq: false,
             max_topic_length: 0,
-            auto_message_version_on_topic_len: false,
+            auto_message_version_on_topic_len: true,
             enabled_append_prop_crc: false,
             force_verify_prop_crc: false,
             travel_cq_file_num_when_get_message: 0,

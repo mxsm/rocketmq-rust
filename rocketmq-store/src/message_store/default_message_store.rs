@@ -30,6 +30,7 @@ use std::time::Instant;
 
 use bytes::Buf;
 use log::info;
+use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_common::{
     common::{
@@ -550,6 +551,18 @@ impl MessageStore for DefaultMessageStore {
             }
         }
         self.commit_log.put_message(msg).await
+    }
+
+    async fn put_messages(&mut self, msg_batch: MessageExtBatch) -> PutMessageResult {
+        for hook in self.put_message_hook_list.read().iter() {
+            if let Some(result) = hook
+                .execute_before_put_message(&msg_batch.message_ext_broker_inner.message_ext_inner)
+            {
+                return result;
+            }
+        }
+
+        self.commit_log.put_messages(msg_batch).await
     }
 
     fn truncate_files(&mut self, offset_to_truncate: i64) -> bool {

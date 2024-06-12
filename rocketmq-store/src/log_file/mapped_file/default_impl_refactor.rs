@@ -245,10 +245,10 @@ impl MappedFile for LocalMappedFile {
     }
 
     fn append_messages<AMC: AppendMessageCallback>(
-        &mut self,
-        message: &MessageExtBatch,
+        &self,
+        message: &mut MessageExtBatch,
         message_callback: &AMC,
-        put_message_context: &PutMessageContext,
+        put_message_context: &mut PutMessageContext,
     ) -> AppendMessageResult {
         todo!()
     }

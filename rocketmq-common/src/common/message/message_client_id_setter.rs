@@ -15,6 +15,13 @@
  * limitations under the License.
  */
 
+use crate::common::message::message_single::Message;
+use crate::common::message::MessageConst;
+
 pub fn create_uniq_id() -> String {
     unimplemented!()
+}
+
+pub fn get_uniq_id(message: &Message) -> Option<String> {
+    message.get_property(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX)
 }

@@ -59,34 +59,12 @@ pub trait AppendMessageCallback {
         put_message_context: &PutMessageContext,
     ) -> AppendMessageResult;
 
-    /*    fn do_append_back(
+    fn do_append_batch<MF: MappedFile>(
         &self,
         file_from_offset: i64,
-        mapped_file: &DefaultMappedFile,
+        mapped_file: &MF,
         max_blank: i32,
-        msg: &mut MessageExtBrokerInner,
-        put_message_context: &PutMessageContext,
-    ) -> AppendMessageResult;*/
-
-    /// After batched message serialization, write MappedByteBuffer
-    ///
-    /// # Arguments
-    ///
-    /// * `file_from_offset` - The offset of the file
-    /// * `byte_buffer` - The buffer to write
-    /// * `max_blank` - The maximum blank space
-    /// * `message_ext_batch` - The batched message to write
-    /// * `put_message_context` - The context of putting message
-    ///
-    /// # Returns
-    ///
-    /// The number of bytes written
-    fn do_append_batch(
-        &self,
-        file_from_offset: i64,
-        byte_buffer: &mut BytesMut,
-        max_blank: i32,
-        message_ext_batch: &MessageExtBatch,
+        msg: &mut MessageExtBatch,
         put_message_context: &PutMessageContext,
     ) -> AppendMessageResult;
 }
@@ -196,145 +174,14 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         }
     }
 
-    fn do_append_batch(
+    fn do_append_batch<MF: MappedFile>(
         &self,
         file_from_offset: i64,
-        byte_buffer: &mut BytesMut,
+        mapped_file: &MF,
         max_blank: i32,
-        message_ext_batch: &MessageExtBatch,
+        msg: &mut MessageExtBatch,
         put_message_context: &PutMessageContext,
     ) -> AppendMessageResult {
         todo!()
     }
-
-    /* fn do_append_batch(
-        &self,
-        file_from_offset: i64,
-        byte_buffer: &mut BytesMut,
-        max_blank: i32,
-        message_ext_batch: &MessageExtBatch,
-        put_message_context: &PutMessageContext,
-    ) -> AppendMessageResult {
-        todo!()
-    }*/
-    /* fn do_append(
-        &mut self,
-        file_from_offset: i64,
-        byte_buffer: &mut ByteBuffer,
-        max_blank: i32,
-        msg_inner: &mut MessageExtBrokerInner,
-        put_message_context: &PutMessageContext,
-    ) -> AppendMessageResult {
-        let mut pre_encode_buffer = bytes::BytesMut::from(msg_inner.encoded_buff.as_ref());
-        let is_multi_dispatch_msg = self.message_store_config.enable_multi_dispatch
-            && CommitLog::is_multi_dispatch_msg(msg_inner);
-        if is_multi_dispatch_msg {
-            unimplemented!()
-        }
-        //can optimize?
-        let msg_len = pre_encode_buffer.clone().get_i32();
-        //physical offset
-        let wrote_offset = file_from_offset + byte_buffer.position;
-
-        let msg_id_supplier = || {
-            let sys_flag = msg_inner.sys_flag();
-            let msg_id_len = if (sys_flag & MessageSysFlag::STOREHOSTADDRESS_V6_FLAG) == 0 {
-                4 + 4 + 8
-            } else {
-                16 + 4 + 8
-            };
-
-            let mut msg_id_buffer = bytes::BytesMut::from(
-                MessageExt::socket_address_2_byte_buffer(&msg_inner.store_host()).as_ref(),
-            );
-            msg_id_buffer.put_i64(wrote_offset);
-            UtilAll::bytes_to_string(msg_id_buffer.as_ref())
-        };
-
-        let mut queue_offset = msg_inner.queue_offset();
-
-        let message_num = CommitLog::get_message_num(msg_inner);
-
-        let tran_type = MessageSysFlag::get_transaction_value(msg_inner.sys_flag());
-        match tran_type {
-            MessageSysFlag::TRANSACTION_PREPARED_TYPE
-            | MessageSysFlag::TRANSACTION_ROLLBACK_TYPE => {
-                queue_offset = 0;
-            }
-            _ => {}
-        }
-
-        if (msg_len + END_FILE_MIN_BLANK_LENGTH) > max_blank {
-            self.msg_store_item_memory.clear();
-            self.msg_store_item_memory.put_i32(max_blank);
-            self.msg_store_item_memory.put_i32(BLANK_MAGIC_CODE);
-            //  byte_buffer.put(&self.msg_store_item_memory[0..8]);
-            /* let begin_time_mills = CommitLog::default_message_store().now(); */
-            /*return AppendMessageResult::new(
-                AppendMessageStatus::EndOfFile,
-                wrote_offset,
-                max_blank as usize,
-                msg_id_supplier,
-                msg_inner.get_store_timestamp(),
-                queue_offset,
-                CommitLog::default_message_store().now() - begin_time_mills,
-                None,
-            );*/
-            return AppendMessageResult::default();
-        }
-
-        let mut pos = 4 + 4 + 4 + 4 + 4;
-        pre_encode_buffer[pos..(pos + mem::size_of::<i64>())]
-            .copy_from_slice(&queue_offset.to_be_bytes());
-        pos += 8;
-
-        pre_encode_buffer[pos..(pos + mem::size_of::<i64>())]
-            .copy_from_slice(&(file_from_offset + byte_buffer.get_position()).to_be_bytes());
-        let ip_len = if (msg_inner.sys_flag() & MessageSysFlag::BORNHOST_V6_FLAG) == 0 {
-            4 + 4
-        } else {
-            16 + 4
-        };
-        pos += 8 + 4 + 8 + ip_len;
-        // refresh store time stamp in lock
-        pre_encode_buffer[pos..(pos + mem::size_of::<i64>())]
-            .copy_from_slice(msg_inner.store_timestamp().to_be_bytes().as_ref());
-        /*        if enabled_append_prop_crc {
-            let check_size = msg_len - MessageDecoder::CRC32_RESERVED_LENGTH;
-            let mut tmp_buffer = pre_encode_buffer.duplicate();
-            tmp_buffer.limit(tmp_buffer.position() + check_size as usize);
-            let crc32 = MessageDecoder::crc32(&tmp_buffer);
-            tmp_buffer.limit(tmp_buffer.position() + MessageDecoder::CRC32_RESERVED_LENGTH);
-            MessageDecoder::create_crc32(&mut tmp_buffer, crc32);
-        }*/
-
-        //let begin_time_mills = CommitLog::default_message_store().now();
-        /*   CommitLog::default_message_store()
-        .perf_counter()
-        .start_tick("WRITE_MEMORY_TIME_MS");*/
-        byte_buffer
-            .get_data_mut()
-            .write_all(&pre_encode_buffer)
-            .unwrap();
-        /* CommitLog::default_message_store()
-        .perf_counter()
-        .end_tick("WRITE_MEMORY_TIME_MS");*/
-        msg_inner.encoded_buff.clear();
-
-        /*        if is_multi_dispatch_msg {
-            CommitLog::multi_dispatch().update_multi_queue_offset(&msg_inner);
-        }*/
-
-        /*AppendMessageResult::new(
-            AppendMessageStatus::PutOk,
-            wrote_offset,
-            msg_len as usize,
-            msg_id_supplier,
-            msg_inner.store_timestamp(),
-            queue_offset,
-            0,
-            Some(message_num),
-        )*/
-        AppendMessageResult::default()
-    }*/
 }

@@ -119,7 +119,7 @@ impl MessageTrait for Message {
     }
 
     fn put_property(&mut self, key: impl Into<String>, value: impl Into<String>) {
-        todo!()
+        self.properties.insert(key.into(), value.into());
     }
 
     fn properties(&self) -> &HashMap<String, String> {

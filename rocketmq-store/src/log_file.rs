@@ -17,6 +17,7 @@
 
 use std::sync::Arc;
 
+use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
 use rocketmq_common::TimeUtils::get_current_millis;
 
@@ -58,6 +59,8 @@ pub trait RocketMQMessageStore: Clone + 'static {
     fn get_state_machine_version(&self) -> i64;
 
     async fn put_message(&mut self, msg: MessageExtBrokerInner) -> PutMessageResult;
+
+    async fn put_messages(&mut self, msg_batch: MessageExtBatch) -> PutMessageResult;
 
     fn truncate_files(&mut self, offset_to_truncate: i64) -> bool;
 
