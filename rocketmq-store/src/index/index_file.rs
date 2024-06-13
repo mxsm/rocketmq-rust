@@ -273,23 +273,16 @@ impl IndexFile {
                 + self.hash_slot_num * HASH_SLOT_SIZE
                 + next_index_to_read as usize * INDEX_SIZE;
 
-            let key_hash_read =
-                i32::from_be_bytes(buffer[abs_index_pos..abs_index_pos + 4].try_into().unwrap());
-            let phy_offset_read = i64::from_be_bytes(
-                buffer[abs_index_pos + 4..abs_index_pos + 12]
-                    .try_into()
-                    .unwrap(),
-            );
-            let time_diff = i32::from_be_bytes(
-                buffer[abs_index_pos + 12..abs_index_pos + 16]
-                    .try_into()
-                    .unwrap(),
-            );
-            let prev_index_read = i32::from_be_bytes(
-                buffer[abs_index_pos + 16..abs_index_pos + 20]
-                    .try_into()
-                    .unwrap(),
-            );
+            let key_hash_read = buffer.slice(abs_index_pos..abs_index_pos + 4).get_i32();
+            let phy_offset_read = buffer
+                .slice(abs_index_pos + 4..abs_index_pos + 12)
+                .get_i64();
+            let time_diff = buffer
+                .slice(abs_index_pos + 12..abs_index_pos + 16)
+                .get_i32();
+            let prev_index_read = buffer
+                .slice(abs_index_pos + 16..abs_index_pos + 20)
+                .get_i32();
 
             if time_diff < 0 {
                 break;
