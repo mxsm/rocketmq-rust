@@ -282,7 +282,7 @@ impl CommitLog {
             .store_timestamp = get_current_millis() as i64;
         let tran_type =
             MessageSysFlag::get_transaction_value(msg_batch.message_ext_broker_inner.sys_flag());
-        if MessageSysFlag::TRANSACTION_NOT_TYPE == tran_type {
+        if MessageSysFlag::TRANSACTION_NOT_TYPE != tran_type {
             return PutMessageResult::new_default(PutMessageStatus::MessageIllegal);
         }
         if msg_batch
@@ -374,6 +374,7 @@ impl CommitLog {
             &mut msg_batch,
             self.append_message_callback.as_ref(),
             &mut put_message_context,
+            self.enabled_append_prop_crc,
         );
         let put_message_result = match result.status {
             AppendMessageStatus::PutOk => {
@@ -403,6 +404,7 @@ impl CommitLog {
                     &mut msg_batch,
                     self.append_message_callback.as_ref(),
                     &mut put_message_context,
+                    self.enabled_append_prop_crc,
                 );
                 if AppendMessageStatus::PutOk == result.status {
                     PutMessageResult::new_append_result(PutMessageStatus::PutOk, Some(result))
@@ -865,7 +867,7 @@ impl CommitLog {
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
-                               files"
+                                files"
             );
             self.mapped_file_queue.set_flushed_where(0);
             self.mapped_file_queue.set_committed_where(0);
@@ -1045,7 +1047,7 @@ impl CommitLog {
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
-                               files"
+                                files"
             );
             self.mapped_file_queue.set_flushed_where(0);
             self.mapped_file_queue.set_committed_where(0);

@@ -42,6 +42,10 @@ impl PutMessageContext {
         self.phy_pos = phy_pos;
     }
 
+    pub fn get_phy_pos_mut(&mut self) -> &mut [i64] {
+        &mut self.phy_pos
+    }
+
     pub fn get_batch_size(&self) -> i32 {
         self.batch_size
     }

@@ -255,6 +255,7 @@ impl MappedFile for DefaultMappedFile {
         message: &mut MessageExtBatch,
         message_callback: &AMC,
         put_message_context: &mut PutMessageContext,
+        enabled_append_prop_crc: bool,
     ) -> AppendMessageResult {
         let current_pos = self.wrote_position.load(Ordering::Acquire) as u64;
         if current_pos >= self.file_size {
@@ -273,6 +274,7 @@ impl MappedFile for DefaultMappedFile {
             (self.file_size - current_pos) as i32,
             message,
             put_message_context,
+            enabled_append_prop_crc,
         );
         self.store_timestamp.store(
             message.message_ext_broker_inner.store_timestamp(),

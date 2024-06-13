@@ -249,6 +249,7 @@ impl MappedFile for LocalMappedFile {
         message: &mut MessageExtBatch,
         message_callback: &AMC,
         put_message_context: &mut PutMessageContext,
+        enabled_append_prop_crc: bool,
     ) -> AppendMessageResult {
         todo!()
     }

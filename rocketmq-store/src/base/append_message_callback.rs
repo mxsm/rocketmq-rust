@@ -24,6 +24,8 @@ use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::utils::message_utils;
+use rocketmq_common::MessageUtils::build_batch_message_id;
+use rocketmq_common::TimeUtils::get_current_millis;
 
 use crate::base::message_result::AppendMessageResult;
 use crate::base::message_status_enum::AppendMessageStatus;
@@ -65,7 +67,8 @@ pub trait AppendMessageCallback {
         mapped_file: &MF,
         max_blank: i32,
         msg: &mut MessageExtBatch,
-        put_message_context: &PutMessageContext,
+        put_message_context: &mut PutMessageContext,
+        enabled_append_prop_crc: bool,
     ) -> AppendMessageResult;
 }
 
@@ -179,9 +182,93 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         file_from_offset: i64,
         mapped_file: &MF,
         max_blank: i32,
-        msg: &mut MessageExtBatch,
-        put_message_context: &PutMessageContext,
+        msg_batch: &mut MessageExtBatch,
+        put_message_context: &mut PutMessageContext,
+        enabled_append_prop_crc: bool,
     ) -> AppendMessageResult {
-        todo!()
+        let wrote_offset = file_from_offset + mapped_file.get_wrote_position() as i64;
+        let queue_offset = msg_batch.message_ext_broker_inner.queue_offset();
+        let begin_queue_offset = queue_offset;
+
+        let begin_time_mills = get_current_millis();
+
+        // Assuming get_encoded_buff returns Option<ByteBuffer>
+        let mut pre_encode_buffer = msg_batch.encoded_buff.take().unwrap();
+        let sys_flag = msg_batch.message_ext_broker_inner.sys_flag();
+        let born_host_length = if sys_flag & MessageSysFlag::BORNHOST_V6_FLAG == 0 {
+            4 + 4
+        } else {
+            16 + 4
+        };
+        let store_host_length = if sys_flag & MessageSysFlag::STOREHOSTADDRESS_V6_FLAG == 0 {
+            4 + 4
+        } else {
+            16 + 4
+        };
+        let mut total_msg_len = 0;
+        let mut msg_num = 0;
+        let mut msg_pos = 0;
+        let mut index = 0;
+        while total_msg_len < pre_encode_buffer.len() as i32 {
+            let msg_len = i32::from_be_bytes(
+                pre_encode_buffer[total_msg_len as usize..(total_msg_len + 4) as usize]
+                    .try_into()
+                    .unwrap(),
+            );
+            total_msg_len += msg_len;
+            if total_msg_len + END_FILE_MIN_BLANK_LENGTH > max_blank {
+                let mut bytes = BytesMut::with_capacity(END_FILE_MIN_BLANK_LENGTH as usize);
+                bytes.put_i32(max_blank);
+                bytes.put_i32(BLANK_MAGIC_CODE);
+                mapped_file.append_message_bytes(&bytes.freeze());
+                return AppendMessageResult {
+                    status: AppendMessageStatus::EndOfFile,
+                    wrote_offset,
+                    wrote_bytes: max_blank,
+                    msg_id: "".to_string(),
+                    store_timestamp: msg_batch.message_ext_broker_inner.store_timestamp(),
+                    logics_offset: begin_queue_offset,
+                    ..Default::default()
+                };
+            }
+            let mut pos = msg_pos + 20;
+            pre_encode_buffer[pos..(pos + 8)].copy_from_slice(&queue_offset.to_be_bytes());
+            pos += 8;
+            let phy_pos = wrote_offset + total_msg_len as i64 - msg_len as i64;
+            pre_encode_buffer[pos..(pos + 8)].copy_from_slice(&phy_pos.to_be_bytes());
+            pos += 8 + 4 + 8 + born_host_length;
+            pre_encode_buffer[pos..(pos + 8)].copy_from_slice(
+                &msg_batch
+                    .message_ext_broker_inner
+                    .store_timestamp()
+                    .to_be_bytes(),
+            );
+            if enabled_append_prop_crc {
+                let _check_size = msg_len - self.crc32_reserved_length;
+            }
+            put_message_context.get_phy_pos_mut()[index] = phy_pos;
+            msg_num += 1;
+            msg_pos += msg_len as usize;
+            index += 1;
+        }
+
+        let bytes = pre_encode_buffer.freeze();
+        mapped_file.append_message_bytes(&bytes);
+        let msg_id = build_batch_message_id(
+            msg_batch.message_ext_broker_inner.store_host(),
+            store_host_length,
+            put_message_context.get_batch_size() as usize,
+            put_message_context.get_phy_pos(),
+        );
+        AppendMessageResult {
+            status: AppendMessageStatus::PutOk,
+            wrote_offset,
+            wrote_bytes: total_msg_len,
+            msg_id,
+            store_timestamp: msg_batch.message_ext_broker_inner.store_timestamp(),
+            logics_offset: begin_queue_offset,
+            msg_num,
+            ..Default::default()
+        }
     }
 }
