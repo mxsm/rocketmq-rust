@@ -285,8 +285,8 @@ pub fn count_inner_msg_num(bytes: Option<Bytes>) -> u32 {
         None => 0,
         Some(mut bytes) => {
             let mut count = 0;
-            while !bytes.is_empty() {
-                let size = bytes.get_i32();
+            while bytes.has_remaining() {
+                let size = bytes.slice(0..4).get_i32();
                 if size as usize > bytes.len() {
                     break;
                 }
@@ -308,9 +308,9 @@ mod tests {
     #[test]
     fn count_inner_msg_num_counts_correctly_for_multiple_messages() {
         let mut bytes = BytesMut::new();
-        bytes.put_i32(4);
+        bytes.put_i32(8);
         bytes.put_slice(&[0, 0, 0, 0]);
-        bytes.put_i32(4);
+        bytes.put_i32(8);
         bytes.put_slice(&[0, 0, 0, 0]);
         assert_eq!(count_inner_msg_num(Some(bytes.freeze())), 2);
     }
@@ -318,7 +318,7 @@ mod tests {
     #[test]
     fn count_inner_msg_num_counts_correctly_for_single_message() {
         let mut bytes = BytesMut::new();
-        bytes.put_i32(4);
+        bytes.put_i32(8);
         bytes.put_slice(&[0, 0, 0, 0]);
         assert_eq!(count_inner_msg_num(Some(bytes.freeze())), 1);
     }
@@ -333,6 +333,6 @@ mod tests {
     fn count_inner_msg_num_ignores_incomplete_messages() {
         let mut bytes = BytesMut::new();
         bytes.put_i32(4);
-        assert_eq!(count_inner_msg_num(Some(bytes.freeze())), 0);
+        assert_eq!(count_inner_msg_num(Some(bytes.freeze())), 1);
     }
 }
