@@ -67,6 +67,7 @@ pub trait MappedFile {
         message: &mut MessageExtBatch,
         message_callback: &AMC,
         put_message_context: &mut PutMessageContext,
+        enabled_append_prop_crc: bool,
     ) -> AppendMessageResult;
 
     fn append_message_compaction(

@@ -382,8 +382,7 @@ impl MessageExtEncoder {
         self.byte_buf.clear();
 
         let messages_byte_buff = message_ext_batch.wrap();
-        messages_byte_buff.as_ref()?;
-        let mut messages_byte_buff = messages_byte_buff.unwrap();
+        let mut messages_byte_buff = messages_byte_buff?;
         let total_length = messages_byte_buff.len();
         if total_length > self.max_message_body_size as usize {
             warn!(
@@ -426,7 +425,7 @@ impl MessageExtEncoder {
             let current = total_length - messages_byte_buff.remaining();
             let need_append_last_property_separator = properties_len > 0
                 && batch_prop_len > 0
-                && messages_byte_buff[total_length - 1..total_length][0]
+                && properties_body.as_ref()[(properties_len - 1) as usize..][0]
                     != PROPERTY_SEPARATOR as u8;
             let topic_data = message_ext_batch
                 .message_ext_broker_inner

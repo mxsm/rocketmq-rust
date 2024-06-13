@@ -90,12 +90,57 @@ pub fn build_message_id(socket_addr: SocketAddr, wrote_offset: i64) -> String {
     bytes_to_string(msg_id_vec.as_slice())
 }
 
+pub fn socket_address_to_vec(socket_addr: SocketAddr) -> Vec<u8> {
+    match socket_addr {
+        SocketAddr::V4(addr) => {
+            let mut msg_id_vec = Vec::<u8>::with_capacity(8);
+            msg_id_vec.extend_from_slice(&addr.ip().octets());
+            msg_id_vec.put_i32(addr.port() as i32);
+            msg_id_vec
+        }
+        SocketAddr::V6(addr) => {
+            let mut msg_id_vec = Vec::<u8>::with_capacity(20);
+            msg_id_vec.extend_from_slice(&addr.ip().octets());
+            msg_id_vec.put_i32(addr.port() as i32);
+            msg_id_vec
+        }
+    }
+}
+
+pub fn build_batch_message_id(
+    socket_addr: SocketAddr,
+    store_host_length: i32,
+    batch_size: usize,
+    phy_pos: &[i64],
+) -> String {
+    if batch_size == 0 {
+        return String::new();
+    }
+    let msg_id_len = (store_host_length + 8) as usize;
+    let mut msg_id_vec = vec![0u8; msg_id_len];
+    msg_id_vec[..store_host_length as usize].copy_from_slice(&socket_address_to_vec(socket_addr));
+    let mut message_id = String::with_capacity(batch_size * msg_id_len * 2 + batch_size - 1);
+    for (index, value) in phy_pos.iter().enumerate() {
+        msg_id_vec[msg_id_len - 8..msg_id_len].copy_from_slice(&value.to_be_bytes());
+        if index != 0 {
+            message_id.push(',');
+        }
+        message_id.push_str(&bytes_to_string(&msg_id_vec));
+    }
+    message_id
+}
+
 pub fn parse_message_id(_msg_id: impl Into<String>) -> (SocketAddr, i64) {
     unimplemented!()
 }
 
 #[cfg(test)]
 mod tests {
+    use std::net::Ipv4Addr;
+
+    use bytes::Bytes;
+    use bytes::BytesMut;
+
     use super::*;
     use crate::common::message::message_single::MessageExt;
 
@@ -153,5 +198,44 @@ mod tests {
         let wrote_offset = 1;
         let result = build_message_id(socket_addr, wrote_offset);
         assert_eq!(result, "7F0000010000000C0000000000000001");
+    }
+
+    #[test]
+    fn build_batch_message_id_creates_correct_id_for_single_position() {
+        let socket_addr = SocketAddr::new(Ipv4Addr::new(127, 0, 0, 1).into(), 8080);
+        let store_host_length = 8;
+        let batch_size = 1;
+        let phy_pos = vec![12345];
+
+        let result = build_batch_message_id(socket_addr, store_host_length, batch_size, &phy_pos);
+
+        assert_eq!(result, "7F00000100001F900000000000003039");
+    }
+
+    #[test]
+    fn build_batch_message_id_creates_correct_id_for_multiple_positions() {
+        let socket_addr = SocketAddr::new(Ipv4Addr::new(127, 0, 0, 1).into(), 8080);
+        let store_host_length = 8;
+        let batch_size = 2;
+        let phy_pos = vec![12345, 67890];
+
+        let result = build_batch_message_id(socket_addr, store_host_length, batch_size, &phy_pos);
+
+        assert_eq!(
+            result,
+            "7F00000100001F900000000000003039,7F00000100001F900000000000010932"
+        );
+    }
+
+    #[test]
+    fn build_batch_message_id_creates_empty_id_for_no_positions() {
+        let socket_addr = SocketAddr::new(Ipv4Addr::new(127, 0, 0, 1).into(), 8080);
+        let store_host_length = 8;
+        let batch_size = 0;
+        let phy_pos = vec![];
+
+        let result = build_batch_message_id(socket_addr, store_host_length, batch_size, &phy_pos);
+
+        assert_eq!(result, "");
     }
 }
