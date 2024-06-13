@@ -82,3 +82,43 @@ impl<'de> Deserialize<'de> for StoreType {
         deserializer.deserialize_str(StoreTypeVisitor)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn get_store_type_returns_correct_string() {
+        assert_eq!(StoreType::LocalFile.get_store_type(), "LocalFile");
+        assert_eq!(StoreType::RocksDB.get_store_type(), "RocksDB");
+    }
+
+    #[test]
+    fn serialize_returns_correct_json() {
+        let local_file = StoreType::LocalFile;
+        let rocks_db = StoreType::RocksDB;
+
+        assert_eq!(
+            serde_json::to_value(&local_file).unwrap(),
+            json!("LocalFile")
+        );
+        assert_eq!(serde_json::to_value(&rocks_db).unwrap(), json!("RocksDB"));
+    }
+
+    #[test]
+    fn deserialize_returns_correct_enum() {
+        let local_file: StoreType = serde_json::from_value(json!("LocalFile")).unwrap();
+        let rocks_db: StoreType = serde_json::from_value(json!("RocksDB")).unwrap();
+
+        assert_eq!(local_file, StoreType::LocalFile);
+        assert_eq!(rocks_db, StoreType::RocksDB);
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown variant `Unknown`, expected `SingleTag` or `MultiTag`")]
+    fn deserialize_panics_on_unknown_variant() {
+        let _: StoreType = serde_json::from_value(json!("Unknown")).unwrap();
+    }
+}
