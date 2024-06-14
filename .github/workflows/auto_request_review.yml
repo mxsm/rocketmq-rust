@@ -19,4 +19,4 @@ jobs:
           # you can fetch it before you run this action, then let this action pick it up with `use_local: true`.
           # This defaults to false if not specified.
           # See https://github.com/necojackarc/auto-request-review/issues/76 for more details.
-          use_local: true
+          use_local: false
