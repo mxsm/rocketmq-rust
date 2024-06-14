@@ -5,7 +5,7 @@ on:
     types: [ submitted ]
   pull_request:
     types: [ opened, synchronize ]
-    
+
 jobs:
   add-label:
     runs-on: ubuntu-latest
@@ -24,7 +24,7 @@ jobs:
             const { pull_request, review } = context.payload;
 
             // Define your list of collaborators
-            const collaborators = ['mxsm', 'TeslaRustor,'SpaceXCN']; // Replace with actual GitHub usernames
+            const collaborators = ['mxsm', 'TeslaRustor','SpaceXCN']; // Replace with actual GitHub usernames
 
             // Check if the review is approved and from a collaborator
             const isApprovedByCollaborator = review.state === 'approved' && collaborators.includes(review.user.login);
