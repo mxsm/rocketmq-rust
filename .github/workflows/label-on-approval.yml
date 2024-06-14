@@ -23,7 +23,8 @@ jobs:
 
             // Define your list of collaborators
             const collaborators = ['mxsm', 'TeslaRustor','SpaceXCN']; // Replace with actual GitHub usernames
-
+            console.log('review:', review.state);
+            console.log('Collaborators:', collaborators);
             // Check if the review is approved and from a collaborator
             const isApprovedByCollaborator = review.state === 'approved' && collaborators.includes(review.user.login);
 
