@@ -3,7 +3,9 @@ name: Add Label on Approval
 on:
   pull_request_review:
     types: [ submitted ]
-
+  pull_request:
+    types: [ opened, synchronize ]
+    
 jobs:
   add-label:
     runs-on: ubuntu-latest
