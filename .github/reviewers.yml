@@ -1,6 +1,7 @@
 reviewers:
   # The default reviewers
   defaults:
-    - mxsm # group
-    - TeslaRustor # username
-    - SpaceXCN # 
+    - repository-owners # group
+options:
+  ignore_draft: true
+  number_of_reviewers: 2

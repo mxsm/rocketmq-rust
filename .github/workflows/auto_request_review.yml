@@ -12,7 +12,7 @@ jobs:
       - name: Request review based on files changes and/or groups the author belongs to
         uses: necojackarc/auto-request-review@v0.13.0
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           config: .github/reviewers.yml # Config file location override
           # Look for config locally during run instead of in repo.
           # For instance, if you'd like to use a config file stored in external storage,
