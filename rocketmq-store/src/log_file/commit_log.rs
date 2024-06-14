@@ -88,10 +88,10 @@ struct PutMessageThreadLocal {
 }
 
 thread_local! {
-    static PUT_MESSAGE_THREAD_LOCAL: PutMessageThreadLocal = PutMessageThreadLocal{
+    static PUT_MESSAGE_THREAD_LOCAL: PutMessageThreadLocal = const { PutMessageThreadLocal{
         encoder: Cell::new(None),
         key: Cell::new(String::new()),
-    };
+    } };
 }
 
 fn encode_message_ext(
