@@ -35,7 +35,7 @@ jobs:
             return { approvedByCollaborator: isApprovedByCollaborator, pullRequestNumber: pull_request.number };
 
       - name: Add label if approved by Collaborators
-        if: steps.check_approval.outputs.approvedByCollaborator == true
+        if: ${{ steps.check_approval.outputs.approvedByCollaborator == true }}
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.PAT_TOKEN }}
