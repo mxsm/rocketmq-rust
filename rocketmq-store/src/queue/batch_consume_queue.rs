@@ -30,7 +30,7 @@ use crate::base::swappable::Swappable;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::consume_queue::mapped_file_queue::MappedFileQueue;
 use crate::filter::MessageFilter;
-use crate::log_file::mapped_file::default_impl_refactor::LocalMappedFile;
+use crate::log_file::mapped_file::default_impl::DefaultMappedFile;
 use crate::queue::queue_offset_operator::QueueOffsetOperator;
 use crate::queue::ConsumeQueueTrait;
 use crate::queue::CqUnit;
@@ -73,8 +73,8 @@ pub struct BatchConsumeQueue {
     max_offset_in_queue: Arc<AtomicI64>,
     min_offset_in_queue: Arc<AtomicI64>,
     commit_log_size: i32,
-    offset_cache: Arc<parking_lot::RwLock<BTreeMap<i64, LocalMappedFile>>>,
-    time_cache: Arc<parking_lot::RwLock<BTreeMap<i64, LocalMappedFile>>>,
+    offset_cache: Arc<parking_lot::RwLock<BTreeMap<i64, DefaultMappedFile>>>,
+    time_cache: Arc<parking_lot::RwLock<BTreeMap<i64, DefaultMappedFile>>>,
 }
 
 impl BatchConsumeQueue {

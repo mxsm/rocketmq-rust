@@ -709,3 +709,9 @@ impl ReferenceResource {
         self.ref_count.load(Ordering::Relaxed) <= 0 && self.cleanup_over.load(Ordering::Relaxed)
     }
 }
+
+impl Default for ReferenceResource {
+    fn default() -> Self {
+        Self::new()
+    }
+}
