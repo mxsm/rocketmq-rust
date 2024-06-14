@@ -1,39 +1,48 @@
-name: Label on Approval
+name: Add Label on Approval
 
 on:
   pull_request_review:
     types: [ submitted ]
 
 jobs:
-  add-label-on-approval:
+  add-label:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v2
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Check for approval and add label
-        uses: actions/github-script@v6
-        env:
-          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+      - name: Check if approval is from owner
+        id: check_approval
+        uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.PAT_TOKEN }}
           script: |
-            const approved = context.payload.review.state === 'approved';
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const pull_number = context.payload.pull_request.number;
+            const { owner } = context.repo;
+            const { pull_request, review } = context.payload;
 
-            if (approved) {
-              const { data: collaborators } = await github.repos.listCollaborators({ owner, repo });
-              const reviewer = context.payload.review.user.login;
-              const isOwner = collaborators.some(collab => collab.login === reviewer && collab.permissions.admin);
+            // Check if the review is approved and from the repository owner
+            const isApprovedByOwner = review.state === 'approved' && review.user.login === owner;
 
-              if (isOwner) {
-                await github.issues.addLabels({
-                  owner,
-                  repo,
-                  issue_number: pull_number,
-                  labels: ['approved','auto merge']
-                });
-              }
-            }
+            // Return the result to the workflow
+            return { approvedByOwner: isApprovedByOwner, pullRequestNumber: pull_request.number };
+
+      - name: Add label if approved by owner
+        if: steps.check_approval.outputs.approvedByOwner == true
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PAT_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo;
+            const { pullRequestNumber } = steps.check_approval.outputs;
+
+            // Add your label here
+            const labelToAdd = 'approved-by-owner';
+
+            // Add the label to the pull request
+            await github.rest.issues.addLabels({
+              owner,
+              repo,
+              issue_number: pullRequestNumber,
+              labels: [labelToAdd]
+            });
