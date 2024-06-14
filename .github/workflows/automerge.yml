@@ -16,15 +16,15 @@ jobs:
           GITHUB_TOKEN: "${{ secrets.PAT_TOKEN }}"
           MERGE_LABELS: "approved,auto merge"
           MERGE_METHOD: "squash"
-          MERGE_COMMIT_MESSAGE: "🚀This PR has been automatically merged with squash.🎉"
+          MERGE_COMMIT_MESSAGE: "pull-request-title"
           MERGE_FORKS: "false"
-          MERGE_RETRIES: "6"
-          MERGE_RETRY_SLEEP: "10000"
-          MERGE_REQUIRED_APPROVALS: "0"
+          MERGE_RETRIES: "10"
+          MERGE_RETRY_SLEEP: "20000"
+          MERGE_REQUIRED_APPROVALS: "1"
           UPDATE_METHOD: "rebase"
 
       - name: Add comment
-        if: success() && steps.automerge.outputs.merged == 'true'
+        if: ${{ steps.automerge.outputs.mergeResult == 'merged' }}
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.PAT_TOKEN }}
