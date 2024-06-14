@@ -34,7 +34,7 @@ impl fmt::Display for CleanupPolicy {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct ParseCleanupPolicyError;
 
 impl fmt::Display for ParseCleanupPolicyError {
@@ -52,5 +52,33 @@ impl FromStr for CleanupPolicy {
             "COMPACTION" => Ok(CleanupPolicy::COMPACTION),
             _ => Err(ParseCleanupPolicyError),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cleanup_policy_display() {
+        assert_eq!(CleanupPolicy::DELETE.to_string(), "DELETE");
+        assert_eq!(CleanupPolicy::COMPACTION.to_string(), "COMPACTION");
+    }
+
+    #[test]
+    fn cleanup_policy_from_str() {
+        assert_eq!("DELETE".parse(), Ok(CleanupPolicy::DELETE));
+        assert_eq!("COMPACTION".parse(), Ok(CleanupPolicy::COMPACTION));
+    }
+
+    #[test]
+    fn cleanup_policy_from_str_case_insensitive() {
+        assert_eq!("delete".parse(), Ok(CleanupPolicy::DELETE));
+        assert_eq!("compaction".parse(), Ok(CleanupPolicy::COMPACTION));
+    }
+
+    #[test]
+    fn cleanup_policy_from_str_invalid() {
+        assert!("invalid".parse::<CleanupPolicy>().is_err());
     }
 }
