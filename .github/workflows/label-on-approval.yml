@@ -32,21 +32,15 @@ jobs:
             console.log('isApprovedByCollaborator:',  isApprovedByCollaborator);
             console.log('pull_request:',  pull_request.number);
             // Return the result to the workflow
-            return { approvedByCollaborator: isApprovedByCollaborator, pullRequestNumber: pull_request.number };
+            if (isApprovedByCollaborator) { 
+              await github.rest.issues.addLabels({
+                owner,
+                repo,
+                issue_number: pull_request.number,
+                labels: ['approved','auto merge']
+              });
+            }
+            
 
-      - name: Add label if approved by Collaborators
-        if: ${{ steps.check_approval.outputs.approvedByCollaborator == true }}
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.PAT_TOKEN }}
-          script: |
-            const { owner, repo } = context.repo;
-            const { pullRequestNumber } = steps.check_approval.outputs;
 
-            // Add the label to the pull request
-            await github.rest.issues.addLabels({
-              owner,
-              repo,
-              issue_number: pullRequestNumber,
-              labels: ['approved','auto merge']
-            });
+
