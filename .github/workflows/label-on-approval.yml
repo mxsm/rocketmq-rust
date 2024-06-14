@@ -27,7 +27,7 @@ jobs:
             const collaborators = ['mxsm', 'TeslaRustor','SpaceXCN']; // Replace with actual GitHub usernames
 
             // Check if the review is approved and from a collaborator
-            const isApprovedByCollaborator = review.state === 'approved' && collaborators.includes(review.user.login);
+            const isApprovedByCollaborator = review && review.state === 'approved' && collaborators.includes(review.user.login);
 
             // Return the result to the workflow
             return { approvedByCollaborator: isApprovedByCollaborator, pullRequestNumber: pull_request.number };
