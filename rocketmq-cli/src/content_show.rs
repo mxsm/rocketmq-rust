@@ -20,7 +20,8 @@ use std::path::PathBuf;
 
 use bytes::Buf;
 use rocketmq_common::common::message::message_decoder;
-use rocketmq_store::log_file::mapped_file::default_impl_refactor::LocalMappedFile;
+use rocketmq_store::log_file::mapped_file::default_impl::DefaultMappedFile;
+use rocketmq_store::log_file::mapped_file::MappedFile;
 use tabled::Table;
 use tabled::Tabled;
 
@@ -32,7 +33,7 @@ pub fn print_content(from: Option<u32>, to: Option<u32>, path: Option<PathBuf>) 
     let path_buf = path.unwrap().into_os_string();
     let file_metadata = fs::metadata(path_buf.clone()).unwrap();
     println!("file size: {}B", file_metadata.len());
-    let mapped_file = LocalMappedFile::new(
+    let mapped_file = DefaultMappedFile::new(
         path_buf.to_os_string().to_string_lossy().to_string(),
         file_metadata.len(),
     );

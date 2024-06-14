@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use crate::log_file::mapped_file::default_impl_refactor::LocalMappedFile;
+use crate::log_file::mapped_file::default_impl::DefaultMappedFile;
 
 pub struct AllocateMappedFileService {
     tx: Sender<AllocateRequest>,
@@ -55,7 +55,7 @@ impl AllocateMappedFileService {
         next_file_path: String,
         next_next_file_path: String,
         file_size: i32,
-    ) -> LocalMappedFile {
+    ) -> DefaultMappedFile {
         unimplemented!()
     }
 }
@@ -107,7 +107,7 @@ impl AllocateMappedFileService {
 struct AllocateRequest {
     file_path: String,
     file_size: i32,
-    mapped_file: Option<LocalMappedFile>,
+    mapped_file: Option<DefaultMappedFile>,
 }
 
 impl Display for AllocateRequest {
