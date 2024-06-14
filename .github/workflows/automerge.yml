@@ -40,7 +40,7 @@ jobs:
           github-token: ${{ secrets.PAT_TOKEN }}
           script: |
             const { owner, repo, number: issue_number } = context.issue;
-            github.issues.createComment({
+            github.rest.issues.createComment({
               owner,
               repo,
               issue_number,
