@@ -18,7 +18,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
         with:
           script: |
-            const github = require('@actions/github');
             const context = github.context;
             const approved = context.payload.review.state === 'approved';
             const owner = context.repo.owner;
