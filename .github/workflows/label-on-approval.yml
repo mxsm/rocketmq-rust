@@ -21,13 +21,15 @@ jobs:
           github-token: ${{ secrets.PAT_TOKEN }}
           script: |
             const { owner, repo } = context.repo;
-            const { pull_request, review } = context.payload;
+            const { pull_request, reviews } = context.payload;
 
             // Define your list of collaborators
             const collaborators = ['mxsm', 'TeslaRustor','SpaceXCN']; // Replace with actual GitHub usernames
 
             // Check if the review is approved and from a collaborator
-            const isApprovedByCollaborator = review && review.state === 'approved' && collaborators.includes(review.user.login);
+            const isApprovedByCollaborator = reviews.some(review =>
+              review.state === 'approved' && collaborators.includes(review.user.login)
+            );
 
             // Return the result to the workflow
             return { approvedByCollaborator: isApprovedByCollaborator, pullRequestNumber: pull_request.number };
