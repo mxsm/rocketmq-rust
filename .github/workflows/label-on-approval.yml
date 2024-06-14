@@ -1,0 +1,39 @@
+name: Label on Approval
+
+on:
+  pull_request_review:
+    types: [ submitted ]
+
+jobs:
+  add-label-on-approval:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check for approval and add label
+        uses: actions/github-script@v7
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+        with:
+          script: |
+            const approved = context.payload.review.state === 'approved';
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const pull_number = context.payload.pull_request.number;
+
+            if (approved) {
+              const { data: collaborators } = await github.repos.listCollaborators({ owner, repo });
+              const reviewer = context.payload.review.user.login;
+              const isOwner = collaborators.some(collab => collab.login === reviewer && collab.permissions.admin);
+
+              if (isOwner) {
+                await github.issues.addLabels({
+                  owner,
+                  repo,
+                  issue_number: pull_number,
+                  labels: ['approved','auto merge']
+                });
+              }
+            }
