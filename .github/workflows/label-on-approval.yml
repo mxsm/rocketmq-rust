@@ -10,14 +10,16 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v2
 
       - name: Check for approval and add label
-        uses: actions/github-script@v7
+        uses: actions/github-script@v6
         env:
           GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
         with:
           script: |
+            const github = require('@actions/github');
+            const context = github.context;
             const approved = context.payload.review.state === 'approved';
             const owner = context.repo.owner;
             const repo = context.repo.repo;
