@@ -1,6 +1,6 @@
 name: Auto Merge PR
 on:
-  pull_request:
+  pull_request_target:
     types:
       - labeled
       - synchronize
@@ -13,7 +13,7 @@ jobs:
       - name: automerge
         uses: "pascalgn/automerge-action@v0.16.3"
         env:
-          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+          GITHUB_TOKEN: "${{ secrets.PAT_TOKEN }}"
           MERGE_LABELS: "approved,auto merge"
           MERGE_METHOD: "squash"
           MERGE_COMMIT_MESSAGE: "pull-request-title"
