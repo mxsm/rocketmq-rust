@@ -9,6 +9,10 @@ reviewers:
       - mxsm # username
       - TeslaRustor # username
       - SpaceXCN # username
+  
+  per_author:
+    engineers:
+      - repository-owners # group
 
 files:
   # Keys are glob expressions.
