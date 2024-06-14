@@ -15,10 +15,10 @@ jobs:
       - name: Create a comment
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.PAT_TOKEN  }}
+          github-token: ${{ secrets.GITHUB_TOKEN  }}
           script: |
             const { owner, repo, number: issue_number } = context.issue;
-            const commentBody = "@coderabbitai review Please review this PR.";
+            const commentBody = "Please review this PR.";
             github.rest.issues.createComment({
               owner,
               repo,
