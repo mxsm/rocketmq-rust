@@ -22,17 +22,3 @@ jobs:
           MERGE_RETRY_SLEEP: "20000"
           MERGE_REQUIRED_APPROVALS: "1"
           UPDATE_METHOD: "rebase"
-
-      - name: Add comment
-        if: ${{ steps.automerge.outputs.mergeResult == 'merged' }}
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const { owner, repo, number: issue_number } = context.issue;
-            github.rest.issues.createComment({
-              owner,
-              repo,
-              issue_number,
-              body: "🚀This PR has been automatically merged with squash.🚀"
-            })
