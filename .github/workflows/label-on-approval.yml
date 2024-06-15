@@ -4,6 +4,10 @@ on:
   pull_request_review:
     types: [ submitted,edited ]
 
+permissions:
+  issues: write
+  pull-requests: write
+
 jobs:
   add-label:
     runs-on: ubuntu-latest
@@ -23,10 +27,10 @@ jobs:
 
             // Define your list of collaborators
             const collaborators = ['mxsm', 'TeslaRustor','SpaceXCN']; // Replace with actual GitHub usernames
-            console.log('review:', review.state);
+            console.log('state:', review.state);
             console.log('review:',  review.state === 'approved');
             console.log('Collaborators:', collaborators);
-            console.log('Collaborators:',  collaborators.includes(review.user.login));
+            console.log('User:',  collaborators.includes(review.user.login));
             // Check if the review is approved and from a collaborator
             const isApprovedByCollaborator = review.state === 'approved' && collaborators.includes(review.user.login);
             console.log('isApprovedByCollaborator:',  isApprovedByCollaborator);
