@@ -13,9 +13,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
       - name: Authenticate with GitHub App
         id: auth
         uses: tibdex/github-app-token@v2
