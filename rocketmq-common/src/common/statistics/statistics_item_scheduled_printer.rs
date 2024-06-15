@@ -16,13 +16,33 @@
  */
 use crate::common::statistics::statistics_item::StatisticsItem;
 
+/// `StatisticsItemScheduledPrinter` is a struct that provides functionality for scheduling and
+/// removing `StatisticsItem`.
 pub struct StatisticsItemScheduledPrinter;
 
 impl StatisticsItemScheduledPrinter {
+    /// Schedules a `StatisticsItem`.
+    ///
+    /// # Arguments
+    ///
+    /// * `statistics_item` - A reference to the `StatisticsItem` that needs to be scheduled.
+    ///
+    /// # Panics
+    ///
+    /// This function currently panics with `unimplemented!()`.
     pub fn schedule(&self, _statistics_item: &StatisticsItem) {
         unimplemented!()
     }
 
+    /// Removes a `StatisticsItem`.
+    ///
+    /// # Arguments
+    ///
+    /// * `statistics_item` - A reference to the `StatisticsItem` that needs to be removed.
+    ///
+    /// # Panics
+    ///
+    /// This function currently panics with `unimplemented!()`.
     pub fn remove(&self, _statistics_item: &StatisticsItem) {
         unimplemented!()
     }
