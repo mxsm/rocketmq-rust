@@ -65,3 +65,46 @@ impl PartialOrd for MessageQueue {
         Some(self.cmp(other))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn message_queue_creation() {
+        let mq = MessageQueue::new("topic", "broker", 1);
+        assert_eq!(mq.topic, "topic");
+        assert_eq!(mq.broker_name, "broker");
+        assert_eq!(mq.queue_id, 1);
+    }
+
+    #[test]
+    fn message_queue_display() {
+        let mq = MessageQueue::new("topic", "broker", 1);
+        assert_eq!(
+            format!("{}", mq),
+            "MessageQueue { topic: topic, broker_name: broker, queue_id: 1 }"
+        );
+    }
+
+    #[test]
+    fn message_queue_ordering_same_topic_and_broker() {
+        let mq1 = MessageQueue::new("topic", "broker", 1);
+        let mq2 = MessageQueue::new("topic", "broker", 2);
+        assert!(mq1 < mq2);
+    }
+
+    #[test]
+    fn message_queue_ordering_different_topic() {
+        let mq1 = MessageQueue::new("topic1", "broker", 1);
+        let mq2 = MessageQueue::new("topic2", "broker", 1);
+        assert!(mq1 < mq2);
+    }
+
+    #[test]
+    fn message_queue_ordering_different_broker() {
+        let mq1 = MessageQueue::new("topic", "broker1", 1);
+        let mq2 = MessageQueue::new("topic", "broker2", 1);
+        assert!(mq1 < mq2);
+    }
+}
