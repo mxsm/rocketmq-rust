@@ -1,4 +1,4 @@
-name: Auto Comment on PR
+name: Complex Workflow
 
 on:
   pull_request:
