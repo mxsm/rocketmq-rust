@@ -35,5 +35,5 @@ jobs:
               owner,
               repo,
               issue_number,
-              body: "🚀This PR has been automatically merged with squash.🚀"
+              body: "🚀This PR has been automatically merged with squash🚀"
             })
