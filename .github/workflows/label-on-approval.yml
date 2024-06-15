@@ -20,7 +20,7 @@ jobs:
         id: check_approval
         uses: actions/github-script@v7
         env:
-          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+          GITHUB_TOKEN: "${{ secrets.PAT }}"
         with:
           github-token: ${{ env.GITHUB_TOKEN }}
           script: |
