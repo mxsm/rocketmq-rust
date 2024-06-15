@@ -1,6 +1,6 @@
 name: Auto Merge PR
 on:
-  pull_request:
+  pull_request_target:
     types:
       - labeled
       - synchronize
@@ -16,7 +16,7 @@ jobs:
           GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
           MERGE_LABELS: "approved,auto merge"
           MERGE_METHOD: "squash"
-          MERGE_COMMIT_MESSAGE: "pull-request-title"
+          MERGE_COMMIT_MESSAGE: "automatic"
           MERGE_FORKS: "false"
           MERGE_RETRIES: "10"
           MERGE_RETRY_SLEEP: "20000"
