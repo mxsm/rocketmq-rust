@@ -16,6 +16,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Debug secrets
+        run: |
+          echo "APP_ID: ${{ secrets.APP_ID }}"
+          echo "PRIVATE_KEY: (length: ${#secrets.PRIVATE_KEY})"
+
       - name: Authenticate with GitHub App
         id: auth
         uses: tibdex/github-app-token@v2
