@@ -1,29 +1,33 @@
 name: Auto Comment on PR
 
 on:
-  pull_request_target:
-    types: [ opened, synchronize ]
-
-permissions:
-  issues: write
-  pull-requests: write
+  pull_request:
+    types: [opened, synchronize]
 
 jobs:
-  comment:
+  checkout:
     runs-on: ubuntu-latest
-
+    permissions:
+      contents: read
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
+  comment:
+    runs-on: ubuntu-latest
+    needs: checkout
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
       - name: Create a comment
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN  }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const { owner, repo, number: issue_number } = context.issue;
             const commentBody = "Please review this PR.";
-            github.rest.issues.createComment({
+            await github.rest.issues.createComment({
               owner,
               repo,
               issue_number,
