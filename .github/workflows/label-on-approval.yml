@@ -2,7 +2,7 @@ name: Add Label on Approval
 
 on:
   pull_request_target:
-    types: [ submitted,edited ]
+    types: [submitted, edited]
     branches: [main]
 
 permissions:
@@ -12,6 +12,9 @@ permissions:
 jobs:
   add-label:
     runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
 
     steps:
       - name: Checkout code
@@ -25,27 +28,19 @@ jobs:
           script: |
             const { owner, repo } = context.repo;
             const { pull_request, review } = context.payload;
-
+            
             // Define your list of collaborators
-            const collaborators = ['mxsm', 'TeslaRustor','SpaceXCN']; // Replace with actual GitHub usernames
-            console.log('state:', review.state);
-            console.log('review:',  review.state === 'approved');
-            console.log('Collaborators:', collaborators);
-            console.log('User:',  collaborators.includes(review.user.login));
+            const collaborators = ['mxsm', 'TeslaRustor', 'SpaceXCN']; // Replace with actual GitHub usernames
+
             // Check if the review is approved and from a collaborator
-            const isApprovedByCollaborator = review.state === 'approved' && collaborators.includes(review.user.login);
-            console.log('isApprovedByCollaborator:',  isApprovedByCollaborator);
-            console.log('pull_request:',  pull_request.number);
+            const isApprovedByCollaborator = review && review.state === 'approved' && collaborators.includes(review.user.login);
+
             // Return the result to the workflow
-            if (isApprovedByCollaborator) { 
+            if (isApprovedByCollaborator) {
               await github.rest.issues.addLabels({
                 owner,
                 repo,
                 issue_number: pull_request.number,
-                labels: ['approved','auto merge']
+                labels: ['approved', 'auto merge']
               });
             }
-            
-
-
-
