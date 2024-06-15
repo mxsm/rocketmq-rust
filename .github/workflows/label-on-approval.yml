@@ -18,10 +18,11 @@ jobs:
 
       - name: Authenticate with GitHub App
         id: auth
-        uses: mxsm/rocketmq-app@v1
+        uses: tibdex/github-app-token@v2
         with:
           app_id: ${{ secrets.APP_ID }}
           private_key: ${{ secrets.PRIVATE_KEY }}
+      - run: "echo 'The created token is masked: ${{ steps.create_token.outputs.token }}'"
 
       - name: Check if approval is from Collaborators
         id: check_approval
