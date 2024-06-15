@@ -5,6 +5,7 @@ on:
       - labeled
       - synchronize
       - opened
+    branches: [main]
 
 jobs:
   automerge:
