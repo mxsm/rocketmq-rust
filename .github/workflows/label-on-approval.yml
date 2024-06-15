@@ -2,8 +2,7 @@ name: Add Label on Approval
 
 on:
   pull_request_target:
-    types: [submitted, edited]
-    branches: [main]
+    types: [opened, synchronize]
 
 permissions:
   issues: write
@@ -12,9 +11,6 @@ permissions:
 jobs:
   add-label:
     runs-on: ubuntu-latest
-    permissions:
-      issues: write
-      pull-requests: write
 
     steps:
       - name: Checkout code
@@ -28,19 +24,30 @@ jobs:
           script: |
             const { owner, repo } = context.repo;
             const { pull_request, review } = context.payload;
-            
+            if (!review) {
+              console.log('No review found.');
+              return;
+            }
             // Define your list of collaborators
-            const collaborators = ['mxsm', 'TeslaRustor', 'SpaceXCN']; // Replace with actual GitHub usernames
-
+            const collaborators = ['mxsm', 'TeslaRustor','SpaceXCN']; // Replace with actual GitHub usernames
+            console.log('review:', review.state);
+            console.log('review:',  review.state === 'approved');
+            console.log('Collaborators:', collaborators);
+            console.log('Collaborators:',  collaborators.includes(review.user.login));
             // Check if the review is approved and from a collaborator
-            const isApprovedByCollaborator = review && review.state === 'approved' && collaborators.includes(review.user.login);
-
+            const isApprovedByCollaborator = review.state === 'approved' && collaborators.includes(review.user.login);
+            console.log('isApprovedByCollaborator:',  isApprovedByCollaborator);
+            console.log('pull_request:',  pull_request.number);
             // Return the result to the workflow
-            if (isApprovedByCollaborator) {
+            if (isApprovedByCollaborator) { 
               await github.rest.issues.addLabels({
                 owner,
                 repo,
                 issue_number: pull_request.number,
-                labels: ['approved', 'auto merge']
+                labels: ['approved','auto merge']
               });
             }
+            
+
+
+
