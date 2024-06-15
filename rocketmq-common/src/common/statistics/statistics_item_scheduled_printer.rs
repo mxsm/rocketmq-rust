@@ -38,7 +38,7 @@ impl StatisticsItemScheduledPrinter {
     ///
     /// # Arguments
     ///
-    /// * `_statistics_item` - A reference to the `StatisticsItem` that needs to be removed.
+    /// * `statistics_item` - A reference to the `StatisticsItem` that needs to be removed.
     ///
     /// # Panics
     ///
