@@ -35,7 +35,6 @@ jobs:
               console.log('No review found.');
               return;
             }
-            // Define your list of collaborators
             const collaborators = ['mxsm', 'TeslaRustor','SpaceXCN']; // Replace with actual GitHub usernames
             console.log('review:', review.state);
             console.log('review:',  review.state === 'approved');
