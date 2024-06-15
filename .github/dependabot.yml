@@ -9,7 +9,7 @@ updates:
     open-pull-requests-limit: 10
   - package-ecosystem: "github-actions"
     directory: "/"
-    # Check for updates every Monday
+    # Check for updates every Monday 
     schedule:
       interval: "daily"
     open-pull-requests-limit: 10
