@@ -18,10 +18,11 @@ jobs:
 
       - name: Authenticate with GitHub App
         id: auth
-        uses: mxsm/rocketmq-app
+        uses: tibdex/github-app-token@v2
         with:
-          app_id: ${{ secrets.APP_ID }}  # GitHub App ID
-          private_key: ${{ secrets.PRIVATE_KEY }}  # GitHub App Private Key
+          app_id: ${{ secrets.APP_ID }}
+          private_key: ${{ secrets.PRIVATE_KEY }}
+      - run: "echo 'The created token is masked: ${{ steps.create_token.outputs.token }}'"
 
       - name: Check if approval is from Collaborators
         id: check_approval
@@ -35,7 +36,6 @@ jobs:
               console.log('No review found.');
               return;
             }
-            // Define your list of collaborators
             const collaborators = ['mxsm', 'TeslaRustor','SpaceXCN']; // Replace with actual GitHub usernames
             console.log('review:', review.state);
             console.log('review:',  review.state === 'approved');
