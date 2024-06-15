@@ -2,7 +2,7 @@ name: Work flow watch
 
 on:
   workflow_run:
-    workflows: [ Add Label on Approval ]
+    workflows: [ "Add Label on Approval" ]
     types:
       - completed
 
