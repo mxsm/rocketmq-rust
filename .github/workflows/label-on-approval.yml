@@ -29,18 +29,22 @@ jobs:
             const { owner, repo } = context.repo;
             const { pull_request, review } = context.payload;
             
-            // Define your list of collaborators
-            const collaborators = ['mxsm', 'TeslaRustor', 'SpaceXCN']; // Replace with actual GitHub usernames
-
+            const collaborators = ['mxsm', 'TeslaRustor','SpaceXCN']; // Replace with actual GitHub usernames
+            console.log('review:', review);
             // Check if the review is approved and from a collaborator
             const isApprovedByCollaborator = review && review.state === 'approved' && collaborators.includes(review.user.login);
-
+            console.log('review:', review.state);
+            console.log('review:',  review.state === 'approved');
+            console.log('Collaborators:', collaborators);
+            console.log('Collaborators:',  collaborators.includes(review.user.login));
+            console.log('isApprovedByCollaborator:',  isApprovedByCollaborator);
+            console.log('pull_request:',  pull_request.number);
             // Return the result to the workflow
-            if (isApprovedByCollaborator) {
+            if (isApprovedByCollaborator) { 
               await github.rest.issues.addLabels({
                 owner,
                 repo,
                 issue_number: pull_request.number,
-                labels: ['approved', 'auto merge']
+                labels: ['approved','auto merge']
               });
             }
