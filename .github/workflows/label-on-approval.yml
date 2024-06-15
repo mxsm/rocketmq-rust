@@ -20,8 +20,8 @@ jobs:
         id: auth
         uses: mxsm/rocketmq-app
         with:
-          app_id: ${{ secrets.APP_ID }}  # GitHub App ID
-          private_key: ${{ secrets.PRIVATE_KEY }}  # GitHub App Private Key
+          app_id: ${{ secrets.APP_ID }}
+          private_key: ${{ secrets.PRIVATE_KEY }}
 
       - name: Check if approval is from Collaborators
         id: check_approval
