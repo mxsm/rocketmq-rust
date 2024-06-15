@@ -25,7 +25,7 @@ jobs:
           MERGE_LABELS: "approved"
           MERGE_METHOD: "squash"
           MERGE_COMMIT_MESSAGE: "automatic"
-          MERGE_FORKS: "false"
+          MERGE_FORKS: "true"
           MERGE_RETRIES: "50"
           MERGE_RETRY_SLEEP: "10000"
           MERGE_REQUIRED_APPROVALS: "1"
