@@ -1,8 +1,7 @@
 name: Auto Merge PR
 on:
   check_suite:
-    types:
-      - completed
+    types: [completed]
 jobs:
   automerge:
     runs-on: ubuntu-latest
