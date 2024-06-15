@@ -1,9 +1,20 @@
 name: Add Label on Approval
 
 on:
+  pull_request_target:
+    types:
+      - labeled
+      - unlabeled
+      - synchronize
+      - opened
+      - edited
+      - ready_for_review
+      - reopened
+      - unlocked
   pull_request_review:
     types: [ submitted ]
-
+  check_suite:
+    types: [ completed ]
 permissions:
   issues: write
   pull-requests: write
