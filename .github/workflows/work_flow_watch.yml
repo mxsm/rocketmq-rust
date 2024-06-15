@@ -1,0 +1,33 @@
+name: Work flow watch
+
+on:
+  workflow_run:
+    workflows: [ Add Label on Approval ]
+    types:
+      - completed
+
+jobs:
+  add-label:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check if approval is from Collaborators
+        id: check_approval
+        uses: actions/github-script@v7
+        env:
+          GITHUB_TOKEN: "${{ secrets.PAT }}"
+        with:
+          github-token: ${{ env.GITHUB_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo;
+            const { pull_request } = context.payload;
+
+            await github.rest.issues.addLabels({
+                owner,
+                repo,
+                issue_number: pull_request.number,
+                labels: ['approved','auto merge']
+            });
