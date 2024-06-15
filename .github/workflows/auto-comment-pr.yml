@@ -1,29 +1,25 @@
-name: Complex Workflow
+name: Auto Comment on PR
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize]
 
+permissions:
+  issues: write
+  pull-requests: write
+
 jobs:
-  checkout:
+  comment:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-  comment:
-    runs-on: ubuntu-latest
-    needs: checkout
-    permissions:
-      issues: write
-      pull-requests: write
-    steps:
       - name: Create a comment
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.PAT_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const { owner, repo, number: issue_number } = context.issue;
             const commentBody = "Please review this PR.";
