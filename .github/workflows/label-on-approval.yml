@@ -32,7 +32,7 @@ jobs:
             const collaborators = ['mxsm', 'TeslaRustor','SpaceXCN']; // Replace with actual GitHub usernames
             console.log('review:', review.state);
             console.log('review:',  review.state === 'approved');
-            console.log('Collaborators:', collaborators);
+            console.log('Collaborators1:', collaborators);
             console.log('Collaborators:',  collaborators.includes(review.user.login));
             // Check if the review is approved and from a collaborator
             const isApprovedByCollaborator = review.state === 'approved' && collaborators.includes(review.user.login);
