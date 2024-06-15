@@ -26,8 +26,8 @@ jobs:
           MERGE_METHOD: "squash"
           MERGE_COMMIT_MESSAGE: "automatic"
           MERGE_FORKS: "false"
-          MERGE_RETRIES: "10"
-          MERGE_RETRY_SLEEP: "20000"
+          MERGE_RETRIES: "50"
+          MERGE_RETRY_SLEEP: "10000"
           MERGE_REQUIRED_APPROVALS: "1"
           UPDATE_METHOD: "rebase"
 
