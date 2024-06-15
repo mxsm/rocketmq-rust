@@ -1,6 +1,6 @@
 name: Auto Merge PR
 on:
-  pull_request:
+  pull_request_target:
     types:
       - labeled
       - unlabeled
@@ -10,8 +10,13 @@ on:
       - ready_for_review
       - reopened
       - unlocked
+  pull_request_review:
+    types:
+      - submitted
   check_suite:
-    types: [completed]
+    types:
+      - completed
+  status: {}
 jobs:
   automerge:
     runs-on: ubuntu-latest
@@ -19,8 +24,8 @@ jobs:
       - name: automerge
         uses: "pascalgn/automerge-action@v0.16.3"
         env:
-          GITHUB_TOKEN: "${{ secrets.PAT }}"
-          MERGE_LABELS: "approved"
+          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+          MERGE_LABELS: "approved,auto merge,!ready to review"
           MERGE_METHOD: "squash"
           MERGE_COMMIT_MESSAGE: "automatic"
           MERGE_FORKS: "true"
