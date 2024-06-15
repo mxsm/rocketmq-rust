@@ -1,4 +1,4 @@
-name: Add Label on Approval
+name: Approval
 
 on:
   pull_request_review:
