@@ -19,7 +19,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN  }}
           script: |
             const { owner, repo, number: issue_number } = context.issue;
-            const commentBody = "Please review this PR.";
+            const commentBody = "🚀Thanks for your contribution🎉, CodeRabbit will review your code.🔥";
             github.rest.issues.createComment({
               owner,
               repo,
