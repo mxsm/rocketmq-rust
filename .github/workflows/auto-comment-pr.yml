@@ -15,10 +15,8 @@ jobs:
 
       - name: Create a comment
         uses: actions/github-script@v7
-        env:
-          GITHUB_TOKEN: "${{ secrets.PAT }}"
         with:
-          github-token: ${{ env.GITHUB_TOKEN  }}
+          github-token: ${{ secrets.GITHUB_TOKEN  }}
           script: |
             const { owner, repo, number: issue_number } = context.issue;
             const commentBody = "🚀Thanks for your contribution🎉. CodeRabbit(AI) will review your code first🔥";

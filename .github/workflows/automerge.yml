@@ -16,7 +16,7 @@ on:
   check_suite:
     types:
       - completed
-  status: {}
+  status: { }
 jobs:
   automerge:
     runs-on: ubuntu-latest
@@ -24,7 +24,7 @@ jobs:
       - name: automerge
         uses: "pascalgn/automerge-action@v0.16.3"
         env:
-          GITHUB_TOKEN: "${{ secrets.PAT }}"
+          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
           MERGE_LABELS: "approved,auto merge,!ready to review"
           MERGE_METHOD: "squash"
           MERGE_COMMIT_MESSAGE: "automatic"
