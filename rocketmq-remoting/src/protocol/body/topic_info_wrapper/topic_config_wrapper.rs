@@ -25,7 +25,7 @@ use crate::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMapping
 use crate::protocol::DataVersion;
 use crate::protocol::RemotingSerializable;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TopicConfigAndMappingSerializeWrapper {
     #[serde(rename = "topicQueueMappingInfoMap")]
     pub topic_queue_mapping_info_map: HashMap<String /* topic */, TopicQueueMappingInfo>,
@@ -77,12 +77,51 @@ impl Default for TopicConfigAndMappingSerializeWrapper {
 
 impl RemotingSerializable for TopicConfigAndMappingSerializeWrapper {
     type Output = TopicConfigAndMappingSerializeWrapper;
+}
 
-    /*fn decode(bytes: &[u8]) -> Self::Output {
-        serde_json::from_slice::<Self::Output>(bytes).unwrap()
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    #[test]
+    fn topic_config_and_mapping_serialize_wrapper_default() {
+        let wrapper = TopicConfigAndMappingSerializeWrapper::default();
+        assert!(wrapper.topic_queue_mapping_info_map.is_empty());
+        assert!(wrapper.topic_queue_mapping_detail_map.is_empty());
+        assert_eq!(wrapper.mapping_data_version, DataVersion::new());
+        assert!(wrapper.topic_config_table.is_none());
+        assert!(wrapper.data_version.is_none());
     }
 
-    fn encode(&self, _compress: bool) -> Vec<u8> {
-        todo!()
-    }*/
+    #[test]
+    fn topic_config_and_mapping_serialize_wrapper_getters() {
+        let mut wrapper = TopicConfigAndMappingSerializeWrapper::default();
+        let topic_config = TopicConfig::default();
+        let topic_queue_mapping_info = TopicQueueMappingInfo::default();
+        let topic_queue_mapping_detail = TopicQueueMappingDetail::default();
+        let data_version = DataVersion::default();
+
+        wrapper.topic_config_table = Some(HashMap::new());
+        wrapper.data_version = Some(data_version.clone());
+        wrapper
+            .topic_queue_mapping_info_map
+            .insert("test".to_string(), topic_queue_mapping_info.clone());
+        wrapper
+            .topic_queue_mapping_detail_map
+            .insert("test".to_string(), topic_queue_mapping_detail.clone());
+
+        assert_eq!(
+            wrapper.topic_queue_mapping_info_map(),
+            &HashMap::from([("test".to_string(), topic_queue_mapping_info)])
+        );
+        assert_eq!(
+            wrapper.topic_queue_mapping_detail_map(),
+            &HashMap::from([("test".to_string(), topic_queue_mapping_detail)])
+        );
+        assert_eq!(wrapper.mapping_data_version(), &DataVersion::new());
+        assert_eq!(wrapper.topic_config_table(), &Some(HashMap::new()));
+        assert_eq!(wrapper.data_version(), &Some(data_version));
+    }
 }
