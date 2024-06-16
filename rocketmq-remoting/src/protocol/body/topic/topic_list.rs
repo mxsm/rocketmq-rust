@@ -29,3 +29,28 @@ pub struct TopicList {
 impl RemotingSerializable for TopicList {
     type Output = TopicList;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn topic_list_creation_empty() {
+        let topic_list = TopicList::default();
+        assert!(topic_list.topic_list.is_empty());
+        assert!(topic_list.broker_addr.is_none());
+    }
+
+    #[test]
+    fn topic_list_creation_with_data() {
+        let topic_list = TopicList {
+            topic_list: vec!["topic1".to_string(), "topic2".to_string()],
+            broker_addr: Some("broker1".to_string()),
+        };
+        assert_eq!(
+            topic_list.topic_list,
+            vec!["topic1".to_string(), "topic2".to_string()]
+        );
+        assert_eq!(topic_list.broker_addr, Some("broker1".to_string()));
+    }
+}
