@@ -48,7 +48,7 @@ impl ProducerManager {
         !channels.unwrap().is_empty()
     }
 
-    pub fn unregister_producer(&self, group: &String, client_channel_info: &ClientChannelInfo) {
+    pub fn unregister_producer(&self, group: &str, client_channel_info: &ClientChannelInfo) {
         let mut mutex_guard = self.group_channel_table.lock();
         let channel_table = mutex_guard.get_mut(group);
         if let Some(ct) = channel_table {
