@@ -325,7 +325,9 @@ impl BrokerStatsManager {
                 item_names.clone(),
                 &formatter,
                 Self::ACCOUNT_STAT_INVERTAL,
-                self.broker_config.as_ref().unwrap(),
+                self.broker_config
+                    .as_ref()
+                    .expect("Broker config must be initialized"),
             ));
         self.account_stat_manager
             .add_statistics_kind_meta(create_statistics_kind_meta(
@@ -333,7 +335,9 @@ impl BrokerStatsManager {
                 item_names.clone(),
                 &formatter,
                 Self::ACCOUNT_STAT_INVERTAL,
-                self.broker_config.as_ref().unwrap(),
+                self.broker_config
+                    .as_ref()
+                    .expect("Broker config must be initialized"),
             ));
         self.account_stat_manager
             .add_statistics_kind_meta(create_statistics_kind_meta(
@@ -341,7 +345,9 @@ impl BrokerStatsManager {
                 item_names.clone(),
                 &formatter,
                 Self::ACCOUNT_STAT_INVERTAL,
-                self.broker_config.as_ref().unwrap(),
+                self.broker_config
+                    .as_ref()
+                    .expect("Broker config must be initialized"),
             ));
         self.account_stat_manager
             .add_statistics_kind_meta(create_statistics_kind_meta(
@@ -349,7 +355,9 @@ impl BrokerStatsManager {
                 item_names.clone(),
                 &formatter,
                 Self::ACCOUNT_STAT_INVERTAL,
-                self.broker_config.as_ref().unwrap(),
+                self.broker_config
+                    .as_ref()
+                    .expect("Broker config must be initialized"),
             ));
         self.account_stat_manager
             .add_statistics_kind_meta(create_statistics_kind_meta(
@@ -357,7 +365,9 @@ impl BrokerStatsManager {
                 item_names.clone(),
                 &formatter,
                 Self::ACCOUNT_STAT_INVERTAL,
-                self.broker_config.as_ref().unwrap(),
+                self.broker_config
+                    .as_ref()
+                    .expect("Broker config must be initialized"),
             ));
         self.account_stat_manager
             .add_statistics_kind_meta(create_statistics_kind_meta(
@@ -365,7 +375,9 @@ impl BrokerStatsManager {
                 item_names.clone(),
                 &formatter,
                 Self::ACCOUNT_STAT_INVERTAL,
-                self.broker_config.as_ref().unwrap(),
+                self.broker_config
+                    .as_ref()
+                    .expect("Broker config must be initialized"),
             ));
 
         /*  let state_getter = Box::new(StatisticsItemStateGetter);

@@ -33,7 +33,7 @@ impl<'a> StatisticsItemPrinter<'a> {
     }
 
     pub fn print(&self, prefix: &str, stat_item: &StatisticsItem, suffixes: &[&str]) {
-        let suffix: String = suffixes.iter().copied().collect();
+        let suffix = suffixes.join("");
 
         let log_message = format!("{}{}{}", prefix, self.formatter.format(stat_item), suffix);
 
