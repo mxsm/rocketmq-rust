@@ -3,7 +3,7 @@ name: Auto Comment on PR
 on:
   pull_request_target:
     types: [ opened, synchronize ]
-    branches: [main]
+    branches: [ main ]
 
 jobs:
   comment:
@@ -21,7 +21,7 @@ jobs:
           github-token: ${{ env.GITHUB_TOKEN  }}
           script: |
             const { owner, repo, number: issue_number } = context.issue;
-            const commentBody = "🚀Thanks for your contribution🎉. CodeRabbit will review your code first🔥";
+            const commentBody = "🚀Thanks for your contribution🎉. CodeRabbit(AI) will review your code first🔥";
             github.rest.issues.createComment({
               owner,
               repo,
@@ -32,5 +32,5 @@ jobs:
                 owner,
                 repo,
                 issue_number,
-                labels: ['approved','auto merge','ready to review']
+                labels: ['ready to review','auto merge']
               });
