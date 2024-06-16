@@ -20,6 +20,10 @@ use std::sync::Arc;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::statistics::state_getter::StateGetter;
 use rocketmq_common::common::statistics::statistics_item_formatter::StatisticsItemFormatter;
+use rocketmq_common::common::statistics::statistics_item_printer::StatisticsItemPrinter;
+use rocketmq_common::common::statistics::statistics_item_scheduled_printer::StatisticsItemScheduledPrinter;
+use rocketmq_common::common::statistics::statistics_kind_meta::StatisticsKindMeta;
+use rocketmq_common::common::statistics::statistics_manager::StatisticsManager;
 use rocketmq_common::common::stats::moment_stats_item_set::MomentStatsItemSet;
 use rocketmq_common::common::stats::stats_item_set::StatsItemSet;
 use rocketmq_common::common::stats::Stats;
@@ -30,6 +34,7 @@ pub struct BrokerStatsManager {
     enable_queue_stat: bool,
     moment_stats_item_set_fall_size: Option<Arc<MomentStatsItemSet>>,
     moment_stats_item_set_fall_time: Option<Arc<MomentStatsItemSet>>,
+    account_stat_manager: StatisticsManager,
     producer_state_getter: Option<Arc<Box<dyn StateGetter>>>,
     consumer_state_getter: Option<Arc<Box<dyn StateGetter>>>,
     broker_config: Option<Arc<BrokerConfig>>,
@@ -96,16 +101,19 @@ impl BrokerStatsManager {
             .broker_identity
             .broker_cluster_name
             .to_string();
-        BrokerStatsManager {
+        let mut broker_stats_manager = BrokerStatsManager {
             stats_table,
             cluster_name,
             enable_queue_stat,
             moment_stats_item_set_fall_size: None,
             moment_stats_item_set_fall_time: None,
+            account_stat_manager: Default::default(),
             producer_state_getter: None,
             consumer_state_getter: None,
             broker_config: None,
-        }
+        };
+        broker_stats_manager.init();
+        broker_stats_manager
     }
 
     pub fn new_with_name(cluster_name: String, enable_queue_stat: bool) -> Self {
@@ -114,16 +122,19 @@ impl BrokerStatsManager {
             MomentStatsItemSet::new(Stats::GROUP_GET_FALL_SIZE.to_string());
         let moment_stats_item_set_fall_time =
             MomentStatsItemSet::new(Stats::GROUP_GET_FALL_TIME.to_string());
-        BrokerStatsManager {
+        let mut broker_stats_manager = BrokerStatsManager {
             stats_table,
             cluster_name,
             enable_queue_stat,
             moment_stats_item_set_fall_size: None,
             moment_stats_item_set_fall_time: None,
+            account_stat_manager: Default::default(),
             producer_state_getter: None,
             consumer_state_getter: None,
             broker_config: None,
-        }
+        };
+        broker_stats_manager.init();
+        broker_stats_manager
     }
 
     pub fn init(&mut self) {
@@ -283,81 +294,81 @@ impl BrokerStatsManager {
 
         let formatter = StatisticsItemFormatter;
 
-        /*        self.account_stat_manager.set_brief_meta(vec![
-            Pair::of("RT.to_string(), vec![[50, 50], [100, 10], [1000, 10]]),
-            Pair::of("INNER_RT", vec![[10, 10], [100, 10], [1000, 10]]),
-        ]);*/
+        self.account_stat_manager.set_brief_meta(vec![
+            (
+                Self::RT.to_string(),
+                vec![vec![50, 50], vec![100, 10], vec![1000, 10]],
+            ),
+            (
+                Self::INNER_RT.to_string(),
+                vec![vec![50, 50], vec![100, 10], vec![1000, 10]],
+            ),
+        ]);
 
-        /*        let _item_names = vec![
-            "MSG_NUM",
-            "SUCCESS_MSG_NUM",
-            "FAILURE_MSG_NUM",
-            "COMMERCIAL_MSG_NUM",
-            "SUCCESS_REQ_NUM",
-            "FAILURE_REQ_NUM",
-            "MSG_SIZE",
-            "SUCCESS_MSG_SIZE",
-            "FAILURE_MSG_SIZE",
-            "RT",
-            "INNER_RT",
-        ];*/
+        let item_names = vec![
+            Self::MSG_NUM,
+            Self::SUCCESS_MSG_NUM,
+            Self::FAILURE_MSG_NUM,
+            Self::COMMERCIAL_MSG_NUM,
+            Self::SUCCESS_REQ_NUM,
+            Self::FAILURE_REQ_NUM,
+            Self::MSG_SIZE,
+            Self::SUCCESS_MSG_SIZE,
+            Self::FAILURE_MSG_SIZE,
+            Self::RT,
+            Self::INNER_RT,
+        ];
 
-        /*self.account_stat_manager
+        self.account_stat_manager
             .add_statistics_kind_meta(create_statistics_kind_meta(
-                "ACCOUNT_SEND",
+                Self::ACCOUNT_SEND,
                 item_names.clone(),
-                self.account_executor.clone(),
-                formatter,
-                "ACCOUNT_LOG",
-                "ACCOUNT_STAT_INVERTAL",
+                &formatter,
+                Self::ACCOUNT_STAT_INVERTAL,
+                self.broker_config.as_ref().unwrap(),
             ));
         self.account_stat_manager
             .add_statistics_kind_meta(create_statistics_kind_meta(
-                "ACCOUNT_RCV",
+                Self::ACCOUNT_RCV,
                 item_names.clone(),
-                self.account_executor.clone(),
-                formatter,
-                "ACCOUNT_LOG",
-                "ACCOUNT_STAT_INVERTAL",
+                &formatter,
+                Self::ACCOUNT_STAT_INVERTAL,
+                self.broker_config.as_ref().unwrap(),
             ));
         self.account_stat_manager
             .add_statistics_kind_meta(create_statistics_kind_meta(
-                "ACCOUNT_SEND_BACK",
+                Self::ACCOUNT_SEND_BACK,
                 item_names.clone(),
-                self.account_executor.clone(),
-                formatter,
-                "ACCOUNT_LOG",
-                "ACCOUNT_STAT_INVERTAL",
+                &formatter,
+                Self::ACCOUNT_STAT_INVERTAL,
+                self.broker_config.as_ref().unwrap(),
             ));
         self.account_stat_manager
             .add_statistics_kind_meta(create_statistics_kind_meta(
-                "ACCOUNT_SEND_BACK_TO_DLQ",
+                Self::ACCOUNT_SEND_BACK_TO_DLQ,
                 item_names.clone(),
-                self.account_executor.clone(),
-                formatter,
-                "ACCOUNT_LOG",
-                "ACCOUNT_STAT_INVERTAL",
+                &formatter,
+                Self::ACCOUNT_STAT_INVERTAL,
+                self.broker_config.as_ref().unwrap(),
             ));
         self.account_stat_manager
             .add_statistics_kind_meta(create_statistics_kind_meta(
-                "ACCOUNT_SEND_REJ",
+                Self::ACCOUNT_SEND_REJ,
                 item_names.clone(),
-                self.account_executor.clone(),
-                formatter,
-                "ACCOUNT_LOG",
-                "ACCOUNT_STAT_INVERTAL",
+                &formatter,
+                Self::ACCOUNT_STAT_INVERTAL,
+                self.broker_config.as_ref().unwrap(),
             ));
         self.account_stat_manager
             .add_statistics_kind_meta(create_statistics_kind_meta(
-                "ACCOUNT_REV_REJ",
+                Self::ACCOUNT_REV_REJ,
                 item_names.clone(),
-                self.account_executor.clone(),
-                formatter,
-                "ACCOUNT_LOG",
-                "ACCOUNT_STAT_INVERTAL",
+                &formatter,
+                Self::ACCOUNT_STAT_INVERTAL,
+                self.broker_config.as_ref().unwrap(),
             ));
 
-        let state_getter = Box::new(StatisticsItemStateGetter);
+        /*  let state_getter = Box::new(StatisticsItemStateGetter);
         self.account_stat_manager
             .set_statistics_item_state_getter(state_getter);*/
     }
@@ -389,6 +400,23 @@ impl BrokerStatsManager {
     pub fn get_broker_gets_num_without_system_topic(&self) -> u64 {
         0
     }
+}
+
+pub fn create_statistics_kind_meta(
+    name: &str,
+    item_names: Vec<&str>,
+    formatter: &StatisticsItemFormatter,
+    interval: u64,
+    broker_config: &Arc<BrokerConfig>,
+) -> Arc<StatisticsKindMeta> {
+    let printer = StatisticsItemPrinter::new(formatter);
+    let scheduled_printer = StatisticsItemScheduledPrinter;
+    let kind_meta = StatisticsKindMeta::new(
+        name.to_string(),
+        item_names.into_iter().map(String::from).collect(),
+        scheduled_printer,
+    );
+    Arc::new(kind_meta)
 }
 
 pub fn build_commercial_stats_key(owner: &str, topic: &str, group: &str, type_: &str) -> String {
