@@ -23,7 +23,7 @@ use serde::Serialize;
 use super::TopicFilterType;
 use crate::common::constant::PermName;
 
-#[derive(Clone, Serialize, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TopicConfig {
     pub topic_name: Option<String>,

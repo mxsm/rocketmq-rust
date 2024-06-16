@@ -21,7 +21,7 @@ use rocketmq_common::common::mix_all::METADATA_SCOPE_GLOBAL;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
 pub struct TopicQueueMappingInfo {
     pub topic: Option<String>,
     pub scope: String,
