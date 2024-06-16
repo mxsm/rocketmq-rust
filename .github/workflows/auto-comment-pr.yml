@@ -32,5 +32,5 @@ jobs:
                 owner,
                 repo,
                 issue_number,
-                labels: ['approved','auto merge','ready to review']
+                labels: ['ready to review','auto merge']
               });
