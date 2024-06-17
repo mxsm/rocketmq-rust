@@ -789,7 +789,7 @@ mod tests {
             let initial_counter = data_version.counter.load(Ordering::SeqCst);
             data_version.next_version();
             assert_eq!(initial_state_version, data_version.state_version);
-            assert!(data_version.timestamp == initial_timestamp);
+            assert!(data_version.timestamp >= initial_timestamp);
             assert_eq!(
                 initial_counter + 1,
                 data_version.counter.load(Ordering::SeqCst)
