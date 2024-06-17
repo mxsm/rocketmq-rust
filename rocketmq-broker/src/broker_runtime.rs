@@ -27,11 +27,13 @@ use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::server::config::ServerConfig;
+use rocketmq_common::common::statistics::state_getter::StateGetter;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_common::UtilAll::compute_next_morning_time_millis;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use rocketmq_remoting::protocol::DataVersion;
+use rocketmq_remoting::protocol::NamespaceUtil;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_remoting::runtime::server::RocketMQServer;
 use rocketmq_runtime::RocketMQRuntime;
@@ -46,6 +48,7 @@ use tracing::info;
 use tracing::warn;
 
 use crate::broker::broker_hook::BrokerShutdownHook;
+use crate::client::manager::consumer_manager::ConsumerManager;
 use crate::client::manager::producer_manager::ProducerManager;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
 use crate::hook::batch_check_before_put_message::BatchCheckBeforePutMessageHook;
@@ -146,15 +149,26 @@ impl BrokerRuntime {
             server_config: server_config.clone(),
             topic_queue_mapping_manager: topic_queue_mapping_manager.clone(),
         });
-        let broker_stats_manager = Arc::new(BrokerStatsManager::new(broker_config.clone()));
+        let topic_config_manager =
+            TopicConfigManager::new(broker_config.clone(), broker_runtime_inner);
+        let mut stats_manager = BrokerStatsManager::new(broker_config.clone());
+        let producer_manager = Arc::new(ProducerManager::new());
+        stats_manager.set_producer_state_getter(Arc::new(ProducerStateGetter {
+            topic_config_manager: topic_config_manager.clone(),
+            producer_manager: producer_manager.clone(),
+        }));
+        stats_manager.set_consumer_state_getter(Arc::new(ConsumerStateGetter {
+            topic_config_manager: topic_config_manager.clone(),
+            consumer_manager: ConsumerManager {},
+        }));
+
+        let broker_stats_manager = Arc::new(stats_manager);
+
         Self {
             broker_config: broker_config.clone(),
             message_store_config,
             server_config,
-            topic_config_manager: TopicConfigManager::new(
-                broker_config.clone(),
-                broker_runtime_inner,
-            ),
+            topic_config_manager,
             topic_queue_mapping_manager,
             consumer_offset_manager: Arc::new(Default::default()),
             subscription_group_manager: Arc::new(Default::default()),
@@ -166,7 +180,7 @@ impl BrokerRuntime {
             timer_message_store: None,
             broker_out_api: broker_outer_api,
             broker_runtime: Some(runtime),
-            producer_manager: Arc::new(ProducerManager::new()),
+            producer_manager,
             drop: Arc::new(AtomicBool::new(false)),
             shutdown: Arc::new(AtomicBool::new(false)),
             shutdown_hook: None,
@@ -867,5 +881,52 @@ impl BrokerRuntimeInner {
                 Default::default(),
             )
             .await;
+    }
+}
+
+struct ProducerStateGetter {
+    topic_config_manager: TopicConfigManager,
+    producer_manager: Arc<ProducerManager>,
+}
+impl StateGetter for ProducerStateGetter {
+    fn online(&self, instance_id: &str, group: &str, topic: &str) -> bool {
+        if self
+            .topic_config_manager
+            .topic_config_table()
+            .lock()
+            .contains_key(NamespaceUtil::wrap_namespace(instance_id, topic).as_str())
+        {
+            self.producer_manager
+                .group_online(NamespaceUtil::wrap_namespace(instance_id, group))
+        } else {
+            self.producer_manager.group_online(group.to_string())
+        }
+    }
+}
+
+struct ConsumerStateGetter {
+    topic_config_manager: TopicConfigManager,
+    consumer_manager: ConsumerManager,
+}
+impl StateGetter for ConsumerStateGetter {
+    fn online(&self, instance_id: &str, group: &str, topic: &str) -> bool {
+        if self
+            .topic_config_manager
+            .topic_config_table()
+            .lock()
+            .contains_key(topic)
+        {
+            let topic_full_name = NamespaceUtil::wrap_namespace(instance_id, topic);
+            self.consumer_manager
+                .find_subscription_data(
+                    NamespaceUtil::wrap_namespace(instance_id, group).as_str(),
+                    topic_full_name.as_str(),
+                )
+                .is_some()
+        } else {
+            self.consumer_manager
+                .find_subscription_data(group, topic)
+                .is_some()
+        }
     }
 }

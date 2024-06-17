@@ -20,4 +20,4 @@ mod consumer_data;
 pub mod heartbeat_data;
 mod message_model;
 mod producer_data;
-mod subscription_data;
+pub mod subscription_data;
