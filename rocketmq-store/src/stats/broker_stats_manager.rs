@@ -19,9 +19,11 @@ use std::sync::Arc;
 
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::statistics::state_getter::StateGetter;
+use rocketmq_common::common::statistics::statistics_item::StatisticsItem;
 use rocketmq_common::common::statistics::statistics_item_formatter::StatisticsItemFormatter;
 use rocketmq_common::common::statistics::statistics_item_printer::StatisticsItemPrinter;
 use rocketmq_common::common::statistics::statistics_item_scheduled_printer::StatisticsItemScheduledPrinter;
+use rocketmq_common::common::statistics::statistics_item_state_getter::StatisticsItemStateGetter;
 use rocketmq_common::common::statistics::statistics_kind_meta::StatisticsKindMeta;
 use rocketmq_common::common::statistics::statistics_manager::StatisticsManager;
 use rocketmq_common::common::stats::moment_stats_item_set::MomentStatsItemSet;
@@ -35,8 +37,8 @@ pub struct BrokerStatsManager {
     moment_stats_item_set_fall_size: Option<Arc<MomentStatsItemSet>>,
     moment_stats_item_set_fall_time: Option<Arc<MomentStatsItemSet>>,
     account_stat_manager: StatisticsManager,
-    producer_state_getter: Option<Arc<Box<dyn StateGetter>>>,
-    consumer_state_getter: Option<Arc<Box<dyn StateGetter>>>,
+    producer_state_getter: Option<Arc<dyn StateGetter>>,
+    consumer_state_getter: Option<Arc<dyn StateGetter>>,
     broker_config: Option<Arc<BrokerConfig>>,
 }
 
@@ -116,7 +118,11 @@ impl BrokerStatsManager {
         broker_stats_manager
     }
 
-    pub fn new_with_name(cluster_name: String, enable_queue_stat: bool) -> Self {
+    pub fn new_with_name(
+        broker_config: Arc<BrokerConfig>,
+        cluster_name: String,
+        enable_queue_stat: bool,
+    ) -> Self {
         let stats_table = Arc::new(parking_lot::RwLock::new(HashMap::new()));
         let moment_stats_item_set_fall_size =
             MomentStatsItemSet::new(Stats::GROUP_GET_FALL_SIZE.to_string());
@@ -131,7 +137,7 @@ impl BrokerStatsManager {
             account_stat_manager: Default::default(),
             producer_state_getter: None,
             consumer_state_getter: None,
-            broker_config: None,
+            broker_config: Some(broker_config),
         };
         broker_stats_manager.init();
         broker_stats_manager
@@ -380,9 +386,55 @@ impl BrokerStatsManager {
                     .expect("Broker config must be initialized"),
             ));
 
-        /*  let state_getter = Box::new(StatisticsItemStateGetter);
+        struct DefaultStatisticsItemStateGetter {
+            producer_state_getter: Option<Arc<dyn StateGetter>>,
+            consumer_state_getter: Option<Arc<dyn StateGetter>>,
+        }
+        impl StatisticsItemStateGetter for DefaultStatisticsItemStateGetter {
+            fn online(&self, item: &StatisticsItem) -> bool {
+                let vec = split_account_stat_key(item.stat_object());
+                if vec.is_empty() || vec.len() < 4 {
+                    return false;
+                }
+                let instance_id = vec[1];
+                let topic = vec[1];
+                let group = vec[1];
+                let kind = item.stat_kind();
+                if BrokerStatsManager::ACCOUNT_SEND == kind
+                    || BrokerStatsManager::ACCOUNT_SEND_REJ == kind
+                {
+                    self.producer_state_getter
+                        .as_ref()
+                        .unwrap()
+                        .online(instance_id, group, topic);
+                } else if BrokerStatsManager::ACCOUNT_RCV == kind
+                    || BrokerStatsManager::ACCOUNT_SEND_BACK == kind
+                    || BrokerStatsManager::ACCOUNT_SEND_BACK_TO_DLQ == kind
+                    || BrokerStatsManager::ACCOUNT_REV_REJ == kind
+                {
+                    self.consumer_state_getter
+                        .as_ref()
+                        .unwrap()
+                        .online(instance_id, group, topic);
+                }
+
+                false
+            }
+        }
+
         self.account_stat_manager
-            .set_statistics_item_state_getter(state_getter);*/
+            .set_statistics_item_state_getter(Arc::new(DefaultStatisticsItemStateGetter {
+                producer_state_getter: self.producer_state_getter.clone(),
+                consumer_state_getter: self.consumer_state_getter.clone(),
+            }));
+    }
+
+    pub fn set_producer_state_getter(&mut self, state_getter: Arc<dyn StateGetter>) {
+        self.producer_state_getter = Some(state_getter);
+    }
+
+    pub fn set_consumer_state_getter(&mut self, state_getter: Arc<dyn StateGetter>) {
+        self.consumer_state_getter = Some(state_getter);
     }
 
     pub fn get_stats_table(&self) -> Arc<parking_lot::RwLock<HashMap<String, StatsItemSet>>> {
