@@ -112,7 +112,7 @@ impl BrokerStatsManager {
             account_stat_manager: Default::default(),
             producer_state_getter: None,
             consumer_state_getter: None,
-            broker_config: None,
+            broker_config: Some(broker_config),
         };
         broker_stats_manager.init();
         broker_stats_manager
