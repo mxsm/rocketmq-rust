@@ -14,13 +14,29 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod interceptor;
-pub mod state_getter;
-pub mod statistics_brief;
-pub mod statistics_item;
-pub mod statistics_item_formatter;
-pub mod statistics_item_printer;
-pub mod statistics_item_scheduled_printer;
-pub mod statistics_item_state_getter;
-pub mod statistics_kind_meta;
-pub mod statistics_manager;
+use tracing::info;
+
+use crate::common::statistics::statistics_item::StatisticsItem;
+use crate::common::statistics::statistics_item_formatter::StatisticsItemFormatter;
+
+pub struct StatisticsItemPrinter<'a> {
+    formatter: &'a StatisticsItemFormatter,
+}
+
+impl<'a> StatisticsItemPrinter<'a> {
+    pub fn new(formatter: &'a StatisticsItemFormatter) -> Self {
+        Self { formatter }
+    }
+
+    pub fn set_formatter(&mut self, formatter: &'a StatisticsItemFormatter) {
+        self.formatter = formatter;
+    }
+
+    pub fn print(&self, prefix: &str, stat_item: &StatisticsItem, suffixes: &[&str]) {
+        let suffix = suffixes.join("");
+
+        let log_message = format!("{}{}{}", prefix, self.formatter.format(stat_item), suffix);
+
+        info!("{}", log_message);
+    }
+}
