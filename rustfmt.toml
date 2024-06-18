@@ -10,6 +10,6 @@ normalize_doc_attributes = true
 wrap_comments = true
 format_macro_bodies = true
 format_macro_matchers = true
-reorder_impl_items = true
+reorder_impl_items = false
 reorder_imports = true
 reorder_modules = true
