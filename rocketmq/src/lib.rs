@@ -19,3 +19,24 @@
 pub use rocketmq::main;
 /// Re-export tokio module.
 pub use tokio as rocketmq;
+
+#[macro_export]
+macro_rules! is_trait_implemented {
+    ($t:ty, $tr:ident) => {{
+        struct Checker<T: ?Sized>(std::marker::PhantomData<T>);
+
+        impl<T: $tr + ?Sized> Checker<T> {
+            fn is_implemented() -> bool {
+                true
+            }
+        }
+
+        impl<T: ?Sized> Checker<T> {
+            fn is_implemented() -> bool {
+                false
+            }
+        }
+
+        Checker::<$t>::is_implemented()
+    }};
+}

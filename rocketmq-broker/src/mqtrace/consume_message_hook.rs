@@ -19,7 +19,7 @@ use crate::mqtrace::consume_message_context::ConsumeMessageContext;
 /// `ConsumeMessageHook` is a trait that provides hooks for consuming messages.
 /// Implementors of this trait provide their own logic for what should happen before and after a
 /// message is consumed.
-pub trait ConsumeMessageHook {
+pub trait ConsumeMessageHook: Sync + Send + 'static {
     /// Returns the name of the hook.
     /// This is typically used for logging and debugging purposes.
     fn hook_name(&self) -> &str;

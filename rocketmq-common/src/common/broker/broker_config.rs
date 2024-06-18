@@ -142,6 +142,7 @@ pub struct BrokerConfig {
     pub skip_pre_online: bool,
     pub namesrv_addr: Option<String>,
     pub fetch_name_srv_addr_by_dns_lookup: bool,
+    pub lite_pull_message_enable: bool,
 }
 
 impl Default for BrokerConfig {
@@ -195,6 +196,7 @@ impl Default for BrokerConfig {
             skip_pre_online: false,
             namesrv_addr: NAMESRV_ADDR.clone(),
             fetch_name_srv_addr_by_dns_lookup: false,
+            lite_pull_message_enable: true,
         }
     }
 }

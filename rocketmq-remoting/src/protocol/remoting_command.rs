@@ -27,6 +27,7 @@ use rocketmq_common::common::mq_version::RocketMqVersion;
 use serde::Deserialize;
 use serde::Serialize;
 
+use super::FastCodesHeader;
 use super::RemotingCommandType;
 use super::SerializeType;
 use crate::code::response_code::RemotingSysResponseCode;
@@ -231,6 +232,10 @@ impl RemotingCommand {
         self
     }
 
+    pub fn set_opaque_mut(&mut self, opaque: i32) {
+        self.opaque = opaque;
+    }
+
     pub fn set_flag(mut self, flag: i32) -> Self {
         self.flag = flag;
         self
@@ -357,6 +362,20 @@ impl RemotingCommand {
         match self.ext_fields {
             None => None,
             Some(ref header) => T::from(header),
+        }
+    }
+
+    pub fn decode_command_custom_header_fast<T>(&self) -> Option<T>
+    where
+        T: FromMap<Target = T> + Default + FastCodesHeader,
+    {
+        match self.ext_fields {
+            None => None,
+            Some(ref header) => {
+                let mut target = T::default();
+                target.decode_fast(header);
+                Some(target)
+            }
         }
     }
 
