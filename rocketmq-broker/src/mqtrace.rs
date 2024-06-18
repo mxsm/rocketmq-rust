@@ -15,5 +15,7 @@
  * limitations under the License.
  */
 
+pub(crate) mod consume_message_context;
+pub(crate) mod consume_message_hook;
 pub(crate) mod send_message_context;
 pub(crate) mod send_message_hook;
