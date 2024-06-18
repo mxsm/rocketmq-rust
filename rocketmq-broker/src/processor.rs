@@ -71,6 +71,7 @@ pub(crate) mod peek_message_processor;
 pub(crate) mod polling_info_processor;
 pub(crate) mod pop_message_processor;
 pub(crate) mod pull_message_processor;
+pub(crate) mod pull_message_result_handler;
 pub(crate) mod query_assignment_processor;
 pub(crate) mod query_message_processor;
 pub(crate) mod reply_message_processor;
@@ -142,6 +143,12 @@ impl<MS: MessageStore + Send + Sync + 'static> RequestProcessor for BrokerReques
                     .process_request(ctx, request_code, request)
                     .await
             }
+            RequestCode::PullMessage | RequestCode::LitePullMessage => {
+                self.pull_message_processor
+                    .process_request(ctx, request_code, request)
+                    .await
+            }
+
             _ => self.admin_broker_processor.process_request(ctx, request),
         }
     }

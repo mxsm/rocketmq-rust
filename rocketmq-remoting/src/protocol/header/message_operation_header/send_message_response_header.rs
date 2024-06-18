@@ -93,15 +93,15 @@ impl SendMessageResponseHeader {
 
 impl FastCodesHeader for SendMessageResponseHeader {
     fn encode_fast(&mut self, out: &mut bytes::BytesMut) {
-        self.write_if_not_null(out, "msgId", self.msg_id.to_string().as_str());
-        self.write_if_not_null(out, "queueId", self.queue_id.to_string().as_str());
-        self.write_if_not_null(out, "queueOffset", self.queue_offset.to_string().as_str());
-        self.write_if_not_null(
+        Self::write_if_not_null(out, "msgId", self.msg_id.to_string().as_str());
+        Self::write_if_not_null(out, "queueId", self.queue_id.to_string().as_str());
+        Self::write_if_not_null(out, "queueOffset", self.queue_offset.to_string().as_str());
+        Self::write_if_not_null(
             out,
             "transactionId",
             self.transaction_id.clone().as_deref().unwrap(),
         );
-        self.write_if_not_null(
+        Self::write_if_not_null(
             out,
             "batchUniqId",
             self.batch_uniq_id.clone().as_deref().unwrap(),

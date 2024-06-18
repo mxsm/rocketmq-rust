@@ -20,7 +20,7 @@
 pub mod base;
 pub mod config;
 mod consume_queue;
-mod filter;
+pub mod filter;
 pub mod hook;
 mod index;
 mod kv;
