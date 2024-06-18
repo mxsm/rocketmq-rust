@@ -54,7 +54,7 @@ once_cell = { workspace = true }
 tempfile = "3.10.1"
 trait-variant.workspace = true
 time = "0.3.36"
-dashmap = "5.5.3"
+dashmap = "6.0.0"
 hostname = "0.4"
 [dev-dependencies]
 mockall = "0.12.1"
