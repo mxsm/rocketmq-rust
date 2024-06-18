@@ -48,30 +48,61 @@ impl PullMessageResponseHeader {
 }
 
 impl FastCodesHeader for PullMessageResponseHeader {
+    fn encode_fast(&mut self, out: &mut BytesMut) {
+        if let Some(value) = self.suggest_which_broker_id {
+            Self::write_if_not_null(
+                out,
+                Self::SUGGEST_WHICH_BROKER_ID,
+                value.to_string().as_str(),
+            );
+        }
+        if let Some(value) = self.next_begin_offset {
+            Self::write_if_not_null(out, Self::NEXT_BEGIN_OFFSET, value.to_string().as_str());
+        }
+        if let Some(value) = self.min_offset {
+            Self::write_if_not_null(out, Self::MIN_OFFSET, value.to_string().as_str());
+        }
+        if let Some(value) = self.max_offset {
+            Self::write_if_not_null(out, Self::MAX_OFFSET, value.to_string().as_str());
+        }
+        if let Some(value) = self.offset_delta {
+            Self::write_if_not_null(out, Self::OFFSET_DELTA, value.to_string().as_str());
+        }
+        if let Some(value) = self.topic_sys_flag {
+            Self::write_if_not_null(out, Self::TOPIC_SYS_FLAG, value.to_string().as_str());
+        }
+        if let Some(value) = self.group_sys_flag {
+            Self::write_if_not_null(out, Self::GROUP_SYS_FLAG, value.to_string().as_str());
+        }
+        if let Some(value) = self.forbidden_type {
+            Self::write_if_not_null(out, Self::FORBIDDEN_TYPE, value.to_string().as_str());
+        }
+    }
+
     fn decode_fast(&mut self, fields: &HashMap<String, String>) {
         if let Some(offset_delta) = fields.get(Self::SUGGEST_WHICH_BROKER_ID) {
-            self.suggest_which_broker_id = offset_delta.parse().ok();
+            self.suggest_which_broker_id = Some(offset_delta.parse().unwrap());
         }
         if let Some(offset_delta) = fields.get(Self::NEXT_BEGIN_OFFSET) {
-            self.next_begin_offset = offset_delta.parse().ok();
+            self.next_begin_offset = Some(offset_delta.parse().unwrap());
         }
         if let Some(offset_delta) = fields.get(Self::MIN_OFFSET) {
-            self.min_offset = offset_delta.parse().ok();
+            self.min_offset = Some(offset_delta.parse().unwrap());
         }
         if let Some(offset_delta) = fields.get(Self::MAX_OFFSET) {
-            self.max_offset = offset_delta.parse().ok();
+            self.max_offset = Some(offset_delta.parse().unwrap());
         }
         if let Some(offset_delta) = fields.get(Self::OFFSET_DELTA) {
-            self.offset_delta = offset_delta.parse().ok();
+            self.offset_delta = Some(offset_delta.parse().unwrap());
         }
         if let Some(offset_delta) = fields.get(Self::TOPIC_SYS_FLAG) {
-            self.topic_sys_flag = offset_delta.parse().ok();
+            self.topic_sys_flag = Some(offset_delta.parse().unwrap());
         }
         if let Some(offset_delta) = fields.get(Self::GROUP_SYS_FLAG) {
-            self.group_sys_flag = offset_delta.parse().ok();
+            self.group_sys_flag = Some(offset_delta.parse().unwrap());
         }
         if let Some(offset_delta) = fields.get(Self::FORBIDDEN_TYPE) {
-            self.forbidden_type = offset_delta.parse().ok();
+            self.forbidden_type = Some(offset_delta.parse().unwrap());
         }
     }
 }
