@@ -72,7 +72,8 @@ pub(crate) struct BrokerRuntime {
     topic_config_manager: TopicConfigManager,
     topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
     consumer_offset_manager: Arc<ConsumerOffsetManager>,
-    subscription_group_manager: Arc<SubscriptionGroupManager>,
+    #[cfg(feature = "local_file_store")]
+    subscription_group_manager: Arc<SubscriptionGroupManager<DefaultMessageStore>>,
     consumer_filter_manager: Arc<ConsumerFilterManager>,
     consumer_order_info_manager: Arc<ConsumerOrderInfoManager>,
     #[cfg(feature = "local_file_store")]
@@ -106,7 +107,7 @@ impl Clone for BrokerRuntime {
             topic_config_manager: self.topic_config_manager.clone(),
             topic_queue_mapping_manager: self.topic_queue_mapping_manager.clone(),
             consumer_offset_manager: self.consumer_offset_manager.clone(),
-            subscription_group_manager: Arc::new(Default::default()),
+            subscription_group_manager: self.subscription_group_manager.clone(),
             consumer_filter_manager: Arc::new(Default::default()),
             consumer_order_info_manager: Arc::new(Default::default()),
             message_store: self.message_store.clone(),
@@ -171,7 +172,7 @@ impl BrokerRuntime {
             topic_config_manager,
             topic_queue_mapping_manager,
             consumer_offset_manager: Arc::new(Default::default()),
-            subscription_group_manager: Arc::new(Default::default()),
+            subscription_group_manager: Arc::new(SubscriptionGroupManager::new()),
             consumer_filter_manager: Arc::new(Default::default()),
             consumer_order_info_manager: Arc::new(Default::default()),
             message_store: None,

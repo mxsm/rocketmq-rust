@@ -82,7 +82,7 @@ where
     MS: Clone,
 {
     pub(crate) send_message_processor: SendMessageProcessor<MS>,
-    pub(crate) pull_message_processor: PullMessageProcessor,
+    pub(crate) pull_message_processor: PullMessageProcessor<MS>,
     pub(crate) peek_message_processor: PeekMessageProcessor,
     pub(crate) pop_message_processor: PopMessageProcessor,
     pub(crate) ack_message_processor: AckMessageProcessor,

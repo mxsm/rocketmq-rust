@@ -143,6 +143,7 @@ pub struct BrokerConfig {
     pub namesrv_addr: Option<String>,
     pub fetch_name_srv_addr_by_dns_lookup: bool,
     pub lite_pull_message_enable: bool,
+    pub auto_create_subscription_group: bool,
 }
 
 impl Default for BrokerConfig {
@@ -197,6 +198,7 @@ impl Default for BrokerConfig {
             namesrv_addr: NAMESRV_ADDR.clone(),
             fetch_name_srv_addr_by_dns_lookup: false,
             lite_pull_message_enable: true,
+            auto_create_subscription_group: true,
         }
     }
 }

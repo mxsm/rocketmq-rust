@@ -23,6 +23,7 @@ use serde::Serialize;
 
 use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::FromMap;
+use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use crate::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
 use crate::protocol::FastCodesHeader;
 
@@ -31,7 +32,7 @@ use crate::protocol::FastCodesHeader;
 pub struct PullMessageRequestHeader {
     pub consumer_group: String,
     pub topic: String,
-    pub queue_id: i32,
+    pub queue_id: Option<i32>,
     pub queue_offset: i64,
     pub max_msg_nums: i32,
     pub sys_flag: i32,
@@ -73,7 +74,10 @@ impl CommandCustomHeader for PullMessageRequestHeader {
             self.consumer_group.clone(),
         );
         map.insert(Self::TOPIC.to_string(), self.topic.clone());
-        map.insert(Self::QUEUE_ID.to_string(), self.queue_id.to_string());
+        if let Some(value) = self.queue_id {
+            map.insert(Self::QUEUE_ID.to_string(), value.to_string());
+        }
+
         map.insert(
             Self::QUEUE_OFFSET.to_string(),
             self.queue_offset.to_string(),
@@ -130,7 +134,7 @@ impl FromMap for PullMessageRequestHeader {
             topic: map.get(Self::TOPIC).cloned().unwrap_or_default(),
             queue_id: map
                 .get(Self::QUEUE_ID)
-                .map_or(0, |value| value.parse().unwrap_or_default()),
+                .and_then(|value| value.parse::<i32>().ok()),
             queue_offset: map
                 .get(Self::QUEUE_OFFSET)
                 .map_or(0, |value| value.parse().unwrap_or_default()),
@@ -167,7 +171,10 @@ impl FastCodesHeader for PullMessageRequestHeader {
     fn encode_fast(&mut self, out: &mut BytesMut) {
         Self::write_if_not_null(out, "consumerGroup", self.consumer_group.as_str());
         Self::write_if_not_null(out, "topic", self.topic.as_str());
-        Self::write_if_not_null(out, "queueId", self.queue_id.to_string().as_str());
+        if let Some(value) = self.queue_id {
+            Self::write_if_not_null(out, "queueId", value.to_string().as_str());
+        }
+
         Self::write_if_not_null(out, "queueOffset", self.queue_offset.to_string().as_str());
         Self::write_if_not_null(out, "maxMsgNums", self.max_msg_nums.to_string().as_str());
         Self::write_if_not_null(out, "sysFlag", self.sys_flag.to_string().as_str());
@@ -230,7 +237,7 @@ impl FastCodesHeader for PullMessageRequestHeader {
         }
 
         if let Some(str) = fields.get("queueId") {
-            self.queue_id = str.parse::<i32>().unwrap();
+            self.queue_id = str.parse::<i32>().ok();
         }
 
         if let Some(str) = fields.get("queueOffset") {
@@ -320,5 +327,113 @@ impl FastCodesHeader for PullMessageRequestHeader {
                 .unwrap()
                 .oneway = Some(str.parse::<bool>().unwrap());
         }
+    }
+}
+
+impl TopicRequestHeaderTrait for PullMessageRequestHeader {
+    fn with_lo(&mut self, lo: Option<bool>) {
+        self.topic_request.as_mut().unwrap().lo = lo;
+    }
+
+    fn lo(&self) -> Option<bool> {
+        self.topic_request.as_ref().unwrap().lo
+    }
+
+    fn with_topic(&mut self, topic: String) {
+        self.topic = topic;
+    }
+
+    fn topic(&self) -> String {
+        self.topic.clone()
+    }
+
+    fn broker_name(&self) -> Option<String> {
+        self.topic_request
+            .as_ref()
+            .unwrap()
+            .rpc
+            .as_ref()
+            .unwrap()
+            .broker_name
+            .clone()
+    }
+
+    fn with_broker_name(&mut self, broker_name: String) {
+        self.topic_request
+            .as_mut()
+            .unwrap()
+            .rpc
+            .as_mut()
+            .unwrap()
+            .broker_name = Some(broker_name);
+    }
+
+    fn namespace(&self) -> Option<String> {
+        self.topic_request
+            .as_ref()
+            .unwrap()
+            .rpc
+            .as_ref()
+            .unwrap()
+            .namespace
+            .clone()
+    }
+
+    fn with_namespace(&mut self, namespace: String) {
+        self.topic_request
+            .as_mut()
+            .unwrap()
+            .rpc
+            .as_mut()
+            .unwrap()
+            .namespace = Some(namespace);
+    }
+
+    fn namespaced(&self) -> Option<bool> {
+        self.topic_request
+            .as_ref()
+            .unwrap()
+            .rpc
+            .as_ref()
+            .unwrap()
+            .namespaced
+    }
+
+    fn with_namespaced(&mut self, namespaced: bool) {
+        self.topic_request
+            .as_mut()
+            .unwrap()
+            .rpc
+            .as_mut()
+            .unwrap()
+            .namespaced = Some(namespaced);
+    }
+
+    fn oneway(&self) -> Option<bool> {
+        self.topic_request
+            .as_ref()
+            .unwrap()
+            .rpc
+            .as_ref()
+            .unwrap()
+            .oneway
+    }
+
+    fn with_oneway(&mut self, oneway: bool) {
+        self.topic_request
+            .as_mut()
+            .unwrap()
+            .rpc
+            .as_mut()
+            .unwrap()
+            .oneway = Some(oneway);
+    }
+
+    fn queue_id(&self) -> Option<i32> {
+        self.queue_id
+    }
+
+    fn set_queue_id(&mut self, queue_id: Option<i32>) {
+        self.queue_id = queue_id;
     }
 }
