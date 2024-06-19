@@ -109,4 +109,56 @@ impl SubscriptionGroupConfig {
     pub fn attributes(&self) -> &HashMap<String, String> {
         &self.attributes
     }
+
+    pub fn set_group_name(&mut self, group_name: String) {
+        self.group_name = group_name;
+    }
+    pub fn set_consume_enable(&mut self, consume_enable: bool) {
+        self.consume_enable = consume_enable;
+    }
+    pub fn set_consume_from_min_enable(&mut self, consume_from_min_enable: bool) {
+        self.consume_from_min_enable = consume_from_min_enable;
+    }
+    pub fn set_consume_broadcast_enable(&mut self, consume_broadcast_enable: bool) {
+        self.consume_broadcast_enable = consume_broadcast_enable;
+    }
+    pub fn set_consume_message_orderly(&mut self, consume_message_orderly: bool) {
+        self.consume_message_orderly = consume_message_orderly;
+    }
+    pub fn set_retry_queue_nums(&mut self, retry_queue_nums: i32) {
+        self.retry_queue_nums = retry_queue_nums;
+    }
+    pub fn set_retry_max_times(&mut self, retry_max_times: i32) {
+        self.retry_max_times = retry_max_times;
+    }
+    pub fn set_group_retry_policy(&mut self, group_retry_policy: GroupRetryPolicy) {
+        self.group_retry_policy = group_retry_policy;
+    }
+    pub fn set_broker_id(&mut self, broker_id: u64) {
+        self.broker_id = broker_id;
+    }
+    pub fn set_which_broker_when_consume_slowly(&mut self, which_broker_when_consume_slowly: u64) {
+        self.which_broker_when_consume_slowly = which_broker_when_consume_slowly;
+    }
+    pub fn set_notify_consumer_ids_changed_enable(
+        &mut self,
+        notify_consumer_ids_changed_enable: bool,
+    ) {
+        self.notify_consumer_ids_changed_enable = notify_consumer_ids_changed_enable;
+    }
+    pub fn set_group_sys_flag(&mut self, group_sys_flag: i32) {
+        self.group_sys_flag = group_sys_flag;
+    }
+    pub fn set_consume_timeout_minute(&mut self, consume_timeout_minute: i32) {
+        self.consume_timeout_minute = consume_timeout_minute;
+    }
+    pub fn set_subscription_data_set(
+        &mut self,
+        subscription_data_set: HashSet<SimpleSubscriptionData>,
+    ) {
+        self.subscription_data_set = subscription_data_set;
+    }
+    pub fn set_attributes(&mut self, attributes: HashMap<String, String>) {
+        self.attributes = attributes;
+    }
 }

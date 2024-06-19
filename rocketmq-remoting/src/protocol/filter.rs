@@ -14,21 +14,5 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 
-#[derive(Default)]
-pub struct ConsumerManager {}
-
-impl ConsumerManager {
-    pub fn find_subscription_data(&self, _group: &str, _topic: &str) -> Option<SubscriptionData> {
-        None
-    }
-
-    pub fn compensate_subscribe_data(
-        &self,
-        _group: &str,
-        _topic: &str,
-        _subscription_data: &SubscriptionData,
-    ) {
-    }
-}
+pub mod filter_api;

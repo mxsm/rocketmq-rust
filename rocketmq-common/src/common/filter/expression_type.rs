@@ -17,6 +17,14 @@
 pub struct ExpressionType;
 
 impl ExpressionType {
+    /// SQL92 expression type.
     pub const SQL92: &'static str = "SQL92";
+
+    /// TAG expression type.
     pub const TAG: &'static str = "TAG";
+
+    /// Checks if the given type is a TAG type.
+    pub fn is_tag_type(type_: Option<&str>) -> bool {
+        matches!(type_, None | Some("") | Some(ExpressionType::TAG))
+    }
 }

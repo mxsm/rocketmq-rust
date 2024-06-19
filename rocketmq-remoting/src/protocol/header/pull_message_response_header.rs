@@ -18,25 +18,27 @@
 use std::collections::HashMap;
 
 use bytes::BytesMut;
+use rocketmq_macros::RemotingSerializable;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protocol::FastCodesHeader;
 
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default, RemotingSerializable, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
 pub struct PullMessageResponseHeader {
-    suggest_which_broker_id: Option<i64>,
-    next_begin_offset: Option<i64>,
-    min_offset: Option<i64>,
-    max_offset: Option<i64>,
-    offset_delta: Option<i64>,
-    topic_sys_flag: Option<i32>,
-    group_sys_flag: Option<i32>,
-    forbidden_type: Option<i32>,
+    pub suggest_which_broker_id: Option<i64>,
+    pub next_begin_offset: Option<i64>,
+    pub min_offset: Option<i64>,
+    pub max_offset: Option<i64>,
+    pub offset_delta: Option<i64>,
+    pub topic_sys_flag: Option<i32>,
+    pub group_sys_flag: Option<i32>,
+    pub forbidden_type: Option<i32>,
 }
 
-impl PullMessageResponseHeader {
+/*impl PullMessageResponseHeader {
     const FORBIDDEN_TYPE: &'static str = "forbiddenType";
     const GROUP_SYS_FLAG: &'static str = "groupSysFlag";
     const MAX_OFFSET: &'static str = "maxOffset";
@@ -45,7 +47,7 @@ impl PullMessageResponseHeader {
     const OFFSET_DELTA: &'static str = "offsetDelta";
     const SUGGEST_WHICH_BROKER_ID: &'static str = "suggestWhichBrokerId";
     const TOPIC_SYS_FLAG: &'static str = "topicSysFlag";
-}
+}*/
 
 impl FastCodesHeader for PullMessageResponseHeader {
     fn encode_fast(&mut self, out: &mut BytesMut) {

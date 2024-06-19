@@ -19,8 +19,11 @@ use std::sync::Arc;
 
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config_manager::ConfigManager;
+use rocketmq_common::common::filter::expression_type::ExpressionType;
+use rocketmq_common::TimeUtils::get_current_millis;
 
 use crate::broker_path_config_helper::get_consumer_filter_path;
+use crate::filter::consumer_filter_data::ConsumerFilterData;
 
 #[derive(Default)]
 pub(crate) struct ConsumerFilterManager {
@@ -51,4 +54,43 @@ impl ConfigManager for ConsumerFilterManager {
     }
 
     fn decode(&self, json_string: &str) {}
+}
+
+impl ConsumerFilterManager {
+    pub fn build(
+        topic: &str,
+        consumer_group: &str,
+        expression: &str,
+        type_: &str,
+        client_version: u64,
+    ) -> Option<ConsumerFilterData> {
+        if ExpressionType::is_tag_type(Some(type_)) {
+            return None;
+        }
+
+        let mut consumer_filter_data = ConsumerFilterData::default();
+        consumer_filter_data.set_topic(topic.to_string());
+        consumer_filter_data.set_consumer_group(consumer_group.to_string());
+        consumer_filter_data.set_born_time(get_current_millis());
+        consumer_filter_data.set_dead_time(0);
+        consumer_filter_data.set_expression(expression.to_string());
+        consumer_filter_data.set_expression_type(type_.to_string());
+        consumer_filter_data.set_client_version(client_version);
+
+        /*        let filter_factory = FilterFactory;
+                match filter_factory.get(&type_).compile(&expression) {
+                    Ok(compiled_expression) => {
+                        consumer_filter_data.set_compiled_expression(compiled_expression);
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "parse error: expr={}, topic={}, group={}, error={}",
+                            expression, topic, consumer_group, e
+                        );
+                        return None;
+                    }
+                }
+        */
+        Some(consumer_filter_data)
+    }
 }

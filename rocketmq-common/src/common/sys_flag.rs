@@ -15,4 +15,5 @@
  * limitations under the License.
  */
 pub mod message_sys_flag;
+pub mod pull_sys_flag;
 pub mod topic_sys_flag;

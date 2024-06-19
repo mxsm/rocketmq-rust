@@ -56,5 +56,6 @@ trait-variant.workspace = true
 time = "0.3.36"
 dashmap = "5.5.3"
 hostname = "0.4"
+regex = "1.10.5"
 [dev-dependencies]
 mockall = "0.12.1"

@@ -22,7 +22,7 @@ use std::hash::Hasher;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SubscriptionData {
     pub class_filter_mode: bool,
@@ -35,6 +35,10 @@ pub struct SubscriptionData {
     // In Rust, attributes like `@JSONField(serialize = false)` are typically handled through
     // documentation or external crates.
     pub filter_class_source: String, // This field is not used in this example.
+}
+
+impl SubscriptionData {
+    pub const SUB_ALL: &'static str = "*";
 }
 
 impl Hash for SubscriptionData {

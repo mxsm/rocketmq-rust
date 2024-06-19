@@ -35,10 +35,13 @@ use crate::RocketMQSerializable;
 
 pub mod body;
 pub mod command_custom_header;
+pub mod filter;
+pub mod forbidden_type;
 pub mod header;
 pub mod heartbeat;
 pub mod namesrv;
 pub mod remoting_command;
+pub mod request_source;
 pub mod rocketmq_serializable;
 pub mod route;
 pub mod static_topic;
