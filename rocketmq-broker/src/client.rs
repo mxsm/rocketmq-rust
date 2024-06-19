@@ -16,6 +16,7 @@
  */
 
 pub(crate) mod client_channel_info;
+pub(crate) mod consumer_group_info;
 pub(crate) mod default_consumer_ids_change_listener;
 pub(crate) mod manager;
 pub(crate) mod net;
