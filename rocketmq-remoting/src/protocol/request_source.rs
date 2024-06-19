@@ -36,7 +36,7 @@ impl RequestSource {
 
     pub fn is_valid(value: Option<i32>) -> bool {
         if let Some(v) = value {
-            (-1..4).contains(&v)
+            (-1..3).contains(&v)
         } else {
             false
         }
