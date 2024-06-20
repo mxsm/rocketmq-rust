@@ -15,5 +15,7 @@
  * limitations under the License.
  */
 
-mod consumer_filter_data;
+pub(crate) mod consumer_filter_data;
+pub(crate) mod expression_for_retry_message_filter;
+pub(crate) mod expression_message_filter;
 pub(crate) mod manager;

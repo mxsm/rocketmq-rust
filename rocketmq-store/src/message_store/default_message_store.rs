@@ -52,11 +52,13 @@ use tracing::warn;
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::dispatch_request::DispatchRequest;
+use crate::base::get_message_result::GetMessageResult;
 use crate::base::message_result::PutMessageResult;
 use crate::base::message_status_enum::PutMessageStatus;
 use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::config::broker_role::BrokerRole;
 use crate::config::message_store_config::MessageStoreConfig;
+use crate::filter::MessageFilter;
 use crate::hook::put_message_hook::BoxedPutMessageHook;
 use crate::index::index_dispatch::CommitLogDispatcherBuildIndex;
 use crate::index::index_service::IndexService;
@@ -421,6 +423,7 @@ impl DefaultMessageStore {
     }
 }
 
+#[allow(unused_variables)]
 impl MessageStore for DefaultMessageStore {
     async fn load(&mut self) -> bool {
         let last_exit_ok = !self.is_temp_file_exist();
@@ -597,6 +600,46 @@ impl MessageStore for DefaultMessageStore {
     }
 
     fn dispatch_behind_bytes(&self) {}
+
+    fn get_min_offset_in_queue(&self, topic: &str, queue_id: i32) -> i64 {
+        self.consume_queue_store
+            .get_min_offset_in_queue(topic, queue_id)
+    }
+
+    fn get_max_offset_in_queue(&self, topic: &str, queue_id: i32) -> i64 {
+        self.get_max_offset_in_queue_committed(topic, queue_id, true)
+    }
+
+    fn get_max_offset_in_queue_committed(
+        &self,
+        topic: &str,
+        queue_id: i32,
+        committed: bool,
+    ) -> i64 {
+        if committed {
+            self.consume_queue_store
+                .find_or_create_consume_queue(topic, queue_id)
+                .lock()
+                .get_max_offset_in_queue()
+        } else {
+            self.consume_queue_store
+                .get_max_offset(topic, queue_id)
+                .unwrap_or_default()
+        }
+    }
+
+    async fn get_message(
+        &self,
+        group: &str,
+        topic: &str,
+        queue_id: i32,
+        offset: i64,
+        max_msg_nums: i32,
+        max_total_msg_size: i32,
+        message_filter: &dyn MessageFilter,
+    ) -> Option<GetMessageResult> {
+        todo!()
+    }
 }
 
 #[derive(Clone)]

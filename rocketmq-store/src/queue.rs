@@ -228,7 +228,7 @@ pub trait ConsumeQueueStoreTrait: Send + Sync {
     /// `topic`: Topic.
     /// `queue_id`: Queue ID.
     /// Returns the max offset in QueueOffsetOperator.
-    fn get_max_offset(&self, topic: &str, queue_id: i32) -> i64;
+    fn get_max_offset(&self, topic: &str, queue_id: i32) -> Option<i64>;
 
     /// Find or create the consumeQueue.
     /// `topic`: Topic.
@@ -255,6 +255,10 @@ pub trait ConsumeQueueStoreTrait: Send + Sync {
     /// Get store time from commitlog by cqUnit.
     /// `cq_unit`: cqUnit.
     fn get_store_time(&self, cq_unit: CqUnit) -> i64;
+
+    fn get_min_offset_in_queue(&self, topic: &str, queue_id: i32) -> i64;
+
+    fn get_max_offset_in_queue(&self, topic: &str, queue_id: i32) -> i64;
 }
 
 /// Trait representing ConsumeQueueInterface.

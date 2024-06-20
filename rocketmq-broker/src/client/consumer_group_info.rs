@@ -18,28 +18,28 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use parking_lot::Mutex;
+use parking_lot::RwLock;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
-use tokio::sync::Mutex;
-use tokio::sync::RwLock;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
 
 use crate::client::client_channel_info::ClientChannelInfo;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ConsumerGroupInfo {
     group_name: String,
     subscription_table: Arc<RwLock<HashMap<String, SubscriptionData>>>,
-    channel_info_table: Arc<RwLock<HashMap<String, ClientChannelInfo>>>,
+    channel_info_table: Arc<RwLock<HashMap<Channel, ClientChannelInfo>>>,
     consume_type: Arc<RwLock<ConsumeType>>,
     message_model: Arc<RwLock<MessageModel>>,
     consume_from_where: Arc<RwLock<ConsumeFromWhere>>,
-
     last_update_timestamp: Arc<Mutex<u64>>,
 }
 
@@ -73,8 +73,8 @@ impl ConsumerGroupInfo {
         }
     }
 
-    pub async fn find_channel_by_client_id(&self, client_id: &str) -> Option<ClientChannelInfo> {
-        let channel_info_table = self.channel_info_table.read().await;
+    pub fn find_channel_by_client_id(&self, client_id: &str) -> Option<ClientChannelInfo> {
+        let channel_info_table = self.channel_info_table.read();
         for (_, client_channel_info) in channel_info_table.iter() {
             if client_channel_info.client_id() == client_id {
                 return Some(client_channel_info.clone());
@@ -83,36 +83,36 @@ impl ConsumerGroupInfo {
         None
     }
 
-    pub async fn get_subscription_table(&self) -> Arc<RwLock<HashMap<String, SubscriptionData>>> {
+    pub fn get_subscription_table(&self) -> Arc<RwLock<HashMap<String, SubscriptionData>>> {
         Arc::clone(&self.subscription_table)
     }
 
-    pub async fn find_channel_by_channel(&self, channel: &str) -> Option<ClientChannelInfo> {
-        let channel_info_table = self.channel_info_table.read().await;
+    pub fn find_channel_by_channel(&self, channel: &Channel) -> Option<ClientChannelInfo> {
+        let channel_info_table = self.channel_info_table.read();
         channel_info_table.get(channel).cloned()
     }
 
-    pub async fn get_channel_info_table(&self) -> Arc<RwLock<HashMap<String, ClientChannelInfo>>> {
+    pub fn get_channel_info_table(&self) -> Arc<RwLock<HashMap<Channel, ClientChannelInfo>>> {
         Arc::clone(&self.channel_info_table)
     }
 
-    pub async fn get_all_channels(&self) -> Vec<String> {
-        let channel_info_table = self.channel_info_table.read().await;
+    pub fn get_all_channels(&self) -> Vec<Channel> {
+        let channel_info_table = self.channel_info_table.read();
         channel_info_table.keys().cloned().collect()
     }
 
-    pub async fn get_all_client_ids(&self) -> Vec<String> {
-        let channel_info_table = self.channel_info_table.read().await;
+    pub fn get_all_client_ids(&self) -> Vec<String> {
+        let channel_info_table = self.channel_info_table.read();
         channel_info_table
             .values()
             .map(|info| info.client_id().clone())
             .collect()
     }
 
-    pub async fn unregister_channel(&self, client_channel_info: &ClientChannelInfo) -> bool {
-        let mut channel_info_table = self.channel_info_table.write().await;
+    pub fn unregister_channel(&self, client_channel_info: &ClientChannelInfo) -> bool {
+        let mut channel_info_table = self.channel_info_table.write();
         if channel_info_table
-            .remove(client_channel_info.client_id())
+            .remove(client_channel_info.channel())
             .is_some()
         {
             info!(
@@ -126,13 +126,13 @@ impl ConsumerGroupInfo {
         }
     }
 
-    pub async fn handle_channel_close_event(&self, channel: &str) -> Option<ClientChannelInfo> {
-        let mut channel_info_table = self.channel_info_table.write().await;
+    pub fn handle_channel_close_event(&self, channel: &Channel) -> Option<ClientChannelInfo> {
+        let mut channel_info_table = self.channel_info_table.write();
         if let Some(info) = channel_info_table.remove(channel) {
             warn!(
-                "NETTY EVENT: remove not active channel [{}] from ConsumerGroupInfo \
+                "NETTY EVENT: remove not active channel [{:?}] from ConsumerGroupInfo \
                  groupChannelTable, consumer group: {}",
-                info.socket_addr(),
+                info.channel(),
                 self.group_name
             );
             Some(info)
@@ -141,7 +141,7 @@ impl ConsumerGroupInfo {
         }
     }
 
-    pub async fn update_channel(
+    pub fn update_channel(
         &self,
         info_new: ClientChannelInfo,
         consume_type: ConsumeType,
@@ -151,22 +151,22 @@ impl ConsumerGroupInfo {
         let mut updated = false;
 
         {
-            let mut consume_type_lock = self.consume_type.write().await;
+            let mut consume_type_lock = self.consume_type.write();
             *consume_type_lock = consume_type;
         }
 
         {
-            let mut message_model_lock = self.message_model.write().await;
+            let mut message_model_lock = self.message_model.write();
             *message_model_lock = message_model;
         }
 
         {
-            let mut consume_from_where_lock = self.consume_from_where.write().await;
+            let mut consume_from_where_lock = self.consume_from_where.write();
             *consume_from_where_lock = consume_from_where;
         }
 
-        let mut channel_info_table = self.channel_info_table.write().await;
-        if let Some(info_old) = channel_info_table.get_mut(info_new.socket_addr()) {
+        let mut channel_info_table = self.channel_info_table.write();
+        if let Some(info_old) = channel_info_table.get_mut(info_new.channel()) {
             if info_old.client_id() != info_new.client_id() {
                 error!(
                     "ConsumerGroupInfo: consumer channel exists in broker, but clientId is not \
@@ -177,31 +177,31 @@ impl ConsumerGroupInfo {
                 );
                 *info_old = info_new;
             }
-            info_old.set_last_update_timestamp(get_current_millis() as i64);
+            info_old.set_last_update_timestamp(get_current_millis());
         } else {
-            channel_info_table.insert(info_new.socket_addr().clone(), info_new.clone());
+            channel_info_table.insert(info_new.channel().clone(), info_new.clone());
             info!(
-                "New consumer connected, group: {} channel: {}",
+                "New consumer connected, group: {} channel: {:?}",
                 self.group_name,
-                info_new.socket_addr()
+                info_new.channel()
             );
             updated = true;
         }
 
-        *self.last_update_timestamp.lock().await = get_current_millis();
+        *self.last_update_timestamp.lock() = get_current_millis();
 
         updated
     }
 
-    pub async fn update_subscription(&self, sub_list: HashSet<SubscriptionData>) -> bool {
+    pub fn update_subscription(&self, sub_list: HashSet<SubscriptionData>) -> bool {
         let mut updated = false;
         let mut topic_set: HashSet<String> = HashSet::new();
 
-        let mut subscription_table = self.subscription_table.write().await;
+        let mut subscription_table = self.subscription_table.write();
         for sub in sub_list.iter() {
             if let Some(old) = subscription_table.get(sub.topic.as_str()) {
                 if sub.sub_version > old.sub_version {
-                    if *self.consume_type.read().await == ConsumeType::ConsumePassively {
+                    if *self.consume_type.read() == ConsumeType::ConsumePassively {
                         info!(
                             "Subscription changed, group: {} OLD: {:?} NEW: {:?}",
                             self.group_name, old, sub
@@ -233,36 +233,36 @@ impl ConsumerGroupInfo {
             }
         });
 
-        *self.last_update_timestamp.lock().await = self.get_last_update_timestamp().await;
+        *self.last_update_timestamp.lock() = self.get_last_update_timestamp();
 
         updated
     }
 
-    pub async fn get_subscribe_topics(&self) -> HashSet<String> {
-        let subscription_table = self.subscription_table.read().await;
+    pub fn get_subscribe_topics(&self) -> HashSet<String> {
+        let subscription_table = self.subscription_table.read();
         subscription_table.keys().cloned().collect()
     }
 
-    pub async fn find_subscription_data(&self, topic: &str) -> Option<SubscriptionData> {
-        let subscription_table = self.subscription_table.read().await;
+    pub fn find_subscription_data(&self, topic: &str) -> Option<SubscriptionData> {
+        let subscription_table = self.subscription_table.read();
         subscription_table.get(topic).cloned()
     }
 
-    pub async fn get_consume_type(&self) -> ConsumeType {
-        *self.consume_type.read().await
+    pub fn get_consume_type(&self) -> ConsumeType {
+        *self.consume_type.read()
     }
 
-    pub async fn set_consume_type(&self, consume_type: ConsumeType) {
-        let mut consume_type_lock = self.consume_type.write().await;
+    pub fn set_consume_type(&self, consume_type: ConsumeType) {
+        let mut consume_type_lock = self.consume_type.write();
         *consume_type_lock = consume_type;
     }
 
-    pub async fn get_message_model(&self) -> MessageModel {
-        *self.message_model.read().await
+    pub fn get_message_model(&self) -> MessageModel {
+        *self.message_model.read()
     }
 
-    pub async fn set_message_model(&self, message_model: MessageModel) {
-        let mut message_model_lock = self.message_model.write().await;
+    pub fn set_message_model(&self, message_model: MessageModel) {
+        let mut message_model_lock = self.message_model.write();
         *message_model_lock = message_model;
     }
 
@@ -270,21 +270,137 @@ impl ConsumerGroupInfo {
         &self.group_name
     }
 
-    pub async fn get_last_update_timestamp(&self) -> u64 {
-        *self.last_update_timestamp.lock().await
+    pub fn get_last_update_timestamp(&self) -> u64 {
+        *self.last_update_timestamp.lock()
     }
 
-    pub async fn set_last_update_timestamp(&self, timestamp: u64) {
-        let mut last_update_timestamp_lock = self.last_update_timestamp.lock().await;
+    pub fn set_last_update_timestamp(&self, timestamp: u64) {
+        let mut last_update_timestamp_lock = self.last_update_timestamp.lock();
         *last_update_timestamp_lock = timestamp;
     }
 
-    pub async fn get_consume_from_where(&self) -> ConsumeFromWhere {
-        *self.consume_from_where.read().await
+    pub fn get_consume_from_where(&self) -> ConsumeFromWhere {
+        *self.consume_from_where.read()
     }
 
-    pub async fn set_consume_from_where(&self, consume_from_where: ConsumeFromWhere) {
-        let mut consume_from_where_lock = self.consume_from_where.write().await;
+    pub fn set_consume_from_where(&self, consume_from_where: ConsumeFromWhere) {
+        let mut consume_from_where_lock = self.consume_from_where.write();
         *consume_from_where_lock = consume_from_where;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
+    use rocketmq_remoting::net::channel::Channel;
+    use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
+    use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
+    use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+    use rocketmq_remoting::protocol::LanguageCode;
+
+    use super::*;
+
+    #[test]
+    fn consumer_group_info_new() {
+        let group_name = "test_group".to_string();
+        let consume_type = ConsumeType::ConsumePassively;
+        let message_model = MessageModel::Clustering;
+        let consume_from_where = ConsumeFromWhere::ConsumeFromLastOffset;
+
+        let consumer_group_info = ConsumerGroupInfo::new(
+            group_name.clone(),
+            consume_type,
+            message_model,
+            consume_from_where,
+        );
+
+        assert_eq!(consumer_group_info.get_group_name(), &group_name);
+        assert_eq!(consumer_group_info.get_consume_type(), consume_type);
+        assert_eq!(consumer_group_info.get_message_model(), message_model);
+        assert_eq!(
+            consumer_group_info.get_consume_from_where(),
+            consume_from_where
+        );
+    }
+
+    #[test]
+    fn consumer_group_info_with_group_name() {
+        let group_name = "test_group".to_string();
+
+        let consumer_group_info = ConsumerGroupInfo::with_group_name(group_name.clone());
+
+        assert_eq!(consumer_group_info.get_group_name(), &group_name);
+        assert_eq!(
+            consumer_group_info.get_consume_type(),
+            ConsumeType::ConsumePassively
+        );
+        assert_eq!(
+            consumer_group_info.get_message_model(),
+            MessageModel::Clustering
+        );
+        assert_eq!(
+            consumer_group_info.get_consume_from_where(),
+            ConsumeFromWhere::ConsumeFromLastOffset
+        );
+    }
+
+    #[test]
+    fn consumer_group_info_update_channel() {
+        let group_name = "test_group".to_string();
+        let consume_type = ConsumeType::ConsumePassively;
+        let message_model = MessageModel::Clustering;
+        let consume_from_where = ConsumeFromWhere::ConsumeFromLastOffset;
+
+        let mut consumer_group_info = ConsumerGroupInfo::new(
+            group_name.clone(),
+            consume_type,
+            message_model,
+            consume_from_where,
+        );
+
+        let channel = Channel::new(
+            "127.0.0.1:8080".parse().unwrap(),
+            "192.168.0.1:8080".parse().unwrap(),
+        );
+        let client_channel_info = ClientChannelInfo::new(
+            channel.clone(),
+            "client_id".to_string(),
+            LanguageCode::RUST,
+            1,
+        );
+
+        assert!(consumer_group_info.update_channel(
+            client_channel_info,
+            consume_type,
+            message_model,
+            consume_from_where
+        ));
+    }
+
+    #[test]
+    fn consumer_group_info_update_subscription() {
+        let group_name = "test_group".to_string();
+        let consume_type = ConsumeType::ConsumePassively;
+        let message_model = MessageModel::Clustering;
+        let consume_from_where = ConsumeFromWhere::ConsumeFromLastOffset;
+
+        let mut consumer_group_info = ConsumerGroupInfo::new(
+            group_name.clone(),
+            consume_type,
+            message_model,
+            consume_from_where,
+        );
+
+        let mut sub_list = HashSet::new();
+        let subscription_data = SubscriptionData {
+            topic: "topic".to_string(),
+            sub_string: "sub_string".to_string(),
+            ..Default::default()
+        };
+        sub_list.insert(subscription_data);
+
+        assert!(consumer_group_info.update_subscription(sub_list));
     }
 }

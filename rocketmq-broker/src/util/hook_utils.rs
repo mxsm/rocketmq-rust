@@ -398,9 +398,11 @@ mod tests {
     use rocketmq_common::common::config::TopicConfig;
     use rocketmq_common::common::message::message_batch::MessageExtBatch;
     use rocketmq_common::common::message::message_single::MessageExt;
+    use rocketmq_store::base::get_message_result::GetMessageResult;
     use rocketmq_store::base::message_result::PutMessageResult;
     use rocketmq_store::base::message_status_enum::PutMessageStatus;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_store::filter::MessageFilter;
     use rocketmq_store::hook::put_message_hook::BoxedPutMessageHook;
     use rocketmq_store::log_file::MessageStore;
     use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
@@ -481,6 +483,36 @@ mod tests {
         }
 
         fn dispatch_behind_bytes(&self) {
+            todo!()
+        }
+
+        fn get_min_offset_in_queue(&self, topic: &str, queue_id: i32) -> i64 {
+            todo!()
+        }
+
+        fn get_max_offset_in_queue(&self, topic: &str, queue_id: i32) -> i64 {
+            todo!()
+        }
+
+        fn get_max_offset_in_queue_committed(
+            &self,
+            topic: &str,
+            queue_id: i32,
+            committed: bool,
+        ) -> i64 {
+            todo!()
+        }
+
+        async fn get_message(
+            &self,
+            group: &str,
+            topic: &str,
+            queue_id: i32,
+            offset: i64,
+            max_msg_nums: i32,
+            max_total_msg_size: i32,
+            message_filter: &dyn MessageFilter,
+        ) -> Option<GetMessageResult> {
             todo!()
         }
         // Implement required methods...

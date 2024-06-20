@@ -19,7 +19,7 @@
 
 pub mod base;
 pub mod config;
-mod consume_queue;
+pub mod consume_queue;
 pub mod filter;
 pub mod hook;
 mod index;

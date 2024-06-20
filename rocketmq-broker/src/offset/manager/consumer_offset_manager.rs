@@ -35,14 +35,6 @@ pub(crate) struct ConsumerOffsetManager {
 //Fully implemented will be removed
 #[allow(unused_variables)]
 impl ConfigManager for ConsumerOffsetManager {
-    fn decode0(&mut self, key: &[u8], body: &[u8]) {
-        todo!()
-    }
-
-    fn stop(&mut self) -> bool {
-        todo!()
-    }
-
     fn config_file_path(&self) -> String {
         get_consumer_offset_path(self.broker_config.store_path_root_dir.as_str())
     }
@@ -68,6 +60,18 @@ impl ConfigManager for ConsumerOffsetManager {
                 .clone_from(&wrapper.offset_table);
             self.consumer_offset_wrapper.lock().data_version = wrapper.data_version.clone();
         }
+    }
+}
+
+#[allow(unused_variables)]
+impl ConsumerOffsetManager {
+    pub fn query_then_erase_reset_offset(
+        &self,
+        topic: &str,
+        group: &str,
+        queue_id: i32,
+    ) -> Option<i64> {
+        None
     }
 }
 

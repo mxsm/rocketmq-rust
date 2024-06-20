@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 
 use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_remoting::net::channel::Channel;
 use tracing::info;
 
 use crate::client::client_channel_info::ClientChannelInfo;
@@ -25,8 +26,8 @@ use crate::client::client_channel_info::ClientChannelInfo;
 #[derive(Default)]
 pub struct ProducerManager {
     group_channel_table:
-        parking_lot::Mutex<HashMap<String /* group name */, HashMap<String, ClientChannelInfo>>>,
-    client_channel_table: parking_lot::Mutex<HashMap<String, String /* client ip:port */>>,
+        parking_lot::Mutex<HashMap<String /* group name */, HashMap<Channel, ClientChannelInfo>>>,
+    client_channel_table: parking_lot::Mutex<HashMap<String, Channel /* client ip:port */>>,
 }
 
 impl ProducerManager {
@@ -53,7 +54,7 @@ impl ProducerManager {
         let channel_table = mutex_guard.get_mut(group);
         if let Some(ct) = channel_table {
             if !ct.is_empty() {
-                let old = ct.remove(client_channel_info.socket_addr());
+                let old = ct.remove(client_channel_info.channel());
                 if old.is_some() {
                     info!(
                         "unregister a producer[{}] from groupChannelTable {:?}",
@@ -71,27 +72,27 @@ impl ProducerManager {
         }
     }
 
-    pub fn register_producer(&self, group: &String, client_channel_info: &ClientChannelInfo) {
+    pub fn register_producer(&self, group: &str, client_channel_info: &ClientChannelInfo) {
         let mut group_channel_table = self.group_channel_table.lock();
 
         let channel_table = group_channel_table.entry(group.to_owned()).or_default();
 
         if let Some(client_channel_info_found) =
-            channel_table.get_mut(client_channel_info.socket_addr())
+            channel_table.get_mut(client_channel_info.channel())
         {
-            client_channel_info_found.set_last_update_timestamp(get_current_millis() as i64);
+            client_channel_info_found.set_last_update_timestamp(get_current_millis());
             return;
         }
 
         channel_table.insert(
-            client_channel_info.socket_addr().clone(),
+            client_channel_info.channel().clone(),
             client_channel_info.clone(),
         );
 
         let mut client_channel_table = self.client_channel_table.lock();
         client_channel_table.insert(
             client_channel_info.client_id().clone(),
-            client_channel_info.socket_addr().clone(),
+            client_channel_info.channel().clone(),
         );
     }
 }

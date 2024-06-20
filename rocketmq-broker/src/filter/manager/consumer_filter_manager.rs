@@ -56,6 +56,7 @@ impl ConfigManager for ConsumerFilterManager {
     fn decode(&self, json_string: &str) {}
 }
 
+#[allow(unused_variables)]
 impl ConsumerFilterManager {
     pub fn build(
         topic: &str,
@@ -92,5 +93,13 @@ impl ConsumerFilterManager {
                 }
         */
         Some(consumer_filter_data)
+    }
+
+    pub fn get_consumer_filter_data(
+        &self,
+        topic: &str,
+        consumer_group: &str,
+    ) -> Option<ConsumerFilterData> {
+        None
     }
 }

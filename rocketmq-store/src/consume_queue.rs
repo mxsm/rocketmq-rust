@@ -15,5 +15,5 @@
  * limitations under the License.
  */
 
-pub(crate) mod consume_queue_ext;
-pub(crate) mod mapped_file_queue;
+pub mod consume_queue_ext;
+pub mod mapped_file_queue;
