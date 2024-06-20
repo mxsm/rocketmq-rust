@@ -57,7 +57,7 @@ pub struct ConnectionHandler<RP> {
 impl<RP> Drop for ConnectionHandler<RP> {
     fn drop(&mut self) {
         if let Some(ref sender) = self.conn_disconnect_notify {
-            let socket_addr = self.connection.remote_addr;
+            let socket_addr = self.connection.channel.remote_address();
             warn!(
                 "connection[{}] disconnected, Send notify message.",
                 socket_addr
@@ -69,7 +69,6 @@ impl<RP> Drop for ConnectionHandler<RP> {
 
 impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
     async fn handle(&mut self) -> anyhow::Result<()> {
-        let _remote_addr = self.connection.remote_addr;
         while !self.shutdown.is_shutdown {
             let frame = tokio::select! {
                 res = self.connection.framed.next() => res,
@@ -340,7 +339,7 @@ impl<'a> ConnectionHandlerContext<'a> {
     }
 
     pub fn remoting_address(&self) -> SocketAddr {
-        self.connection.remote_addr
+        self.connection.channel.remote_address()
     }
 }
 
