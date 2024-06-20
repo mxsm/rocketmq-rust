@@ -14,5 +14,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::any::Any;
+
+use crate::client::consumer_group_event::ConsumerGroupEvent;
+use crate::client::consumer_ids_change_listener::ConsumerIdsChangeListener;
+
 #[derive(Default)]
 pub struct DefaultConsumerIdsChangeListener {}
+
+impl ConsumerIdsChangeListener for DefaultConsumerIdsChangeListener {
+    fn handle(&self, _event: ConsumerGroupEvent, _group: String, _args: Vec<Box<dyn Any>>) {
+        todo!()
+    }
+
+    fn shutdown(&self) {
+        todo!()
+    }
+}

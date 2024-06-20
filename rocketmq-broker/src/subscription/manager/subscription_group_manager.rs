@@ -140,6 +140,32 @@ where
             .get(group)
             .cloned()
     }
+
+    pub fn get_forbidden(&self, group: &str, topic: &str, forbidden_index: i32) -> bool {
+        let topic_forbidden = self.get_forbidden_internal(group, topic);
+        let bit_forbidden = 1 << forbidden_index;
+        (topic_forbidden & bit_forbidden) == bit_forbidden
+    }
+    pub fn get_forbidden_internal(&self, group: &str, topic: &str) -> i32 {
+        match self
+            .subscription_group_wrapper
+            .lock()
+            .forbidden_table
+            .get(group)
+        {
+            Some(topic_forbiddens) => match topic_forbiddens.get(topic) {
+                Some(topic_forbidden) => {
+                    if *topic_forbidden < 0 {
+                        0
+                    } else {
+                        *topic_forbidden
+                    }
+                }
+                None => 0,
+            },
+            None => 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

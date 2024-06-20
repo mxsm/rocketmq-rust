@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use crate::consume_queue::consume_queue_ext::CqExtUnit;
 
 /// Represents a message filter.
-pub trait MessageFilter {
+pub trait MessageFilter: Send + Sync {
     /// Matches by tags code or filter bit map which is calculated when the message is received
     /// and stored in consume queue ext.
     fn is_matched_by_consume_queue(
@@ -35,7 +35,7 @@ pub trait MessageFilter {
     /// `properties`: Message properties, should be decoded from the buffer if `None`.
     fn is_matched_by_commit_log(
         &self,
-        msg_buffer: Option<&Vec<u8>>,
+        msg_buffer: Option<&[u8]>,
         properties: Option<&HashMap<String, String>>,
     ) -> bool;
 }

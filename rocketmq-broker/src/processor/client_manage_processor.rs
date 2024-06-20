@@ -77,7 +77,7 @@ impl ClientManageProcessor {
             .unwrap();
 
         let client_channel_info = ClientChannelInfo::new(
-            ctx.remoting_address().to_string(),
+            ctx.as_ref().connection().channel().clone(),
             request_header.client_id.clone(),
             request.language(),
             request.version(),
@@ -103,7 +103,7 @@ impl ClientManageProcessor {
         let heartbeat_data =
             HeartbeatData::decode(request.body().as_ref().map(|v| v.as_ref()).unwrap());
         let client_channel_info = ClientChannelInfo::new(
-            ctx.remoting_address().to_string(),
+            ctx.as_ref().connection().channel().clone(),
             heartbeat_data.client_id.clone(),
             request.language(),
             request.version(),

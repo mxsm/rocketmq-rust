@@ -19,7 +19,7 @@ use std::net::SocketAddr;
 
 use uuid::Uuid;
 
-#[derive(Clone, PartialEq, Hash)]
+#[derive(Debug, Clone, PartialEq, Hash, Eq)]
 pub struct Channel {
     local_address: SocketAddr,
     remote_address: SocketAddr,

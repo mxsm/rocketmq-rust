@@ -318,8 +318,12 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
         max_physic_offset
     }
 
-    fn get_max_offset(&self, topic: &str, queue_id: i32) -> i64 {
-        todo!()
+    fn get_max_offset(&self, topic: &str, queue_id: i32) -> Option<i64> {
+        Some(
+            self.inner
+                .queue_offset_operator
+                .current_queue_offset(format!("{}-{}", topic, queue_id).as_str()),
+        )
     }
 
     fn find_or_create_consume_queue(
@@ -389,6 +393,16 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     fn get_store_time(&self, cq_unit: CqUnit) -> i64 {
+        todo!()
+    }
+
+    fn get_min_offset_in_queue(&self, topic: &str, queue_id: i32) -> i64 {
+        self.find_or_create_consume_queue(topic, queue_id)
+            .lock()
+            .get_min_offset_in_queue()
+    }
+
+    fn get_max_offset_in_queue(&self, topic: &str, queue_id: i32) -> i64 {
         todo!()
     }
 }

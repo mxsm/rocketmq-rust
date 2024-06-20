@@ -48,6 +48,7 @@ use tracing::info;
 use tracing::warn;
 
 use crate::broker::broker_hook::BrokerShutdownHook;
+use crate::client::default_consumer_ids_change_listener::DefaultConsumerIdsChangeListener;
 use crate::client::manager::consumer_manager::ConsumerManager;
 use crate::client::manager::producer_manager::ProducerManager;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
@@ -88,6 +89,7 @@ pub(crate) struct BrokerRuntime {
 
     broker_runtime: Option<RocketMQRuntime>,
     producer_manager: Arc<ProducerManager>,
+    consumer_manager: Arc<ConsumerManager>,
     drop: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
     shutdown_hook: Option<BrokerShutdownHook>,
@@ -117,6 +119,7 @@ impl Clone for BrokerRuntime {
             broker_out_api: self.broker_out_api.clone(),
             broker_runtime: None,
             producer_manager: self.producer_manager.clone(),
+            consumer_manager: self.consumer_manager.clone(),
             drop: self.drop.clone(),
             shutdown: self.shutdown.clone(),
             shutdown_hook: self.shutdown_hook.clone(),
@@ -154,17 +157,20 @@ impl BrokerRuntime {
             TopicConfigManager::new(broker_config.clone(), broker_runtime_inner);
         let mut stats_manager = BrokerStatsManager::new(broker_config.clone());
         let producer_manager = Arc::new(ProducerManager::new());
+        let consumer_manager = Arc::new(ConsumerManager::new_with_broker_stats(
+            Arc::new(DefaultConsumerIdsChangeListener {}),
+            broker_config.clone(),
+        ));
         stats_manager.set_producer_state_getter(Arc::new(ProducerStateGetter {
             topic_config_manager: topic_config_manager.clone(),
             producer_manager: producer_manager.clone(),
         }));
         stats_manager.set_consumer_state_getter(Arc::new(ConsumerStateGetter {
             topic_config_manager: topic_config_manager.clone(),
-            consumer_manager: ConsumerManager {},
+            consumer_manager: consumer_manager.clone(),
         }));
-
         let broker_stats_manager = Arc::new(stats_manager);
-
+        consumer_manager.set_broker_stats_manager(Some(Arc::downgrade(&broker_stats_manager)));
         Self {
             broker_config: broker_config.clone(),
             message_store_config,
@@ -182,6 +188,7 @@ impl BrokerRuntime {
             broker_out_api: broker_outer_api,
             broker_runtime: Some(runtime),
             producer_manager,
+            consumer_manager,
             drop: Arc::new(AtomicBool::new(false)),
             shutdown: Arc::new(AtomicBool::new(false)),
             shutdown_hook: None,
@@ -907,7 +914,7 @@ impl StateGetter for ProducerStateGetter {
 
 struct ConsumerStateGetter {
     topic_config_manager: TopicConfigManager,
-    consumer_manager: ConsumerManager,
+    consumer_manager: Arc<ConsumerManager>,
 }
 impl StateGetter for ConsumerStateGetter {
     fn online(&self, instance_id: &str, group: &str, topic: &str) -> bool {

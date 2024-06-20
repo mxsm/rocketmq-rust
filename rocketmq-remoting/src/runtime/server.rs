@@ -341,6 +341,10 @@ impl<'a> ConnectionHandlerContext<'a> {
     pub fn remoting_address(&self) -> SocketAddr {
         self.connection.channel.remote_address()
     }
+
+    pub fn connection(&self) -> &'a Connection {
+        self.connection
+    }
 }
 
 impl<'a> AsRef<ConnectionHandlerContext<'a>> for ConnectionHandlerContext<'a> {

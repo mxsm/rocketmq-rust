@@ -144,6 +144,11 @@ pub struct BrokerConfig {
     pub fetch_name_srv_addr_by_dns_lookup: bool,
     pub lite_pull_message_enable: bool,
     pub auto_create_subscription_group: bool,
+    pub channel_expired_timeout: u64,
+    pub subscription_expired_timeout: u64,
+    pub enable_property_filter: bool,
+    pub filter_support_retry: bool,
+    pub use_server_side_reset_offset: bool,
 }
 
 impl Default for BrokerConfig {
@@ -199,6 +204,11 @@ impl Default for BrokerConfig {
             fetch_name_srv_addr_by_dns_lookup: false,
             lite_pull_message_enable: true,
             auto_create_subscription_group: true,
+            channel_expired_timeout: 1000 * 120,
+            subscription_expired_timeout: 1000 * 60 * 10,
+            enable_property_filter: false,
+            filter_support_retry: false,
+            use_server_side_reset_offset: true,
         }
     }
 }

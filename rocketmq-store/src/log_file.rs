@@ -21,7 +21,9 @@ use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
 use rocketmq_common::TimeUtils::get_current_millis;
 
+use crate::base::get_message_result::GetMessageResult;
 use crate::base::message_result::PutMessageResult;
+use crate::filter::MessageFilter;
 use crate::hook::put_message_hook::BoxedPutMessageHook;
 use crate::stats::broker_stats_manager::BrokerStatsManager;
 use crate::store::running_flags::RunningFlags;
@@ -79,4 +81,20 @@ pub trait RocketMQMessageStore: Clone + 'static {
     fn get_broker_stats_manager(&self) -> Option<Arc<BrokerStatsManager>>;
 
     fn dispatch_behind_bytes(&self);
+
+    fn get_min_offset_in_queue(&self, topic: &str, queue_id: i32) -> i64;
+    fn get_max_offset_in_queue(&self, topic: &str, queue_id: i32) -> i64;
+    fn get_max_offset_in_queue_committed(&self, topic: &str, queue_id: i32, committed: bool)
+        -> i64;
+
+    async fn get_message(
+        &self,
+        group: &str,
+        topic: &str,
+        queue_id: i32,
+        offset: i64,
+        max_msg_nums: i32,
+        max_total_msg_size: i32,
+        message_filter: &dyn MessageFilter,
+    ) -> Option<GetMessageResult>;
 }

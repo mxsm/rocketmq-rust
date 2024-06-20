@@ -59,3 +59,12 @@ impl Connection {
         }
     }
 }
+
+impl Connection {
+    pub fn framed(&self) -> &Framed<TcpStream, RemotingCommandCodec> {
+        &self.framed
+    }
+    pub fn channel(&self) -> &Channel {
+        &self.channel
+    }
+}

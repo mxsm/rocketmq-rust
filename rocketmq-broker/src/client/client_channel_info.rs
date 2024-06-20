@@ -16,35 +16,27 @@
  */
 
 use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::LanguageCode;
 
-#[derive(Default, Debug, Clone, Hash)]
+#[derive(Debug, Clone, Hash)]
 pub struct ClientChannelInfo {
-    socket_addr: String,
+    channel: Channel,
     client_id: String,
     language: LanguageCode,
     version: i32,
-    last_update_timestamp: i64,
+    last_update_timestamp: u64,
 }
 
 impl ClientChannelInfo {
-    pub fn new(
-        socket_addr: String,
-        client_id: String,
-        language: LanguageCode,
-        version: i32,
-    ) -> Self {
+    pub fn new(channel: Channel, client_id: String, language: LanguageCode, version: i32) -> Self {
         Self {
-            socket_addr,
+            channel,
             client_id,
             language,
             version,
-            last_update_timestamp: get_current_millis() as i64,
+            last_update_timestamp: get_current_millis(),
         }
-    }
-
-    pub fn socket_addr(&self) -> &String {
-        &self.socket_addr
     }
 
     pub fn client_id(&self) -> &String {
@@ -59,12 +51,8 @@ impl ClientChannelInfo {
         self.version
     }
 
-    pub fn last_update_timestamp(&self) -> i64 {
+    pub fn last_update_timestamp(&self) -> u64 {
         self.last_update_timestamp
-    }
-
-    pub fn set_socket_addr(&mut self, socket_addr: String) {
-        self.socket_addr = socket_addr;
     }
 
     pub fn set_client_id(&mut self, client_id: String) {
@@ -79,7 +67,14 @@ impl ClientChannelInfo {
         self.version = version;
     }
 
-    pub fn set_last_update_timestamp(&mut self, last_update_timestamp: i64) {
+    pub fn set_last_update_timestamp(&mut self, last_update_timestamp: u64) {
         self.last_update_timestamp = last_update_timestamp;
+    }
+
+    pub fn channel(&self) -> &Channel {
+        &self.channel
+    }
+    pub fn set_channel(&mut self, channel: Channel) {
+        self.channel = channel;
     }
 }

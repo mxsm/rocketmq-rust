@@ -16,9 +16,7 @@
  */
 
 use crate::base::message_status_enum::AppendMessageStatus;
-use crate::base::message_status_enum::GetMessageStatus;
 use crate::base::message_status_enum::PutMessageStatus;
-use crate::base::select_result::SelectMappedBufferResult;
 
 /// Represents the result of an append message operation.
 #[derive(Debug, Clone)]
@@ -123,35 +121,4 @@ impl PutMessageResult {
     pub fn set_remote_put(&mut self, remote_put: bool) {
         self.remote_put = remote_put;
     }
-}
-
-/// Represents the result of getting a message.
-pub struct GetMessageResult {
-    /// The list of mapped buffer results.
-    pub message_mapped_list: Vec<SelectMappedBufferResult>,
-    /// The list of message buffers.
-    pub message_buffer_list: Vec<Vec<u8>>, /* Using Vec<u8> as a simplified representation of
-                                            * ByteBuffer in Rust */
-    /// The list of message queue offsets.
-    pub message_queue_offset: Vec<i64>,
-    /// The status of getting the message.
-    pub status: GetMessageStatus,
-    /// The next begin offset.
-    pub next_begin_offset: i64,
-    /// The minimum offset.
-    pub min_offset: i64,
-    /// The maximum offset.
-    pub max_offset: i64,
-    /// The total size of buffers.
-    pub buffer_total_size: i32,
-    /// The count of messages.
-    pub message_count: i32,
-    /// Indicates whether pulling from a slave is suggested.
-    pub suggest_pulling_from_slave: bool,
-    /// The count of messages for commercial purposes.
-    pub msg_count4_commercial: i32,
-    /// The size per message for commercial purposes.
-    pub commercial_size_per_msg: i32,
-    /// The sum of cold data.
-    pub cold_data_sum: i64,
 }

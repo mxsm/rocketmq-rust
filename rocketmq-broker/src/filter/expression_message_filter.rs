@@ -14,11 +14,28 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::collections::HashMap;
 
-pub(crate) mod client_channel_info;
-pub(crate) mod consumer_group_event;
-pub(crate) mod consumer_group_info;
-pub(crate) mod consumer_ids_change_listener;
-pub(crate) mod default_consumer_ids_change_listener;
-pub(crate) mod manager;
-pub(crate) mod net;
+use rocketmq_store::consume_queue::consume_queue_ext::CqExtUnit;
+use rocketmq_store::filter::MessageFilter;
+
+pub struct ExpressionMessageFilter;
+
+#[allow(unused_variables)]
+impl MessageFilter for ExpressionMessageFilter {
+    fn is_matched_by_consume_queue(
+        &self,
+        tags_code: Option<i64>,
+        cq_ext_unit: Option<&CqExtUnit>,
+    ) -> bool {
+        todo!()
+    }
+
+    fn is_matched_by_commit_log(
+        &self,
+        msg_buffer: Option<&[u8]>,
+        properties: Option<&HashMap<String, String>>,
+    ) -> bool {
+        todo!()
+    }
+}

@@ -15,10 +15,12 @@
  * limitations under the License.
  */
 
-pub(crate) mod client_channel_info;
-pub(crate) mod consumer_group_event;
-pub(crate) mod consumer_group_info;
-pub(crate) mod consumer_ids_change_listener;
-pub(crate) mod default_consumer_ids_change_listener;
-pub(crate) mod manager;
-pub(crate) mod net;
+use std::any::Any;
+
+use crate::client::consumer_group_event::ConsumerGroupEvent;
+
+pub trait ConsumerIdsChangeListener {
+    fn handle(&self, event: ConsumerGroupEvent, group: String, args: Vec<Box<dyn Any>>);
+
+    fn shutdown(&self);
+}
