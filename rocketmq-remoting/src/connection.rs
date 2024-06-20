@@ -21,6 +21,7 @@ use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
 use crate::codec::remoting_command_codec::RemotingCommandCodec;
+use crate::net::channel::Channel;
 
 /// Send and receive `Frame` values from a remote peer.
 ///
@@ -37,7 +38,7 @@ use crate::codec::remoting_command_codec::RemotingCommandCodec;
 
 pub struct Connection {
     pub(crate) framed: Framed<TcpStream, RemotingCommandCodec>,
-    pub(crate) remote_addr: SocketAddr,
+    pub(crate) channel: Channel,
 }
 
 impl Connection {
@@ -51,9 +52,10 @@ impl Connection {
     ///
     /// A new `Connection` instance.
     pub fn new(tcp_stream: TcpStream, remote_addr: SocketAddr) -> Connection {
+        let channel = Channel::new(tcp_stream.local_addr().unwrap(), remote_addr);
         Self {
             framed: Framed::new(tcp_stream, RemotingCommandCodec::new()),
-            remote_addr,
+            channel,
         }
     }
 }
