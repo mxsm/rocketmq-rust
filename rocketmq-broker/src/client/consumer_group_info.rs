@@ -76,7 +76,7 @@ impl ConsumerGroupInfo {
     pub async fn find_channel_by_client_id(&self, client_id: &str) -> Option<ClientChannelInfo> {
         let channel_info_table = self.channel_info_table.read().await;
         for (_, client_channel_info) in channel_info_table.iter() {
-            if client_channel_info.get_client_id() == client_id {
+            if client_channel_info.client_id() == client_id {
                 return Some(client_channel_info.clone());
             }
         }
@@ -105,14 +105,14 @@ impl ConsumerGroupInfo {
         let channel_info_table = self.channel_info_table.read().await;
         channel_info_table
             .values()
-            .map(|info| info.get_client_id().clone())
+            .map(|info| info.client_id().clone())
             .collect()
     }
 
     pub async fn unregister_channel(&self, client_channel_info: &ClientChannelInfo) -> bool {
         let mut channel_info_table = self.channel_info_table.write().await;
         if channel_info_table
-            .remove(client_channel_info.get_channel())
+            .remove(client_channel_info.client_id())
             .is_some()
         {
             info!(
@@ -179,7 +179,7 @@ impl ConsumerGroupInfo {
             }
             info_old.set_last_update_timestamp(get_current_millis() as i64);
         } else {
-            channel_info_table.insert(info_new.socket_addr().clone(), info_new);
+            channel_info_table.insert(info_new.socket_addr().clone(), info_new.clone());
             info!(
                 "New consumer connected, group: {} channel: {}",
                 self.group_name,
@@ -249,7 +249,7 @@ impl ConsumerGroupInfo {
     }
 
     pub async fn get_consume_type(&self) -> ConsumeType {
-        self.consume_type.read().await.clone()
+        *self.consume_type.read().await
     }
 
     pub async fn set_consume_type(&self, consume_type: ConsumeType) {
@@ -258,7 +258,7 @@ impl ConsumerGroupInfo {
     }
 
     pub async fn get_message_model(&self) -> MessageModel {
-        self.message_model.read().await.clone()
+        *self.message_model.read().await
     }
 
     pub async fn set_message_model(&self, message_model: MessageModel) {
@@ -280,7 +280,7 @@ impl ConsumerGroupInfo {
     }
 
     pub async fn get_consume_from_where(&self) -> ConsumeFromWhere {
-        self.consume_from_where.read().await.clone()
+        *self.consume_from_where.read().await
     }
 
     pub async fn set_consume_from_where(&self, consume_from_where: ConsumeFromWhere) {
