@@ -178,7 +178,10 @@ impl BrokerRuntime {
             topic_config_manager,
             topic_queue_mapping_manager,
             consumer_offset_manager: Arc::new(Default::default()),
-            subscription_group_manager: Arc::new(SubscriptionGroupManager::new()),
+            subscription_group_manager: Arc::new(SubscriptionGroupManager::new(
+                broker_config.clone(),
+                None,
+            )),
             consumer_filter_manager: Arc::new(Default::default()),
             consumer_order_info_manager: Arc::new(Default::default()),
             message_store: None,

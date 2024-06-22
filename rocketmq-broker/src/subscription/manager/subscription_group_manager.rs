@@ -42,8 +42,17 @@ pub(crate) struct SubscriptionGroupManager<MS> {
 }
 
 impl<MS> SubscriptionGroupManager<MS> {
-    pub fn new() -> SubscriptionGroupManager<MS> {
-        unimplemented!()
+    pub fn new(
+        broker_config: Arc<BrokerConfig>,
+        message_store: Option<MS>,
+    ) -> SubscriptionGroupManager<MS> {
+        Self {
+            broker_config,
+            subscription_group_wrapper: Arc::new(parking_lot::Mutex::new(
+                SubscriptionGroupWrapper::default(),
+            )),
+            message_store,
+        }
     }
 }
 

@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 #![allow(dead_code)]
+#![feature(sync_unsafe_cell)]
 
 pub mod clients;
 pub mod code;

@@ -68,7 +68,7 @@ pub struct PullMessageProcessor<MS> {
 
 impl<MS> Default for PullMessageProcessor<MS> {
     fn default() -> Self {
-        todo!()
+        unimplemented!()
     }
 }
 

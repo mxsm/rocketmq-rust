@@ -161,22 +161,10 @@ impl Encoder<RemotingCommand> for RemotingCommandCodec {
     ///
     /// This function will return an error if the encoding process fails.
     fn encode(&mut self, item: RemotingCommand, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        let header = item.fast_header_encode();
-        let header_length = header.as_ref().map_or(0, |h| h.len()) as i32;
-        let body_length = item.get_body().map_or(0, |b| b.len()) as i32;
-        let total_length = 4 + header_length + body_length;
-
-        dst.reserve((total_length + 4) as usize);
-        dst.put_i32(total_length);
-        let serialize_type =
-            RemotingCommand::mark_serialize_type(header_length, item.get_serialize_type());
-        dst.put_i32(serialize_type);
-
-        if let Some(header_inner) = header {
-            dst.put(header_inner);
-        }
+        let mut item = item;
+        item.fast_header_encode(dst);
         if let Some(body_inner) = item.get_body() {
-            dst.put(body_inner);
+            dst.put(body_inner.as_ref());
         }
         Ok(())
     }
