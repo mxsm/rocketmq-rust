@@ -15,27 +15,4 @@
  * limitations under the License.
  */
 
-use std::sync::Arc;
-
-use crate::log_file::mapped_file::default_impl::DefaultMappedFile;
-
-/// Represents the result of selecting a mapped buffer.
-pub struct SelectMappedBufferResult {
-    /// The start offset.
-    pub start_offset: u64,
-    /// The size.
-    pub size: i32,
-    /// The mapped file.
-    pub mapped_file: Option<Arc<DefaultMappedFile>>,
-    /// Whether the buffer is in cache.
-    pub is_in_cache: bool,
-}
-
-impl SelectMappedBufferResult {
-    /// Returns the buffer.
-    pub fn get_buffer(&self) -> &[u8] {
-        self.mapped_file.as_ref().unwrap().get_mapped_file()
-            [self.start_offset as usize..(self.start_offset + self.size as u64) as usize]
-            .as_ref()
-    }
-}
+pub(crate) mod store_util;

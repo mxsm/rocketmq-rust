@@ -269,6 +269,10 @@ impl CommitLog {
        // self.local_file_message_store = Some(local_file_message_store);
     }*/
 
+    pub fn get_message(&self, offset: i64, size: i32) -> Option<SelectMappedBufferResult> {
+        None
+    }
+
     pub fn set_confirm_offset(&mut self, phy_offset: i64) {
         self.confirm_offset = phy_offset;
         self.store_checkpoint
@@ -867,7 +871,7 @@ impl CommitLog {
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
-                                files"
+                                 files"
             );
             self.mapped_file_queue.set_flushed_where(0);
             self.mapped_file_queue.set_committed_where(0);
@@ -1047,7 +1051,7 @@ impl CommitLog {
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
-                                files"
+                                 files"
             );
             self.mapped_file_queue.set_flushed_where(0);
             self.mapped_file_queue.set_committed_where(0);

@@ -14,28 +14,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use once_cell::sync::Lazy;
+use sysinfo::System;
 
-use std::sync::Arc;
+pub struct StoreUtil;
 
-use crate::log_file::mapped_file::default_impl::DefaultMappedFile;
+pub static TOTAL_PHYSICAL_MEMORY_SIZE: Lazy<u64> =
+    Lazy::new(StoreUtil::get_total_physical_memory_size);
 
-/// Represents the result of selecting a mapped buffer.
-pub struct SelectMappedBufferResult {
-    /// The start offset.
-    pub start_offset: u64,
-    /// The size.
-    pub size: i32,
-    /// The mapped file.
-    pub mapped_file: Option<Arc<DefaultMappedFile>>,
-    /// Whether the buffer is in cache.
-    pub is_in_cache: bool,
-}
-
-impl SelectMappedBufferResult {
-    /// Returns the buffer.
-    pub fn get_buffer(&self) -> &[u8] {
-        self.mapped_file.as_ref().unwrap().get_mapped_file()
-            [self.start_offset as usize..(self.start_offset + self.size as u64) as usize]
-            .as_ref()
+impl StoreUtil {
+    pub fn get_total_physical_memory_size() -> u64 {
+        let mut sys = System::new_all();
+        sys.refresh_all();
+        let physical_total = sys.total_memory();
+        physical_total * 1024 // Convert from kilobytes to bytes
     }
 }

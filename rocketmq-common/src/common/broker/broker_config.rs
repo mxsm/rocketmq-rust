@@ -149,6 +149,8 @@ pub struct BrokerConfig {
     pub enable_property_filter: bool,
     pub filter_support_retry: bool,
     pub use_server_side_reset_offset: bool,
+    pub slave_read_enable: bool,
+    pub commercial_base_count: i32,
 }
 
 impl Default for BrokerConfig {
@@ -209,6 +211,8 @@ impl Default for BrokerConfig {
             enable_property_filter: false,
             filter_support_retry: false,
             use_server_side_reset_offset: true,
+            slave_read_enable: false,
+            commercial_base_count: 1,
         }
     }
 }

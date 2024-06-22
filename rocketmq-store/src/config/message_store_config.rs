@@ -98,10 +98,10 @@ pub struct MessageStoreConfig {
     pub flush_commit_log_thorough_interval: i32,
     pub commit_commit_log_thorough_interval: u64,
     pub flush_consume_queue_thorough_interval: usize,
-    pub max_transfer_bytes_on_message_in_memory: usize,
-    pub max_transfer_count_on_message_in_memory: usize,
-    pub max_transfer_bytes_on_message_in_disk: usize,
-    pub max_transfer_count_on_message_in_disk: usize,
+    pub max_transfer_bytes_on_message_in_memory: u64,
+    pub max_transfer_count_on_message_in_memory: u64,
+    pub max_transfer_bytes_on_message_in_disk: u64,
+    pub max_transfer_count_on_message_in_disk: u64,
     pub access_message_in_memory_max_ratio: usize,
     pub message_index_enable: bool,
     pub max_hash_slot_num: u32,
@@ -203,6 +203,7 @@ pub struct MessageStoreConfig {
     pub real_time_persist_rocksdb_config: bool,
     pub enable_rocksdb_log: bool,
     pub topic_queue_lock_num: usize,
+    pub max_filter_message_size: i32,
 }
 
 impl Default for MessageStoreConfig {
@@ -281,10 +282,10 @@ impl Default for MessageStoreConfig {
             flush_commit_log_thorough_interval: 1000 * 10,
             commit_commit_log_thorough_interval: 200,
             flush_consume_queue_thorough_interval: 0,
-            max_transfer_bytes_on_message_in_memory: 0,
-            max_transfer_count_on_message_in_memory: 0,
-            max_transfer_bytes_on_message_in_disk: 0,
-            max_transfer_count_on_message_in_disk: 0,
+            max_transfer_bytes_on_message_in_memory: 1024 * 256,
+            max_transfer_count_on_message_in_memory: 32,
+            max_transfer_bytes_on_message_in_disk: 1024 * 64,
+            max_transfer_count_on_message_in_disk: 8,
             access_message_in_memory_max_ratio: 0,
             message_index_enable: true,
             max_hash_slot_num: 5000000,
@@ -337,7 +338,7 @@ impl Default for MessageStoreConfig {
             auto_message_version_on_topic_len: true,
             enabled_append_prop_crc: false,
             force_verify_prop_crc: false,
-            travel_cq_file_num_when_get_message: 0,
+            travel_cq_file_num_when_get_message: 1,
             correct_logic_min_offset_sleep_interval: 0,
             correct_logic_min_offset_force_interval: 0,
             mapped_file_swap_enable: false,
@@ -386,6 +387,7 @@ impl Default for MessageStoreConfig {
             real_time_persist_rocksdb_config: false,
             enable_rocksdb_log: false,
             topic_queue_lock_num: 0,
+            max_filter_message_size: 16000,
         }
     }
 }

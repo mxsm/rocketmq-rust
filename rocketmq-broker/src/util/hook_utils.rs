@@ -511,7 +511,7 @@ mod tests {
             offset: i64,
             max_msg_nums: i32,
             max_total_msg_size: i32,
-            message_filter: &dyn MessageFilter,
+            message_filter: Option<&dyn MessageFilter>,
         ) -> Option<GetMessageResult> {
             todo!()
         }

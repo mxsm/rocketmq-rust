@@ -44,6 +44,11 @@ impl From<i32> for RemotingSysResponseCode {
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum ResponseCode {
+    Success = 0,
+    SystemError = 1,
+    SystemBusy = 2,
+    RequestCodeNotSupported = 3,
+    TransactionFailed = 4,
     FlushDiskTimeout = 10,
     SlaveNotAvailable = 11,
     FlushSlaveTimeout = 12,

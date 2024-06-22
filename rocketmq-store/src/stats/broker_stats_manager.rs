@@ -464,6 +464,15 @@ impl BrokerStatsManager {
     pub fn get_broker_gets_num_without_system_topic(&self) -> u64 {
         0
     }
+
+    pub fn record_disk_fall_behind_size(
+        &self,
+        group: &str,
+        topic: &str,
+        queue_id: i32,
+        fall_behind: i64,
+    ) {
+    }
 }
 
 pub fn create_statistics_kind_meta(

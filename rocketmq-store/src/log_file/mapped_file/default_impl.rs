@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 
+use std::cell::SyncUnsafeCell;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -56,7 +57,7 @@ pub struct DefaultMappedFile {
     reference_resource: ReferenceResource,
     file: File,
     //  file_channel: FileChannel,
-    mmapped_file: parking_lot::Mutex<MmapMut>,
+    mmapped_file: SyncUnsafeCell<MmapMut>,
     transient_store_pool: Option<TransientStorePool>,
     file_name: String,
     file_from_offset: u64,
@@ -110,7 +111,7 @@ impl DefaultMappedFile {
                 first_shutdown_timestamp: AtomicI64::new(0),
             },
             file,
-            mmapped_file: parking_lot::Mutex::new(mmap),
+            mmapped_file: SyncUnsafeCell::new(mmap),
             file_name,
             file_from_offset,
             mapped_byte_buffer: None,
@@ -194,7 +195,7 @@ impl DefaultMappedFile {
             start_timestamp: 0,
             transient_store_pool: Some(transient_store_pool),
             stop_timestamp: 0,
-            mmapped_file: parking_lot::Mutex::new(mmap),
+            mmapped_file: SyncUnsafeCell::new(mmap),
         }
     }
 }
@@ -296,14 +297,14 @@ impl MappedFile for DefaultMappedFile {
             return None;
         }
         Some(Bytes::copy_from_slice(
-            &self.mmapped_file.lock()[pos..pos + size],
+            &self.get_mapped_file()[pos..pos + size],
         ))
     }
 
     fn append_message_offset_length(&self, data: &Bytes, offset: usize, length: usize) -> bool {
         let current_pos = self.wrote_position.load(Ordering::Relaxed) as usize;
         if current_pos + length <= self.file_size as usize {
-            match (&mut self.mmapped_file.lock()[current_pos..]).write_all(data.as_ref()) {
+            match (&mut self.get_mapped_file_mut()[current_pos..]).write_all(data.as_ref()) {
                 Ok(_) => {
                     self.wrote_position
                         .fetch_add(length as i32, Ordering::SeqCst);
@@ -328,8 +329,7 @@ impl MappedFile for DefaultMappedFile {
             if self.reference_resource.hold() {
                 let value = self.get_read_position();
                 if self.transient_store_pool.is_none() {
-                    self.mmapped_file
-                        .lock()
+                    self.get_mapped_file()
                         .flush()
                         .expect("Error occurred when force data to disk.");
                 } else {
@@ -416,7 +416,7 @@ impl MappedFile for DefaultMappedFile {
         let read_end_position = pos + size;
         if read_end_position <= read_position as usize {
             if self.hold() {
-                let buffer = BytesMut::from(&self.mmapped_file.lock()[pos..read_end_position]);
+                let buffer = BytesMut::from(&self.get_mapped_file()[pos..read_end_position]);
                 Some(buffer.freeze())
             } else {
                 debug!(
@@ -593,46 +593,15 @@ impl MappedFile for DefaultMappedFile {
 }
 
 #[allow(unused_variables)]
+#[allow(clippy::mut_from_ref)]
 impl DefaultMappedFile {
-    /*    fn append_message_inner(
-        &mut self,
-        message: &mut MessageExtBrokerInner,
-        append_message_callback: &mut dyn AppendMessageCallback,
-        put_message_context: &PutMessageContext,
-    ) -> AppendMessageResult {
-        //write pointer position
-        let current_write_pos = self
-            .wrote_position
-            .load(std::sync::atomic::Ordering::Relaxed);
-        if current_write_pos >= self.file_size as i32 {
-            error!(
-                "MappedFile.appendMessage return null, wrotePosition: {} fileSize: {}",
-                current_write_pos, self.file_size
-            );
-            return AppendMessageResult {
-                status: AppendMessageStatus::UnknownError,
-                ..AppendMessageResult::default()
-            };
-        }
-        //do append to the Mapped file(Default is local file)
-        /*        append_message_callback.do_append(
-            self.file_from_offset, // file start logic address offset
-            &mut ByteBuffer::new(&mut self.mmapped_file, current_write_pos as i64),
-            (self.file_size - current_write_pos as u64) as i32,
-            message,
-            put_message_context,
-        )*/
-        AppendMessageResult::default()
+    pub fn get_mapped_file_mut(&self) -> &mut MmapMut {
+        unsafe { &mut *self.mmapped_file.get() }
     }
 
-    fn append_messages_inner(
-        &mut self,
-        message: &MessageExtBatch,
-        message_callback: &dyn AppendMessageCallback,
-        put_message_context: &PutMessageContext,
-    ) -> AppendMessageResult {
-        unimplemented!()
-    }*/
+    pub fn get_mapped_file(&self) -> &MmapMut {
+        unsafe { &*self.mmapped_file.get() }
+    }
 
     fn is_able_to_flush(&self, flush_least_pages: i32) -> bool {
         if self.is_full() {

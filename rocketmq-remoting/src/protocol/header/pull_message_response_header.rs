@@ -28,7 +28,7 @@ use crate::protocol::FastCodesHeader;
 #[derive(Serialize, Deserialize, Debug, Default, RemotingSerializable, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
 pub struct PullMessageResponseHeader {
-    pub suggest_which_broker_id: Option<i64>,
+    pub suggest_which_broker_id: Option<u64>,
     pub next_begin_offset: Option<i64>,
     pub min_offset: Option<i64>,
     pub max_offset: Option<i64>,
