@@ -213,9 +213,36 @@ impl RemotingCommand {
         self
     }
 
+    pub fn set_command_custom_header_ref(
+        &mut self,
+        command_custom_header: impl CommandCustomHeader + Send + Sync + 'static,
+    ) {
+        self.command_custom_header = Some(Arc::new(command_custom_header));
+        if let Some(cch) = &self.command_custom_header {
+            let option = cch.to_map();
+
+            match &mut self.ext_fields {
+                None => {
+                    self.ext_fields = option;
+                }
+                Some(ext) => {
+                    if let Some(val) = option {
+                        for (key, value) in &val {
+                            ext.insert(key.clone(), value.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub fn set_code(mut self, code: impl Into<i32>) -> Self {
         self.code = code.into();
         self
+    }
+
+    pub fn set_code_ref(&mut self, code: impl Into<i32>) {
+        self.code = code.into();
     }
 
     pub fn set_language(mut self, language: LanguageCode) -> Self {
@@ -244,6 +271,10 @@ impl RemotingCommand {
     pub fn set_remark(mut self, remark: Option<String>) -> Self {
         self.remark = remark;
         self
+    }
+
+    pub fn set_remark_ref(&mut self, remark: Option<String>) {
+        self.remark = remark;
     }
 
     pub fn set_ext_fields(mut self, ext_fields: HashMap<String, String>) -> Self {
@@ -417,6 +448,10 @@ impl RemotingCommand {
     pub fn with_remark(&mut self, remark: Option<String>) -> &mut Self {
         self.remark = remark;
         self
+    }
+
+    pub fn get_ext_fields(&self) -> Option<&HashMap<String, String>> {
+        self.ext_fields.as_ref()
     }
 }
 

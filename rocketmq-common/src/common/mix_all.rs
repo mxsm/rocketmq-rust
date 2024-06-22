@@ -77,3 +77,76 @@ pub static MULTI_PATH_SPLITTER: Lazy<String> =
 pub fn is_sys_consumer_group(consumer_group: &str) -> bool {
     consumer_group.starts_with(CID_RMQ_SYS_PREFIX)
 }
+
+pub fn is_sys_consumer_group_for_no_cold_read_limit(consumer_group: &str) -> bool {
+    if consumer_group == DEFAULT_CONSUMER_GROUP
+        || consumer_group == TOOLS_CONSUMER_GROUP
+        || consumer_group == SCHEDULE_CONSUMER_GROUP
+        || consumer_group == FILTERSRV_CONSUMER_GROUP
+        || consumer_group == MONITOR_CONSUMER_GROUP
+        || consumer_group == SELF_TEST_CONSUMER_GROUP
+        || consumer_group == ONS_HTTP_PROXY_GROUP
+        || consumer_group == CID_ONSAPI_PERMISSION_GROUP
+        || consumer_group == CID_ONSAPI_OWNER_GROUP
+        || consumer_group == CID_ONSAPI_PULL_GROUP
+        || consumer_group == CID_SYS_RMQ_TRANS
+        || consumer_group.starts_with(CID_RMQ_SYS_PREFIX)
+    {
+        return true;
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn identifies_sys_consumer_group() {
+        assert!(is_sys_consumer_group("CID_RMQ_SYS_SOME_GROUP"));
+        assert!(!is_sys_consumer_group("NON_SYS_GROUP"));
+    }
+
+    #[test]
+    fn identifies_sys_consumer_group_for_no_cold_read_limit() {
+        assert!(is_sys_consumer_group_for_no_cold_read_limit(
+            "DEFAULT_CONSUMER"
+        ));
+        assert!(is_sys_consumer_group_for_no_cold_read_limit(
+            "TOOLS_CONSUMER"
+        ));
+        assert!(is_sys_consumer_group_for_no_cold_read_limit(
+            "SCHEDULE_CONSUMER"
+        ));
+        assert!(is_sys_consumer_group_for_no_cold_read_limit(
+            "FILTERSRV_CONSUMER"
+        ));
+        assert!(!is_sys_consumer_group_for_no_cold_read_limit(
+            "MONITOR_CONSUMER"
+        ));
+        assert!(!is_sys_consumer_group_for_no_cold_read_limit(
+            "SELF_TEST_CONSUMER"
+        ));
+        assert!(!is_sys_consumer_group_for_no_cold_read_limit(
+            "ONS_HTTP_PROXY_GROUP"
+        ));
+        assert!(is_sys_consumer_group_for_no_cold_read_limit(
+            "CID_ONSAPI_PERMISSION"
+        ));
+        assert!(is_sys_consumer_group_for_no_cold_read_limit(
+            "CID_ONSAPI_OWNER"
+        ));
+        assert!(is_sys_consumer_group_for_no_cold_read_limit(
+            "CID_ONSAPI_PULL"
+        ));
+        assert!(is_sys_consumer_group_for_no_cold_read_limit(
+            "CID_RMQ_SYS_TRANS"
+        ));
+        assert!(is_sys_consumer_group_for_no_cold_read_limit(
+            "CID_RMQ_SYS_SOME_GROUP"
+        ));
+        assert!(!is_sys_consumer_group_for_no_cold_read_limit(
+            "NON_SYS_GROUP"
+        ));
+    }
+}

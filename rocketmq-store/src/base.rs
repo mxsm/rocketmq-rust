@@ -30,6 +30,7 @@ pub mod put_message_context;
 pub mod select_result;
 pub mod store_checkpoint;
 pub mod store_enum;
+pub mod store_stats_service;
 pub mod swappable;
 pub mod transient_store_pool;
 

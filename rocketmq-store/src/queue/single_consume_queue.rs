@@ -774,4 +774,16 @@ impl ConsumeQueueTrait for ConsumeQueue {
     fn estimate_message_count(&self, from: i64, to: i64, filter: &dyn MessageFilter) -> i64 {
         todo!()
     }
+
+    fn iterate_from(&self, start_index: i64) -> Option<Box<dyn Iterator<Item = CqUnit>>> {
+        todo!()
+    }
+
+    fn iterate_from_inner(
+        &self,
+        start_index: i64,
+        count: i32,
+    ) -> Option<Box<dyn Iterator<Item = CqUnit>>> {
+        todo!()
+    }
 }

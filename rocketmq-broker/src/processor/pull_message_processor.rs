@@ -39,6 +39,7 @@ use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::filter::MessageFilter;
 use rocketmq_store::log_file::MessageStore;
+use rocketmq_store::log_file::MAX_PULL_MSG_SIZE;
 use tracing::error;
 use tracing::warn;
 
@@ -46,7 +47,6 @@ use crate::client::manager::consumer_manager::ConsumerManager;
 use crate::filter::expression_for_retry_message_filter::ExpressionForRetryMessageFilter;
 use crate::filter::expression_message_filter::ExpressionMessageFilter;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
-use crate::mqtrace::consume_message_hook::ConsumeMessageHook;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
 use crate::processor::pull_message_result_handler::PullMessageResultHandler;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
@@ -55,7 +55,6 @@ use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager
 
 #[derive(Clone)]
 pub struct PullMessageProcessor<MS> {
-    consume_message_hook_vec: Arc<Vec<Box<dyn ConsumeMessageHook>>>,
     pull_message_result_handler: Arc<dyn PullMessageResultHandler>,
     broker_config: Arc<BrokerConfig>,
     subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
@@ -94,7 +93,7 @@ where
         ctx: ConnectionHandlerContext<'_>,
         request: RemotingCommand,
         broker_allow_suspend: bool,
-        _broker_allow_flow_ctr_suspend: bool,
+        broker_allow_flow_ctr_suspend: bool,
     ) -> Option<RemotingCommand> {
         let begin_time_mills = get_current_millis();
         let mut response = RemotingCommand::create_response_command();
@@ -103,6 +102,7 @@ where
             .decode_command_custom_header_fast::<PullMessageRequestHeader>()
             .unwrap();
         let mut response_header = PullMessageResponseHeader::default();
+
         if !PermName::is_readable(self.broker_config.broker_permission) {
             response_header.forbidden_type = Some(ForbiddenType::BROKER_FORBIDDEN);
             return Some(
@@ -197,7 +197,7 @@ where
         if request_header.queue_id.is_none()
             || request_header.queue_id.unwrap() < 0
             || request_header.queue_id.unwrap()
-                > topic_config.as_ref().unwrap().read_queue_nums as i32
+                >= topic_config.as_ref().unwrap().read_queue_nums as i32
         {
             return Some(
                 response
@@ -453,7 +453,17 @@ where
                 get_message_result.set_next_begin_offset(broadcast_init_offset);
                 Some(get_message_result)
             } else {
-                None
+                self.message_store
+                    .get_message(
+                        group,
+                        topic,
+                        queue_id,
+                        request_header.queue_offset,
+                        request_header.max_msg_nums,
+                        MAX_PULL_MSG_SIZE,
+                        Some(message_filter.as_ref()),
+                    )
+                    .await
             }
         };
         if let Some(get_message_result) = get_message_result {

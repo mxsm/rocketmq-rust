@@ -32,6 +32,8 @@ pub mod commit_log;
 pub mod flush_manager_impl;
 pub mod mapped_file;
 
+pub const MAX_PULL_MSG_SIZE: i32 = 128 * 1024 * 1024;
+
 #[trait_variant::make(MessageStore: Send)]
 pub trait RocketMQMessageStore: Clone + 'static {
     /// Load previously stored messages.
@@ -95,6 +97,6 @@ pub trait RocketMQMessageStore: Clone + 'static {
         offset: i64,
         max_msg_nums: i32,
         max_total_msg_size: i32,
-        message_filter: &dyn MessageFilter,
+        message_filter: Option<&dyn MessageFilter>,
     ) -> Option<GetMessageResult>;
 }

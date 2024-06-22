@@ -504,6 +504,7 @@ impl ConsumeQueueStore {
     fn truncate_dirty_logic_files(&self, topic: &str, queue_id: i32, phy_offset: i64) {
         let file_queue_life_cycle = self.get_life_cycle(topic, queue_id);
         file_queue_life_cycle
+            .as_ref()
             .lock()
             .truncate_dirty_logic_files(phy_offset);
     }

@@ -65,6 +65,7 @@ pub(crate) mod admin_broker_processor;
 pub(crate) mod change_invisible_time_processor;
 pub(crate) mod client_manage_processor;
 pub(crate) mod consumer_manage_processor;
+mod default_pull_message_result_handler;
 pub(crate) mod end_transaction_processor;
 pub(crate) mod notification_processor;
 pub(crate) mod peek_message_processor;

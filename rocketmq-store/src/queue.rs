@@ -32,6 +32,7 @@ use crate::base::dispatch_request::DispatchRequest;
 use crate::base::swappable::Swappable;
 use crate::consume_queue::consume_queue_ext::CqExtUnit;
 use crate::filter::MessageFilter;
+use crate::queue::consume_queue_ext::ConsumeQueueExt;
 use crate::queue::queue_offset_operator::QueueOffsetOperator;
 
 /// FileQueueLifeCycle contains life cycle methods of ConsumerQueue that is directly implemented by
@@ -87,6 +88,19 @@ pub struct CqUnit {
     pub cq_ext_unit: Option<CqExtUnit>,
     pub native_buffer: Vec<u8>,
     pub compacted_offset: i32,
+}
+
+impl CqUnit {
+    pub fn get_valid_tags_code_as_long(&self) -> Option<i64> {
+        if !self.is_tags_code_valid() {
+            return None;
+        }
+        Some(self.tags_code)
+    }
+
+    pub fn is_tags_code_valid(&self) -> bool {
+        !ConsumeQueueExt::is_ext_addr(self.tags_code)
+    }
 }
 
 /// Trait representing ConsumeQueueStoreInterface.
@@ -359,4 +373,12 @@ pub trait ConsumeQueueTrait: Send + Sync + FileQueueLifeCycle {
 
     /// Estimate number of records matching given filter.
     fn estimate_message_count(&self, from: i64, to: i64, filter: &dyn MessageFilter) -> i64;
+
+    fn iterate_from(&self, start_index: i64) -> Option<Box<dyn Iterator<Item = CqUnit>>>;
+
+    fn iterate_from_inner(
+        &self,
+        start_index: i64,
+        count: i32,
+    ) -> Option<Box<dyn Iterator<Item = CqUnit>>>;
 }

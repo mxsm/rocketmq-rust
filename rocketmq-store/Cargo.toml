@@ -59,6 +59,8 @@ log = "0.4.20"
 
 memmap2 = "0.9.4"
 trait-variant.workspace = true
+sysinfo = "0.30.12"
+once_cell = { workspace = true }
 [dev-dependencies]
 tempfile = "3.10.0"
 mockall = { workspace = true }

@@ -34,15 +34,15 @@ pub struct ConsumeMessageContext {
     //mq_trace_context: Option<Box<dyn std::any::Any>>, // Replace with actual type
     pub topic_config: Arc<TopicConfig>,
 
-    pub account_auth_type: String,
-    pub account_owner_parent: String,
-    pub account_owner_self: String,
+    pub account_auth_type: Option<String>,
+    pub account_owner_parent: Option<String>,
+    pub account_owner_self: Option<String>,
     pub rcv_msg_num: i32,
     pub rcv_msg_size: i32,
     pub rcv_stat: StatsType,
     pub commercial_rcv_msg_num: i32,
 
-    pub commercial_owner: String,
+    pub commercial_owner: Option<String>,
     pub commercial_rcv_stats: StatsType,
     pub commercial_rcv_times: i32,
     pub commercial_rcv_size: i32,
