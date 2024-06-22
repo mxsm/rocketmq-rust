@@ -195,7 +195,7 @@ mod tests {
         let commercial_size_per_msg = 20;
         let cold_data_sum = 500;
 
-        result.set_message_buffer_list(buffer_list);
+        //result.set_message_buffer_list(buffer_list);
         result.set_message_queue_offset(queue_offset);
         result.set_status(status.clone());
         result.set_next_begin_offset(next_begin_offset);
