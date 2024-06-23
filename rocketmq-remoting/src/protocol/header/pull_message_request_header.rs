@@ -25,7 +25,6 @@ use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::FromMap;
 use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use crate::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
-use crate::protocol::FastCodesHeader;
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -123,105 +122,61 @@ impl CommandCustomHeader for PullMessageRequestHeader {
         }
         Some(map)
     }
-}
 
-impl FromMap for PullMessageRequestHeader {
-    type Target = Self;
-
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
-        Some(Self {
-            consumer_group: map.get(Self::CONSUMER_GROUP).cloned().unwrap_or_default(),
-            topic: map.get(Self::TOPIC).cloned().unwrap_or_default(),
-            queue_id: map
-                .get(Self::QUEUE_ID)
-                .and_then(|value| value.parse::<i32>().ok()),
-            queue_offset: map
-                .get(Self::QUEUE_OFFSET)
-                .map_or(0, |value| value.parse().unwrap_or_default()),
-            max_msg_nums: map
-                .get(Self::MAX_MSG_NUMS)
-                .map_or(0, |value| value.parse().unwrap_or_default()),
-            sys_flag: map
-                .get(Self::SYS_FLAG)
-                .map_or(0, |value| value.parse().unwrap_or_default()),
-            commit_offset: map
-                .get(Self::COMMIT_OFFSET)
-                .map_or(0, |value| value.parse().unwrap_or_default()),
-            suspend_timeout_millis: map
-                .get(Self::SUSPEND_TIMEOUT_MILLIS)
-                .map_or(0, |value| value.parse().unwrap_or_default()),
-            subscription: map.get(Self::SUBSCRIPTION).cloned(),
-            sub_version: map
-                .get(Self::SUB_VERSION)
-                .map_or(0, |value| value.parse().unwrap_or_default()),
-            expression_type: map.get(Self::EXPRESSION_TYPE).cloned(),
-            max_msg_bytes: map
-                .get(Self::MAX_MSG_BYTES)
-                .and_then(|value| value.parse::<i32>().ok()),
-            request_source: map
-                .get(Self::REQUEST_SOURCE)
-                .and_then(|value| value.parse::<i32>().ok()),
-            proxy_forward_client_id: map.get(Self::PROXY_FORWARD_CLIENT_ID).cloned(),
-            topic_request: <TopicRequestHeader as FromMap>::from(map),
-        })
-    }
-}
-
-impl FastCodesHeader for PullMessageRequestHeader {
     fn encode_fast(&mut self, out: &mut BytesMut) {
-        Self::write_if_not_null(out, "consumerGroup", self.consumer_group.as_str());
-        Self::write_if_not_null(out, "topic", self.topic.as_str());
+        self.write_if_not_null(out, "consumerGroup", self.consumer_group.as_str());
+        self.write_if_not_null(out, "topic", self.topic.as_str());
         if let Some(value) = self.queue_id {
-            Self::write_if_not_null(out, "queueId", value.to_string().as_str());
+            self.write_if_not_null(out, "queueId", value.to_string().as_str());
         }
 
-        Self::write_if_not_null(out, "queueOffset", self.queue_offset.to_string().as_str());
-        Self::write_if_not_null(out, "maxMsgNums", self.max_msg_nums.to_string().as_str());
-        Self::write_if_not_null(out, "sysFlag", self.sys_flag.to_string().as_str());
-        Self::write_if_not_null(out, "commitOffset", self.commit_offset.to_string().as_str());
-        Self::write_if_not_null(
+        self.write_if_not_null(out, "queueOffset", self.queue_offset.to_string().as_str());
+        self.write_if_not_null(out, "maxMsgNums", self.max_msg_nums.to_string().as_str());
+        self.write_if_not_null(out, "sysFlag", self.sys_flag.to_string().as_str());
+        self.write_if_not_null(out, "commitOffset", self.commit_offset.to_string().as_str());
+        self.write_if_not_null(
             out,
             "suspendTimeoutMillis",
             self.suspend_timeout_millis.to_string().as_str(),
         );
         if let Some(ref value) = self.subscription {
-            Self::write_if_not_null(out, "subscription", value.as_str());
+            self.write_if_not_null(out, "subscription", value.as_str());
         }
 
-        Self::write_if_not_null(out, "subVersion", self.sub_version.to_string().as_str());
+        self.write_if_not_null(out, "subVersion", self.sub_version.to_string().as_str());
         if let Some(ref value) = self.expression_type {
-            Self::write_if_not_null(out, "expressionType", value.as_str());
+            self.write_if_not_null(out, "expressionType", value.as_str());
         }
         if let Some(value) = self.max_msg_bytes {
-            Self::write_if_not_null(out, "maxMsgBytes", value.to_string().as_str());
+            self.write_if_not_null(out, "maxMsgBytes", value.to_string().as_str());
         }
 
         if let Some(value) = self.request_source {
-            Self::write_if_not_null(out, "requestSource", value.to_string().as_str());
+            self.write_if_not_null(out, "requestSource", value.to_string().as_str());
         }
         if let Some(ref value) = self.proxy_forward_client_id {
-            Self::write_if_not_null(out, "proxyFrowardClientId", value.as_str());
+            self.write_if_not_null(out, "proxyFrowardClientId", value.as_str());
         }
 
         // Assuming "lo", "ns", "nsd", "bname", "oway" are other fields in the struct
         if let Some(ref value) = self.topic_request {
             if let Some(lo) = value.lo {
-                Self::write_if_not_null(out, "lo", lo.to_string().as_str());
+                self.write_if_not_null(out, "lo", lo.to_string().as_str());
             }
         }
         if let Some(ref topic_request) = self.topic_request {
             if let Some(ref rpc) = topic_request.rpc {
                 if let Some(ref np) = rpc.namespace {
-                    Self::write_if_not_null(out, "ns", np.as_str());
+                    self.write_if_not_null(out, "ns", np.as_str());
                 }
                 if let Some(ref nsd) = rpc.namespaced {
-                    Self::write_if_not_null(out, "nsd", nsd.to_string().as_str());
+                    self.write_if_not_null(out, "nsd", nsd.to_string().as_str());
                 }
                 if let Some(ref bname) = rpc.broker_name {
-                    Self::write_if_not_null(out, "bname", bname.as_str());
+                    self.write_if_not_null(out, "bname", bname.as_str());
                 }
                 if let Some(ref oway) = rpc.namespace {
-                    Self::write_if_not_null(out, "oway", oway.as_str());
+                    self.write_if_not_null(out, "oway", oway.as_str());
                 }
             }
         }
@@ -327,6 +282,52 @@ impl FastCodesHeader for PullMessageRequestHeader {
                 .unwrap()
                 .oneway = Some(str.parse::<bool>().unwrap());
         }
+    }
+
+    fn support_fast_codec(&self) -> bool {
+        true
+    }
+}
+
+impl FromMap for PullMessageRequestHeader {
+    type Target = Self;
+
+    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+        Some(Self {
+            consumer_group: map.get(Self::CONSUMER_GROUP).cloned().unwrap_or_default(),
+            topic: map.get(Self::TOPIC).cloned().unwrap_or_default(),
+            queue_id: map
+                .get(Self::QUEUE_ID)
+                .and_then(|value| value.parse::<i32>().ok()),
+            queue_offset: map
+                .get(Self::QUEUE_OFFSET)
+                .map_or(0, |value| value.parse().unwrap_or_default()),
+            max_msg_nums: map
+                .get(Self::MAX_MSG_NUMS)
+                .map_or(0, |value| value.parse().unwrap_or_default()),
+            sys_flag: map
+                .get(Self::SYS_FLAG)
+                .map_or(0, |value| value.parse().unwrap_or_default()),
+            commit_offset: map
+                .get(Self::COMMIT_OFFSET)
+                .map_or(0, |value| value.parse().unwrap_or_default()),
+            suspend_timeout_millis: map
+                .get(Self::SUSPEND_TIMEOUT_MILLIS)
+                .map_or(0, |value| value.parse().unwrap_or_default()),
+            subscription: map.get(Self::SUBSCRIPTION).cloned(),
+            sub_version: map
+                .get(Self::SUB_VERSION)
+                .map_or(0, |value| value.parse().unwrap_or_default()),
+            expression_type: map.get(Self::EXPRESSION_TYPE).cloned(),
+            max_msg_bytes: map
+                .get(Self::MAX_MSG_BYTES)
+                .and_then(|value| value.parse::<i32>().ok()),
+            request_source: map
+                .get(Self::REQUEST_SOURCE)
+                .and_then(|value| value.parse::<i32>().ok()),
+            proxy_forward_client_id: map.get(Self::PROXY_FORWARD_CLIENT_ID).cloned(),
+            topic_request: <TopicRequestHeader as FromMap>::from(map),
+        })
     }
 }
 

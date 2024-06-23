@@ -48,6 +48,14 @@ impl From<io::Error> for RemotingCommandEncoderError {
     }
 }
 
+#[derive(Debug, Error)]
+pub enum RemotingCommandError {
+    #[error("RocketMQ protocol decoding failed, extFields length: {0}, but header length: {1}")]
+    DecodingError(usize, usize),
+    #[error("UTF-8 decoding error")]
+    Utf8Error(#[from] std::str::Utf8Error),
+}
+
 #[cfg(test)]
 mod tests {
     use std::io;

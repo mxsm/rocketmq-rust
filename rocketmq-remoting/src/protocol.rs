@@ -31,7 +31,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde::Serializer;
 
-use crate::RocketMQSerializable;
+use crate::rocketmq_serializable::RocketMQSerializable;
 
 pub mod body;
 pub mod command_custom_header;
