@@ -25,7 +25,7 @@ pub mod error;
 pub mod net;
 pub mod protocol;
 
-pub use crate::protocol::rocketmq_serializable as RocketMQSerializable;
+pub use crate::protocol::rocketmq_serializable;
 
 pub mod remoting;
 pub mod rpc;

@@ -31,13 +31,13 @@ use serde::Deserialize;
 use serde::Serialize;
 use tracing::error;
 
-use super::FastCodesHeader;
 use super::RemotingCommandType;
 use super::SerializeType;
 use crate::code::response_code::RemotingSysResponseCode;
 use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::FromMap;
 use crate::protocol::LanguageCode;
+use crate::rocketmq_serializable::RocketMQSerializable;
 
 lazy_static! {
     static ref OPAQUE_COUNTER: Arc<AtomicI32> = Arc::new(AtomicI32::new(0));
@@ -59,10 +59,10 @@ fn set_cmd_version(cmd: &mut RemotingCommand) {
     let config_version = *CONFIG_VERSION.read().unwrap();
 
     if config_version >= 0 {
-        cmd.set_version(config_version);
+        cmd.set_version_ref(config_version);
     } else if let Ok(v) = std::env::var("rocketmq.remoting.version") {
         if let Ok(value) = v.parse::<i32>() {
-            cmd.set_version(value);
+            cmd.set_version_ref(value);
             *CONFIG_VERSION.write().unwrap() = value;
         }
     }
@@ -254,8 +254,13 @@ impl RemotingCommand {
         self
     }
 
-    pub fn set_version(&mut self, version: i32) {
+    pub fn set_version_ref(&mut self, version: i32) {
         self.version = version;
+    }
+
+    pub fn set_version(mut self, version: i32) -> Self {
+        self.version = version;
+        self
     }
 
     pub fn set_opaque(mut self, opaque: i32) -> Self {
@@ -387,7 +392,23 @@ impl RemotingCommand {
                     dst.put(header_inner.as_slice());
                 }
             }
-            SerializeType::ROCKETMQ => {}
+            SerializeType::ROCKETMQ => {
+                let begin_index = dst.len();
+                dst.put_i64(0);
+                if let Some(header) = self.command_custom_header_ref() {
+                    if !header.support_fast_codec() {
+                        self.make_custom_header_to_net();
+                    }
+                }
+                let header_size = RocketMQSerializable::rocketmq_protocol_encode(self, dst);
+                let body_length = self.body.as_ref().map_or(0, |b| b.len()) as i32;
+                let serialize_type =
+                    RemotingCommand::mark_serialize_type(header_size as i32, SerializeType::JSON);
+                dst[begin_index..begin_index + 4]
+                    .copy_from_slice(&(header_size as i32 + body_length).to_be_bytes());
+                dst[begin_index + 4..begin_index + 8]
+                    .copy_from_slice(&serialize_type.to_be_bytes());
+            }
         }
 
         /*let header_length = header.as_ref().map_or(0, |h| h.len()) as i32;
@@ -471,14 +492,19 @@ impl RemotingCommand {
 
     pub fn decode_command_custom_header_fast<T>(&self) -> Option<T>
     where
-        T: FromMap<Target = T> + Default + FastCodesHeader,
+        T: FromMap<Target = T>,
+        T: Default + CommandCustomHeader,
     {
         match self.ext_fields {
             None => None,
             Some(ref header) => {
                 let mut target = T::default();
-                target.decode_fast(header);
-                Some(target)
+                if target.support_fast_codec() {
+                    target.decode_fast(header);
+                    Some(target)
+                } else {
+                    T::from(header)
+                }
             }
         }
     }
@@ -550,6 +576,27 @@ impl RemotingCommand {
             Some(value) => {
                 let value = value.get();
                 let value = value as *const dyn CommandCustomHeader as *mut T;
+                unsafe { Some(&mut *value) }
+            }
+        }
+    }
+    pub fn command_custom_header_ref(&self) -> Option<&dyn CommandCustomHeader> {
+        match self.command_custom_header.as_ref() {
+            None => None,
+            Some(value) => {
+                let value = value.get();
+                let value = value as *const dyn CommandCustomHeader;
+                unsafe { Some(&*value) }
+            }
+        }
+    }
+
+    pub fn command_custom_header_mut(&mut self) -> Option<&mut dyn CommandCustomHeader> {
+        match self.command_custom_header.as_ref() {
+            None => None,
+            Some(value) => {
+                let value = value.get();
+                let value = value as *mut dyn CommandCustomHeader;
                 unsafe { Some(&mut *value) }
             }
         }
