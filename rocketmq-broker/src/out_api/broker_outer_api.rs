@@ -23,7 +23,7 @@ use rocketmq_common::utils::crc32_utils;
 use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
 use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::RemotingSysResponseCode;
+use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::body::broker_body::register_broker_body::RegisterBrokerBody;
 use rocketmq_remoting::protocol::body::kv_table::KVTable;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
@@ -199,7 +199,7 @@ impl BrokerOuterAPI {
             .await
         {
             Ok(response) => match From::from(response.code()) {
-                RemotingSysResponseCode::Success => {
+                ResponseCode::Success => {
                     let register_broker_result =
                         response.decode_command_custom_header::<RegisterBrokerResponseHeader>();
                     let mut result = RegisterBrokerResult::default();
