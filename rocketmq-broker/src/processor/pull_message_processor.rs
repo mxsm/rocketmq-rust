@@ -66,9 +66,29 @@ pub struct PullMessageProcessor<MS> {
     message_store: MS,
 }
 
-impl<MS> Default for PullMessageProcessor<MS> {
-    fn default() -> Self {
-        unimplemented!()
+impl<MS> PullMessageProcessor<MS> {
+    pub fn new(
+        pull_message_result_handler: Arc<dyn PullMessageResultHandler>,
+        broker_config: Arc<BrokerConfig>,
+        subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
+        topic_config_manager: Arc<TopicConfigManager>,
+        topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
+        consumer_manager: Arc<ConsumerManager>,
+        consumer_filter_manager: Arc<ConsumerFilterManager>,
+        consumer_offset_manager: Arc<ConsumerOffsetManager>,
+        message_store: MS,
+    ) -> Self {
+        Self {
+            pull_message_result_handler,
+            broker_config,
+            subscription_group_manager,
+            topic_config_manager,
+            topic_queue_mapping_manager,
+            consumer_manager,
+            consumer_filter_manager,
+            consumer_offset_manager,
+            message_store,
+        }
     }
 }
 

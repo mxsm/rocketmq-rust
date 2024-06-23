@@ -47,6 +47,20 @@ pub struct DefaultPullMessageResultHandler {
     consume_message_hook_list: Arc<Vec<Box<dyn ConsumeMessageHook>>>,
 }
 
+impl DefaultPullMessageResultHandler {
+    pub fn new(
+        topic_config_manager: Arc<TopicConfigManager>,
+        broker_config: Arc<BrokerConfig>,
+        consume_message_hook_list: Arc<Vec<Box<dyn ConsumeMessageHook>>>,
+    ) -> Self {
+        Self {
+            topic_config_manager,
+            broker_config,
+            consume_message_hook_list,
+        }
+    }
+}
+
 #[allow(unused_variables)]
 impl PullMessageResultHandler for DefaultPullMessageResultHandler {
     fn handle(
