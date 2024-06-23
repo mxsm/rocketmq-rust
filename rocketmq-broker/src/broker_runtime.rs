@@ -58,6 +58,8 @@ use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
 use crate::offset::manager::consumer_order_info_manager::ConsumerOrderInfoManager;
 use crate::out_api::broker_outer_api::BrokerOuterAPI;
 use crate::processor::client_manage_processor::ClientManageProcessor;
+use crate::processor::default_pull_message_result_handler::DefaultPullMessageResultHandler;
+use crate::processor::pull_message_processor::PullMessageProcessor;
 use crate::processor::send_message_processor::SendMessageProcessor;
 use crate::processor::BrokerRequestProcessor;
 use crate::schedule::schedule_message_service::ScheduleMessageService;
@@ -353,9 +355,25 @@ impl BrokerRuntime {
             self.broker_config.clone(),
             self.message_store.as_ref().unwrap(),
         );
+        let pull_message_result_handler = DefaultPullMessageResultHandler::new(
+            Arc::new(self.topic_config_manager.clone()),
+            self.broker_config.clone(),
+            Arc::new(Default::default()),
+        );
+        let pull_message_processor = PullMessageProcessor::new(
+            Arc::new(pull_message_result_handler),
+            self.broker_config.clone(),
+            self.subscription_group_manager.clone(),
+            Arc::new(self.topic_config_manager.clone()),
+            self.topic_queue_mapping_manager.clone(),
+            self.consumer_manager.clone(),
+            self.consumer_filter_manager.clone(),
+            self.consumer_offset_manager.clone(),
+            self.message_store.as_ref().unwrap().clone(),
+        );
         BrokerRequestProcessor {
             send_message_processor,
-            pull_message_processor: Default::default(),
+            pull_message_processor,
             peek_message_processor: Default::default(),
             pop_message_processor: Default::default(),
             ack_message_processor: Default::default(),
