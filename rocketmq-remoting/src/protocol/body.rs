@@ -15,9 +15,8 @@
  * limitations under the License.
  */
 
- pub mod broker_body;
- pub mod get_consumer_listby_group_response_body;
- pub mod kv_table;
- pub mod topic;
- pub mod topic_info_wrapper;
- 
+pub mod broker_body;
+pub mod get_consumer_listby_group_response_body;
+pub mod kv_table;
+pub mod topic;
+pub mod topic_info_wrapper;
