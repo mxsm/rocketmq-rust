@@ -14,9 +14,26 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::collections::HashMap;
 
-pub mod broker_body;
-pub mod get_consumer_listby_group_response_body;
-pub mod kv_table;
-pub mod topic;
-pub mod topic_info_wrapper;
+use serde::Deserialize;
+use serde::Serialize;
+
+use crate::protocol::command_custom_header::CommandCustomHeader;
+use crate::protocol::command_custom_header::FromMap;
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct GetConsumerListByGroupResponseHeader;
+
+impl CommandCustomHeader for GetConsumerListByGroupResponseHeader {
+    fn to_map(&self) -> Option<HashMap<String, String>> {
+        None
+    }
+}
+impl FromMap for GetConsumerListByGroupResponseHeader {
+    type Target = GetConsumerListByGroupResponseHeader;
+
+    fn from(_map: &HashMap<String, String>) -> Option<Self::Target> {
+        Some(Self {})
+    }
+}

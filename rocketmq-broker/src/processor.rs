@@ -149,7 +149,13 @@ impl<MS: MessageStore + Send + Sync + 'static> RequestProcessor for BrokerReques
                     .process_request(ctx, request_code, request)
                     .await
             }
-
+            RequestCode::GetConsumerListByGroup
+            | RequestCode::UpdateConsumerOffset
+            | RequestCode::QueryConsumerOffset => {
+                self.consumer_manage_processor
+                    .process_request(ctx, request_code, request)
+                    .await
+            }
             _ => self.admin_broker_processor.process_request(ctx, request),
         }
     }

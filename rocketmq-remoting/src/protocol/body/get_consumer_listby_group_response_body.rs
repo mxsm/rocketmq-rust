@@ -14,9 +14,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use serde::Deserialize;
+use serde::Serialize;
 
-pub mod broker_body;
-pub mod get_consumer_listby_group_response_body;
-pub mod kv_table;
-pub mod topic;
-pub mod topic_info_wrapper;
+use crate::protocol::RemotingSerializable;
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GetConsumerListByGroupResponseBody {
+    pub consumer_id_list: Vec<String>,
+}
+
+impl RemotingSerializable for GetConsumerListByGroupResponseBody {
+    type Output = ();
+}

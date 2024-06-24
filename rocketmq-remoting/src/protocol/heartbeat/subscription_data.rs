@@ -34,6 +34,7 @@ pub struct SubscriptionData {
     pub expression_type: String,
     // In Rust, attributes like `@JSONField(serialize = false)` are typically handled through
     // documentation or external crates.
+    #[serde(skip)]
     pub filter_class_source: String, // This field is not used in this example.
 }
 
