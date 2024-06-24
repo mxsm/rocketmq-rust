@@ -122,10 +122,12 @@ impl RocketmqDefaultClient {
 impl RemotingService for RocketmqDefaultClient {
     async fn start(&self) {
         let client = self.clone();
+        //invoke scan available name sever now
+        client.scan_available_name_srv();
         let handle = task::spawn(async move {
             loop {
-                client.scan_available_name_srv();
                 time::sleep(Duration::from_millis(1)).await;
+                client.scan_available_name_srv();
             }
         });
     }
