@@ -18,10 +18,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::mix_all::IS_SUB_CHANGE;
 use rocketmq_common::common::mix_all::IS_SUPPORT_HEART_BEAT_V2;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
+use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingSerializable;
@@ -32,16 +34,19 @@ use crate::client::manager::producer_manager::ProducerManager;
 
 #[derive(Default, Clone)]
 pub struct ClientManageProcessor {
-    consumer_group_heartbeat_table:
-        HashMap<String /* ConsumerGroup */, i32 /* HeartbeatFingerprint */>,
+    consumer_group_heartbeat_table: Arc<
+        parking_lot::RwLock<HashMap<String /* ConsumerGroup */, i32 /* HeartbeatFingerprint */>>,
+    >,
     producer_manager: Arc<ProducerManager>,
+    broker_config: Arc<BrokerConfig>,
 }
 
 impl ClientManageProcessor {
-    pub fn new(producer_manager: Arc<ProducerManager>) -> Self {
+    pub fn new(broker_config: Arc<BrokerConfig>, producer_manager: Arc<ProducerManager>) -> Self {
         Self {
-            consumer_group_heartbeat_table: HashMap::new(),
+            consumer_group_heartbeat_table: Arc::new(parking_lot::RwLock::new(HashMap::new())),
             producer_manager,
+            broker_config,
         }
     }
 }
@@ -113,7 +118,17 @@ impl ClientManageProcessor {
         }
 
         //do consumer data handle
-
+        for consumer_data in heartbeat_data.consumer_data_set.iter() {
+            if self.broker_config.reject_pull_consumer_enable
+                && ConsumeType::ConsumeActively == consumer_data.consume_type
+            {
+                continue;
+            }
+            self.consumer_group_heartbeat_table.write().insert(
+                consumer_data.group_name.clone(),
+                heartbeat_data.heartbeat_fingerprint,
+            );
+        }
         //do producer data handle
         for producer_data in heartbeat_data.producer_data_set.iter() {
             self.producer_manager

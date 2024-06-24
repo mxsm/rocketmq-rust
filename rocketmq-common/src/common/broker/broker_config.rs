@@ -151,6 +151,7 @@ pub struct BrokerConfig {
     pub use_server_side_reset_offset: bool,
     pub slave_read_enable: bool,
     pub commercial_base_count: i32,
+    pub reject_pull_consumer_enable: bool,
 }
 
 impl Default for BrokerConfig {
@@ -213,6 +214,7 @@ impl Default for BrokerConfig {
             use_server_side_reset_offset: true,
             slave_read_enable: false,
             commercial_base_count: 1,
+            reject_pull_consumer_enable: false,
         }
     }
 }
