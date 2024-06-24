@@ -58,6 +58,7 @@ use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
 use crate::offset::manager::consumer_order_info_manager::ConsumerOrderInfoManager;
 use crate::out_api::broker_outer_api::BrokerOuterAPI;
 use crate::processor::client_manage_processor::ClientManageProcessor;
+use crate::processor::consumer_manage_processor::ConsumerManageProcessor;
 use crate::processor::default_pull_message_result_handler::DefaultPullMessageResultHandler;
 use crate::processor::pull_message_processor::PullMessageProcessor;
 use crate::processor::send_message_processor::SendMessageProcessor;
@@ -371,6 +372,8 @@ impl BrokerRuntime {
             self.consumer_offset_manager.clone(),
             self.message_store.as_ref().unwrap().clone(),
         );
+
+        let consumer_manage_processor = ConsumerManageProcessor::new(self.consumer_manager.clone());
         BrokerRequestProcessor {
             send_message_processor,
             pull_message_processor,
@@ -383,7 +386,7 @@ impl BrokerRuntime {
             reply_message_processor: Default::default(),
             admin_broker_processor: Default::default(),
             client_manage_processor: ClientManageProcessor::new(self.producer_manager.clone()),
-            consumer_manage_processor: Default::default(),
+            consumer_manage_processor,
             query_assignment_processor: Default::default(),
             query_message_processor: Default::default(),
             end_transaction_processor: Default::default(),
