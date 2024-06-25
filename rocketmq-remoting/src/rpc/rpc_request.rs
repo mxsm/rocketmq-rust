@@ -14,6 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-mod rpc_request;
-pub mod rpc_request_header;
-mod topic_request_header;
+use bytes::Bytes;
+
+use crate::rpc::rpc_request_header::RpcRequestHeader;
+
+pub struct RpcRequest {
+    pub code: i32,
+    pub header: RpcRequestHeader,
+    pub body: Option<Bytes>,
+}

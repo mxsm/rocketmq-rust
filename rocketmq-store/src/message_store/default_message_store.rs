@@ -918,6 +918,16 @@ impl MessageStore for DefaultMessageStore {
         result.set_min_offset(min_offset);
         get_result
     }
+
+    fn check_in_mem_by_consume_offset(
+        &self,
+        topic: &str,
+        queue_id: i32,
+        consume_offset: i64,
+        batch_size: i32,
+    ) -> bool {
+        todo!()
+    }
 }
 
 #[derive(Clone)]

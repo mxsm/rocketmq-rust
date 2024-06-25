@@ -22,4 +22,6 @@ pub mod message_operation_header;
 pub mod namesrv;
 pub mod pull_message_request_header;
 pub mod pull_message_response_header;
+pub mod query_consumer_offset_request_header;
+pub mod query_consumer_offset_response_header;
 pub mod unregister_client_request_header;

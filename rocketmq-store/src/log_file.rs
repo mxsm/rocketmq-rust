@@ -99,4 +99,12 @@ pub trait RocketMQMessageStore: Clone + 'static {
         max_total_msg_size: i32,
         message_filter: Option<&dyn MessageFilter>,
     ) -> Option<GetMessageResult>;
+
+    fn check_in_mem_by_consume_offset(
+        &self,
+        topic: &str,
+        queue_id: i32,
+        consume_offset: i64,
+        batch_size: i32,
+    ) -> bool;
 }
