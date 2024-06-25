@@ -19,8 +19,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_common::common::constant::PermName;
+use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::IS_SUB_CHANGE;
 use rocketmq_common::common::mix_all::IS_SUPPORT_HEART_BEAT_V2;
+use rocketmq_common::common::sys_flag::topic_sys_flag;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
@@ -28,32 +31,55 @@ use rocketmq_remoting::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
+use rocketmq_store::log_file::MessageStore;
+use tracing::info;
 
 use crate::client::client_channel_info::ClientChannelInfo;
+use crate::client::manager::consumer_manager::ConsumerManager;
 use crate::client::manager::producer_manager::ProducerManager;
+use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
+use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
-#[derive(Default, Clone)]
-pub struct ClientManageProcessor {
+#[derive(Clone)]
+pub struct ClientManageProcessor<MS> {
     consumer_group_heartbeat_table: Arc<
         parking_lot::RwLock<HashMap<String /* ConsumerGroup */, i32 /* HeartbeatFingerprint */>>,
     >,
     producer_manager: Arc<ProducerManager>,
+    consumer_manager: Arc<ConsumerManager>,
+    topic_config_manager: TopicConfigManager,
+    subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
     broker_config: Arc<BrokerConfig>,
 }
 
-impl ClientManageProcessor {
-    pub fn new(broker_config: Arc<BrokerConfig>, producer_manager: Arc<ProducerManager>) -> Self {
+impl<MS> ClientManageProcessor<MS>
+where
+    MS: MessageStore,
+{
+    pub fn new(
+        broker_config: Arc<BrokerConfig>,
+        producer_manager: Arc<ProducerManager>,
+        consumer_manager: Arc<ConsumerManager>,
+        topic_config_manager: TopicConfigManager,
+        subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
+    ) -> Self {
         Self {
             consumer_group_heartbeat_table: Arc::new(parking_lot::RwLock::new(HashMap::new())),
             producer_manager,
+            consumer_manager,
+            topic_config_manager,
+            subscription_group_manager,
             broker_config,
         }
     }
 }
 
-impl ClientManageProcessor {
+impl<MS> ClientManageProcessor<MS>
+where
+    MS: MessageStore,
+{
     pub async fn process_request(
-        &self,
+        &mut self,
         ctx: ConnectionHandlerContext<'_>,
         request_code: RequestCode,
         request: RemotingCommand,
@@ -69,9 +95,7 @@ impl ClientManageProcessor {
             }
         }
     }
-}
 
-impl ClientManageProcessor {
     fn unregister_client(
         &self,
         ctx: ConnectionHandlerContext<'_>,
@@ -101,7 +125,7 @@ impl ClientManageProcessor {
     }
 
     fn heart_beat(
-        &self,
+        &mut self,
         ctx: ConnectionHandlerContext<'_>,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
@@ -128,6 +152,56 @@ impl ClientManageProcessor {
                 consumer_data.group_name.clone(),
                 heartbeat_data.heartbeat_fingerprint,
             );
+            let mut has_order_topic_sub = false;
+            for subscription_data in consumer_data.subscription_data_set.iter() {
+                if self
+                    .topic_config_manager
+                    .is_order_topic(subscription_data.topic.as_str())
+                {
+                    has_order_topic_sub = true;
+                    break;
+                }
+            }
+            let subscription_group_config = self
+                .subscription_group_manager
+                .find_subscription_group_config(consumer_data.group_name.as_str());
+            if subscription_group_config.is_none() {
+                continue;
+            }
+            let subscription_group_config = subscription_group_config.unwrap();
+            let is_notify_consumer_ids_changed_enable =
+                subscription_group_config.notify_consumer_ids_changed_enable();
+            let topic_sys_flag = if consumer_data.unit_mode {
+                topic_sys_flag::build_sys_flag(false, true)
+            } else {
+                0
+            };
+            let new_topic = mix_all::get_retry_topic(consumer_data.group_name.as_str());
+            self.topic_config_manager
+                .create_topic_in_send_message_back_method(
+                    new_topic.as_str(),
+                    subscription_group_config.retry_queue_nums(),
+                    PermName::PERM_WRITE | PermName::PERM_READ,
+                    has_order_topic_sub,
+                    topic_sys_flag,
+                );
+            let changed = self.consumer_manager.register_consumer(
+                consumer_data.group_name.as_str(),
+                client_channel_info.clone(),
+                consumer_data.consume_type,
+                consumer_data.message_model,
+                consumer_data.consume_from_where,
+                consumer_data.subscription_data_set.clone(),
+                is_notify_consumer_ids_changed_enable,
+            );
+            if changed {
+                info!(
+                    "ClientManageProcessor: registerConsumer info changed, SDK address={}, \
+                     consumerData={:?}",
+                    ctx.remoting_address(),
+                    consumer_data
+                )
+            }
         }
         //do producer data handle
         for producer_data in heartbeat_data.producer_data_set.iter() {

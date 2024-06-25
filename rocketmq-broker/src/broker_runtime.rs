@@ -161,7 +161,7 @@ impl BrokerRuntime {
         let mut stats_manager = BrokerStatsManager::new(broker_config.clone());
         let producer_manager = Arc::new(ProducerManager::new());
         let consumer_manager = Arc::new(ConsumerManager::new_with_broker_stats(
-            Arc::new(DefaultConsumerIdsChangeListener {}),
+            Box::new(DefaultConsumerIdsChangeListener {}),
             broker_config.clone(),
         ));
         stats_manager.set_producer_state_getter(Arc::new(ProducerStateGetter {
@@ -385,7 +385,13 @@ impl BrokerRuntime {
             polling_info_processor: Default::default(),
             reply_message_processor: Default::default(),
             admin_broker_processor: Default::default(),
-            client_manage_processor: ClientManageProcessor::new(self.producer_manager.clone()),
+            client_manage_processor: ClientManageProcessor::new(
+                self.broker_config.clone(),
+                self.producer_manager.clone(),
+                self.consumer_manager.clone(),
+                self.topic_config_manager.clone(),
+                self.subscription_group_manager.clone(),
+            ),
             consumer_manage_processor,
             query_assignment_processor: Default::default(),
             query_message_processor: Default::default(),

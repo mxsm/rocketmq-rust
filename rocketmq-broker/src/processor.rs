@@ -92,7 +92,7 @@ where
     pub(crate) polling_info_processor: PollingInfoProcessor,
     pub(crate) reply_message_processor: ReplyMessageProcessor,
     pub(crate) query_message_processor: QueryMessageProcessor,
-    pub(crate) client_manage_processor: ClientManageProcessor,
+    pub(crate) client_manage_processor: ClientManageProcessor<MS>,
     pub(crate) consumer_manage_processor: ConsumerManageProcessor,
     pub(crate) query_assignment_processor: QueryAssignmentProcessor,
     pub(crate) end_transaction_processor: EndTransactionProcessor,

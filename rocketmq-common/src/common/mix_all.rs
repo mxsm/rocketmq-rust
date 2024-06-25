@@ -97,6 +97,10 @@ pub fn is_sys_consumer_group_for_no_cold_read_limit(consumer_group: &str) -> boo
     false
 }
 
+pub fn get_retry_topic(consumer_group: &str) -> String {
+    format!("{}{}", RETRY_GROUP_TOPIC_PREFIX, consumer_group)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,5 +152,19 @@ mod tests {
         assert!(!is_sys_consumer_group_for_no_cold_read_limit(
             "NON_SYS_GROUP"
         ));
+    }
+
+    #[test]
+    fn generates_retry_topic_for_consumer_group() {
+        let consumer_group = "test_group";
+        let expected = format!("{}{}", RETRY_GROUP_TOPIC_PREFIX, consumer_group);
+        assert_eq!(get_retry_topic(consumer_group), expected);
+    }
+
+    #[test]
+    fn generates_retry_topic_for_empty_consumer_group() {
+        let consumer_group = "";
+        let expected = RETRY_GROUP_TOPIC_PREFIX.to_string();
+        assert_eq!(get_retry_topic(consumer_group), expected);
     }
 }
