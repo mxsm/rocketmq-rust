@@ -20,7 +20,7 @@ use std::any::Any;
 use crate::client::consumer_group_event::ConsumerGroupEvent;
 
 pub trait ConsumerIdsChangeListener {
-    fn handle(&self, event: ConsumerGroupEvent, group: String, args: Vec<Box<dyn Any>>);
+    fn handle(&self, event: ConsumerGroupEvent, group: &str, args: &[&dyn Any]);
 
     fn shutdown(&self);
 }

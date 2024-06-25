@@ -193,7 +193,7 @@ impl ConsumerGroupInfo {
         updated
     }
 
-    pub fn update_subscription(&self, sub_list: HashSet<SubscriptionData>) -> bool {
+    pub fn update_subscription(&self, sub_list: &HashSet<SubscriptionData>) -> bool {
         let mut updated = false;
         let mut topic_set: HashSet<String> = HashSet::new();
 
@@ -401,6 +401,6 @@ mod tests {
         };
         sub_list.insert(subscription_data);
 
-        assert!(consumer_group_info.update_subscription(sub_list));
+        assert!(consumer_group_info.update_subscription(&sub_list));
     }
 }

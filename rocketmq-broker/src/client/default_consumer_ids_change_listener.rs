@@ -23,9 +23,7 @@ use crate::client::consumer_ids_change_listener::ConsumerIdsChangeListener;
 pub struct DefaultConsumerIdsChangeListener {}
 
 impl ConsumerIdsChangeListener for DefaultConsumerIdsChangeListener {
-    fn handle(&self, _event: ConsumerGroupEvent, _group: String, _args: Vec<Box<dyn Any>>) {
-        todo!()
-    }
+    fn handle(&self, _event: ConsumerGroupEvent, _group: &str, _args: &[&dyn Any]) {}
 
     fn shutdown(&self) {
         todo!()
