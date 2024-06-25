@@ -14,6 +14,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-mod rpc_request;
-pub mod rpc_request_header;
-mod topic_request_header;
+
+use rocketmq_macros::RequestHeaderCodec;
+use serde::Deserialize;
+use serde::Serialize;
+
+#[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodec, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct QueryConsumerOffsetResponseHeader {
+    pub offset: Option<i64>,
+}

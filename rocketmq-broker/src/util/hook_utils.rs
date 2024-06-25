@@ -515,6 +515,16 @@ mod tests {
         ) -> Option<GetMessageResult> {
             todo!()
         }
+
+        fn check_in_mem_by_consume_offset(
+            &self,
+            topic: &str,
+            queue_id: i32,
+            consume_offset: i64,
+            batch_size: i32,
+        ) -> bool {
+            todo!()
+        }
         // Implement required methods...
     }
 

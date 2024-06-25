@@ -34,3 +34,12 @@ impl Default for LogicQueueMappingItem {
         }
     }
 }
+
+impl LogicQueueMappingItem {
+    pub fn compute_static_queue_offset_strictly(&self, physical_queue_offset: i64) -> i64 {
+        if physical_queue_offset > self.start_offset {
+            return self.logic_offset;
+        }
+        self.logic_offset + (physical_queue_offset - self.start_offset)
+    }
+}

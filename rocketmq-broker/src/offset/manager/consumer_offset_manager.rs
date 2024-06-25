@@ -26,10 +26,41 @@ use serde::Serialize;
 
 use crate::broker_path_config_helper::get_consumer_offset_path;
 
+pub const TOPIC_GROUP_SEPARATOR: &str = "@";
+
 #[derive(Default)]
 pub(crate) struct ConsumerOffsetManager {
     pub(crate) broker_config: Arc<BrokerConfig>,
     consumer_offset_wrapper: parking_lot::Mutex<ConsumerOffsetWrapper>,
+}
+
+impl ConsumerOffsetManager {
+    pub fn query_offset(&self, group: &str, topic: &str, queue_id: i32) -> i64 {
+        let key = format!("{}{}{}", topic, TOPIC_GROUP_SEPARATOR, group);
+        if self.broker_config.use_server_side_reset_offset {
+            if let Some(value) = self
+                .consumer_offset_wrapper
+                .lock()
+                .reset_offset_table
+                .get(key.as_str())
+            {
+                if value.contains_key(&queue_id) {
+                    return value.get(&queue_id).cloned().unwrap_or(-1);
+                }
+            }
+        }
+        if let Some(value) = self
+            .consumer_offset_wrapper
+            .lock()
+            .offset_table
+            .get(key.as_str())
+        {
+            if value.contains_key(&queue_id) {
+                return value.get(&queue_id).cloned().unwrap_or(-1);
+            }
+        }
+        -1
+    }
 }
 
 //Fully implemented will be removed

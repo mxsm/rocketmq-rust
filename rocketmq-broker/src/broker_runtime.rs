@@ -373,7 +373,12 @@ impl BrokerRuntime {
             self.message_store.as_ref().unwrap().clone(),
         );
 
-        let consumer_manage_processor = ConsumerManageProcessor::new(self.consumer_manager.clone());
+        let consumer_manage_processor = ConsumerManageProcessor::new(
+            self.consumer_manager.clone(),
+            self.topic_queue_mapping_manager.clone(),
+            self.consumer_offset_manager.clone(),
+            self.message_store.clone().unwrap(),
+        );
         BrokerRequestProcessor {
             send_message_processor,
             pull_message_processor,
