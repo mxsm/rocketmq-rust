@@ -45,4 +45,20 @@ impl CqExtUnit {
             filter_bit_map,
         }
     }
+
+    pub fn size(&self) -> i16 {
+        self.size
+    }
+    pub fn tags_code(&self) -> i64 {
+        self.tags_code
+    }
+    pub fn msg_store_time(&self) -> i64 {
+        self.msg_store_time
+    }
+    pub fn bit_map_size(&self) -> i16 {
+        self.bit_map_size
+    }
+    pub fn filter_bit_map(&self) -> &Option<Vec<u8>> {
+        &self.filter_bit_map
+    }
 }
