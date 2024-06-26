@@ -205,7 +205,7 @@ impl ConsumeQueueTrait for BatchConsumeQueue {
         todo!()
     }
 
-    fn get(&self, index: i64) -> CqUnit {
+    fn get(&self, index: i64) -> Option<CqUnit> {
         todo!()
     }
 

@@ -437,6 +437,14 @@ impl DefaultMessageStore {
         }
         next_offset
     }
+
+    fn check_in_mem_by_commit_offset(&self, offset_py: i64, size: i32) -> bool {
+        let message = self.commit_log.get_message(offset_py, size);
+        match message {
+            None => false,
+            Some(msg) => msg.is_in_mem(),
+        }
+    }
 }
 
 fn estimate_in_mem_by_commit_offset(
@@ -926,7 +934,28 @@ impl MessageStore for DefaultMessageStore {
         consume_offset: i64,
         batch_size: i32,
     ) -> bool {
-        todo!()
+        let consume_queue = self
+            .consume_queue_store
+            .find_or_create_consume_queue(topic, queue_id);
+        let first_cqitem = consume_queue.lock().get(consume_offset);
+        if first_cqitem.is_none() {
+            return false;
+        }
+        let cq = first_cqitem.as_ref().unwrap();
+        let start_offset_py = cq.pos;
+        if batch_size <= 1 {
+            let size = cq.size;
+            return self.check_in_mem_by_commit_offset(start_offset_py, size);
+        }
+        let last_cqitem = consume_queue.lock().get(consume_offset + batch_size as i64);
+        if last_cqitem.is_none() {
+            let size = cq.size;
+            return self.check_in_mem_by_commit_offset(start_offset_py, size);
+        }
+        let last_cqitem = last_cqitem.as_ref().unwrap();
+        let end_offset_py = last_cqitem.pos;
+        let size = (end_offset_py - start_offset_py) + last_cqitem.size as i64;
+        self.check_in_mem_by_commit_offset(start_offset_py, size as i32)
     }
 }
 

@@ -366,7 +366,7 @@ impl MappedFile for DefaultMappedFile {
                     start_offset: self.file_from_offset + pos as u64,
                     size,
                     mapped_file: Some(self),
-                    is_in_cache: false,
+                    is_in_cache: true,
                 })
             } else {
                 None
@@ -388,7 +388,7 @@ impl MappedFile for DefaultMappedFile {
                 start_offset: self.get_file_from_offset() + pos as u64,
                 size: read_position - pos,
                 mapped_file: Some(self),
-                is_in_cache: false,
+                is_in_cache: true,
             })
         } else {
             None
@@ -588,7 +588,7 @@ impl MappedFile for DefaultMappedFile {
     }*/
 
     fn is_loaded(&self, position: i64, size: usize) -> bool {
-        todo!()
+        true
     }
 }
 

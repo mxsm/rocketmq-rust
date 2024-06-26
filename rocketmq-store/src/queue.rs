@@ -90,6 +90,21 @@ pub struct CqUnit {
     pub compacted_offset: i32,
 }
 
+impl Default for CqUnit {
+    fn default() -> Self {
+        CqUnit {
+            queue_offset: 0,
+            size: 0,
+            pos: 0,
+            batch_num: 1,
+            tags_code: 0,
+            cq_ext_unit: None,
+            native_buffer: vec![],
+            compacted_offset: 0,
+        }
+    }
+}
+
 impl CqUnit {
     pub fn get_valid_tags_code_as_long(&self) -> Option<i64> {
         if !self.is_tags_code_valid() {
@@ -291,7 +306,7 @@ pub trait ConsumeQueueTrait: Send + Sync + FileQueueLifeCycle {
     ) -> Result<Box<dyn Iterator<Item = CqUnit>>, RocksDBException>;*/
 
     /// Get cq unit at specified index.
-    fn get(&self, index: i64) -> CqUnit;
+    fn get(&self, index: i64) -> Option<CqUnit>;
 
     fn get_cq_unit_and_store_time(&self, index: i64) -> Option<(CqUnit, i64)>;
 

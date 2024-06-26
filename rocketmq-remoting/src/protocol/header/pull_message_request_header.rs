@@ -25,6 +25,7 @@ use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::FromMap;
 use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use crate::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
+use crate::rpc::rpc_request_header::RpcRequestHeader;
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -238,6 +239,11 @@ impl CommandCustomHeader for PullMessageRequestHeader {
         if let Some(str) = fields.get("proxyFrowardClientId") {
             self.proxy_forward_client_id = Some(str.clone());
         }
+
+        self.topic_request = Some(TopicRequestHeader {
+            rpc: Some(RpcRequestHeader::default()),
+            ..TopicRequestHeader::default()
+        });
 
         if let Some(str) = fields.get("lo") {
             self.topic_request.as_mut().unwrap().lo = Some(str.parse::<bool>().unwrap());

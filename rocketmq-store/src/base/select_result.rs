@@ -18,6 +18,7 @@
 use std::sync::Arc;
 
 use crate::log_file::mapped_file::default_impl::DefaultMappedFile;
+use crate::log_file::mapped_file::MappedFile;
 
 /// Represents the result of selecting a mapped buffer.
 pub struct SelectMappedBufferResult {
@@ -37,5 +38,15 @@ impl SelectMappedBufferResult {
         self.mapped_file.as_ref().unwrap().get_mapped_file()
             [self.start_offset as usize..(self.start_offset + self.size as u64) as usize]
             .as_ref()
+    }
+
+    pub fn is_in_mem(&self) -> bool {
+        match self.mapped_file.as_ref() {
+            None => true,
+            Some(inner) => {
+                let pos = self.start_offset - inner.get_file_from_offset();
+                inner.is_loaded(pos as i64, self.size as usize)
+            }
+        }
     }
 }

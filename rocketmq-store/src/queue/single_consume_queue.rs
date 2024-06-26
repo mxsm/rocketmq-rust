@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use bytes::Buf;
 use bytes::BufMut;
+use bytes::Bytes;
 use bytes::BytesMut;
 use rocketmq_common::common::attribute::cq_type::CQType;
 use rocketmq_common::common::boundary_type::BoundaryType;
@@ -31,6 +32,7 @@ use tracing::info;
 use tracing::warn;
 
 use crate::base::dispatch_request::DispatchRequest;
+use crate::base::select_result::SelectMappedBufferResult;
 use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::base::swappable::Swappable;
 use crate::config::broker_role::BrokerRole;
@@ -315,6 +317,20 @@ impl ConsumeQueue {
             mapped_file.append_message_bytes(&bytes);
         }
     }
+
+    pub fn get_index_buffer(&self, start_index: i64) -> Option<SelectMappedBufferResult> {
+        let mapped_file_size = self.mapped_file_size;
+        let offset = start_index * CQ_STORE_UNIT_SIZE as i64;
+        if offset >= self.get_min_logic_offset() {
+            if let Some(mapped_file) = self
+                .mapped_file_queue
+                .find_mapped_file_by_offset(offset, false)
+            {
+                return mapped_file.select_mapped_buffer((offset % mapped_file_size as i64) as i32);
+            }
+        }
+        None
+    }
 }
 
 impl FileQueueLifeCycle for ConsumeQueue {
@@ -485,8 +501,11 @@ impl ConsumeQueueTrait for ConsumeQueue {
         self.queue_id
     }
 
-    fn get(&self, index: i64) -> CqUnit {
-        todo!()
+    fn get(&self, index: i64) -> Option<CqUnit> {
+        match self.iterate_from(index) {
+            None => None,
+            Some(value) => None,
+        }
     }
 
     fn get_cq_unit_and_store_time(&self, index: i64) -> Option<(CqUnit, i64)> {
@@ -538,7 +557,7 @@ impl ConsumeQueueTrait for ConsumeQueue {
     }
 
     fn get_min_logic_offset(&self) -> i64 {
-        todo!()
+        self.min_logic_offset.load(Ordering::Relaxed)
     }
 
     fn get_cq_type(&self) -> CQType {
@@ -776,7 +795,15 @@ impl ConsumeQueueTrait for ConsumeQueue {
     }
 
     fn iterate_from(&self, start_index: i64) -> Option<Box<dyn Iterator<Item = CqUnit>>> {
-        todo!()
+        match self.get_index_buffer(start_index) {
+            None => None,
+            Some(value) => Some(Box::new(ConsumeQueueIterator {
+                smbr: Some(value),
+                relative_pos: 0,
+                counter: 0,
+                consume_queue_ext: self.consume_queue_ext.clone(),
+            })),
+        }
     }
 
     fn iterate_from_inner(
@@ -785,5 +812,68 @@ impl ConsumeQueueTrait for ConsumeQueue {
         count: i32,
     ) -> Option<Box<dyn Iterator<Item = CqUnit>>> {
         todo!()
+    }
+}
+
+struct ConsumeQueueIterator {
+    smbr: Option<SelectMappedBufferResult>,
+    relative_pos: i32,
+    counter: i32,
+    consume_queue_ext: Option<ConsumeQueueExt>,
+}
+
+impl ConsumeQueueIterator {
+    fn get_ext(&self, offset: i64, cq_ext_unit: &CqExtUnit) -> bool {
+        match self.consume_queue_ext.as_ref() {
+            None => false,
+            Some(value) => value.get(offset, cq_ext_unit),
+        }
+    }
+}
+
+impl Iterator for ConsumeQueueIterator {
+    type Item = CqUnit;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.smbr.as_ref() {
+            None => None,
+            Some(value) => {
+                if self.counter * CQ_STORE_UNIT_SIZE >= value.size {
+                    return None;
+                }
+                let mmp = value.mapped_file.as_ref().unwrap().get_mapped_file();
+                let start =
+                    value.start_offset as usize + (self.counter * CQ_STORE_UNIT_SIZE) as usize;
+                self.counter += 1;
+                let end = start + CQ_STORE_UNIT_SIZE as usize;
+                let mut bytes = Bytes::copy_from_slice(&mmp[start..end]);
+                let pos = bytes.get_i64();
+                let size = bytes.get_i32();
+                let tags_code = bytes.get_i64();
+                let mut cq_unit = CqUnit {
+                    queue_offset: start as i64 / CQ_STORE_UNIT_SIZE as i64,
+                    size,
+                    pos,
+                    tags_code,
+                    ..CqUnit::default()
+                };
+
+                if ConsumeQueueExt::is_ext_addr(cq_unit.tags_code) {
+                    let cq_ext_unit = CqExtUnit::default();
+                    let ext_ret = self.get_ext(cq_unit.tags_code, &cq_ext_unit);
+                    if ext_ret {
+                        cq_unit.tags_code = cq_ext_unit.tags_code();
+                        cq_unit.cq_ext_unit = Some(cq_ext_unit);
+                    } else {
+                        error!(
+                            "[BUG] can't find consume queue extend file content! addr={}, \
+                             offsetPy={}, sizePy={}",
+                            cq_unit.tags_code, cq_unit.pos, cq_unit.pos,
+                        );
+                    }
+                }
+                Some(cq_unit)
+            }
+        }
     }
 }
