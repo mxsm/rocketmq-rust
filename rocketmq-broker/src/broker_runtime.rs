@@ -376,7 +376,9 @@ impl BrokerRuntime {
         let consumer_manage_processor = ConsumerManageProcessor::new(
             self.consumer_manager.clone(),
             self.topic_queue_mapping_manager.clone(),
+            self.subscription_group_manager.clone(),
             self.consumer_offset_manager.clone(),
+            Arc::new(self.topic_config_manager.clone()),
             self.message_store.clone().unwrap(),
         );
         BrokerRequestProcessor {

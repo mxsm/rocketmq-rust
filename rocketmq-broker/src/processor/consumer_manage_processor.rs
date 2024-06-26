@@ -25,6 +25,7 @@ use rocketmq_remoting::protocol::header::get_consumer_listby_group_request_heade
 use rocketmq_remoting::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use rocketmq_remoting::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
 use rocketmq_remoting::protocol::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader;
+use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
 use rocketmq_remoting::protocol::RemotingSerializable;
@@ -34,6 +35,8 @@ use tracing::warn;
 
 use crate::client::manager::consumer_manager::ConsumerManager;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
+use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
+use crate::topic::manager::topic_config_manager::TopicConfigManager;
 use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
 
 #[derive(Clone)]
@@ -44,6 +47,8 @@ where
     consumer_manager: Arc<ConsumerManager>,
     topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
     consumer_offset_manager: Arc<ConsumerOffsetManager>,
+    subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
+    topic_config_manager: Arc<TopicConfigManager>,
     message_store: MS,
 }
 
@@ -54,13 +59,17 @@ where
     pub fn new(
         consumer_manager: Arc<ConsumerManager>,
         topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
+        subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
         consumer_offset_manager: Arc<ConsumerOffsetManager>,
+        topic_config_manager: Arc<TopicConfigManager>,
         message_store: MS,
     ) -> Self {
         Self {
             consumer_manager,
             topic_queue_mapping_manager,
             consumer_offset_manager,
+            subscription_group_manager,
+            topic_config_manager,
             message_store,
         }
     }
@@ -143,7 +152,60 @@ where
         ctx: ConnectionHandlerContext<'_>,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
-        unimplemented!()
+        let mut request_header = request
+            .decode_command_custom_header::<UpdateConsumerOffsetRequestHeader>()
+            .unwrap();
+        let mut mapping_context = self
+            .topic_queue_mapping_manager
+            .build_topic_queue_mapping_context(&request_header, false);
+
+        let rewrite_result = self.rewrite_request_for_static_topic_for_consume_offset(
+            &mut request_header,
+            &mut mapping_context,
+        );
+        if let Some(result) = rewrite_result {
+            return Some(result);
+        }
+        let topic = request_header.topic.as_str();
+        let group = request_header.consumer_group.as_str();
+        let queue_id = request_header.queue_id;
+        let offset = request_header.commit_offset;
+        let response = RemotingCommand::create_response_command();
+        if !self
+            .subscription_group_manager
+            .contains_subscription_group(group)
+        {
+            return Some(
+                response
+                    .set_code(ResponseCode::SubscriptionGroupNotExist)
+                    .set_remark(Some(format!("subscription group not exist, {}", group))),
+            );
+        }
+
+        if !self.topic_config_manager.contains_topic(topic) {
+            return Some(
+                response
+                    .set_code(ResponseCode::TopicNotExist)
+                    .set_remark(Some(format!("topic not exist, {}", topic))),
+            );
+        }
+
+        if queue_id.is_none() {
+            return Some(
+                response
+                    .set_code(ResponseCode::SystemError)
+                    .set_remark(Some(format!("QueueId is null, topic is {}", topic))),
+            );
+        }
+        if offset.is_none() {
+            return Some(
+                response
+                    .set_code(ResponseCode::SystemError)
+                    .set_remark(Some(format!("Offset is null, topic is {}", topic))),
+            );
+        }
+
+        None
     }
 
     async fn query_consumer_offset(
@@ -211,6 +273,14 @@ where
             return Some(result);
         }
         Some(response)
+    }
+
+    fn rewrite_request_for_static_topic_for_consume_offset(
+        &mut self,
+        request_header: &mut UpdateConsumerOffsetRequestHeader,
+        mapping_context: &mut TopicQueueMappingContext,
+    ) -> Option<RemotingCommand> {
+        None
     }
 
     fn rewrite_request_for_static_topic(
