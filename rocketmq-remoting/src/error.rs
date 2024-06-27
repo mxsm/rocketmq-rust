@@ -32,6 +32,10 @@ pub enum RemotingError {
 }
 
 #[derive(Debug, Error)]
+#[error("RpcException: code: {0}, message: {1}")]
+pub struct RpcException(pub i32, pub String);
+
+#[derive(Debug, Error)]
 #[error("{0}")]
 pub struct RemotingCommandDecoderError(pub String);
 impl From<io::Error> for RemotingCommandDecoderError {

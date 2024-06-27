@@ -14,12 +14,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use bytes::Bytes;
+use std::any::Any;
 
 use crate::rpc::rpc_request_header::RpcRequestHeader;
 
+#[derive(Default)]
 pub struct RpcRequest {
     pub code: i32,
     pub header: RpcRequestHeader,
-    pub body: Option<Bytes>,
+    pub body: Option<Box<dyn Any>>,
+}
+
+impl RpcRequest {
+    pub fn new(code: i32, header: RpcRequestHeader, body: Option<Box<dyn Any>>) -> Self {
+        Self { code, header, body }
+    }
 }

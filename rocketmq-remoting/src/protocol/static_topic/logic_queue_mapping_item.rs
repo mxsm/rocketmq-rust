@@ -42,4 +42,24 @@ impl LogicQueueMappingItem {
         }
         self.logic_offset + (physical_queue_offset - self.start_offset)
     }
+
+    pub fn compute_physical_queue_offset(&self, static_queue_offset: i64) -> i64 {
+        self.start_offset + (static_queue_offset - self.logic_offset)
+    }
+
+    pub fn compute_offset_delta(&self) -> i64 {
+        self.logic_offset - self.start_offset
+    }
+
+    pub fn check_if_end_offset_decided(&self) -> bool {
+        self.end_offset > self.start_offset
+    }
+
+    pub fn compute_max_static_queue_offset(&self) -> i64 {
+        if self.end_offset >= self.start_offset {
+            self.logic_offset + self.end_offset - self.start_offset
+        } else {
+            self.logic_offset
+        }
+    }
 }

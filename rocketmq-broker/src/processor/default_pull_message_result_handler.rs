@@ -90,14 +90,23 @@ impl PullMessageResultHandler for DefaultPullMessageResultHandler {
             &mut response,
             client_address.as_str(),
         );
-        /*        self.execute_consume_message_hook_before(
+        self.execute_consume_message_hook_before(
             &request,
             &request_header,
             &get_message_result,
             broker_allow_suspend,
             From::from(response.code()),
-        );*/
-
+        );
+        /*let response_header = response.read_custom_header_mut::<PullMessageResponseHeader>();
+        let rewrite_result = PullMessageProcessor::rewrite_response_for_static_topic(
+            &request_header,
+            response_header.unwrap(),
+            &mut mapping_context,
+            ResponseCode::from(response.code()),
+        );
+        if rewrite_result.is_some() {
+            return rewrite_result;
+        }*/
         None
     }
 }
