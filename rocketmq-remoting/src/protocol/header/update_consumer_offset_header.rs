@@ -266,7 +266,7 @@ mod tests {
         let header = <UpdateConsumerOffsetRequestHeader as FromMap>::from(&map).unwrap();
         assert_eq!(header.consumer_group, "");
         assert_eq!(header.topic, "");
-        assert_eq!(header.queue_id, Some(0));
-        assert_eq!(header.commit_offset, Some(0));
+        assert_eq!(header.queue_id, None);
+        assert_eq!(header.commit_offset, None);
     }
 }
