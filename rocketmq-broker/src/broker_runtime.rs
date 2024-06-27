@@ -54,6 +54,7 @@ use crate::client::manager::producer_manager::ProducerManager;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
 use crate::hook::batch_check_before_put_message::BatchCheckBeforePutMessageHook;
 use crate::hook::check_before_put_message::CheckBeforePutMessageHook;
+use crate::offset::manager::broadcast_offset_manager::BroadcastOffsetManager;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
 use crate::offset::manager::consumer_order_info_manager::ConsumerOrderInfoManager;
 use crate::out_api::broker_outer_api::BrokerOuterAPI;
@@ -372,6 +373,7 @@ impl BrokerRuntime {
             self.consumer_manager.clone(),
             self.consumer_filter_manager.clone(),
             Arc::new(self.consumer_offset_manager.clone()),
+            Arc::new(BroadcastOffsetManager::default()),
             self.message_store.as_ref().unwrap().clone(),
         );
 

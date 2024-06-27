@@ -38,7 +38,6 @@ use tracing::info;
 
 use crate::mqtrace::consume_message_context::ConsumeMessageContext;
 use crate::mqtrace::consume_message_hook::ConsumeMessageHook;
-use crate::processor::pull_message_processor::PullMessageProcessor;
 use crate::processor::pull_message_result_handler::PullMessageResultHandler;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
@@ -75,7 +74,7 @@ impl PullMessageResultHandler for DefaultPullMessageResultHandler {
         broker_allow_suspend: bool,
         message_filter: Box<dyn MessageFilter>,
         mut response: RemotingCommand,
-        mut mapping_context: TopicQueueMappingContext,
+        mapping_context: TopicQueueMappingContext,
         begin_time_mills: u64,
     ) -> Option<RemotingCommand> {
         let client_address = channel.remote_address().to_string();

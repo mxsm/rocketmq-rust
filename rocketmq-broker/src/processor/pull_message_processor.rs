@@ -48,7 +48,6 @@ use rocketmq_store::log_file::MAX_PULL_MSG_SIZE;
 use tracing::error;
 use tracing::warn;
 
-use crate::client::client_channel_info::ClientChannelInfo;
 use crate::client::consumer_group_info::ConsumerGroupInfo;
 use crate::client::manager::consumer_manager::ConsumerManager;
 use crate::filter::expression_for_retry_message_filter::ExpressionForRetryMessageFilter;
