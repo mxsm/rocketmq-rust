@@ -75,7 +75,7 @@ pub(crate) struct BrokerRuntime {
     server_config: Arc<ServerConfig>,
     topic_config_manager: TopicConfigManager,
     topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
-    consumer_offset_manager: Arc<ConsumerOffsetManager>,
+    consumer_offset_manager: ConsumerOffsetManager,
     #[cfg(feature = "local_file_store")]
     subscription_group_manager: Arc<SubscriptionGroupManager<DefaultMessageStore>>,
     consumer_filter_manager: Arc<ConsumerFilterManager>,
@@ -180,7 +180,7 @@ impl BrokerRuntime {
             server_config,
             topic_config_manager,
             topic_queue_mapping_manager,
-            consumer_offset_manager: Arc::new(Default::default()),
+            consumer_offset_manager: ConsumerOffsetManager::new(broker_config.clone(), None),
             subscription_group_manager: Arc::new(SubscriptionGroupManager::new(
                 broker_config.clone(),
                 None,
@@ -286,6 +286,8 @@ impl BrokerRuntime {
                 self.topic_config_manager.topic_config_table(),
                 Some(self.broker_stats_manager.clone()),
             );
+            self.consumer_offset_manager
+                .set_message_store(Some(Arc::new(message_store.clone())));
             self.topic_config_manager
                 .set_message_store(Some(message_store.clone()));
             self.broker_stats = Some(Arc::new(BrokerStats::new(Arc::new(message_store.clone()))));
@@ -369,14 +371,17 @@ impl BrokerRuntime {
             self.topic_queue_mapping_manager.clone(),
             self.consumer_manager.clone(),
             self.consumer_filter_manager.clone(),
-            self.consumer_offset_manager.clone(),
+            Arc::new(self.consumer_offset_manager.clone()),
             self.message_store.as_ref().unwrap().clone(),
         );
 
         let consumer_manage_processor = ConsumerManageProcessor::new(
+            self.broker_config.clone(),
             self.consumer_manager.clone(),
             self.topic_queue_mapping_manager.clone(),
-            self.consumer_offset_manager.clone(),
+            self.subscription_group_manager.clone(),
+            Arc::new(self.consumer_offset_manager.clone()),
+            Arc::new(self.topic_config_manager.clone()),
             self.message_store.clone().unwrap(),
         );
         BrokerRequestProcessor {

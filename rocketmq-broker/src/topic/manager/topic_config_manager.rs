@@ -495,6 +495,10 @@ impl TopicConfigManager {
         }
         topic_config
     }
+
+    pub fn contains_topic(&self, topic: &str) -> bool {
+        self.topic_config_table.lock().contains_key(topic)
+    }
 }
 
 //Fully implemented will be removed

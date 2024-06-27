@@ -101,6 +101,16 @@ impl<MS> SubscriptionGroupManager<MS>
 where
     MS: MessageStore,
 {
+    pub fn contains_subscription_group(&self, group: &str) -> bool {
+        if group.is_empty() {
+            return false;
+        }
+        self.subscription_group_wrapper
+            .lock()
+            .subscription_group_table
+            .contains_key(group)
+    }
+
     pub fn find_subscription_group_config(&self, group: &str) -> Option<SubscriptionGroupConfig> {
         let mut subscription_group_config = self.find_subscription_group_config_inner(group);
         if subscription_group_config.is_none()

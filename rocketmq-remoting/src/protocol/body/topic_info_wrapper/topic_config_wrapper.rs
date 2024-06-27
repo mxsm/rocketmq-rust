@@ -98,7 +98,7 @@ mod tests {
     #[test]
     fn topic_config_and_mapping_serialize_wrapper_getters() {
         let mut wrapper = TopicConfigAndMappingSerializeWrapper::default();
-        let topic_config = TopicConfig::default();
+        let _topic_config = TopicConfig::default();
         let topic_queue_mapping_info = TopicQueueMappingInfo::default();
         let topic_queue_mapping_detail = TopicQueueMappingDetail::default();
         let data_version = DataVersion::default();

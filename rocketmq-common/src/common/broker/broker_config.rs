@@ -152,6 +152,7 @@ pub struct BrokerConfig {
     pub slave_read_enable: bool,
     pub commercial_base_count: i32,
     pub reject_pull_consumer_enable: bool,
+    pub consumer_offset_update_version_step: i64,
 }
 
 impl Default for BrokerConfig {
@@ -215,6 +216,7 @@ impl Default for BrokerConfig {
             slave_read_enable: false,
             commercial_base_count: 1,
             reject_pull_consumer_enable: false,
+            consumer_offset_update_version_step: 500,
         }
     }
 }
