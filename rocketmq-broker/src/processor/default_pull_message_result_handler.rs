@@ -38,6 +38,7 @@ use tracing::info;
 
 use crate::mqtrace::consume_message_context::ConsumeMessageContext;
 use crate::mqtrace::consume_message_hook::ConsumeMessageHook;
+use crate::processor::pull_message_processor::PullMessageProcessor;
 use crate::processor::pull_message_result_handler::PullMessageResultHandler;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
@@ -74,7 +75,7 @@ impl PullMessageResultHandler for DefaultPullMessageResultHandler {
         broker_allow_suspend: bool,
         message_filter: Box<dyn MessageFilter>,
         mut response: RemotingCommand,
-        mapping_context: TopicQueueMappingContext,
+        mut mapping_context: TopicQueueMappingContext,
         begin_time_mills: u64,
     ) -> Option<RemotingCommand> {
         let client_address = channel.remote_address().to_string();
@@ -90,14 +91,23 @@ impl PullMessageResultHandler for DefaultPullMessageResultHandler {
             &mut response,
             client_address.as_str(),
         );
-        /*        self.execute_consume_message_hook_before(
+        self.execute_consume_message_hook_before(
             &request,
             &request_header,
             &get_message_result,
             broker_allow_suspend,
             From::from(response.code()),
-        );*/
-
+        );
+        /*let response_header = response.read_custom_header_mut::<PullMessageResponseHeader>();
+        let rewrite_result = PullMessageProcessor::rewrite_response_for_static_topic(
+            &request_header,
+            response_header.unwrap(),
+            &mut mapping_context,
+            ResponseCode::from(response.code()),
+        );
+        if rewrite_result.is_some() {
+            return rewrite_result;
+        }*/
         None
     }
 }

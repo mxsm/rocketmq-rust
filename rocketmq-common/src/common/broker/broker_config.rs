@@ -153,6 +153,7 @@ pub struct BrokerConfig {
     pub commercial_base_count: i32,
     pub reject_pull_consumer_enable: bool,
     pub consumer_offset_update_version_step: i64,
+    pub enable_broadcast_offset_store: bool,
 }
 
 impl Default for BrokerConfig {
@@ -217,6 +218,7 @@ impl Default for BrokerConfig {
             commercial_base_count: 1,
             reject_pull_consumer_enable: false,
             consumer_offset_update_version_step: 500,
+            enable_broadcast_offset_store: true,
         }
     }
 }

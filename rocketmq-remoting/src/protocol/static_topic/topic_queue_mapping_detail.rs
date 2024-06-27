@@ -16,7 +16,7 @@ pub struct TopicQueueMappingDetail {
 }
 
 impl TopicQueueMappingDetail {
-    pub fn get_mapping_info(
+    /*    pub fn get_mapping_info(
         mapping_detail: &TopicQueueMappingDetail,
         global_id: i32,
     ) -> Option<Vec<LogicQueueMappingItem>> {
@@ -26,6 +26,29 @@ impl TopicQueueMappingDetail {
             }
         }
         None
+    }*/
+
+    pub fn get_mapping_info(
+        mapping_detail: &TopicQueueMappingDetail,
+        global_id: i32,
+    ) -> Option<&Vec<LogicQueueMappingItem>> {
+        mapping_detail.hosted_queues.as_ref()?.get(&global_id)
+    }
+
+    pub fn compute_max_offset_from_mapping(
+        mapping_detail: &TopicQueueMappingDetail,
+        global_id: Option<i32>,
+    ) -> i64 {
+        match Self::get_mapping_info(mapping_detail, global_id.unwrap()) {
+            Some(mapping_items) => {
+                if mapping_items.is_empty() {
+                    return -1;
+                }
+                let item = mapping_items.last().unwrap();
+                item.compute_max_static_queue_offset()
+            }
+            None => -1,
+        }
     }
 }
 

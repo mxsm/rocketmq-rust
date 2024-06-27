@@ -16,3 +16,18 @@
  */
 #[derive(Debug, Default)]
 pub struct BroadcastOffsetManager {}
+
+#[allow(unused_variables)]
+impl BroadcastOffsetManager {
+    pub fn query_init_offset(
+        &self,
+        topic: &str,
+        group_id: &str,
+        queue_id: i32,
+        client_id: &str,
+        request_offset: i64,
+        from_proxy: bool,
+    ) -> i64 {
+        unimplemented!()
+    }
+}

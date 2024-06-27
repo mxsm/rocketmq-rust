@@ -217,6 +217,16 @@ impl RemotingCommand {
         self
     }
 
+    pub fn set_command_custom_header_origin(
+        mut self,
+        command_custom_header: Option<
+            Arc<SyncUnsafeCell<dyn CommandCustomHeader + Send + Sync + 'static>>,
+        >,
+    ) -> Self {
+        self.command_custom_header = command_custom_header;
+        self
+    }
+
     pub fn set_command_custom_header_ref<T>(&mut self, command_custom_header: T)
     where
         T: CommandCustomHeader + Sync + Send + 'static,

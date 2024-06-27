@@ -174,7 +174,7 @@ impl TopicQueueMappingManager {
                     topic: topic.clone(),
                     global_id,
                     mapping_detail: Some(mapping_detail.clone()),
-                    mapping_item_list,
+                    mapping_item_list: mapping_item_list.clone(),
                     leader_item,
                     current_item: None,
                 };

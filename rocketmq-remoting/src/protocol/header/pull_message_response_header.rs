@@ -25,7 +25,9 @@ use serde::Serialize;
 
 use crate::protocol::FastCodesHeader;
 
-#[derive(Serialize, Deserialize, Debug, Default, RemotingSerializable, RequestHeaderCodec)]
+#[derive(
+    Serialize, Deserialize, Debug, Default, RemotingSerializable, RequestHeaderCodec, Clone,
+)]
 #[serde(rename_all = "camelCase")]
 pub struct PullMessageResponseHeader {
     pub suggest_which_broker_id: Option<u64>,
