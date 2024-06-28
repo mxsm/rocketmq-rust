@@ -55,7 +55,7 @@ futures-io = "0.3"
 
 num_cpus.workspace = true
 tempfile = "3.10.0"
-log = "0.4.20"
+log = "0.4.22"
 
 memmap2 = "0.9.4"
 trait-variant.workspace = true

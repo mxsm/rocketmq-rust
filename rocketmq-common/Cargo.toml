@@ -47,7 +47,7 @@ zstd = "0.13"
 
 local-ip-address = "0.6.1"
 chrono = "0.4.38"
-log = "0.4.20"
+log = "0.4.22"
 
 parking_lot = { workspace = true }
 once_cell = { workspace = true }
