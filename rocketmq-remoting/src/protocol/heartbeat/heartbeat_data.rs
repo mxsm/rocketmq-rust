@@ -40,7 +40,10 @@ pub struct HeartbeatData {
 mod tests {
     use std::collections::HashSet;
 
+    use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
+
     use super::*;
+    use crate::protocol::RemotingSerializable;
 
     #[test]
     fn heartbeat_data_serialization_deserialization() {
@@ -58,7 +61,7 @@ mod tests {
         };
 
         let serialized = original.encode();
-        let deserialized = HeartbeatData::decode(serialized.as_slice());
+        let deserialized = SerdeJsonUtils::decode::<HeartbeatData>(serialized.as_slice());
 
         assert_eq!(original, deserialized);
     }
@@ -74,7 +77,7 @@ mod tests {
         };
 
         let serialized = original.encode();
-        let deserialized = HeartbeatData::decode(serialized.as_slice());
+        let deserialized = SerdeJsonUtils::decode::<HeartbeatData>(serialized.as_slice());
 
         assert_eq!(original, deserialized);
     }
@@ -90,7 +93,7 @@ mod tests {
         };
 
         let serialized = original.encode();
-        let deserialized = HeartbeatData::decode(serialized.as_slice());
+        let deserialized = SerdeJsonUtils::decode::<HeartbeatData>(serialized.as_slice());
 
         assert_eq!(original, deserialized);
     }
