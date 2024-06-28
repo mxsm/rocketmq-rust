@@ -54,8 +54,8 @@ impl RpcClientUtils {
         //     None
         // } else if let Some(bytes) = body.downcast_ref::<Bytes>() {
         //     Ok(Some(bytes.clone()))
-        // } else if let Some(remoting_serializable) = body.downcast_ref::<&dyn RemotingSerializable>()
-        // {
+        // } else if let Some(remoting_serializable) = body.downcast_ref::<&dyn
+        // RemotingSerializable>() {
         //     Ok(Some(Bytes::from(*remoting_serializable.encode())))
         // } else if let Some(buffer) = body.downcast_ref::<BytesMut>() {
         //     let data = buffer.clone().freeze();
