@@ -18,10 +18,8 @@
 use std::any::Any;
 
 use bytes::Bytes;
-use bytes::BytesMut;
 
 use crate::protocol::remoting_command::RemotingCommand;
-use crate::protocol::RemotingSerializable;
 use crate::rpc::rpc_request::RpcRequest;
 use crate::rpc::rpc_response::RpcResponse;
 
@@ -29,8 +27,8 @@ pub struct RpcClientUtils;
 
 impl RpcClientUtils {
     pub fn create_command_for_rpc_request(rpc_request: RpcRequest) -> RemotingCommand {
-        let cmd = RemotingCommand::create_request_command(rpc_request.code, rpc_request.header);
-        cmd.set_body(Self::encode_body(&**rpc_request.body))
+        RemotingCommand::create_request_command(rpc_request.code, rpc_request.header)
+        //cmd.set_body(Self::encode_body(&**rpc_request.body))
     }
 
     pub fn create_command_for_rpc_response(mut rpc_response: RpcResponse) -> RemotingCommand {
@@ -43,13 +41,13 @@ impl RpcClientUtils {
             None => {}
             Some(value) => cmd.set_remark_ref(Some(value.1.clone())),
         }
-        if let Some(ref body) = rpc_response.body {
-            return cmd.set_body(Self::encode_body(&**body));
+        if let Some(ref _body) = rpc_response.body {
+            return cmd;
         }
         cmd
     }
 
-    pub fn encode_body(body: &dyn Any) -> Option<Bytes> {
+    pub fn encode_body(_body: &dyn Any) -> Option<Bytes> {
         // if body.is::<()>() {
         //     None
         // } else if let Some(bytes) = body.downcast_ref::<Bytes>() {
