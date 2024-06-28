@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
+use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::FileUtils;
 use rocketmq_remoting::protocol::body::kv_table::KVTable;
 use rocketmq_remoting::protocol::RemotingSerializable;
@@ -75,7 +76,7 @@ impl KVConfigManager {
     pub fn load(&mut self) {
         let result = FileUtils::file_to_string(self.namesrv_config.kv_config_path.as_str());
         if let Ok(content) = result {
-            let wrapper = KVConfigSerializeWrapper::decode(content.as_bytes());
+            let wrapper = SerdeJsonUtils::decode::<KVConfigSerializeWrapper>(content.as_bytes());
             if let Some(ref config_table) = wrapper.config_table {
                 for (namespace, config) in config_table {
                     self.config_table.insert(namespace.clone(), config.clone());

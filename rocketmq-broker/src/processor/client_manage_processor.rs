@@ -24,12 +24,12 @@ use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::IS_SUB_CHANGE;
 use rocketmq_common::common::mix_all::IS_SUPPORT_HEART_BEAT_V2;
 use rocketmq_common::common::sys_flag::topic_sys_flag;
+use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
 use rocketmq_store::log_file::MessageStore;
 use tracing::info;
@@ -129,8 +129,9 @@ where
         ctx: ConnectionHandlerContext<'_>,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
-        let heartbeat_data =
-            HeartbeatData::decode(request.body().as_ref().map(|v| v.as_ref()).unwrap());
+        let heartbeat_data = SerdeJsonUtils::decode::<HeartbeatData>(
+            request.body().as_ref().map(|v| v.as_ref()).unwrap(),
+        );
         let client_channel_info = ClientChannelInfo::new(
             ctx.as_ref().connection().channel().clone(),
             heartbeat_data.client_id.clone(),

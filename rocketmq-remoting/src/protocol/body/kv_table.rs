@@ -20,13 +20,7 @@ use std::collections::HashMap;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::protocol::RemotingSerializable;
-
 #[derive(Deserialize, Serialize, Debug, Clone, Default)]
 pub struct KVTable {
     pub table: HashMap<String, String>,
-}
-
-impl RemotingSerializable for KVTable {
-    type Output = Self;
 }

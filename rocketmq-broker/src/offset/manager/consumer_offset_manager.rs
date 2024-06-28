@@ -223,7 +223,3 @@ struct ConsumerOffsetWrapper {
     #[serde(skip)]
     version_change_counter: Arc<AtomicI64>,
 }
-
-impl RemotingSerializable for ConsumerOffsetWrapper {
-    type Output = Self;
-}

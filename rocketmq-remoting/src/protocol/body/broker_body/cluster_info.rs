@@ -22,7 +22,6 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protocol::route::route_data_view::BrokerData;
-use crate::protocol::RemotingSerializable;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ClusterInfo {
@@ -31,18 +30,6 @@ pub struct ClusterInfo {
 
     #[serde(rename = "clusterAddrTable")]
     cluster_addr_table: Option<HashMap<String, HashSet<String>>>,
-}
-
-impl RemotingSerializable for ClusterInfo {
-    type Output = ClusterInfo;
-
-    /*fn decode(bytes: &[u8]) -> ClusterInfo {
-        serde_json::from_slice::<Self::Output>(bytes).unwrap()
-    }
-
-    fn encode(&self, _compress: bool) -> Vec<u8> {
-        serde_json::to_vec(self).unwrap()
-    }*/
 }
 
 impl ClusterInfo {

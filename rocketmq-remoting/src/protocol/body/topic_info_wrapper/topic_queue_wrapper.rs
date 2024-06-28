@@ -17,14 +17,13 @@
 
 use std::collections::HashMap;
 
-use rocketmq_macros::RemotingSerializable;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use crate::protocol::DataVersion;
 
-#[derive(Clone, Debug, Serialize, Deserialize, RemotingSerializable, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct TopicQueueMappingSerializeWrapper {
     topic_queue_mapping_info_map: Option<HashMap<String, TopicQueueMappingDetail>>,

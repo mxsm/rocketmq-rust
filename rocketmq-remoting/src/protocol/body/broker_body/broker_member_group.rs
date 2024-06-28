@@ -19,8 +19,6 @@ use std::collections::HashMap;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::protocol::RemotingSerializable;
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct BrokerMemberGroup {
@@ -43,16 +41,8 @@ impl BrokerMemberGroup {
     }
 }
 
-impl RemotingSerializable for BrokerMemberGroup {
-    type Output = BrokerMemberGroup;
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct GetBrokerMemberGroupResponseBody {
     pub broker_member_group: Option<BrokerMemberGroup>,
-}
-
-impl RemotingSerializable for GetBrokerMemberGroupResponseBody {
-    type Output = GetBrokerMemberGroupResponseBody;
 }

@@ -24,8 +24,8 @@ use std::time::SystemTime;
 
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::topic::TopicValidator;
+use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::utils::time_utils;
-use serde::de;
 use serde::ser::SerializeStruct;
 use serde::Deserialize;
 use serde::Serialize;
@@ -222,10 +222,6 @@ impl<'de> Deserialize<'de> for DataVersion {
     }
 }
 
-impl RemotingSerializable for DataVersion {
-    type Output = DataVersion;
-}
-
 impl Clone for DataVersion {
     fn clone(&self) -> Self {
         DataVersion {
@@ -326,44 +322,24 @@ impl Display for DataVersion {
 
 /// A trait for types that can be deserialized from a byte vector.
 pub trait RemotingSerializable {
-    /// The output type after deserialization.
-    type Output;
+    fn encode(&self) -> Vec<u8>;
+    fn to_json(&self) -> String;
+    fn to_json_pretty(&self) -> String;
+}
 
-    /// Decode a byte vector into the corresponding type.
-    ///
-    /// # Arguments
-    ///
-    /// * `bytes` - The byte vector to be deserialized.
-    ///
-    /// # Returns
-    ///
-    /// The deserialized output of type `Self::Output`.
-    fn decode<'a>(bytes: &'a [u8]) -> Self::Output
-    where
-        Self::Output: de::Deserialize<'a>,
-    {
-        serde_json::from_slice::<Self::Output>(bytes).unwrap()
+pub trait JsonSerializable: Serialize + RemotingSerializable {}
+
+impl<T: Serialize> RemotingSerializable for T {
+    fn encode(&self) -> Vec<u8> {
+        SerdeJsonUtils::to_json_vec(self).unwrap()
     }
 
-    fn encode(&self) -> Vec<u8>
-    where
-        Self: Serialize,
-    {
-        serde_json::to_vec(self).unwrap()
+    fn to_json(&self) -> String {
+        SerdeJsonUtils::to_json(self).unwrap()
     }
 
-    fn to_json(&self) -> String
-    where
-        Self: Serialize,
-    {
-        serde_json::to_string(self).unwrap()
-    }
-
-    fn to_json_pretty(&self) -> String
-    where
-        Self: Serialize,
-    {
-        serde_json::to_string_pretty(self).unwrap()
+    fn to_json_pretty(&self) -> String {
+        SerdeJsonUtils::to_json_pretty(self).unwrap()
     }
 }
 
