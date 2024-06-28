@@ -26,7 +26,7 @@ impl SerdeJsonUtils {
         serde_json::from_slice::<T>(bytes).unwrap()
     }
 
-    pub fn from_json<T>(json: &str) -> Result<T, SerdeJsonError>
+    pub fn from_json_str<T>(json: &str) -> Result<T, SerdeJsonError>
     where
         T: serde::de::DeserializeOwned,
     {
@@ -79,14 +79,14 @@ mod tests {
     #[test]
     fn from_json_returns_expected_result() {
         let json = r#"{"key": "value"}"#;
-        let result: Result<Value, _> = SerdeJsonUtils::from_json(json);
+        let result: Result<Value, _> = SerdeJsonUtils::from_json_str(json);
         assert!(result.is_ok());
     }
 
     #[test]
     fn from_json_returns_error_for_invalid_json() {
         let json = "invalid";
-        let result: Result<Value, _> = SerdeJsonUtils::from_json(json);
+        let result: Result<Value, _> = SerdeJsonUtils::from_json_str(json);
         assert!(result.is_err());
     }
 
@@ -151,14 +151,14 @@ mod tests {
             name: "Alice".to_string(),
             age: 30,
         };
-        let result: TestStruct = SerdeJsonUtils::from_json(json_str).unwrap();
+        let result: TestStruct = SerdeJsonUtils::from_json_str(json_str).unwrap();
         assert_eq!(result, expected);
     }
 
     #[test]
     fn test_from_json_error() {
         let json_str = r#"{"name":"Alice","age":"thirty"}"#;
-        let result: Result<TestStruct, SerdeJsonError> = SerdeJsonUtils::from_json(json_str);
+        let result: Result<TestStruct, SerdeJsonError> = SerdeJsonUtils::from_json_str(json_str);
         assert!(result.is_err());
     }
 

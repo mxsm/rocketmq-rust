@@ -16,6 +16,8 @@
  */
 #![allow(dead_code)]
 #![feature(duration_constructors)]
+#![feature(sync_unsafe_cell)]
+#![allow(clippy::mut_from_ref)]
 
 pub use broker_bootstrap::BrokerBootstrap;
 pub use broker_bootstrap::Builder;
