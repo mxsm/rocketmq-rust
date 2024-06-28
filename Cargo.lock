@@ -1405,6 +1405,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror",
  "time",
  "tokio",
  "tracing",
