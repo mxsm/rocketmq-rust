@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 
+use std::cell::SyncUnsafeCell;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -27,6 +28,7 @@ use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::topic::TopicValidator;
+use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::TopicAttributes::ALL;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper;
@@ -43,7 +45,7 @@ use crate::broker_runtime::BrokerRuntimeInner;
 
 pub(crate) struct TopicConfigManager {
     topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
-    data_version: Arc<parking_lot::Mutex<DataVersion>>,
+    data_version: Arc<SyncUnsafeCell<DataVersion>>,
     broker_config: Arc<BrokerConfig>,
     message_store: Option<DefaultMessageStore>,
     topic_config_table_lock: Arc<parking_lot::ReentrantMutex<()>>,
@@ -72,7 +74,7 @@ impl TopicConfigManager {
     ) -> Self {
         let mut manager = Self {
             topic_config_table: Arc::new(parking_lot::Mutex::new(HashMap::new())),
-            data_version: Arc::new(parking_lot::Mutex::new(DataVersion::default())),
+            data_version: Arc::new(SyncUnsafeCell::new(DataVersion::default())),
             broker_config,
             message_store: None,
             topic_config_table_lock: Default::default(),
@@ -229,7 +231,7 @@ impl TopicConfigManager {
         topic_queue_mapping_info_map: HashMap<String, TopicQueueMappingInfo>,
     ) -> TopicConfigAndMappingSerializeWrapper {
         if self.broker_config.enable_split_registration {
-            self.data_version.lock().next_version();
+            self.data_version_mut().next_version();
         }
         TopicConfigAndMappingSerializeWrapper {
             topic_config_table: Some(topic_config_table),
@@ -294,7 +296,7 @@ impl TopicConfigManager {
                         default_topic, topic_config, remote_address
                     );
                     self.put_topic_config(topic_config.clone());
-                    self.data_version.lock().next_version_with(
+                    self.data_version_mut().next_version_with(
                         self.message_store
                             .as_ref()
                             .unwrap()
@@ -355,7 +357,7 @@ impl TopicConfigManager {
             config.order = is_order;
 
             self.put_topic_config(config.clone());
-            self.data_version.lock().next_version_with(
+            self.data_version_mut().next_version_with(
                 self.message_store
                     .as_ref()
                     .unwrap()
@@ -411,7 +413,7 @@ impl TopicConfigManager {
             }
         }
 
-        self.data_version.lock().next_version_with(
+        self.data_version_mut().next_version_with(
             self.message_store
                 .as_ref()
                 .unwrap()
@@ -478,7 +480,7 @@ impl TopicConfigManager {
             config.topic_sys_flag = 0;
             info!("create new topic {:?}", config);
             self.put_topic_config(config.clone());
-            self.data_version.lock().next_version_with(
+            self.data_version_mut().next_version_with(
                 self.message_store
                     .as_ref()
                     .unwrap()
@@ -499,10 +501,16 @@ impl TopicConfigManager {
     pub fn contains_topic(&self, topic: &str) -> bool {
         self.topic_config_table.lock().contains_key(topic)
     }
+
+    fn data_version(&self) -> &DataVersion {
+        unsafe { &*self.data_version.get() }
+    }
+
+    fn data_version_mut(&self) -> &mut DataVersion {
+        unsafe { &mut *self.data_version.get() }
+    }
 }
 
-//Fully implemented will be removed
-#[allow(unused_variables)]
 impl ConfigManager for TopicConfigManager {
     fn config_file_path(&self) -> String {
         get_topic_config_path(self.broker_config.store_path_root_dir.as_str())
@@ -510,7 +518,7 @@ impl ConfigManager for TopicConfigManager {
 
     fn encode_pretty(&self, pretty_format: bool) -> String {
         let topic_config_table = self.topic_config_table.lock().clone();
-        let version = self.data_version.lock().clone();
+        let version = self.data_version().clone();
         match pretty_format {
             true => TopicConfigSerializeWrapper::new(Some(topic_config_table), Some(version))
                 .to_json_pretty(),
@@ -525,10 +533,10 @@ impl ConfigManager for TopicConfigManager {
         if json_string.is_empty() {
             return;
         }
-        let wrapper = serde_json::from_str::<TopicConfigSerializeWrapper>(json_string)
+        let wrapper = SerdeJsonUtils::from_json_str::<TopicConfigSerializeWrapper>(json_string)
             .expect("Decode TopicConfigSerializeWrapper from json failed");
         if let Some(value) = wrapper.data_version() {
-            self.data_version.lock().assign_new_one(value);
+            self.data_version_mut().assign_new_one(value);
         }
         if let Some(map) = wrapper.topic_config_table() {
             for (key, value) in map {
