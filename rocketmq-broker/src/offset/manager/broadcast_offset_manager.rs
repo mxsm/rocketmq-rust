@@ -30,4 +30,16 @@ impl BroadcastOffsetManager {
     ) -> i64 {
         unimplemented!()
     }
+
+    pub fn update_offset(
+        &self,
+        topic: &str,
+        group: &str,
+        queue_id: i32,
+        offset: i64,
+        client_id: &str,
+        from_proxy: bool,
+    ) {
+        unimplemented!()
+    }
 }

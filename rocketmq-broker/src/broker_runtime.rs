@@ -94,6 +94,7 @@ pub(crate) struct BrokerRuntime {
     broker_runtime: Option<RocketMQRuntime>,
     producer_manager: Arc<ProducerManager>,
     consumer_manager: Arc<ConsumerManager>,
+    broadcast_offset_manager: Arc<BroadcastOffsetManager>,
     drop: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
     shutdown_hook: Option<BrokerShutdownHook>,
@@ -124,6 +125,7 @@ impl Clone for BrokerRuntime {
             broker_runtime: None,
             producer_manager: self.producer_manager.clone(),
             consumer_manager: self.consumer_manager.clone(),
+            broadcast_offset_manager: self.broadcast_offset_manager.clone(),
             drop: self.drop.clone(),
             shutdown: self.shutdown.clone(),
             shutdown_hook: self.shutdown_hook.clone(),
@@ -196,6 +198,7 @@ impl BrokerRuntime {
             broker_runtime: Some(runtime),
             producer_manager,
             consumer_manager,
+            broadcast_offset_manager: Arc::new(Default::default()),
             drop: Arc::new(AtomicBool::new(false)),
             shutdown: Arc::new(AtomicBool::new(false)),
             shutdown_hook: None,
@@ -361,6 +364,10 @@ impl BrokerRuntime {
         );
         let pull_message_result_handler = DefaultPullMessageResultHandler::new(
             Arc::new(self.topic_config_manager.clone()),
+            Arc::new(self.consumer_offset_manager.clone()),
+            self.consumer_manager.clone(),
+            self.broadcast_offset_manager.clone(),
+            self.broker_stats_manager.clone(),
             self.broker_config.clone(),
             Arc::new(Default::default()),
         );

@@ -51,7 +51,7 @@ impl RequestSource {
         RequestSource::SDK
     }
 
-    fn from_value(value: i32) -> RequestSource {
+    pub fn from_value(value: i32) -> RequestSource {
         match value {
             -1 => RequestSource::SDK,
             0 => RequestSource::ProxyForOrder,

@@ -155,6 +155,10 @@ impl GetMessageResult {
         self.message_queue_offset.push(queue_offset);
         self.message_mapped_list.push(maped_buffer);
     }
+
+    pub fn message_mapped_list(&self) -> &[SelectMappedBufferResult] {
+        self.message_mapped_list.as_slice()
+    }
 }
 
 #[cfg(test)]

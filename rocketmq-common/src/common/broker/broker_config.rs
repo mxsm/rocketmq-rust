@@ -154,6 +154,7 @@ pub struct BrokerConfig {
     pub reject_pull_consumer_enable: bool,
     pub consumer_offset_update_version_step: i64,
     pub enable_broadcast_offset_store: bool,
+    pub transfer_msg_by_heap: bool,
 }
 
 impl Default for BrokerConfig {
@@ -219,6 +220,7 @@ impl Default for BrokerConfig {
             reject_pull_consumer_enable: false,
             consumer_offset_update_version_step: 500,
             enable_broadcast_offset_store: true,
+            transfer_msg_by_heap: true,
         }
     }
 }
