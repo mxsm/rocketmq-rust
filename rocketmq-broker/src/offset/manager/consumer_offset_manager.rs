@@ -180,6 +180,23 @@ impl ConfigManager for ConsumerOffsetManager {
 
 #[allow(unused_variables)]
 impl ConsumerOffsetManager {
+    pub fn commit_pull_offset(
+        &self,
+        _client_host: SocketAddr,
+        group: &str,
+        topic: &str,
+        queue_id: i32,
+        offset: i64,
+    ) {
+        let key = format!("{}{}{}", topic, TOPIC_GROUP_SEPARATOR, group);
+        self.consumer_offset_wrapper
+            .lock()
+            .pull_offset_table
+            .entry(key)
+            .or_default()
+            .insert(queue_id, offset);
+    }
+
     pub fn query_then_erase_reset_offset(
         &self,
         topic: &str,

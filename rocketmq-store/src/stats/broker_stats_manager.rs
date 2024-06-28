@@ -473,6 +473,18 @@ impl BrokerStatsManager {
         fall_behind: i64,
     ) {
     }
+
+    pub fn inc_topic_put_nums(&self, topic: &str, num: i32, times: i32) {}
+
+    pub fn inc_topic_put_size(&self, topic: &str, size: i32) {}
+
+    pub fn inc_group_get_nums(&self, group: &str, topic: &str, inc_value: i32) {}
+    pub fn inc_group_get_size(&self, group: &str, topic: &str, inc_value: i32) {}
+
+    pub fn inc_group_ck_nums(&self, group: &str, topic: &str, inc_value: i32) {}
+
+    pub fn inc_group_ack_nums(&self, group: &str, topic: &str, inc_value: i32) {}
+    pub fn inc_broker_get_nums(&self, group: &str, inc_value: i32) {}
 }
 
 pub fn create_statistics_kind_meta(

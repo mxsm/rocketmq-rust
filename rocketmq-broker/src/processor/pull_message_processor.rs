@@ -178,7 +178,7 @@ impl<MS> PullMessageProcessor<MS> {
 
         let rpc_response = RpcResponse::default();
         let response_header = rpc_response.get_header_mut::<PullMessageResponseHeader>();
-        let rewrite_result = Self::rewrite_response_for_static_topic(
+        let rewrite_result = rewrite_response_for_static_topic(
             request_header,
             response_header.unwrap(),
             mapping_context,
@@ -191,128 +191,129 @@ impl<MS> PullMessageProcessor<MS> {
             rpc_response,
         ))
     }
+}
 
-    pub fn rewrite_response_for_static_topic(
-        request_header: &PullMessageRequestHeader,
-        response_header: &mut PullMessageResponseHeader,
-        mapping_context: &mut TopicQueueMappingContext,
-        code: ResponseCode,
-    ) -> Option<RemotingCommand> {
-        mapping_context.mapping_detail.as_ref()?;
-        let mapping_detail = mapping_context.mapping_detail.as_ref().unwrap();
-        let leader_item = mapping_context.leader_item.as_ref().unwrap();
-        let current_item = mapping_context.current_item.as_ref().unwrap();
-        let mapping_items = &mut mapping_context.mapping_item_list;
-        let earlist_item =
-            TopicQueueMappingUtils::find_logic_queue_mapping_item(mapping_items, 0, true).unwrap();
+pub fn rewrite_response_for_static_topic(
+    request_header: &PullMessageRequestHeader,
+    response_header: &mut PullMessageResponseHeader,
+    mapping_context: &mut TopicQueueMappingContext,
+    code: ResponseCode,
+) -> Option<RemotingCommand> {
+    mapping_context.mapping_detail.as_ref()?;
+    let mapping_detail = mapping_context.mapping_detail.as_ref().unwrap();
+    let leader_item = mapping_context.leader_item.as_ref().unwrap();
+    let current_item = mapping_context.current_item.as_ref().unwrap();
+    let mapping_items = &mut mapping_context.mapping_item_list;
+    let earlist_item =
+        TopicQueueMappingUtils::find_logic_queue_mapping_item(mapping_items, 0, true).unwrap();
 
-        assert!(current_item.logic_offset >= 0);
+    assert!(current_item.logic_offset >= 0);
 
-        let request_offset = request_header.queue_offset;
-        let mut next_begin_offset = response_header.next_begin_offset;
-        let mut min_offset = response_header.min_offset;
-        let mut max_offset = response_header.max_offset;
-        let mut response_code = code;
+    let request_offset = request_header.queue_offset;
+    let mut next_begin_offset = response_header.next_begin_offset;
+    let mut min_offset = response_header.min_offset;
+    let mut max_offset = response_header.max_offset;
+    let mut response_code = code;
 
-        if code != ResponseCode::Success {
-            let mut is_revised = false;
-            if leader_item.gen == current_item.gen {
-                if request_offset > max_offset.unwrap() {
-                    if code == ResponseCode::PullOffsetMoved {
-                        response_code = ResponseCode::PullOffsetMoved;
-                        next_begin_offset = max_offset;
-                    } else {
-                        response_code = code;
-                    }
-                } else if request_offset < min_offset.unwrap() {
-                    next_begin_offset = min_offset;
-                    response_code = ResponseCode::PullRetryImmediately;
+    if code != ResponseCode::Success {
+        let mut is_revised = false;
+        if leader_item.gen == current_item.gen {
+            if request_offset > max_offset.unwrap() {
+                if code == ResponseCode::PullOffsetMoved {
+                    response_code = ResponseCode::PullOffsetMoved;
+                    next_begin_offset = max_offset;
                 } else {
                     response_code = code;
                 }
+            } else if request_offset < min_offset.unwrap() {
+                next_begin_offset = min_offset;
+                response_code = ResponseCode::PullRetryImmediately;
+            } else {
+                response_code = code;
             }
+        }
 
-            if earlist_item.gen == current_item.gen {
-                if request_offset < min_offset.unwrap() {
-                    /*if code == ResponseCode::PullOffsetMoved {
-                        response_code = ResponseCode::PullOffsetMoved;
-                        next_begin_offset = min_offset;
-                    } else {
-                        response_code = ResponseCode::PullOffsetMoved;
-                        next_begin_offset = min_offset;
-                    }*/
+        if earlist_item.gen == current_item.gen {
+            if request_offset < min_offset.unwrap() {
+                /*if code == ResponseCode::PullOffsetMoved {
                     response_code = ResponseCode::PullOffsetMoved;
                     next_begin_offset = min_offset;
-                } else if request_offset >= max_offset.unwrap() {
-                    if let Some(next_item) =
-                        TopicQueueMappingUtils::find_next(mapping_items, Some(current_item), true)
-                    {
-                        is_revised = true;
-                        next_begin_offset = Some(next_item.start_offset);
-                        min_offset = Some(next_item.start_offset);
-                        max_offset = min_offset;
-                        response_code = ResponseCode::PullRetryImmediately;
-                    } else {
-                        response_code = ResponseCode::PullNotFound;
-                    }
                 } else {
-                    response_code = code;
-                }
-            }
-
-            if !is_revised
-                && leader_item.gen != current_item.gen
-                && earlist_item.gen != current_item.gen
-            {
-                if request_offset < min_offset? {
+                    response_code = ResponseCode::PullOffsetMoved;
                     next_begin_offset = min_offset;
+                }*/
+                response_code = ResponseCode::PullOffsetMoved;
+                next_begin_offset = min_offset;
+            } else if request_offset >= max_offset.unwrap() {
+                if let Some(next_item) =
+                    TopicQueueMappingUtils::find_next(mapping_items, Some(current_item), true)
+                {
+                    is_revised = true;
+                    next_begin_offset = Some(next_item.start_offset);
+                    min_offset = Some(next_item.start_offset);
+                    max_offset = min_offset;
                     response_code = ResponseCode::PullRetryImmediately;
-                } else if request_offset >= max_offset? {
-                    if let Some(next_item) =
-                        TopicQueueMappingUtils::find_next(mapping_items, Some(current_item), true)
-                    {
-                        next_begin_offset = Some(next_item.start_offset);
-                        min_offset = Some(next_item.start_offset);
-                        max_offset = min_offset;
-                        response_code = ResponseCode::PullRetryImmediately;
-                    } else {
-                        response_code = ResponseCode::PullNotFound;
-                    }
                 } else {
-                    response_code = code;
+                    response_code = ResponseCode::PullNotFound;
                 }
+            } else {
+                response_code = code;
             }
         }
 
-        if current_item.check_if_end_offset_decided()
-            && next_begin_offset.unwrap() >= current_item.end_offset
+        if !is_revised
+            && leader_item.gen != current_item.gen
+            && earlist_item.gen != current_item.gen
         {
-            next_begin_offset = Some(current_item.end_offset);
+            if request_offset < min_offset? {
+                next_begin_offset = min_offset;
+                response_code = ResponseCode::PullRetryImmediately;
+            } else if request_offset >= max_offset? {
+                if let Some(next_item) =
+                    TopicQueueMappingUtils::find_next(mapping_items, Some(current_item), true)
+                {
+                    next_begin_offset = Some(next_item.start_offset);
+                    min_offset = Some(next_item.start_offset);
+                    max_offset = min_offset;
+                    response_code = ResponseCode::PullRetryImmediately;
+                } else {
+                    response_code = ResponseCode::PullNotFound;
+                }
+            } else {
+                response_code = code;
+            }
         }
+    }
 
-        response_header.next_begin_offset =
-            Some(current_item.compute_static_queue_offset_strictly(next_begin_offset.unwrap()));
-        response_header.min_offset = Some(current_item.compute_static_queue_offset_strictly(
+    if current_item.check_if_end_offset_decided()
+        && next_begin_offset.unwrap() >= current_item.end_offset
+    {
+        next_begin_offset = Some(current_item.end_offset);
+    }
+
+    response_header.next_begin_offset =
+        Some(current_item.compute_static_queue_offset_strictly(next_begin_offset.unwrap()));
+    response_header.min_offset =
+        Some(current_item.compute_static_queue_offset_strictly(
             min_offset.unwrap().max(current_item.start_offset),
         ));
-        response_header.max_offset = Some(
-            current_item
-                .compute_static_queue_offset_strictly(max_offset.unwrap())
-                .max(TopicQueueMappingDetail::compute_max_offset_from_mapping(
-                    mapping_detail,
-                    mapping_context.global_id,
-                )),
-        );
-        response_header.offset_delta = Some(current_item.compute_offset_delta());
+    response_header.max_offset = Some(
+        current_item
+            .compute_static_queue_offset_strictly(max_offset.unwrap())
+            .max(TopicQueueMappingDetail::compute_max_offset_from_mapping(
+                mapping_detail,
+                mapping_context.global_id,
+            )),
+    );
+    response_header.offset_delta = Some(current_item.compute_offset_delta());
 
-        if code != ResponseCode::Success {
-            Some(
-                RemotingCommand::create_response_command_with_header(response_header.clone())
-                    .set_code(response_code),
-            )
-        } else {
-            None
-        }
+    if code != ResponseCode::Success {
+        Some(
+            RemotingCommand::create_response_command_with_header(response_header.clone())
+                .set_code(response_code),
+        )
+    } else {
+        None
     }
 }
 
@@ -792,5 +793,18 @@ where
             }
             None => proxy_pull_broadcast,
         }
+    }
+}
+pub(crate) fn is_broadcast(
+    proxy_pull_broadcast: bool,
+    consumer_group_info: Option<&ConsumerGroupInfo>,
+) -> bool {
+    match consumer_group_info {
+        Some(info) => {
+            proxy_pull_broadcast
+                || (info.get_message_model() == MessageModel::Broadcasting
+                    && info.get_consume_type() == ConsumeType::ConsumePassively)
+        }
+        None => proxy_pull_broadcast,
     }
 }
