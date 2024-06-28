@@ -57,5 +57,6 @@ time = "0.3.36"
 dashmap = "6.0.1"
 hostname = "0.4"
 regex = "1.10.5"
+thiserror = { workspace = true }
 [dev-dependencies]
 mockall = "0.12.1"
