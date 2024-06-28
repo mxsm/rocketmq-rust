@@ -20,6 +20,7 @@ use dns_lookup::lookup_host;
 use rocketmq_common::common::broker::broker_config::BrokerIdentity;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::utils::crc32_utils;
+use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
 use rocketmq_remoting::code::request_code::RequestCode;
@@ -209,7 +210,7 @@ impl BrokerOuterAPI {
                         result.master_addr = header.master_addr.clone().unwrap_or("".to_string());
                     }
                     if let Some(body) = response.body() {
-                        result.kv_table = KVTable::decode(body.as_ref());
+                        result.kv_table = SerdeJsonUtils::decode::<KVTable>(body.as_ref());
                     }
                     Some(result)
                 }

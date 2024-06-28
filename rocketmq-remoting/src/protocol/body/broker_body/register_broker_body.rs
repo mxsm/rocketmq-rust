@@ -17,6 +17,7 @@
 
 use bytes::Bytes;
 use rocketmq_common::common::mq_version::RocketMqVersion;
+use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -66,20 +67,8 @@ impl RegisterBrokerBody {
         _broker_version: RocketMqVersion,
     ) -> RegisterBrokerBody {
         if !compressed {
-            return <RegisterBrokerBody as RemotingSerializable>::decode(bytes.iter().as_slice());
+            return SerdeJsonUtils::decode::<RegisterBrokerBody>(bytes.iter().as_slice());
         }
         todo!()
     }
-}
-
-impl RemotingSerializable for RegisterBrokerBody {
-    type Output = RegisterBrokerBody;
-
-    /* fn decode(bytes: &[u8]) -> Self::Output {
-        serde_json::from_slice::<Self::Output>(bytes).unwrap()
-    }
-
-    fn encode(&self, _compress: bool) -> Vec<u8> {
-        todo!()
-    }*/
 }

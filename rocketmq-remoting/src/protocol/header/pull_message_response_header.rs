@@ -18,16 +18,13 @@
 use std::collections::HashMap;
 
 use bytes::BytesMut;
-use rocketmq_macros::RemotingSerializable;
 use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protocol::FastCodesHeader;
 
-#[derive(
-    Serialize, Deserialize, Debug, Default, RemotingSerializable, RequestHeaderCodec, Clone,
-)]
+#[derive(Serialize, Deserialize, Debug, Default, RequestHeaderCodec, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct PullMessageResponseHeader {
     pub suggest_which_broker_id: Option<u64>,

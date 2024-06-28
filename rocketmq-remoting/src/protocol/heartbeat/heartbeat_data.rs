@@ -21,7 +21,6 @@ use serde::Serialize;
 
 use crate::protocol::heartbeat::consumer_data::ConsumerData;
 use crate::protocol::heartbeat::producer_data::ProducerData;
-use crate::protocol::RemotingSerializable;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -37,11 +36,6 @@ pub struct HeartbeatData {
     #[serde(rename = "withoutSub", default)]
     pub is_without_sub: bool,
 }
-
-impl RemotingSerializable for HeartbeatData {
-    type Output = HeartbeatData;
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;

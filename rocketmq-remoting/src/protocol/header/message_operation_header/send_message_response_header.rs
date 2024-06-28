@@ -16,14 +16,13 @@
  */
 use std::collections::HashMap;
 
-use rocketmq_macros::RemotingSerializable;
 use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protocol::FastCodesHeader;
 
-#[derive(Debug, Serialize, Deserialize, Default, RemotingSerializable, RequestHeaderCodec)]
+#[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
 pub struct SendMessageResponseHeader {
     msg_id: String,

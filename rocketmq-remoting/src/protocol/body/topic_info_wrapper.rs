@@ -22,7 +22,6 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protocol::DataVersion;
-use crate::protocol::RemotingSerializable;
 
 pub mod topic_config_wrapper;
 pub mod topic_queue_wrapper;
@@ -73,8 +72,4 @@ impl TopicConfigSerializeWrapper {
     pub fn set_data_version(&mut self, data_version: Option<DataVersion>) {
         self.data_version = data_version;
     }
-}
-
-impl RemotingSerializable for TopicConfigSerializeWrapper {
-    type Output = Self;
 }

@@ -21,7 +21,6 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
-use crate::protocol::RemotingSerializable;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrokerData {
@@ -169,8 +168,4 @@ pub struct TopicRouteData {
     pub filter_server_table: HashMap<String, Vec<String>>,
     #[serde(rename = "TopicQueueMappingInfo")]
     pub topic_queue_mapping_by_broker: Option<HashMap<String, TopicQueueMappingInfo>>,
-}
-
-impl RemotingSerializable for TopicRouteData {
-    type Output = Self;
 }

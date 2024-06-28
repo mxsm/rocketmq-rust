@@ -17,17 +17,11 @@
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::protocol::RemotingSerializable;
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct TopicList {
     pub topic_list: Vec<String>,
     pub broker_addr: Option<String>,
-}
-
-impl RemotingSerializable for TopicList {
-    type Output = TopicList;
 }
 
 #[cfg(test)]

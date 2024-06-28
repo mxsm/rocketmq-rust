@@ -23,7 +23,6 @@ use serde::Serialize;
 use crate::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
 use crate::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use crate::protocol::DataVersion;
-use crate::protocol::RemotingSerializable;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TopicConfigAndMappingSerializeWrapper {
@@ -73,10 +72,6 @@ impl Default for TopicConfigAndMappingSerializeWrapper {
             data_version: None,
         }
     }
-}
-
-impl RemotingSerializable for TopicConfigAndMappingSerializeWrapper {
-    type Output = TopicConfigAndMappingSerializeWrapper;
 }
 
 #[cfg(test)]

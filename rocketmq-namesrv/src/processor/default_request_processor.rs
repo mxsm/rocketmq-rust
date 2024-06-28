@@ -22,6 +22,7 @@ use bytes::Bytes;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
+use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::CRC32Utils;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::RemotingSysResponseCode;
@@ -176,8 +177,9 @@ impl DefaultRequestProcessor {
         let request_header = request
             .decode_command_custom_header::<QueryDataVersionRequestHeader>()
             .unwrap();
-        let data_version =
-            DataVersion::decode(request.body().as_ref().map(|v| v.as_ref()).unwrap());
+        let data_version = SerdeJsonUtils::decode::<DataVersion>(
+            request.body().as_ref().map(|v| v.as_ref()).unwrap(),
+        );
         let changed = self
             .route_info_manager
             .read()
@@ -407,7 +409,7 @@ impl DefaultRequestProcessor {
             .decode_command_custom_header::<RegisterTopicRequestHeader>()
             .unwrap();
         if let Some(ref body) = request.body() {
-            let topic_route_data = TopicRouteData::decode(body);
+            let topic_route_data = SerdeJsonUtils::decode::<TopicRouteData>(body);
             if !topic_route_data.queue_datas.is_empty() {
                 self.route_info_manager
                     .write()
@@ -514,7 +516,9 @@ fn extract_register_topic_config_from_request(
     request: &RemotingCommand,
 ) -> TopicConfigAndMappingSerializeWrapper {
     if let Some(body_inner) = request.body() {
-        return TopicConfigAndMappingSerializeWrapper::decode(body_inner.iter().as_slice());
+        return SerdeJsonUtils::decode::<TopicConfigAndMappingSerializeWrapper>(
+            body_inner.iter().as_slice(),
+        );
     }
     TopicConfigAndMappingSerializeWrapper::default()
 }

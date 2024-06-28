@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use rocketmq_macros::RemotingSerializable;
+
 use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
@@ -23,7 +23,7 @@ use crate::code::request_code::RequestCode;
 use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use crate::protocol::remoting_command::RemotingCommand;
 
-#[derive(Debug, Clone, Serialize, Deserialize, RemotingSerializable, RequestHeaderCodec)]
+#[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
 pub struct SendMessageRequestHeader {
     // the namespace name
@@ -144,7 +144,7 @@ impl TopicRequestHeaderTrait for SendMessageRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, RemotingSerializable, RequestHeaderCodec)]
+#[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
 pub struct SendMessageRequestHeaderV2 {
     // the namespace name

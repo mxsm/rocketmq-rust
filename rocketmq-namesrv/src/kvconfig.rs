@@ -17,7 +17,6 @@
 
 use std::collections::HashMap;
 
-use rocketmq_remoting::protocol::RemotingSerializable;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -44,8 +43,4 @@ impl KVConfigSerializeWrapper {
             config_table: Some(HashMap::new()),
         }
     }
-}
-
-impl RemotingSerializable for KVConfigSerializeWrapper {
-    type Output = Self;
 }

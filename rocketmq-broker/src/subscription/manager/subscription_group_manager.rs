@@ -204,7 +204,3 @@ impl SubscriptionGroupWrapper {
         &self.forbidden_table
     }
 }
-
-impl RemotingSerializable for SubscriptionGroupWrapper {
-    type Output = Self;
-}

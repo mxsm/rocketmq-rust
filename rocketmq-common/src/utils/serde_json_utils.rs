@@ -19,6 +19,13 @@ use crate::error::SerdeJsonError;
 pub struct SerdeJsonUtils;
 
 impl SerdeJsonUtils {
+    pub fn decode<T>(bytes: &[u8]) -> T
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        serde_json::from_slice::<T>(bytes).unwrap()
+    }
+
     pub fn from_json<T>(json: &str) -> Result<T, SerdeJsonError>
     where
         T: serde::de::DeserializeOwned,
