@@ -43,7 +43,7 @@ config.workspace = true
 parking_lot.workspace = true
 
 clap = { version = "4.5.7", features = ["derive"] }
-log = "0.4.20"
+log = "0.4.22"
 
 [[bin]]
 name = "rocketmq-namesrv-rust"
