@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 use std::collections::HashMap;
+use std::fmt;
 use std::fmt::Display;
 use std::fmt::Formatter;
 use std::sync::atomic::AtomicI64;
@@ -98,6 +99,26 @@ pub enum LanguageCode {
     RUST,
 }
 
+impl fmt::Display for LanguageCode {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            LanguageCode::JAVA => write!(f, "JAVA"),
+            LanguageCode::CPP => write!(f, "CPP"),
+            LanguageCode::DOTNET => write!(f, "DOTNET"),
+            LanguageCode::PYTHON => write!(f, "PYTHON"),
+            LanguageCode::DELPHI => write!(f, "DELPHI"),
+            LanguageCode::ERLANG => write!(f, "ERLANG"),
+            LanguageCode::RUBY => write!(f, "RUBY"),
+            LanguageCode::OTHER => write!(f, "OTHER"),
+            LanguageCode::HTTP => write!(f, "HTTP"),
+            LanguageCode::GO => write!(f, "GO"),
+            LanguageCode::PHP => write!(f, "PHP"),
+            LanguageCode::OMS => write!(f, "OMS"),
+            LanguageCode::RUST => write!(f, "RUST"),
+        }
+    }
+}
+
 impl LanguageCode {
     pub fn value_of(code: u8) -> Option<Self> {
         match code {
@@ -161,6 +182,15 @@ impl LanguageCode {
 pub enum SerializeType {
     JSON,
     ROCKETMQ,
+}
+
+impl fmt::Display for SerializeType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            SerializeType::JSON => write!(f, "JSON"),
+            SerializeType::ROCKETMQ => write!(f, "ROCKETMQ"),
+        }
+    }
 }
 
 impl SerializeType {

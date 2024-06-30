@@ -33,7 +33,7 @@ pub(crate) mod coldctr;
 pub(crate) mod controller;
 pub(crate) mod filter;
 pub(crate) mod hook;
-pub(crate) mod longpolling;
+pub(crate) mod long_polling;
 pub(crate) mod mqtrace;
 pub(crate) mod offset;
 pub(crate) mod out_api;

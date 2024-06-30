@@ -84,6 +84,7 @@ impl DefaultPullMessageResultHandler {
 }
 
 #[allow(unused_variables)]
+#[allow(unused_assignments)]
 impl PullMessageResultHandler for DefaultPullMessageResultHandler {
     fn handle(
         &self,
@@ -175,7 +176,26 @@ impl PullMessageResultHandler for DefaultPullMessageResultHandler {
                   }*/
                 None
             }
-            ResponseCode::PullNotFound => Some(response),
+            ResponseCode::PullNotFound => {
+                let has_suspend_flag =
+                    PullSysFlag::has_suspend_flag(request_header.sys_flag as u32);
+                let suspend_timeout_millis_long = if has_suspend_flag {
+                    request_header.suspend_timeout_millis
+                } else {
+                    0
+                };
+                if broker_allow_suspend && has_suspend_flag {
+                    let mut polling_time_mills = suspend_timeout_millis_long;
+                    if !self.broker_config.long_polling_enable {
+                        polling_time_mills = self.broker_config.short_polling_time_mills;
+                    }
+                    let topic = request_header.topic.as_str();
+                    let queue_id = request_header.queue_id.unwrap();
+                    let offset = request_header.queue_offset;
+                }
+
+                return None;
+            }
             ResponseCode::PullOffsetMoved => Some(response),
             ResponseCode::PullRetryImmediately => Some(response),
             _ => None,

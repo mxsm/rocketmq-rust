@@ -37,7 +37,7 @@ pub struct PullMessageRequestHeader {
     pub max_msg_nums: i32,
     pub sys_flag: i32,
     pub commit_offset: i64,
-    pub suspend_timeout_millis: i64,
+    pub suspend_timeout_millis: u64,
     pub subscription: Option<String>,
     pub sub_version: i64,
     pub expression_type: Option<String>,
@@ -213,7 +213,7 @@ impl CommandCustomHeader for PullMessageRequestHeader {
         }
 
         if let Some(str) = fields.get("suspendTimeoutMillis") {
-            self.suspend_timeout_millis = str.parse::<i64>().unwrap();
+            self.suspend_timeout_millis = str.parse::<u64>().unwrap();
         }
 
         if let Some(str) = fields.get("subscription") {

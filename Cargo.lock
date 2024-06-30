@@ -1484,6 +1484,7 @@ dependencies = [
  "futures-sink",
  "futures-util",
  "local-ip-address",
+ "log",
  "mockall",
  "parking_lot",
  "rand",
