@@ -781,7 +781,7 @@ where
         -1
     }
 
-    pub async fn execute_request_when_wakeup(&self, channel: Channel, request: RemotingCommand) {}
+    pub fn execute_request_when_wakeup(&self, channel: Channel, request: RemotingCommand) {}
 }
 pub(crate) fn is_broadcast(
     proxy_pull_broadcast: bool,

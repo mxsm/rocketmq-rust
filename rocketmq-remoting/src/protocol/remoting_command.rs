@@ -120,19 +120,16 @@ impl fmt::Display for RemotingCommand {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "{}",
-            format!(
-                "RemotingCommand [code={}, language={}, version={}, opaque={}, flag(B)={}, \
-                 remark={}, extFields={}, serializeTypeCurrentRPC={}]",
-                self.code,
-                self.language,
-                self.version,
-                self.opaque,
-                format!("{:b}", self.flag),
-                self.remark.as_ref().unwrap_or(&"".to_string()),
-                format!("{:?}", self.ext_fields),
-                self.serialize_type
-            )
+            "RemotingCommand [code={}, language={}, version={}, opaque={}, flag(B)={:b}, \
+             remark={}, extFields={:?}, serializeTypeCurrentRPC={}]",
+            self.code,
+            self.language,
+            self.version,
+            self.opaque,
+            self.flag,
+            self.remark.as_ref().unwrap_or(&"".to_string()),
+            self.ext_fields,
+            self.serialize_type
         )
     }
 }

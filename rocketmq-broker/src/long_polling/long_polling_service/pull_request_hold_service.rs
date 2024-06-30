@@ -76,12 +76,11 @@ where
         }
     }
 
-    pub async fn notify_message_arriving(&self, topic: &str, queue_id: i32, max_offset: i64) {
-        self.notify_message_arriving_ext(topic, queue_id, max_offset, None, 0, None, None)
-            .await;
+    pub fn notify_message_arriving(&self, topic: &str, queue_id: i32, max_offset: i64) {
+        self.notify_message_arriving_ext(topic, queue_id, max_offset, None, 0, None, None);
     }
 
-    pub async fn notify_message_arriving_ext(
+    pub fn notify_message_arriving_ext(
         &self,
         topic: &str,
         queue_id: i32,
@@ -125,12 +124,10 @@ where
                         }
 
                         if match_by_commit_log {
-                            self.pull_message_processor
-                                .execute_request_when_wakeup(
-                                    request.client_channel().clone(),
-                                    request.request_command().clone(),
-                                )
-                                .await;
+                            self.pull_message_processor.execute_request_when_wakeup(
+                                request.client_channel().clone(),
+                                request.request_command().clone(),
+                            );
                             continue;
                         }
                     }
@@ -138,12 +135,10 @@ where
                     if get_current_millis()
                         >= (request.suspend_timestamp() + request.timeout_millis())
                     {
-                        self.pull_message_processor
-                            .execute_request_when_wakeup(
-                                request.client_channel().clone(),
-                                request.request_command().clone(),
-                            )
-                            .await;
+                        self.pull_message_processor.execute_request_when_wakeup(
+                            request.client_channel().clone(),
+                            request.request_command().clone(),
+                        );
                         continue;
                     }
 
@@ -166,12 +161,10 @@ where
                         request.client_channel(),
                         request.request_command()
                     );
-                    self.pull_message_processor
-                        .execute_request_when_wakeup(
-                            request.client_channel().clone(),
-                            request.request_command().clone(),
-                        )
-                        .await;
+                    self.pull_message_processor.execute_request_when_wakeup(
+                        request.client_channel().clone(),
+                        request.request_command().clone(),
+                    );
                 }
             }
         }

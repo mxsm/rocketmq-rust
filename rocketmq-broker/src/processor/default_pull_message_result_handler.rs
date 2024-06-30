@@ -194,7 +194,7 @@ impl PullMessageResultHandler for DefaultPullMessageResultHandler {
                     let offset = request_header.queue_offset;
                 }
 
-                return None;
+                None
             }
             ResponseCode::PullOffsetMoved => Some(response),
             ResponseCode::PullRetryImmediately => Some(response),
