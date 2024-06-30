@@ -753,7 +753,7 @@ where
         let proxy_pull_broadcast = RequestSource::ProxyForBroadcast.get_value()
             == request_header.request_source.unwrap_or(-2);
 
-        if Self::is_broadcast(proxy_pull_broadcast, consumer_group_info.as_ref()) {
+        if is_broadcast(proxy_pull_broadcast, consumer_group_info.as_ref()) {
             let client_id = if proxy_pull_broadcast {
                 request_header.proxy_forward_client_id.as_ref().cloned()
             } else {
@@ -781,19 +781,7 @@ where
         -1
     }
 
-    fn is_broadcast(
-        proxy_pull_broadcast: bool,
-        consumer_group_info: Option<&ConsumerGroupInfo>,
-    ) -> bool {
-        match consumer_group_info {
-            Some(info) => {
-                proxy_pull_broadcast
-                    || (info.get_message_model() == MessageModel::Broadcasting
-                        && info.get_consume_type() == ConsumeType::ConsumePassively)
-            }
-            None => proxy_pull_broadcast,
-        }
-    }
+    pub fn execute_request_when_wakeup(&self, channel: Channel, request: RemotingCommand) {}
 }
 pub(crate) fn is_broadcast(
     proxy_pull_broadcast: bool,

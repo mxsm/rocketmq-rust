@@ -155,6 +155,8 @@ pub struct BrokerConfig {
     pub consumer_offset_update_version_step: i64,
     pub enable_broadcast_offset_store: bool,
     pub transfer_msg_by_heap: bool,
+    pub short_polling_time_mills: u64,
+    pub long_polling_enable: bool,
 }
 
 impl Default for BrokerConfig {
@@ -221,6 +223,8 @@ impl Default for BrokerConfig {
             consumer_offset_update_version_step: 500,
             enable_broadcast_offset_store: true,
             transfer_msg_by_heap: true,
+            short_polling_time_mills: 1000,
+            long_polling_enable: true,
         }
     }
 }

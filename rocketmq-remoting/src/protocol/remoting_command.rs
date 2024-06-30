@@ -16,6 +16,7 @@
  */
 use std::cell::SyncUnsafeCell;
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -112,6 +113,24 @@ impl Clone for RemotingCommand {
             command_custom_header: self.command_custom_header.clone(),
             serialize_type: self.serialize_type,
         }
+    }
+}
+
+impl fmt::Display for RemotingCommand {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "RemotingCommand [code={}, language={}, version={}, opaque={}, flag(B)={:b}, \
+             remark={}, extFields={:?}, serializeTypeCurrentRPC={}]",
+            self.code,
+            self.language,
+            self.version,
+            self.opaque,
+            self.flag,
+            self.remark.as_ref().unwrap_or(&"".to_string()),
+            self.ext_fields,
+            self.serialize_type
+        )
     }
 }
 
@@ -317,6 +336,10 @@ impl RemotingCommand {
     pub fn set_suspended(mut self, suspended: bool) -> Self {
         self.suspended = suspended;
         self
+    }
+
+    pub fn set_suspended_ref(&mut self, suspended: bool) {
+        self.suspended = suspended;
     }
 
     pub fn set_serialize_type(mut self, serialize_type: SerializeType) -> Self {
