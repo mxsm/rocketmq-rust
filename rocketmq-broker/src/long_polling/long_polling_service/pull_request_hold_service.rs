@@ -29,6 +29,7 @@ use crate::processor::pull_message_processor::PullMessageProcessor;
 
 const TOPIC_QUEUE_ID_SEPARATOR: &str = "@";
 
+#[derive(Clone)]
 pub struct PullRequestHoldService<MS> {
     pull_request_table: Arc<parking_lot::RwLock<HashMap<String, ManyPullRequest>>>,
     pull_message_processor: Arc<PullMessageProcessor<MS>>,
@@ -88,7 +89,7 @@ where
         tags_code: Option<i64>,
         msg_store_time: i64,
         filter_bit_map: Option<Vec<u8>>,
-        properties: Option<HashMap<String, String>>,
+        properties: Option<&HashMap<String, String>>,
     ) {
         let key = build_key(topic, queue_id);
         let mut table = self.pull_request_table.write();
@@ -120,7 +121,7 @@ where
                         if match_by_consume_queue && properties.is_some() {
                             match_by_commit_log = request
                                 .message_filter()
-                                .is_matched_by_commit_log(None, properties.as_ref());
+                                .is_matched_by_commit_log(None, properties);
                         }
 
                         if match_by_commit_log {
