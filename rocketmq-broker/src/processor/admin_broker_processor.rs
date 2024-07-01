@@ -14,7 +14,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::cell::SyncUnsafeCell;
+use std::sync::Weak;
+
 use rocketmq_remoting::code::request_code::RequestCode;
+use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
 use tracing::info;
@@ -24,8 +28,10 @@ pub struct AdminBrokerProcessor {}
 
 impl AdminBrokerProcessor {
     pub fn process_request(
-        &self,
-        _ctx: ConnectionHandlerContext,
+        &mut self,
+        _channel: Channel,
+        _ctx: Weak<SyncUnsafeCell<ConnectionHandlerContext>>,
+        _request_code: RequestCode,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
         let request_code = RequestCode::from(request.code());

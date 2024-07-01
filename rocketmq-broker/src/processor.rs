@@ -14,7 +14,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::cell::SyncUnsafeCell;
 use std::sync::Arc;
+use std::sync::Weak;
 
 use rand::Rng;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
@@ -29,6 +31,7 @@ use rocketmq_common::TimeUtils;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::RemotingSysResponseCode::SystemError;
 use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::TopicRequestHeaderTrait;
@@ -123,7 +126,8 @@ impl<MS: Clone> Clone for BrokerRequestProcessor<MS> {
 impl<MS: MessageStore + Send + Sync + 'static> RequestProcessor for BrokerRequestProcessor<MS> {
     async fn process_request(
         &mut self,
-        ctx: ConnectionHandlerContext<'_>,
+        channel: Channel,
+        ctx: Weak<SyncUnsafeCell<ConnectionHandlerContext>>,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
         let request_code = RequestCode::from(request.code());
@@ -134,29 +138,31 @@ impl<MS: MessageStore + Send + Sync + 'static> RequestProcessor for BrokerReques
             | RequestCode::SendBatchMessage
             | RequestCode::ConsumerSendMsgBack => {
                 self.send_message_processor
-                    .process_request(ctx, request_code, request)
+                    .process_request(channel, ctx, request_code, request)
                     .await
             }
             RequestCode::HeartBeat
             | RequestCode::UnregisterClient
             | RequestCode::CheckClientConfig => {
                 self.client_manage_processor
-                    .process_request(ctx, request_code, request)
+                    .process_request(channel, ctx, request_code, request)
                     .await
             }
             RequestCode::PullMessage | RequestCode::LitePullMessage => {
                 self.pull_message_processor
-                    .process_request(ctx, request_code, request)
+                    .process_request(channel, ctx, request_code, request)
                     .await
             }
             RequestCode::GetConsumerListByGroup
             | RequestCode::UpdateConsumerOffset
             | RequestCode::QueryConsumerOffset => {
                 self.consumer_manage_processor
-                    .process_request(ctx, request_code, request)
+                    .process_request(channel, ctx, request_code, request)
                     .await
             }
-            _ => self.admin_broker_processor.process_request(ctx, request),
+            _ => self
+                .admin_broker_processor
+                .process_request(channel, ctx, request_code, request),
         }
     }
 }
@@ -199,7 +205,8 @@ impl SendMessageProcessorInner {
 
     pub(crate) fn consumer_send_msg_back(
         &self,
-        _ctx: &ConnectionHandlerContext,
+        _channel: &Channel,
+        _ctx: &Weak<SyncUnsafeCell<ConnectionHandlerContext>>,
         _request: &RemotingCommand,
     ) -> Option<RemotingCommand> {
         todo!()
@@ -207,7 +214,8 @@ impl SendMessageProcessorInner {
 
     pub(crate) fn build_msg_context(
         &self,
-        ctx: &ConnectionHandlerContext,
+        channel: &Channel,
+        _ctx: &Weak<SyncUnsafeCell<ConnectionHandlerContext>>,
         request_header: &mut SendMessageRequestHeader,
         request: &RemotingCommand,
     ) -> SendMessageContext {
@@ -226,7 +234,7 @@ impl SendMessageProcessorInner {
                 .map_or_else(|| 0, |b| b.len() as i32),
         );
         send_message_context.msg_props(request_header.properties.clone().unwrap());
-        send_message_context.born_host(ctx.remoting_address().to_string());
+        send_message_context.born_host(channel.remote_address().to_string());
         send_message_context.broker_addr(self.broker_config.broker_server_config().bind_address());
         send_message_context.queue_id(request_header.queue_id);
         send_message_context.broker_region_id(self.broker_config.region_id());
@@ -271,7 +279,8 @@ impl SendMessageProcessorInner {
 
     pub(crate) fn msg_check(
         &mut self,
-        ctx: &ConnectionHandlerContext<'_>,
+        channel: &Channel,
+        _ctx: &Weak<SyncUnsafeCell<ConnectionHandlerContext>>,
         _request: &RemotingCommand,
         request_header: &SendMessageRequestHeader,
         response: &mut RemotingCommand,
@@ -321,14 +330,14 @@ impl SendMessageProcessorInner {
             warn!(
                 "the topic {} not exist, producer: {}",
                 request_header.topic(),
-                ctx.remoting_address(),
+                channel.remote_address(),
             );
             topic_config = self
                 .topic_config_manager
                 .create_topic_in_send_message_method(
                     request_header.topic.as_str(),
                     request_header.default_topic.as_str(),
-                    ctx.remoting_address(),
+                    channel.remote_address(),
                     request_header.default_topic_queue_nums,
                     topic_sys_flag,
                 );

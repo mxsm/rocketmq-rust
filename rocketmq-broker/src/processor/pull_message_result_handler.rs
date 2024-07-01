@@ -14,12 +14,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::cell::SyncUnsafeCell;
+use std::sync::Weak;
+
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::filter::MessageFilter;
 
@@ -30,6 +34,7 @@ pub trait PullMessageResultHandler: Sync + Send + 'static {
         request: RemotingCommand,
         request_header: PullMessageRequestHeader,
         channel: Channel,
+        ctx: Weak<SyncUnsafeCell<ConnectionHandlerContext>>,
         subscription_data: SubscriptionData,
         subscription_group_config: SubscriptionGroupConfig,
         broker_allow_suspend: bool,

@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 
+use std::cell::SyncUnsafeCell;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -34,6 +35,7 @@ use tracing::info;
 use tracing::warn;
 
 use crate::connection::Connection;
+use crate::net::channel::Channel;
 use crate::protocol::remoting_command::RemotingCommand;
 use crate::runtime::processor::RequestProcessor;
 
@@ -48,7 +50,9 @@ type Rx = mpsc::UnboundedReceiver<RemotingCommand>;
 
 pub struct ConnectionHandler<RP> {
     request_processor: RP,
-    connection: Connection,
+    //connection: Connection,
+    connection_handler_context: Arc<SyncUnsafeCell<ConnectionHandlerContext>>,
+    channel: Channel,
     shutdown: Shutdown,
     _shutdown_complete: mpsc::Sender<()>,
     conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
@@ -57,7 +61,7 @@ pub struct ConnectionHandler<RP> {
 impl<RP> Drop for ConnectionHandler<RP> {
     fn drop(&mut self) {
         if let Some(ref sender) = self.conn_disconnect_notify {
-            let socket_addr = self.connection.channel.remote_address();
+            let socket_addr = self.channel.remote_address();
             warn!(
                 "connection[{}] disconnected, Send notify message.",
                 socket_addr
@@ -70,8 +74,9 @@ impl<RP> Drop for ConnectionHandler<RP> {
 impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
     async fn handle(&mut self) -> anyhow::Result<()> {
         while !self.shutdown.is_shutdown {
+            let connection_handler_context = unsafe { &mut *self.connection_handler_context.get() };
             let frame = tokio::select! {
-                res = self.connection.framed.next() => res,
+                res = connection_handler_context.connection.framed.next() => res,
                 _ = self.shutdown.recv() =>{
                     //If a shutdown signal is received, return from `handle`.
                     return Ok(());
@@ -91,17 +96,19 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                     return Ok(());
                 }
             };
-            let ctx = ConnectionHandlerContext::new(&self.connection);
+            //let ctx = ConnectionHandlerContext::new(&self.connection);
             let opaque = cmd.opaque();
+            let channel = self.channel.clone();
+            let ctx = Arc::downgrade(&self.connection_handler_context);
             let response = tokio::select! {
-                result = self.request_processor.process_request( ctx,cmd) =>  result,
+                result = self.request_processor.process_request(channel,ctx,cmd) =>  result,
             };
             if response.is_none() {
                 continue;
             }
             let response = response.unwrap();
             tokio::select! {
-                result = self.connection.framed.send(response.set_opaque(opaque)) => match result{
+                result =connection_handler_context.connection.framed.send(response.set_opaque(opaque)) => match result{
                     Ok(_) =>{},
                     Err(err) => {
                         error!("send response failed: {}", err);
@@ -155,10 +162,17 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
             // error here is non-recoverable.
             let (socket, remote_addr) = self.accept().await?;
             info!("Accepted connection, client ip:{}", remote_addr);
+            let channel = Channel::new(socket.local_addr().unwrap(), remote_addr);
             //create per connection handler state
             let mut handler = ConnectionHandler {
                 request_processor: self.request_processor.clone(),
-                connection: Connection::new(socket, remote_addr),
+                //connection: Connection::new(socket, remote_addr),
+                connection_handler_context: Arc::new(SyncUnsafeCell::new(
+                    ConnectionHandlerContext {
+                        connection: Connection::new(socket),
+                    },
+                )),
+                channel,
                 shutdown: Shutdown::new(self.notify_shutdown.subscribe()),
                 _shutdown_complete: self.shutdown_complete_tx.clone(),
                 conn_disconnect_notify: self.conn_disconnect_notify.clone(),
@@ -329,32 +343,28 @@ impl Shutdown {
     }
 }
 
-pub struct ConnectionHandlerContext<'a> {
-    pub(crate) connection: &'a Connection,
+pub struct ConnectionHandlerContext {
+    pub(crate) connection: Connection,
 }
 
-impl<'a> ConnectionHandlerContext<'a> {
-    pub fn new(connection: &'a Connection) -> Self {
+impl ConnectionHandlerContext {
+    pub fn new(connection: Connection) -> Self {
         Self { connection }
     }
 
-    pub fn remoting_address(&self) -> SocketAddr {
-        self.connection.channel.remote_address()
-    }
-
-    pub fn connection(&self) -> &'a Connection {
-        self.connection
+    pub fn connection(&self) -> &Connection {
+        &self.connection
     }
 }
 
-impl<'a> AsRef<ConnectionHandlerContext<'a>> for ConnectionHandlerContext<'a> {
-    fn as_ref(&self) -> &ConnectionHandlerContext<'a> {
+impl AsRef<ConnectionHandlerContext> for ConnectionHandlerContext {
+    fn as_ref(&self) -> &ConnectionHandlerContext {
         self
     }
 }
 
-impl<'a> AsMut<ConnectionHandlerContext<'a>> for ConnectionHandlerContext<'a> {
-    fn as_mut(&mut self) -> &mut ConnectionHandlerContext<'a> {
+impl AsMut<ConnectionHandlerContext> for ConnectionHandlerContext {
+    fn as_mut(&mut self) -> &mut ConnectionHandlerContext {
         self
     }
 }

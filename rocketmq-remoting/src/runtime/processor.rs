@@ -15,6 +15,10 @@
  * limitations under the License.
  */
 
+use std::cell::SyncUnsafeCell;
+use std::sync::Weak;
+
+use crate::net::channel::Channel;
 use crate::protocol::remoting_command::RemotingCommand;
 use crate::runtime::server::ConnectionHandlerContext;
 
@@ -24,7 +28,8 @@ pub trait LocalRequestProcessor: Clone {
     /// Process a request.
     async fn process_request(
         &mut self,
-        ctx: ConnectionHandlerContext<'_>,
+        channel: Channel,
+        ctx: Weak<SyncUnsafeCell<ConnectionHandlerContext>>,
         request: RemotingCommand,
     ) -> Option<RemotingCommand>;
 }
