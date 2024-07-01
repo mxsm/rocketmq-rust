@@ -16,31 +16,19 @@
  */
 use std::collections::HashMap;
 
-use rocketmq_store::log_file::MessageStore;
-
-use crate::long_polling::long_polling_service::pull_request_hold_service::PullRequestHoldService;
-use crate::long_polling::message_arriving_listener::MessageArrivingListener;
-
-pub struct NotifyMessageArrivingListener<MS> {
-    pull_request_hold_service: PullRequestHoldService<MS>,
-}
-
-impl<MS> NotifyMessageArrivingListener<MS>
-where
-    MS: MessageStore + Send + Sync,
-{
-    pub fn new(pull_request_hold_service: PullRequestHoldService<MS>) -> Self {
-        Self {
-            pull_request_hold_service,
-        }
-    }
-}
-
-#[allow(unused_variables)]
-impl<MS> MessageArrivingListener for NotifyMessageArrivingListener<MS>
-where
-    MS: MessageStore + Send + Sync,
-{
+pub trait MessageArrivingListener {
+    /// This method is called when a new message arrives.
+    ///
+    /// # Arguments
+    ///
+    /// * `topic` - A string that holds the topic of the message.
+    /// * `queue_id` - An i32 that holds the id of the queue where the message is placed.
+    /// * `logic_offset` - An i64 that represents the logical offset of the message in the queue.
+    /// * `tags_code` - An i64 that represents the tags associated with the message.
+    /// * `msg_store_time` - An i64 that represents the time when the message was stored.
+    /// * `filter_bit_map` - A Vec<u8> that represents the filter bit map for the message.
+    /// * `properties` - An Option containing a reference to a HashMap<String, String> that holds
+    ///   the properties of the message.
     fn arriving(
         &self,
         topic: &str,
@@ -50,15 +38,5 @@ where
         msg_store_time: i64,
         filter_bit_map: Option<Vec<u8>>,
         properties: Option<&HashMap<String, String>>,
-    ) {
-        self.pull_request_hold_service.notify_message_arriving_ext(
-            topic,
-            queue_id,
-            logic_offset,
-            tags_code,
-            msg_store_time,
-            filter_bit_map,
-            properties,
-        );
-    }
+    );
 }
