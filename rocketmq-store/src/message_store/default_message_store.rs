@@ -32,7 +32,10 @@ use bytes::Buf;
 use log::info;
 use rocketmq_common::common::attribute::cleanup_policy::CleanupPolicy;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
+use rocketmq_common::common::mix_all::is_lmq;
 use rocketmq_common::common::mix_all::is_sys_consumer_group_for_no_cold_read_limit;
+use rocketmq_common::common::mix_all::MULTI_DISPATCH_QUEUE_SPLITTER;
+use rocketmq_common::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
 use rocketmq_common::CleanupPolicyUtils::get_delete_policy;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_common::{
@@ -110,6 +113,7 @@ pub struct DefaultMessageStore {
     broker_stats_manager: Option<Arc<BrokerStatsManager>>,
     message_arriving_listener:
         Option<Arc<Box<dyn MessageArrivingListener + Sync + Send + 'static>>>,
+    notify_message_arrive_in_batch: bool,
 }
 
 impl Clone for DefaultMessageStore {
@@ -137,6 +141,7 @@ impl Clone for DefaultMessageStore {
             clean_consume_queue_service: self.clean_consume_queue_service.clone(),
             broker_stats_manager: self.broker_stats_manager.clone(),
             message_arriving_listener: self.message_arriving_listener.clone(),
+            notify_message_arrive_in_batch: self.notify_message_arrive_in_batch,
         }
     }
 }
@@ -147,6 +152,7 @@ impl DefaultMessageStore {
         broker_config: Arc<BrokerConfig>,
         topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
         broker_stats_manager: Option<Arc<BrokerStatsManager>>,
+        notify_message_arrive_in_batch: bool,
     ) -> Self {
         let running_flags = Arc::new(RunningFlags::new());
         let store_checkpoint = Arc::new(
@@ -214,6 +220,7 @@ impl DefaultMessageStore {
             clean_consume_queue_service: Arc::new(CleanConsumeQueueService {}),
             broker_stats_manager,
             message_arriving_listener: None,
+            notify_message_arrive_in_batch,
         }
     }
 
@@ -575,6 +582,8 @@ impl MessageStore for DefaultMessageStore {
             Arc::new(self.commit_log.clone()),
             self.message_store_config.clone(),
             self.dispatcher.clone(),
+            self.notify_message_arrive_in_batch,
+            self.clone(),
         );
 
         self.commit_log.start();
@@ -1025,12 +1034,16 @@ impl ReputMessageService {
         commit_log: Arc<CommitLog>,
         message_store_config: Arc<MessageStoreConfig>,
         dispatcher: CommitLogDispatcherDefault,
+        notify_message_arrive_in_batch: bool,
+        message_store: DefaultMessageStore,
     ) {
         let mut inner = ReputMessageServiceInner {
             reput_from_offset: self.reput_from_offset.clone().unwrap(),
             commit_log,
             message_store_config,
             dispatcher,
+            notify_message_arrive_in_batch,
+            message_store,
         };
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
         self.tx = Some(Arc::new(tx));
@@ -1090,9 +1103,60 @@ struct ReputMessageServiceInner {
     commit_log: Arc<CommitLog>,
     message_store_config: Arc<MessageStoreConfig>,
     dispatcher: CommitLogDispatcherDefault,
+    notify_message_arrive_in_batch: bool,
+    message_store: DefaultMessageStore,
 }
 
 impl ReputMessageServiceInner {
+    fn notify_message_arrive4multi_queue(&self, dispatch_request: &mut DispatchRequest) {
+        let prop = dispatch_request.properties_map.as_ref();
+        if prop.is_none() || dispatch_request.topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) {
+            return;
+        }
+        let prop = prop.unwrap();
+        let multi_dispatch_queue = prop.get(MessageConst::PROPERTY_INNER_MULTI_DISPATCH);
+        let multi_queue_offset = prop.get(MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET);
+        if multi_dispatch_queue.is_none()
+            || multi_queue_offset.is_none()
+            || multi_dispatch_queue.as_ref().unwrap().is_empty()
+            || multi_queue_offset.as_ref().unwrap().is_empty()
+        {
+            return;
+        }
+        let queues: Vec<&str> = multi_dispatch_queue
+            .unwrap()
+            .split(MULTI_DISPATCH_QUEUE_SPLITTER)
+            .collect();
+        let queue_offsets: Vec<&str> = multi_queue_offset
+            .unwrap()
+            .split(MULTI_DISPATCH_QUEUE_SPLITTER)
+            .collect();
+        if queues.len() != queue_offsets.len() {
+            return;
+        }
+        for i in 0..queues.len() {
+            let queue_name = queues[i];
+            let queue_offset: i64 = queue_offsets[i].parse().unwrap();
+            let mut queue_id = dispatch_request.queue_id;
+            if self.message_store_config.enable_lmq && is_lmq(Some(queue_name)) {
+                queue_id = 0;
+            }
+            self.message_store
+                .message_arriving_listener
+                .as_ref()
+                .unwrap()
+                .arriving(
+                    queue_name,
+                    queue_id,
+                    queue_offset + 1,
+                    Some(dispatch_request.tags_code),
+                    dispatch_request.store_timestamp,
+                    dispatch_request.bit_map.clone(),
+                    dispatch_request.properties_map.as_ref(),
+                );
+        }
+    }
+
     pub async fn do_reput(&mut self) {
         let reput_from_offset = self.reput_from_offset.load(Ordering::Acquire);
         if reput_from_offset < self.commit_log.get_min_offset() {
@@ -1134,7 +1198,7 @@ impl ReputMessageServiceInner {
                     break;
                 }
 
-                let dispatch_request = commit_log::check_message_and_return_size(
+                let mut dispatch_request = commit_log::check_message_and_return_size(
                     bytes.as_mut().unwrap(),
                     false,
                     false,
@@ -1151,6 +1215,10 @@ impl ReputMessageServiceInner {
                     match dispatch_request.msg_size.cmp(&0) {
                         std::cmp::Ordering::Greater => {
                             self.dispatcher.dispatch(&dispatch_request);
+                            if !self.notify_message_arrive_in_batch {
+                                self.message_store
+                                    .notify_message_arrive_if_necessary(&mut dispatch_request);
+                            }
                             self.reput_from_offset
                                 .fetch_add(dispatch_request.msg_size as i64, Ordering::AcqRel);
                             read_size += dispatch_request.msg_size;

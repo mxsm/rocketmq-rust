@@ -295,6 +295,7 @@ impl BrokerRuntime {
                 self.broker_config.clone(),
                 self.topic_config_manager.topic_config_table(),
                 Some(self.broker_stats_manager.clone()),
+                false,
             );
             self.consumer_offset_manager
                 .set_message_store(Some(Arc::new(message_store.clone())));

@@ -101,6 +101,13 @@ pub fn get_retry_topic(consumer_group: &str) -> String {
     format!("{}{}", RETRY_GROUP_TOPIC_PREFIX, consumer_group)
 }
 
+pub fn is_lmq(lmq_meta_data: Option<&str>) -> bool {
+    match lmq_meta_data {
+        Some(data) => data.starts_with(LMQ_PREFIX),
+        None => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,5 +173,22 @@ mod tests {
         let consumer_group = "";
         let expected = RETRY_GROUP_TOPIC_PREFIX.to_string();
         assert_eq!(get_retry_topic(consumer_group), expected);
+    }
+
+    #[test]
+    fn returns_true_for_lmq_prefixed_metadata() {
+        let lmq_meta_data = Some("%LMQ%SpecificInfo");
+        assert!(is_lmq(lmq_meta_data));
+    }
+
+    #[test]
+    fn returns_false_for_non_lmq_prefixed_metadata() {
+        let lmq_meta_data = Some("NonLMQSpecificInfo");
+        assert!(!is_lmq(lmq_meta_data));
+    }
+
+    #[test]
+    fn returns_false_for_none_metadata() {
+        assert!(!is_lmq(None));
     }
 }
