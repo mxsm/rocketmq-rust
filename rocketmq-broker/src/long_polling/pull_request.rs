@@ -14,17 +14,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 use std::sync::Arc;
 
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
 use rocketmq_store::filter::MessageFilter;
 
 #[derive(Clone)]
 pub struct PullRequest {
     request_command: RemotingCommand,
     client_channel: Channel,
+    ctx: ConnectionHandlerContext,
     timeout_millis: u64,
     suspend_timestamp: u64,
     pull_from_this_offset: i64,
@@ -36,6 +39,7 @@ impl PullRequest {
     pub fn new(
         request_command: RemotingCommand,
         client_channel: Channel,
+        ctx: ConnectionHandlerContext,
         timeout_millis: u64,
         suspend_timestamp: u64,
         pull_from_this_offset: i64,
@@ -45,6 +49,7 @@ impl PullRequest {
         Self {
             request_command,
             client_channel,
+            ctx,
             timeout_millis,
             suspend_timestamp,
             pull_from_this_offset,

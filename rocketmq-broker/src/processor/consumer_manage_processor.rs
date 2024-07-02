@@ -21,6 +21,7 @@ use bytes::Bytes;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::body::get_consumer_listby_group_response_body::GetConsumerListByGroupResponseBody;
 use rocketmq_remoting::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::TopicRequestHeaderTrait;
@@ -87,23 +88,29 @@ where
 {
     pub async fn process_request(
         &mut self,
-        ctx: ConnectionHandlerContext<'_>,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
         request_code: RequestCode,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
         match request_code {
             RequestCode::GetConsumerListByGroup => {
-                self.get_consumer_list_by_group(ctx, request).await
+                self.get_consumer_list_by_group(channel, ctx, request).await
             }
-            RequestCode::UpdateConsumerOffset => self.update_consumer_offset(ctx, request).await,
-            RequestCode::QueryConsumerOffset => self.query_consumer_offset(ctx, request).await,
+            RequestCode::UpdateConsumerOffset => {
+                self.update_consumer_offset(channel, ctx, request).await
+            }
+            RequestCode::QueryConsumerOffset => {
+                self.query_consumer_offset(channel, ctx, request).await
+            }
             _ => None,
         }
     }
 
     pub async fn get_consumer_list_by_group(
         &mut self,
-        ctx: ConnectionHandlerContext<'_>,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
         let response = RemotingCommand::create_response_command();
@@ -119,7 +126,7 @@ where
                 warn!(
                     "getConsumerGroupInfo failed, {} {}",
                     request_header.consumer_group,
-                    ctx.remoting_address()
+                    channel.remote_address()
                 );
             }
             Some(info) => {
@@ -137,7 +144,7 @@ where
                     warn!(
                         "getAllClientId failed, {} {}",
                         request_header.consumer_group,
-                        ctx.remoting_address()
+                        channel.remote_address()
                     )
                 }
             }
@@ -154,7 +161,8 @@ where
 
     async fn update_consumer_offset(
         &mut self,
-        ctx: ConnectionHandlerContext<'_>,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
         let mut request_header = request
@@ -225,7 +233,7 @@ where
             return Some(response.set_remark(Some("Offset has been previously reset".to_string())));
         }
         self.consumer_offset_manager.commit_offset(
-            ctx.remoting_address(),
+            channel.remote_address(),
             group,
             topic,
             queue_id.unwrap(),
@@ -236,7 +244,8 @@ where
 
     async fn query_consumer_offset(
         &mut self,
-        ctx: ConnectionHandlerContext<'_>,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
         let mut request_header = request

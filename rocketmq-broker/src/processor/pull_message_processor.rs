@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 use std::sync::Arc;
 
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
@@ -324,18 +325,20 @@ where
 {
     pub async fn process_request(
         &mut self,
-        ctx: ConnectionHandlerContext<'_>,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
         request_code: RequestCode,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
-        self.process_request_inner(request_code, ctx, request, true, true)
+        self.process_request_inner(request_code, channel, ctx, request, true, true)
             .await
     }
 
     async fn process_request_inner(
         &mut self,
         request_code: RequestCode,
-        ctx: ConnectionHandlerContext<'_>,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
         request: RemotingCommand,
         broker_allow_suspend: bool,
         broker_allow_flow_ctr_suspend: bool,
@@ -408,7 +411,7 @@ where
             error!(
                 "the topic {} not exist, consumer: {}",
                 request_header.topic,
-                ctx.as_ref().remoting_address()
+                channel.remote_address()
             );
             return Some(
                 response
@@ -454,7 +457,7 @@ where
                         request_header.queue_id.unwrap(),
                         request_header.topic,
                         topic_config.as_ref().unwrap().read_queue_nums,
-                        ctx.as_ref().remoting_address()
+                        channel.remote_address()
                     ))),
             );
         }
@@ -691,7 +694,7 @@ where
                 group,
                 queue_id,
                 &request_header,
-                ctx.connection().channel(),
+                &channel,
             );
             if broadcast_init_offset >= 0 {
                 let mut get_message_result = GetMessageResult::new();
@@ -717,7 +720,8 @@ where
                 get_message_result,
                 request,
                 request_header,
-                ctx.connection().channel().clone(),
+                channel,
+                ctx,
                 subscription_data,
                 subscription_group_config.unwrap(),
                 broker_allow_suspend,

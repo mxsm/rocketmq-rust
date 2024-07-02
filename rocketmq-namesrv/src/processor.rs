@@ -18,6 +18,7 @@
 use std::sync::Arc;
 
 use rocketmq_remoting::code::request_code::RequestCode;
+use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
@@ -46,16 +47,19 @@ impl Clone for NameServerRequestProcessor {
 impl RequestProcessor for NameServerRequestProcessor {
     async fn process_request(
         &mut self,
-        ctx: ConnectionHandlerContext<'_>,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
         let request_code = RequestCode::from(request.code());
         info!("process_request: {:?}", request_code);
         match request_code {
-            RequestCode::GetRouteinfoByTopic => {
-                self.client_request_processor.process_request(ctx, request)
-            }
-            _ => self.default_request_processor.process_request(ctx, request),
+            RequestCode::GetRouteinfoByTopic => self
+                .client_request_processor
+                .process_request(channel, ctx, request),
+            _ => self
+                .default_request_processor
+                .process_request(channel, ctx, request),
         }
     }
 }

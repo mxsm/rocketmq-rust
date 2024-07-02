@@ -42,6 +42,7 @@ use rocketmq_common::MessageDecoder::string_to_message_properties;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::RemotingSysResponseCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::parse_request_header;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
@@ -99,12 +100,15 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
 
     pub async fn process_request(
         &mut self,
-        ctx: ConnectionHandlerContext<'_>,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
         request_code: RequestCode,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
         match request_code {
-            RequestCode::ConsumerSendMsgBack => self.inner.consumer_send_msg_back(&ctx, &request),
+            RequestCode::ConsumerSendMsgBack => {
+                self.inner.consumer_send_msg_back(&channel, &ctx, &request)
+            }
             _ => {
                 let mut request_header = parse_request_header(&request)?;
                 let mapping_context = self
@@ -120,7 +124,7 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
 
                 let send_message_context =
                     self.inner
-                        .build_msg_context(&ctx, &mut request_header, &request);
+                        .build_msg_context(&channel, &ctx, &mut request_header, &request);
                 self.inner
                     .execute_send_message_hook_before(&send_message_context);
                 SendMessageProcessor::<MS>::clear_reserved_properties(&mut request_header);
@@ -131,6 +135,7 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
                     };
                 if request_header.batch.is_none() || !request_header.batch.unwrap() {
                     self.send_message(
+                        &channel,
                         &ctx,
                         request,
                         send_message_context,
@@ -141,6 +146,7 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
                     .await
                 } else {
                     self.send_batch_message(
+                        &channel,
                         &ctx,
                         request,
                         send_message_context,
@@ -181,7 +187,8 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
 
     async fn send_batch_message<F>(
         &mut self,
-        ctx: &ConnectionHandlerContext<'_>,
+        channel: &Channel,
+        ctx: &ConnectionHandlerContext,
         request: RemotingCommand,
         send_message_context: SendMessageContext,
         request_header: SendMessageRequestHeader,
@@ -191,7 +198,7 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
     where
         F: Fn(&mut SendMessageContext, &mut RemotingCommand),
     {
-        let response = self.pre_send(ctx.as_ref(), request.as_ref(), &request_header);
+        let response = self.pre_send(channel, ctx, request.as_ref(), &request_header);
         if response.code() != -1 {
             return Some(response);
         }
@@ -249,7 +256,7 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
             .body
             .clone_from(request.body());
         message_ext.message_ext_inner.born_timestamp = request_header.born_timestamp;
-        message_ext.message_ext_inner.born_host = ctx.remoting_address();
+        message_ext.message_ext_inner.born_host = channel.remote_address();
         message_ext.message_ext_inner.store_host = self.store_host;
         message_ext.message_ext_inner.reconsume_times = request_header.reconsume_times.unwrap_or(0);
         let cluster_name = self
@@ -355,7 +362,8 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
 
     async fn send_message<F>(
         &mut self,
-        ctx: &ConnectionHandlerContext<'_>,
+        channel: &Channel,
+        ctx: &ConnectionHandlerContext,
         request: RemotingCommand,
         send_message_context: SendMessageContext,
         request_header: SendMessageRequestHeader,
@@ -365,7 +373,7 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
     where
         F: Fn(&mut SendMessageContext, &mut RemotingCommand),
     {
-        let mut response = self.pre_send(ctx.as_ref(), request.as_ref(), &request_header);
+        let mut response = self.pre_send(channel, ctx, request.as_ref(), &request_header);
         if response.code() != -1 {
             return Some(response);
         }
@@ -440,7 +448,7 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
         );
 
         message_ext.message_ext_inner.born_timestamp = request_header.born_timestamp;
-        message_ext.message_ext_inner.born_host = ctx.remoting_address();
+        message_ext.message_ext_inner.born_host = channel.remote_address();
         message_ext.message_ext_inner.store_host = self.store_host;
         message_ext.message_ext_inner.reconsume_times = request_header.reconsume_times.unwrap_or(0);
 
@@ -611,7 +619,8 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
 
     pub fn pre_send(
         &mut self,
-        ctx: &ConnectionHandlerContext<'_>,
+        channel: &Channel,
+        ctx: &ConnectionHandlerContext,
         request: &RemotingCommand,
         request_header: &SendMessageRequestHeader,
     ) -> RemotingCommand {
@@ -638,7 +647,7 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
         }
         response = response.set_code(-1);
         self.inner
-            .msg_check(ctx, request, request_header, &mut response);
+            .msg_check(channel, ctx, request, request_header, &mut response);
         response
     }
 

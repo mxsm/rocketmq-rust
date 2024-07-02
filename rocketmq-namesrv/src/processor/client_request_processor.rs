@@ -26,6 +26,7 @@ use rocketmq_common::common::FAQUrl;
 use rocketmq_common::TimeUtils;
 use rocketmq_remoting::code::response_code::RemotingSysResponseCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingSerializable;
@@ -116,7 +117,8 @@ impl ClientRequestProcessor {
 impl ClientRequestProcessor {
     pub fn process_request(
         &self,
-        _ctx: ConnectionHandlerContext<'_>,
+        _channel: Channel,
+        _ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
         Some(self.get_route_info_by_topic(request))

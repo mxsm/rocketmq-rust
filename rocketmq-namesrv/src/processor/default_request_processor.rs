@@ -27,6 +27,7 @@ use rocketmq_common::CRC32Utils;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::RemotingSysResponseCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::body::broker_body::broker_member_group::GetBrokerMemberGroupResponseBody;
 use rocketmq_remoting::protocol::body::broker_body::register_broker_body::RegisterBrokerBody;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
@@ -69,7 +70,8 @@ pub struct DefaultRequestProcessor {
 impl DefaultRequestProcessor {
     pub fn process_request(
         &self,
-        ctx: ConnectionHandlerContext,
+        channel: Channel,
+        _ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
         let code = request.code();
@@ -86,7 +88,7 @@ impl DefaultRequestProcessor {
             Some(RequestCode::QueryDataVersion) => self.query_broker_topic_config(request),
             //handle register broker
             Some(RequestCode::RegisterBroker) => {
-                self.process_register_broker(ctx.remoting_address(), request)
+                self.process_register_broker(channel.remote_address(), request)
             }
             Some(RequestCode::UnregisterBroker) => self.process_unregister_broker(request),
             Some(RequestCode::BrokerHeartbeat) => self.process_broker_heartbeat(request),

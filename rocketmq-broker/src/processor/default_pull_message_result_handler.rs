@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -33,6 +34,7 @@ use rocketmq_remoting::protocol::request_source::RequestSource;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_remoting::protocol::NamespaceUtil;
+use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::filter::MessageFilter;
@@ -92,6 +94,7 @@ impl PullMessageResultHandler for DefaultPullMessageResultHandler {
         request: RemotingCommand,
         request_header: PullMessageRequestHeader,
         channel: Channel,
+        ctx: ConnectionHandlerContext,
         subscription_data: SubscriptionData,
         subscription_group_config: SubscriptionGroupConfig,
         broker_allow_suspend: bool,
@@ -192,6 +195,16 @@ impl PullMessageResultHandler for DefaultPullMessageResultHandler {
                     let topic = request_header.topic.as_str();
                     let queue_id = request_header.queue_id.unwrap();
                     let offset = request_header.queue_offset;
+
+                    /*            PullRequest::new(
+                        request,
+                        channel,
+                        polling_time_mills,
+                        begin_time_mills,
+                        offset,
+                        subscription_data,
+                        message_filter,
+                    );*/
                 }
 
                 None

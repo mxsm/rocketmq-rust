@@ -26,6 +26,7 @@ use rocketmq_common::common::mix_all::IS_SUPPORT_HEART_BEAT_V2;
 use rocketmq_common::common::sys_flag::topic_sys_flag;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_remoting::code::request_code::RequestCode;
+use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::heartbeat_data::HeartbeatData;
@@ -80,13 +81,14 @@ where
 {
     pub async fn process_request(
         &mut self,
-        ctx: ConnectionHandlerContext<'_>,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
         request_code: RequestCode,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
         match request_code {
-            RequestCode::HeartBeat => self.heart_beat(ctx, request),
-            RequestCode::UnregisterClient => self.unregister_client(ctx, request),
+            RequestCode::HeartBeat => self.heart_beat(channel, ctx, request),
+            RequestCode::UnregisterClient => self.unregister_client(channel, ctx, request),
             RequestCode::CheckClientConfig => {
                 unimplemented!("CheckClientConfig")
             }
@@ -98,7 +100,8 @@ where
 
     fn unregister_client(
         &self,
-        ctx: ConnectionHandlerContext<'_>,
+        channel: Channel,
+        _ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
         let request_header = request
@@ -106,7 +109,7 @@ where
             .unwrap();
 
         let client_channel_info = ClientChannelInfo::new(
-            ctx.as_ref().connection().channel().clone(),
+            channel.clone(),
             request_header.client_id.clone(),
             request.language(),
             request.version(),
@@ -126,20 +129,21 @@ where
 
     fn heart_beat(
         &mut self,
-        ctx: ConnectionHandlerContext<'_>,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
         let heartbeat_data = SerdeJsonUtils::decode::<HeartbeatData>(
             request.body().as_ref().map(|v| v.as_ref()).unwrap(),
         );
         let client_channel_info = ClientChannelInfo::new(
-            ctx.as_ref().connection().channel().clone(),
+            channel.clone(),
             heartbeat_data.client_id.clone(),
             request.language(),
             request.version(),
         );
         if heartbeat_data.heartbeat_fingerprint != 0 {
-            return self.heart_beat_v2(ctx, heartbeat_data, client_channel_info);
+            return self.heart_beat_v2(&channel, &ctx, heartbeat_data, client_channel_info);
         }
 
         //do consumer data handle
@@ -199,7 +203,7 @@ where
                 info!(
                     "ClientManageProcessor: registerConsumer info changed, SDK address={}, \
                      consumerData={:?}",
-                    ctx.remoting_address(),
+                    channel.remote_address(),
                     consumer_data
                 )
             }
@@ -217,7 +221,8 @@ where
 
     fn heart_beat_v2(
         &self,
-        _ctx: ConnectionHandlerContext<'_>,
+        _channel: &Channel,
+        _ctx: &ConnectionHandlerContext,
         heartbeat_data: HeartbeatData,
         client_channel_info: ClientChannelInfo,
     ) -> Option<RemotingCommand> {
