@@ -14,10 +14,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::cell::SyncUnsafeCell;
+
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::Weak;
 
 use bytes::Bytes;
 use bytes::BytesMut;
@@ -95,7 +94,7 @@ impl PullMessageResultHandler for DefaultPullMessageResultHandler {
         request: RemotingCommand,
         request_header: PullMessageRequestHeader,
         channel: Channel,
-        ctx: Weak<SyncUnsafeCell<ConnectionHandlerContext>>,
+        ctx: ConnectionHandlerContext,
         subscription_data: SubscriptionData,
         subscription_group_config: SubscriptionGroupConfig,
         broker_allow_suspend: bool,

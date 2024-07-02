@@ -14,9 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::cell::SyncUnsafeCell;
+
 use std::sync::Arc;
-use std::sync::Weak;
 
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::constant::PermName;
@@ -327,7 +326,7 @@ where
     pub async fn process_request(
         &mut self,
         channel: Channel,
-        ctx: Weak<SyncUnsafeCell<ConnectionHandlerContext>>,
+        ctx: ConnectionHandlerContext,
         request_code: RequestCode,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
@@ -339,7 +338,7 @@ where
         &mut self,
         request_code: RequestCode,
         channel: Channel,
-        ctx: Weak<SyncUnsafeCell<ConnectionHandlerContext>>,
+        ctx: ConnectionHandlerContext,
         request: RemotingCommand,
         broker_allow_suspend: bool,
         broker_allow_flow_ctr_suspend: bool,

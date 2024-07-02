@@ -15,11 +15,9 @@
  * limitations under the License.
  */
 
-use std::cell::SyncUnsafeCell;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::Weak;
 
 use rocketmq_common::common::attribute::cleanup_policy::CleanupPolicy;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
@@ -103,7 +101,7 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
     pub async fn process_request(
         &mut self,
         channel: Channel,
-        ctx: Weak<SyncUnsafeCell<ConnectionHandlerContext>>,
+        ctx: ConnectionHandlerContext,
         request_code: RequestCode,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
@@ -190,7 +188,7 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
     async fn send_batch_message<F>(
         &mut self,
         channel: &Channel,
-        ctx: &Weak<SyncUnsafeCell<ConnectionHandlerContext>>,
+        ctx: &ConnectionHandlerContext,
         request: RemotingCommand,
         send_message_context: SendMessageContext,
         request_header: SendMessageRequestHeader,
@@ -365,7 +363,7 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
     async fn send_message<F>(
         &mut self,
         channel: &Channel,
-        ctx: &Weak<SyncUnsafeCell<ConnectionHandlerContext>>,
+        ctx: &ConnectionHandlerContext,
         request: RemotingCommand,
         send_message_context: SendMessageContext,
         request_header: SendMessageRequestHeader,
@@ -622,7 +620,7 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
     pub fn pre_send(
         &mut self,
         channel: &Channel,
-        ctx: &Weak<SyncUnsafeCell<ConnectionHandlerContext>>,
+        ctx: &ConnectionHandlerContext,
         request: &RemotingCommand,
         request_header: &SendMessageRequestHeader,
     ) -> RemotingCommand {

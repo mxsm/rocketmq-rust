@@ -15,11 +15,9 @@
  * limitations under the License.
  */
 
-use std::cell::SyncUnsafeCell;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::sync::Weak;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -120,7 +118,7 @@ impl ClientRequestProcessor {
     pub fn process_request(
         &self,
         _channel: Channel,
-        _ctx: Weak<SyncUnsafeCell<ConnectionHandlerContext>>,
+        _ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
         Some(self.get_route_info_by_topic(request))

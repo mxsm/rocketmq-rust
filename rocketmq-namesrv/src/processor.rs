@@ -15,9 +15,7 @@
  * limitations under the License.
  */
 
-use std::cell::SyncUnsafeCell;
 use std::sync::Arc;
-use std::sync::Weak;
 
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::net::channel::Channel;
@@ -50,7 +48,7 @@ impl RequestProcessor for NameServerRequestProcessor {
     async fn process_request(
         &mut self,
         channel: Channel,
-        ctx: Weak<SyncUnsafeCell<ConnectionHandlerContext>>,
+        ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
         let request_code = RequestCode::from(request.code());

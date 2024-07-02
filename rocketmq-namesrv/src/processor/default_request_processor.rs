@@ -15,10 +15,8 @@
  * limitations under the License.
  */
 
-use std::cell::SyncUnsafeCell;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::Weak;
 
 use bytes::Bytes;
 use rocketmq_common::common::mix_all;
@@ -73,7 +71,7 @@ impl DefaultRequestProcessor {
     pub fn process_request(
         &self,
         channel: Channel,
-        _ctx: Weak<SyncUnsafeCell<ConnectionHandlerContext>>,
+        _ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
         let code = request.code();

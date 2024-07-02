@@ -19,6 +19,7 @@ use std::cell::SyncUnsafeCell;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::Weak;
 use std::time::Duration;
 
 use futures::SinkExt;
@@ -48,10 +49,12 @@ type Tx = mpsc::UnboundedSender<RemotingCommand>;
 /// Shorthand for the receive half of the message channel.
 type Rx = mpsc::UnboundedReceiver<RemotingCommand>;
 
+pub type ConnectionHandlerContext = Weak<SyncUnsafeCell<ConnectionHandlerContextWrapper>>;
+
 pub struct ConnectionHandler<RP> {
     request_processor: RP,
     //connection: Connection,
-    connection_handler_context: Arc<SyncUnsafeCell<ConnectionHandlerContext>>,
+    connection_handler_context: Arc<SyncUnsafeCell<ConnectionHandlerContextWrapper>>,
     channel: Channel,
     shutdown: Shutdown,
     _shutdown_complete: mpsc::Sender<()>,
@@ -168,7 +171,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
                 request_processor: self.request_processor.clone(),
                 //connection: Connection::new(socket, remote_addr),
                 connection_handler_context: Arc::new(SyncUnsafeCell::new(
-                    ConnectionHandlerContext {
+                    ConnectionHandlerContextWrapper {
                         connection: Connection::new(socket),
                     },
                 )),
@@ -343,11 +346,11 @@ impl Shutdown {
     }
 }
 
-pub struct ConnectionHandlerContext {
+pub struct ConnectionHandlerContextWrapper {
     pub(crate) connection: Connection,
 }
 
-impl ConnectionHandlerContext {
+impl ConnectionHandlerContextWrapper {
     pub fn new(connection: Connection) -> Self {
         Self { connection }
     }
@@ -357,14 +360,14 @@ impl ConnectionHandlerContext {
     }
 }
 
-impl AsRef<ConnectionHandlerContext> for ConnectionHandlerContext {
-    fn as_ref(&self) -> &ConnectionHandlerContext {
+impl AsRef<ConnectionHandlerContextWrapper> for ConnectionHandlerContextWrapper {
+    fn as_ref(&self) -> &ConnectionHandlerContextWrapper {
         self
     }
 }
 
-impl AsMut<ConnectionHandlerContext> for ConnectionHandlerContext {
-    fn as_mut(&mut self) -> &mut ConnectionHandlerContext {
+impl AsMut<ConnectionHandlerContextWrapper> for ConnectionHandlerContextWrapper {
+    fn as_mut(&mut self) -> &mut ConnectionHandlerContextWrapper {
         self
     }
 }

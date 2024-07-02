@@ -14,9 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::cell::SyncUnsafeCell;
+
 use std::sync::Arc;
-use std::sync::Weak;
 
 use rand::Rng;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
@@ -127,7 +126,7 @@ impl<MS: MessageStore + Send + Sync + 'static> RequestProcessor for BrokerReques
     async fn process_request(
         &mut self,
         channel: Channel,
-        ctx: Weak<SyncUnsafeCell<ConnectionHandlerContext>>,
+        ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
         let request_code = RequestCode::from(request.code());
@@ -206,7 +205,7 @@ impl SendMessageProcessorInner {
     pub(crate) fn consumer_send_msg_back(
         &self,
         _channel: &Channel,
-        _ctx: &Weak<SyncUnsafeCell<ConnectionHandlerContext>>,
+        _ctx: &ConnectionHandlerContext,
         _request: &RemotingCommand,
     ) -> Option<RemotingCommand> {
         todo!()
@@ -215,7 +214,7 @@ impl SendMessageProcessorInner {
     pub(crate) fn build_msg_context(
         &self,
         channel: &Channel,
-        _ctx: &Weak<SyncUnsafeCell<ConnectionHandlerContext>>,
+        _ctx: &ConnectionHandlerContext,
         request_header: &mut SendMessageRequestHeader,
         request: &RemotingCommand,
     ) -> SendMessageContext {
@@ -280,7 +279,7 @@ impl SendMessageProcessorInner {
     pub(crate) fn msg_check(
         &mut self,
         channel: &Channel,
-        _ctx: &Weak<SyncUnsafeCell<ConnectionHandlerContext>>,
+        _ctx: &ConnectionHandlerContext,
         _request: &RemotingCommand,
         request_header: &SendMessageRequestHeader,
         response: &mut RemotingCommand,

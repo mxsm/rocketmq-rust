@@ -15,10 +15,8 @@
  * limitations under the License.
  */
 
-use std::cell::SyncUnsafeCell;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::Weak;
 
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::constant::PermName;
@@ -84,7 +82,7 @@ where
     pub async fn process_request(
         &mut self,
         channel: Channel,
-        ctx: Weak<SyncUnsafeCell<ConnectionHandlerContext>>,
+        ctx: ConnectionHandlerContext,
         request_code: RequestCode,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
@@ -103,7 +101,7 @@ where
     fn unregister_client(
         &self,
         channel: Channel,
-        _ctx: Weak<SyncUnsafeCell<ConnectionHandlerContext>>,
+        _ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
         let request_header = request
@@ -132,7 +130,7 @@ where
     fn heart_beat(
         &mut self,
         channel: Channel,
-        ctx: Weak<SyncUnsafeCell<ConnectionHandlerContext>>,
+        ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
         let heartbeat_data = SerdeJsonUtils::decode::<HeartbeatData>(
@@ -224,7 +222,7 @@ where
     fn heart_beat_v2(
         &self,
         _channel: &Channel,
-        _ctx: &Weak<SyncUnsafeCell<ConnectionHandlerContext>>,
+        _ctx: &ConnectionHandlerContext,
         heartbeat_data: HeartbeatData,
         client_channel_info: ClientChannelInfo,
     ) -> Option<RemotingCommand> {

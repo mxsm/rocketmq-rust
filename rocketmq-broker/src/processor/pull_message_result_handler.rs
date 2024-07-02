@@ -14,8 +14,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::cell::SyncUnsafeCell;
-use std::sync::Weak;
 
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
@@ -34,7 +32,7 @@ pub trait PullMessageResultHandler: Sync + Send + 'static {
         request: RemotingCommand,
         request_header: PullMessageRequestHeader,
         channel: Channel,
-        ctx: Weak<SyncUnsafeCell<ConnectionHandlerContext>>,
+        ctx: ConnectionHandlerContext,
         subscription_data: SubscriptionData,
         subscription_group_config: SubscriptionGroupConfig,
         broker_allow_suspend: bool,

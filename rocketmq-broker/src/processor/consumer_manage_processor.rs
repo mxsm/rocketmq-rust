@@ -15,9 +15,7 @@
  * limitations under the License.
  */
 
-use std::cell::SyncUnsafeCell;
 use std::sync::Arc;
-use std::sync::Weak;
 
 use bytes::Bytes;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
@@ -91,7 +89,7 @@ where
     pub async fn process_request(
         &mut self,
         channel: Channel,
-        ctx: Weak<SyncUnsafeCell<ConnectionHandlerContext>>,
+        ctx: ConnectionHandlerContext,
         request_code: RequestCode,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
@@ -112,7 +110,7 @@ where
     pub async fn get_consumer_list_by_group(
         &mut self,
         channel: Channel,
-        ctx: Weak<SyncUnsafeCell<ConnectionHandlerContext>>,
+        ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
         let response = RemotingCommand::create_response_command();
@@ -164,7 +162,7 @@ where
     async fn update_consumer_offset(
         &mut self,
         channel: Channel,
-        ctx: Weak<SyncUnsafeCell<ConnectionHandlerContext>>,
+        ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
         let mut request_header = request
@@ -247,7 +245,7 @@ where
     async fn query_consumer_offset(
         &mut self,
         channel: Channel,
-        ctx: Weak<SyncUnsafeCell<ConnectionHandlerContext>>,
+        ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
         let mut request_header = request

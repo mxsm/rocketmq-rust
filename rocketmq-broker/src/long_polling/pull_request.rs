@@ -14,9 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::cell::SyncUnsafeCell;
+
 use std::sync::Arc;
-use std::sync::Weak;
 
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
@@ -28,7 +27,7 @@ use rocketmq_store::filter::MessageFilter;
 pub struct PullRequest {
     request_command: RemotingCommand,
     client_channel: Channel,
-    ctx: Weak<SyncUnsafeCell<ConnectionHandlerContext>>,
+    ctx: ConnectionHandlerContext,
     timeout_millis: u64,
     suspend_timestamp: u64,
     pull_from_this_offset: i64,
@@ -40,7 +39,7 @@ impl PullRequest {
     pub fn new(
         request_command: RemotingCommand,
         client_channel: Channel,
-        ctx: Weak<SyncUnsafeCell<ConnectionHandlerContext>>,
+        ctx: ConnectionHandlerContext,
         timeout_millis: u64,
         suspend_timestamp: u64,
         pull_from_this_offset: i64,
