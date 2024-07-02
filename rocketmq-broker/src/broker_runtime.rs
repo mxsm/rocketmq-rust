@@ -54,6 +54,8 @@ use crate::client::manager::producer_manager::ProducerManager;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
 use crate::hook::batch_check_before_put_message::BatchCheckBeforePutMessageHook;
 use crate::hook::check_before_put_message::CheckBeforePutMessageHook;
+use crate::long_polling::long_polling_service::pull_request_hold_service::PullRequestHoldService;
+use crate::long_polling::notify_message_arriving_listener::NotifyMessageArrivingListener;
 use crate::offset::manager::broadcast_offset_manager::BroadcastOffsetManager;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
 use crate::offset::manager::consumer_order_info_manager::ConsumerOrderInfoManager;
@@ -103,6 +105,8 @@ pub(crate) struct BrokerRuntime {
     update_master_haserver_addr_periodically: bool,
     should_start_time: Arc<AtomicU64>,
     is_isolated: Arc<AtomicBool>,
+    #[cfg(feature = "local_file_store")]
+    pull_request_hold_service: Option<PullRequestHoldService<DefaultMessageStore>>,
 }
 
 impl Clone for BrokerRuntime {
@@ -134,6 +138,7 @@ impl Clone for BrokerRuntime {
             update_master_haserver_addr_periodically: self.update_master_haserver_addr_periodically,
             should_start_time: self.should_start_time.clone(),
             is_isolated: self.is_isolated.clone(),
+            pull_request_hold_service: self.pull_request_hold_service.clone(),
         }
     }
 }
@@ -207,6 +212,7 @@ impl BrokerRuntime {
             update_master_haserver_addr_periodically: false,
             should_start_time: Arc::new(AtomicU64::new(0)),
             is_isolated: Arc::new(AtomicBool::new(false)),
+            pull_request_hold_service: None,
         }
     }
 
@@ -355,7 +361,7 @@ impl BrokerRuntime {
         self.topic_queue_mapping_clean_service = Some(Arc::new(TopicQueueMappingCleanService));
     }
 
-    fn init_processor(&self) -> BrokerRequestProcessor<DefaultMessageStore> {
+    fn init_processor(&mut self) -> BrokerRequestProcessor<DefaultMessageStore> {
         let send_message_processor = SendMessageProcessor::<DefaultMessageStore>::new(
             self.topic_queue_mapping_manager.clone(),
             self.topic_config_manager.clone(),
@@ -371,6 +377,7 @@ impl BrokerRuntime {
             self.broker_config.clone(),
             Arc::new(Default::default()),
         );
+        let message_store = Arc::new(self.message_store.as_ref().unwrap().clone());
         let pull_message_processor = PullMessageProcessor::new(
             Arc::new(pull_message_result_handler),
             self.broker_config.clone(),
@@ -381,7 +388,7 @@ impl BrokerRuntime {
             self.consumer_filter_manager.clone(),
             Arc::new(self.consumer_offset_manager.clone()),
             Arc::new(BroadcastOffsetManager::default()),
-            self.message_store.as_ref().unwrap().clone(),
+            message_store.clone(),
         );
 
         let consumer_manage_processor = ConsumerManageProcessor::new(
@@ -393,6 +400,19 @@ impl BrokerRuntime {
             Arc::new(self.topic_config_manager.clone()),
             self.message_store.clone().unwrap(),
         );
+        self.pull_request_hold_service = Some(PullRequestHoldService::new(
+            message_store,
+            Arc::new(pull_message_processor.clone()),
+            self.broker_config.clone(),
+        ));
+
+        self.message_store
+            .as_mut()
+            .unwrap()
+            .set_message_arriving_listener(Some(Arc::new(Box::new(
+                NotifyMessageArrivingListener::new(self.pull_request_hold_service.clone().unwrap()),
+            ))));
+
         BrokerRequestProcessor {
             send_message_processor,
             pull_message_processor,
@@ -574,6 +594,10 @@ impl BrokerRuntime {
         fast_server_config.listen_port = self.server_config.listen_port - 2;
         let fast_server = RocketMQServer::new(Arc::new(fast_server_config));
         tokio::spawn(async move { fast_server.run(fast_request_processor).await });
+
+        if let Some(pull_request_hold_service) = self.pull_request_hold_service.as_mut() {
+            pull_request_hold_service.start();
+        }
     }
 
     fn update_namesrv_addr(&mut self) {

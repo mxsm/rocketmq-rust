@@ -358,6 +358,15 @@ impl ConnectionHandlerContextWrapper {
     pub fn connection(&self) -> &Connection {
         &self.connection
     }
+
+    pub async fn write(&mut self, cmd: RemotingCommand) {
+        match self.connection.framed.send(cmd).await {
+            Ok(_) => {}
+            Err(error) => {
+                error!("send response failed: {}", error);
+            }
+        }
+    }
 }
 
 impl AsRef<ConnectionHandlerContextWrapper> for ConnectionHandlerContextWrapper {

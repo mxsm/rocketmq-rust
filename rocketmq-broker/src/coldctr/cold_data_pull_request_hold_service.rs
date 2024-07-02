@@ -14,6 +14,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+pub const NO_SUSPEND_KEY: &str = "_noSuspend_";
 #[derive(Default)]
 pub struct ColdDataPullRequestHoldService {}

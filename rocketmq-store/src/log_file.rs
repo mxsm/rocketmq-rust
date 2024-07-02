@@ -21,6 +21,7 @@ use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
 use rocketmq_common::TimeUtils::get_current_millis;
 
+use crate::base::dispatch_request::DispatchRequest;
 use crate::base::get_message_result::GetMessageResult;
 use crate::base::message_result::PutMessageResult;
 use crate::filter::MessageFilter;
@@ -107,4 +108,6 @@ pub trait RocketMQMessageStore: Clone + 'static {
         consume_offset: i64,
         batch_size: i32,
     ) -> bool;
+
+    fn notify_message_arrive_if_necessary(&self, dispatch_request: &mut DispatchRequest);
 }
