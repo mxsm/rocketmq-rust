@@ -88,4 +88,8 @@ impl PullRequest {
     pub fn suspend_timestamp(&self) -> u64 {
         self.suspend_timestamp
     }
+
+    pub fn connection_handler_context(&self) -> &ConnectionHandlerContext {
+        &self.ctx
+    }
 }

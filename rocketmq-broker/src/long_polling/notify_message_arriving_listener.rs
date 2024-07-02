@@ -16,10 +16,10 @@
  */
 use std::collections::HashMap;
 
+use rocketmq_store::base::message_arriving_listener::MessageArrivingListener;
 use rocketmq_store::log_file::MessageStore;
 
 use crate::long_polling::long_polling_service::pull_request_hold_service::PullRequestHoldService;
-use crate::long_polling::message_arriving_listener::MessageArrivingListener;
 
 pub struct NotifyMessageArrivingListener<MS> {
     pull_request_hold_service: PullRequestHoldService<MS>,

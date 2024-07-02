@@ -56,6 +56,7 @@ use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::dispatch_request::DispatchRequest;
 use crate::base::get_message_result::GetMessageResult;
+use crate::base::message_arriving_listener::MessageArrivingListener;
 use crate::base::message_result::PutMessageResult;
 use crate::base::message_status_enum::GetMessageStatus;
 use crate::base::message_status_enum::PutMessageStatus;
@@ -107,6 +108,8 @@ pub struct DefaultMessageStore {
     correct_logic_offset_service: Arc<CorrectLogicOffsetService>,
     clean_consume_queue_service: Arc<CleanConsumeQueueService>,
     broker_stats_manager: Option<Arc<BrokerStatsManager>>,
+    message_arriving_listener:
+        Option<Arc<Box<dyn MessageArrivingListener + Sync + Send + 'static>>>,
 }
 
 impl Clone for DefaultMessageStore {
@@ -133,6 +136,7 @@ impl Clone for DefaultMessageStore {
             correct_logic_offset_service: self.correct_logic_offset_service.clone(),
             clean_consume_queue_service: self.clean_consume_queue_service.clone(),
             broker_stats_manager: self.broker_stats_manager.clone(),
+            message_arriving_listener: self.message_arriving_listener.clone(),
         }
     }
 }
@@ -209,6 +213,7 @@ impl DefaultMessageStore {
             correct_logic_offset_service: Arc::new(CorrectLogicOffsetService {}),
             clean_consume_queue_service: Arc::new(CleanConsumeQueueService {}),
             broker_stats_manager,
+            message_arriving_listener: None,
         }
     }
 
@@ -444,6 +449,15 @@ impl DefaultMessageStore {
             None => false,
             Some(msg) => msg.is_in_mem(),
         }
+    }
+
+    pub fn set_message_arriving_listener(
+        &mut self,
+        message_arriving_listener: Option<
+            Arc<Box<dyn MessageArrivingListener + Sync + Send + 'static>>,
+        >,
+    ) {
+        self.message_arriving_listener = message_arriving_listener;
     }
 }
 
@@ -957,6 +971,22 @@ impl MessageStore for DefaultMessageStore {
         let size = (end_offset_py - start_offset_py) + last_cqitem.size as i64;
         self.check_in_mem_by_commit_offset(start_offset_py, size as i32)
     }
+
+    fn notify_message_arrive_if_necessary(&self, dispatch_request: &mut DispatchRequest) {
+        if self.broker_config.long_polling_enable && self.message_arriving_listener.is_some() {
+            self.message_arriving_listener.as_ref().unwrap().arriving(
+                dispatch_request.topic.as_str(),
+                dispatch_request.queue_id,
+                dispatch_request.consume_queue_offset + 1,
+                Some(dispatch_request.tags_code),
+                dispatch_request.store_timestamp,
+                dispatch_request.bit_map.clone(),
+                dispatch_request.properties_map.as_ref(),
+            );
+            self.reput_message_service
+                .notify_message_arrive4multi_queue(dispatch_request);
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -982,6 +1012,10 @@ struct ReputMessageService {
 }
 
 impl ReputMessageService {
+    fn notify_message_arrive4multi_queue(&self, dispatch_request: &mut DispatchRequest) {
+        unimplemented!("notify_message_arrive4multi_queue")
+    }
+
     pub fn set_reput_from_offset(&mut self, reput_from_offset: i64) {
         self.reput_from_offset = Some(Arc::new(AtomicI64::new(reput_from_offset)));
     }

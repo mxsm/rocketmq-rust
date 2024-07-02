@@ -17,6 +17,5 @@
 
 pub(crate) mod long_polling_service;
 pub(crate) mod many_pull_request;
-pub(crate) mod message_arriving_listener;
 pub(crate) mod notify_message_arriving_listener;
 pub(crate) mod pull_request;

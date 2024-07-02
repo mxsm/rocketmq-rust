@@ -14,7 +14,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 use std::sync::Arc;
 
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
@@ -51,6 +50,7 @@ use tracing::warn;
 
 use crate::client::consumer_group_info::ConsumerGroupInfo;
 use crate::client::manager::consumer_manager::ConsumerManager;
+use crate::coldctr::cold_data_pull_request_hold_service::NO_SUSPEND_KEY;
 use crate::filter::expression_for_retry_message_filter::ExpressionForRetryMessageFilter;
 use crate::filter::expression_message_filter::ExpressionMessageFilter;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
@@ -72,7 +72,7 @@ pub struct PullMessageProcessor<MS> {
     consumer_filter_manager: Arc<ConsumerFilterManager>,
     consumer_offset_manager: Arc<ConsumerOffsetManager>,
     broadcast_offset_manager: Arc<BroadcastOffsetManager>,
-    message_store: MS,
+    message_store: Arc<MS>,
 }
 
 impl<MS> PullMessageProcessor<MS> {
@@ -86,7 +86,7 @@ impl<MS> PullMessageProcessor<MS> {
         consumer_filter_manager: Arc<ConsumerFilterManager>,
         consumer_offset_manager: Arc<ConsumerOffsetManager>,
         broadcast_offset_manager: Arc<BroadcastOffsetManager>,
-        message_store: MS,
+        message_store: Arc<MS>,
     ) -> Self {
         Self {
             pull_message_result_handler,
@@ -321,7 +321,7 @@ pub fn rewrite_response_for_static_topic(
 #[allow(unused_variables)]
 impl<MS> PullMessageProcessor<MS>
 where
-    MS: MessageStore,
+    MS: MessageStore + Send + Sync + 'static,
 {
     pub async fn process_request(
         &mut self,
@@ -785,7 +785,37 @@ where
         -1
     }
 
-    pub fn execute_request_when_wakeup(&self, channel: Channel, request: RemotingCommand) {}
+    pub fn execute_request_when_wakeup(
+        &self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: RemotingCommand,
+    ) {
+        let mut self_inner = self.clone();
+        tokio::spawn(async move {
+            let broker_allow_flow_ctr_suspend = !(request.ext_fields().is_some()
+                && request.ext_fields().unwrap().contains_key(NO_SUSPEND_KEY));
+            let opaque = request.opaque();
+            let response = self_inner
+                .process_request(
+                    channel,
+                    ctx.clone(),
+                    RequestCode::from(request.code()),
+                    request,
+                )
+                .await;
+            if let Some(response) = response {
+                let command = response.set_opaque(opaque).mark_response_type();
+                match ctx.upgrade() {
+                    None => {}
+                    Some(ctx) => {
+                        let ctx_ref = unsafe { &mut *ctx.get() };
+                        ctx_ref.write(command).await;
+                    }
+                }
+            }
+        });
+    }
 }
 pub(crate) fn is_broadcast(
     proxy_pull_broadcast: bool,

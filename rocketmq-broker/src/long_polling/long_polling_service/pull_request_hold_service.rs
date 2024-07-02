@@ -18,10 +18,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_store::consume_queue::consume_queue_ext::CqExtUnit;
 use rocketmq_store::log_file::MessageStore;
+use tokio::time::Instant;
 use tracing::info;
+use tracing::warn;
 
 use crate::long_polling::many_pull_request::ManyPullRequest;
 use crate::long_polling::pull_request::PullRequest;
@@ -34,6 +37,7 @@ pub struct PullRequestHoldService<MS> {
     pull_request_table: Arc<parking_lot::RwLock<HashMap<String, ManyPullRequest>>>,
     pull_message_processor: Arc<PullMessageProcessor<MS>>,
     message_store: Arc<MS>,
+    broker_config: Arc<BrokerConfig>,
 }
 
 impl<MS> PullRequestHoldService<MS>
@@ -43,11 +47,13 @@ where
     pub fn new(
         message_store: Arc<MS>,
         pull_message_processor: Arc<PullMessageProcessor<MS>>,
+        broker_config: Arc<BrokerConfig>,
     ) -> Self {
         PullRequestHoldService {
             pull_request_table: Arc::new(parking_lot::RwLock::new(HashMap::new())),
             pull_message_processor,
             message_store,
+            broker_config,
         }
     }
 }
@@ -57,6 +63,31 @@ impl<MS> PullRequestHoldService<MS>
 where
     MS: MessageStore + Send + Sync,
 {
+    pub fn start(&mut self) {
+        let self_clone = self.clone();
+        tokio::spawn(async move {
+            loop {
+                if self_clone.broker_config.long_polling_enable {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                } else {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(
+                        self_clone.broker_config.short_polling_time_mills,
+                    ))
+                    .await;
+                }
+                let instant = Instant::now();
+                self_clone.check_hold_request();
+                let elapsed = instant.elapsed().as_millis();
+                if elapsed > 5000 {
+                    warn!(
+                        "PullRequestHoldService: check hold pull request cost {}ms",
+                        elapsed
+                    );
+                }
+            }
+        });
+    }
+
     pub fn suspend_pull_request(&self, topic: &str, queue_id: i32, mut pull_request: PullRequest) {
         let key = build_key(topic, queue_id);
         let mut table = self.pull_request_table.write();
@@ -74,6 +105,7 @@ where
             let topic = key_parts[0];
             let queue_id = key_parts[1].parse::<i32>().unwrap();
             let max_offset = self.message_store.get_max_offset_in_queue(topic, queue_id);
+            self.notify_message_arriving(topic, queue_id, max_offset);
         }
     }
 
@@ -127,6 +159,7 @@ where
                         if match_by_commit_log {
                             self.pull_message_processor.execute_request_when_wakeup(
                                 request.client_channel().clone(),
+                                request.connection_handler_context().clone(),
                                 request.request_command().clone(),
                             );
                             continue;
@@ -138,6 +171,7 @@ where
                     {
                         self.pull_message_processor.execute_request_when_wakeup(
                             request.client_channel().clone(),
+                            request.connection_handler_context().clone(),
                             request.request_command().clone(),
                         );
                         continue;
@@ -164,6 +198,7 @@ where
                     );
                     self.pull_message_processor.execute_request_when_wakeup(
                         request.client_channel().clone(),
+                        request.connection_handler_context().clone(),
                         request.request_command().clone(),
                     );
                 }
