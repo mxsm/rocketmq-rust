@@ -17,12 +17,14 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use rocketmq_common::common::mix_all::MASTER_ID;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protocol::subscription::group_retry_policy::GroupRetryPolicy;
 use crate::protocol::subscription::simple_subscription_data::SimpleSubscriptionData;
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubscriptionGroupConfig {
     group_name: String,
@@ -45,8 +47,46 @@ pub struct SubscriptionGroupConfig {
 
     consume_timeout_minute: i32,
 
-    subscription_data_set: HashSet<SimpleSubscriptionData>,
+    subscription_data_set: Option<HashSet<SimpleSubscriptionData>>,
     attributes: HashMap<String, String>,
+}
+
+impl SubscriptionGroupConfig {
+    pub fn new(group_name: &str) -> Self {
+        Self {
+            group_name: group_name.to_string(),
+            ..Default::default()
+        }
+    }
+}
+
+impl Default for SubscriptionGroupConfig {
+    fn default() -> Self {
+        SubscriptionGroupConfig {
+            group_name: "".to_string(),
+
+            consume_enable: true,
+            consume_from_min_enable: false,
+            consume_broadcast_enable: true,
+            consume_message_orderly: false,
+
+            retry_queue_nums: 1,
+            retry_max_times: 16,
+            group_retry_policy: GroupRetryPolicy::default(),
+
+            broker_id: MASTER_ID,
+            which_broker_when_consume_slowly: 1,
+
+            notify_consumer_ids_changed_enable: true,
+
+            group_sys_flag: 0,
+
+            consume_timeout_minute: 15,
+
+            subscription_data_set: None,
+            attributes: HashMap::new(),
+        }
+    }
 }
 
 impl SubscriptionGroupConfig {
@@ -102,8 +142,8 @@ impl SubscriptionGroupConfig {
         self.consume_timeout_minute
     }
 
-    pub fn subscription_data_set(&self) -> &HashSet<SimpleSubscriptionData> {
-        &self.subscription_data_set
+    pub fn subscription_data_set(&self) -> Option<&HashSet<SimpleSubscriptionData>> {
+        self.subscription_data_set.as_ref()
     }
 
     pub fn attributes(&self) -> &HashMap<String, String> {
@@ -154,11 +194,79 @@ impl SubscriptionGroupConfig {
     }
     pub fn set_subscription_data_set(
         &mut self,
-        subscription_data_set: HashSet<SimpleSubscriptionData>,
+        subscription_data_set: Option<HashSet<SimpleSubscriptionData>>,
     ) {
         self.subscription_data_set = subscription_data_set;
     }
     pub fn set_attributes(&mut self, attributes: HashMap<String, String>) {
         self.attributes = attributes;
+    }
+}
+
+#[cfg(test)]
+mod subscription_group_config_tests {
+    use super::*;
+    //use crate::protocol::subscription::group_retry_policy::RetryPolicy;
+
+    #[test]
+    fn creating_default_subscription_group_config() {
+        let config = SubscriptionGroupConfig::default();
+        assert_eq!(config.group_name, "");
+        assert!(config.consume_enable);
+        assert!(!config.consume_from_min_enable);
+        assert!(config.consume_broadcast_enable);
+        assert!(!config.consume_message_orderly);
+        assert_eq!(config.retry_queue_nums, 1);
+        assert_eq!(config.retry_max_times, 16);
+        // assert_eq!(config.group_retry_policy, GroupRetryPolicy::default());
+        assert_eq!(config.broker_id, MASTER_ID);
+        assert_eq!(config.which_broker_when_consume_slowly, 1);
+        assert!(config.notify_consumer_ids_changed_enable);
+        assert_eq!(config.group_sys_flag, 0);
+        assert_eq!(config.consume_timeout_minute, 15);
+        assert!(config.subscription_data_set.is_none());
+        assert!(config.attributes.is_empty());
+    }
+
+    #[test]
+    fn setting_and_getting_fields() {
+        let mut config = SubscriptionGroupConfig::default();
+        config.set_group_name("test_group".to_string());
+        config.set_consume_enable(false);
+        config.set_consume_from_min_enable(true);
+        config.set_consume_broadcast_enable(false);
+        config.set_consume_message_orderly(true);
+        config.set_retry_queue_nums(2);
+        config.set_retry_max_times(10);
+        //config.set_group_retry_policy(GroupRetryPolicy::Custom(RetryPolicy::FixedDelay(100)));
+        config.set_broker_id(2);
+        config.set_which_broker_when_consume_slowly(2);
+        config.set_notify_consumer_ids_changed_enable(false);
+        config.set_group_sys_flag(1);
+        config.set_consume_timeout_minute(30);
+        config.set_subscription_data_set(Some(HashSet::new()));
+        config.set_attributes(HashMap::from([("key".to_string(), "value".to_string())]));
+
+        assert_eq!(config.group_name(), "test_group");
+        assert!(!config.consume_enable());
+        assert!(config.consume_from_min_enable());
+        assert!(!config.consume_broadcast_enable());
+        assert!(config.consume_message_orderly());
+        assert_eq!(config.retry_queue_nums(), 2);
+        assert_eq!(config.retry_max_times(), 10);
+        /*        assert_eq!(
+            config.group_retry_policy(),
+            &GroupRetryPolicy::Custom(RetryPolicy::FixedDelay(100))
+        );*/
+        assert_eq!(config.broker_id(), 2);
+        assert_eq!(config.which_broker_when_consume_slowly(), 2);
+        assert!(!config.notify_consumer_ids_changed_enable());
+        assert_eq!(config.group_sys_flag(), 1);
+        assert_eq!(config.consume_timeout_minute(), 30);
+        assert!(config.subscription_data_set().is_some());
+        assert_eq!(
+            config.attributes(),
+            &HashMap::from([("key".to_string(), "value".to_string())])
+        );
     }
 }
