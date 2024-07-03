@@ -17,6 +17,74 @@
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+use crate::protocol::subscription::customized_retry_policy::CustomizedRetryPolicy;
+use crate::protocol::subscription::exponential_retry_policy::ExponentialRetryPolicy;
+use crate::protocol::subscription::group_retry_policy_type::GroupRetryPolicyType;
+use crate::protocol::subscription::retry_policy::RetryPolicy;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GroupRetryPolicy {}
+pub struct GroupRetryPolicy {
+    type_: GroupRetryPolicyType,
+    exponential_retry_policy: Option<ExponentialRetryPolicy>,
+    customized_retry_policy: Option<CustomizedRetryPolicy>,
+    default_retry_policy: CustomizedRetryPolicy,
+}
+
+impl Default for GroupRetryPolicy {
+    fn default() -> Self {
+        GroupRetryPolicy {
+            type_: GroupRetryPolicyType::Customized,
+            exponential_retry_policy: None,
+            customized_retry_policy: None,
+            default_retry_policy: CustomizedRetryPolicy::default(),
+        }
+    }
+}
+
+impl GroupRetryPolicy {
+    pub fn type_(&self) -> GroupRetryPolicyType {
+        self.type_
+    }
+
+    pub fn exponential_retry_policy(&self) -> &Option<ExponentialRetryPolicy> {
+        &self.exponential_retry_policy
+    }
+
+    pub fn customized_retry_policy(&self) -> &Option<CustomizedRetryPolicy> {
+        &self.customized_retry_policy
+    }
+
+    pub fn set_type_(&mut self, type_: GroupRetryPolicyType) {
+        self.type_ = type_;
+    }
+
+    pub fn set_exponential_retry_policy(
+        &mut self,
+        exponential_retry_policy: Option<ExponentialRetryPolicy>,
+    ) {
+        self.exponential_retry_policy = exponential_retry_policy;
+    }
+
+    pub fn set_customized_retry_policy(
+        &mut self,
+        customized_retry_policy: Option<CustomizedRetryPolicy>,
+    ) {
+        self.customized_retry_policy = customized_retry_policy;
+    }
+
+    pub fn get_retry_policy(&self) -> &dyn RetryPolicy {
+        match self.type_ {
+            GroupRetryPolicyType::Exponential => self
+                .exponential_retry_policy
+                .as_ref()
+                .map(|p| p as &dyn RetryPolicy)
+                .unwrap_or(&self.default_retry_policy as &dyn RetryPolicy),
+            GroupRetryPolicyType::Customized => self
+                .customized_retry_policy
+                .as_ref()
+                .map(|p| p as &dyn RetryPolicy)
+                .unwrap_or(&self.default_retry_policy as &dyn RetryPolicy),
+        }
+    }
+}

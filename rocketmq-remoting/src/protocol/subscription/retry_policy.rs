@@ -14,11 +14,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-pub mod customized_retry_policy;
-pub mod exponential_retry_policy;
-pub mod group_retry_policy;
-pub mod group_retry_policy_type;
-pub mod retry_policy;
-pub mod simple_subscription_data;
-pub mod subscription_group_config;
+pub trait RetryPolicy {
+    /// Compute message's next delay duration by specify reconsume_times
+    ///
+    /// # Arguments
+    ///
+    /// * `reconsume_times` - Message reconsume times
+    ///
+    /// # Returns
+    ///
+    /// * Message's next delay duration in milliseconds
+    fn next_delay_duration(&self, reconsume_times: i32) -> i64;
+}
