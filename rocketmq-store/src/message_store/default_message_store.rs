@@ -64,6 +64,7 @@ use crate::base::message_result::PutMessageResult;
 use crate::base::message_status_enum::GetMessageStatus;
 use crate::base::message_status_enum::PutMessageStatus;
 use crate::base::store_checkpoint::StoreCheckpoint;
+use crate::base::store_stats_service::StoreStatsService;
 use crate::config::broker_role::BrokerRole;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::filter::MessageFilter;
@@ -114,6 +115,7 @@ pub struct DefaultMessageStore {
     message_arriving_listener:
         Option<Arc<Box<dyn MessageArrivingListener + Sync + Send + 'static>>>,
     notify_message_arrive_in_batch: bool,
+    store_stats_service: Arc<StoreStatsService>,
 }
 
 impl Clone for DefaultMessageStore {
@@ -142,6 +144,7 @@ impl Clone for DefaultMessageStore {
             broker_stats_manager: self.broker_stats_manager.clone(),
             message_arriving_listener: self.message_arriving_listener.clone(),
             notify_message_arrive_in_batch: self.notify_message_arrive_in_batch,
+            store_stats_service: self.store_stats_service.clone(),
         }
     }
 }
@@ -193,6 +196,7 @@ impl DefaultMessageStore {
         ensure_dir_ok(Self::get_store_path_physic(&message_store_config).as_str());
         ensure_dir_ok(Self::get_store_path_logic(&message_store_config).as_str());
 
+        let identity = broker_config.broker_identity.clone();
         Self {
             message_store_config: message_store_config.clone(),
             broker_config,
@@ -221,6 +225,7 @@ impl DefaultMessageStore {
             broker_stats_manager,
             message_arriving_listener: None,
             notify_message_arrive_in_batch,
+            store_stats_service: Arc::new(StoreStatsService::new(Some(identity))),
         }
     }
 
@@ -934,9 +939,13 @@ impl MessageStore for DefaultMessageStore {
         }
 
         if GetMessageStatus::Found == status {
-            println!("------");
+            self.store_stats_service
+                .get_get_message_times_total_found()
+                .fetch_add(1, Ordering::Relaxed);
         } else {
-            unimplemented!()
+            self.store_stats_service
+                .get_get_message_times_total_miss()
+                .fetch_add(1, Ordering::Relaxed);
         }
         let elapsed_time = begin_time.elapsed().as_millis() as u64;
         if get_result.is_none() {
