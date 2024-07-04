@@ -39,7 +39,7 @@ lazy_static! {
         std::env::var(NAMESRV_ADDR_PROPERTY).map_or(Some("127.0.0.1:9876".to_string()), Some);
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct BrokerIdentity {
     pub broker_name: String,

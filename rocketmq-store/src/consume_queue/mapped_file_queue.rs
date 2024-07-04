@@ -387,8 +387,6 @@ impl MappedFileQueue {
 
 #[cfg(test)]
 mod tests {
-    use std::ptr;
-
     use super::*;
 
     #[test]
