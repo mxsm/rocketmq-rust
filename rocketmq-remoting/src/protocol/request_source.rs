@@ -15,11 +15,13 @@
  * limitations under the License.
  */
 #[derive(Debug, PartialEq, Clone, Copy)]
+#[repr(i32)]
 pub enum RequestSource {
-    SDK,
-    ProxyForOrder,
-    ProxyForBroadcast,
-    ProxyForStream,
+    Unknown = -2,
+    SDK = -1,
+    ProxyForOrder = 0,
+    ProxyForBroadcast = 1,
+    ProxyForStream = 2,
 }
 
 impl RequestSource {
@@ -31,6 +33,7 @@ impl RequestSource {
             RequestSource::ProxyForOrder => 0,
             RequestSource::ProxyForBroadcast => 1,
             RequestSource::ProxyForStream => 2,
+            _ => -2,
         }
     }
 
@@ -48,7 +51,7 @@ impl RequestSource {
                 return Self::from_value(v);
             }
         }
-        RequestSource::SDK
+        RequestSource::Unknown
     }
 
     pub fn from_value(value: i32) -> RequestSource {
@@ -57,8 +60,14 @@ impl RequestSource {
             0 => RequestSource::ProxyForOrder,
             1 => RequestSource::ProxyForBroadcast,
             2 => RequestSource::ProxyForStream,
-            _ => RequestSource::SDK,
+            _ => RequestSource::Unknown,
         }
+    }
+}
+
+impl From<i32> for RequestSource {
+    fn from(value: i32) -> Self {
+        RequestSource::from_value(value)
     }
 }
 
@@ -72,6 +81,7 @@ mod tests {
         assert_eq!(RequestSource::ProxyForOrder.get_value(), 0);
         assert_eq!(RequestSource::ProxyForBroadcast.get_value(), 1);
         assert_eq!(RequestSource::ProxyForStream.get_value(), 2);
+        assert_eq!(RequestSource::Unknown.get_value(), -2);
     }
 
     #[test]

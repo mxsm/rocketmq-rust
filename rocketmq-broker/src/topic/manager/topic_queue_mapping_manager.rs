@@ -99,93 +99,92 @@ impl TopicQueueMappingManager {
 
         let mut global_id: Option<i32> = request_header.queue_id();
 
-        if let Some(mapping_detail) = self.topic_queue_mapping_table.lock().get(&topic) {
-            // it is not static topic
-            if mapping_detail
+        let mutex_guard = self.topic_queue_mapping_table.lock();
+        let tqmd = mutex_guard.get(&topic);
+        if tqmd.is_none() {
+            return TopicQueueMappingContext {
+                topic,
+                global_id: None,
+                mapping_detail: None,
+                mapping_item_list: vec![],
+                leader_item: None,
+                current_item: None,
+            };
+        }
+        let mapping_detail = tqmd.unwrap();
+
+        assert_eq!(
+            mapping_detail
                 .topic_queue_mapping_info
                 .bname
                 .clone()
-                .unwrap()
-                != self.broker_config.broker_name
-            {
-                return TopicQueueMappingContext {
-                    topic: topic.clone(),
-                    global_id: None,
-                    mapping_detail: None,
-                    mapping_item_list: vec![],
-                    leader_item: None,
-                    current_item: None,
-                };
-            }
-            if global_id.is_none() {
-                return TopicQueueMappingContext {
-                    topic: topic.clone(),
-                    global_id: None,
-                    mapping_detail: Some(mapping_detail.clone()),
-                    mapping_item_list: vec![],
-                    leader_item: None,
-                    current_item: None,
-                };
-            }
-            // If not find mappingItem, it encounters some errors
-            if let Some(global_id_value) = global_id {
-                if global_id_value < 0 && !select_one_when_miss {
-                    return TopicQueueMappingContext {
-                        topic: topic.clone(),
-                        global_id,
-                        mapping_detail: Some(mapping_detail.clone()),
-                        mapping_item_list: vec![],
-                        leader_item: None,
-                        current_item: None,
-                    };
-                }
-            }
-            if let Some(ref mut global_id_value) = global_id {
-                if *global_id_value < 0 {
-                    if let Some(hosted_queues) = &mapping_detail.hosted_queues {
-                        if !hosted_queues.is_empty() {
-                            // do not check
-                            *global_id_value = *hosted_queues.keys().next().unwrap_or(&-1);
-                        }
+                .unwrap(),
+            self.broker_config.broker_name
+        );
+
+        if global_id.is_none() {
+            return TopicQueueMappingContext {
+                topic,
+                global_id: None,
+                mapping_detail: Some(mapping_detail.clone()),
+                mapping_item_list: vec![],
+                leader_item: None,
+                current_item: None,
+            };
+        }
+        // If not find mappingItem, it encounters some errors
+        if global_id.unwrap() < 0 && !select_one_when_miss {
+            return TopicQueueMappingContext {
+                topic,
+                global_id,
+                mapping_detail: Some(mapping_detail.clone()),
+                mapping_item_list: vec![],
+                leader_item: None,
+                current_item: None,
+            };
+        }
+        if let Some(ref mut global_id_value) = global_id {
+            if *global_id_value < 0 {
+                if let Some(hosted_queues) = &mapping_detail.hosted_queues {
+                    if !hosted_queues.is_empty() {
+                        // do not check
+                        *global_id_value = *hosted_queues.keys().next().unwrap_or(&-1);
                     }
                 }
             }
-            if let Some(global_id_value) = global_id {
-                if global_id_value < 0 {
-                    return TopicQueueMappingContext {
-                        topic: topic.clone(),
-                        global_id,
-                        mapping_detail: Some(mapping_detail.clone()),
-                        mapping_item_list: vec![],
-                        leader_item: None,
-                        current_item: None,
-                    };
-                }
-            }
-            if let Some(mapping_item_list) =
-                TopicQueueMappingDetail::get_mapping_info(mapping_detail, global_id.unwrap())
-            {
-                let leader_item = if !mapping_item_list.is_empty() {
-                    Some(mapping_item_list[mapping_item_list.len() - 1].clone())
-                } else {
-                    None
-                };
+        }
+        if let Some(global_id_value) = global_id {
+            if global_id_value < 0 {
                 return TopicQueueMappingContext {
                     topic: topic.clone(),
                     global_id,
                     mapping_detail: Some(mapping_detail.clone()),
-                    mapping_item_list: mapping_item_list.clone(),
-                    leader_item,
+                    mapping_item_list: vec![],
+                    leader_item: None,
                     current_item: None,
                 };
             }
         }
+        let (leader_item, mapping_item_list) = if let Some(mapping_item_list) =
+            TopicQueueMappingDetail::get_mapping_info(mapping_detail, global_id.unwrap())
+        {
+            if !mapping_item_list.is_empty() {
+                (
+                    Some(mapping_item_list[mapping_item_list.len() - 1].clone()),
+                    mapping_item_list.clone(),
+                )
+            } else {
+                (None, vec![])
+            }
+        } else {
+            (None, vec![])
+        };
         TopicQueueMappingContext {
-            topic,
+            topic: topic.clone(),
             global_id,
-            mapping_detail: None,
-            mapping_item_list: vec![],
-            leader_item: None,
+            mapping_detail: Some(mapping_detail.clone()),
+            mapping_item_list,
+            leader_item,
             current_item: None,
         }
     }

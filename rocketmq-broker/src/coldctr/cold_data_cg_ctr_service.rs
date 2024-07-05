@@ -16,4 +16,10 @@
  */
 
 #[derive(Default)]
-pub struct ColdDataCgCtrService {}
+pub struct ColdDataCgCtrService;
+
+impl ColdDataCgCtrService {
+    pub fn is_cg_need_cold_data_flow_ctr(&self, _consumer_group: &str) -> bool {
+        false
+    }
+}

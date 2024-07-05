@@ -23,6 +23,7 @@ use bytes::BytesMut;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::mix_all::MASTER_ID;
 use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
+use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::code::response_code::RemotingSysResponseCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
@@ -44,6 +45,7 @@ use tracing::debug;
 use tracing::info;
 
 use crate::client::manager::consumer_manager::ConsumerManager;
+use crate::long_polling::pull_request::PullRequest;
 use crate::mqtrace::consume_message_context::ConsumeMessageContext;
 use crate::mqtrace::consume_message_hook::ConsumeMessageHook;
 use crate::offset::manager::broadcast_offset_manager::BroadcastOffsetManager;
@@ -166,6 +168,9 @@ impl PullMessageResultHandler for DefaultPullMessageResultHandler {
                     request_header.topic.as_str(),
                     get_message_result.message_count(),
                 );
+
+                ctx.upgrade()?;
+
                 if self.broker_config.transfer_msg_by_heap {
                     let body = self.read_get_message_result(
                         &get_message_result,
@@ -173,11 +178,10 @@ impl PullMessageResultHandler for DefaultPullMessageResultHandler {
                         request_header.topic.as_str(),
                         request_header.queue_id.unwrap(),
                     );
-                    return Some(response.set_body(body));
-                } /*else {
-                      None
-                  }*/
-                None
+                    Some(response.set_body(body))
+                } else {
+                    None
+                }
             }
             ResponseCode::PullNotFound => {
                 let has_suspend_flag =
@@ -196,17 +200,17 @@ impl PullMessageResultHandler for DefaultPullMessageResultHandler {
                     let queue_id = request_header.queue_id.unwrap();
                     let offset = request_header.queue_offset;
 
-                    /*            PullRequest::new(
+                    let pull_request = PullRequest::new(
                         request,
                         channel,
+                        ctx,
                         polling_time_mills,
-                        begin_time_mills,
+                        get_current_millis(),
                         offset,
                         subscription_data,
-                        message_filter,
-                    );*/
+                        Arc::new(message_filter),
+                    );
                 }
-
                 None
             }
             ResponseCode::PullOffsetMoved => Some(response),

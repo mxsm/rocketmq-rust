@@ -1472,6 +1472,7 @@ version = "0.3.0"
 dependencies = [
  "anyhow",
  "bytes",
+ "cfg-if",
  "clap",
  "config",
  "criterion",

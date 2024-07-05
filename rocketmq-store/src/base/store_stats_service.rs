@@ -138,6 +138,10 @@ impl StoreStatsService {
     pub fn get_get_message_times_total_miss(&self) -> &AtomicUsize {
         &self.get_message_times_total_miss
     }
+
+    pub fn get_message_transferred_msg_count(&self) -> &AtomicUsize {
+        &self.get_message_transferred_msg_count
+    }
 }
 
 pub struct CallSnapshot {

@@ -72,6 +72,7 @@ use crate::hook::put_message_hook::BoxedPutMessageHook;
 use crate::index::index_dispatch::CommitLogDispatcherBuildIndex;
 use crate::index::index_service::IndexService;
 use crate::kv::compaction_service::CompactionService;
+use crate::kv::compaction_store::CompactionStore;
 use crate::log_file::commit_log;
 use crate::log_file::commit_log::CommitLog;
 use crate::log_file::mapped_file::MappedFile;
@@ -80,6 +81,7 @@ use crate::log_file::MAX_PULL_MSG_SIZE;
 use crate::queue::build_consume_queue::CommitLogDispatcherBuildConsumeQueue;
 use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
 use crate::queue::ConsumeQueueStoreTrait;
+use crate::queue::ConsumeQueueTrait;
 use crate::stats::broker_stats_manager::BrokerStatsManager;
 use crate::store::running_flags::RunningFlags;
 use crate::store_path_config_helper::get_abort_file;
@@ -116,6 +118,7 @@ pub struct DefaultMessageStore {
         Option<Arc<Box<dyn MessageArrivingListener + Sync + Send + 'static>>>,
     notify_message_arrive_in_batch: bool,
     store_stats_service: Arc<StoreStatsService>,
+    compaction_store: Arc<CompactionStore>,
 }
 
 impl Clone for DefaultMessageStore {
@@ -145,6 +148,7 @@ impl Clone for DefaultMessageStore {
             message_arriving_listener: self.message_arriving_listener.clone(),
             notify_message_arrive_in_batch: self.notify_message_arrive_in_batch,
             store_stats_service: self.store_stats_service.clone(),
+            compaction_store: self.compaction_store.clone(),
         }
     }
 }
@@ -226,6 +230,7 @@ impl DefaultMessageStore {
             message_arriving_listener: None,
             notify_message_arrive_in_batch,
             store_stats_service: Arc::new(StoreStatsService::new(Some(identity))),
+            compaction_store: Arc::new(CompactionStore),
         }
     }
 
@@ -757,7 +762,15 @@ impl MessageStore for DefaultMessageStore {
         let topic_config = self.get_topic_config(topic);
         let policy = get_delete_policy(topic_config.as_ref());
         if policy == CleanupPolicy::COMPACTION && self.message_store_config.enable_compaction {
-            unimplemented!()
+            //not implemented will be implemented in the future
+            return self.compaction_store.get_message(
+                group,
+                topic,
+                queue_id,
+                offset,
+                max_msg_nums,
+                max_total_msg_size,
+            );
         }
         let begin_time = Instant::now();
 
@@ -768,174 +781,177 @@ impl MessageStore for DefaultMessageStore {
         let mut max_offset = 0;
         let mut get_result = Some(GetMessageResult::new());
         let max_offset_py = self.commit_log.get_max_offset();
-        let consume_queue = self
-            .consume_queue_store
-            .find_or_create_consume_queue(topic, queue_id);
-        /*if consume_queue.is_some() {
-        } else {
-            status = GetMessageStatus::NoMatchedLogicQueue;
-            next_begin_offset = self.next_offset_correction(offset, 0);
-        }*/
-        min_offset = consume_queue.lock().get_min_offset_in_queue();
-        max_offset = consume_queue.lock().get_max_offset_in_queue();
-        if max_offset == 0 {
-            status = GetMessageStatus::NoMessageInQueue;
-            next_begin_offset = self.next_offset_correction(offset, 0);
-        } else if offset < min_offset {
-            status = GetMessageStatus::OffsetTooSmall;
-            next_begin_offset = self.next_offset_correction(offset, min_offset);
-        } else if offset == max_offset {
-            status = GetMessageStatus::OffsetOverflowOne;
-            next_begin_offset = self.next_offset_correction(offset, offset);
-        } else if offset > max_offset {
-            status = GetMessageStatus::OffsetOverflowOne;
-            next_begin_offset = self.next_offset_correction(offset, max_offset);
-        } else {
-            let max_filter_message_size = self
-                .message_store_config
-                .max_filter_message_size
-                .max(max_msg_nums * consume_queue.lock().get_unit_size());
-            let disk_fall_recorded = self.message_store_config.disk_fall_recorded;
-            let mut max_pull_size = max_total_msg_size.max(100);
-            if max_pull_size > MAX_PULL_MSG_SIZE {
-                warn!(
-                    "The max pull size is too large maxPullSize={} topic={} queueId={}",
-                    max_pull_size, topic, queue_id
-                );
-                max_pull_size = MAX_PULL_MSG_SIZE;
-            }
-            status = GetMessageStatus::NoMatchedMessage;
-            let mut max_phy_offset_pulling = 0;
-            let mut cq_file_num = 0;
-            while get_result.as_ref().unwrap().buffer_total_size() <= 0
-                && next_begin_offset < max_offset
-                && cq_file_num
-                    < self
-                        .message_store_config
-                        .travel_cq_file_num_when_get_message
-            {
-                cq_file_num += 1;
-                let buffer_consume_queue = consume_queue
-                    .lock()
-                    .iterate_from_inner(next_begin_offset, max_msg_nums);
-                if buffer_consume_queue.is_none() {
-                    status = GetMessageStatus::OffsetFoundNull;
-                    next_begin_offset = self.next_offset_correction(
-                        next_begin_offset,
-                        self.consume_queue_store
-                            .roll_next_file(&**consume_queue.lock(), next_begin_offset),
+        let consume_queue = self.find_consume_queue(topic, queue_id);
+        if let Some(consume_queue) = consume_queue {
+            min_offset = consume_queue.lock().get_min_offset_in_queue();
+            max_offset = consume_queue.lock().get_max_offset_in_queue();
+            if max_offset == 0 {
+                status = GetMessageStatus::NoMessageInQueue;
+                next_begin_offset = self.next_offset_correction(offset, 0);
+            } else if offset < min_offset {
+                status = GetMessageStatus::OffsetTooSmall;
+                next_begin_offset = self.next_offset_correction(offset, min_offset);
+            } else if offset == max_offset {
+                status = GetMessageStatus::OffsetOverflowOne;
+                next_begin_offset = self.next_offset_correction(offset, offset);
+            } else if offset > max_offset {
+                status = GetMessageStatus::OffsetOverflowBadly;
+                next_begin_offset = self.next_offset_correction(offset, max_offset);
+            } else {
+                let max_filter_message_size = self
+                    .message_store_config
+                    .max_filter_message_size
+                    .max(max_msg_nums * consume_queue.lock().get_unit_size());
+                let disk_fall_recorded = self.message_store_config.disk_fall_recorded;
+                let mut max_pull_size = max_total_msg_size.max(100);
+                if max_pull_size > MAX_PULL_MSG_SIZE {
+                    warn!(
+                        "The max pull size is too large maxPullSize={} topic={} queueId={}",
+                        max_pull_size, topic, queue_id
                     );
-                    break;
+                    max_pull_size = MAX_PULL_MSG_SIZE;
                 }
-                let mut next_phy_file_start_offset = i64::MIN;
-                let mut buffer_consume_queue = buffer_consume_queue.unwrap();
-                loop {
-                    if let Some(cq_unit) = buffer_consume_queue.next() {
+                status = GetMessageStatus::NoMatchedMessage;
+                let mut max_phy_offset_pulling = 0;
+                let mut cq_file_num = 0;
+                while get_result.as_ref().unwrap().buffer_total_size() <= 0
+                    && next_begin_offset < max_offset
+                    && cq_file_num
+                        < self
+                            .message_store_config
+                            .travel_cq_file_num_when_get_message
+                {
+                    cq_file_num += 1;
+                    let buffer_consume_queue = consume_queue
+                        .lock()
+                        .iterate_from_inner(next_begin_offset, max_msg_nums);
+                    if buffer_consume_queue.is_none() {
+                        status = GetMessageStatus::OffsetFoundNull;
+                        next_begin_offset = self.next_offset_correction(
+                            next_begin_offset,
+                            self.consume_queue_store
+                                .roll_next_file(&**consume_queue.lock(), next_begin_offset),
+                        );
+                        break;
+                    }
+                    let mut next_phy_file_start_offset = i64::MIN;
+                    let mut buffer_consume_queue = buffer_consume_queue.unwrap();
+                    loop {
                         if next_begin_offset >= max_offset {
                             break;
                         }
-                        let offset_py = cq_unit.pos;
-                        let size_py = cq_unit.size;
-                        let is_in_mem = estimate_in_mem_by_commit_offset(
-                            offset_py,
-                            max_offset_py,
-                            &self.message_store_config,
-                        );
-                        if (cq_unit.queue_offset - offset)
-                            * consume_queue.lock().get_unit_size() as i64
-                            > max_filter_message_size as i64
-                        {
-                            break;
-                        }
-                        let get_result_ref = get_result.as_mut().unwrap();
-                        if is_the_batch_full(
-                            size_py,
-                            cq_unit.batch_num as i32,
-                            max_msg_nums,
-                            max_pull_size as i64,
-                            get_result_ref.buffer_total_size(),
-                            get_result_ref.message_count(),
-                            is_in_mem,
-                            &self.message_store_config,
-                        ) {
-                            break;
-                        }
-                        if get_result_ref.buffer_total_size() >= max_pull_size {
-                            break;
-                        }
-                        max_phy_offset_pulling = offset_py;
-                        next_begin_offset = cq_unit.queue_offset + cq_unit.batch_num as i64;
-                        if next_phy_file_start_offset != i64::MIN
-                            && offset_py < next_phy_file_start_offset
-                        {
-                            continue;
-                        }
-
-                        if let Some(filter) = message_filter {
-                            if !filter.is_matched_by_consume_queue(
-                                cq_unit.get_valid_tags_code_as_long(),
-                                cq_unit.cq_ext_unit.as_ref(),
+                        if let Some(cq_unit) = buffer_consume_queue.next() {
+                            let offset_py = cq_unit.pos;
+                            let size_py = cq_unit.size;
+                            let is_in_mem = estimate_in_mem_by_commit_offset(
+                                offset_py,
+                                max_offset_py,
+                                &self.message_store_config,
+                            );
+                            if (cq_unit.queue_offset - offset)
+                                * consume_queue.lock().get_unit_size() as i64
+                                > max_filter_message_size as i64
+                            {
+                                break;
+                            }
+                            let get_result_ref = get_result.as_mut().unwrap();
+                            if is_the_batch_full(
+                                size_py,
+                                cq_unit.batch_num as i32,
+                                max_msg_nums,
+                                max_pull_size as i64,
+                                get_result_ref.buffer_total_size(),
+                                get_result_ref.message_count(),
+                                is_in_mem,
+                                &self.message_store_config,
                             ) {
+                                break;
+                            }
+                            if get_result_ref.buffer_total_size() >= max_pull_size {
+                                break;
+                            }
+                            max_phy_offset_pulling = offset_py;
+                            next_begin_offset = cq_unit.queue_offset + cq_unit.batch_num as i64;
+                            if next_phy_file_start_offset != i64::MIN
+                                && offset_py < next_phy_file_start_offset
+                            {
+                                continue;
+                            }
+
+                            if let Some(filter) = message_filter {
+                                if !filter.is_matched_by_consume_queue(
+                                    cq_unit.get_valid_tags_code_as_long(),
+                                    cq_unit.cq_ext_unit.as_ref(),
+                                ) {
+                                    if get_result_ref.buffer_total_size() == 0 {
+                                        status = GetMessageStatus::NoMatchedMessage;
+                                    }
+                                    continue;
+                                }
+                            }
+
+                            let select_result = self.commit_log.get_message(offset_py, size_py);
+                            if select_result.is_none() {
+                                if get_result_ref.buffer_total_size() == 0 {
+                                    status = GetMessageStatus::MessageWasRemoving;
+                                }
+                                next_phy_file_start_offset =
+                                    self.commit_log.roll_next_file(offset_py);
+                                continue;
+                            }
+                            if self.message_store_config.cold_data_flow_control_enable
+                                && !is_sys_consumer_group_for_no_cold_read_limit(group)
+                                && !select_result.as_ref().unwrap().is_in_cache
+                            {
+                                get_result_ref.set_cold_data_sum(
+                                    get_result_ref.cold_data_sum() + size_py as i64,
+                                );
+                            }
+
+                            if message_filter.is_some()
+                                && !message_filter.as_ref().unwrap().is_matched_by_commit_log(
+                                    Some(select_result.as_ref().unwrap().get_buffer()),
+                                    None,
+                                )
+                            {
                                 if get_result_ref.buffer_total_size() == 0 {
                                     status = GetMessageStatus::NoMatchedMessage;
                                 }
+                                drop(select_result);
                                 continue;
                             }
+                            self.store_stats_service
+                                .get_message_transferred_msg_count()
+                                .fetch_add(cq_unit.batch_num as usize, Ordering::Relaxed);
+                            get_result.as_mut().unwrap().add_message(
+                                select_result.unwrap(),
+                                cq_unit.queue_offset as u64,
+                                cq_unit.batch_num as i32,
+                            );
+                            status = GetMessageStatus::Found;
+                            next_phy_file_start_offset = i64::MIN;
                         }
-
-                        let select_result = self.commit_log.get_message(offset_py, size_py);
-                        if select_result.is_none() {
-                            if get_result_ref.buffer_total_size() == 0 {
-                                status = GetMessageStatus::MessageWasRemoving;
-                            }
-                            next_phy_file_start_offset = self.commit_log.roll_next_file(offset_py);
-                            continue;
-                        }
-                        if self.message_store_config.cold_data_flow_control_enable
-                            && !is_sys_consumer_group_for_no_cold_read_limit(group)
-                            && !select_result.as_ref().unwrap().is_in_cache
-                        {
-                            get_result_ref
-                                .set_cold_data_sum(get_result_ref.cold_data_sum() + size_py as i64);
-                        }
-
-                        if message_filter.is_some()
-                            && !message_filter.as_ref().unwrap().is_matched_by_commit_log(
-                                Some(select_result.as_ref().unwrap().get_buffer()),
-                                None,
-                            )
-                        {
-                            if get_result_ref.buffer_total_size() == 0 {
-                                status = GetMessageStatus::NoMatchedMessage;
-                            }
-                            drop(select_result);
-                            continue;
-                        }
-                        get_result.as_mut().unwrap().add_message(
-                            select_result.unwrap(),
-                            cq_unit.queue_offset as u64,
-                            cq_unit.batch_num as i32,
-                        );
-                        status = GetMessageStatus::Found;
-                        next_phy_file_start_offset = i64::MIN;
                     }
                 }
-            }
-            if disk_fall_recorded {
-                let fall_behind = max_offset_py - max_phy_offset_pulling;
-                self.broker_stats_manager
-                    .as_ref()
+                if disk_fall_recorded {
+                    let fall_behind = max_offset_py - max_phy_offset_pulling;
+                    self.broker_stats_manager
+                        .as_ref()
+                        .unwrap()
+                        .record_disk_fall_behind_size(group, topic, queue_id, fall_behind);
+                }
+                let diff = max_offset_py - max_phy_offset_pulling;
+                let memory = ((*TOTAL_PHYSICAL_MEMORY_SIZE as f64)
+                    * (self.message_store_config.access_message_in_memory_max_ratio as f64 / 100.0))
+                    as i64;
+                get_result
+                    .as_mut()
                     .unwrap()
-                    .record_disk_fall_behind_size(group, topic, queue_id, fall_behind);
+                    .set_suggest_pulling_from_slave(diff > memory);
             }
-            let diff = max_offset_py - max_phy_offset_pulling;
-            let memory = ((*TOTAL_PHYSICAL_MEMORY_SIZE as f64)
-                * (self.message_store_config.access_message_in_memory_max_ratio as f64 / 100.0))
-                as i64;
-            get_result
-                .as_mut()
-                .unwrap()
-                .set_suggest_pulling_from_slave(diff > memory);
+        } else {
+            status = GetMessageStatus::NoMatchedLogicQueue;
+            next_begin_offset = self.next_offset_correction(offset, 0);
         }
 
         if GetMessageStatus::Found == status {
@@ -1004,6 +1020,17 @@ impl MessageStore for DefaultMessageStore {
             self.reput_message_service
                 .notify_message_arrive4multi_queue(dispatch_request);
         }
+    }
+
+    fn find_consume_queue(
+        &self,
+        topic: &str,
+        queue_id: i32,
+    ) -> Option<Arc<parking_lot::Mutex<Box<dyn ConsumeQueueTrait>>>> {
+        Some(
+            self.consume_queue_store
+                .find_or_create_consume_queue(topic, queue_id),
+        )
     }
 }
 

@@ -141,6 +141,20 @@ impl ConsumerManager {
             .insert(topic.to_string(), subscription_data.clone());
     }
 
+    pub fn compensate_basic_consumer_info(
+        &self,
+        group: &str,
+        consume_type: ConsumeType,
+        message_model: MessageModel,
+    ) {
+        let mut write_guard = self.consumer_compensation_table.write();
+        let consumer_group_info = write_guard
+            .entry(group.to_string())
+            .or_insert_with(|| ConsumerGroupInfo::with_group_name(group.to_string()));
+        consumer_group_info.set_consume_type(consume_type);
+        consumer_group_info.set_message_model(message_model);
+    }
+
     pub fn register_consumer(
         &self,
         group: &str,

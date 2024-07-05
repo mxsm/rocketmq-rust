@@ -26,6 +26,7 @@ use crate::base::get_message_result::GetMessageResult;
 use crate::base::message_result::PutMessageResult;
 use crate::filter::MessageFilter;
 use crate::hook::put_message_hook::BoxedPutMessageHook;
+use crate::queue::ConsumeQueueTrait;
 use crate::stats::broker_stats_manager::BrokerStatsManager;
 use crate::store::running_flags::RunningFlags;
 
@@ -110,4 +111,10 @@ pub trait RocketMQMessageStore: Clone + 'static {
     ) -> bool;
 
     fn notify_message_arrive_if_necessary(&self, dispatch_request: &mut DispatchRequest);
+
+    fn find_consume_queue(
+        &self,
+        topic: &str,
+        queue_id: i32,
+    ) -> Option<Arc<parking_lot::Mutex<Box<dyn ConsumeQueueTrait>>>>;
 }
