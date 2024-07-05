@@ -14,28 +14,27 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::collections::HashMap;
+use crate::base::get_message_result::GetMessageResult;
 
-use rocketmq_store::consume_queue::consume_queue_ext::CqExtUnit;
-use rocketmq_store::filter::MessageFilter;
+pub struct CompactionStore;
 
-pub struct ExpressionMessageFilter;
+impl CompactionStore {
+    pub fn new() -> Self {
+        CompactionStore
+    }
+}
 
 #[allow(unused_variables)]
-impl MessageFilter for ExpressionMessageFilter {
-    fn is_matched_by_consume_queue(
+impl CompactionStore {
+    pub fn get_message(
         &self,
-        tags_code: Option<i64>,
-        cq_ext_unit: Option<&CqExtUnit>,
-    ) -> bool {
-        true
-    }
-
-    fn is_matched_by_commit_log(
-        &self,
-        msg_buffer: Option<&[u8]>,
-        properties: Option<&HashMap<String, String>>,
-    ) -> bool {
-        true
+        group: &str,
+        topic: &str,
+        queue_id: i32,
+        offset: i64,
+        max_msg_nums: i32,
+        max_total_msg_size: i32,
+    ) -> Option<GetMessageResult> {
+        None
     }
 }

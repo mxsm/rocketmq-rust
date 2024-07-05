@@ -809,9 +809,9 @@ impl ConsumeQueueTrait for ConsumeQueue {
     fn iterate_from_inner(
         &self,
         start_index: i64,
-        count: i32,
+        _count: i32,
     ) -> Option<Box<dyn Iterator<Item = CqUnit>>> {
-        todo!()
+        self.iterate_from(start_index)
     }
 }
 

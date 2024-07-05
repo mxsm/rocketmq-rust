@@ -28,7 +28,7 @@ impl MessageFilter for ExpressionForRetryMessageFilter {
         tags_code: Option<i64>,
         cq_ext_unit: Option<&CqExtUnit>,
     ) -> bool {
-        todo!()
+        true
     }
 
     fn is_matched_by_commit_log(
@@ -36,6 +36,6 @@ impl MessageFilter for ExpressionForRetryMessageFilter {
         msg_buffer: Option<&[u8]>,
         properties: Option<&HashMap<String, String>>,
     ) -> bool {
-        todo!()
+        true
     }
 }

@@ -57,7 +57,7 @@ dirs.workspace = true
 local-ip-address = "0.6.1"
 dns-lookup = "2.0"
 log = "0.4.22"
-
+cfg-if = { workspace = true }
 [dev-dependencies]
 mockall = "0.12.1"
 static_assertions = { version = "1" }

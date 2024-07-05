@@ -50,6 +50,7 @@ use tracing::warn;
 
 use crate::client::consumer_group_info::ConsumerGroupInfo;
 use crate::client::manager::consumer_manager::ConsumerManager;
+use crate::coldctr::cold_data_cg_ctr_service::ColdDataCgCtrService;
 use crate::coldctr::cold_data_pull_request_hold_service::NO_SUSPEND_KEY;
 use crate::filter::expression_for_retry_message_filter::ExpressionForRetryMessageFilter;
 use crate::filter::expression_message_filter::ExpressionMessageFilter;
@@ -73,6 +74,7 @@ pub struct PullMessageProcessor<MS> {
     consumer_offset_manager: Arc<ConsumerOffsetManager>,
     broadcast_offset_manager: Arc<BroadcastOffsetManager>,
     message_store: Arc<MS>,
+    cold_data_cg_ctr_service: Arc<ColdDataCgCtrService>,
 }
 
 impl<MS> PullMessageProcessor<MS> {
@@ -99,6 +101,7 @@ impl<MS> PullMessageProcessor<MS> {
             consumer_offset_manager,
             broadcast_offset_manager,
             message_store,
+            cold_data_cg_ctr_service: Arc::new(Default::default()),
         }
     }
 
@@ -462,9 +465,17 @@ where
             );
         }
         match RequestSource::parse_integer(request_header.request_source) {
-            RequestSource::ProxyForBroadcast => {}
-            RequestSource::ProxyForStream => {}
-            _ => {}
+            RequestSource::ProxyForBroadcast => {
+                unimplemented!("ProxyForBroadcast not implement")
+            }
+            RequestSource::ProxyForStream => {
+                unimplemented!("ProxyForStream not implement")
+            }
+            _ => self.consumer_manager.compensate_basic_consumer_info(
+                request_header.consumer_group.as_str(),
+                ConsumeType::ConsumePassively,
+                MessageModel::Clustering,
+            ),
         }
         let has_subscription_flag =
             PullSysFlag::has_subscription_flag(request_header.sys_flag as u32);
@@ -540,7 +551,7 @@ where
                 );
             }
             let sgc_ref = subscription_group_config.as_ref().unwrap();
-            if sgc_ref.consume_broadcast_enable()
+            if !sgc_ref.consume_broadcast_enable()
                 && consumer_group_info.as_ref().unwrap().get_message_model()
                     == MessageModel::Broadcasting
             {
@@ -671,6 +682,15 @@ where
         };
 
         //ColdDataFlow not implement
+
+        cfg_if::cfg_if! {
+            if #[cfg(feature = "local_file_store")] {
+                if self.cold_data_cg_ctr_service.is_cg_need_cold_data_flow_ctr(request_header.consumer_group.as_str()) {
+                    unimplemented!("ColdDataFlow not implement")
+                }
+            }
+        }
+
         let use_reset_offset_feature = self.broker_config.use_server_side_reset_offset;
         let topic = request_header.topic.as_str();
         let group = request_header.consumer_group.as_str();
@@ -754,8 +774,8 @@ where
             return -1;
         }
         let consumer_group_info = self.consumer_manager.get_consumer_group_info(group);
-        let proxy_pull_broadcast = RequestSource::ProxyForBroadcast.get_value()
-            == request_header.request_source.unwrap_or(-2);
+        let proxy_pull_broadcast = RequestSource::ProxyForBroadcast
+            == From::from(request_header.request_source.unwrap_or(-2));
 
         if is_broadcast(proxy_pull_broadcast, consumer_group_info.as_ref()) {
             let client_id = if proxy_pull_broadcast {
@@ -821,12 +841,67 @@ pub(crate) fn is_broadcast(
     proxy_pull_broadcast: bool,
     consumer_group_info: Option<&ConsumerGroupInfo>,
 ) -> bool {
-    match consumer_group_info {
-        Some(info) => {
-            proxy_pull_broadcast
-                || (info.get_message_model() == MessageModel::Broadcasting
-                    && info.get_consume_type() == ConsumeType::ConsumePassively)
-        }
-        None => proxy_pull_broadcast,
+    proxy_pull_broadcast
+        || consumer_group_info.map_or(false, |info| {
+            matches!(info.get_message_model(), MessageModel::Broadcasting)
+                && matches!(info.get_consume_type(), ConsumeType::ConsumePassively)
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
+    use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
+    use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
+
+    use super::*;
+    use crate::client::consumer_group_info::ConsumerGroupInfo;
+
+    #[test]
+    fn returns_true_for_proxy_pull_broadcast() {
+        let result = is_broadcast(true, None);
+        assert!(
+            result,
+            "Should return true when proxy_pull_broadcast is true"
+        );
+    }
+
+    #[test]
+    fn returns_false_for_non_broadcast_and_active_consumption() {
+        let consumer_group_info = ConsumerGroupInfo::new(
+            "test_group".to_string(),
+            ConsumeType::ConsumeActively,
+            MessageModel::Clustering,
+            ConsumeFromWhere::ConsumeFromLastOffset,
+        );
+        let result = is_broadcast(false, Some(&consumer_group_info));
+        assert!(
+            !result,
+            "Should return false for non-broadcast and active consumption"
+        );
+    }
+
+    #[test]
+    fn returns_true_for_broadcast_and_passive_consumption() {
+        let consumer_group_info = ConsumerGroupInfo::new(
+            "test_group".to_string(),
+            ConsumeType::ConsumePassively,
+            MessageModel::Broadcasting,
+            ConsumeFromWhere::ConsumeFromLastOffset,
+        );
+        let result = is_broadcast(false, Some(&consumer_group_info));
+        assert!(
+            result,
+            "Should return true for broadcast and passive consumption"
+        );
+    }
+
+    #[test]
+    fn returns_false_when_no_consumer_group_info_provided() {
+        let result = is_broadcast(false, None);
+        assert!(
+            !result,
+            "Should return false when no consumer group info is provided"
+        );
     }
 }

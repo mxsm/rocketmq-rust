@@ -16,3 +16,4 @@
  */
 
 pub(crate) mod compaction_service;
+pub(crate) mod compaction_store;
