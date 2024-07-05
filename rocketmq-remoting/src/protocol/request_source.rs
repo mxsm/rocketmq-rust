@@ -72,54 +72,58 @@ impl From<i32> for RequestSource {
 }
 
 #[cfg(test)]
-mod tests {
+mod request_source_tests {
     use super::*;
 
     #[test]
-    fn get_value_returns_correct_value_for_each_variant() {
+    fn parse_integer_returns_unknown_for_out_of_range_positive_values() {
+        assert_eq!(
+            RequestSource::parse_integer(Some(3)),
+            RequestSource::Unknown
+        );
+    }
+
+    #[test]
+    fn parse_integer_returns_unknown_for_out_of_range_negative_values() {
+        assert_eq!(
+            RequestSource::parse_integer(Some(-3)),
+            RequestSource::Unknown
+        );
+    }
+
+    #[test]
+    fn from_value_returns_correct_variant_for_known_values() {
+        assert_eq!(RequestSource::from_value(-1), RequestSource::SDK);
+        assert_eq!(RequestSource::from_value(0), RequestSource::ProxyForOrder);
+        assert_eq!(
+            RequestSource::from_value(1),
+            RequestSource::ProxyForBroadcast
+        );
+        assert_eq!(RequestSource::from_value(2), RequestSource::ProxyForStream);
+    }
+
+    #[test]
+    fn from_value_returns_unknown_for_unknown_values() {
+        assert_eq!(RequestSource::from_value(4), RequestSource::Unknown);
+        assert_eq!(RequestSource::from_value(-3), RequestSource::Unknown);
+    }
+
+    #[test]
+    fn is_valid_identifies_only_known_values_as_valid() {
+        assert!(RequestSource::is_valid(Some(-1)));
+        assert!(RequestSource::is_valid(Some(0)));
+        assert!(RequestSource::is_valid(Some(1)));
+        assert!(RequestSource::is_valid(Some(2)));
+        assert!(!RequestSource::is_valid(Some(3)));
+        assert!(!RequestSource::is_valid(Some(-3)));
+    }
+
+    #[test]
+    fn get_value_returns_expected_integer_representation() {
         assert_eq!(RequestSource::SDK.get_value(), -1);
         assert_eq!(RequestSource::ProxyForOrder.get_value(), 0);
         assert_eq!(RequestSource::ProxyForBroadcast.get_value(), 1);
         assert_eq!(RequestSource::ProxyForStream.get_value(), 2);
         assert_eq!(RequestSource::Unknown.get_value(), -2);
-    }
-
-    #[test]
-    fn is_valid_returns_true_for_valid_values() {
-        assert!(RequestSource::is_valid(Some(-1)));
-        assert!(RequestSource::is_valid(Some(0)));
-        assert!(RequestSource::is_valid(Some(1)));
-        assert!(RequestSource::is_valid(Some(2)));
-    }
-
-    #[test]
-    fn is_valid_returns_false_for_invalid_values() {
-        assert!(!RequestSource::is_valid(Some(-2)));
-        assert!(!RequestSource::is_valid(Some(4)));
-        assert!(!RequestSource::is_valid(None));
-    }
-
-    #[test]
-    fn parse_integer_returns_correct_variant_for_valid_values() {
-        assert_eq!(RequestSource::parse_integer(Some(-1)), RequestSource::SDK);
-        assert_eq!(
-            RequestSource::parse_integer(Some(0)),
-            RequestSource::ProxyForOrder
-        );
-        assert_eq!(
-            RequestSource::parse_integer(Some(1)),
-            RequestSource::ProxyForBroadcast
-        );
-        assert_eq!(
-            RequestSource::parse_integer(Some(2)),
-            RequestSource::ProxyForStream
-        );
-    }
-
-    #[test]
-    fn parse_integer_returns_sdk_for_invalid_values() {
-        assert_eq!(RequestSource::parse_integer(Some(4)), RequestSource::SDK);
-        assert_eq!(RequestSource::parse_integer(Some(-2)), RequestSource::SDK);
-        assert_eq!(RequestSource::parse_integer(None), RequestSource::SDK);
     }
 }
