@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::cell::SyncUnsafeCell;
 use std::sync::Arc;
 
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
@@ -46,6 +47,7 @@ use rocketmq_store::filter::MessageFilter;
 use rocketmq_store::log_file::MessageStore;
 use rocketmq_store::log_file::MAX_PULL_MSG_SIZE;
 use tracing::error;
+use tracing::info;
 use tracing::warn;
 
 use crate::client::consumer_group_info::ConsumerGroupInfo;
@@ -64,7 +66,7 @@ use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager
 
 #[derive(Clone)]
 pub struct PullMessageProcessor<MS> {
-    pull_message_result_handler: Arc<dyn PullMessageResultHandler>,
+    pull_message_result_handler: Arc<SyncUnsafeCell<dyn PullMessageResultHandler>>,
     broker_config: Arc<BrokerConfig>,
     subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
     topic_config_manager: Arc<TopicConfigManager>,
@@ -79,7 +81,7 @@ pub struct PullMessageProcessor<MS> {
 
 impl<MS> PullMessageProcessor<MS> {
     pub fn new(
-        pull_message_result_handler: Arc<dyn PullMessageResultHandler>,
+        pull_message_result_handler: Arc<SyncUnsafeCell<dyn PullMessageResultHandler>>,
         broker_config: Arc<BrokerConfig>,
         subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
         topic_config_manager: Arc<TopicConfigManager>,
@@ -352,6 +354,7 @@ where
         let mut request_header = request
             .decode_command_custom_header_fast::<PullMessageRequestHeader>()
             .unwrap();
+        info!("receive pull message request: {:?}", request_header);
         let mut response_header = PullMessageResponseHeader::default();
 
         if !PermName::is_readable(self.broker_config.broker_permission) {
@@ -736,7 +739,7 @@ where
             }
         };
         if let Some(get_message_result) = get_message_result {
-            return self.pull_message_result_handler.handle(
+            return self.pull_message_result_handler().handle(
                 get_message_result,
                 request,
                 request_header,
@@ -754,13 +757,9 @@ where
         None
     }
 
-    /*    fn rewrite_request_for_static_topic(
-        &mut self,
-        _request_header: &PullMessageRequestHeader,
-        _mapping_context: &TopicQueueMappingContext,
-    ) -> Option<RemotingCommand> {
-        unimplemented!()
-    }*/
+    fn pull_message_result_handler(&self) -> &dyn PullMessageResultHandler {
+        unsafe { &*self.pull_message_result_handler.get() }
+    }
 
     fn query_broadcast_pull_init_offset(
         &mut self,
