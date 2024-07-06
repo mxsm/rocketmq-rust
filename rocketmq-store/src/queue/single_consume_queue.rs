@@ -569,7 +569,7 @@ impl ConsumeQueueTrait for ConsumeQueue {
     }
 
     fn get_unit_size(&self) -> i32 {
-        todo!()
+        CQ_STORE_UNIT_SIZE
     }
 
     fn correct_min_offset(&self, min_commit_log_offset: i64) {

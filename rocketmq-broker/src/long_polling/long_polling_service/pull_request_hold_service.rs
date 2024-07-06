@@ -22,6 +22,7 @@ use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_store::consume_queue::consume_queue_ext::CqExtUnit;
 use rocketmq_store::log_file::MessageStore;
+use tokio::sync::Notify;
 use tokio::time::Instant;
 use tracing::info;
 use tracing::warn;
@@ -38,6 +39,7 @@ pub struct PullRequestHoldService<MS> {
     pull_message_processor: Arc<PullMessageProcessor<MS>>,
     message_store: Arc<MS>,
     broker_config: Arc<BrokerConfig>,
+    shutdown: Arc<Notify>,
 }
 
 impl<MS> PullRequestHoldService<MS>
@@ -54,6 +56,7 @@ where
             pull_message_processor,
             message_store,
             broker_config,
+            shutdown: Arc::new(Default::default()),
         }
     }
 }
@@ -67,13 +70,19 @@ where
         let self_clone = self.clone();
         tokio::spawn(async move {
             loop {
-                if self_clone.broker_config.long_polling_enable {
-                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                let handle_future = if self_clone.broker_config.long_polling_enable {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(5))
                 } else {
                     tokio::time::sleep(tokio::time::Duration::from_millis(
                         self_clone.broker_config.short_polling_time_mills,
                     ))
-                    .await;
+                };
+                tokio::select! {
+                    _ = handle_future => {info!("PullRequestHoldService: handle_future..........");}
+                    _ = self_clone.shutdown.notified() => {
+                        info!("PullRequestHoldService: shutdown..........");
+                        break;
+                    }
                 }
                 let instant = Instant::now();
                 self_clone.check_hold_request();
@@ -88,6 +97,9 @@ where
         });
     }
 
+    pub fn shutdown(&mut self) {
+        self.shutdown.notify_waiters();
+    }
     pub fn suspend_pull_request(&self, topic: &str, queue_id: i32, mut pull_request: PullRequest) {
         let key = build_key(topic, queue_id);
         let mut table = self.pull_request_table.write();
@@ -97,13 +109,20 @@ where
     }
 
     fn check_hold_request(&self) {
-        for (key, mpr) in self.pull_request_table.read().iter() {
+        let binding = self.pull_request_table.read();
+        let keys = binding.keys().cloned().collect::<Vec<String>>();
+        drop(binding);
+        for key in keys {
             let key_parts: Vec<&str> = key.split(TOPIC_QUEUE_ID_SEPARATOR).collect();
             if key_parts.len() != 2 {
                 continue;
             }
             let topic = key_parts[0];
             let queue_id = key_parts[1].parse::<i32>().unwrap();
+            info!(
+                "check hold request, topic: {}, queue_id: {}",
+                topic, queue_id
+            );
             let max_offset = self.message_store.get_max_offset_in_queue(topic, queue_id);
             self.notify_message_arriving(topic, queue_id, max_offset);
         }
@@ -130,7 +149,7 @@ where
                 if request_list.is_empty() {
                     return;
                 }
-
+                drop(table);
                 let mut replay_list = Vec::new();
 
                 for request in request_list {
@@ -181,6 +200,8 @@ where
                 }
 
                 if !replay_list.is_empty() {
+                    let mut table = self.pull_request_table.write();
+                    let mpr = table.entry(key).or_insert_with(ManyPullRequest::new);
                     mpr.add_pull_requests(replay_list);
                 }
             }

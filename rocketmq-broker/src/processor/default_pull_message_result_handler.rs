@@ -39,12 +39,14 @@ use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::filter::MessageFilter;
+use rocketmq_store::message_store::default_message_store::DefaultMessageStore;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use rocketmq_store::stats::stats_type::StatsType;
 use tracing::debug;
 use tracing::info;
 
 use crate::client::manager::consumer_manager::ConsumerManager;
+use crate::long_polling::long_polling_service::pull_request_hold_service::PullRequestHoldService;
 use crate::long_polling::pull_request::PullRequest;
 use crate::mqtrace::consume_message_context::ConsumeMessageContext;
 use crate::mqtrace::consume_message_hook::ConsumeMessageHook;
@@ -63,6 +65,7 @@ pub struct DefaultPullMessageResultHandler {
     broker_stats_manager: Arc<BrokerStatsManager>,
     broker_config: Arc<BrokerConfig>,
     consume_message_hook_list: Arc<Vec<Box<dyn ConsumeMessageHook>>>,
+    pull_request_hold_service: Option<Arc<PullRequestHoldService<DefaultMessageStore>>>,
 }
 
 impl DefaultPullMessageResultHandler {
@@ -83,12 +86,18 @@ impl DefaultPullMessageResultHandler {
             broker_stats_manager,
             broker_config,
             consume_message_hook_list,
+            pull_request_hold_service: None,
         }
+    }
+
+    pub fn set_pull_request_hold_service(
+        &mut self,
+        pull_request_hold_service: Option<Arc<PullRequestHoldService<DefaultMessageStore>>>,
+    ) {
+        self.pull_request_hold_service = pull_request_hold_service;
     }
 }
 
-#[allow(unused_variables)]
-#[allow(unused_assignments)]
 impl PullMessageResultHandler for DefaultPullMessageResultHandler {
     fn handle(
         &self,
@@ -103,7 +112,7 @@ impl PullMessageResultHandler for DefaultPullMessageResultHandler {
         message_filter: Box<dyn MessageFilter>,
         mut response: RemotingCommand,
         mut mapping_context: TopicQueueMappingContext,
-        begin_time_mills: u64,
+        _begin_time_mills: u64,
     ) -> Option<RemotingCommand> {
         let client_address = channel.remote_address().to_string();
         let topic_config = self
@@ -154,6 +163,7 @@ impl PullMessageResultHandler for DefaultPullMessageResultHandler {
 
         match code {
             ResponseCode::Success => {
+                info!("----------------------------------为什么");
                 self.broker_stats_manager.inc_group_get_nums(
                     request_header.consumer_group.as_str(),
                     request_header.topic.as_str(),
@@ -210,6 +220,10 @@ impl PullMessageResultHandler for DefaultPullMessageResultHandler {
                         subscription_data,
                         Arc::new(message_filter),
                     );
+                    self.pull_request_hold_service
+                        .as_ref()
+                        .unwrap()
+                        .suspend_pull_request(topic, queue_id, pull_request);
                 }
                 None
             }

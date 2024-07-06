@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+use std::cell::SyncUnsafeCell;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
@@ -234,6 +234,10 @@ impl BrokerRuntime {
         info!("[Broker shutdown]TopicConfigManager persist success");
         let _ = self.topic_config_manager.stop();
 
+        if let Some(pull_request_hold_service) = self.pull_request_hold_service.as_mut() {
+            pull_request_hold_service.shutdown();
+        }
+
         if let Some(runtime) = self.broker_runtime.take() {
             runtime.shutdown();
         }
@@ -369,18 +373,19 @@ impl BrokerRuntime {
             self.broker_config.clone(),
             self.message_store.as_ref().unwrap(),
         );
-        let pull_message_result_handler = DefaultPullMessageResultHandler::new(
-            Arc::new(self.topic_config_manager.clone()),
-            Arc::new(self.consumer_offset_manager.clone()),
-            self.consumer_manager.clone(),
-            self.broadcast_offset_manager.clone(),
-            self.broker_stats_manager.clone(),
-            self.broker_config.clone(),
-            Arc::new(Default::default()),
-        );
+        let pull_message_result_handler =
+            Arc::new(SyncUnsafeCell::new(DefaultPullMessageResultHandler::new(
+                Arc::new(self.topic_config_manager.clone()),
+                Arc::new(self.consumer_offset_manager.clone()),
+                self.consumer_manager.clone(),
+                self.broadcast_offset_manager.clone(),
+                self.broker_stats_manager.clone(),
+                self.broker_config.clone(),
+                Arc::new(Default::default()),
+            )));
         let message_store = Arc::new(self.message_store.as_ref().unwrap().clone());
         let pull_message_processor = PullMessageProcessor::new(
-            Arc::new(pull_message_result_handler),
+            pull_message_result_handler.clone(),
             self.broker_config.clone(),
             self.subscription_group_manager.clone(),
             Arc::new(self.topic_config_manager.clone()),
@@ -406,6 +411,12 @@ impl BrokerRuntime {
             Arc::new(pull_message_processor.clone()),
             self.broker_config.clone(),
         ));
+
+        unsafe {
+            (*pull_message_result_handler.get()).set_pull_request_hold_service(Some(Arc::new(
+                self.pull_request_hold_service.clone().unwrap(),
+            )));
+        }
 
         self.message_store
             .as_mut()
