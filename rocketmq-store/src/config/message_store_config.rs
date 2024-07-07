@@ -286,7 +286,7 @@ impl Default for MessageStoreConfig {
             max_transfer_count_on_message_in_memory: 32,
             max_transfer_bytes_on_message_in_disk: 1024 * 64,
             max_transfer_count_on_message_in_disk: 8,
-            access_message_in_memory_max_ratio: 0,
+            access_message_in_memory_max_ratio: 40,
             message_index_enable: true,
             max_hash_slot_num: 5000000,
             max_index_num: 5000000 * 4,

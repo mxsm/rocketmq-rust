@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::fmt;
 
 use crate::base::message_status_enum::GetMessageStatus;
 use crate::base::select_result::SelectMappedBufferResult;
@@ -48,6 +49,23 @@ pub struct GetMessageResult {
     commercial_size_per_msg: i32,
     /// The sum of cold data.
     cold_data_sum: i64,
+}
+
+impl fmt::Display for GetMessageResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "GetMessageResult [status={:?}, nextBeginOffset={}, minOffset={}, maxOffset={}, \
+             bufferTotalSize={}, messageCount={}, suggestPullingFromSlave={}]",
+            self.status,
+            self.next_begin_offset,
+            self.min_offset,
+            self.max_offset,
+            self.buffer_total_size,
+            self.message_count,
+            self.suggest_pulling_from_slave
+        )
+    }
 }
 
 impl GetMessageResult {
