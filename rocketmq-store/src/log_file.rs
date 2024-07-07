@@ -30,6 +30,7 @@ use crate::queue::ConsumeQueueTrait;
 use crate::stats::broker_stats_manager::BrokerStatsManager;
 use crate::store::running_flags::RunningFlags;
 
+pub(crate) mod cold_data_check_service;
 pub mod commit_log;
 pub mod flush_manager_impl;
 pub mod mapped_file;

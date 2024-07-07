@@ -63,6 +63,7 @@ use crate::base::swappable::Swappable;
 use crate::config::broker_role::BrokerRole;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::consume_queue::mapped_file_queue::MappedFileQueue;
+use crate::log_file::cold_data_check_service::ColdDataCheckService;
 use crate::log_file::flush_manager_impl::defalut_flush_manager::DefaultFlushManager;
 use crate::log_file::mapped_file::default_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
@@ -196,6 +197,7 @@ pub struct CommitLog {
     flush_manager: Arc<tokio::sync::Mutex<DefaultFlushManager>>,
     //flush_manager: Arc<parking_lot::Mutex<DefaultFlushManager>>,
     begin_time_in_lock: Arc<AtomicU64>,
+    cold_data_check_service: Arc<ColdDataCheckService>,
 }
 
 impl CommitLog {
@@ -233,6 +235,7 @@ impl CommitLog {
                 store_checkpoint,
             ))),
             begin_time_in_lock: Arc::new(AtomicU64::new(0)),
+            cold_data_check_service: Arc::new(Default::default()),
         }
     }
 }
@@ -262,15 +265,23 @@ impl CommitLog {
 
     pub fn destroy(&mut self) {}
 
-    /*    pub fn set_local_file_message_store(
-        &mut self,
-        local_file_message_store: Weak<Mutex<LocalFileMessageStore>>,
-    ) {
-       // self.local_file_message_store = Some(local_file_message_store);
-    }*/
-
     pub fn get_message(&self, offset: i64, size: i32) -> Option<SelectMappedBufferResult> {
-        None
+        let mapped_file_size = self.message_store_config.mapped_file_size_commit_log;
+        let mapped_file = self
+            .mapped_file_queue
+            .find_mapped_file_by_offset(offset, offset == 0);
+        match mapped_file {
+            None => None,
+            Some(mmap_file) => {
+                let pos = offset % mapped_file_size as i64;
+                let mut select_mapped_buffer_result =
+                    MappedFile::select_mapped_buffer_size(mmap_file, pos as i32, size);
+                if let Some(ref mut result) = select_mapped_buffer_result {
+                    result.is_in_cache = self.cold_data_check_service.is_data_in_page_cache();
+                }
+                select_mapped_buffer_result
+            }
+        }
     }
 
     pub fn set_confirm_offset(&mut self, phy_offset: i64) {

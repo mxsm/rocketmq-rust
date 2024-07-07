@@ -832,6 +832,11 @@ impl MessageStore for DefaultMessageStore {
                             self.consume_queue_store
                                 .roll_next_file(&**consume_queue.lock(), next_begin_offset),
                         );
+                        warn!(
+                            "consumer request topic: {}, offset: {}, minOffset: {}, maxOffset: \
+                             {}, but access logic queue failed. Correct nextBeginOffset to {}",
+                            topic, offset, min_offset, max_offset, next_begin_offset
+                        );
                         break;
                     }
                     let mut next_phy_file_start_offset = i64::MIN;
@@ -972,6 +977,10 @@ impl MessageStore for DefaultMessageStore {
         result.set_next_begin_offset(next_begin_offset);
         result.set_max_offset(max_offset);
         result.set_min_offset(min_offset);
+        /*        println!(
+            "------------------------------------------------{} {} {} {} {}",
+            result, next_begin_offset, max_offset, min_offset, elapsed_time
+        );*/
         get_result
     }
 
