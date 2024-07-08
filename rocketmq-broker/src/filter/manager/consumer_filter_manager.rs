@@ -16,18 +16,44 @@
  */
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
 use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_filter::utils::bloom_filter::BloomFilter;
 
 use crate::broker_path_config_helper::get_consumer_filter_path;
 use crate::filter::consumer_filter_data::ConsumerFilterData;
+use crate::filter::manager::consumer_filter_wrapper::ConsumerFilterWrapper;
+
+const MS_24_HOUR: u64 = Duration::from_hours(24).as_millis() as u64;
 
 #[derive(Default)]
 pub(crate) struct ConsumerFilterManager {
-    pub(crate) broker_config: Arc<BrokerConfig>,
+    broker_config: Arc<BrokerConfig>,
+    consumer_filter_wrapper: Arc<parking_lot::RwLock<ConsumerFilterWrapper>>,
+    bloom_filter: Option<BloomFilter>,
+}
+
+impl ConsumerFilterManager {
+    pub fn new(mut broker_config: Arc<BrokerConfig>) -> Self {
+        let consumer_filter_wrapper =
+            Arc::new(parking_lot::RwLock::new(ConsumerFilterWrapper::default()));
+        let bloom_filter = BloomFilter::new(
+            broker_config.max_error_rate_of_bloom_filter,
+            broker_config.expect_consumer_num_use_filter,
+        )
+        .unwrap();
+        let broker_config_mut = Arc::make_mut(&mut broker_config);
+        broker_config_mut.bit_map_length_consume_queue_ext = bloom_filter.m();
+        ConsumerFilterManager {
+            broker_config,
+            consumer_filter_wrapper,
+            bloom_filter: Some(bloom_filter),
+        }
+    }
 }
 
 //Fully implemented will be removed
@@ -61,11 +87,11 @@ impl ConsumerFilterManager {
     pub fn build(
         topic: &str,
         consumer_group: &str,
-        expression: &str,
-        type_: &str,
+        expression: Option<&str>,
+        type_: Option<&str>,
         client_version: u64,
     ) -> Option<ConsumerFilterData> {
-        if ExpressionType::is_tag_type(Some(type_)) {
+        if ExpressionType::is_tag_type(type_) {
             return None;
         }
 
@@ -74,8 +100,8 @@ impl ConsumerFilterManager {
         consumer_filter_data.set_consumer_group(consumer_group.to_string());
         consumer_filter_data.set_born_time(get_current_millis());
         consumer_filter_data.set_dead_time(0);
-        consumer_filter_data.set_expression(expression.to_string());
-        consumer_filter_data.set_expression_type(type_.to_string());
+        consumer_filter_data.set_expression(expression.map(|s| s.to_string()));
+        consumer_filter_data.set_expression_type(type_.map(|s| s.to_string()));
         consumer_filter_data.set_client_version(client_version);
 
         /*        let filter_factory = FilterFactory;
@@ -101,5 +127,9 @@ impl ConsumerFilterManager {
         consumer_group: &str,
     ) -> Option<ConsumerFilterData> {
         None
+    }
+
+    pub fn get_bloom_filter(&self) -> Option<&BloomFilter> {
+        self.bloom_filter.as_ref()
     }
 }

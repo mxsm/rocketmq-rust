@@ -14,22 +14,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::any::Any;
 use std::collections::HashMap;
 
-use serde::Deserialize;
-use serde::Serialize;
+pub trait EvaluationContext {
+    /// Get value by name from context
+    fn get(&self, name: &str) -> Option<&dyn Any>;
 
-use crate::filter::consumer_filter_data::ConsumerFilterData;
-
-#[derive(Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct ConsumerFilterWrapper {
-    filter_data_by_topic: HashMap<String /* Topic */, FilterDataMapByTopic>,
-}
-
-#[derive(Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct FilterDataMapByTopic {
-    filter_data_map: HashMap<String /* consumer group */, ConsumerFilterData>,
-    topic: String,
+    /// Context variables
+    fn key_values(&self) -> HashMap<String, Box<dyn Any>>;
 }
