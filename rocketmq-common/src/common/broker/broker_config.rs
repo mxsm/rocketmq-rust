@@ -97,7 +97,7 @@ impl BrokerIdentity {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct BrokerConfig {
     pub broker_identity: BrokerIdentity,
@@ -157,6 +157,9 @@ pub struct BrokerConfig {
     pub transfer_msg_by_heap: bool,
     pub short_polling_time_mills: u64,
     pub long_polling_enable: bool,
+    pub max_error_rate_of_bloom_filter: i32,
+    pub expect_consumer_num_use_filter: i32,
+    pub bit_map_length_consume_queue_ext: i32,
 }
 
 impl Default for BrokerConfig {
@@ -225,6 +228,9 @@ impl Default for BrokerConfig {
             transfer_msg_by_heap: true,
             short_polling_time_mills: 1000,
             long_polling_enable: true,
+            max_error_rate_of_bloom_filter: 20,
+            expect_consumer_num_use_filter: 32,
+            bit_map_length_consume_queue_ext: 64,
         }
     }
 }
@@ -269,7 +275,7 @@ pub fn default_broker_name() -> String {
         .unwrap_or_else(|| "DEFAULT_BROKER".to_string())
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct TopicQueueConfig {
     pub default_topic_queue_nums: u32,
@@ -283,7 +289,7 @@ impl Default for TopicQueueConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct TimerWheelConfig {
     pub timer_wheel_enable: bool,

@@ -511,14 +511,8 @@ where
                     let consumer_filter_data = ConsumerFilterManager::build(
                         request_header.topic.as_str(),
                         request_header.consumer_group.as_str(),
-                        request_header
-                            .subscription
-                            .as_ref()
-                            .map_or_else(|| "", |value| value.as_str()),
-                        request_header
-                            .expression_type
-                            .as_ref()
-                            .map_or_else(|| "", |value| value.as_str()),
+                        request_header.subscription.as_deref(),
+                        request_header.expression_type.as_deref(),
                         request_header.sub_version as u64,
                     );
                     if consumer_filter_data.is_none() {
@@ -681,7 +675,11 @@ where
         let message_filter: Box<dyn MessageFilter> = if self.broker_config.filter_support_retry {
             Box::new(ExpressionForRetryMessageFilter)
         } else {
-            Box::new(ExpressionMessageFilter)
+            Box::new(ExpressionMessageFilter::new(
+                Some(subscription_data.clone()),
+                consumer_filter_data,
+                self.consumer_filter_manager.clone(),
+            ))
         };
 
         //ColdDataFlow not implement

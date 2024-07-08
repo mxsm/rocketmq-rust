@@ -14,21 +14,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::sync::Arc;
+
+use rocketmq_filter::expression::Expression;
 use rocketmq_filter::utils::bloom_filter_data::BloomFilterData;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ConsumerFilterData {
     consumer_group: String,
     topic: String,
-    expression: String,
-    expression_type: String,
-    //compiled_expression: Expression,
+    expression: Option<String>,
+    expression_type: Option<String>,
+    #[serde(skip)]
+    compiled_expression: Option<Arc<Box<dyn Expression + Send + Sync + 'static>>>,
     born_time: u64,
     dead_time: u64,
-    bloom_filter_data: BloomFilterData,
+    bloom_filter_data: Option<BloomFilterData>,
     client_version: u64,
 }
 
@@ -41,12 +45,12 @@ impl ConsumerFilterData {
         &self.topic
     }
 
-    pub fn expression(&self) -> &str {
-        &self.expression
+    pub fn expression(&self) -> Option<&String> {
+        self.expression.as_ref()
     }
 
-    pub fn expression_type(&self) -> &str {
-        &self.expression_type
+    pub fn expression_type(&self) -> Option<&String> {
+        self.expression_type.as_ref()
     }
 
     pub fn born_time(&self) -> u64 {
@@ -57,8 +61,8 @@ impl ConsumerFilterData {
         self.dead_time
     }
 
-    pub fn bloom_filter_data(&self) -> &BloomFilterData {
-        &self.bloom_filter_data
+    pub fn bloom_filter_data(&self) -> Option<&BloomFilterData> {
+        self.bloom_filter_data.as_ref()
     }
 
     pub fn client_version(&self) -> u64 {
@@ -73,11 +77,11 @@ impl ConsumerFilterData {
         self.topic = topic;
     }
 
-    pub fn set_expression(&mut self, expression: String) {
+    pub fn set_expression(&mut self, expression: Option<String>) {
         self.expression = expression;
     }
 
-    pub fn set_expression_type(&mut self, expression_type: String) {
+    pub fn set_expression_type(&mut self, expression_type: Option<String>) {
         self.expression_type = expression_type;
     }
 
@@ -89,7 +93,7 @@ impl ConsumerFilterData {
         self.dead_time = dead_time;
     }
 
-    pub fn set_bloom_filter_data(&mut self, bloom_filter_data: BloomFilterData) {
+    pub fn set_bloom_filter_data(&mut self, bloom_filter_data: Option<BloomFilterData>) {
         self.bloom_filter_data = bloom_filter_data;
     }
 

@@ -14,22 +14,24 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::collections::HashMap;
+pub mod evaluation_context;
 
-use serde::Deserialize;
-use serde::Serialize;
+use std::error::Error;
 
-use crate::filter::consumer_filter_data::ConsumerFilterData;
+use crate::expression::evaluation_context::EvaluationContext;
 
-#[derive(Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct ConsumerFilterWrapper {
-    filter_data_by_topic: HashMap<String /* Topic */, FilterDataMapByTopic>,
-}
-
-#[derive(Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct FilterDataMapByTopic {
-    filter_data_map: HashMap<String /* consumer group */, ConsumerFilterData>,
-    topic: String,
+pub trait Expression {
+    /// Calculate expression result with context
+    ///
+    /// # Arguments
+    ///
+    /// * `context` - Context of evaluation
+    ///
+    /// # Returns
+    ///
+    /// The value of this expression
+    fn evaluate(
+        &self,
+        context: &dyn EvaluationContext,
+    ) -> Result<Box<dyn std::any::Any>, Box<dyn Error>>;
 }

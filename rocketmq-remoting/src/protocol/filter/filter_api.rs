@@ -72,7 +72,7 @@ impl FilterAPI {
         sub_string: &str,
         type_: Option<String>,
     ) -> Result<SubscriptionData, String> {
-        if type_.as_deref() == Some(ExpressionType::TAG) || type_.is_none() {
+        if type_.is_none() || type_.as_ref().unwrap().as_str() == ExpressionType::TAG {
             return FilterAPI::build_subscription_data(topic, sub_string);
         }
 
@@ -88,9 +88,7 @@ impl FilterAPI {
             sub_string: sub_string.to_string(),
             ..Default::default()
         };
-        if let Some(type_) = type_ {
-            subscription_data.expression_type = type_;
-        }
+        subscription_data.expression_type = type_.unwrap();
         Ok(subscription_data)
     }
 }

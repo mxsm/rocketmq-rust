@@ -19,10 +19,12 @@ use std::collections::HashSet;
 use std::hash::Hash;
 use std::hash::Hasher;
 
+use rocketmq_common::common::filter::expression_type::ExpressionType;
+use rocketmq_common::TimeUtils::get_current_millis;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubscriptionData {
     pub class_filter_mode: bool,
@@ -36,6 +38,21 @@ pub struct SubscriptionData {
     // documentation or external crates.
     #[serde(skip)]
     pub filter_class_source: String, // This field is not used in this example.
+}
+
+impl Default for SubscriptionData {
+    fn default() -> Self {
+        SubscriptionData {
+            class_filter_mode: false,
+            topic: String::new(),
+            sub_string: String::new(),
+            tags_set: HashSet::new(),
+            code_set: HashSet::new(),
+            sub_version: get_current_millis() as i64,
+            expression_type: ExpressionType::TAG.to_string(),
+            filter_class_source: String::new(),
+        }
+    }
 }
 
 impl SubscriptionData {
