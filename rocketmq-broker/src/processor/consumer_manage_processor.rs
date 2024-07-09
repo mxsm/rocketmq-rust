@@ -307,7 +307,7 @@ where
         ) {
             return Some(result);
         }
-        Some(response)
+        Some(response.set_command_custom_header(response_header))
     }
 
     fn rewrite_request_for_static_topic_for_consume_offset(
