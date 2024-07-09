@@ -22,7 +22,7 @@ use serde::Serialize;
 
 use crate::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BrokerData {
     cluster: String,
     #[serde(rename = "brokerName")]

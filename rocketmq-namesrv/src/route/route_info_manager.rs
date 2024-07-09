@@ -349,9 +349,9 @@ impl RouteInfoManager {
 
 impl RouteInfoManager {
     pub(crate) fn get_all_cluster_info(&self) -> ClusterInfo {
-        ClusterInfo::new(
-            Some(self.broker_addr_table.clone()),
-            Some(self.cluster_addr_table.clone()),
+        ClusterInfo::new_with_var(
+            self.broker_addr_table.clone(),
+            self.cluster_addr_table.clone(),
         )
     }
 

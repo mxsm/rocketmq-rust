@@ -17,46 +17,93 @@
 
 use std::cmp::Ordering;
 use std::fmt;
+use std::hash::Hash;
+use std::hash::Hasher;
 
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-struct MessageQueue {
+#[derive(Clone, Debug)]
+pub struct MessageQueue {
     topic: String,
     broker_name: String,
     queue_id: i32,
 }
 
 impl MessageQueue {
-    fn new(topic: &str, broker_name: &str, queue_id: i32) -> Self {
+    pub fn new() -> Self {
+        MessageQueue {
+            topic: String::new(),
+            broker_name: String::new(),
+            queue_id: 0,
+        }
+    }
+
+    pub fn from_other(other: &MessageQueue) -> Self {
+        MessageQueue {
+            topic: other.topic.clone(),
+            broker_name: other.broker_name.clone(),
+            queue_id: other.queue_id,
+        }
+    }
+
+    pub fn with_params(topic: &str, broker_name: &str, queue_id: i32) -> Self {
         MessageQueue {
             topic: topic.to_string(),
             broker_name: broker_name.to_string(),
             queue_id,
         }
     }
+
+    pub fn get_topic(&self) -> &str {
+        &self.topic
+    }
+
+    pub fn set_topic(&mut self, topic: &str) {
+        self.topic = topic.to_string();
+    }
+
+    pub fn get_broker_name(&self) -> &str {
+        &self.broker_name
+    }
+
+    pub fn set_broker_name(&mut self, broker_name: &str) {
+        self.broker_name = broker_name.to_string();
+    }
+
+    pub fn get_queue_id(&self) -> i32 {
+        self.queue_id
+    }
+
+    pub fn set_queue_id(&mut self, queue_id: i32) {
+        self.queue_id = queue_id;
+    }
 }
 
-impl fmt::Display for MessageQueue {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "MessageQueue {{ topic: {}, broker_name: {}, queue_id: {} }}",
-            self.topic, self.broker_name, self.queue_id
-        )
+impl PartialEq for MessageQueue {
+    fn eq(&self, other: &Self) -> bool {
+        self.topic == other.topic
+            && self.broker_name == other.broker_name
+            && self.queue_id == other.queue_id
+    }
+}
+
+impl Eq for MessageQueue {}
+
+impl Hash for MessageQueue {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.topic.hash(state);
+        self.broker_name.hash(state);
+        self.queue_id.hash(state);
     }
 }
 
 impl Ord for MessageQueue {
     fn cmp(&self, other: &Self) -> Ordering {
-        match self.topic.cmp(&other.topic) {
-            Ordering::Equal => match self.broker_name.cmp(&other.broker_name) {
-                Ordering::Equal => self.queue_id.cmp(&other.queue_id),
-                ord => ord,
-            },
-            ord => ord,
-        }
+        self.topic
+            .cmp(&other.topic)
+            .then_with(|| self.broker_name.cmp(&other.broker_name))
+            .then_with(|| self.queue_id.cmp(&other.queue_id))
     }
 }
 
@@ -65,45 +112,84 @@ impl PartialOrd for MessageQueue {
         Some(self.cmp(other))
     }
 }
+
+impl fmt::Display for MessageQueue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "MessageQueue [topic={}, broker_name={}, queue_id={}]",
+            self.topic, self.broker_name, self.queue_id
+        )
+    }
+}
+
 #[cfg(test)]
-mod tests {
+mod message_queue_tests {
     use super::*;
 
     #[test]
-    fn message_queue_creation() {
-        let mq = MessageQueue::new("topic", "broker", 1);
-        assert_eq!(mq.topic, "topic");
-        assert_eq!(mq.broker_name, "broker");
-        assert_eq!(mq.queue_id, 1);
+    fn new_creates_empty_message_queue() {
+        let mq = MessageQueue::new();
+        assert_eq!(mq.topic, "");
+        assert_eq!(mq.broker_name, "");
+        assert_eq!(mq.queue_id, 0);
     }
 
     #[test]
-    fn message_queue_display() {
-        let mq = MessageQueue::new("topic", "broker", 1);
-        assert_eq!(
-            format!("{}", mq),
-            "MessageQueue { topic: topic, broker_name: broker, queue_id: 1 }"
-        );
+    fn from_other_copies_all_fields() {
+        let original = MessageQueue::with_params("topic1", "broker1", 1);
+        let copy = MessageQueue::from_other(&original);
+        assert_eq!(copy.topic, "topic1");
+        assert_eq!(copy.broker_name, "broker1");
+        assert_eq!(copy.queue_id, 1);
     }
 
     #[test]
-    fn message_queue_ordering_same_topic_and_broker() {
-        let mq1 = MessageQueue::new("topic", "broker", 1);
-        let mq2 = MessageQueue::new("topic", "broker", 2);
-        assert!(mq1 < mq2);
+    fn with_params_sets_all_fields() {
+        let mq = MessageQueue::with_params("topic2", "broker2", 2);
+        assert_eq!(mq.topic, "topic2");
+        assert_eq!(mq.broker_name, "broker2");
+        assert_eq!(mq.queue_id, 2);
     }
 
     #[test]
-    fn message_queue_ordering_different_topic() {
-        let mq1 = MessageQueue::new("topic1", "broker", 1);
-        let mq2 = MessageQueue::new("topic2", "broker", 1);
-        assert!(mq1 < mq2);
+    fn set_topic_updates_topic() {
+        let mut mq = MessageQueue::new();
+        mq.set_topic("new_topic");
+        assert_eq!(mq.topic, "new_topic");
     }
 
     #[test]
-    fn message_queue_ordering_different_broker() {
-        let mq1 = MessageQueue::new("topic", "broker1", 1);
-        let mq2 = MessageQueue::new("topic", "broker2", 1);
-        assert!(mq1 < mq2);
+    fn set_broker_name_updates_broker_name() {
+        let mut mq = MessageQueue::new();
+        mq.set_broker_name("new_broker");
+        assert_eq!(mq.broker_name, "new_broker");
+    }
+
+    #[test]
+    fn set_queue_id_updates_queue_id() {
+        let mut mq = MessageQueue::new();
+        mq.set_queue_id(3);
+        assert_eq!(mq.queue_id, 3);
+    }
+
+    #[test]
+    fn equals_self() {
+        let mq1 = MessageQueue::with_params("topic", "broker", 1);
+        assert!(mq1.eq(&mq1));
+    }
+
+    #[test]
+    fn not_equal_different_topic() {
+        let mq1 = MessageQueue::with_params("topic1", "broker", 1);
+        let mq2 = MessageQueue::with_params("topic2", "broker", 1);
+        assert!(!mq1.eq(&mq2));
+    }
+
+    #[test]
+    fn not_equal_different_broker_name() {
+        let mq1 = MessageQueue::with_params("topic", "broker1", 1);
+        let mq2 = MessageQueue::with_params("topic", "broker2", 1);
+        assert!(!mq1.eq(&mq2));
     }
 }

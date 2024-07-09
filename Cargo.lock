@@ -1615,6 +1615,7 @@ dependencies = [
  "futures-sink",
  "futures-util",
  "lazy_static",
+ "log",
  "num_cpus",
  "parking_lot",
  "rand",

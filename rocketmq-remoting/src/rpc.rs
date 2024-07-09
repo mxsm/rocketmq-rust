@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+pub mod client_meta_data;
 pub mod rpc_client_utils;
 pub mod rpc_request;
 pub mod rpc_request_header;

@@ -14,6 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use rocketmq_common::common::mix_all;
+
 use crate::protocol::static_topic::logic_queue_mapping_item::LogicQueueMappingItem;
 
 pub struct TopicQueueMappingUtils;
@@ -76,5 +78,19 @@ impl TopicQueueMappingUtils {
             }
         }
         None
+    }
+
+    pub fn get_mock_broker_name(scope: &str) -> String {
+        assert!(!scope.is_empty(), "Scope cannot be null");
+
+        if scope == mix_all::METADATA_SCOPE_GLOBAL {
+            return format!(
+                "{}{}",
+                mix_all::LOGICAL_QUEUE_MOCK_BROKER_PREFIX,
+                &scope[2..]
+            );
+        } else {
+            return format!("{}{}", mix_all::LOGICAL_QUEUE_MOCK_BROKER_PREFIX, scope);
+        }
     }
 }
