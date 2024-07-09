@@ -1518,6 +1518,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rocketmq-client"
+version = "0.3.0"
+
+[[package]]
 name = "rocketmq-common"
 version = "0.3.0"
 dependencies = [

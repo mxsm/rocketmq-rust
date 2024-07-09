@@ -1,0 +1,13 @@
+[package]
+name = "rocketmq-client"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+readme.workspace = true
+description.workspace = true
+
+[dependencies]
