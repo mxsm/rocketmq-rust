@@ -1558,6 +1558,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rocketmq-example"
+version = "0.3.0"
+
+[[package]]
 name = "rocketmq-filter"
 version = "0.3.0"
 dependencies = [
