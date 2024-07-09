@@ -222,6 +222,8 @@ impl DefaultMessageStore {
             reput_message_service: ReputMessageService {
                 tx: None,
                 reput_from_offset: None,
+                message_store_config,
+                inner: None,
             },
             clean_commit_log_service: Arc::new(CleanCommitLogService {}),
             correct_logic_offset_service: Arc::new(CorrectLogicOffsetService {}),
@@ -1063,11 +1065,64 @@ impl CommitLogDispatcher for CommitLogDispatcherDefault {
 struct ReputMessageService {
     tx: Option<Arc<Sender<()>>>,
     reput_from_offset: Option<Arc<AtomicI64>>,
+    message_store_config: Arc<MessageStoreConfig>,
+    inner: Option<ReputMessageServiceInner>,
 }
 
 impl ReputMessageService {
     fn notify_message_arrive4multi_queue(&self, dispatch_request: &mut DispatchRequest) {
-        unimplemented!("notify_message_arrive4multi_queue")
+        if dispatch_request.properties_map.is_none()
+            || dispatch_request
+                .topic
+                .as_str()
+                .starts_with(RETRY_GROUP_TOPIC_PREFIX)
+        {
+            return;
+        }
+        let prop = dispatch_request.properties_map.as_ref().unwrap();
+        let multi_dispatch_queue = prop.get(MessageConst::PROPERTY_INNER_MULTI_DISPATCH);
+        let multi_queue_offset = prop.get(MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET);
+        if multi_dispatch_queue.is_none()
+            || multi_queue_offset.is_none()
+            || multi_dispatch_queue.as_ref().unwrap().is_empty()
+            || multi_queue_offset.as_ref().unwrap().is_empty()
+        {
+            return;
+        }
+        let queues: Vec<&str> = multi_dispatch_queue
+            .unwrap()
+            .split(MULTI_DISPATCH_QUEUE_SPLITTER)
+            .collect();
+        let queue_offsets: Vec<&str> = multi_dispatch_queue
+            .unwrap()
+            .split(MULTI_DISPATCH_QUEUE_SPLITTER)
+            .collect();
+        if queues.len() != queue_offsets.len() {
+            return;
+        }
+        let reput_message_service_inner = self.inner.as_ref().unwrap();
+        for i in 0..queues.len() {
+            let queue_name = queues[i];
+            let queue_offset: i64 = queue_offsets[i].parse().unwrap();
+            let mut queue_id = dispatch_request.queue_id;
+            if self.message_store_config.enable_lmq && is_lmq(Some(queue_name)) {
+                queue_id = 0;
+            }
+            reput_message_service_inner
+                .message_store
+                .message_arriving_listener
+                .as_ref()
+                .unwrap()
+                .arriving(
+                    queue_name,
+                    queue_id,
+                    queue_offset + 1,
+                    Some(dispatch_request.tags_code),
+                    dispatch_request.store_timestamp,
+                    dispatch_request.bit_map.clone(),
+                    dispatch_request.properties_map.as_ref(),
+                );
+        }
     }
 
     pub fn set_reput_from_offset(&mut self, reput_from_offset: i64) {
@@ -1088,8 +1143,9 @@ impl ReputMessageService {
             message_store_config,
             dispatcher,
             notify_message_arrive_in_batch,
-            message_store,
+            message_store: Arc::new(message_store),
         };
+        self.inner = Some(inner.clone());
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
         self.tx = Some(Arc::new(tx));
         let handle = tokio::spawn(async move {
@@ -1143,13 +1199,14 @@ impl ReputMessageService {
 }
 
 //Construct a consumer queue and index file.
+#[derive(Clone)]
 struct ReputMessageServiceInner {
     reput_from_offset: Arc<AtomicI64>,
     commit_log: Arc<CommitLog>,
     message_store_config: Arc<MessageStoreConfig>,
     dispatcher: CommitLogDispatcherDefault,
     notify_message_arrive_in_batch: bool,
-    message_store: DefaultMessageStore,
+    message_store: Arc<DefaultMessageStore>,
 }
 
 impl ReputMessageServiceInner {

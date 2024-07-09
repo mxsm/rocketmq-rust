@@ -163,7 +163,6 @@ impl PullMessageResultHandler for DefaultPullMessageResultHandler {
 
         match code {
             ResponseCode::Success => {
-                info!("----------------------------------为什么");
                 self.broker_stats_manager.inc_group_get_nums(
                     request_header.consumer_group.as_str(),
                     request_header.topic.as_str(),

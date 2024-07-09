@@ -590,16 +590,16 @@ impl BrokerRuntime {
     fn protect_broker(&mut self) {}
 
     fn start_basic_service(&mut self) {
+        let request_processor = self.init_processor();
+        let fast_request_processor = request_processor.clone();
         self.message_store
             .as_mut()
             .unwrap()
             .start()
             .expect("Message store start error");
 
-        //start nomarl broker server
-        let request_processor = self.init_processor();
-        let fast_request_processor = request_processor.clone();
         let server = RocketMQServer::new(self.server_config.clone());
+        //start nomarl broker server
         tokio::spawn(async move { server.run(request_processor).await });
         //start fast broker server
         let mut fast_server_config = (*self.server_config).clone();
