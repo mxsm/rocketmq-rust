@@ -4,6 +4,7 @@ members = [
     "rocketmq-broker",
     "rocketmq-cli",
     "rocketmq-common",
+    "rocketmq-example",
     "rocketmq-filter",
     "rocketmq-macros",
     "rocketmq-namesrv",
