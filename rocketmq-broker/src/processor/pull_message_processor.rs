@@ -38,8 +38,9 @@ use rocketmq_remoting::protocol::request_source::RequestSource;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
+use rocketmq_remoting::rpc::rpc_client::RpcClient;
 use rocketmq_remoting::rpc::rpc_client_utils::RpcClientUtils;
-use rocketmq_remoting::rpc::rpc_response::RpcResponse;
+use rocketmq_remoting::rpc::rpc_request::RpcRequest;
 use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
@@ -59,6 +60,7 @@ use crate::filter::expression_message_filter::ExpressionMessageFilter;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
 use crate::offset::manager::broadcast_offset_manager::BroadcastOffsetManager;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
+use crate::out_api::broker_outer_api::BrokerOuterAPI;
 use crate::processor::pull_message_result_handler::PullMessageResultHandler;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
@@ -77,6 +79,7 @@ pub struct PullMessageProcessor<MS> {
     broadcast_offset_manager: Arc<BroadcastOffsetManager>,
     message_store: Arc<MS>,
     cold_data_cg_ctr_service: Arc<ColdDataCgCtrService>,
+    broker_outer_api: Arc<BrokerOuterAPI>,
 }
 
 impl<MS> PullMessageProcessor<MS> {
@@ -91,6 +94,7 @@ impl<MS> PullMessageProcessor<MS> {
         consumer_offset_manager: Arc<ConsumerOffsetManager>,
         broadcast_offset_manager: Arc<BroadcastOffsetManager>,
         message_store: Arc<MS>,
+        broker_outer_api: Arc<BrokerOuterAPI>,
     ) -> Self {
         Self {
             pull_message_result_handler,
@@ -104,10 +108,12 @@ impl<MS> PullMessageProcessor<MS> {
             broadcast_offset_manager,
             message_store,
             cold_data_cg_ctr_service: Arc::new(Default::default()),
+            broker_outer_api,
         }
     }
 
-    pub fn rewrite_request_for_static_topic(
+    pub async fn rewrite_request_for_static_topic(
+        &self,
         request_header: &mut PullMessageRequestHeader,
         mapping_context: &mut TopicQueueMappingContext,
     ) -> Option<RemotingCommand> {
@@ -173,16 +179,31 @@ impl<MS> PullMessageProcessor<MS> {
         sys_flag = PullSysFlag::clear_suspend_flag(sys_flag as u32) as i32;
         sys_flag = PullSysFlag::clear_commit_offset_flag(sys_flag as u32) as i32;
         request_header.sys_flag = sys_flag;
-        /* let rpc_request = RpcRequest::new(RequestCode::PullMessage, request_header.clone(), None);
-        let rpc_response = broker_controller
+        let rpc_request = RpcRequest::new(
+            RequestCode::PullMessage.to_i32(),
+            request_header
+                .topic_request
+                .as_ref()
+                .unwrap()
+                .rpc
+                .clone()
+                .unwrap(),
+            None,
+        );
+        let rpc_response = self
             .broker_outer_api
-            .rpc_client
-            .invoke(rpc_request, broker_controller.broker_config.forward_timeout)?;
-        if rpc_response.exception.is_some() {
-            return Err(rpc_response.exception.unwrap());
-        }*/
-
-        let rpc_response = RpcResponse::default();
+            .rpc_client()
+            .invoke(rpc_request, self.broker_config.forward_timeout)
+            .await;
+        let rpc_response = match rpc_response {
+            Ok(value) => value,
+            Err(err) => {
+                return Some(RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::SystemError,
+                    format!("invoke rpc failed: {:?}", err),
+                ));
+            }
+        };
         let response_header = rpc_response.get_header_mut::<PullMessageResponseHeader>();
         let rewrite_result = rewrite_response_for_static_topic(
             request_header,
@@ -443,10 +464,10 @@ where
         let mut topic_queue_mapping_context = self
             .topic_queue_mapping_manager
             .build_topic_queue_mapping_context(&request_header, false);
-        if let Some(resp) = Self::rewrite_request_for_static_topic(
-            &mut request_header,
-            &mut topic_queue_mapping_context,
-        ) {
+        if let Some(resp) = self
+            .rewrite_request_for_static_topic(&mut request_header, &mut topic_queue_mapping_context)
+            .await
+        {
             return Some(resp);
         }
         if request_header.queue_id.is_none()

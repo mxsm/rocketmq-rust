@@ -37,6 +37,8 @@ use rocketmq_remoting::protocol::route::route_data_view::QueueData;
 use rocketmq_remoting::protocol::route::route_data_view::TopicRouteData;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::remoting::RemotingService;
+use rocketmq_remoting::rpc::client_metadata::ClientMetadata;
+use rocketmq_remoting::rpc::rpc_client_impl::RpcClientImpl;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_remoting::runtime::RPCHook;
 use tracing::error;
@@ -46,14 +48,19 @@ use tracing::info;
 pub struct BrokerOuterAPI {
     remoting_client: RocketmqDefaultClient,
     name_server_address: Option<String>,
+    rpc_client: RpcClientImpl,
+    client_metadata: ClientMetadata,
 }
 
 impl BrokerOuterAPI {
     pub fn new(tokio_client_config: Arc<TokioClientConfig>) -> Self {
         let client = RocketmqDefaultClient::new(tokio_client_config);
+        let client_metadata = ClientMetadata::new();
         Self {
-            remoting_client: client,
+            remoting_client: client.clone(),
             name_server_address: None,
+            rpc_client: RpcClientImpl::new(client_metadata.clone(), client),
+            client_metadata,
         }
     }
 
@@ -62,12 +69,15 @@ impl BrokerOuterAPI {
         rpc_hook: Option<impl RPCHook>,
     ) -> Self {
         let mut client = RocketmqDefaultClient::new(tokio_client_config);
+        let client_metadata = ClientMetadata::new();
         if let Some(rpc_hook) = rpc_hook {
             client.register_rpc_hook(rpc_hook);
         }
         Self {
-            remoting_client: client,
+            remoting_client: client.clone(),
             name_server_address: None,
+            rpc_client: RpcClientImpl::new(client_metadata.clone(), client),
+            client_metadata,
         }
     }
 
@@ -256,6 +266,10 @@ impl BrokerOuterAPI {
     pub fn shutdown(&self) {}
 
     pub fn refresh_metadata(&self) {}
+
+    pub fn rpc_client(&self) -> &RpcClientImpl {
+        &self.rpc_client
+    }
 }
 
 fn dns_lookup_address_by_domain(domain: &str) -> Vec<String> {
