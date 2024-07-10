@@ -27,7 +27,7 @@ use crate::protocol::route::route_data_view::TopicRouteData;
 use crate::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
 use crate::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ClientMetadata {
     topic_route_table: Arc<RwLock<HashMap<String /* Topic */, TopicRouteData>>>,
     topic_end_points_table:

@@ -395,6 +395,7 @@ impl BrokerRuntime {
             Arc::new(self.consumer_offset_manager.clone()),
             Arc::new(BroadcastOffsetManager::default()),
             message_store.clone(),
+            self.broker_out_api.clone(),
         );
 
         let consumer_manage_processor = ConsumerManageProcessor::new(

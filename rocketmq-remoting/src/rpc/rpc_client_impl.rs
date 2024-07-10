@@ -38,6 +38,7 @@ use crate::rpc::rpc_client_utils::RpcClientUtils;
 use crate::rpc::rpc_request::RpcRequest;
 use crate::rpc::rpc_response::RpcResponse;
 
+#[derive(Clone)]
 pub struct RpcClientImpl {
     client_metadata: ClientMetadata,
     remoting_client: RocketmqDefaultClient,
