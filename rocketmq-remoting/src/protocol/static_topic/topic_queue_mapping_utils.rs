@@ -84,13 +84,13 @@ impl TopicQueueMappingUtils {
         assert!(!scope.is_empty(), "Scope cannot be null");
 
         if scope == mix_all::METADATA_SCOPE_GLOBAL {
-            return format!(
+            format!(
                 "{}{}",
                 mix_all::LOGICAL_QUEUE_MOCK_BROKER_PREFIX,
                 &scope[2..]
-            );
+            )
         } else {
-            return format!("{}{}", mix_all::LOGICAL_QUEUE_MOCK_BROKER_PREFIX, scope);
+            format!("{}{}", mix_all::LOGICAL_QUEUE_MOCK_BROKER_PREFIX, scope)
         }
     }
 }

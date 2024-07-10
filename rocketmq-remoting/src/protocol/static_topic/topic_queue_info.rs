@@ -21,10 +21,10 @@ use rocketmq_common::common::mix_all::METADATA_SCOPE_GLOBAL;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 pub struct TopicQueueMappingInfo {
     pub topic: Option<String>,
-    pub scope: String,
+    pub scope: Option<String>,
     #[serde(rename = "totalQueues")]
     pub total_queues: i32,
     pub bname: Option<String>,
@@ -38,7 +38,7 @@ impl Default for TopicQueueMappingInfo {
     fn default() -> Self {
         Self {
             topic: None,
-            scope: METADATA_SCOPE_GLOBAL.to_string(),
+            scope: Some(METADATA_SCOPE_GLOBAL.to_string()),
             total_queues: 0,
             bname: None,
             epoch: 0,
@@ -52,7 +52,7 @@ impl TopicQueueMappingInfo {
     pub fn new(topic: String, total_queues: i32, bname: String, epoch: i64) -> Self {
         Self {
             topic: Some(topic),
-            scope: METADATA_SCOPE_GLOBAL.to_string(),
+            scope: Some(METADATA_SCOPE_GLOBAL.to_string()),
             total_queues,
             bname: Some(bname),
             epoch,

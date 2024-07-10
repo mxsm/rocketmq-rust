@@ -29,8 +29,11 @@ pub struct RpcClientUtils;
 
 impl RpcClientUtils {
     pub fn create_command_for_rpc_request(rpc_request: RpcRequest) -> RemotingCommand {
-        RemotingCommand::create_request_command(rpc_request.code, rpc_request.header)
-        //cmd.set_body(Self::encode_body(&**rpc_request.body))
+        let result = RemotingCommand::create_request_command(rpc_request.code, rpc_request.header);
+        if let Some(body) = rpc_request.body {
+            return result.set_body(Self::encode_body(&*body));
+        }
+        result
     }
 
     pub fn create_command_for_rpc_response(mut rpc_response: RpcResponse) -> RemotingCommand {
