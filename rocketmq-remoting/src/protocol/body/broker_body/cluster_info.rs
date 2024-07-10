@@ -26,10 +26,10 @@ use crate::protocol::route::route_data_view::BrokerData;
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ClusterInfo {
     #[serde(rename = "brokerAddrTable")]
-    broker_addr_table: Option<HashMap<String, BrokerData>>,
+    pub broker_addr_table: Option<HashMap<String, BrokerData>>,
 
     #[serde(rename = "clusterAddrTable")]
-    cluster_addr_table: Option<HashMap<String, HashSet<String>>>,
+    pub cluster_addr_table: Option<HashMap<String, HashSet<String>>>,
 }
 
 impl ClusterInfo {

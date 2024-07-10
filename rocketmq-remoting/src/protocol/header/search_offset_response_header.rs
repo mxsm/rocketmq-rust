@@ -14,19 +14,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod broker;
-pub mod client_request_header;
-pub mod get_consumer_listby_group_request_header;
-pub mod get_consumer_listby_group_response_header;
-pub mod get_earliest_msg_storetime_response_header;
-pub mod get_max_offset_response_header;
-pub mod get_min_offset_response_header;
-pub mod message_operation_header;
-pub mod namesrv;
-pub mod pull_message_request_header;
-pub mod pull_message_response_header;
-pub mod query_consumer_offset_request_header;
-pub mod query_consumer_offset_response_header;
-pub mod search_offset_response_header;
-pub mod unregister_client_request_header;
-pub mod update_consumer_offset_header;
+use rocketmq_macros::RequestHeaderCodec;
+use serde::Deserialize;
+use serde::Serialize;
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
+pub struct SearchOffsetResponseHeader {
+    pub offset: i64,
+}

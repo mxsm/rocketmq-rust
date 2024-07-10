@@ -22,11 +22,11 @@ use crate::rpc::rpc_request_header::RpcRequestHeader;
 pub struct RpcRequest {
     pub code: i32,
     pub header: RpcRequestHeader,
-    pub body: Option<Box<dyn Any>>,
+    pub body: Option<Box<dyn Any + Send>>,
 }
 
 impl RpcRequest {
-    pub fn new(code: i32, header: RpcRequestHeader, body: Option<Box<dyn Any>>) -> Self {
+    pub fn new(code: i32, header: RpcRequestHeader, body: Option<Box<dyn Any + Send>>) -> Self {
         Self { code, header, body }
     }
 }

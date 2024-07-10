@@ -30,15 +30,6 @@ pub struct RpcResponse {
 }
 
 impl RpcResponse {
-    pub fn new(exception: Option<RpcException>) -> Self {
-        Self {
-            code: exception.as_ref().map_or(0, |e| e.0),
-            header: None,
-            body: None,
-            exception,
-        }
-    }
-
     pub fn get_header<T>(&self) -> Option<&T>
     where
         T: CommandCustomHeader + Send + Sync + 'static,
@@ -64,6 +55,37 @@ impl RpcResponse {
                 let value = value as *const dyn CommandCustomHeader as *mut T;
                 unsafe { Some(&mut *value) }
             }
+        }
+    }
+
+    pub fn new_exception(exception: Option<RpcException>) -> Self {
+        Self {
+            code: exception.as_ref().map_or(0, |e| e.0),
+            header: None,
+            body: None,
+            exception,
+        }
+    }
+
+    pub fn new(
+        code: i32,
+        header: impl CommandCustomHeader + Send + Sync + 'static,
+        body: Option<Box<dyn Any>>,
+    ) -> Self {
+        Self {
+            code,
+            header: Some(Arc::new(SyncUnsafeCell::new(header))),
+            body,
+            exception: None,
+        }
+    }
+
+    pub fn new_option(code: i32, body: Option<Box<dyn Any>>) -> Self {
+        Self {
+            code,
+            header: None,
+            body,
+            exception: None,
         }
     }
 }

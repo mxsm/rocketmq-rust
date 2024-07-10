@@ -14,6 +14,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+pub mod client_metadata;
+pub mod rpc_client;
+pub mod rpc_client_hook;
+pub mod rpc_client_impl;
 pub mod rpc_client_utils;
 pub mod rpc_request;
 pub mod rpc_request_header;
