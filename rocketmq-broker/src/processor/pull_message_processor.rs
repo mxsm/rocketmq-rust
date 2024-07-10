@@ -814,11 +814,13 @@ where
                 && request.ext_fields().unwrap().contains_key(NO_SUSPEND_KEY));
             let opaque = request.opaque();
             let response = self_inner
-                .process_request(
+                .process_request_inner(
+                    RequestCode::from(request.code()),
                     channel,
                     ctx.clone(),
-                    RequestCode::from(request.code()),
                     request,
+                    false,
+                    broker_allow_flow_ctr_suspend,
                 )
                 .await;
             if let Some(response) = response {
