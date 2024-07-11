@@ -14,22 +14,26 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod attribute_enum;
-pub mod attribute_parser;
-pub mod attribute_util;
-pub mod cleanup_policy;
-pub mod cq_type;
-pub mod topic_attributes;
-pub mod topic_message_type;
+use std::collections::HashMap;
 
-pub trait AttributeTrait {
-    fn name(&self) -> String;
-    fn changeable(&self) -> bool;
-    fn verify(&self, value: &str);
+use serde::Deserialize;
+use serde::Serialize;
+
+use crate::protocol::command_custom_header::CommandCustomHeader;
+use crate::protocol::command_custom_header::FromMap;
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct GetAllTopicConfigResponseHeader;
+
+impl CommandCustomHeader for GetAllTopicConfigResponseHeader {
+    fn to_map(&self) -> Option<HashMap<String, String>> {
+        None
+    }
 }
+impl FromMap for GetAllTopicConfigResponseHeader {
+    type Target = Self;
 
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Attribute {
-    pub(crate) name: String,
-    pub(crate) changeable: bool,
+    fn from(_map: &HashMap<String, String>) -> Option<Self::Target> {
+        Some(Self {})
+    }
 }

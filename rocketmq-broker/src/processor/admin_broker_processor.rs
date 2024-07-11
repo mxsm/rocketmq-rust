@@ -14,26 +14,105 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+mod topic_request_handler;
 
+use std::sync::Arc;
+
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_remoting::code::request_code::RequestCode;
+use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
-use tracing::info;
+use rocketmq_store::message_store::default_message_store::DefaultMessageStore;
+use tracing::warn;
 
-#[derive(Default, Clone)]
-pub struct AdminBrokerProcessor {}
+use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
+use crate::processor::admin_broker_processor::topic_request_handler::TopicRequestHandler;
+use crate::processor::pop_inflight_message_counter::PopInflightMessageCounter;
+use crate::topic::manager::topic_config_manager::TopicConfigManager;
+use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
+
+#[derive(Clone)]
+pub struct AdminBrokerProcessor {
+    topic_request_handler: TopicRequestHandler,
+}
 
 impl AdminBrokerProcessor {
-    pub fn process_request(
+    pub fn new(
+        broker_config: Arc<BrokerConfig>,
+        topic_config_manager: TopicConfigManager,
+        consumer_offset_manager: ConsumerOffsetManager,
+        topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
+        default_message_store: DefaultMessageStore,
+    ) -> Self {
+        let inner = Inner {
+            broker_config,
+            topic_config_manager,
+            consumer_offset_manager,
+            topic_queue_mapping_manager,
+            default_message_store,
+            pop_inflight_message_counter: Arc::new(PopInflightMessageCounter),
+        };
+        let topic_request_handler = TopicRequestHandler::new(inner);
+        AdminBrokerProcessor {
+            topic_request_handler,
+        }
+    }
+}
+
+impl AdminBrokerProcessor {
+    pub async fn process_request(
         &mut self,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
-        _request_code: RequestCode,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request_code: RequestCode,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
-        let request_code = RequestCode::from(request.code());
-        info!("AdminBrokerProcessor process_request: {:?}", request_code);
-        None
+        match request_code {
+            RequestCode::UpdateAndCreateTopic => {
+                self.topic_request_handler
+                    .update_and_create_topic(channel, ctx, request_code, request)
+                    .await
+            }
+            RequestCode::UpdateAndCreateTopicList => {
+                self.topic_request_handler
+                    .update_and_create_topic_list(channel, ctx, request_code, request)
+                    .await
+            }
+            RequestCode::GetAllTopicConfig => {
+                self.topic_request_handler
+                    .get_all_topic_config(channel, ctx, request_code, request)
+                    .await
+            }
+            RequestCode::DeleteTopicInBroker => {
+                self.topic_request_handler
+                    .delete_topic(channel, ctx, request_code, request)
+                    .await
+            }
+            _ => Some(get_unknown_cmd_response(request_code)),
+        }
     }
+}
+
+fn get_unknown_cmd_response(request_code: RequestCode) -> RemotingCommand {
+    warn!(
+        "request type {:?}-{} not supported",
+        request_code,
+        request_code.to_i32()
+    );
+    RemotingCommand::create_response_command_with_code_remark(
+        ResponseCode::RequestCodeNotSupported,
+        format!(" request type {} not supported", request_code.to_i32()),
+    )
+}
+
+#[derive(Clone)]
+struct Inner {
+    broker_config: Arc<BrokerConfig>,
+    topic_config_manager: TopicConfigManager,
+    consumer_offset_manager: ConsumerOffsetManager,
+    topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
+    default_message_store: DefaultMessageStore,
+    pop_inflight_message_counter: Arc<PopInflightMessageCounter>,
 }

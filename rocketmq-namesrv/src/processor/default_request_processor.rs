@@ -181,7 +181,8 @@ impl DefaultRequestProcessor {
             .unwrap();
         let data_version = SerdeJsonUtils::decode::<DataVersion>(
             request.body().as_ref().map(|v| v.as_ref()).unwrap(),
-        );
+        )
+        .unwrap();
         let changed = self
             .route_info_manager
             .read()
@@ -411,7 +412,7 @@ impl DefaultRequestProcessor {
             .decode_command_custom_header::<RegisterTopicRequestHeader>()
             .unwrap();
         if let Some(ref body) = request.body() {
-            let topic_route_data = SerdeJsonUtils::decode::<TopicRouteData>(body);
+            let topic_route_data = SerdeJsonUtils::decode::<TopicRouteData>(body).unwrap();
             if !topic_route_data.queue_datas.is_empty() {
                 self.route_info_manager
                     .write()
@@ -520,7 +521,8 @@ fn extract_register_topic_config_from_request(
     if let Some(body_inner) = request.body() {
         return SerdeJsonUtils::decode::<TopicConfigAndMappingSerializeWrapper>(
             body_inner.iter().as_slice(),
-        );
+        )
+        .unwrap();
     }
     TopicConfigAndMappingSerializeWrapper::default()
 }

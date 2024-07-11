@@ -135,7 +135,8 @@ where
     ) -> Option<RemotingCommand> {
         let heartbeat_data = SerdeJsonUtils::decode::<HeartbeatData>(
             request.body().as_ref().map(|v| v.as_ref()).unwrap(),
-        );
+        )
+        .unwrap();
         let client_channel_info = ClientChannelInfo::new(
             channel.clone(),
             heartbeat_data.client_id.clone(),

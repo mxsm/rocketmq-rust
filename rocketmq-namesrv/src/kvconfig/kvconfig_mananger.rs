@@ -76,7 +76,8 @@ impl KVConfigManager {
     pub fn load(&mut self) {
         let result = FileUtils::file_to_string(self.namesrv_config.kv_config_path.as_str());
         if let Ok(content) = result {
-            let wrapper = SerdeJsonUtils::decode::<KVConfigSerializeWrapper>(content.as_bytes());
+            let wrapper =
+                SerdeJsonUtils::decode::<KVConfigSerializeWrapper>(content.as_bytes()).unwrap();
             if let Some(ref config_table) = wrapper.config_table {
                 for (namespace, config) in config_table {
                     self.config_table.insert(namespace.clone(), config.clone());

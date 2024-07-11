@@ -67,7 +67,7 @@ impl RegisterBrokerBody {
         _broker_version: RocketMqVersion,
     ) -> RegisterBrokerBody {
         if !compressed {
-            return SerdeJsonUtils::decode::<RegisterBrokerBody>(bytes.iter().as_slice());
+            return SerdeJsonUtils::decode::<RegisterBrokerBody>(bytes.iter().as_slice()).unwrap();
         }
         todo!()
     }

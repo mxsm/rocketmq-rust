@@ -220,7 +220,7 @@ impl BrokerOuterAPI {
                         result.master_addr = header.master_addr.clone().unwrap_or("".to_string());
                     }
                     if let Some(body) = response.body() {
-                        result.kv_table = SerdeJsonUtils::decode::<KVTable>(body.as_ref());
+                        result.kv_table = SerdeJsonUtils::decode::<KVTable>(body.as_ref()).unwrap();
                     }
                     Some(result)
                 }

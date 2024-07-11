@@ -72,6 +72,7 @@ pub(crate) mod end_transaction_processor;
 pub(crate) mod notification_processor;
 pub(crate) mod peek_message_processor;
 pub(crate) mod polling_info_processor;
+pub(crate) mod pop_inflight_message_counter;
 pub(crate) mod pop_message_processor;
 pub(crate) mod pull_message_processor;
 pub(crate) mod pull_message_result_handler;
@@ -159,9 +160,11 @@ impl<MS: MessageStore + Send + Sync + 'static> RequestProcessor for BrokerReques
                     .process_request(channel, ctx, request_code, request)
                     .await
             }
-            _ => self
-                .admin_broker_processor
-                .process_request(channel, ctx, request_code, request),
+            _ => {
+                self.admin_broker_processor
+                    .process_request(channel, ctx, request_code, request)
+                    .await
+            }
         }
     }
 }

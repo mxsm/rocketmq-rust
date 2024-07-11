@@ -118,4 +118,6 @@ pub trait RocketMQMessageStore: Clone + 'static {
         topic: &str,
         queue_id: i32,
     ) -> Option<Arc<parking_lot::Mutex<Box<dyn ConsumeQueueTrait>>>>;
+
+    fn delete_topics(&self, delete_topics: Vec<String>);
 }

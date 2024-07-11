@@ -16,6 +16,7 @@
  */
 
 pub mod broker_body;
+pub mod create_topic_list_request_body;
 pub mod get_consumer_listby_group_response_body;
 pub mod kv_table;
 pub mod topic;

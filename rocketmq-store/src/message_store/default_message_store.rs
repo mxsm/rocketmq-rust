@@ -1043,6 +1043,24 @@ impl MessageStore for DefaultMessageStore {
                 .find_or_create_consume_queue(topic, queue_id),
         )
     }
+
+    fn delete_topics(&self, delete_topics: Vec<String>) {
+        if delete_topics.is_empty() {
+            return;
+        }
+        for topic in delete_topics {
+            let queue_table = self
+                .consume_queue_store
+                .find_consume_queue_map(topic.as_str());
+            if queue_table.is_none() {
+                continue;
+            }
+            /* for (queue_id, consume_queue) in queue_table.unwrap() {
+                consume_queue.lock().destroy();
+                self.consume_queue_store.delete_queue(topic.as_str(), *queue_id);
+            }*/
+        }
+    }
 }
 
 #[derive(Clone)]
