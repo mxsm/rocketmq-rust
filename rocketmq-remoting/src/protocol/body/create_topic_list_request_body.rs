@@ -14,22 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod attribute_enum;
-pub mod attribute_parser;
-pub mod attribute_util;
-pub mod cleanup_policy;
-pub mod cq_type;
-pub mod topic_attributes;
-pub mod topic_message_type;
+use rocketmq_common::common::config::TopicConfig;
+use serde::Deserialize;
+use serde::Serialize;
 
-pub trait AttributeTrait {
-    fn name(&self) -> String;
-    fn changeable(&self) -> bool;
-    fn verify(&self, value: &str);
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Attribute {
-    pub(crate) name: String,
-    pub(crate) changeable: bool,
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateTopicListRequestBody {
+    pub topic_config_list: Vec<TopicConfig>,
 }

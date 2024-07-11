@@ -17,6 +17,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Display;
+use std::str::FromStr;
 
 use crate::common::message::MessageConst;
 
@@ -28,6 +29,20 @@ pub enum TopicMessageType {
     Delay,
     Transaction,
     Mixed,
+}
+
+impl From<String> for TopicMessageType {
+    fn from(s: String) -> Self {
+        match s.to_uppercase().as_str() {
+            "UNSPECIFIED" => Self::Unspecified,
+            "NORMAL" => Self::Normal,
+            "FIFO" => Self::Fifo,
+            "DELAY" => Self::Delay,
+            "TRANSACTION" => Self::Transaction,
+            "MIXED" => Self::Mixed,
+            _ => Self::Unspecified,
+        }
+    }
 }
 
 impl TopicMessageType {

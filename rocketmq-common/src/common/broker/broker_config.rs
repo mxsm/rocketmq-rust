@@ -160,6 +160,8 @@ pub struct BrokerConfig {
     pub max_error_rate_of_bloom_filter: i32,
     pub expect_consumer_num_use_filter: i32,
     pub bit_map_length_consume_queue_ext: i32,
+    pub validate_system_topic_when_update_topic: bool,
+    pub enable_mixed_message_type: bool,
     pub forward_timeout: u64,
 }
 
@@ -233,6 +235,8 @@ impl Default for BrokerConfig {
             expect_consumer_num_use_filter: 32,
             bit_map_length_consume_queue_ext: 64,
             forward_timeout: 3 * 1000,
+            validate_system_topic_when_update_topic: true,
+            enable_mixed_message_type: false,
         }
     }
 }

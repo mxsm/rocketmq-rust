@@ -16,6 +16,9 @@
  */
 pub mod broker;
 pub mod client_request_header;
+pub mod create_topic_request_header;
+pub mod delete_topic_request_header;
+pub mod get_all_topic_config_response_header;
 pub mod get_consumer_listby_group_request_header;
 pub mod get_consumer_listby_group_response_header;
 pub mod get_earliest_msg_storetime_response_header;

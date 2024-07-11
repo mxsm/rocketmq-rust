@@ -21,7 +21,9 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use super::TopicFilterType;
+use crate::common::attribute::topic_message_type::TopicMessageType;
 use crate::common::constant::PermName;
+use crate::TopicAttributes::TOPIC_MESSAGE_TYPE_ATTRIBUTE;
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -55,6 +57,17 @@ impl TopicConfig {
     const DEFAULT_READ_QUEUE_NUMS: u32 = 16;
     const DEFAULT_WRITE_QUEUE_NUMS: u32 = 16;
     const SEPARATOR: &'static str = " ";
+
+    pub fn get_topic_message_type(&self) -> TopicMessageType {
+        if self.attributes.is_empty() {
+            return TopicMessageType::Normal;
+        }
+        let content = self.attributes.get(TOPIC_MESSAGE_TYPE_ATTRIBUTE.get_name());
+        if let Some(content) = content {
+            return TopicMessageType::from(content.to_string());
+        }
+        TopicMessageType::Normal
+    }
 
     pub fn new(topic_name: impl Into<String>) -> Self {
         TopicConfig {

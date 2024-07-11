@@ -75,6 +75,36 @@ impl ConsumerOffsetManager {
 }
 
 impl ConsumerOffsetManager {
+    pub fn clean_offset_by_topic(&self, topic: &str) {
+        let mut offset_table = self.consumer_offset_wrapper.offset_table.write();
+        let mut keys_to_remove = Vec::new();
+
+        for (topic_at_group, _) in offset_table.iter() {
+            if topic_at_group.contains(topic) {
+                let arrays: Vec<&str> = topic_at_group.split(TOPIC_GROUP_SEPARATOR).collect();
+                if arrays.len() == 2 && arrays[0] == topic {
+                    keys_to_remove.push(topic_at_group.clone());
+                }
+            }
+        }
+        for key in keys_to_remove {
+            offset_table.remove(&key);
+        }
+    }
+
+    pub fn which_group_by_topic(&self, topic: &str) -> HashSet<String> {
+        let read_guard = self.consumer_offset_wrapper.offset_table.read();
+        let mut groups = HashSet::new();
+        for (key, _) in read_guard.iter() {
+            let arr: Vec<&str> = key.split(TOPIC_GROUP_SEPARATOR).collect();
+            if arr.len() == 2 && arr[0] == topic {
+                let group = arr[1].to_string();
+                groups.insert(group);
+            }
+        }
+        groups
+    }
+
     pub fn commit_offset(
         &self,
         client_host: SocketAddr,

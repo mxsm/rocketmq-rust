@@ -61,7 +61,7 @@ mod tests {
         };
 
         let serialized = original.encode();
-        let deserialized = SerdeJsonUtils::decode::<HeartbeatData>(serialized.as_slice());
+        let deserialized = SerdeJsonUtils::decode::<HeartbeatData>(serialized.as_slice()).unwrap();
 
         assert_eq!(original, deserialized);
     }
@@ -77,7 +77,7 @@ mod tests {
         };
 
         let serialized = original.encode();
-        let deserialized = SerdeJsonUtils::decode::<HeartbeatData>(serialized.as_slice());
+        let deserialized = SerdeJsonUtils::decode::<HeartbeatData>(serialized.as_slice()).unwrap();
 
         assert_eq!(original, deserialized);
     }
@@ -93,7 +93,7 @@ mod tests {
         };
 
         let serialized = original.encode();
-        let deserialized = SerdeJsonUtils::decode::<HeartbeatData>(serialized.as_slice());
+        let deserialized = SerdeJsonUtils::decode::<HeartbeatData>(serialized.as_slice()).unwrap();
 
         assert_eq!(original, deserialized);
     }

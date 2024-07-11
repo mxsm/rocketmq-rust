@@ -28,8 +28,10 @@ use crate::protocol::DataVersion;
 pub struct TopicConfigAndMappingSerializeWrapper {
     #[serde(rename = "topicQueueMappingInfoMap")]
     pub topic_queue_mapping_info_map: HashMap<String /* topic */, TopicQueueMappingInfo>,
+
     #[serde(rename = "topicQueueMappingDetailMap")]
     pub topic_queue_mapping_detail_map: HashMap<String /* topic */, TopicQueueMappingDetail>,
+
     #[serde(rename = "mappingDataVersion")]
     pub mapping_data_version: DataVersion,
 

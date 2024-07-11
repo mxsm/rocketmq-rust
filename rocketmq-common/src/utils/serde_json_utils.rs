@@ -19,11 +19,11 @@ use crate::error::SerdeJsonError;
 pub struct SerdeJsonUtils;
 
 impl SerdeJsonUtils {
-    pub fn decode<T>(bytes: &[u8]) -> T
+    pub fn decode<T>(bytes: &[u8]) -> Result<T, SerdeJsonError>
     where
         T: serde::de::DeserializeOwned,
     {
-        serde_json::from_slice::<T>(bytes).unwrap()
+        serde_json::from_slice::<T>(bytes).map_err(SerdeJsonError::JsonError)
     }
 
     pub fn from_json_str<T>(json: &str) -> Result<T, SerdeJsonError>

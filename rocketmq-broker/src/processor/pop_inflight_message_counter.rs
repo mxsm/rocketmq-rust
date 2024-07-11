@@ -14,22 +14,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod attribute_enum;
-pub mod attribute_parser;
-pub mod attribute_util;
-pub mod cleanup_policy;
-pub mod cq_type;
-pub mod topic_attributes;
-pub mod topic_message_type;
 
-pub trait AttributeTrait {
-    fn name(&self) -> String;
-    fn changeable(&self) -> bool;
-    fn verify(&self, value: &str);
-}
+pub struct PopInflightMessageCounter;
 
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Attribute {
-    pub(crate) name: String,
-    pub(crate) changeable: bool,
+impl PopInflightMessageCounter {
+    pub fn clear_in_flight_message_num_by_topic_name(&self, _topic: &str) {
+        // TODO
+    }
 }

@@ -390,6 +390,34 @@ impl TopicConfigManager {
         });
     }
 
+    pub fn update_topic_config_list(&mut self, topic_config_list: &mut [TopicConfig]) {
+        for topic_config in topic_config_list {
+            self.update_topic_config(topic_config);
+        }
+    }
+
+    #[inline]
+    pub fn remove_topic_config(&self, topic: &str) -> Option<TopicConfig> {
+        self.topic_config_table.lock().remove(topic)
+    }
+
+    pub fn delete_topic_config(&self, topic: &str) {
+        let old = self.remove_topic_config(topic);
+        if let Some(old) = old {
+            info!("delete topic config OK, topic: {:?}", old);
+            let state_machine_version = if let Some(message_store) = self.message_store.as_ref() {
+                message_store.get_state_machine_version()
+            } else {
+                0
+            };
+            self.data_version_mut()
+                .next_version_with(state_machine_version);
+            self.persist();
+        } else {
+            warn!("delete topic config failed, topic: {} not exists", topic);
+        }
+    }
+
     pub fn update_topic_config(&mut self, topic_config: &mut TopicConfig) {
         let new_attributes = Self::request(topic_config);
         let current_attributes = self.current(topic_config.topic_name.as_ref().unwrap().as_str());
@@ -502,12 +530,17 @@ impl TopicConfigManager {
         self.topic_config_table.lock().contains_key(topic)
     }
 
-    fn data_version(&self) -> &DataVersion {
+    pub fn data_version(&self) -> &DataVersion {
         unsafe { &*self.data_version.get() }
     }
 
     fn data_version_mut(&self) -> &mut DataVersion {
         unsafe { &mut *self.data_version.get() }
+    }
+
+    #[inline]
+    pub fn broker_runtime_inner(&self) -> &Arc<BrokerRuntimeInner> {
+        &self.broker_runtime_inner
     }
 }
 

@@ -60,6 +60,7 @@ use crate::offset::manager::broadcast_offset_manager::BroadcastOffsetManager;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
 use crate::offset::manager::consumer_order_info_manager::ConsumerOrderInfoManager;
 use crate::out_api::broker_outer_api::BrokerOuterAPI;
+use crate::processor::admin_broker_processor::AdminBrokerProcessor;
 use crate::processor::client_manage_processor::ClientManageProcessor;
 use crate::processor::consumer_manage_processor::ConsumerManageProcessor;
 use crate::processor::default_pull_message_result_handler::DefaultPullMessageResultHandler;
@@ -426,6 +427,14 @@ impl BrokerRuntime {
                 NotifyMessageArrivingListener::new(self.pull_request_hold_service.clone().unwrap()),
             ))));
 
+        let admin_broker_processor = AdminBrokerProcessor::new(
+            self.broker_config.clone(),
+            self.topic_config_manager.clone(),
+            self.consumer_offset_manager.clone(),
+            self.topic_queue_mapping_manager.clone(),
+            self.message_store.as_ref().unwrap().clone(),
+        );
+
         BrokerRequestProcessor {
             send_message_processor,
             pull_message_processor,
@@ -436,7 +445,7 @@ impl BrokerRuntime {
             notification_processor: Default::default(),
             polling_info_processor: Default::default(),
             reply_message_processor: Default::default(),
-            admin_broker_processor: Default::default(),
+            admin_broker_processor,
             client_manage_processor: ClientManageProcessor::new(
                 self.broker_config.clone(),
                 self.producer_manager.clone(),
