@@ -17,6 +17,12 @@
 
 #![allow(dead_code)]
 #![allow(unused_imports)]
+#![feature(sync_unsafe_cell)]
+
+use std::cell::SyncUnsafeCell;
+use std::ops::Deref;
+use std::ops::DerefMut;
+use std::sync::Arc;
 
 pub use crate::common::attribute::topic_attributes as TopicAttributes;
 pub use crate::common::message::message_accessor as MessageAccessor;
@@ -40,5 +46,105 @@ pub mod log;
 mod thread_pool;
 pub mod utils;
 
+pub struct ArcCellWrapper<T: ?Sized> {
+    inner: Arc<SyncUnsafeCell<T>>,
+}
+
+impl<T> ArcCellWrapper<T> {
+    #[inline]
+    pub fn new(value: T) -> Self {
+        Self {
+            inner: Arc::new(SyncUnsafeCell::new(value)),
+        }
+    }
+}
+
+impl<T: ?Sized> Clone for ArcCellWrapper<T> {
+    fn clone(&self) -> Self {
+        ArcCellWrapper {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
+impl<T> AsRef<T> for ArcCellWrapper<T> {
+    fn as_ref(&self) -> &T {
+        unsafe { &*self.inner.get() }
+    }
+}
+
+impl<T> AsMut<T> for ArcCellWrapper<T> {
+    fn as_mut(&mut self) -> &mut T {
+        unsafe { &mut *self.inner.get() }
+    }
+}
+
+impl<T> Deref for ArcCellWrapper<T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        self.as_ref()
+    }
+}
+
+impl<T> DerefMut for ArcCellWrapper<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.as_mut()
+    }
+}
+
 #[cfg(test)]
-mod tests {}
+mod arc_cell_wrapper_tests {
+    use std::sync::Arc;
+
+    use super::*;
+
+    #[test]
+    fn new_creates_arc_cell_wrapper_with_provided_value() {
+        let wrapper = ArcCellWrapper::new(10);
+        assert_eq!(*wrapper.as_ref(), 10);
+    }
+
+    #[test]
+    fn clone_creates_a_new_instance_with_same_value() {
+        let wrapper = ArcCellWrapper::new(20);
+        let cloned_wrapper = wrapper.clone();
+        assert_eq!(*cloned_wrapper.as_ref(), 20);
+    }
+
+    #[test]
+    fn as_ref_returns_immutable_reference_to_value() {
+        let wrapper = ArcCellWrapper::new(30);
+        assert_eq!(*wrapper.as_ref(), 30);
+    }
+
+    #[test]
+    fn as_mut_returns_mutable_reference_to_value() {
+        let mut wrapper = ArcCellWrapper::new(40);
+        *wrapper.as_mut() = 50;
+        assert_eq!(*wrapper.as_ref(), 50);
+    }
+
+    #[test]
+    fn deref_returns_reference_to_inner_value() {
+        let wrapper = ArcCellWrapper::new(60);
+        assert_eq!(*wrapper, 60);
+    }
+
+    #[test]
+    fn deref_mut_allows_modification_of_inner_value() {
+        let mut wrapper = ArcCellWrapper::new(70);
+        *wrapper = 80;
+        assert_eq!(*wrapper, 80);
+    }
+
+    #[test]
+    fn multiple_clones_share_the_same_underlying_data() {
+        let wrapper = ArcCellWrapper::new(Arc::new(90));
+        let cloned_wrapper1 = wrapper.clone();
+        let cloned_wrapper2 = wrapper.clone();
+
+        assert_eq!(Arc::strong_count(wrapper.as_ref()), 1);
+        assert_eq!(Arc::strong_count(cloned_wrapper1.as_ref()), 1);
+        assert_eq!(Arc::strong_count(cloned_wrapper2.as_ref()), 1);
+    }
+}

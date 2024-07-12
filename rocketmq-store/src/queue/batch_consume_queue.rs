@@ -197,7 +197,7 @@ impl Swappable for BatchConsumeQueue {
 }
 
 impl ConsumeQueueTrait for BatchConsumeQueue {
-    fn get_topic(&self) -> String {
+    fn get_topic(&self) -> &str {
         todo!()
     }
 
