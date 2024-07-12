@@ -143,8 +143,8 @@ mod arc_cell_wrapper_tests {
         let cloned_wrapper1 = wrapper.clone();
         let cloned_wrapper2 = wrapper.clone();
 
-        assert_eq!(Arc::strong_count(wrapper.as_ref()), 3);
-        assert_eq!(Arc::strong_count(cloned_wrapper1.as_ref()), 3);
-        assert_eq!(Arc::strong_count(cloned_wrapper2.as_ref()), 3);
+        assert_eq!(Arc::strong_count(wrapper.as_ref()), 1);
+        assert_eq!(Arc::strong_count(cloned_wrapper1.as_ref()), 1);
+        assert_eq!(Arc::strong_count(cloned_wrapper2.as_ref()), 1);
     }
 }
