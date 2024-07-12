@@ -14,19 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-mod batch_consume_queue;
-pub mod build_consume_queue;
-mod consume_queue_ext;
-pub mod local_file_consume_queue_store;
-mod queue_offset_operator;
-pub mod single_consume_queue;
-
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use rocketmq_common::common::attribute::cq_type::CQType;
 use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
+use rocketmq_common::ArcCellWrapper;
 
 use crate::base::dispatch_request::DispatchRequest;
 use crate::base::swappable::Swappable;
@@ -34,6 +27,17 @@ use crate::consume_queue::consume_queue_ext::CqExtUnit;
 use crate::filter::MessageFilter;
 use crate::queue::consume_queue_ext::ConsumeQueueExt;
 use crate::queue::queue_offset_operator::QueueOffsetOperator;
+
+mod batch_consume_queue;
+pub mod build_consume_queue;
+mod consume_queue_ext;
+pub mod local_file_consume_queue_store;
+mod queue_offset_operator;
+pub mod single_consume_queue;
+
+//pub type ArcConsumeQueue = Arc<SyncUnsafeCell<Box<dyn ConsumeQueueTrait>>>;
+pub type ArcConsumeQueue = ArcCellWrapper<Box<dyn ConsumeQueueTrait>>;
+pub type ConsumeQueueTable = parking_lot::Mutex<HashMap<String, HashMap<i32, ArcConsumeQueue>>>;
 
 /// FileQueueLifeCycle contains life cycle methods of ConsumerQueue that is directly implemented by
 /// FILE.
@@ -263,19 +267,12 @@ pub trait ConsumeQueueStoreTrait: Send + Sync {
     /// `topic`: Topic.
     /// `queue_id`: Queue ID.
     /// Returns the consumeQueue.
-    fn find_or_create_consume_queue(
-        &self,
-        topic: &str,
-        queue_id: i32,
-    ) -> Arc<parking_lot::Mutex<Box<dyn ConsumeQueueTrait>>>;
+    fn find_or_create_consume_queue(&self, topic: &str, queue_id: i32) -> ArcConsumeQueue;
 
     /// Find the consumeQueueMap of topic.
     /// `topic`: Topic.
     /// Returns the consumeQueueMap of topic.
-    fn find_consume_queue_map(
-        &self,
-        topic: &str,
-    ) -> Option<HashMap<i32, Box<dyn ConsumeQueueTrait>>>;
+    fn find_consume_queue_map(&self, topic: &str) -> Option<HashMap<i32, ArcConsumeQueue>>;
 
     /// Get the total size of all consumeQueue.
     /// Returns the total size of all consumeQueue.
@@ -293,7 +290,7 @@ pub trait ConsumeQueueStoreTrait: Send + Sync {
 /// Trait representing ConsumeQueueInterface.
 pub trait ConsumeQueueTrait: Send + Sync + FileQueueLifeCycle {
     /// Get the topic name.
-    fn get_topic(&self) -> String;
+    fn get_topic(&self) -> &str;
 
     /// Get queue id.
     fn get_queue_id(&self) -> i32;

@@ -493,8 +493,8 @@ impl Swappable for ConsumeQueue {
 
 #[allow(unused_variables)]
 impl ConsumeQueueTrait for ConsumeQueue {
-    fn get_topic(&self) -> String {
-        self.topic.clone()
+    fn get_topic(&self) -> &str {
+        self.topic.as_str()
     }
 
     fn get_queue_id(&self) -> i32 {

@@ -80,8 +80,8 @@ use crate::log_file::MessageStore;
 use crate::log_file::MAX_PULL_MSG_SIZE;
 use crate::queue::build_consume_queue::CommitLogDispatcherBuildConsumeQueue;
 use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
+use crate::queue::ArcConsumeQueue;
 use crate::queue::ConsumeQueueStoreTrait;
-use crate::queue::ConsumeQueueTrait;
 use crate::stats::broker_stats_manager::BrokerStatsManager;
 use crate::store::running_flags::RunningFlags;
 use crate::store_path_config_helper::get_abort_file;
@@ -728,10 +728,11 @@ impl MessageStore for DefaultMessageStore {
         committed: bool,
     ) -> i64 {
         if committed {
-            self.consume_queue_store
-                .find_or_create_consume_queue(topic, queue_id)
-                .lock()
-                .get_max_offset_in_queue()
+            let queue = self
+                .consume_queue_store
+                .find_or_create_consume_queue(topic, queue_id);
+
+            queue.get_max_offset_in_queue()
         } else {
             self.consume_queue_store
                 .get_max_offset(topic, queue_id)
@@ -785,8 +786,8 @@ impl MessageStore for DefaultMessageStore {
         let max_offset_py = self.commit_log.get_max_offset();
         let consume_queue = self.find_consume_queue(topic, queue_id);
         if let Some(consume_queue) = consume_queue {
-            min_offset = consume_queue.lock().get_min_offset_in_queue();
-            max_offset = consume_queue.lock().get_max_offset_in_queue();
+            min_offset = consume_queue.get_min_offset_in_queue();
+            max_offset = consume_queue.get_max_offset_in_queue();
             if max_offset == 0 {
                 status = GetMessageStatus::NoMessageInQueue;
                 next_begin_offset = self.next_offset_correction(offset, 0);
@@ -803,7 +804,7 @@ impl MessageStore for DefaultMessageStore {
                 let max_filter_message_size = self
                     .message_store_config
                     .max_filter_message_size
-                    .max(max_msg_nums * consume_queue.lock().get_unit_size());
+                    .max(max_msg_nums * consume_queue.get_unit_size());
                 let disk_fall_recorded = self.message_store_config.disk_fall_recorded;
                 let mut max_pull_size = max_total_msg_size.max(100);
                 if max_pull_size > MAX_PULL_MSG_SIZE {
@@ -824,15 +825,14 @@ impl MessageStore for DefaultMessageStore {
                             .travel_cq_file_num_when_get_message
                 {
                     cq_file_num += 1;
-                    let buffer_consume_queue = consume_queue
-                        .lock()
-                        .iterate_from_inner(next_begin_offset, max_msg_nums);
+                    let buffer_consume_queue =
+                        consume_queue.iterate_from_inner(next_begin_offset, max_msg_nums);
                     if buffer_consume_queue.is_none() {
                         status = GetMessageStatus::OffsetFoundNull;
                         next_begin_offset = self.next_offset_correction(
                             next_begin_offset,
                             self.consume_queue_store
-                                .roll_next_file(&**consume_queue.lock(), next_begin_offset),
+                                .roll_next_file(&**consume_queue, next_begin_offset),
                         );
                         warn!(
                             "consumer request topic: {}, offset: {}, minOffset: {}, maxOffset: \
@@ -856,7 +856,7 @@ impl MessageStore for DefaultMessageStore {
                                 &self.message_store_config,
                             );
                             if (cq_unit.queue_offset - offset)
-                                * consume_queue.lock().get_unit_size() as i64
+                                * consume_queue.get_unit_size() as i64
                                 > max_filter_message_size as i64
                             {
                                 break;
@@ -996,7 +996,7 @@ impl MessageStore for DefaultMessageStore {
         let consume_queue = self
             .consume_queue_store
             .find_or_create_consume_queue(topic, queue_id);
-        let first_cqitem = consume_queue.lock().get(consume_offset);
+        let first_cqitem = consume_queue.get(consume_offset);
         if first_cqitem.is_none() {
             return false;
         }
@@ -1006,7 +1006,7 @@ impl MessageStore for DefaultMessageStore {
             let size = cq.size;
             return self.check_in_mem_by_commit_offset(start_offset_py, size);
         }
-        let last_cqitem = consume_queue.lock().get(consume_offset + batch_size as i64);
+        let last_cqitem = consume_queue.get(consume_offset + batch_size as i64);
         if last_cqitem.is_none() {
             let size = cq.size;
             return self.check_in_mem_by_commit_offset(start_offset_py, size);
@@ -1033,11 +1033,7 @@ impl MessageStore for DefaultMessageStore {
         }
     }
 
-    fn find_consume_queue(
-        &self,
-        topic: &str,
-        queue_id: i32,
-    ) -> Option<Arc<parking_lot::Mutex<Box<dyn ConsumeQueueTrait>>>> {
+    fn find_consume_queue(&self, topic: &str, queue_id: i32) -> Option<ArcConsumeQueue> {
         Some(
             self.consume_queue_store
                 .find_or_create_consume_queue(topic, queue_id),
