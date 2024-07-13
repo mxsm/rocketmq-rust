@@ -26,6 +26,7 @@ pub use tokio as rocketmq;
 pub async fn wait_for_signal() {
     use tokio::signal::unix::signal;
     use tokio::signal::unix::SignalKind;
+    use tracing::info;
     let mut term = signal(SignalKind::terminate()).expect("failed to register signal handler");
     let mut int = signal(SignalKind::interrupt()).expect("failed to register signal handler");
 
