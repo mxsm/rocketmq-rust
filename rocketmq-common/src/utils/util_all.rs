@@ -17,6 +17,7 @@
 
 use std::env;
 use std::fs;
+use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -248,6 +249,27 @@ pub fn compute_next_morning_time_millis() -> u64 {
         .with_ymd_and_hms(tomorrow.year(), tomorrow.month(), tomorrow.day(), 0, 0, 0)
         .unwrap();
     next_morning.timestamp_millis() as u64
+}
+
+pub fn delete_empty_directory<P: AsRef<Path>>(path: P) {
+    let path = path.as_ref();
+    if !path.exists() {
+        return;
+    }
+    if !path.is_dir() {
+        return;
+    }
+    match fs::read_dir(path) {
+        Ok(entries) => {
+            if entries.count() == 0 {
+                match fs::remove_dir(path) {
+                    Ok(_) => info!("delete empty directory, {}", path.display()),
+                    Err(e) => error!("Error deleting directory: {}", e),
+                }
+            }
+        }
+        Err(e) => error!("Error reading directory: {}", e),
+    }
 }
 
 #[cfg(test)]

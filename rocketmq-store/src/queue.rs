@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use rocketmq_common::common::attribute::cq_type::CQType;
 use rocketmq_common::common::boundary_type::BoundaryType;
@@ -284,6 +285,8 @@ pub trait ConsumeQueueStoreTrait: Send + Sync {
     fn get_min_offset_in_queue(&self, topic: &str, queue_id: i32) -> i64;
 
     fn get_max_offset_in_queue(&self, topic: &str, queue_id: i32) -> i64;
+
+    fn get_consume_queue_table(&self) -> Arc<ConsumeQueueTable>;
 }
 
 /// Trait representing ConsumeQueueInterface.

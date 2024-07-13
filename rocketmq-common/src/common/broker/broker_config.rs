@@ -162,6 +162,7 @@ pub struct BrokerConfig {
     pub bit_map_length_consume_queue_ext: i32,
     pub validate_system_topic_when_update_topic: bool,
     pub enable_mixed_message_type: bool,
+    pub auto_delete_unused_stats: bool,
     pub forward_timeout: u64,
 }
 
@@ -237,6 +238,7 @@ impl Default for BrokerConfig {
             forward_timeout: 3 * 1000,
             validate_system_topic_when_update_topic: true,
             enable_mixed_message_type: false,
+            auto_delete_unused_stats: false,
         }
     }
 }

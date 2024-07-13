@@ -115,5 +115,5 @@ pub trait RocketMQMessageStore: Clone + 'static {
 
     fn find_consume_queue(&self, topic: &str, queue_id: i32) -> Option<ArcConsumeQueue>;
 
-    fn delete_topics(&self, delete_topics: Vec<String>);
+    fn delete_topics(&mut self, delete_topics: Vec<&str>) -> i32;
 }

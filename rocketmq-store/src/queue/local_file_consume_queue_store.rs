@@ -58,7 +58,7 @@ struct Inner {
     pub(crate) message_store_config: Arc<MessageStoreConfig>,
     pub(crate) broker_config: Arc<BrokerConfig>,
     pub(crate) queue_offset_operator: QueueOffsetOperator,
-    pub(crate) consume_queue_table: ConsumeQueueTable,
+    pub(crate) consume_queue_table: Arc<ConsumeQueueTable>,
 }
 
 impl Inner {
@@ -85,7 +85,7 @@ impl ConsumeQueueStore {
                 message_store_config,
                 broker_config,
                 queue_offset_operator: QueueOffsetOperator::new(),
-                consume_queue_table: parking_lot::Mutex::new(HashMap::new()),
+                consume_queue_table: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             }),
             running_flags,
             store_checkpoint,
@@ -151,7 +151,9 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     fn destroy_consume_queue(&self, consume_queue: &dyn ConsumeQueueTrait) {
-        todo!()
+        let mut file_queue_life_cycle =
+            self.get_life_cycle(consume_queue.get_topic(), consume_queue.get_queue_id());
+        file_queue_life_cycle.destroy();
     }
 
     fn flush(&self, consume_queue: &dyn ConsumeQueueTrait, flush_least_pages: i32) -> bool {
@@ -282,7 +284,7 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     fn remove_topic_queue_table(&mut self, topic: &str, queue_id: i32) {
-        todo!()
+        self.inner.queue_offset_operator.remove(topic, queue_id);
     }
 
     fn get_topic_queue_table(&self) -> HashMap<String, i64> {
@@ -382,6 +384,10 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
 
     fn get_max_offset_in_queue(&self, topic: &str, queue_id: i32) -> i64 {
         todo!()
+    }
+
+    fn get_consume_queue_table(&self) -> Arc<ConsumeQueueTable> {
+        self.inner.consume_queue_table.clone()
     }
 }
 

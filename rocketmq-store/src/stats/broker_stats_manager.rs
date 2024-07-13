@@ -485,6 +485,8 @@ impl BrokerStatsManager {
 
     pub fn inc_group_ack_nums(&self, group: &str, topic: &str, inc_value: i32) {}
     pub fn inc_broker_get_nums(&self, group: &str, inc_value: i32) {}
+
+    pub fn on_topic_deleted(&self, topic: &str) {}
 }
 
 pub fn create_statistics_kind_meta(
