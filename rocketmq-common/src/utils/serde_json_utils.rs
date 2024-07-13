@@ -136,7 +136,8 @@ mod tests {
 
     use serde::Deserialize;
     use serde::Serialize;
-    use serde_json::Error;
+
+    use crate::error::Error;
 
     #[derive(Serialize, Deserialize, Debug, PartialEq)]
     struct TestStruct {
