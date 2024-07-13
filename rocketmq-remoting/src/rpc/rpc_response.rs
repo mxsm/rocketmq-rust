@@ -15,8 +15,8 @@
  * limitations under the License.
  */
 use std::any::Any;
-use std::cell::SyncUnsafeCell;
-use std::sync::Arc;
+
+use rocketmq_common::ArcCellWrapper;
 
 use crate::error::RpcException;
 use crate::protocol::command_custom_header::CommandCustomHeader;
@@ -24,7 +24,7 @@ use crate::protocol::command_custom_header::CommandCustomHeader;
 #[derive(Default)]
 pub struct RpcResponse {
     pub code: i32,
-    pub header: Option<Arc<SyncUnsafeCell<dyn CommandCustomHeader + Send + Sync + 'static>>>,
+    pub header: Option<ArcCellWrapper<Box<dyn CommandCustomHeader + Send + Sync + 'static>>>,
     pub body: Option<Box<dyn Any>>,
     pub exception: Option<RpcException>,
 }
@@ -32,28 +32,26 @@ pub struct RpcResponse {
 impl RpcResponse {
     pub fn get_header<T>(&self) -> Option<&T>
     where
-        T: CommandCustomHeader + Send + Sync + 'static,
+        T: CommandCustomHeader + Any + Send + Sync + 'static,
     {
         match self.header.as_ref() {
             None => None,
             Some(value) => {
-                let value = value.get();
-                let value = value as *const dyn CommandCustomHeader as *const T;
-                unsafe { Some(&*value) }
+                let ptr_raw = std::ptr::from_ref(&**value.as_ref()) as *const T;
+                unsafe { Some(&*ptr_raw) }
             }
         }
     }
 
     pub fn get_header_mut<T>(&self) -> Option<&mut T>
     where
-        T: CommandCustomHeader + Send + Sync + 'static,
+        T: CommandCustomHeader + Any + Send + Sync + 'static,
     {
         match self.header.as_ref() {
             None => None,
             Some(value) => {
-                let value = value.get();
-                let value = value as *const dyn CommandCustomHeader as *mut T;
-                unsafe { Some(&mut *value) }
+                let ptr_raw = std::ptr::from_mut(&mut **value.mut_from_ref()) as *mut T;
+                unsafe { Some(&mut *ptr_raw) }
             }
         }
     }
@@ -69,12 +67,12 @@ impl RpcResponse {
 
     pub fn new(
         code: i32,
-        header: impl CommandCustomHeader + Send + Sync + 'static,
+        header: Box<dyn CommandCustomHeader + Send + Sync + 'static>,
         body: Option<Box<dyn Any>>,
     ) -> Self {
         Self {
             code,
-            header: Some(Arc::new(SyncUnsafeCell::new(header))),
+            header: Some(ArcCellWrapper::new(header)),
             body,
             exception: None,
         }

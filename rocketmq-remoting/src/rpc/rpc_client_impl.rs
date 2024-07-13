@@ -102,7 +102,8 @@ impl RpcClientImpl {
                         .body()
                         .as_ref()
                         .map(|value| Box::new(value.clone()) as Box<dyn Any>);
-                    let rpc_response = RpcResponse::new(response.code(), response_header, body);
+                    let rpc_response =
+                        RpcResponse::new(response.code(), Box::new(response_header), body);
                     Ok(rpc_response)
                 }
                 _ => Ok(RpcResponse::new_exception(Some(RpcException(
@@ -138,7 +139,8 @@ impl RpcClientImpl {
                         .body()
                         .as_ref()
                         .map(|value| Box::new(value.clone()) as Box<dyn Any>);
-                    let rpc_response = RpcResponse::new(response.code(), response_header, body);
+                    let rpc_response =
+                        RpcResponse::new(response.code(), Box::new(response_header), body);
                     Ok(rpc_response)
                 }
                 _ => Ok(RpcResponse::new_exception(Some(RpcException(
@@ -173,7 +175,8 @@ impl RpcClientImpl {
                         .body()
                         .as_ref()
                         .map(|value| Box::new(value.clone()) as Box<dyn Any>);
-                    let rpc_response = RpcResponse::new(response.code(), response_header, body);
+                    let rpc_response =
+                        RpcResponse::new(response.code(), Box::new(response_header), body);
                     Ok(rpc_response)
                 }
                 _ => Ok(RpcResponse::new_exception(Some(RpcException(
@@ -208,7 +211,8 @@ impl RpcClientImpl {
                         .body()
                         .as_ref()
                         .map(|value| Box::new(value.clone()) as Box<dyn Any>);
-                    let rpc_response = RpcResponse::new(response.code(), response_header, body);
+                    let rpc_response =
+                        RpcResponse::new(response.code(), Box::new(response_header), body);
                     Ok(rpc_response)
                 }
                 _ => Ok(RpcResponse::new_exception(Some(RpcException(
@@ -243,7 +247,8 @@ impl RpcClientImpl {
                         .body()
                         .as_ref()
                         .map(|value| Box::new(value.clone()) as Box<dyn Any>);
-                    let rpc_response = RpcResponse::new(response.code(), response_header, body);
+                    let rpc_response =
+                        RpcResponse::new(response.code(), Box::new(response_header), body);
                     Ok(rpc_response)
                 }
                 _ => Ok(RpcResponse::new_exception(Some(RpcException(
@@ -278,7 +283,8 @@ impl RpcClientImpl {
                         .body()
                         .as_ref()
                         .map(|value| Box::new(value.clone()) as Box<dyn Any>);
-                    let rpc_response = RpcResponse::new(response.code(), response_header, body);
+                    let rpc_response =
+                        RpcResponse::new(response.code(), Box::new(response_header), body);
                     Ok(rpc_response)
                 }
                 ResponseCode::QueryNotFound => {
@@ -317,7 +323,8 @@ impl RpcClientImpl {
                         .body()
                         .as_ref()
                         .map(|value| Box::new(value.clone()) as Box<dyn Any>);
-                    let rpc_response = RpcResponse::new(response.code(), response_header, body);
+                    let rpc_response =
+                        RpcResponse::new(response.code(), Box::new(response_header), body);
                     Ok(rpc_response)
                 }
                 _ => Ok(RpcResponse::new_exception(Some(RpcException(

@@ -15,7 +15,6 @@
  * limitations under the License.
  */
 
-use std::cell::SyncUnsafeCell;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -32,6 +31,7 @@ use bytes::BytesMut;
 use memmap2::MmapMut;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
+use rocketmq_common::SyncUnsafeCellWrapper;
 use rocketmq_common::UtilAll::ensure_dir_ok;
 use tracing::debug;
 use tracing::error;
@@ -56,8 +56,7 @@ static TOTAL_MAPPED_FILES: AtomicI32 = AtomicI32::new(0);
 pub struct DefaultMappedFile {
     reference_resource: ReferenceResource,
     file: File,
-    //  file_channel: FileChannel,
-    mmapped_file: SyncUnsafeCell<MmapMut>,
+    mmapped_file: SyncUnsafeCellWrapper<MmapMut>,
     transient_store_pool: Option<TransientStorePool>,
     file_name: String,
     file_from_offset: u64,
@@ -69,7 +68,6 @@ pub struct DefaultMappedFile {
     store_timestamp: AtomicI64,
     first_create_in_queue: bool,
     last_flush_time: u64,
-    //  mapped_byte_buffer_wait_to_clean: Option<MappedByteBuffer>,
     swap_map_time: u64,
     mapped_byte_buffer_access_count_since_last_swap: AtomicI64,
     start_timestamp: u64,
@@ -111,7 +109,7 @@ impl DefaultMappedFile {
                 first_shutdown_timestamp: AtomicI64::new(0),
             },
             file,
-            mmapped_file: SyncUnsafeCell::new(mmap),
+            mmapped_file: SyncUnsafeCellWrapper::new(mmap),
             file_name,
             file_from_offset,
             mapped_byte_buffer: None,
@@ -195,7 +193,7 @@ impl DefaultMappedFile {
             start_timestamp: 0,
             transient_store_pool: Some(transient_store_pool),
             stop_timestamp: 0,
-            mmapped_file: SyncUnsafeCell::new(mmap),
+            mmapped_file: SyncUnsafeCellWrapper::new(mmap),
         }
     }
 }
@@ -578,29 +576,19 @@ impl MappedFile for DefaultMappedFile {
         todo!()
     }
 
-    /*    fn init(
-        &mut self,
-        file_name: &str,
-        file_size: usize,
-        transient_store_pool: &TransientStorePool,
-    ) -> std::io::Result<()> {
-        todo!()
-    }*/
-
     fn is_loaded(&self, position: i64, size: usize) -> bool {
         true
     }
 }
 
 #[allow(unused_variables)]
-#[allow(clippy::mut_from_ref)]
 impl DefaultMappedFile {
     pub fn get_mapped_file_mut(&self) -> &mut MmapMut {
-        unsafe { &mut *self.mmapped_file.get() }
+        self.mmapped_file.mut_from_ref()
     }
 
     pub fn get_mapped_file(&self) -> &MmapMut {
-        unsafe { &*self.mmapped_file.get() }
+        self.mmapped_file.as_ref()
     }
 
     fn is_able_to_flush(&self, flush_least_pages: i32) -> bool {

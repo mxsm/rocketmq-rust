@@ -35,7 +35,6 @@ pub mod local_file_consume_queue_store;
 mod queue_offset_operator;
 pub mod single_consume_queue;
 
-//pub type ArcConsumeQueue = Arc<SyncUnsafeCell<Box<dyn ConsumeQueueTrait>>>;
 pub type ArcConsumeQueue = ArcCellWrapper<Box<dyn ConsumeQueueTrait>>;
 pub type ConsumeQueueTable = parking_lot::Mutex<HashMap<String, HashMap<i32, ArcConsumeQueue>>>;
 

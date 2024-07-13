@@ -14,11 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::any::Any;
 use std::collections::HashMap;
 
 use crate::rocketmq_serializable::RocketMQSerializable;
 
-pub trait CommandCustomHeader {
+pub trait CommandCustomHeader: Any {
     /// Checks the fields of the implementing type.  
     ///  
     /// Returns a `Result` indicating whether the fields are valid or not.  

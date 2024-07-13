@@ -19,10 +19,12 @@
 #![allow(unused_imports)]
 #![feature(sync_unsafe_cell)]
 
+use std::borrow::Borrow;
 use std::cell::SyncUnsafeCell;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::sync::Arc;
+use std::sync::Weak;
 
 pub use crate::common::attribute::topic_attributes as TopicAttributes;
 pub use crate::common::message::message_accessor as MessageAccessor;
@@ -46,8 +48,42 @@ pub mod log;
 mod thread_pool;
 pub mod utils;
 
+pub struct WeakCellWrapper<T: ?Sized> {
+    inner: Weak<SyncUnsafeCell<T>>,
+}
+
+impl<T: ?Sized> Clone for WeakCellWrapper<T> {
+    fn clone(&self) -> Self {
+        WeakCellWrapper {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+impl<T> WeakCellWrapper<T> {
+    pub fn upgrade(&self) -> Option<ArcCellWrapper<T>> {
+        self.inner
+            .upgrade()
+            .map(|value| ArcCellWrapper { inner: value })
+    }
+}
+
+#[derive(Default)]
 pub struct ArcCellWrapper<T: ?Sized> {
     inner: Arc<SyncUnsafeCell<T>>,
+}
+
+impl<T> ArcCellWrapper<T> {
+    #[allow(clippy::mut_from_ref)]
+    pub fn mut_from_ref(&self) -> &mut T {
+        unsafe { &mut *self.inner.get() }
+    }
+
+    pub fn downgrade(this: &Self) -> WeakCellWrapper<T> {
+        WeakCellWrapper {
+            inner: Arc::downgrade(&this.inner),
+        }
+    }
 }
 
 impl<T> ArcCellWrapper<T> {
@@ -87,6 +123,51 @@ impl<T> Deref for ArcCellWrapper<T> {
 }
 
 impl<T> DerefMut for ArcCellWrapper<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.as_mut()
+    }
+}
+
+pub struct SyncUnsafeCellWrapper<T: ?Sized> {
+    inner: SyncUnsafeCell<T>,
+}
+
+impl<T> SyncUnsafeCellWrapper<T> {
+    #[inline]
+    pub fn new(value: T) -> Self {
+        Self {
+            inner: SyncUnsafeCell::new(value),
+        }
+    }
+}
+
+impl<T> SyncUnsafeCellWrapper<T> {
+    #[allow(clippy::mut_from_ref)]
+    pub fn mut_from_ref(&self) -> &mut T {
+        unsafe { &mut *self.inner.get() }
+    }
+}
+
+impl<T> AsRef<T> for SyncUnsafeCellWrapper<T> {
+    fn as_ref(&self) -> &T {
+        unsafe { &*self.inner.get() }
+    }
+}
+
+impl<T> AsMut<T> for SyncUnsafeCellWrapper<T> {
+    fn as_mut(&mut self) -> &mut T {
+        &mut *self.inner.get_mut()
+    }
+}
+
+impl<T> Deref for SyncUnsafeCellWrapper<T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        self.as_ref()
+    }
+}
+
+impl<T> DerefMut for SyncUnsafeCellWrapper<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.as_mut()
     }
