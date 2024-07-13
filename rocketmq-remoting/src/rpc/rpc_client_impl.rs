@@ -23,7 +23,7 @@ use crate::clients::rocketmq_default_impl::RocketmqDefaultClient;
 use crate::clients::RemotingClient;
 use crate::code::request_code::RequestCode;
 use crate::code::response_code::ResponseCode;
-use crate::error::RpcException;
+use crate::error::Error::RpcException;
 use crate::protocol::header::get_earliest_msg_storetime_response_header::GetEarliestMsgStoretimeResponseHeader;
 use crate::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader;
 use crate::protocol::header::get_min_offset_response_header::GetMinOffsetResponseHeader;
@@ -37,6 +37,7 @@ use crate::rpc::rpc_client_hook::RpcClientHook;
 use crate::rpc::rpc_client_utils::RpcClientUtils;
 use crate::rpc::rpc_request::RpcRequest;
 use crate::rpc::rpc_response::RpcResponse;
+use crate::Result;
 
 #[derive(Clone)]
 pub struct RpcClientImpl {
@@ -65,10 +66,7 @@ impl RpcClientImpl {
         self.client_hook_list.clear();
     }
 
-    fn get_broker_addr_by_name_or_exception(
-        &self,
-        broker_name: &str,
-    ) -> Result<String, RpcException> {
+    fn get_broker_addr_by_name_or_exception(&self, broker_name: &str) -> Result<String> {
         match self.client_metadata.find_master_broker_addr(broker_name) {
             None => Err(RpcException(
                 From::from(ResponseCode::SystemError),
@@ -83,7 +81,7 @@ impl RpcClientImpl {
         addr: String,
         request: RpcRequest,
         timeout_millis: u64,
-    ) -> Result<RpcResponse, RpcException> {
+    ) -> Result<RpcResponse> {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
@@ -123,7 +121,7 @@ impl RpcClientImpl {
         addr: String,
         request: RpcRequest,
         timeout_millis: u64,
-    ) -> Result<RpcResponse, RpcException> {
+    ) -> Result<RpcResponse> {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
@@ -159,7 +157,7 @@ impl RpcClientImpl {
         addr: String,
         request: RpcRequest,
         timeout_millis: u64,
-    ) -> Result<RpcResponse, RpcException> {
+    ) -> Result<RpcResponse> {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
@@ -195,7 +193,7 @@ impl RpcClientImpl {
         addr: String,
         request: RpcRequest,
         timeout_millis: u64,
-    ) -> Result<RpcResponse, RpcException> {
+    ) -> Result<RpcResponse> {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
@@ -231,7 +229,7 @@ impl RpcClientImpl {
         addr: String,
         request: RpcRequest,
         timeout_millis: u64,
-    ) -> Result<RpcResponse, RpcException> {
+    ) -> Result<RpcResponse> {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
@@ -267,7 +265,7 @@ impl RpcClientImpl {
         addr: String,
         request: RpcRequest,
         timeout_millis: u64,
-    ) -> Result<RpcResponse, RpcException> {
+    ) -> Result<RpcResponse> {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
@@ -307,7 +305,7 @@ impl RpcClientImpl {
         addr: String,
         request: RpcRequest,
         timeout_millis: u64,
-    ) -> Result<RpcResponse, RpcException> {
+    ) -> Result<RpcResponse> {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
@@ -343,7 +341,7 @@ impl RpcClientImpl {
         addr: String,
         request: RpcRequest,
         timeout_millis: u64,
-    ) -> Result<RpcResponse, RpcException> {
+    ) -> Result<RpcResponse> {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
@@ -373,11 +371,7 @@ impl RpcClientImpl {
 }
 
 impl RpcClient for RpcClientImpl {
-    async fn invoke(
-        &self,
-        request: RpcRequest,
-        timeout_millis: u64,
-    ) -> Result<RpcResponse, RpcException> {
+    async fn invoke(&self, request: RpcRequest, timeout_millis: u64) -> Result<RpcResponse> {
         if !self.client_hook_list.is_empty() {
             for hook in self.client_hook_list.iter() {
                 let result = hook.before_request(&request)?;
@@ -445,7 +439,7 @@ impl RpcClient for RpcClientImpl {
         mq: MessageQueue,
         mut request: RpcRequest,
         timeout_millis: u64,
-    ) -> Result<RpcResponse, RpcException> {
+    ) -> Result<RpcResponse> {
         let bname = self.client_metadata.get_broker_name_from_message_queue(&mq);
         request.header.broker_name = bname;
         self.invoke(request, timeout_millis).await

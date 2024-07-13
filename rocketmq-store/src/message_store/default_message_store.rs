@@ -29,7 +29,6 @@ use std::time::Duration;
 use std::time::Instant;
 
 use bytes::Buf;
-use log::info;
 use rocketmq_common::common::attribute::cleanup_policy::CleanupPolicy;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::mix_all::is_lmq;
@@ -53,6 +52,7 @@ use rocketmq_common::{
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::Sender;
 use tracing::error;
+use tracing::info;
 use tracing::warn;
 
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;

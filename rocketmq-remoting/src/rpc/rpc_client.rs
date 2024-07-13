@@ -16,22 +16,18 @@
  */
 use rocketmq_common::common::message::message_queue::MessageQueue;
 
-use crate::error::RpcException;
 use crate::rpc::rpc_request::RpcRequest;
 use crate::rpc::rpc_response::RpcResponse;
+use crate::Result;
 
 #[trait_variant::make(RpcClient:Send)]
 pub trait RpcClientLocal {
-    async fn invoke(
-        &self,
-        request: RpcRequest,
-        timeout_millis: u64,
-    ) -> Result<RpcResponse, RpcException>;
+    async fn invoke(&self, request: RpcRequest, timeout_millis: u64) -> Result<RpcResponse>;
 
     async fn invoke_mq(
         &self,
         mq: MessageQueue,
         request: RpcRequest,
         timeout_millis: u64,
-    ) -> Result<RpcResponse, RpcException>;
+    ) -> Result<RpcResponse>;
 }

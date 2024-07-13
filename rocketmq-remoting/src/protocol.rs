@@ -25,7 +25,7 @@ use std::time::SystemTime;
 
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::topic::TopicValidator;
-use rocketmq_common::error::SerdeJsonError;
+use rocketmq_common::error::Error;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::utils::time_utils;
 use serde::ser::SerializeStruct;
@@ -360,7 +360,7 @@ pub trait RemotingSerializable {
 
 pub trait RemotingDeserializable {
     type Output;
-    fn decode(bytes: &[u8]) -> Result<Self::Output, SerdeJsonError>;
+    fn decode(bytes: &[u8]) -> Result<Self::Output, Error>;
 }
 
 pub trait JsonSerializable: Serialize + RemotingSerializable {}
@@ -381,7 +381,7 @@ impl<T: Serialize> RemotingSerializable for T {
 
 impl<T: serde::de::DeserializeOwned> RemotingDeserializable for T {
     type Output = T;
-    fn decode(bytes: &[u8]) -> Result<Self::Output, SerdeJsonError> {
+    fn decode(bytes: &[u8]) -> Result<Self::Output, Error> {
         SerdeJsonUtils::decode(bytes)
     }
 }

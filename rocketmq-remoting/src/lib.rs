@@ -26,9 +26,12 @@ pub mod error;
 pub mod net;
 pub mod protocol;
 
+use crate::error::Error;
 pub use crate::protocol::rocketmq_serializable;
 
 pub mod remoting;
 pub mod rpc;
 pub mod runtime;
 pub mod server;
+
+pub type Result<T, E = Error> = std::result::Result<T, E>;

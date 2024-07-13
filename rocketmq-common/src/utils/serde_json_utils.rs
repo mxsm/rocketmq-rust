@@ -14,58 +14,58 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use crate::error::SerdeJsonError;
+use crate::error::Error;
 
 pub struct SerdeJsonUtils;
 
 impl SerdeJsonUtils {
-    pub fn decode<T>(bytes: &[u8]) -> Result<T, SerdeJsonError>
+    pub fn decode<T>(bytes: &[u8]) -> Result<T, Error>
     where
         T: serde::de::DeserializeOwned,
     {
-        serde_json::from_slice::<T>(bytes).map_err(SerdeJsonError::JsonError)
+        serde_json::from_slice::<T>(bytes).map_err(Error::JsonError)
     }
 
-    pub fn from_json_str<T>(json: &str) -> Result<T, SerdeJsonError>
+    pub fn from_json_str<T>(json: &str) -> Result<T, Error>
     where
         T: serde::de::DeserializeOwned,
     {
-        serde_json::from_str(json).map_err(SerdeJsonError::JsonError)
+        serde_json::from_str(json).map_err(Error::JsonError)
     }
 
-    pub fn from_json_slice<T>(json: &[u8]) -> Result<T, SerdeJsonError>
+    pub fn from_json_slice<T>(json: &[u8]) -> Result<T, Error>
     where
         T: serde::de::DeserializeOwned,
     {
-        serde_json::from_slice(json).map_err(SerdeJsonError::JsonError)
+        serde_json::from_slice(json).map_err(Error::JsonError)
     }
 
-    pub fn to_json<T>(value: &T) -> Result<String, SerdeJsonError>
+    pub fn to_json<T>(value: &T) -> Result<String, Error>
     where
         T: serde::Serialize,
     {
-        serde_json::to_string(value).map_err(SerdeJsonError::JsonError)
+        serde_json::to_string(value).map_err(Error::JsonError)
     }
 
-    pub fn to_json_pretty<T>(value: &T) -> Result<String, SerdeJsonError>
+    pub fn to_json_pretty<T>(value: &T) -> Result<String, Error>
     where
         T: serde::Serialize,
     {
-        serde_json::to_string_pretty(value).map_err(SerdeJsonError::JsonError)
+        serde_json::to_string_pretty(value).map_err(Error::JsonError)
     }
 
-    pub fn to_json_vec<T>(value: &T) -> Result<Vec<u8>, SerdeJsonError>
+    pub fn to_json_vec<T>(value: &T) -> Result<Vec<u8>, Error>
     where
         T: serde::Serialize,
     {
-        serde_json::to_vec(value).map_err(SerdeJsonError::JsonError)
+        serde_json::to_vec(value).map_err(Error::JsonError)
     }
 
-    pub fn to_json_vec_pretty<T>(value: &T) -> Result<Vec<u8>, SerdeJsonError>
+    pub fn to_json_vec_pretty<T>(value: &T) -> Result<Vec<u8>, Error>
     where
         T: serde::Serialize,
     {
-        serde_json::to_vec_pretty(value).map_err(SerdeJsonError::JsonError)
+        serde_json::to_vec_pretty(value).map_err(Error::JsonError)
     }
 }
 
@@ -136,7 +136,8 @@ mod tests {
 
     use serde::Deserialize;
     use serde::Serialize;
-    use serde_json::Error;
+
+    use crate::error::Error;
 
     #[derive(Serialize, Deserialize, Debug, PartialEq)]
     struct TestStruct {
@@ -158,7 +159,7 @@ mod tests {
     #[test]
     fn test_from_json_error() {
         let json_str = r#"{"name":"Alice","age":"thirty"}"#;
-        let result: Result<TestStruct, SerdeJsonError> = SerdeJsonUtils::from_json_str(json_str);
+        let result: Result<TestStruct, Error> = SerdeJsonUtils::from_json_str(json_str);
         assert!(result.is_err());
     }
 
@@ -176,8 +177,7 @@ mod tests {
     #[test]
     fn test_from_json_slice_error() {
         let json_slice = r#"{"name":"Bob","age":"twenty-five"}"#.as_bytes();
-        let result: Result<TestStruct, SerdeJsonError> =
-            SerdeJsonUtils::from_json_slice(json_slice);
+        let result: Result<TestStruct, Error> = SerdeJsonUtils::from_json_slice(json_slice);
         assert!(result.is_err());
     }
 
@@ -202,7 +202,7 @@ mod tests {
             name: "Charlie".to_string(),
             age: 40,
         };
-        let result: Result<String, SerdeJsonError> = SerdeJsonUtils::to_json(&value);
+        let result: Result<String, Error> = SerdeJsonUtils::to_json(&value);
         assert!(result.is_ok());
     }
 }

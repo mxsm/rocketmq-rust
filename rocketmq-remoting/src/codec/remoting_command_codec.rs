@@ -21,8 +21,7 @@ use bytes::BytesMut;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
-use crate::error::RemotingCommandDecoderError;
-use crate::error::RemotingCommandEncoderError;
+use crate::error::Error;
 use crate::protocol::remoting_command::RemotingCommand;
 
 /// Encodes a `RemotingCommand` into a `BytesMut` buffer.
@@ -61,7 +60,7 @@ impl RemotingCommandCodec {
 }
 
 impl Decoder for RemotingCommandCodec {
-    type Error = RemotingCommandDecoderError;
+    type Error = Error;
     type Item = RemotingCommand;
 
     /// Decodes a `RemotingCommand` from a `BytesMut` buffer.
@@ -113,7 +112,7 @@ impl Decoder for RemotingCommandCodec {
         // Read the header length as a big-endian i32.
         let header_length = cmd_data.get_i32() as usize;
         if header_length > total_size - 4 {
-            return Err(RemotingCommandDecoderError(format!(
+            return Err(Error::RemotingCommandDecoderError(format!(
                 "Header length {} is greater than total size {}",
                 header_length, total_size
             )));
@@ -124,7 +123,7 @@ impl Decoder for RemotingCommandCodec {
 
         let mut cmd = serde_json::from_slice::<RemotingCommand>(&header_data).map_err(|error| {
             // Handle deserialization error gracefully
-            RemotingCommandDecoderError(format!("Deserialization error: {}", error))
+            Error::RemotingCommandDecoderError(format!("Deserialization error: {}", error))
         })?;
         if total_size - 4 > header_length {
             cmd.set_body_mut_ref(Some(
@@ -137,7 +136,7 @@ impl Decoder for RemotingCommandCodec {
 }
 
 impl Encoder<RemotingCommand> for RemotingCommandCodec {
-    type Error = RemotingCommandEncoderError;
+    type Error = Error;
 
     /// Encodes a `RemotingCommand` into a `BytesMut` buffer.
     ///

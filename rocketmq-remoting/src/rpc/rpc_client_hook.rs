@@ -14,15 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use crate::error::RpcException;
+
 use crate::rpc::rpc_request::RpcRequest;
 use crate::rpc::rpc_response::RpcResponse;
+use crate::Result;
 
 pub trait RpcClientHook {
-    fn before_request(&self, rpc_request: &RpcRequest)
-        -> Result<Option<RpcResponse>, RpcException>;
-    fn after_response(
-        &self,
-        rpc_response: &RpcResponse,
-    ) -> Result<Option<RpcResponse>, RpcException>;
+    fn before_request(&self, rpc_request: &RpcRequest) -> Result<Option<RpcResponse>>;
+    fn after_response(&self, rpc_response: &RpcResponse) -> Result<Option<RpcResponse>>;
 }

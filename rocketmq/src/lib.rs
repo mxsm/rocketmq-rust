@@ -20,23 +20,25 @@ pub use rocketmq::main;
 /// Re-export tokio module.
 pub use tokio as rocketmq;
 
-#[macro_export]
-macro_rules! is_trait_implemented {
-    ($t:ty, $tr:ident) => {{
-        struct Checker<T: ?Sized>(std::marker::PhantomData<T>);
+/// On unix platforms we want to intercept SIGINT and SIGTERM
+/// This method returns if either are signalled
+#[cfg(unix)]
+pub async fn wait_for_signal() {
+    use tokio::signal::unix::signal;
+    use tokio::signal::unix::SignalKind;
+    use tracing::info;
+    let mut term = signal(SignalKind::terminate()).expect("failed to register signal handler");
+    let mut int = signal(SignalKind::interrupt()).expect("failed to register signal handler");
 
-        impl<T: $tr + ?Sized> Checker<T> {
-            fn is_implemented() -> bool {
-                true
-            }
-        }
+    tokio::select! {
+        _ = term.recv() => info!("Received SIGTERM"),
+        _ = int.recv() => info!("Received SIGINT"),
+    }
+}
 
-        impl<T: ?Sized> Checker<T> {
-            fn is_implemented() -> bool {
-                false
-            }
-        }
-
-        Checker::<$t>::is_implemented()
-    }};
+#[cfg(windows)]
+/// ctrl_c is the cross-platform way to intercept the equivalent of SIGINT
+/// This method returns if this occurs
+pub async fn wait_for_signal() {
+    let _ = tokio::signal::ctrl_c().await;
 }
