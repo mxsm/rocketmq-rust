@@ -35,6 +35,7 @@ use rocketmq_common::common::mix_all::is_lmq;
 use rocketmq_common::common::mix_all::is_sys_consumer_group_for_no_cold_read_limit;
 use rocketmq_common::common::mix_all::MULTI_DISPATCH_QUEUE_SPLITTER;
 use rocketmq_common::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
+use rocketmq_common::utils::util_all;
 use rocketmq_common::CleanupPolicyUtils::get_delete_policy;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_common::{
@@ -67,6 +68,8 @@ use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::base::store_stats_service::StoreStatsService;
 use crate::config::broker_role::BrokerRole;
 use crate::config::message_store_config::MessageStoreConfig;
+use crate::config::store_path_config_helper::get_store_path_batch_consume_queue;
+use crate::config::store_path_config_helper::get_store_path_consume_queue_ext;
 use crate::filter::MessageFilter;
 use crate::hook::put_message_hook::BoxedPutMessageHook;
 use crate::index::index_dispatch::CommitLogDispatcherBuildIndex;
@@ -1040,22 +1043,50 @@ impl MessageStore for DefaultMessageStore {
         )
     }
 
-    fn delete_topics(&self, delete_topics: Vec<String>) {
+    fn delete_topics(&mut self, delete_topics: Vec<&str>) -> i32 {
         if delete_topics.is_empty() {
-            return;
+            return 0;
         }
+        let mut delete_count = 0;
         for topic in delete_topics {
-            let queue_table = self
-                .consume_queue_store
-                .find_consume_queue_map(topic.as_str());
+            let queue_table = self.consume_queue_store.find_consume_queue_map(topic);
             if queue_table.is_none() {
                 continue;
             }
-            /* for (queue_id, consume_queue) in queue_table.unwrap() {
-                consume_queue.lock().destroy();
-                self.consume_queue_store.delete_queue(topic.as_str(), *queue_id);
-            }*/
+            let queue_table = queue_table.unwrap();
+            for (queue_id, consume_queue) in queue_table {
+                self.consume_queue_store
+                    .destroy_consume_queue(consume_queue.as_ref().as_ref());
+                self.consume_queue_store
+                    .remove_topic_queue_table(topic, queue_id);
+            }
+            // remove topic from cq table
+            let consume_queue_table = self.consume_queue_store.get_consume_queue_table();
+            consume_queue_table.lock().remove(topic);
+
+            if self.broker_config.auto_delete_unused_stats {
+                self.broker_stats_manager
+                    .as_ref()
+                    .unwrap()
+                    .on_topic_deleted(topic);
+            }
+
+            let root_dir = self.message_store_config.store_path_root_dir.as_str();
+            let consume_queue_dir =
+                PathBuf::from(get_store_path_consume_queue(root_dir)).join(topic);
+            let consume_queue_ext_dir =
+                PathBuf::from(get_store_path_consume_queue_ext(root_dir)).join(topic);
+            let batch_consume_queue_dir =
+                PathBuf::from(get_store_path_batch_consume_queue(root_dir)).join(topic);
+
+            util_all::delete_empty_directory(consume_queue_dir);
+            util_all::delete_empty_directory(consume_queue_ext_dir);
+            util_all::delete_empty_directory(batch_consume_queue_dir);
+            info!("DeleteTopic: Topic has been destroyed, topic={}", topic);
+            delete_count += 1;
         }
+
+        delete_count
     }
 }
 

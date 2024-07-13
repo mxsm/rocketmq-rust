@@ -388,7 +388,7 @@ impl TopicRequestHandler {
         Some(response)
     }
 
-    fn delete_topic_in_broker(&self, topic: &str) {
+    fn delete_topic_in_broker(&mut self, topic: &str) {
         self.inner.topic_config_manager.delete_topic_config(topic);
         self.inner.topic_queue_mapping_manager.delete(topic);
         self.inner
@@ -397,8 +397,6 @@ impl TopicRequestHandler {
         self.inner
             .pop_inflight_message_counter
             .clear_in_flight_message_num_by_topic_name(topic);
-        self.inner
-            .default_message_store
-            .delete_topics(vec![topic.to_string()]);
+        self.inner.default_message_store.delete_topics(vec![topic]);
     }
 }
