@@ -14,7 +14,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::cell::SyncUnsafeCell;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::atomic::AtomicI32;
@@ -28,6 +27,7 @@ use bytes::Bytes;
 use bytes::BytesMut;
 use lazy_static::lazy_static;
 use rocketmq_common::common::mq_version::RocketMqVersion;
+use rocketmq_common::ArcCellWrapper;
 use serde::Deserialize;
 use serde::Serialize;
 use tracing::error;
@@ -93,7 +93,7 @@ pub struct RemotingCommand {
     suspended: bool,
     #[serde(skip)]
     command_custom_header:
-        Option<Arc<SyncUnsafeCell<dyn CommandCustomHeader + Send + Sync + 'static>>>,
+        Option<ArcCellWrapper<Box<dyn CommandCustomHeader + Send + Sync + 'static>>>,
     #[serde(rename = "serializeTypeCurrentRPC")]
     serialize_type: SerializeType,
 }
@@ -216,30 +216,14 @@ impl RemotingCommand {
     where
         T: CommandCustomHeader + Sync + Send + 'static,
     {
-        self.command_custom_header = Some(Arc::new(SyncUnsafeCell::new(command_custom_header)));
-        /*if let Some(cch) = &self.command_custom_header {
-            let option = cch.to_map();
-
-            match &mut self.ext_fields {
-                None => {
-                    self.ext_fields = option;
-                }
-                Some(ext) => {
-                    if let Some(val) = option {
-                        for (key, value) in &val {
-                            ext.insert(key.clone(), value.clone());
-                        }
-                    }
-                }
-            }
-        }*/
+        self.command_custom_header = Some(ArcCellWrapper::new(Box::new(command_custom_header)));
         self
     }
 
     pub fn set_command_custom_header_origin(
         mut self,
         command_custom_header: Option<
-            Arc<SyncUnsafeCell<dyn CommandCustomHeader + Send + Sync + 'static>>,
+            ArcCellWrapper<Box<dyn CommandCustomHeader + Send + Sync + 'static>>,
         >,
     ) -> Self {
         self.command_custom_header = command_custom_header;
@@ -250,23 +234,7 @@ impl RemotingCommand {
     where
         T: CommandCustomHeader + Sync + Send + 'static,
     {
-        self.command_custom_header = Some(Arc::new(SyncUnsafeCell::new(command_custom_header)));
-        /*if let Some(cch) = &self.command_custom_header {
-            let option = cch.to_map();
-
-            match &mut self.ext_fields {
-                None => {
-                    self.ext_fields = option;
-                }
-                Some(ext) => {
-                    if let Some(val) = option {
-                        for (key, value) in &val {
-                            ext.insert(key.clone(), value.clone());
-                        }
-                    }
-                }
-            }
-        }*/
+        self.command_custom_header = Some(ArcCellWrapper::new(Box::new(command_custom_header)));
     }
 
     pub fn set_code(mut self, code: impl Into<i32>) -> Self {
@@ -365,9 +333,7 @@ impl RemotingCommand {
 
     pub fn header_encode(&self) -> Option<Bytes> {
         self.command_custom_header.as_ref().and_then(|header| {
-            let header_ptr = header.get();
-            let header_ref = unsafe { &*(header_ptr as *const dyn CommandCustomHeader) };
-            header_ref
+            header
                 .to_map()
                 .as_ref()
                 .map(|val| Bytes::from(serde_json::to_vec(val).unwrap()))
@@ -376,9 +342,7 @@ impl RemotingCommand {
 
     pub fn make_custom_header_to_net(&mut self) {
         if let Some(header) = &self.command_custom_header {
-            let header_ptr = header.get();
-            let header_ref = unsafe { &*(header_ptr as *const dyn CommandCustomHeader) };
-            let option = header_ref.to_map();
+            let option = header.to_map();
 
             match &mut self.ext_fields {
                 None => {
@@ -443,22 +407,6 @@ impl RemotingCommand {
                     .copy_from_slice(&serialize_type.to_be_bytes());
             }
         }
-
-        /*let header_length = header.as_ref().map_or(0, |h| h.len()) as i32;
-        let body_length = self.body.as_ref().map_or(0, |b| b.len()) as i32;
-        let total_length = 4 + header_length + body_length;
-
-        dst.reserve((total_length + 4) as usize);
-        dst.put_i32(total_length);
-        let serialize_type =
-            RemotingCommand::mark_serialize_type(header_length, item.get_serialize_type());
-        dst.put_i32(serialize_type);
-
-        if let Some(header_inner) = header {
-            dst.put(header_inner);
-        }
-
-        let st = serde_json::to_string(self).unwrap();*/
     }
 
     pub fn get_body(&self) -> Option<&Bytes> {
@@ -588,50 +536,40 @@ impl RemotingCommand {
 
     pub fn read_custom_header<T>(&mut self) -> Option<&T>
     where
-        T: CommandCustomHeader + Sync + Send,
+        T: CommandCustomHeader + Sync + Send + 'static,
     {
         match self.command_custom_header.as_ref() {
             None => None,
             Some(value) => {
-                let value = value.get();
-                let value = value as *const dyn CommandCustomHeader as *const T;
-                unsafe { Some(&*value) }
+                let ptr_raw = std::ptr::from_ref(&**value.as_ref()) as *const T;
+                unsafe { Some(&*ptr_raw) }
             }
         }
     }
 
     pub fn read_custom_header_mut<T>(&mut self) -> Option<&mut T>
     where
-        T: CommandCustomHeader + Sync + Send,
+        T: CommandCustomHeader + Sync + Send + 'static,
     {
-        match self.command_custom_header.as_ref() {
+        match self.command_custom_header.as_mut() {
             None => None,
             Some(value) => {
-                let value = value.get();
-                let value = value as *const dyn CommandCustomHeader as *mut T;
-                unsafe { Some(&mut *value) }
+                let ptr_raw = std::ptr::from_mut(&mut **value.as_mut()) as *mut T;
+                unsafe { Some(&mut *ptr_raw) }
             }
         }
     }
     pub fn command_custom_header_ref(&self) -> Option<&dyn CommandCustomHeader> {
         match self.command_custom_header.as_ref() {
             None => None,
-            Some(value) => {
-                let value = value.get();
-                let value = value as *const dyn CommandCustomHeader;
-                unsafe { Some(&*value) }
-            }
+            Some(value) => Some(value.as_ref().as_ref()),
         }
     }
 
     pub fn command_custom_header_mut(&mut self) -> Option<&mut dyn CommandCustomHeader> {
-        match self.command_custom_header.as_ref() {
+        match self.command_custom_header.as_mut() {
             None => None,
-            Some(value) => {
-                let value = value.get();
-                let value = value as *mut dyn CommandCustomHeader;
-                unsafe { Some(&mut *value) }
-            }
+            Some(value) => Some(value.as_mut().as_mut()),
         }
     }
 }

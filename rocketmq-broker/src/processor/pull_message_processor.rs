@@ -14,7 +14,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::cell::SyncUnsafeCell;
 use std::sync::Arc;
 
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
@@ -22,6 +21,7 @@ use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
 use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
 use rocketmq_common::common::FAQUrl;
+use rocketmq_common::ArcCellWrapper;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::RemotingSysResponseCode;
@@ -68,7 +68,7 @@ use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager
 
 #[derive(Clone)]
 pub struct PullMessageProcessor<MS> {
-    pull_message_result_handler: Arc<SyncUnsafeCell<dyn PullMessageResultHandler>>,
+    pull_message_result_handler: ArcCellWrapper<Box<dyn PullMessageResultHandler>>,
     broker_config: Arc<BrokerConfig>,
     subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
     topic_config_manager: Arc<TopicConfigManager>,
@@ -84,7 +84,7 @@ pub struct PullMessageProcessor<MS> {
 
 impl<MS> PullMessageProcessor<MS> {
     pub fn new(
-        pull_message_result_handler: Arc<SyncUnsafeCell<dyn PullMessageResultHandler>>,
+        pull_message_result_handler: ArcCellWrapper<Box<dyn PullMessageResultHandler>>,
         broker_config: Arc<BrokerConfig>,
         subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
         topic_config_manager: Arc<TopicConfigManager>,
@@ -758,7 +758,7 @@ where
             }
         };
         if let Some(get_message_result) = get_message_result {
-            return self.pull_message_result_handler().handle(
+            return self.pull_message_result_handler.handle(
                 get_message_result,
                 request,
                 request_header,
@@ -774,10 +774,6 @@ where
             );
         }
         None
-    }
-
-    fn pull_message_result_handler(&self) -> &dyn PullMessageResultHandler {
-        unsafe { &*self.pull_message_result_handler.get() }
     }
 
     fn query_broadcast_pull_init_offset(
@@ -848,9 +844,8 @@ where
                 let command = response.set_opaque(opaque).mark_response_type();
                 match ctx.upgrade() {
                     None => {}
-                    Some(ctx) => {
-                        let ctx_ref = unsafe { &mut *ctx.get() };
-                        ctx_ref.write(command).await;
+                    Some(mut ctx) => {
+                        ctx.write(command).await;
                     }
                 }
             }

@@ -163,7 +163,11 @@ impl TopicRequestHandler {
                 .broker_runtime_inner()
                 .register_increment_broker_data(
                     vec![topic_config],
-                    self.inner.topic_config_manager.data_version().clone(),
+                    self.inner
+                        .topic_config_manager
+                        .data_version()
+                        .as_ref()
+                        .clone(),
                 )
                 .await;
         }
@@ -261,7 +265,11 @@ impl TopicRequestHandler {
                 .broker_runtime_inner()
                 .register_increment_broker_data(
                     request_body.topic_config_list,
-                    self.inner.topic_config_manager.data_version().clone(),
+                    self.inner
+                        .topic_config_manager
+                        .data_version()
+                        .as_ref()
+                        .clone(),
                 )
                 .await;
         }
@@ -364,7 +372,13 @@ impl TopicRequestHandler {
                     .lock()
                     .clone(),
             ),
-            data_version: Some(self.inner.topic_config_manager.data_version().clone()),
+            data_version: Some(
+                self.inner
+                    .topic_config_manager
+                    .data_version()
+                    .as_ref()
+                    .clone(),
+            ),
             ..Default::default()
         };
         let content = topic_config_and_mapping_serialize_wrapper.to_json();

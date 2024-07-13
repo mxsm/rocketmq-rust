@@ -15,15 +15,15 @@
  * limitations under the License.
  */
 
-use std::cell::SyncUnsafeCell;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::Weak;
 use std::time::Duration;
 
 use futures::SinkExt;
 use rocketmq_common::common::server::config::ServerConfig;
+use rocketmq_common::ArcCellWrapper;
+use rocketmq_common::WeakCellWrapper;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::broadcast;
@@ -49,12 +49,11 @@ type Tx = mpsc::UnboundedSender<RemotingCommand>;
 /// Shorthand for the receive half of the message channel.
 type Rx = mpsc::UnboundedReceiver<RemotingCommand>;
 
-pub type ConnectionHandlerContext = Weak<SyncUnsafeCell<ConnectionHandlerContextWrapper>>;
+pub type ConnectionHandlerContext = WeakCellWrapper<ConnectionHandlerContextWrapper>;
 
 pub struct ConnectionHandler<RP> {
     request_processor: RP,
-    //connection: Connection,
-    connection_handler_context: Arc<SyncUnsafeCell<ConnectionHandlerContextWrapper>>,
+    connection_handler_context: ArcCellWrapper<ConnectionHandlerContextWrapper>,
     channel: Channel,
     shutdown: Shutdown,
     _shutdown_complete: mpsc::Sender<()>,
@@ -77,9 +76,8 @@ impl<RP> Drop for ConnectionHandler<RP> {
 impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
     async fn handle(&mut self) -> anyhow::Result<()> {
         while !self.shutdown.is_shutdown {
-            let connection_handler_context = unsafe { &mut *self.connection_handler_context.get() };
             let frame = tokio::select! {
-                res = connection_handler_context.connection.framed.next() => res,
+                res = self.connection_handler_context.connection.framed.next() => res,
                 _ = self.shutdown.recv() =>{
                     //If a shutdown signal is received, return from `handle`.
                     return Ok(());
@@ -102,7 +100,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
             //let ctx = ConnectionHandlerContext::new(&self.connection);
             let opaque = cmd.opaque();
             let channel = self.channel.clone();
-            let ctx = Arc::downgrade(&self.connection_handler_context);
+            let ctx = ArcCellWrapper::downgrade(&self.connection_handler_context);
             let response = tokio::select! {
                 result = self.request_processor.process_request(channel,ctx,cmd) =>  result,
             };
@@ -111,7 +109,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
             }
             let response = response.unwrap();
             tokio::select! {
-                result =connection_handler_context.connection.framed.send(response.set_opaque(opaque)) => match result{
+                result =self.connection_handler_context.connection.framed.send(response.set_opaque(opaque)) => match result{
                     Ok(_) =>{},
                     Err(err) => {
                         error!("send response failed: {}", err);
@@ -170,11 +168,9 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
             let mut handler = ConnectionHandler {
                 request_processor: self.request_processor.clone(),
                 //connection: Connection::new(socket, remote_addr),
-                connection_handler_context: Arc::new(SyncUnsafeCell::new(
-                    ConnectionHandlerContextWrapper {
-                        connection: Connection::new(socket),
-                    },
-                )),
+                connection_handler_context: ArcCellWrapper::new(ConnectionHandlerContextWrapper {
+                    connection: Connection::new(socket),
+                }),
                 channel,
                 shutdown: Shutdown::new(self.notify_shutdown.subscribe()),
                 _shutdown_complete: self.shutdown_complete_tx.clone(),

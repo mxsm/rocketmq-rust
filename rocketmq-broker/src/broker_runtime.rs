@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::cell::SyncUnsafeCell;
+use std::any::Any;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
@@ -28,6 +28,7 @@ use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_common::common::statistics::state_getter::StateGetter;
+use rocketmq_common::ArcCellWrapper;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_common::UtilAll::compute_next_morning_time_millis;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
@@ -65,6 +66,7 @@ use crate::processor::client_manage_processor::ClientManageProcessor;
 use crate::processor::consumer_manage_processor::ConsumerManageProcessor;
 use crate::processor::default_pull_message_result_handler::DefaultPullMessageResultHandler;
 use crate::processor::pull_message_processor::PullMessageProcessor;
+use crate::processor::pull_message_result_handler::PullMessageResultHandler;
 use crate::processor::send_message_processor::SendMessageProcessor;
 use crate::processor::BrokerRequestProcessor;
 use crate::schedule::schedule_message_service::ScheduleMessageService;
@@ -374,8 +376,8 @@ impl BrokerRuntime {
             self.broker_config.clone(),
             self.message_store.as_ref().unwrap(),
         );
-        let pull_message_result_handler =
-            Arc::new(SyncUnsafeCell::new(DefaultPullMessageResultHandler::new(
+        let mut pull_message_result_handler =
+            ArcCellWrapper::new(Box::new(DefaultPullMessageResultHandler::new(
                 Arc::new(self.topic_config_manager.clone()),
                 Arc::new(self.consumer_offset_manager.clone()),
                 self.consumer_manager.clone(),
@@ -383,7 +385,7 @@ impl BrokerRuntime {
                 self.broker_stats_manager.clone(),
                 self.broker_config.clone(),
                 Arc::new(Default::default()),
-            )));
+            )) as Box<dyn PullMessageResultHandler>);
         let message_store = Arc::new(self.message_store.as_ref().unwrap().clone());
         let pull_message_processor = PullMessageProcessor::new(
             pull_message_result_handler.clone(),
@@ -414,11 +416,13 @@ impl BrokerRuntime {
             self.broker_config.clone(),
         ));
 
-        unsafe {
-            (*pull_message_result_handler.get()).set_pull_request_hold_service(Some(Arc::new(
+        let pull_message_result_handler = pull_message_result_handler.as_mut() as &mut dyn Any;
+        pull_message_result_handler
+            .downcast_mut::<DefaultPullMessageResultHandler>()
+            .unwrap()
+            .set_pull_request_hold_service(Some(Arc::new(
                 self.pull_request_hold_service.clone().unwrap(),
             )));
-        }
 
         self.message_store
             .as_mut()

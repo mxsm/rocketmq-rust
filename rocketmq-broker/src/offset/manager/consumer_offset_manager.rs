@@ -15,7 +15,6 @@
  * limitations under the License.
  */
 
-use std::cell::SyncUnsafeCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt;
@@ -27,6 +26,7 @@ use std::sync::Arc;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
+use rocketmq_common::ArcCellWrapper;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_store::log_file::MessageStore;
@@ -60,7 +60,7 @@ impl ConsumerOffsetManager {
         ConsumerOffsetManager {
             broker_config,
             consumer_offset_wrapper: ConsumerOffsetWrapper {
-                data_version: Arc::new(SyncUnsafeCell::new(DataVersion::default())),
+                data_version: ArcCellWrapper::new(DataVersion::default()),
                 offset_table: Arc::new(parking_lot::RwLock::new(HashMap::new())),
                 reset_offset_table: Arc::new(parking_lot::RwLock::new(HashMap::new())),
                 pull_offset_table: Arc::new(parking_lot::RwLock::new(HashMap::new())),
@@ -143,7 +143,9 @@ impl ConsumerOffsetManager {
             } else {
                 0
             };
-            unsafe { &mut *self.consumer_offset_wrapper.data_version.get() }
+            self.consumer_offset_wrapper
+                .data_version
+                .mut_from_ref()
                 .next_version_with(state_machine_version);
         }
     }
@@ -212,8 +214,8 @@ impl ConfigManager for ConsumerOffsetManager {
                 .offset_table
                 .write()
                 .extend(wrapper.offset_table.read().clone());
-            let data_version = unsafe { &mut *self.consumer_offset_wrapper.data_version.get() };
-            *data_version = unsafe { &*wrapper.data_version.get() }.clone();
+            let data_version = self.consumer_offset_wrapper.data_version.mut_from_ref();
+            *data_version = wrapper.data_version.as_ref().clone();
         }
     }
 }
@@ -253,9 +255,9 @@ impl ConsumerOffsetManager {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Default, Clone)]
 struct ConsumerOffsetWrapper {
-    data_version: Arc<SyncUnsafeCell<DataVersion>>,
+    data_version: ArcCellWrapper<DataVersion>,
     offset_table: Arc<parking_lot::RwLock<HashMap<String /* topic@group */, HashMap<i32, i64>>>>,
     reset_offset_table: Arc<parking_lot::RwLock<HashMap<String, HashMap<i32, i64>>>>,
     pull_offset_table:
@@ -287,7 +289,7 @@ impl ConsumerOffsetWrapper {
 impl Serialize for ConsumerOffsetWrapper {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut state = serializer.serialize_struct("ConsumerOffsetWrapper", 5)?;
-        state.serialize_field("dataVersion", unsafe { &*self.data_version.get() })?;
+        state.serialize_field("dataVersion", self.data_version.as_ref())?;
         state.serialize_field("offsetTable", &*self.offset_table.read())?;
         state.serialize_field("resetOffsetTable", &*self.reset_offset_table.read())?;
         state.serialize_field("pullOffsetTable", &*self.pull_offset_table.read())?;
@@ -390,7 +392,7 @@ impl<'de> Deserialize<'de> for ConsumerOffsetWrapper {
                 let pull_offset_table = pull_offset_table.unwrap_or_default();
 
                 Ok(ConsumerOffsetWrapper {
-                    data_version: Arc::new(SyncUnsafeCell::new(data_version)),
+                    data_version: ArcCellWrapper::new(data_version),
                     offset_table: Arc::new(parking_lot::RwLock::new(offset_table)),
                     reset_offset_table: Arc::new(parking_lot::RwLock::new(reset_offset_table)),
                     pull_offset_table: Arc::new(parking_lot::RwLock::new(pull_offset_table)),
