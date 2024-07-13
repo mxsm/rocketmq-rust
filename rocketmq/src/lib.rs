@@ -24,7 +24,6 @@ pub use tokio as rocketmq;
 /// This method returns if either are signalled
 #[cfg(unix)]
 pub async fn wait_for_signal() {
-    use observability_deps::tracing::info;
     use tokio::signal::unix::signal;
     use tokio::signal::unix::SignalKind;
     let mut term = signal(SignalKind::terminate()).expect("failed to register signal handler");
