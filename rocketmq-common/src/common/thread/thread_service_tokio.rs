@@ -153,7 +153,7 @@ mod tests {
         assert!(service_thread.started.load(Ordering::SeqCst));
         assert!(!service_thread.stopped.load(Ordering::SeqCst));
 
-        time::sleep(std::time::Duration::from_secs(100)).await;
+        time::sleep(std::time::Duration::from_secs(1)).await;
         service_thread.shutdown_interrupt(false).await;
         assert!(!service_thread.started.load(Ordering::SeqCst));
         assert!(service_thread.stopped.load(Ordering::SeqCst));
