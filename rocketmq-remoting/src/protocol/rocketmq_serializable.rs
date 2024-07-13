@@ -23,9 +23,10 @@ use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
 
-use crate::error::RemotingCommandError;
+use crate::error::Error;
 use crate::protocol::remoting_command::RemotingCommand;
 use crate::protocol::LanguageCode;
+use crate::Result;
 
 pub struct RocketMQSerializable;
 
@@ -49,7 +50,7 @@ impl RocketMQSerializable {
         buf: &mut BytesMut,
         use_short_length: bool,
         limit: usize,
-    ) -> Result<Option<String>, RemotingCommandError> {
+    ) -> Result<Option<String>> {
         let len = if use_short_length {
             buf.get_u16() as usize
         } else {
@@ -61,13 +62,13 @@ impl RocketMQSerializable {
         }
 
         if len > limit {
-            return Err(RemotingCommandError::DecodingError(len, limit));
+            return Err(Error::DecodingError(len, limit));
         }
 
         let bytes = buf.split_to(len).freeze(); // Convert BytesMut to Bytes
         str::from_utf8(&bytes)
             .map(|s| Some(s.to_string()))
-            .map_err(RemotingCommandError::Utf8Error)
+            .map_err(Error::Utf8Error)
     }
 
     pub fn rocketmq_protocol_encode(cmd: &mut RemotingCommand, buf: &mut BytesMut) -> usize {
@@ -206,7 +207,7 @@ impl RocketMQSerializable {
     pub fn rocket_mq_protocol_decode(
         header_buffer: &mut BytesMut,
         header_len: usize,
-    ) -> Result<RemotingCommand, RemotingCommandError> {
+    ) -> Result<RemotingCommand> {
         let cmd = RemotingCommand::default()
             .set_code(header_buffer.get_i16())
             .set_language(LanguageCode::value_of(header_buffer.get_u8()).unwrap())
@@ -220,10 +221,7 @@ impl RocketMQSerializable {
         let ext_fields_length = header_buffer.get_i32() as usize;
         let ext = if ext_fields_length > 0 {
             if ext_fields_length > header_len {
-                return Err(RemotingCommandError::DecodingError(
-                    ext_fields_length,
-                    header_len,
-                ));
+                return Err(Error::DecodingError(ext_fields_length, header_len));
             }
             Self::map_deserialize(header_buffer, ext_fields_length)?
         } else {
@@ -233,10 +231,7 @@ impl RocketMQSerializable {
         Ok(cmd.set_remark(remark).set_ext_fields(ext))
     }
 
-    pub fn map_deserialize(
-        buffer: &mut BytesMut,
-        len: usize,
-    ) -> Result<HashMap<String, String>, RemotingCommandError> {
+    pub fn map_deserialize(buffer: &mut BytesMut, len: usize) -> Result<HashMap<String, String>> {
         let mut map = HashMap::new();
         let end_index = buffer.len() - len;
 

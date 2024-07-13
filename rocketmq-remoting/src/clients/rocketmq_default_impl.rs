@@ -29,7 +29,7 @@ use tracing::warn;
 
 use crate::clients::Client;
 use crate::clients::RemotingClient;
-use crate::error::RemotingError;
+use crate::error::Error;
 use crate::protocol::remoting_command::RemotingCommand;
 use crate::remoting::RemotingService;
 use crate::runtime::config::client_config::TokioClientConfig;
@@ -210,7 +210,7 @@ impl RemotingClient for RocketmqDefaultClient {
         addr: String,
         request: RemotingCommand,
         timeout_millis: u64,
-    ) -> Result<RemotingCommand, RemotingError> {
+    ) -> Result<RemotingCommand, Error> {
         let client = self.get_and_create_client(addr.clone()).unwrap();
         match time::timeout(Duration::from_millis(timeout_millis), async move {
             client.lock().await.send_read(request).await
@@ -219,9 +219,9 @@ impl RemotingClient for RocketmqDefaultClient {
         {
             Ok(result) => match result {
                 Ok(response) => Ok(response),
-                Err(err) => Err(RemotingError::RemoteException(err.to_string())),
+                Err(err) => Err(Error::RemoteException(err.to_string())),
             },
-            Err(err) => Err(RemotingError::RemoteException(err.to_string())),
+            Err(err) => Err(Error::RemoteException(err.to_string())),
         }
     }
 
@@ -234,7 +234,7 @@ impl RemotingClient for RocketmqDefaultClient {
             .await
             {
                 Ok(_) => Ok(()),
-                Err(err) => Err(RemotingError::RemoteException(err.to_string())),
+                Err(err) => Err(Error::RemoteException(err.to_string())),
             }
         });
     }

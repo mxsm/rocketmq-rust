@@ -42,3 +42,5 @@ pub(crate) mod schedule;
 pub(crate) mod subscription;
 pub(crate) mod topic;
 pub(crate) mod util;
+
+type RemotingError = rocketmq_remoting::error::Error;

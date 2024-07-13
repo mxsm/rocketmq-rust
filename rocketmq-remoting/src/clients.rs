@@ -23,7 +23,7 @@ use std::time::Duration;
 pub use blocking_client::BlockingClient;
 pub use client::Client;
 
-use crate::error::RemotingError;
+use crate::error::Error;
 use crate::net::ResponseFuture;
 use crate::protocol::remoting_command::RemotingCommand;
 use crate::remoting::InvokeCallback;
@@ -88,7 +88,7 @@ pub trait RemotingClient: RemotingService {
         addr: String,
         request: RemotingCommand,
         timeout_millis: u64,
-    ) -> Result<RemotingCommand, RemotingError>;
+    ) -> Result<RemotingCommand, Error>;
 
     async fn invoke_oneway(&self, addr: String, request: RemotingCommand, timeout_millis: u64);
 

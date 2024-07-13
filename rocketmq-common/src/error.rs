@@ -17,7 +17,7 @@
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub enum SerdeJsonError {
+pub enum Error {
     #[error("Serialization error: {0}")]
     JsonError(#[from] serde_json::Error),
 }

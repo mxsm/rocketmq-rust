@@ -20,82 +20,108 @@ use std::io;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub enum RemotingError {
+pub enum Error {
     #[error("{0}")]
     RemotingCommandException(String),
+
     #[error("{0}")]
     FromStrError(String),
+
     #[error("{0:?}")]
     Io(#[from] io::Error),
+
     #[error("{0}")]
     RemoteException(String),
-}
 
-#[derive(Debug, Error)]
-#[error("RpcException: code: {0}, message: {1}")]
-pub struct RpcException(pub i32, pub String);
+    #[error("RpcException: code: {0}, message: {1}")]
+    RpcException(i32, String),
 
-#[derive(Debug, Error)]
-#[error("{0}")]
-pub struct RemotingCommandDecoderError(pub String);
-impl From<io::Error> for RemotingCommandDecoderError {
-    fn from(err: io::Error) -> Self {
-        RemotingCommandDecoderError(err.to_string())
-    }
-}
-#[derive(Debug, Error)]
-#[error("{0}")]
-pub struct RemotingCommandEncoderError(pub String);
-impl From<io::Error> for RemotingCommandEncoderError {
-    fn from(err: io::Error) -> Self {
-        RemotingCommandEncoderError(err.to_string())
-    }
-}
-
-#[derive(Debug, Error)]
-pub enum RemotingCommandError {
     #[error("RocketMQ protocol decoding failed, extFields length: {0}, but header length: {1}")]
     DecodingError(usize, usize),
+
     #[error("UTF-8 decoding error")]
     Utf8Error(#[from] std::str::Utf8Error),
+
+    #[error("RemotingCommandDecoderError:{0}")]
+    RemotingCommandDecoderError(String),
+
+    #[error("RemotingCommandEncoderError:{0}")]
+    RemotingCommandEncoderError(String),
 }
 
 #[cfg(test)]
-mod tests {
+mod error_tests {
     use std::io;
 
     use super::*;
 
     #[test]
-    fn remoting_command_decoder_error_from_io_error() {
-        let io_error = io::Error::new(io::ErrorKind::Other, "test error");
-        let decoder_error = RemotingCommandDecoderError::from(io_error);
-        assert_eq!(decoder_error.0, "test error");
+    fn remoting_command_exception_contains_correct_message() {
+        let error = Error::RemotingCommandException("Error message".into());
+        assert_eq!(error.to_string(), "Error message");
     }
 
     #[test]
-    fn remoting_command_encoder_error_from_io_error() {
-        let io_error = io::Error::new(io::ErrorKind::Other, "test error");
-        let encoder_error = RemotingCommandEncoderError::from(io_error);
-        assert_eq!(encoder_error.0, "test error");
+    fn from_str_error_contains_correct_message() {
+        let error = Error::FromStrError("Parse error".into());
+        assert_eq!(error.to_string(), "Parse error");
     }
 
     #[test]
-    fn remoting_error_from_io_error() {
-        let io_error = io::Error::new(io::ErrorKind::Other, "test error");
-        let remoting_error = RemotingError::from(io_error);
-        match remoting_error {
-            RemotingError::Io(error) => assert_eq!(error.to_string(), "test error"),
-            _ => panic!("Expected Io variant"),
-        }
+    fn io_error_is_correctly_mapped() {
+        let io_error = io::Error::new(io::ErrorKind::Other, "IO error");
+        let error: Error = io_error.into();
+        assert!(matches!(error, Error::Io(_)));
+        assert!(error.to_string().contains("IO error"));
     }
 
     #[test]
-    fn remoting_error_from_string() {
-        let remoting_error = RemotingError::RemotingCommandException("test error".to_string());
-        match remoting_error {
-            RemotingError::RemotingCommandException(error) => assert_eq!(error, "test error"),
-            _ => panic!("Expected RemotingCommandException variant"),
-        }
+    fn remote_exception_contains_correct_message() {
+        let error = Error::RemoteException("Remote error".into());
+        assert_eq!(error.to_string(), "Remote error");
+    }
+
+    #[test]
+    fn rpc_exception_contains_correct_code_and_message() {
+        let error = Error::RpcException(404, "Not found".into());
+        assert_eq!(
+            error.to_string(),
+            "RpcException: code: 404, message: Not found"
+        );
+    }
+
+    #[test]
+    fn decoding_error_contains_correct_lengths() {
+        let error = Error::DecodingError(10, 20);
+        assert_eq!(
+            error.to_string(),
+            "RocketMQ protocol decoding failed, extFields length: 10, but header length: 20"
+        );
+    }
+
+    #[test]
+    fn utf8_error_is_correctly_mapped() {
+        let utf8_error = std::str::from_utf8(&[0, 159, 146, 150]).unwrap_err();
+        let error: Error = utf8_error.into();
+        assert!(matches!(error, Error::Utf8Error(_)));
+        assert!(error.to_string().contains("UTF-8 decoding error"));
+    }
+
+    #[test]
+    fn remoting_command_decoder_error_contains_correct_message() {
+        let error = Error::RemotingCommandDecoderError("Decoder error".into());
+        assert_eq!(
+            error.to_string(),
+            "RemotingCommandDecoderError:Decoder error"
+        );
+    }
+
+    #[test]
+    fn remoting_command_encoder_error_contains_correct_message() {
+        let error = Error::RemotingCommandEncoderError("Encoder error".into());
+        assert_eq!(
+            error.to_string(),
+            "RemotingCommandEncoderError:Encoder error"
+        );
     }
 }

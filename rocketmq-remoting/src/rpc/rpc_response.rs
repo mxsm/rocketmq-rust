@@ -18,7 +18,7 @@ use std::any::Any;
 
 use rocketmq_common::ArcCellWrapper;
 
-use crate::error::RpcException;
+use crate::error::Error;
 use crate::protocol::command_custom_header::CommandCustomHeader;
 
 #[derive(Default)]
@@ -26,7 +26,7 @@ pub struct RpcResponse {
     pub code: i32,
     pub header: Option<ArcCellWrapper<Box<dyn CommandCustomHeader + Send + Sync + 'static>>>,
     pub body: Option<Box<dyn Any>>,
-    pub exception: Option<RpcException>,
+    pub exception: Option<Error>,
 }
 
 impl RpcResponse {
@@ -56,9 +56,12 @@ impl RpcResponse {
         }
     }
 
-    pub fn new_exception(exception: Option<RpcException>) -> Self {
+    pub fn new_exception(exception: Option<Error>) -> Self {
         Self {
-            code: exception.as_ref().map_or(0, |e| e.0),
+            code: exception.as_ref().map_or(0, |e| match e {
+                Error::RpcException(code, _) => *code,
+                _ => 0,
+            }),
             header: None,
             body: None,
             exception,
