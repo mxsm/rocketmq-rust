@@ -19,7 +19,7 @@ use std::collections::HashMap;
 
 use crate::rocketmq_serializable::RocketMQSerializable;
 
-pub trait CommandCustomHeader: Any {
+pub trait CommandCustomHeader: AsAny {
     /// Checks the fields of the implementing type.  
     ///  
     /// Returns a `Result` indicating whether the fields are valid or not.  
@@ -78,6 +78,22 @@ pub trait CommandCustomHeader: Any {
     /// support fast codec. This can be overridden by implementing types.
     fn support_fast_codec(&self) -> bool {
         false
+    }
+}
+
+pub trait AsAny: Any {
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+
+    fn as_any(&self) -> &dyn Any;
+}
+
+impl<T: CommandCustomHeader> AsAny for T {
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 

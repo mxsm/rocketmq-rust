@@ -32,27 +32,31 @@ pub struct RpcResponse {
 impl RpcResponse {
     pub fn get_header<T>(&self) -> Option<&T>
     where
-        T: CommandCustomHeader + Any + Send + Sync + 'static,
+        T: CommandCustomHeader + Send + Sync + 'static,
     {
         match self.header.as_ref() {
             None => None,
-            Some(value) => {
-                let ptr_raw = std::ptr::from_ref(&**value.as_ref()) as *const T;
-                unsafe { Some(&*ptr_raw) }
-            }
+            Some(value) => value.as_ref().as_any().downcast_ref::<T>(),
         }
     }
 
-    pub fn get_header_mut<T>(&self) -> Option<&mut T>
+    pub fn get_header_mut_from_ref<T>(&self) -> Option<&mut T>
     where
-        T: CommandCustomHeader + Any + Send + Sync + 'static,
+        T: CommandCustomHeader + Send + Sync + 'static,
     {
         match self.header.as_ref() {
             None => None,
-            Some(value) => {
-                let ptr_raw = std::ptr::from_mut(&mut **value.mut_from_ref()) as *mut T;
-                unsafe { Some(&mut *ptr_raw) }
-            }
+            Some(value) => value.mut_from_ref().as_any_mut().downcast_mut::<T>(),
+        }
+    }
+
+    pub fn get_header_mut<T>(&mut self) -> Option<&mut T>
+    where
+        T: CommandCustomHeader + Send + Sync + 'static,
+    {
+        match self.header.as_mut() {
+            None => None,
+            Some(value) => value.as_mut().as_any_mut().downcast_mut::<T>(),
         }
     }
 
