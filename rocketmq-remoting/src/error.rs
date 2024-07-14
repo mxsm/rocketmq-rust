@@ -100,6 +100,7 @@ mod error_tests {
     }
 
     #[test]
+    #[allow(invalid_from_utf8)]
     fn utf8_error_is_correctly_mapped() {
         let utf8_error = std::str::from_utf8(&[0, 159, 146, 150]).unwrap_err();
         let error: Error = utf8_error.into();
