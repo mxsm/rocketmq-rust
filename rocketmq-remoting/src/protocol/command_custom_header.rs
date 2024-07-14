@@ -52,7 +52,7 @@ pub trait CommandCustomHeader: AsAny {
     fn write_if_not_null(&self, out: &mut bytes::BytesMut, key: &str, value: &str) {
         if !value.is_empty() {
             RocketMQSerializable::write_str(out, true, key);
-            RocketMQSerializable::write_str(out, false, key);
+            RocketMQSerializable::write_str(out, false, value);
         }
     }
 
