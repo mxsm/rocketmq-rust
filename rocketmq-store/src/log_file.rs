@@ -59,6 +59,7 @@ pub trait RocketMQMessageStore: Clone + 'static {
 
     fn set_broker_init_max_offset(&mut self, broker_init_max_offset: i64);
 
+    #[inline]
     fn now(&self) -> u64 {
         get_current_millis()
     }
