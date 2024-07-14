@@ -35,6 +35,7 @@ use rocketmq_common::common::TopicFilterType;
 use rocketmq_common::utils::message_utils;
 use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
 use rocketmq_common::utils::util_all;
+use rocketmq_common::ArcCellWrapper;
 use rocketmq_common::CleanupPolicyUtils;
 use rocketmq_common::MessageDecoder;
 use rocketmq_common::MessageDecoder::message_properties_to_string;
@@ -53,7 +54,6 @@ use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::log_file::MessageStore;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
-use tracing::debug;
 
 use crate::mqtrace::send_message_context::SendMessageContext;
 use crate::processor::SendMessageProcessorInner;
@@ -86,7 +86,7 @@ impl<MS: Clone> Clone for SendMessageProcessor<MS> {
 // RequestProcessor implementation
 impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
     pub fn has_send_message_hook(&self) -> bool {
-        self.inner.send_message_hook_vec.read().is_empty()
+        self.inner.send_message_hook_vec.is_empty()
     }
 
     fn clear_reserved_properties(request_header: &mut SendMessageRequestHeader) {
@@ -110,7 +110,7 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
                 self.inner.consumer_send_msg_back(&channel, &ctx, &request)
             }
             _ => {
-                let mut request_header = parse_request_header(&request)?;
+                let mut request_header = parse_request_header(&request, request_code)?;
                 let mapping_context = self
                     .topic_queue_mapping_manager
                     .build_topic_queue_mapping_context(&request_header, true);
@@ -134,6 +134,7 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
                         inner.execute_send_message_hook_after(Some(cmd), ctx)
                     };
                 if request_header.batch.is_none() || !request_header.batch.unwrap() {
+                    //handle single message
                     self.send_message(
                         &channel,
                         &ctx,
@@ -145,6 +146,7 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
                     )
                     .await
                 } else {
+                    //handle batch message
                     self.send_batch_message(
                         &channel,
                         &ctx,
@@ -176,7 +178,7 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
             inner: SendMessageProcessorInner {
                 broker_config: broker_config.clone(),
                 topic_config_manager,
-                send_message_hook_vec: Arc::new(parking_lot::RwLock::new(Vec::new())),
+                send_message_hook_vec: ArcCellWrapper::new(Vec::new()),
             },
             topic_queue_mapping_manager,
             broker_config,
@@ -634,7 +636,6 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
             MessageConst::PROPERTY_TRACE_SWITCH,
             self.broker_config.trace_on.to_string(),
         );
-        debug!("Receive SendMessage request command: {:?}", request_header);
         let start_timestamp = self.broker_config.start_accept_send_request_time_stamp;
         if self.message_store.now() < (start_timestamp as u64) {
             response = response

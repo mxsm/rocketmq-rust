@@ -248,11 +248,12 @@ impl TopicRequestHeaderTrait for SendMessageRequestHeader {
     }
 }
 
-pub fn parse_request_header(request: &RemotingCommand) -> Option<SendMessageRequestHeader> {
+pub fn parse_request_header(
+    request: &RemotingCommand,
+    request_code: RequestCode,
+) -> Option<SendMessageRequestHeader> {
     let mut request_header_v2 = None;
-    if RequestCode::SendMessageV2.to_i32() == request.code()
-        || RequestCode::SendBatchMessage.to_i32() == request.code()
-    {
+    if RequestCode::SendMessageV2 == request_code || RequestCode::SendBatchMessage == request_code {
         request_header_v2 = request.decode_command_custom_header::<SendMessageRequestHeaderV2>();
     }
 

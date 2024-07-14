@@ -25,6 +25,7 @@ use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::common::TopicSysFlag::build_sys_flag;
+use rocketmq_common::ArcCellWrapper;
 use rocketmq_common::MessageDecoder;
 use rocketmq_common::TimeUtils;
 use rocketmq_remoting::code::request_code::RequestCode;
@@ -173,12 +174,12 @@ impl<MS: MessageStore + Send + Sync + 'static> RequestProcessor for BrokerReques
 pub(crate) struct SendMessageProcessorInner {
     pub(crate) broker_config: Arc<BrokerConfig>,
     pub(crate) topic_config_manager: TopicConfigManager,
-    pub(crate) send_message_hook_vec: Arc<parking_lot::RwLock<Vec<Box<dyn SendMessageHook>>>>,
+    pub(crate) send_message_hook_vec: ArcCellWrapper<Vec<Box<dyn SendMessageHook>>>,
 }
 
 impl SendMessageProcessorInner {
     pub(crate) fn execute_send_message_hook_before(&self, context: &SendMessageContext) {
-        for hook in self.send_message_hook_vec.read().iter() {
+        for hook in self.send_message_hook_vec.iter() {
             hook.send_message_before(context);
         }
     }
@@ -188,7 +189,7 @@ impl SendMessageProcessorInner {
         response: Option<&mut RemotingCommand>,
         context: &mut SendMessageContext,
     ) {
-        for hook in self.send_message_hook_vec.read().iter() {
+        for hook in self.send_message_hook_vec.iter() {
             if let Some(ref response) = response {
                 if let Some(ref header) =
                     response.decode_command_custom_header::<SendMessageResponseHeader>()
@@ -221,7 +222,7 @@ impl SendMessageProcessorInner {
         request_header: &mut SendMessageRequestHeader,
         request: &RemotingCommand,
     ) -> SendMessageContext {
-        let namespace = NamespaceUtil::get_namespace_from_resource(&request_header.topic);
+        let namespace = NamespaceUtil::get_namespace_from_resource(request_header.topic.as_str());
 
         let mut send_message_context = SendMessageContext {
             namespace,
@@ -235,27 +236,24 @@ impl SendMessageProcessorInner {
                 .as_ref()
                 .map_or_else(|| 0, |b| b.len() as i32),
         );
-        send_message_context.msg_props(request_header.properties.clone().unwrap());
+        send_message_context.msg_props(request_header.properties.clone().unwrap_or("".to_string()));
         send_message_context.born_host(channel.remote_address().to_string());
-        send_message_context.broker_addr(self.broker_config.broker_server_config().bind_address());
+        send_message_context.broker_addr(self.broker_config.get_broker_addr());
         send_message_context.queue_id(request_header.queue_id);
-        send_message_context.broker_region_id(self.broker_config.region_id());
+        send_message_context.broker_region_id(self.broker_config.region_id().to_string());
         send_message_context.born_time_stamp(request_header.born_timestamp);
         send_message_context.request_time_stamp(TimeUtils::get_current_millis() as i64);
 
-        if let Some(owner) = request
-            .ext_fields()
-            .unwrap()
-            .get(BrokerStatsManager::COMMERCIAL_OWNER)
-        {
-            send_message_context.commercial_owner(owner.clone());
+        if let Some(owner) = request.ext_fields() {
+            if let Some(value) = owner.get(BrokerStatsManager::COMMERCIAL_OWNER) {
+                send_message_context.commercial_owner(value.clone());
+            }
         }
-
         let mut properties =
             MessageDecoder::string_to_message_properties(request_header.properties.as_ref());
         properties.insert(
             MessageConst::PROPERTY_MSG_REGION.to_string(),
-            self.broker_config.region_id(),
+            self.broker_config.region_id().to_string(),
         );
         properties.insert(
             MessageConst::PROPERTY_TRACE_SWITCH.to_string(),
@@ -364,6 +362,21 @@ impl SendMessageProcessorInner {
                     request_header.topic.as_str()
                 )));
             }
+        }
+
+        let queue_id_int = request_header.queue_id.unwrap();
+        let topic_config_inner = topic_config.as_ref().unwrap();
+        let id_valid = topic_config_inner
+            .write_queue_nums
+            .max(topic_config_inner.read_queue_nums);
+        if queue_id_int >= id_valid as i32 {
+            response.with_code(ResponseCode::SystemError);
+            response.with_remark(Some(format!(
+                "request queueId[{}] is illegal, {:?} Producer: {}",
+                queue_id_int,
+                topic_config_inner,
+                channel.remote_address()
+            )));
         }
     }
 

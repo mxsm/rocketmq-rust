@@ -268,12 +268,16 @@ impl BrokerConfig {
         &self.broker_server_config
     }
 
-    pub fn region_id(&self) -> String {
-        self.region_id.clone()
+    pub fn region_id(&self) -> &str {
+        self.region_id.as_str()
     }
 
     pub fn broker_permission(&self) -> u32 {
         self.broker_permission
+    }
+
+    pub fn get_broker_addr(&self) -> String {
+        format!("{}:{}", self.broker_ip1, self.listen_port)
     }
 }
 
