@@ -14,7 +14,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::any::Any;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
@@ -416,10 +415,11 @@ impl BrokerRuntime {
             self.broker_config.clone(),
         ));
 
-        let pull_message_result_handler = pull_message_result_handler.as_mut() as &mut dyn Any;
+        let pull_message_result_handler = pull_message_result_handler.as_mut().as_mut();
         pull_message_result_handler
+            .as_any_mut()
             .downcast_mut::<DefaultPullMessageResultHandler>()
-            .unwrap()
+            .expect("downcast DefaultPullMessageResultHandler failed")
             .set_pull_request_hold_service(Some(Arc::new(
                 self.pull_request_hold_service.clone().unwrap(),
             )));

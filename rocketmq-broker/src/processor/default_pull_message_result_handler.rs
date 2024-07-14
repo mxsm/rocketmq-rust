@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+use std::any::Any;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -230,6 +230,14 @@ impl PullMessageResultHandler for DefaultPullMessageResultHandler {
             ResponseCode::PullRetryImmediately => Some(response),
             _ => None,
         }
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 
