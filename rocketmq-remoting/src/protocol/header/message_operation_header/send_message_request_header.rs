@@ -14,29 +14,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::collections::HashMap;
 
-use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::code::request_code::RequestCode;
+use crate::protocol::command_custom_header::CommandCustomHeader;
+use crate::protocol::command_custom_header::FromMap;
+use crate::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
 use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use crate::protocol::remoting_command::RemotingCommand;
+use crate::rpc::topic_request_header::TopicRequestHeader;
 
-#[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodec)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SendMessageRequestHeader {
-    // the namespace name
-    pub ns: Option<String>,
-    // if the data has been namespaced
-    pub nsd: Option<bool>,
-    // the abstract remote addr name, usually the physical broker name
-    pub bname: Option<String>,
-    // oneway
-    pub oway: Option<bool>,
-
-    pub lo: Option<bool>,
-
     pub producer_group: String,
     pub topic: String,
     pub default_topic: String,
@@ -50,89 +43,200 @@ pub struct SendMessageRequestHeader {
     pub unit_mode: Option<bool>,
     pub batch: Option<bool>,
     pub max_reconsume_times: Option<i32>,
+    #[serde(flatten)]
+    pub topic_request_header: Option<TopicRequestHeader>,
 }
 
 impl SendMessageRequestHeader {
-    pub fn new(
-        producer_group: String,
-        topic: String,
-        default_topic: String,
-        default_topic_queue_nums: i32,
-        queue_id: Option<i32>,
-        sys_flag: i32,
-        born_timestamp: i64,
-        flag: i32,
-    ) -> Self {
-        SendMessageRequestHeader {
-            ns: None,
-            nsd: None,
-            bname: None,
-            oway: None,
-            lo: None,
-            producer_group,
-            topic,
-            default_topic,
-            default_topic_queue_nums,
-            queue_id,
-            sys_flag,
-            born_timestamp,
-            flag,
-            properties: None,
-            reconsume_times: None,
-            unit_mode: None,
-            batch: None,
-            max_reconsume_times: None,
+    pub const PRODUCER_GROUP: &'static str = "producerGroup";
+    pub const TOPIC: &'static str = "topic";
+    pub const DEFAULT_TOPIC: &'static str = "defaultTopic";
+    pub const DEFAULT_TOPIC_QUEUE_NUMS: &'static str = "defaultTopicQueueNums";
+    pub const QUEUE_ID: &'static str = "queueId";
+    pub const SYS_FLAG: &'static str = "sysFlag";
+    pub const BORN_TIMESTAMP: &'static str = "bornTimestamp";
+    pub const FLAG: &'static str = "flag";
+    pub const PROPERTIES: &'static str = "properties";
+    pub const RECONSUME_TIMES: &'static str = "reconsumeTimes";
+    pub const UNIT_MODE: &'static str = "unitMode";
+    pub const BATCH: &'static str = "batch";
+    pub const MAX_RECONSUME_TIMES: &'static str = "maxReconsumeTimes";
+}
+
+impl CommandCustomHeader for SendMessageRequestHeader {
+    fn to_map(&self) -> Option<HashMap<String, String>> {
+        let mut map = HashMap::from([
+            (
+                Self::PRODUCER_GROUP.to_string(),
+                self.producer_group.clone(),
+            ),
+            (Self::TOPIC.to_string(), self.topic.clone()),
+            (Self::DEFAULT_TOPIC.to_string(), self.default_topic.clone()),
+            (
+                Self::DEFAULT_TOPIC_QUEUE_NUMS.to_string(),
+                self.default_topic_queue_nums.to_string(),
+            ),
+            (Self::SYS_FLAG.to_string(), self.sys_flag.to_string()),
+            (
+                Self::BORN_TIMESTAMP.to_string(),
+                self.born_timestamp.to_string(),
+            ),
+            (Self::FLAG.to_string(), self.flag.to_string()),
+        ]);
+        if let Some(ref queue_id) = self.queue_id {
+            map.insert(Self::QUEUE_ID.to_string(), queue_id.to_string());
         }
+        if let Some(ref properties) = self.properties {
+            map.insert(Self::PROPERTIES.to_string(), properties.clone());
+        }
+        if let Some(ref reconsume_times) = self.reconsume_times {
+            map.insert(
+                Self::RECONSUME_TIMES.to_string(),
+                reconsume_times.to_string(),
+            );
+        }
+        if let Some(ref unit_mode) = self.unit_mode {
+            map.insert(Self::UNIT_MODE.to_string(), unit_mode.to_string());
+        }
+        if let Some(ref batch) = self.batch {
+            map.insert(Self::BATCH.to_string(), batch.to_string());
+        }
+        if let Some(ref max_reconsume_times) = self.max_reconsume_times {
+            map.insert(
+                Self::MAX_RECONSUME_TIMES.to_string(),
+                max_reconsume_times.to_string(),
+            );
+        }
+        if let Some(ref value) = self.topic_request_header {
+            if let Some(value) = value.to_map() {
+                map.extend(value);
+            }
+        }
+        Some(map)
+    }
+}
+
+impl FromMap for SendMessageRequestHeader {
+    type Target = Self;
+
+    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+        Some(SendMessageRequestHeader {
+            producer_group: map.get(Self::PRODUCER_GROUP)?.clone(),
+            topic: map.get(Self::TOPIC)?.clone(),
+            default_topic: map.get(Self::DEFAULT_TOPIC)?.clone(),
+            default_topic_queue_nums: map.get(Self::DEFAULT_TOPIC_QUEUE_NUMS)?.parse().ok()?,
+            queue_id: map.get(Self::QUEUE_ID).and_then(|v| v.parse().ok()),
+            sys_flag: map.get(Self::SYS_FLAG)?.parse().ok()?,
+            born_timestamp: map.get(Self::BORN_TIMESTAMP)?.parse().ok()?,
+            flag: map.get(Self::FLAG)?.parse().ok()?,
+            properties: map.get(Self::PROPERTIES).cloned(),
+            reconsume_times: map.get(Self::RECONSUME_TIMES).and_then(|v| v.parse().ok()),
+            unit_mode: map.get(Self::UNIT_MODE).and_then(|v| v.parse().ok()),
+            batch: map.get(Self::BATCH).and_then(|v| v.parse().ok()),
+            max_reconsume_times: map
+                .get(Self::MAX_RECONSUME_TIMES)
+                .and_then(|v| v.parse().ok()),
+            topic_request_header: <TopicRequestHeader as FromMap>::from(map),
+        })
     }
 }
 
 impl TopicRequestHeaderTrait for SendMessageRequestHeader {
     fn with_lo(&mut self, lo: Option<bool>) {
-        self.lo = lo;
+        self.topic_request_header.as_mut().unwrap().lo = lo;
     }
 
     fn lo(&self) -> Option<bool> {
-        self.lo
+        match self.topic_request_header {
+            None => None,
+            Some(ref value) => value.lo,
+        }
     }
 
     fn with_topic(&mut self, topic: String) {
         self.topic = topic;
     }
 
-    fn topic(&self) -> String {
-        self.topic.clone()
+    fn topic(&self) -> &str {
+        self.topic.as_str()
     }
 
-    fn broker_name(&self) -> Option<String> {
-        self.bname.clone()
+    fn broker_name(&self) -> Option<&str> {
+        self.topic_request_header
+            .as_ref()?
+            .rpc_request_header
+            .as_ref()?
+            .broker_name
+            .as_deref()
     }
 
     fn with_broker_name(&mut self, broker_name: String) {
-        self.bname = Some(broker_name);
+        self.topic_request_header
+            .as_mut()
+            .unwrap()
+            .rpc_request_header
+            .as_mut()
+            .unwrap()
+            .broker_name = Some(broker_name);
     }
 
-    fn namespace(&self) -> Option<String> {
-        self.ns.clone()
+    fn namespace(&self) -> Option<&str> {
+        self.topic_request_header
+            .as_ref()?
+            .rpc_request_header
+            .as_ref()?
+            .namespace
+            .as_deref()
     }
 
     fn with_namespace(&mut self, namespace: String) {
-        self.ns = Some(namespace);
+        self.topic_request_header
+            .as_mut()
+            .unwrap()
+            .rpc_request_header
+            .as_mut()
+            .unwrap()
+            .namespace = Some(namespace);
     }
 
     fn namespaced(&self) -> Option<bool> {
-        self.nsd
+        self.topic_request_header
+            .as_ref()?
+            .rpc_request_header
+            .as_ref()?
+            .namespaced
+            .as_ref()
+            .cloned()
     }
 
     fn with_namespaced(&mut self, namespaced: bool) {
-        self.nsd = Some(namespaced);
+        self.topic_request_header
+            .as_mut()
+            .unwrap()
+            .rpc_request_header
+            .as_mut()
+            .unwrap()
+            .namespaced = Some(namespaced);
     }
 
     fn oneway(&self) -> Option<bool> {
-        self.oway
+        self.topic_request_header
+            .as_ref()?
+            .rpc_request_header
+            .as_ref()?
+            .oneway
+            .as_ref()
+            .cloned()
     }
 
     fn with_oneway(&mut self, oneway: bool) {
-        self.oway = Some(oneway);
+        self.topic_request_header
+            .as_mut()
+            .unwrap()
+            .rpc_request_header
+            .as_mut()
+            .unwrap()
+            .namespaced = Some(oneway);
     }
 
     fn queue_id(&self) -> Option<i32> {
@@ -141,179 +245,6 @@ impl TopicRequestHeaderTrait for SendMessageRequestHeader {
 
     fn set_queue_id(&mut self, queue_id: Option<i32>) {
         self.queue_id = queue_id;
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodec)]
-#[serde(rename_all = "camelCase")]
-pub struct SendMessageRequestHeaderV2 {
-    // the namespace name
-    pub ns: Option<String>,
-    // if the data has been namespaced
-    pub nsd: Option<bool>,
-    // the abstract remote addr name, usually the physical broker name
-    pub bname: Option<String>,
-    // oneway
-    pub oway: Option<bool>,
-
-    pub lo: Option<bool>,
-
-    // producerGroup
-    pub a: String,
-
-    // topic
-    pub b: String,
-
-    // defaultTopic
-    pub c: String,
-
-    // defaultTopicQueueNums
-    pub d: i32,
-
-    // queueId
-    pub e: Option<i32>,
-
-    //sysFlag
-    pub f: i32,
-
-    // bornTimestamp
-    pub g: i64,
-
-    // flag
-    pub h: i32,
-
-    // properties
-    pub i: Option<String>,
-
-    // reconsumeTimes
-    pub j: Option<i32>,
-
-    // unitMode
-    pub k: Option<bool>,
-
-    // consumeRetryTimes
-    pub l: Option<i32>,
-
-    // batch
-    pub m: Option<bool>,
-
-    // brokerName
-    pub n: Option<String>,
-}
-
-impl SendMessageRequestHeaderV2 {
-    pub fn new(
-        a: String,
-        b: String,
-        c: String,
-        d: i32,
-        e: Option<i32>,
-        f: i32,
-        g: i64,
-        h: i32,
-    ) -> Self {
-        SendMessageRequestHeaderV2 {
-            ns: None,
-            nsd: None,
-            bname: None,
-            oway: None,
-            lo: None,
-            a,
-            b,
-            c,
-            d,
-            e,
-            f,
-            g,
-            h,
-            i: None,
-            j: None,
-            k: None,
-            l: None,
-            m: None,
-            n: None,
-        }
-    }
-
-    pub fn create_send_message_request_header_v1(&self) -> SendMessageRequestHeader {
-        SendMessageRequestHeader {
-            ns: self.ns.as_ref().cloned(),
-            nsd: self.nsd.as_ref().cloned(),
-            bname: self.n.as_ref().cloned(),
-            oway: self.oway.as_ref().cloned(),
-            lo: self.lo.as_ref().cloned(),
-            producer_group: self.a.clone(),
-            topic: self.b.clone(),
-            default_topic: self.c.clone(),
-            default_topic_queue_nums: self.d,
-            queue_id: self.e,
-            sys_flag: self.f,
-            born_timestamp: self.g,
-            flag: self.h,
-            properties: self.i.as_ref().cloned(),
-            reconsume_times: self.j,
-            unit_mode: self.k,
-            batch: self.m,
-            max_reconsume_times: self.l,
-        }
-    }
-}
-
-impl TopicRequestHeaderTrait for SendMessageRequestHeaderV2 {
-    fn with_lo(&mut self, lo: Option<bool>) {
-        self.lo = lo;
-    }
-
-    fn lo(&self) -> Option<bool> {
-        self.lo
-    }
-
-    fn with_topic(&mut self, topic: String) {
-        self.b = topic;
-    }
-
-    fn topic(&self) -> String {
-        self.b.clone()
-    }
-
-    fn broker_name(&self) -> Option<String> {
-        self.bname.clone()
-    }
-
-    fn with_broker_name(&mut self, broker_name: String) {
-        self.bname = Some(broker_name);
-    }
-
-    fn namespace(&self) -> Option<String> {
-        self.ns.clone()
-    }
-
-    fn with_namespace(&mut self, namespace: String) {
-        self.ns = Some(namespace);
-    }
-
-    fn namespaced(&self) -> Option<bool> {
-        self.nsd
-    }
-
-    fn with_namespaced(&mut self, namespaced: bool) {
-        self.nsd = Some(namespaced);
-    }
-
-    fn oneway(&self) -> Option<bool> {
-        self.oway
-    }
-
-    fn with_oneway(&mut self, oneway: bool) {
-        self.oway = Some(oneway);
-    }
-
-    fn queue_id(&self) -> Option<i32> {
-        self.e
-    }
-
-    fn set_queue_id(&mut self, queue_id: Option<i32>) {
-        self.e = queue_id;
     }
 }
 
@@ -326,97 +257,105 @@ pub fn parse_request_header(request: &RemotingCommand) -> Option<SendMessageRequ
     }
 
     match request_header_v2 {
-        Some(header) => Some(header.create_send_message_request_header_v1()),
+        Some(header) => {
+            Some(SendMessageRequestHeaderV2::create_send_message_request_header_v1(&header))
+        }
         None => request.decode_command_custom_header::<SendMessageRequestHeader>(),
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use RemotingCommand;
+mod send_message_request_header_tests {
+    use std::collections::HashMap;
 
     use super::*;
 
     #[test]
-    fn test_send_message_request_header_new() {
-        let header = SendMessageRequestHeader::new(
-            String::from("group"),
-            String::from("topic"),
-            String::from("default_topic"),
-            1,
-            Some(0),
-            0,
-            0,
-            0,
-        );
-        assert_eq!(header.producer_group, "group");
-        assert_eq!(header.topic, "topic");
-        assert_eq!(header.default_topic, "default_topic");
-        assert_eq!(header.default_topic_queue_nums, 1);
-        assert_eq!(header.queue_id, Some(0));
+    fn from_map_creates_instance_with_all_fields() {
+        let mut map = HashMap::new();
+        map.insert("producerGroup".to_string(), "ProducerGroup".to_string());
+        map.insert("topic".to_string(), "TopicName".to_string());
+        map.insert("defaultTopic".to_string(), "DefaultTopic".to_string());
+        map.insert("defaultTopicQueueNums".to_string(), "4".to_string());
+        map.insert("queueId".to_string(), "1".to_string());
+        map.insert("sysFlag".to_string(), "0".to_string());
+        map.insert("bornTimestamp".to_string(), "1622547600000".to_string());
+        map.insert("flag".to_string(), "0".to_string());
+        map.insert("properties".to_string(), "key:value".to_string());
+        map.insert("reconsumeTimes".to_string(), "0".to_string());
+        map.insert("unitMode".to_string(), "false".to_string());
+        map.insert("batch".to_string(), "false".to_string());
+        map.insert("maxReconsumeTimes".to_string(), "3".to_string());
+
+        let header = <SendMessageRequestHeader as FromMap>::from(&map).unwrap();
+
+        assert_eq!(header.producer_group, "ProducerGroup");
+        assert_eq!(header.topic, "TopicName");
+        assert_eq!(header.default_topic, "DefaultTopic");
+        assert_eq!(header.default_topic_queue_nums, 4);
+        assert_eq!(header.queue_id, Some(1));
         assert_eq!(header.sys_flag, 0);
-        assert_eq!(header.born_timestamp, 0);
+        assert_eq!(header.born_timestamp, 1622547600000);
         assert_eq!(header.flag, 0);
+        assert_eq!(header.properties, Some("key:value".to_string()));
+        assert_eq!(header.reconsume_times, Some(0));
+        assert_eq!(header.unit_mode, Some(false));
+        assert_eq!(header.batch, Some(false));
+        assert_eq!(header.max_reconsume_times, Some(3));
     }
 
     #[test]
-    fn test_send_message_request_header_v2_new() {
-        let header_v2 = SendMessageRequestHeaderV2::new(
-            String::from("group"),
-            String::from("topic"),
-            String::from("default_topic"),
-            1,
-            Some(0),
-            0,
-            0,
-            0,
-        );
-        assert_eq!(header_v2.a, "group");
-        assert_eq!(header_v2.b, "topic");
-        assert_eq!(header_v2.c, "default_topic");
-        assert_eq!(header_v2.d, 1);
-        assert_eq!(header_v2.e, Some(0));
-        assert_eq!(header_v2.f, 0);
-        assert_eq!(header_v2.g, 0);
-        assert_eq!(header_v2.h, 0);
+    fn to_map_returns_map_with_all_fields() {
+        let header = SendMessageRequestHeader {
+            producer_group: "ProducerGroup".to_string(),
+            topic: "TopicName".to_string(),
+            default_topic: "DefaultTopic".to_string(),
+            default_topic_queue_nums: 4,
+            queue_id: Some(1),
+            sys_flag: 0,
+            born_timestamp: 1622547600000,
+            flag: 0,
+            properties: Some("key:value".to_string()),
+            reconsume_times: Some(0),
+            unit_mode: Some(false),
+            batch: Some(false),
+            max_reconsume_times: Some(3),
+            topic_request_header: None,
+        };
+
+        let map = header.to_map().unwrap();
+
+        assert_eq!(map.get("producerGroup").unwrap(), "ProducerGroup");
+        assert_eq!(map.get("topic").unwrap(), "TopicName");
+        assert_eq!(map.get("defaultTopic").unwrap(), "DefaultTopic");
+        assert_eq!(map.get("defaultTopicQueueNums").unwrap(), "4");
+        assert_eq!(map.get("queueId").unwrap(), "1");
+        assert_eq!(map.get("sysFlag").unwrap(), "0");
+        assert_eq!(map.get("bornTimestamp").unwrap(), "1622547600000");
+        assert_eq!(map.get("flag").unwrap(), "0");
+        assert_eq!(map.get("properties").unwrap(), "key:value");
+        assert_eq!(map.get("reconsumeTimes").unwrap(), "0");
+        assert_eq!(map.get("unitMode").unwrap(), "false");
+        assert_eq!(map.get("batch").unwrap(), "false");
+        assert_eq!(map.get("maxReconsumeTimes").unwrap(), "3");
     }
 
     #[test]
-    fn test_send_message_request_header_v2_create_v1() {
-        let header_v2 = SendMessageRequestHeaderV2::new(
-            String::from("group"),
-            String::from("topic"),
-            String::from("default_topic"),
-            1,
-            Some(0),
-            0,
-            0,
-            0,
-        );
-        let header_v1 = header_v2.create_send_message_request_header_v1();
-        assert_eq!(header_v1.producer_group, "group");
-        assert_eq!(header_v1.topic, "topic");
-        assert_eq!(header_v1.default_topic, "default_topic");
-        assert_eq!(header_v1.default_topic_queue_nums, 1);
-        assert_eq!(header_v1.queue_id, Some(0));
-        assert_eq!(header_v1.sys_flag, 0);
-        assert_eq!(header_v1.born_timestamp, 0);
-        assert_eq!(header_v1.flag, 0);
+    fn from_map_with_missing_fields_returns_none() {
+        let map = HashMap::new(); // Empty map
+
+        let header = <SendMessageRequestHeader as FromMap>::from(&map);
+
+        assert!(header.is_none());
     }
 
     #[test]
-    fn test_parse_request_header_v1() {
-        let mut request = RemotingCommand::create_response_command();
-        request = request.set_code(RequestCode::SendMessage.to_i32());
-        let header = parse_request_header(&request);
-        assert_eq!(header.is_none(), true);
-    }
+    fn from_map_with_invalid_values_returns_none() {
+        let mut map = HashMap::new();
+        map.insert("defaultTopicQueueNums".to_string(), "invalid".to_string()); // Invalid integer
 
-    #[test]
-    fn test_parse_request_header_v2() {
-        let mut request = RemotingCommand::create_response_command();
-        request = request.set_code(RequestCode::SendMessage.to_i32());
-        let header = parse_request_header(&request);
-        assert_eq!(header.is_none(), true);
+        let header = <SendMessageRequestHeader as FromMap>::from(&map);
+
+        assert!(header.is_none());
     }
 }

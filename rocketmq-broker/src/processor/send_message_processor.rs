@@ -205,7 +205,7 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
         let topic_config = self
             .inner
             .topic_config_manager
-            .select_topic_config(request_header.topic().as_str())
+            .select_topic_config(request_header.topic())
             .unwrap();
         let mut queue_id = request_header.queue_id;
         if queue_id.is_none() || queue_id.unwrap() < 0 {
@@ -337,7 +337,7 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
                 put_message_result,
                 response,
                 &request,
-                request_header.topic().as_str(),
+                request_header.topic(),
                 *queue_id.as_ref().unwrap(),
                 response_header,
             )
@@ -353,7 +353,7 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
                 put_message_result,
                 response,
                 &request,
-                request_header.topic().as_str(),
+                request_header.topic(),
                 *queue_id.as_ref().unwrap(),
                 response_header,
             )
@@ -381,7 +381,7 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
         let mut topic_config = self
             .inner
             .topic_config_manager
-            .select_topic_config(request_header.topic().as_str())
+            .select_topic_config(request_header.topic())
             .unwrap();
         let mut queue_id = request_header.queue_id;
         if queue_id.is_none() || queue_id.unwrap() < 0 {

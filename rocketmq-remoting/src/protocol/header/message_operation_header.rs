@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 pub mod send_message_request_header;
+pub mod send_message_request_header_v2;
 pub mod send_message_response_header;
 
 pub trait TopicRequestHeaderTrait {
@@ -24,13 +25,13 @@ pub trait TopicRequestHeaderTrait {
 
     fn with_topic(&mut self, topic: String);
 
-    fn topic(&self) -> String;
+    fn topic(&self) -> &str;
 
-    fn broker_name(&self) -> Option<String>;
+    fn broker_name(&self) -> Option<&str>;
 
     fn with_broker_name(&mut self, broker_name: String);
 
-    fn namespace(&self) -> Option<String>;
+    fn namespace(&self) -> Option<&str>;
 
     fn with_namespace(&mut self, namespace: String);
 

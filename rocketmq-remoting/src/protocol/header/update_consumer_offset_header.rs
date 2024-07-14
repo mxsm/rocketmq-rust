@@ -105,11 +105,11 @@ impl TopicRequestHeaderTrait for UpdateConsumerOffsetRequestHeader {
         self.topic = topic;
     }
 
-    fn topic(&self) -> String {
-        self.topic.clone()
+    fn topic(&self) -> &str {
+        self.topic.as_str()
     }
 
-    fn broker_name(&self) -> Option<String> {
+    fn broker_name(&self) -> Option<&str> {
         self.topic_request_header
             .as_ref()
             .unwrap()
@@ -117,7 +117,7 @@ impl TopicRequestHeaderTrait for UpdateConsumerOffsetRequestHeader {
             .as_ref()
             .unwrap()
             .broker_name
-            .clone()
+            .as_deref()
     }
 
     fn with_broker_name(&mut self, broker_name: String) {
@@ -130,7 +130,7 @@ impl TopicRequestHeaderTrait for UpdateConsumerOffsetRequestHeader {
             .broker_name = Some(broker_name);
     }
 
-    fn namespace(&self) -> Option<String> {
+    fn namespace(&self) -> Option<&str> {
         self.topic_request_header
             .as_ref()
             .unwrap()
@@ -138,7 +138,7 @@ impl TopicRequestHeaderTrait for UpdateConsumerOffsetRequestHeader {
             .as_ref()
             .unwrap()
             .namespace
-            .clone()
+            .as_deref()
     }
 
     fn with_namespace(&mut self, namespace: String) {
