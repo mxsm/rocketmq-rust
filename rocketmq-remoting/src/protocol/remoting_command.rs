@@ -16,6 +16,7 @@
  */
 use std::collections::HashMap;
 use std::fmt;
+use std::hint;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -359,11 +360,6 @@ impl RemotingCommand {
         }
     }
 
-    /*    pub fn fast_header_encode(&self) -> Option<Bytes> {
-        let st = serde_json::to_string(self).unwrap();
-        Some(Bytes::from(st))
-    }*/
-
     pub fn fast_header_encode(&mut self, dst: &mut BytesMut) {
         match self.serialize_type {
             SerializeType::JSON => {
@@ -534,16 +530,23 @@ impl RemotingCommand {
         self.ext_fields.as_ref()
     }
 
-    pub fn read_custom_header<T>(&mut self) -> Option<&T>
+    pub fn read_custom_header_ref<T>(&self) -> Option<&T>
     where
         T: CommandCustomHeader + Sync + Send + 'static,
     {
         match self.command_custom_header.as_ref() {
             None => None,
-            Some(value) => {
-                let ptr_raw = std::ptr::from_ref(&**value.as_ref()) as *const T;
-                unsafe { Some(&*ptr_raw) }
-            }
+            Some(value) => value.as_ref().as_any().downcast_ref::<T>(),
+        }
+    }
+
+    pub fn read_custom_header_ref_unchecked<T>(&self) -> &T
+    where
+        T: CommandCustomHeader + Sync + Send + 'static,
+    {
+        match self.command_custom_header.as_ref() {
+            None => unsafe { hint::unreachable_unchecked() },
+            Some(value) => value.as_ref().as_any().downcast_ref::<T>().unwrap(),
         }
     }
 
@@ -553,12 +556,30 @@ impl RemotingCommand {
     {
         match self.command_custom_header.as_mut() {
             None => None,
-            Some(value) => {
-                let ptr_raw = std::ptr::from_mut(&mut **value.as_mut()) as *mut T;
-                unsafe { Some(&mut *ptr_raw) }
-            }
+            Some(value) => value.as_mut().as_any_mut().downcast_mut::<T>(),
         }
     }
+
+    pub fn read_custom_header_mut_from_ref<T>(&self) -> Option<&mut T>
+    where
+        T: CommandCustomHeader + Sync + Send + 'static,
+    {
+        match self.command_custom_header.as_ref() {
+            None => None,
+            Some(value) => value.mut_from_ref().as_any_mut().downcast_mut::<T>(),
+        }
+    }
+
+    pub fn read_custom_header_mut_unchecked<T>(&mut self) -> &mut T
+    where
+        T: CommandCustomHeader + Sync + Send + 'static,
+    {
+        match self.command_custom_header.as_mut() {
+            None => unsafe { hint::unreachable_unchecked() },
+            Some(value) => value.as_mut().as_any_mut().downcast_mut::<T>().unwrap(),
+        }
+    }
+
     pub fn command_custom_header_ref(&self) -> Option<&dyn CommandCustomHeader> {
         match self.command_custom_header.as_ref() {
             None => None,

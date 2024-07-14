@@ -204,7 +204,7 @@ impl<MS> PullMessageProcessor<MS> {
                 ));
             }
         };
-        let response_header = rpc_response.get_header_mut::<PullMessageResponseHeader>();
+        let response_header = rpc_response.get_header_mut_from_ref::<PullMessageResponseHeader>();
         let rewrite_result = rewrite_response_for_static_topic(
             request_header,
             response_header.unwrap(),
