@@ -15,7 +15,6 @@
  * limitations under the License.
  */
 
-use bytes::Buf;
 use bytes::BufMut;
 use bytes::BytesMut;
 use tokio_util::codec::Decoder;
@@ -90,7 +89,8 @@ impl Decoder for RemotingCommandCodec {
     ///
     /// This function will return an error if the decoding process fails.
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        let read_to = src.len();
+        RemotingCommand::decode(src)
+        /* let read_to = src.len();
         if read_to < 4 {
             // Wait for more data when there are less than 4 bytes.
             return Ok(None);
@@ -131,7 +131,7 @@ impl Decoder for RemotingCommandCodec {
             ));
         }
 
-        Ok(Some(cmd))
+        Ok(Some(cmd))*/
     }
 }
 

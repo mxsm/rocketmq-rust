@@ -47,6 +47,9 @@ pub enum Error {
 
     #[error("RemotingCommandEncoderError:{0}")]
     RemotingCommandEncoderError(String),
+
+    #[error("Not support serialize type: {0}")]
+    NotSupportSerializeType(u8),
 }
 
 #[cfg(test)]

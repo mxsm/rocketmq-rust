@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 use std::collections::HashMap;
 use std::fmt;
 use std::hint;
@@ -23,11 +24,13 @@ use std::sync::Arc;
 use std::sync::Once;
 use std::sync::RwLock;
 
+use bytes::Buf;
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
 use lazy_static::lazy_static;
 use rocketmq_common::common::mq_version::RocketMqVersion;
+use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::ArcCellWrapper;
 use serde::Deserialize;
 use serde::Serialize;
@@ -36,15 +39,30 @@ use tracing::error;
 use super::RemotingCommandType;
 use super::SerializeType;
 use crate::code::response_code::RemotingSysResponseCode;
+use crate::error::Error;
 use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::FromMap;
 use crate::protocol::LanguageCode;
 use crate::rocketmq_serializable::RocketMQSerializable;
 
+pub const SERIALIZE_TYPE_PROPERTY: &str = "rocketmq.serialize.type";
+pub const SERIALIZE_TYPE_ENV: &str = "ROCKETMQ_SERIALIZE_TYPE";
+pub const REMOTING_VERSION_KEY: &str = "rocketmq.remoting.version";
+
 lazy_static! {
     static ref OPAQUE_COUNTER: Arc<AtomicI32> = Arc::new(AtomicI32::new(0));
     static ref CONFIG_VERSION: RwLock<i32> = RwLock::new(-1);
     static ref INIT: Once = Once::new();
+    pub static ref SERIALIZE_TYPE_CONFIG_IN_THIS_SERVER: SerializeType = {
+        let protocol = std::env::var(SERIALIZE_TYPE_PROPERTY).unwrap_or_else(|_| {
+            std::env::var(SERIALIZE_TYPE_ENV).unwrap_or_else(|_| "".to_string())
+        });
+        match protocol.as_str() {
+            "JSON" => SerializeType::JSON,
+            "ROCKETMQ" => SerializeType::ROCKETMQ,
+            _ => SerializeType::JSON,
+        }
+    };
 }
 
 fn set_cmd_version(cmd: &mut RemotingCommand) {
@@ -149,7 +167,7 @@ impl Default for RemotingCommand {
             body: None,
             suspended: false,
             command_custom_header: None,
-            serialize_type: SerializeType::JSON,
+            serialize_type: *SERIALIZE_TYPE_CONFIG_IN_THIS_SERVER,
         }
     }
 }
@@ -395,12 +413,85 @@ impl RemotingCommand {
                 }
                 let header_size = RocketMQSerializable::rocketmq_protocol_encode(self, dst);
                 let body_length = self.body.as_ref().map_or(0, |b| b.len()) as i32;
-                let serialize_type =
-                    RemotingCommand::mark_serialize_type(header_size as i32, SerializeType::JSON);
+                let serialize_type = RemotingCommand::mark_serialize_type(
+                    header_size as i32,
+                    SerializeType::ROCKETMQ,
+                );
                 dst[begin_index..begin_index + 4]
                     .copy_from_slice(&(header_size as i32 + body_length).to_be_bytes());
                 dst[begin_index + 4..begin_index + 8]
                     .copy_from_slice(&serialize_type.to_be_bytes());
+            }
+        }
+    }
+
+    pub fn decode(src: &mut BytesMut) -> crate::Result<Option<RemotingCommand>> {
+        let read_to = src.len();
+        if read_to < 4 {
+            // Wait for more data when there are less than 4 bytes.
+            return Ok(None);
+        }
+        //Read the total size as a big-endian i32 from the first 4 bytes.
+        let total_size = i32::from_be_bytes([src[0], src[1], src[2], src[3]]) as usize;
+
+        if read_to < total_size + 4 {
+            // Wait for more data when the available data is less than the total size.
+            return Ok(None);
+        }
+        // Split the BytesMut to get the command data including the total size.
+        let mut cmd_data = src.split_to(total_size + 4);
+        // Discard the first i32 (total size).
+        cmd_data.advance(4);
+        if cmd_data.remaining() < 4 {
+            return Ok(None);
+        }
+        // Read the header length as a big-endian i32.
+        let ori_header_length = cmd_data.get_i32();
+        let header_length = parse_header_length(ori_header_length);
+        if header_length > total_size - 4 {
+            return Err(Error::RemotingCommandDecoderError(format!(
+                "Header length {} is greater than total size {}",
+                header_length, total_size
+            )));
+        }
+        let protocol_type = parse_serialize_type(ori_header_length)?;
+        // Assume the header is of i32 type and directly get it from the data.
+        let mut header_data = cmd_data.split_to(header_length);
+
+        let mut cmd =
+            RemotingCommand::header_decode(&mut header_data, header_length, protocol_type)?;
+
+        if let Some(cmd) = cmd.as_mut() {
+            if total_size - 4 > header_length {
+                cmd.set_body_mut_ref(Some(
+                    cmd_data.split_to(total_size - 4 - header_length).freeze(),
+                ));
+            }
+        }
+        Ok(cmd)
+    }
+
+    pub fn header_decode(
+        src: &mut BytesMut,
+        header_length: usize,
+        type_: SerializeType,
+    ) -> crate::Result<Option<RemotingCommand>> {
+        match type_ {
+            SerializeType::JSON => {
+                let cmd =
+                    SerdeJsonUtils::from_json_slice::<RemotingCommand>(src).map_err(|error| {
+                        // Handle deserialization error gracefully
+                        Error::RemotingCommandDecoderError(format!(
+                            "Deserialization error: {}",
+                            error
+                        ))
+                    })?;
+
+                Ok(Some(cmd.set_serialize_type(SerializeType::JSON)))
+            }
+            SerializeType::ROCKETMQ => {
+                let cmd = RocketMQSerializable::rocket_mq_protocol_decode(src, header_length)?;
+                Ok(Some(cmd.set_serialize_type(SerializeType::ROCKETMQ)))
             }
         }
     }
@@ -411,10 +502,6 @@ impl RemotingCommand {
 
     pub fn mark_serialize_type(header_length: i32, protocol_type: SerializeType) -> i32 {
         (protocol_type.get_code() as i32) << 24 | (header_length & 0x00FFFFFF)
-    }
-
-    pub fn get_header_length(size: usize) -> usize {
-        size & 0xFFFFFF
     }
 
     pub fn code(&self) -> i32 {
@@ -592,6 +679,18 @@ impl RemotingCommand {
             None => None,
             Some(value) => Some(value.as_mut().as_mut()),
         }
+    }
+}
+
+pub fn parse_header_length(size: i32) -> usize {
+    (size & 0xFFFFFF) as usize
+}
+
+pub fn parse_serialize_type(size: i32) -> crate::Result<SerializeType> {
+    let code = (size >> 24) as u8;
+    match SerializeType::value_of(code) {
+        None => Err(Error::NotSupportSerializeType(code)),
+        Some(value) => Ok(value),
     }
 }
 
