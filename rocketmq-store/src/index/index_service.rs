@@ -131,10 +131,10 @@ impl IndexService {
         index_file_list_lock.clear();
     }
 
-    fn query_offset(
+    pub fn query_offset(
         &self,
-        topic: String,
-        key: String,
+        topic: &str,
+        key: &str,
         max_num: i32,
         begin: i64,
         end: i64,
@@ -158,7 +158,13 @@ impl IndexService {
                 // Assuming IndexFile has a method to check if the file's timestamps match the query
                 if f.is_time_matched(begin, end) {
                     // Assuming IndexFile has a method to select physical offsets based on the query
-                    f.select_phy_offset(&mut phy_offsets, &topic, max_num as usize, begin, end);
+                    f.select_phy_offset(
+                        &mut phy_offsets,
+                        build_key(topic, key).as_str(),
+                        max_num as usize,
+                        begin,
+                        end,
+                    );
                 }
 
                 if f.get_begin_timestamp() < begin {

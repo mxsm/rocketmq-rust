@@ -18,12 +18,15 @@
 use std::sync::Arc;
 
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
+use rocketmq_common::common::message::message_single::MessageExt;
 use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
 use rocketmq_common::TimeUtils::get_current_millis;
 
 use crate::base::dispatch_request::DispatchRequest;
 use crate::base::get_message_result::GetMessageResult;
 use crate::base::message_result::PutMessageResult;
+use crate::base::query_message_result::QueryMessageResult;
+use crate::base::select_result::SelectMappedBufferResult;
 use crate::filter::MessageFilter;
 use crate::hook::put_message_hook::BoxedPutMessageHook;
 use crate::queue::ArcConsumeQueue;
@@ -117,4 +120,32 @@ pub trait RocketMQMessageStore: Clone + 'static {
     fn find_consume_queue(&self, topic: &str, queue_id: i32) -> Option<ArcConsumeQueue>;
 
     fn delete_topics(&mut self, delete_topics: Vec<&str>) -> i32;
+
+    async fn query_message(
+        &self,
+        topic: &str,
+        key: &str,
+        max_num: i32,
+        begin_timestamp: i64,
+        end_timestamp: i64,
+    ) -> Option<QueryMessageResult>;
+
+    async fn select_one_message_by_offset(
+        &self,
+        commit_log_offset: i64,
+    ) -> Option<SelectMappedBufferResult>;
+
+    async fn select_one_message_by_offset_with_size(
+        &self,
+        commit_log_offset: i64,
+        size: i32,
+    ) -> Option<SelectMappedBufferResult>;
+
+    fn look_message_by_offset(&self, commit_log_offset: i64) -> Option<MessageExt>;
+
+    fn look_message_by_offset_with_size(
+        &self,
+        commit_log_offset: i64,
+        size: i32,
+    ) -> Option<MessageExt>;
 }

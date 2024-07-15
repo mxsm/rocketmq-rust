@@ -66,6 +66,7 @@ use crate::processor::consumer_manage_processor::ConsumerManageProcessor;
 use crate::processor::default_pull_message_result_handler::DefaultPullMessageResultHandler;
 use crate::processor::pull_message_processor::PullMessageProcessor;
 use crate::processor::pull_message_result_handler::PullMessageResultHandler;
+use crate::processor::query_message_processor::QueryMessageProcessor;
 use crate::processor::send_message_processor::SendMessageProcessor;
 use crate::processor::BrokerRequestProcessor;
 use crate::schedule::schedule_message_service::ScheduleMessageService;
@@ -410,7 +411,7 @@ impl BrokerRuntime {
             self.message_store.clone().unwrap(),
         );
         self.pull_request_hold_service = Some(PullRequestHoldService::new(
-            message_store,
+            message_store.clone(),
             Arc::new(pull_message_processor.clone()),
             self.broker_config.clone(),
         ));
@@ -430,6 +431,8 @@ impl BrokerRuntime {
             .set_message_arriving_listener(Some(Arc::new(Box::new(
                 NotifyMessageArrivingListener::new(self.pull_request_hold_service.clone().unwrap()),
             ))));
+        let query_message_processor =
+            QueryMessageProcessor::new(self.message_store_config.clone(), message_store.clone());
 
         let admin_broker_processor = AdminBrokerProcessor::new(
             self.broker_config.clone(),
@@ -459,7 +462,7 @@ impl BrokerRuntime {
             ),
             consumer_manage_processor,
             query_assignment_processor: Default::default(),
-            query_message_processor: Default::default(),
+            query_message_processor,
             end_transaction_processor: Default::default(),
         }
     }

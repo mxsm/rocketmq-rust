@@ -95,7 +95,7 @@ where
     pub(crate) notification_processor: NotificationProcessor,
     pub(crate) polling_info_processor: PollingInfoProcessor,
     pub(crate) reply_message_processor: ReplyMessageProcessor,
-    pub(crate) query_message_processor: QueryMessageProcessor,
+    pub(crate) query_message_processor: QueryMessageProcessor<MS>,
     pub(crate) client_manage_processor: ClientManageProcessor<MS>,
     pub(crate) consumer_manage_processor: ConsumerManageProcessor<MS>,
     pub(crate) query_assignment_processor: QueryAssignmentProcessor,
@@ -161,6 +161,13 @@ impl<MS: MessageStore + Send + Sync + 'static> RequestProcessor for BrokerReques
                     .process_request(channel, ctx, request_code, request)
                     .await
             }
+
+            RequestCode::QueryMessage | RequestCode::ViewMessageById => {
+                self.query_message_processor
+                    .process_request(channel, ctx, request_code, request)
+                    .await
+            }
+
             _ => {
                 self.admin_broker_processor
                     .process_request(channel, ctx, request_code, request)

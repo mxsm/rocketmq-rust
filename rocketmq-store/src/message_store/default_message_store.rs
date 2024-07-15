@@ -31,6 +31,7 @@ use std::time::Instant;
 use bytes::Buf;
 use rocketmq_common::common::attribute::cleanup_policy::CleanupPolicy;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
+use rocketmq_common::common::message::message_single::MessageExt;
 use rocketmq_common::common::mix_all::is_lmq;
 use rocketmq_common::common::mix_all::is_sys_consumer_group_for_no_cold_read_limit;
 use rocketmq_common::common::mix_all::MULTI_DISPATCH_QUEUE_SPLITTER;
@@ -48,6 +49,7 @@ use rocketmq_common::{
     },
     utils::queue_type_utils::QueueTypeUtils,
     FileUtils::string_to_file,
+    MessageDecoder,
     UtilAll::ensure_dir_ok,
 };
 use tokio::runtime::Handle;
@@ -64,6 +66,8 @@ use crate::base::message_arriving_listener::MessageArrivingListener;
 use crate::base::message_result::PutMessageResult;
 use crate::base::message_status_enum::GetMessageStatus;
 use crate::base::message_status_enum::PutMessageStatus;
+use crate::base::query_message_result::QueryMessageResult;
+use crate::base::select_result::SelectMappedBufferResult;
 use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::base::store_stats_service::StoreStatsService;
 use crate::config::broker_role::BrokerRole;
@@ -1087,6 +1091,102 @@ impl MessageStore for DefaultMessageStore {
         }
 
         delete_count
+    }
+    async fn query_message(
+        &self,
+        topic: &str,
+        key: &str,
+        max_num: i32,
+        begin_timestamp: i64,
+        end_timestamp: i64,
+    ) -> Option<QueryMessageResult> {
+        let mut query_message_result = QueryMessageResult::default();
+        let mut last_query_msg_time = end_timestamp;
+        for i in 1..3 {
+            let mut query_offset_result = self.index_service.query_offset(
+                topic,
+                key,
+                max_num,
+                begin_timestamp,
+                end_timestamp,
+            );
+            if query_offset_result.get_phy_offsets().is_empty() {
+                break;
+            }
+
+            query_offset_result.get_phy_offsets_mut().sort();
+
+            query_message_result.index_last_update_timestamp =
+                query_offset_result.get_index_last_update_timestamp();
+            query_message_result.index_last_update_phyoffset =
+                query_offset_result.get_index_last_update_phyoffset();
+            let phy_offsets = query_offset_result.get_phy_offsets();
+            for m in 0..phy_offsets.len() {
+                let offset = *phy_offsets.get(m).unwrap();
+                let msg = self.look_message_by_offset(offset);
+                if m == 0 {
+                    last_query_msg_time = msg.as_ref().unwrap().store_timestamp;
+                }
+                let result = self.commit_log.get_data_with_option(offset, false);
+                if let Some(sbr) = result {
+                    query_message_result.add_message(sbr);
+                }
+            }
+            if query_message_result.buffer_total_size > 0 {
+                break;
+            }
+            if last_query_msg_time < begin_timestamp {
+                break;
+            }
+        }
+
+        Some(query_message_result)
+    }
+
+    async fn select_one_message_by_offset(
+        &self,
+        commit_log_offset: i64,
+    ) -> Option<SelectMappedBufferResult> {
+        let sbr = self.commit_log.get_message(commit_log_offset, 4);
+        if let Some(sbr) = sbr {
+            let size = sbr.get_buffer().get_i32();
+            self.commit_log.get_message(commit_log_offset, size)
+        } else {
+            None
+        }
+    }
+    async fn select_one_message_by_offset_with_size(
+        &self,
+        commit_log_offset: i64,
+        size: i32,
+    ) -> Option<SelectMappedBufferResult> {
+        self.commit_log.get_message(commit_log_offset, size)
+    }
+
+    fn look_message_by_offset(&self, commit_log_offset: i64) -> Option<MessageExt> {
+        if let Some(sbr) = self.commit_log.get_message(commit_log_offset, 4) {
+            let size = sbr.get_buffer().get_i32();
+            self.look_message_by_offset_with_size(commit_log_offset, size)
+        } else {
+            None
+        }
+    }
+
+    fn look_message_by_offset_with_size(
+        &self,
+        commit_log_offset: i64,
+        size: i32,
+    ) -> Option<MessageExt> {
+        let sbr = self.commit_log.get_message(commit_log_offset, size);
+        if let Some(sbr) = sbr {
+            if let Some(mut value) = sbr.get_bytes() {
+                MessageDecoder::decode(&mut value, true, false, false, false, false)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
     }
 }
 

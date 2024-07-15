@@ -51,8 +51,10 @@ impl CommandCustomHeader for TopicRequestHeader {
         if let Some(ref lo) = self.lo {
             map.insert(Self::LO.to_string(), lo.to_string());
         }
-        if let Some(value) = self.rpc_request_header.as_ref().unwrap().to_map() {
-            map.extend(value);
+        if let Some(value) = self.rpc_request_header.as_ref() {
+            if let Some(rpc_map) = value.to_map() {
+                map.extend(rpc_map);
+            }
         }
         Some(map)
     }

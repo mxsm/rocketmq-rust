@@ -38,6 +38,10 @@ impl QueryOffsetResult {
         &self.phy_offsets
     }
 
+    pub fn get_phy_offsets_mut(&mut self) -> &mut Vec<i64> {
+        &mut self.phy_offsets
+    }
+
     pub fn get_index_last_update_timestamp(&self) -> i64 {
         self.index_last_update_timestamp
     }
