@@ -51,4 +51,4 @@ uuid = { version = "1.10.0", features = ["v4", # Lets you generate random UUIDs
     "macro-diagnostics", ] }
 log = "0.4.22"
 [dev-dependencies]
-bytes = "1.6.0"
+bytes = "1.6.1"
