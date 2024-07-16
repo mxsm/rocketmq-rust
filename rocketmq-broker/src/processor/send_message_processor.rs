@@ -58,9 +58,9 @@ use rocketmq_remoting::protocol::header::message_operation_header::send_message_
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::TopicRequestHeaderTrait;
+use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
-use rocketmq_remoting::protocol::NamespaceUtil;
 use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::log_file::MessageStore;
