@@ -15,38 +15,15 @@
  * limitations under the License.
  */
 
-use std::sync::Arc;
-
-use rand::Rng;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::constant::PermName;
-use rocketmq_common::common::message::message_enum::MessageType;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
-use rocketmq_common::common::topic::TopicValidator;
-use rocketmq_common::common::TopicSysFlag::build_sys_flag;
-use rocketmq_common::ArcCellWrapper;
-use rocketmq_common::MessageDecoder;
-use rocketmq_common::TimeUtils;
 use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::RemotingSysResponseCode::SystemError;
-use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
-use rocketmq_remoting::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
-use rocketmq_remoting::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::protocol::NamespaceUtil;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
 use rocketmq_store::log_file::MessageStore;
-use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use tracing::info;
-use tracing::warn;
 
 use self::client_manage_processor::ClientManageProcessor;
-use crate::mqtrace::send_message_context::SendMessageContext;
-use crate::mqtrace::send_message_hook::SendMessageHook;
 use crate::processor::ack_message_processor::AckMessageProcessor;
 use crate::processor::admin_broker_processor::AdminBrokerProcessor;
 use crate::processor::change_invisible_time_processor::ChangeInvisibleTimeProcessor;
@@ -61,7 +38,6 @@ use crate::processor::query_assignment_processor::QueryAssignmentProcessor;
 use crate::processor::query_message_processor::QueryMessageProcessor;
 use crate::processor::reply_message_processor::ReplyMessageProcessor;
 use crate::processor::send_message_processor::SendMessageProcessor;
-use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
 pub(crate) mod ack_message_processor;
 pub(crate) mod admin_broker_processor;
@@ -174,220 +150,5 @@ impl<MS: MessageStore + Send + Sync + 'static> RequestProcessor for BrokerReques
                     .await
             }
         }
-    }
-}
-
-#[derive(Clone)]
-pub(crate) struct SendMessageProcessorInner {
-    pub(crate) broker_config: Arc<BrokerConfig>,
-    pub(crate) topic_config_manager: TopicConfigManager,
-    pub(crate) send_message_hook_vec: ArcCellWrapper<Vec<Box<dyn SendMessageHook>>>,
-}
-
-impl SendMessageProcessorInner {
-    pub(crate) fn execute_send_message_hook_before(&self, context: &SendMessageContext) {
-        for hook in self.send_message_hook_vec.iter() {
-            hook.send_message_before(context);
-        }
-    }
-
-    pub(crate) fn execute_send_message_hook_after(
-        &self,
-        response: Option<&mut RemotingCommand>,
-        context: &mut SendMessageContext,
-    ) {
-        for hook in self.send_message_hook_vec.iter() {
-            if let Some(ref response) = response {
-                if let Some(ref header) =
-                    response.decode_command_custom_header::<SendMessageResponseHeader>()
-                {
-                    context.msg_id = header.msg_id().to_string();
-                    context.queue_id = Some(header.queue_id());
-                    context.queue_offset = Some(header.queue_offset());
-                    context.code = response.code();
-                    context.error_msg = response.remark().unwrap_or(&"".to_string()).to_string();
-                }
-            }
-
-            hook.send_message_after(context);
-        }
-    }
-
-    pub(crate) fn consumer_send_msg_back(
-        &self,
-        _channel: &Channel,
-        _ctx: &ConnectionHandlerContext,
-        _request: &RemotingCommand,
-    ) -> Option<RemotingCommand> {
-        todo!()
-    }
-
-    pub(crate) fn build_msg_context(
-        &self,
-        channel: &Channel,
-        _ctx: &ConnectionHandlerContext,
-        request_header: &mut SendMessageRequestHeader,
-        request: &RemotingCommand,
-    ) -> SendMessageContext {
-        let namespace = NamespaceUtil::get_namespace_from_resource(request_header.topic.as_str());
-
-        let mut send_message_context = SendMessageContext {
-            namespace,
-            producer_group: request_header.producer_group.clone(),
-            ..Default::default()
-        };
-        send_message_context.topic(request_header.topic.clone());
-        send_message_context.body_length(
-            request
-                .body()
-                .as_ref()
-                .map_or_else(|| 0, |b| b.len() as i32),
-        );
-        send_message_context.msg_props(request_header.properties.clone().unwrap_or("".to_string()));
-        send_message_context.born_host(channel.remote_address().to_string());
-        send_message_context.broker_addr(self.broker_config.get_broker_addr());
-        send_message_context.queue_id(request_header.queue_id);
-        send_message_context.broker_region_id(self.broker_config.region_id().to_string());
-        send_message_context.born_time_stamp(request_header.born_timestamp);
-        send_message_context.request_time_stamp(TimeUtils::get_current_millis() as i64);
-
-        if let Some(owner) = request.ext_fields() {
-            if let Some(value) = owner.get(BrokerStatsManager::COMMERCIAL_OWNER) {
-                send_message_context.commercial_owner(value.clone());
-            }
-        }
-        let mut properties =
-            MessageDecoder::string_to_message_properties(request_header.properties.as_ref());
-        properties.insert(
-            MessageConst::PROPERTY_MSG_REGION.to_string(),
-            self.broker_config.region_id().to_string(),
-        );
-        properties.insert(
-            MessageConst::PROPERTY_TRACE_SWITCH.to_string(),
-            self.broker_config.trace_on.to_string(),
-        );
-        request_header.properties = Some(MessageDecoder::message_properties_to_string(&properties));
-
-        if let Some(unique_key) =
-            properties.get(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX)
-        {
-            send_message_context.msg_unique_key.clone_from(unique_key);
-        } else {
-            send_message_context.msg_unique_key = "".to_string();
-        }
-
-        if properties.contains_key(MessageConst::PROPERTY_SHARDING_KEY) {
-            send_message_context.msg_type = MessageType::OrderMsg;
-        } else {
-            send_message_context.msg_type = MessageType::NormalMsg;
-        }
-        send_message_context
-    }
-
-    pub(crate) fn msg_check(
-        &mut self,
-        channel: &Channel,
-        _ctx: &ConnectionHandlerContext,
-        _request: &RemotingCommand,
-        request_header: &SendMessageRequestHeader,
-        response: &mut RemotingCommand,
-    ) {
-        //check broker permission
-        if !PermName::is_writeable(self.broker_config.broker_permission())
-            && self
-                .topic_config_manager
-                .is_order_topic(request_header.topic.as_str())
-        {
-            response.with_code(ResponseCode::NoPermission);
-            response.with_remark(Some(format!(
-                "the broker[{}] sending message is forbidden",
-                self.broker_config.broker_ip1.clone()
-            )));
-            return;
-        }
-
-        //check Topic
-        let result = TopicValidator::validate_topic(request_header.topic.as_str());
-        if !result.valid() {
-            response.with_code(SystemError);
-            response.with_remark(Some(result.remark().to_string()));
-            return;
-        }
-
-        if TopicValidator::is_not_allowed_send_topic(request_header.topic.as_str()) {
-            response.with_code(ResponseCode::NoPermission);
-            response.with_remark(Some(format!(
-                "Sending message to topic[{}] is forbidden.",
-                request_header.topic.as_str()
-            )));
-            return;
-        }
-        let mut topic_config = self
-            .topic_config_manager
-            .select_topic_config(request_header.topic.as_str());
-        if topic_config.is_none() {
-            let mut topic_sys_flag = 0;
-            if request_header.unit_mode.unwrap_or(false) {
-                if request_header.topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) {
-                    topic_sys_flag = build_sys_flag(false, true);
-                } else {
-                    topic_sys_flag = build_sys_flag(true, false);
-                }
-            }
-            warn!(
-                "the topic {} not exist, producer: {}",
-                request_header.topic(),
-                channel.remote_address(),
-            );
-            topic_config = self
-                .topic_config_manager
-                .create_topic_in_send_message_method(
-                    request_header.topic.as_str(),
-                    request_header.default_topic.as_str(),
-                    channel.remote_address(),
-                    request_header.default_topic_queue_nums,
-                    topic_sys_flag,
-                );
-
-            if topic_config.is_none() && request_header.topic.starts_with(RETRY_GROUP_TOPIC_PREFIX)
-            {
-                topic_config = self
-                    .topic_config_manager
-                    .create_topic_in_send_message_back_method(
-                        request_header.topic.as_str(),
-                        1,
-                        PermName::PERM_WRITE | PermName::PERM_READ,
-                        false,
-                        topic_sys_flag,
-                    );
-            }
-
-            if topic_config.is_none() {
-                response.with_code(ResponseCode::TopicNotExist);
-                response.with_remark(Some(format!(
-                    "topic[{}] not exist, apply first please!",
-                    request_header.topic.as_str()
-                )));
-            }
-        }
-
-        let queue_id_int = request_header.queue_id.unwrap();
-        let topic_config_inner = topic_config.as_ref().unwrap();
-        let id_valid = topic_config_inner
-            .write_queue_nums
-            .max(topic_config_inner.read_queue_nums);
-        if queue_id_int >= id_valid as i32 {
-            response.with_code(ResponseCode::SystemError);
-            response.with_remark(Some(format!(
-                "request queueId[{}] is illegal, {:?} Producer: {}",
-                queue_id_int,
-                topic_config_inner,
-                channel.remote_address()
-            )));
-        }
-    }
-
-    pub(crate) fn random_queue_id(&self, write_queue_nums: u32) -> u32 {
-        rand::thread_rng().gen_range(0..=99999999) % write_queue_nums
     }
 }

@@ -101,6 +101,10 @@ pub fn get_retry_topic(consumer_group: &str) -> String {
     format!("{}{}", RETRY_GROUP_TOPIC_PREFIX, consumer_group)
 }
 
+pub fn get_dlq_topic(consumer_group: &str) -> String {
+    format!("{}{}", DLQ_GROUP_TOPIC_PREFIX, consumer_group)
+}
+
 pub fn is_lmq(lmq_meta_data: Option<&str>) -> bool {
     match lmq_meta_data {
         Some(data) => data.starts_with(LMQ_PREFIX),
