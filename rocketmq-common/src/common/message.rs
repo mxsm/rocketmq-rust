@@ -32,23 +32,73 @@ pub mod message_id;
 pub mod message_queue;
 pub mod message_single;
 
+/// Trait defining the behavior of a message in a messaging system.
 pub trait MessageTrait {
+    /// Retrieves the topic of the message.
+    ///
+    /// # Returns
+    /// A string slice representing the topic of the message.
     fn topic(&self) -> &str;
 
+    /// Sets the topic of the message.
+    ///
+    /// # Arguments
+    /// * `topic` - A string or a type that can be converted into a `String` representing the new
+    ///   topic of the message.
     fn with_topic(&mut self, topic: impl Into<String>);
 
+    /// Retrieves the tags associated with the message, if any.
+    ///
+    /// # Returns
+    /// An `Option` containing a string slice representing the tags of the message, or `None` if no
+    /// tags are set.
     fn tags(&self) -> Option<&str>;
 
+    /// Sets the tags of the message.
+    ///
+    /// # Arguments
+    /// * `tags` - A string or a type that can be converted into a `String` representing the new
+    ///   tags of the message.
     fn with_tags(&mut self, tags: impl Into<String>);
 
+    /// Adds a property to the message.
+    ///
+    /// # Arguments
+    /// * `key` - A string or a type that can be converted into a `String` representing the property
+    ///   key.
+    /// * `value` - A string or a type that can be converted into a `String` representing the
+    ///   property value.
     fn put_property(&mut self, key: impl Into<String>, value: impl Into<String>);
 
+    /// Retrieves all properties of the message.
+    ///
+    /// # Returns
+    /// A reference to a `HashMap` containing all properties of the message, where the key is the
+    /// property name and the value is the property value.
     fn properties(&self) -> &HashMap<String, String>;
 
+    /// Adds a user-defined property to the message.
+    ///
+    /// # Arguments
+    /// * `name` - A string or a type that can be converted into a `String` representing the name of
+    ///   the user-defined property.
+    /// * `value` - A string or a type that can be converted into a `String` representing the value
+    ///   of the user-defined property.
     fn put_user_property(&mut self, name: impl Into<String>, value: impl Into<String>);
 
+    /// Retrieves the delay time level of the message.
+    ///
+    /// # Returns
+    /// An `i32` representing the delay time level of the message.
     fn delay_time_level(&self) -> i32;
 
+    /// Sets the delay time level of the message.
+    ///
+    /// # Arguments
+    /// * `level` - An `i32` representing the new delay time level of the message.
+    ///
+    /// # Returns
+    /// The updated delay time level of the message.
     fn with_delay_time_level(&self, level: i32) -> i32;
 }
 

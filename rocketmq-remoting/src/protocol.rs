@@ -351,15 +351,60 @@ impl Display for DataVersion {
     }
 }
 
-/// A trait for types that can be deserialized from a byte vector.
+/// Trait for serializable objects in a remoting context.
+///
+/// This trait defines methods for serializing objects into different formats,
+/// including binary, standard JSON, and pretty-printed JSON. It is intended for
+/// use with types that need to be transmitted over a network or stored in a format
+/// that can be easily shared or read.
 pub trait RemotingSerializable {
+    /// Serializes the object into a binary format.
+    ///
+    /// # Returns
+    /// A `Vec<u8>` containing the binary representation of the object.
     fn encode(&self) -> Vec<u8>;
+
+    /// Serializes the object into a JSON string.
+    ///
+    /// # Returns
+    /// A `String` containing the JSON representation of the object.
     fn to_json(&self) -> String;
+
+    /// Serializes the object into a pretty-printed JSON string.
+    ///
+    /// This method is similar to `to_json` but adds whitespace to the output
+    /// to make it more readable.
+    ///
+    /// # Returns
+    /// A `String` containing the pretty-printed JSON representation of the object.
     fn to_json_pretty(&self) -> String;
 }
 
+/// Trait for deserializing objects in a remoting context.
+///
+/// This trait defines a method for deserializing objects from a binary format,
+/// typically received over a network. Implementors of this trait can specify
+/// their own output types and deserialization logic, making it flexible for
+/// various use cases.
+///
+/// # Type Parameters
+/// - `Output`: The type of the object after deserialization.
 pub trait RemotingDeserializable {
+    /// The output type resulting from the deserialization.
     type Output;
+
+    /// Deserializes an object from a slice of bytes.
+    ///
+    /// This method attempts to convert a slice of bytes into an instance of the `Output` type.
+    /// It returns a `Result` indicating either success with the deserialized object or an error
+    /// if deserialization fails.
+    ///
+    /// # Arguments
+    /// * `bytes` - A slice of bytes representing the serialized object.
+    ///
+    /// # Returns
+    /// A `Result` containing either the deserialized object of type `Output` or an `Error` if
+    /// deserialization fails.
     fn decode(bytes: &[u8]) -> Result<Self::Output, Error>;
 }
 
@@ -386,7 +431,23 @@ impl<T: serde::de::DeserializeOwned> RemotingDeserializable for T {
     }
 }
 
+/// Trait for handling fast encoding and decoding headers in a RocketMQ message.
+///
+/// This trait provides methods for efficiently encoding and decoding message headers,
+/// leveraging RocketMQ's serialization capabilities. It is designed for internal use
+/// within the RocketMQ client to optimize performance in message processing.
 pub trait FastCodesHeader {
+    /// Writes a key-value pair to the output buffer if the value is not null or empty.
+    ///
+    /// This method is a utility function used during the encoding process to ensure
+    /// that only non-empty values are written to the buffer, avoiding unnecessary
+    /// serialization of empty strings.
+    ///
+    /// # Arguments
+    /// * `out` - A mutable reference to the output buffer (`bytes::BytesMut`) where the key-value
+    ///   pair is written.
+    /// * `key` - The key as a string slice.
+    /// * `value` - The value as a string slice.
     fn write_if_not_null(out: &mut bytes::BytesMut, key: &str, value: &str) {
         if !value.is_empty() {
             RocketMQSerializable::write_str(out, true, key);
@@ -394,8 +455,24 @@ pub trait FastCodesHeader {
         }
     }
 
+    /// Encodes the implementing object's data into the provided output buffer.
+    ///
+    /// This method should be implemented to encode the specific header fields of a message
+    /// or another entity into a compact binary format for transmission or storage.
+    ///
+    /// # Arguments
+    /// * `out` - A mutable reference to the output buffer (`bytes::BytesMut`) where the encoded
+    ///   data is written.
     fn encode_fast(&mut self, out: &mut bytes::BytesMut);
 
+    /// Decodes data from a map of fields into the implementing object.
+    ///
+    /// This method should be implemented to populate the object's fields from a map
+    /// containing header names and values. It is used to reconstruct an object from
+    /// data received over the network or read from storage.
+    ///
+    /// # Arguments
+    /// * `fields` - A reference to a `HashMap` containing the header fields as key-value pairs.
     fn decode_fast(&mut self, fields: &HashMap<String, String>);
 }
 

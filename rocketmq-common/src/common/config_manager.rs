@@ -128,29 +128,45 @@ pub trait ConfigManager {
         true
     }
 
-    /// Returns the path of the configuration file.
+    /// Returns the file path for the configuration file.
     ///
-    /// This method is a placeholder for returning the path of the configuration file.
-    /// The actual implementation should be provided by the implementer of the trait.
+    /// This method should be implemented to return the path of the configuration file
+    /// that the `ConfigManager` will use to load or persist the configuration.
+    ///
+    /// # Returns
+    /// A `String` representing the path of the configuration file.
     fn config_file_path(&self) -> String;
 
-    /// Encodes the configuration.
+    /// Encodes the current configuration into a `String`.
     ///
-    /// This method is a placeholder for encoding the configuration.
-    /// The actual implementation should be provided by the implementer of the trait.
+    /// This method leverages `encode_pretty` with `pretty_format` set to `false` to encode
+    /// the current configuration into a compact `String` representation.
+    ///
+    /// # Returns
+    /// A `String` representing the encoded configuration in a compact format.
     fn encode(&mut self) -> String {
         self.encode_pretty(false)
     }
 
-    /// Encodes the configuration with pretty format.
+    /// Encodes the current configuration into a `String` with an option for pretty formatting.
     ///
-    /// This method is a placeholder for encoding the configuration with pretty format.
-    /// The actual implementation should be provided by the implementer of the trait.
+    /// This method encodes the current configuration into a `String`. It offers an option to
+    /// format the output in a more readable (pretty) format if `pretty_format` is `true`.
+    ///
+    /// # Arguments
+    /// * `pretty_format` - A boolean indicating whether the output should be pretty formatted.
+    ///
+    /// # Returns
+    /// A `String` representing the encoded configuration, optionally in a pretty format.
     fn encode_pretty(&self, pretty_format: bool) -> String;
 
     /// Decodes the configuration from a JSON string.
     ///
-    /// This method is a placeholder for decoding the configuration from a JSON string.
-    /// The actual implementation should be provided by the implementer of the trait.
+    /// This method takes a JSON string representation of the configuration and decodes it
+    /// into the internal representation used by the `ConfigManager`. Implementations should
+    /// update the internal state based on the provided JSON string.
+    ///
+    /// # Arguments
+    /// * `json_string` - A `&str` representing the configuration in JSON format.
     fn decode(&self, json_string: &str);
 }
