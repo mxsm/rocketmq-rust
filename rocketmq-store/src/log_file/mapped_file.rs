@@ -33,26 +33,59 @@ use crate::config::flush_disk_type::FlushDiskType;
 pub mod default_impl;
 
 pub trait MappedFile {
-    /// Returns the file name of the `MappedFile`.
+    /// Returns the file name of the mapped file.
+    ///
+    /// # Returns
+    /// A `String` representing the name of the file.
     fn get_file_name(&self) -> String;
 
-    /// Change the file name of the `MappedFile`.
+    /// Renames the mapped file to the specified file name.
+    ///
+    /// # Arguments
+    /// * `file_name` - The new name for the file.
+    ///
+    /// # Returns
+    /// `true` if the file was successfully renamed, `false` otherwise.
     fn rename_to(&mut self, file_name: &str) -> bool;
 
-    /// Returns the file size of the `MappedFile`.
+    /// Retrieves the size of the mapped file in bytes.
+    ///
+    /// # Returns
+    /// The size of the file in bytes as a `u64`.
     fn get_file_size(&self) -> u64;
 
-    // Returns the `FileChannel` behind the `MappedFile`.
-    //fn get_file_channel(&self) -> io::Result<&File>;
-
-    /// Returns true if this `MappedFile` is full and no new messages can be added.
+    /// Checks if the mapped file is full.
+    ///
+    /// # Returns
+    /// `true` if the file is full, `false` otherwise.
     fn is_full(&self) -> bool;
 
-    /// Returns true if this `MappedFile` is available.
-    /// The mapped file will be not available if it's shutdown or destroyed.
+    /// Determines if the mapped file is available for operations.
+    ///
+    /// # Returns
+    /// `true` if the file is available, `false` otherwise.
     fn is_available(&self) -> bool;
 
-    /// Appends a message object to the current `MappedFile` with a specific callback.
+    /// Appends a single message to the mapped file.
+    ///
+    /// This method is responsible for appending a single message to the mapped file using the
+    /// provided message callback for processing. It is typically used for appending individual
+    /// messages to the store.
+    ///
+    /// # Type Parameters
+    /// - `AMC`: A type that implements the `AppendMessageCallback` trait, used for processing the
+    ///   message.
+    ///
+    /// # Arguments
+    /// * `message`: A mutable reference to a `MessageExtBrokerInner` representing the message to be
+    ///   appended.
+    /// * `message_callback`: A reference to the implementor of `AppendMessageCallback` used for
+    ///   message processing.
+    /// * `put_message_context`: A reference to the `PutMessageContext` providing context for the
+    ///   message being appended.
+    ///
+    /// # Returns
+    /// An `AppendMessageResult` indicating the result of the append operation.
     fn append_message<AMC: AppendMessageCallback>(
         &self,
         message: &mut MessageExtBrokerInner,
@@ -60,7 +93,28 @@ pub trait MappedFile {
         put_message_context: &PutMessageContext,
     ) -> AppendMessageResult;
 
-    /// Appends a batch message object to the current `MappedFile` with a specific callback.
+    /// Appends a batch of messages to the mapped file.
+    ///
+    /// This method allows for appending a batch of messages to the mapped file, which can improve
+    /// throughput by reducing the number of individual write operations. The method uses a
+    /// provided message callback for processing the batch of messages.
+    ///
+    /// # Type Parameters
+    /// - `AMC`: A type that implements the `AppendMessageCallback` trait, used for processing the
+    ///   messages.
+    ///
+    /// # Arguments
+    /// * `message`: A mutable reference to a `MessageExtBatch` representing the batch of messages
+    ///   to be appended.
+    /// * `message_callback`: A reference to the implementor of `AppendMessageCallback` used for
+    ///   message processing.
+    /// * `put_message_context`: A mutable reference to the `PutMessageContext` providing context
+    ///   for the messages being appended.
+    /// * `enabled_append_prop_crc`: A boolean flag indicating whether to enable CRC checks for
+    ///   message properties.
+    ///
+    /// # Returns
+    /// An `AppendMessageResult` indicating the result of the append operation.
     fn append_messages<AMC: AppendMessageCallback>(
         &self,
         message: &mut MessageExtBatch,
@@ -69,140 +123,370 @@ pub trait MappedFile {
         enabled_append_prop_crc: bool,
     ) -> AppendMessageResult;
 
+    /// Appends a message for compaction to the mapped file.
+    ///
+    /// This method is specifically designed for appending messages that are subject to compaction.
+    /// It allows for the efficient storage of messages that may be compacted or merged based on
+    /// certain criteria.
+    ///
+    /// # Arguments
+    /// * `byte_buffer_msg`: A mutable reference to a `Bytes` buffer containing the message to be
+    ///   compacted and appended.
+    /// * `cb`: A reference to an implementor of the `CompactionAppendMsgCallback` trait used for
+    ///   processing the message.
+    ///
+    /// # Returns
+    /// An `AppendMessageResult` indicating the result of the append operation.
     fn append_message_compaction(
         &mut self,
         byte_buffer_msg: &mut bytes::Bytes,
         cb: &dyn CompactionAppendMsgCallback,
     ) -> AppendMessageResult;
 
+    /// Retrieves a byte slice from the mapped file.
+    ///
+    /// This method returns a byte slice starting from the specified position and of the specified
+    /// size. It is useful for reading parts of the file without loading the entire file into
+    /// memory.
+    ///
+    /// # Arguments
+    /// * `pos` - The starting position from where bytes should be read.
+    /// * `size` - The number of bytes to read from the starting position.
+    ///
+    /// # Returns
+    /// An `Option<bytes::Bytes>` containing the requested byte slice if available, or `None` if the
+    /// requested slice goes beyond the file boundaries or the file is not available.
     fn get_bytes(&self, pos: usize, size: usize) -> Option<bytes::Bytes>;
 
-    /// Appends a raw message data represents by a byte buffer to the current `MappedFile`.
+    /// Appends a byte array to the mapped file.
+    ///
+    /// This method appends a given byte array to the mapped file. It is a convenience method that
+    /// internally calls `append_message_offset_length` with the offset set to 0 and length set
+    /// to the byte array's length.
+    ///
+    /// # Arguments
+    /// * `data` - A reference to the byte array to be appended.
+    ///
+    /// # Returns
+    /// `true` if the append operation was successful, `false` otherwise.
     fn append_message_bytes(&self, data: &bytes::Bytes) -> bool {
         self.append_message_offset_length(data, 0, data.len())
     }
 
-    /// Appends a raw message data represents by a byte array to the current `MappedFile`,
-    /// starting at the given offset in the array.
+    /// Appends a byte array to the mapped file with specified offset and length.
+    ///
+    /// This method allows for more controlled appending of bytes to the mapped file by specifying
+    /// an offset and length. This can be useful for appending parts of a byte array or for
+    /// advanced manipulation of file contents.
+    ///
+    /// # Arguments
+    /// * `data` - A reference to the byte array to be appended.
+    /// * `offset` - The starting offset in the byte array from where bytes should be appended.
+    /// * `length` - The number of bytes to append starting from the offset.
+    ///
+    /// # Returns
+    /// `true` if the append operation was successful, `false` otherwise.
     fn append_message_offset_length(&self, data: &Bytes, offset: usize, length: usize) -> bool;
 
-    /// Returns the global offset of the current `MappedFile`, it's a long value of the file name.
+    /// Retrieves the file offset based on the current write position.
+    ///
+    /// This method calculates and returns the file offset corresponding to the current write
+    /// position. It is useful for determining the physical file location that corresponds to a
+    /// logical position in the file.
+    ///
+    /// # Returns
+    /// The file offset as a `u64`.
     fn get_file_from_offset(&self) -> u64;
 
-    /// Flushes the data in cache to disk immediately.
+    /// Flushes the mapped file to disk.
+    ///
+    /// This method flushes the contents of the mapped file to disk based on the specified least
+    /// number of pages. It ensures that data written to the mapped file is safely stored on
+    /// disk, which is crucial for preventing data loss.
+    ///
+    /// # Arguments
+    /// * `flush_least_pages` - The minimum number of pages to flush. If set to 0, all pages are
+    ///   flushed.
+    ///
+    /// # Returns
+    /// The number of pages flushed as an `i32`.
     fn flush(&self, flush_least_pages: i32) -> i32;
 
-    /// Flushes the data in the secondary cache to page cache or disk immediately.
+    /// Commits the data to the mapped file.
+    ///
+    /// This method ensures that the changes made to the mapped file are committed to storage,
+    /// based on the specified minimum number of pages. It is crucial for ensuring data integrity
+    /// and durability.
+    ///
+    /// # Arguments
+    /// * `commit_least_pages` - The minimum number of pages to commit. This allows for flexibility
+    ///   in how data is committed, enabling optimizations based on the underlying storage system.
+    ///
+    /// # Returns
+    /// The number of pages actually committed.
     fn commit(&self, commit_least_pages: i32) -> i32;
 
-    /// Selects a slice of the mapped byte buffer's sub-region behind the mapped file, starting at
-    /// the given position.
+    /// Selects a portion of the mapped file based on the specified size.
+    ///
+    /// This method provides a way to access a specific portion of the mapped file, identified by
+    /// the starting position (`pos`) and the size (`size`). It is useful for reading or modifying
+    /// sections of the file without needing to load the entire file into memory.
+    ///
+    /// # Arguments
+    /// * `pos` - The starting position from which the buffer is selected.
+    /// * `size` - The size of the buffer to select.
+    ///
+    /// # Returns
+    /// An `Option<SelectMappedBufferResult>` containing the selected buffer if available, or `None`
+    /// if the specified range is not valid or the file is not available.
     fn select_mapped_buffer_size(
         self: Arc<Self>,
         pos: i32,
         size: i32,
     ) -> Option<SelectMappedBufferResult>;
 
-    /// Selects a slice of the mapped byte buffer's sub-region behind the mapped file, starting at
-    /// the given position.
+    /// Selects a buffer from the mapped file starting from the specified position.
+    ///
+    /// Similar to `select_mapped_buffer_size`, but selects the buffer starting from `pos` to the
+    /// end of the file. This method is useful for operations that require processing the
+    /// remainder of the file from a given position.
+    ///
+    /// # Arguments
+    /// * `pos` - The starting position from which the buffer is selected.
+    ///
+    /// # Returns
+    /// An `Option<SelectMappedBufferResult>` containing the selected buffer if available, or `None`
+    /// if the starting position is not valid or the file is not available.
     fn select_mapped_buffer(self: Arc<Self>, pos: i32) -> Option<SelectMappedBufferResult>;
 
-    /// Returns the mapped byte buffer behind the mapped file.
+    /// Retrieves the entire mapped byte buffer.
+    ///
+    /// This method provides access to the entire byte buffer of the mapped file. It is useful for
+    /// operations that need to work with the complete contents of the file.
+    ///
+    /// # Returns
+    /// A `bytes::Bytes` instance containing the byte buffer of the entire mapped file.
     fn get_mapped_byte_buffer(&self) -> bytes::Bytes;
 
-    /// Returns a slice of the mapped byte buffer behind the mapped file.
+    /// Creates a slice of the mapped byte buffer.
+    ///
+    /// This method is intended for creating a slice of the entire mapped byte buffer, potentially
+    /// for performance optimizations or specific byte manipulation operations.
+    ///
+    /// # Returns
+    /// A `bytes::Bytes` instance representing a slice of the mapped byte buffer.
     fn slice_byte_buffer(&self) -> bytes::Bytes;
 
-    /// Returns the store timestamp of the last message.
+    /// Returns the timestamp when the store was created.
+    ///
+    /// # Returns
+    /// A `i64` representing the timestamp of the store creation.
     fn get_store_timestamp(&self) -> i64;
 
-    /// Returns the last modified timestamp of the file.
+    /// Returns the timestamp of the last modification to the store.
+    ///
+    /// # Returns
+    /// A `i64` representing the timestamp of the last modification.
     fn get_last_modified_timestamp(&self) -> i64;
 
-    /// Get data from a certain pos offset with size byte
+    /// Retrieves data from the store starting at the specified position and of the specified size.
+    ///
+    /// # Arguments
+    /// * `pos` - The starting position from where the data should be read.
+    /// * `size` - The number of bytes to read from the starting position.
+    ///
+    /// # Returns
+    /// An `Option<bytes::Bytes>` containing the requested data slice if available, or `None` if the
+    /// requested slice goes beyond the store boundaries or the store is not available.
     fn get_data(&self, pos: usize, size: usize) -> Option<bytes::Bytes>;
 
-    /// Destroys the file and delete it from the file system.
+    /// Destroys the store after a specified interval.
+    ///
+    /// # Arguments
+    /// * `interval_forcibly` - The time interval after which the store should be forcibly
+    ///   destroyed.
+    ///
+    /// # Returns
+    /// `true` if the store was successfully destroyed, `false` otherwise.
     fn destroy(&self, interval_forcibly: i64) -> bool;
 
-    /// Shutdowns the file and mark it unavailable.
+    /// Initiates a shutdown of the store after a specified interval.
+    ///
+    /// # Arguments
+    /// * `interval_forcibly` - The time interval after which the store should be forcibly shut
+    ///   down.
     fn shutdown(&self, interval_forcibly: i64);
 
-    /// Decreases the reference count by `1` and clean up the mapped file if the reference count
-    /// reaches at `0`.
+    /// Releases any resources held by the store.
     fn release(&self);
 
-    /// Increases the reference count by `1`.
+    /// Holds the mapped file to prevent it from being swapped out.
+    ///
+    /// # Returns
+    /// `true` if the file is successfully held, preventing it from being swapped out; `false`
+    /// otherwise.
     fn hold(&self) -> bool;
 
-    /// Returns true if the current file is first mapped file of some consume queue.
+    /// Checks if this is the first file created in the queue.
+    ///
+    /// # Returns
+    /// `true` if this is the first file created in the queue; `false` otherwise.
     fn is_first_create_in_queue(&self) -> bool;
 
-    /// Sets the flag whether the current file is first mapped file of some consume queue.
+    /// Sets the flag indicating whether this is the first file created in the queue.
+    ///
+    /// # Arguments
+    /// * `first_create_in_queue` - A boolean value indicating whether this is the first file
+    ///   created in the queue.
     fn set_first_create_in_queue(&mut self, first_create_in_queue: bool);
 
-    /// Returns the flushed position of this mapped file.
+    /// Retrieves the position up to which the file has been flushed.
+    ///
+    /// # Returns
+    /// The position up to which the file has been flushed as an `i32`.
     fn get_flushed_position(&self) -> i32;
 
-    /// Sets the flushed position of this mapped file.
+    /// Sets the position up to which the file has been flushed.
+    ///
+    /// # Arguments
+    /// * `flushed_position` - The position up to which the file has been flushed.
     fn set_flushed_position(&self, flushed_position: i32);
 
-    /// Returns the wrote position of this mapped file.
+    /// Retrieves the position up to which the file has been written.
+    ///
+    /// # Returns
+    /// The position up to which the file has been written as an `i32`.
     fn get_wrote_position(&self) -> i32;
 
-    /// Sets the wrote position of this mapped file.
+    /// Sets the position up to which the file has been written.
+    ///
+    /// # Arguments
+    /// * `wrote_position` - The position up to which the file has been written.
     fn set_wrote_position(&self, wrote_position: i32);
 
-    /// Returns the current max readable position of this mapped file.
+    /// Retrieves the current read position in the mapped file.
+    ///
+    /// # Returns
+    /// The current read position as an `i32`.
     fn get_read_position(&self) -> i32;
 
-    /// Sets the committed position of this mapped file.
+    /// Sets the committed position in the mapped file.
+    ///
+    /// This method is used to update the position up to which changes have been committed in the
+    /// mapped file.
+    ///
+    /// # Arguments
+    /// * `committed_position` - The position to set as the committed position.
     fn set_committed_position(&self, committed_position: i32);
 
-    /// Returns the committed position of this mapped file.
+    /// Retrieves the committed position in the mapped file.
+    ///
+    /// # Returns
+    /// The committed position as an `i32`.
     fn get_committed_position(&self) -> i32;
 
-    /// Lock the mapped byte buffer
+    /// Locks the mapped file into memory.
+    ///
+    /// This method prevents the mapped file from being paged out to swap space, ensuring it remains
+    /// in physical memory.
     fn mlock(&self);
 
-    /// Unlock the mapped byte buffer
+    /// Unlocks the mapped file from memory.
+    ///
+    /// This method reverses the effect of `mlock`, allowing the mapped file to be paged out to swap
+    /// space if necessary.
     fn munlock(&self);
 
-    /// Warm up the mapped byte buffer
+    /// Warms up the mapped file by accessing a specified number of pages.
+    ///
+    /// This method is used to improve the performance of accessing the mapped file by pre-loading a
+    /// specified number of pages into memory.
+    ///
+    /// # Arguments
+    /// * `flush_disk_type` - The strategy used for flushing data to disk.
+    /// * `pages` - The number of pages to access for warming up the file.
     fn warm_mapped_file(&self, flush_disk_type: FlushDiskType, pages: usize);
 
-    /// Swap map
+    /// Attempts to swap the current mapped file with a new one.
+    ///
+    /// # Returns
+    /// `true` if the swap was successful, `false` otherwise.
     fn swap_map(&self) -> bool;
 
-    /// Clean pageTable
+    /// Cleans up the swapped map files.
+    ///
+    /// This method is responsible for cleaning up the swapped map files. It can be forced to clean
+    /// up even if certain conditions (like time since last swap) are not met.
+    ///
+    /// # Arguments
+    /// * `force` - A boolean indicating whether the cleanup should be forced regardless of
+    ///   conditions.
     fn clean_swaped_map(&self, force: bool);
 
-    /// Get recent swap map time
+    /// Retrieves the timestamp of the most recent swap operation.
+    ///
+    /// # Returns
+    /// A `i64` representing the timestamp (in milliseconds since the epoch) when the last swap
+    /// operation occurred.
     fn get_recent_swap_map_time(&self) -> i64;
 
-    /// Get recent MappedByteBuffer access count since last swap
+    /// Gets the access count of the mapped byte buffer since the last swap.
+    ///
+    /// This method returns the number of times the mapped byte buffer has been accessed since the
+    /// last swap operation. This can be useful for understanding the usage pattern of the
+    /// mapped file.
+    ///
+    /// # Returns
+    /// An `i64` representing the number of accesses to the mapped byte buffer since the last swap.
     fn get_mapped_byte_buffer_access_count_since_last_swap(&self) -> i64;
 
-    /// Get the underlying file
+    /// Retrieves a reference to the underlying file.
+    ///
+    /// This method provides access to the `File` instance associated with the mapped file. It can
+    /// be used for operations that require direct access to the file, such as file metadata
+    /// retrieval.
+    ///
+    /// # Returns
+    /// A reference to the `File` instance associated with the mapped file.
     fn get_file(&self) -> &File;
 
-    /// Rename file to add ".delete" suffix
+    /// Marks the mapped file for deletion.
+    ///
+    /// This method renames the mapped file in such a way that it is marked for deletion. The actual
+    /// deletion may happen immediately or be deferred until the file is no longer in use.
     fn rename_to_delete(&self);
 
-    /// Move the file to the parent directory
+    /// Moves the current mapped file's context to its parent directory.
+    ///
+    /// This operation may involve updating internal paths or states to reflect the change in
+    /// location. It's primarily used when organizing files or handling hierarchical storage
+    /// structures.
+    ///
+    /// # Returns
+    /// An `io::Result<()>` indicating the success or failure of the operation. A successful
+    /// operation returns `Ok(())`, while a failure returns an `Err` with more details.
     fn move_to_parent(&self) -> io::Result<()>;
 
-    /// Get the last flush time
+    /// Retrieves the timestamp of the last flush operation.
+    ///
+    /// This method returns the time at which the last flush operation was completed for the mapped
+    /// file. The timestamp is represented as an `i64`, measuring milliseconds since the Unix
+    /// epoch.
+    ///
+    /// # Returns
+    /// An `i64` representing the timestamp of the last flush operation.
     fn get_last_flush_time(&self) -> i64;
 
-    /// Init mapped file
-    /*    fn init(
-        &mut self,
-        file_name: &str,
-        file_size: usize,
-        transient_store_pool: &TransientStorePool,
-    ) -> io::Result<()>;*/
-
-    /// Check mapped file is loaded to memory with given position and size
+    /// Checks if a specific portion of the mapped file is loaded into memory.
+    ///
+    /// This method is used to determine if a specified range of the mapped file has been loaded
+    /// into memory, which can be useful for optimizing access patterns or preloading data.
+    ///
+    /// # Arguments
+    /// * `position` - The starting position of the range to check, as an `i64`.
+    /// * `size` - The size of the range to check, in bytes, as a `usize`.
+    ///
+    /// # Returns
+    /// `true` if the specified range is loaded into memory; `false` otherwise.
     fn is_loaded(&self, position: i64, size: usize) -> bool;
 }

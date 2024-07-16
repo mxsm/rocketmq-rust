@@ -22,9 +22,30 @@ pub mod cq_type;
 pub mod topic_attributes;
 pub mod topic_message_type;
 
+/// `AttributeTrait` defines a common interface for attributes.
+///
+/// This trait specifies the operations that can be performed on an attribute object.
+/// It is designed to be implemented by any struct that represents an attribute, providing
+/// a standardized way to interact with attribute data.
 pub trait AttributeTrait {
+    /// Retrieves the name of the attribute.
+    ///
+    /// # Returns
+    /// A `String` representing the name of the attribute.
     fn name(&self) -> String;
+
+    /// Checks if the attribute is changeable.
+    ///
+    /// # Returns
+    /// A `bool` indicating whether the attribute can be changed after its initial set up.
     fn changeable(&self) -> bool;
+
+    /// Verifies if the provided value is valid for the attribute.
+    ///
+    /// Implementations should define the criteria for a value to be considered valid.
+    ///
+    /// # Arguments
+    /// * `value` - A string slice representing the value to be verified.
     fn verify(&self, value: &str);
 }
 

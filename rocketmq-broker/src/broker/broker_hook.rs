@@ -17,7 +17,17 @@
 
 use std::sync::Arc;
 
+/// Trait defining a shutdown hook.
+///
+/// This trait should be implemented by types that need to perform specific actions
+/// before the system or application is shutdown. The `before_shutdown` method will
+/// be called as part of the shutdown sequence, allowing for cleanup or other shutdown
+/// procedures to be executed.
 pub trait ShutdownHook {
+    /// Method to be called before shutdown.
+    ///
+    /// Implementors should place any necessary cleanup or pre-shutdown logic within
+    /// this method. This method is called automatically when a shutdown event occurs.
     fn before_shutdown(&self);
 }
 
