@@ -1484,6 +1484,7 @@ dependencies = [
  "futures-io",
  "futures-sink",
  "futures-util",
+ "lazy_static",
  "local-ip-address",
  "log",
  "mockall",

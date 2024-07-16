@@ -51,6 +51,7 @@ use crate::broker::broker_hook::BrokerShutdownHook;
 use crate::client::default_consumer_ids_change_listener::DefaultConsumerIdsChangeListener;
 use crate::client::manager::consumer_manager::ConsumerManager;
 use crate::client::manager::producer_manager::ProducerManager;
+use crate::client::rebalance::rebalance_lock_manager::RebalanceLockManager;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
 use crate::hook::batch_check_before_put_message::BatchCheckBeforePutMessageHook;
 use crate::hook::check_before_put_message::CheckBeforePutMessageHook;
@@ -110,6 +111,7 @@ pub(crate) struct BrokerRuntime {
     is_isolated: Arc<AtomicBool>,
     #[cfg(feature = "local_file_store")]
     pull_request_hold_service: Option<PullRequestHoldService<DefaultMessageStore>>,
+    rebalance_lock_manager: Arc<RebalanceLockManager>,
 }
 
 impl Clone for BrokerRuntime {
@@ -142,6 +144,7 @@ impl Clone for BrokerRuntime {
             should_start_time: self.should_start_time.clone(),
             is_isolated: self.is_isolated.clone(),
             pull_request_hold_service: self.pull_request_hold_service.clone(),
+            rebalance_lock_manager: self.rebalance_lock_manager.clone(),
         }
     }
 }
@@ -216,6 +219,7 @@ impl BrokerRuntime {
             should_start_time: Arc::new(AtomicU64::new(0)),
             is_isolated: Arc::new(AtomicBool::new(false)),
             pull_request_hold_service: None,
+            rebalance_lock_manager: Arc::new(Default::default()),
         }
     }
 
@@ -372,9 +376,11 @@ impl BrokerRuntime {
     fn init_processor(&mut self) -> BrokerRequestProcessor<DefaultMessageStore> {
         let send_message_processor = SendMessageProcessor::<DefaultMessageStore>::new(
             self.topic_queue_mapping_manager.clone(),
+            self.subscription_group_manager.clone(),
             self.topic_config_manager.clone(),
             self.broker_config.clone(),
             self.message_store.as_ref().unwrap(),
+            self.rebalance_lock_manager.clone(),
         );
         let mut pull_message_result_handler =
             ArcCellWrapper::new(Box::new(DefaultPullMessageResultHandler::new(

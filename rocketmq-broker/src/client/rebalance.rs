@@ -14,12 +14,4 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-pub(crate) mod client_channel_info;
-pub(crate) mod consumer_group_event;
-pub(crate) mod consumer_group_info;
-pub(crate) mod consumer_ids_change_listener;
-pub(crate) mod default_consumer_ids_change_listener;
-pub(crate) mod manager;
-pub(crate) mod net;
-pub(crate) mod rebalance;
+pub mod rebalance_lock_manager;
