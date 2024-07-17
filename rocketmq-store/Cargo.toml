@@ -64,3 +64,8 @@ once_cell = { workspace = true }
 [dev-dependencies]
 tempfile = "3.10.0"
 mockall = { workspace = true }
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "delivery"
+harness = false
