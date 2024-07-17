@@ -386,7 +386,7 @@ impl Default for MessageStoreConfig {
             mem_table_flush_interval_ms: 0,
             real_time_persist_rocksdb_config: false,
             enable_rocksdb_log: false,
-            topic_queue_lock_num: 0,
+            topic_queue_lock_num: 32,
             max_filter_message_size: 16000,
         }
     }
