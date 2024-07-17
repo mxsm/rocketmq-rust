@@ -34,6 +34,7 @@ pub mod store_checkpoint;
 pub mod store_enum;
 pub mod store_stats_service;
 pub mod swappable;
+mod topic_queue_lock;
 pub mod transient_store_pool;
 
 pub struct ByteBuffer<'a> {
