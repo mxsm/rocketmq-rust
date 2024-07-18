@@ -107,19 +107,21 @@ impl BrokerOuterAPI {
         self.remoting_client.start().await;
     }
 
-    pub fn update_name_server_address_list(&self, addrs: String) {
+    pub async fn update_name_server_address_list(&self, addrs: String) {
         let addr_vec = addrs
             .split("';'")
             .map(|s| s.to_string())
             .collect::<Vec<String>>();
         self.remoting_client
             .update_name_server_address_list(addr_vec)
+            .await
     }
 
-    pub fn update_name_server_address_list_by_dns_lookup(&self, domain: String) {
+    pub async fn update_name_server_address_list_by_dns_lookup(&self, domain: String) {
         let address_list = dns_lookup_address_by_domain(domain.as_str());
         self.remoting_client
-            .update_name_server_address_list(address_list);
+            .update_name_server_address_list(address_list)
+            .await;
     }
 
     pub async fn register_broker_all(
@@ -179,7 +181,18 @@ impl BrokerOuterAPI {
             }
             while let Some(handle) = handle_vec.pop() {
                 let result = tokio::join!(handle);
-                register_broker_result_list.push(result.0.unwrap().unwrap());
+                match result.0 {
+                    Ok(value) => {
+                        if let Some(v) = value {
+                            register_broker_result_list.push(v);
+                        } else {
+                            error!("Register broker to name server error");
+                        }
+                    }
+                    Err(e) => {
+                        error!("Register broker to name server error, error={}", e);
+                    }
+                }
             }
         }
 

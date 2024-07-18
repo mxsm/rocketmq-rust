@@ -44,6 +44,7 @@ impl Client {
     /// A new `Client` instance wrapped in a `Result`. Returns an error if the connection fails.
     pub async fn connect<T: tokio::net::ToSocketAddrs>(addr: T) -> anyhow::Result<Client> {
         let tcp_stream = tokio::net::TcpStream::connect(addr).await?;
+        // let tcp_stream = timeout(timeout_duration, tokio::net::TcpStream::connect(addr)).await??;
         //let socket_addr = tcp_stream.peer_addr()?;
         Ok(Client {
             connection: Connection::new(tcp_stream),
@@ -91,8 +92,13 @@ impl Client {
     ///
     /// A `Result` indicating success or failure in sending the request.
     pub async fn send(&mut self, request: RemotingCommand) -> anyhow::Result<()> {
-        self.connection.framed.send(request).await?;
-        Ok(())
+        match self.connection.framed.send(request).await {
+            Ok(_) => Ok(()),
+            Err(_) => {
+                self.connection.ok = false;
+                Err(anyhow!("Failed to send request"))
+            }
+        }
     }
 
     /// Reads and retrieves the response from the remote server.
@@ -103,11 +109,25 @@ impl Client {
     /// reading the response fails.
     async fn read(&mut self) -> anyhow::Result<RemotingCommand> {
         match self.connection.framed.next().await {
-            None => Err(anyhow!("Failed to read response")),
+            None => {
+                self.connection.ok = false;
+                Err(anyhow!("Failed to read response"))
+            }
             Some(result) => match result {
                 Ok(response) => Ok(response),
-                Err(err) => Err(anyhow!(err)),
+                Err(err) => {
+                    self.connection.ok = false;
+                    Err(anyhow!(err))
+                }
             },
         }
+    }
+
+    pub fn connection(&self) -> &Connection {
+        &self.connection
+    }
+
+    pub fn connection_mut(&mut self) -> &mut Connection {
+        &mut self.connection
     }
 }

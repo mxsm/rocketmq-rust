@@ -343,7 +343,7 @@ impl BrokerRuntime {
         if result {
             self.initialize_remoting_server();
             self.initialize_resources();
-            self.initialize_scheduled_tasks();
+            self.initialize_scheduled_tasks().await;
             self.initial_transaction();
             self.initial_acl();
             self.initial_rpc_hooks();
@@ -473,7 +473,7 @@ impl BrokerRuntime {
         }
     }
 
-    fn initialize_scheduled_tasks(&mut self) {
+    async fn initialize_scheduled_tasks(&mut self) {
         let initial_delay = compute_next_morning_time_millis() - get_current_millis();
         let period = Duration::from_days(1).as_millis() as u64;
         let broker_stats = self.broker_stats.clone();
@@ -578,7 +578,7 @@ impl BrokerRuntime {
         }
 
         if let Some(ref namesrv_address) = self.broker_config.namesrv_addr.clone() {
-            self.update_namesrv_addr();
+            self.update_namesrv_addr().await;
             info!(
                 "Set user specified name server address: {}",
                 namesrv_address
@@ -592,7 +592,7 @@ impl BrokerRuntime {
                     tokio::time::sleep(Duration::from_secs(10)).await;
                     loop {
                         let current_execution_time = tokio::time::Instant::now();
-                        broker_runtime.update_namesrv_addr();
+                        broker_runtime.update_namesrv_addr().await;
                         let next_execution_time = current_execution_time + Duration::from_secs(60);
                         let delay = next_execution_time
                             .saturating_duration_since(tokio::time::Instant::now());
@@ -635,15 +635,17 @@ impl BrokerRuntime {
         }
     }
 
-    fn update_namesrv_addr(&mut self) {
+    async fn update_namesrv_addr(&mut self) {
         if self.broker_config.fetch_name_srv_addr_by_dns_lookup {
             if let Some(namesrv_addr) = &self.broker_config.namesrv_addr {
                 self.broker_out_api
-                    .update_name_server_address_list_by_dns_lookup(namesrv_addr.clone());
+                    .update_name_server_address_list_by_dns_lookup(namesrv_addr.clone())
+                    .await;
             }
         } else if let Some(namesrv_addr) = &self.broker_config.namesrv_addr {
             self.broker_out_api
-                .update_name_server_address_list(namesrv_addr.clone());
+                .update_name_server_address_list(namesrv_addr.clone())
+                .await;
         }
     }
 
