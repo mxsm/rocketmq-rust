@@ -23,11 +23,11 @@ use std::time::Duration;
 pub use blocking_client::BlockingClient;
 pub use client::Client;
 
-use crate::error::Error;
 use crate::net::ResponseFuture;
 use crate::protocol::remoting_command::RemotingCommand;
 use crate::remoting::InvokeCallback;
 use crate::remoting::RemotingService;
+use crate::Result;
 
 mod async_client;
 mod blocking_client;
@@ -87,7 +87,7 @@ pub trait RemotingClient: RemotingService {
     ///
     /// # Arguments
     /// * `addrs` - A list of name server addresses to update.
-    fn update_name_server_address_list(&self, addrs: Vec<String>);
+    async fn update_name_server_address_list(&self, addrs: Vec<String>);
 
     /// Retrieves the current list of name server addresses.
     ///
@@ -115,7 +115,7 @@ pub trait RemotingClient: RemotingService {
         addr: String,
         request: RemotingCommand,
         timeout_millis: u64,
-    ) -> Result<RemotingCommand, Error>;
+    ) -> Result<RemotingCommand>;
 
     /// Invokes a command on a specified address without waiting for a response.
     ///

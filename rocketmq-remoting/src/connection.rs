@@ -34,7 +34,14 @@ use crate::codec::remoting_command_codec::RemotingCommandCodec;
 /// The contents of the write buffer are then written to the socket.
 
 pub struct Connection {
+    /// The `Framed` instance used for reading from and writing to the TCP stream.
+    /// It leverages the `RemotingCommandCodec` for encoding and decoding frames.
     pub(crate) framed: Framed<TcpStream, RemotingCommandCodec>,
+
+    /// A boolean flag indicating the current state of the connection.
+    /// `true` means the connection is in a good state, while `false` indicates
+    /// there are issues with the connection.
+    pub(crate) ok: bool,
 }
 
 impl Connection {
@@ -50,6 +57,7 @@ impl Connection {
     pub fn new(tcp_stream: TcpStream) -> Connection {
         Self {
             framed: Framed::new(tcp_stream, RemotingCommandCodec::new()),
+            ok: true,
         }
     }
 }
@@ -58,7 +66,4 @@ impl Connection {
     pub fn framed(&self) -> &Framed<TcpStream, RemotingCommandCodec> {
         &self.framed
     }
-    /*    pub fn channel(&self) -> &Channel {
-        &self.channel
-    }*/
 }
