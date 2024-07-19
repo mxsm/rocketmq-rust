@@ -251,10 +251,11 @@ impl RouteInfoManager {
                         }
                     }
                 }
+                let default_data_version = DataVersion::default();
                 let data_version = topic_config_serialize_wrapper
                     .data_version()
                     .as_ref()
-                    .unwrap();
+                    .unwrap_or(&default_data_version);
                 for topic_config in tc_table.values() {
                     let mut config = topic_config.clone();
                     if (register_first
