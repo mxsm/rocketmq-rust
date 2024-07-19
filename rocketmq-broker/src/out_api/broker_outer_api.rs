@@ -41,6 +41,7 @@ use rocketmq_remoting::rpc::client_metadata::ClientMetadata;
 use rocketmq_remoting::rpc::rpc_client_impl::RpcClientImpl;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_remoting::runtime::RPCHook;
+use tracing::debug;
 use tracing::error;
 use tracing::info;
 
@@ -207,10 +208,17 @@ impl BrokerOuterAPI {
         request_header: RegisterBrokerRequestHeader,
         body: Vec<u8>,
     ) -> Option<RegisterBrokerResult> {
+        debug!(
+            "Register broker to name server, namesrv_addr={},request_code={:?}, \
+             request_header={:?}, body={:?}",
+            namesrv_addr,
+            RequestCode::RegisterBroker,
+            request_header,
+            body
+        );
         let request =
             RemotingCommand::create_request_command(RequestCode::RegisterBroker, request_header)
                 .set_body(Some(body.clone()));
-
         if oneway {
             self.remoting_client
                 .invoke_oneway(namesrv_addr, request, timeout_mills)
@@ -224,6 +232,12 @@ impl BrokerOuterAPI {
         {
             Ok(response) => match From::from(response.code()) {
                 ResponseCode::Success => {
+                    info!(
+                        "Register broker to name server success, namesrv_addr={} response \
+                         body={:?}",
+                        namesrv_addr,
+                        response.body()
+                    );
                     let register_broker_result =
                         response.decode_command_custom_header::<RegisterBrokerResponseHeader>();
                     let mut result = RegisterBrokerResult::default();
