@@ -21,7 +21,6 @@ use std::sync::Arc;
 use bytes::Bytes;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mq_version::RocketMqVersion;
-use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::CRC32Utils;
 use rocketmq_remoting::code::request_code::RequestCode;
@@ -61,7 +60,7 @@ use tracing::warn;
 use crate::route::route_info_manager::RouteInfoManager;
 use crate::KVConfigManager;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DefaultRequestProcessor {
     route_info_manager: Arc<parking_lot::RwLock<RouteInfoManager>>,
     kvconfig_manager: Arc<parking_lot::RwLock<KVConfigManager>>,
@@ -212,16 +211,7 @@ impl DefaultRequestProcessor {
 
 #[allow(clippy::new_without_default)]
 impl DefaultRequestProcessor {
-    pub fn new(namesrv_config: Arc<NamesrvConfig>) -> Self {
-        Self {
-            route_info_manager: Arc::new(parking_lot::RwLock::new(RouteInfoManager::new())),
-            kvconfig_manager: Arc::new(parking_lot::RwLock::new(KVConfigManager::new(
-                namesrv_config,
-            ))),
-        }
-    }
-
-    pub fn new_with(
+    pub fn new(
         route_info_manager: Arc<parking_lot::RwLock<RouteInfoManager>>,
         kvconfig_manager: Arc<parking_lot::RwLock<KVConfigManager>>,
     ) -> Self {

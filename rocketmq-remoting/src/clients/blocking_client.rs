@@ -61,14 +61,13 @@ impl BlockingClient {
         &mut self,
         request: RemotingCommand,
         timeout: Duration,
-    ) -> anyhow::Result<()> {
+    ) -> crate::Result<()> {
         match self
             .rt
             .block_on(tokio::time::timeout(timeout, self.inner.send(request)))
         {
-            Ok(Ok(_)) => Ok(()),
-            Ok(Err(err)) => Err(err),
-            Err(err) => Err(err.into()),
+            Ok(value) => value,
+            Err(err) => Err(crate::error::Error::Elapsed(err)),
         }
     }
 }

@@ -14,12 +14,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use anyhow::anyhow;
+
 use futures_util::SinkExt;
 use tokio_stream::StreamExt;
 
 use crate::connection::Connection;
+use crate::error::Error::ConnectionInvalid;
+use crate::error::Error::Io;
 use crate::protocol::remoting_command::RemotingCommand;
+use crate::Result;
 
 pub struct Client {
     /// The TCP connection decorated with the rocketmq remoting protocol encoder / decoder
@@ -42,12 +45,13 @@ impl Client {
     /// # Returns
     ///
     /// A new `Client` instance wrapped in a `Result`. Returns an error if the connection fails.
-    pub async fn connect<T: tokio::net::ToSocketAddrs>(addr: T) -> anyhow::Result<Client> {
-        let tcp_stream = tokio::net::TcpStream::connect(addr).await?;
-        // let tcp_stream = timeout(timeout_duration, tokio::net::TcpStream::connect(addr)).await??;
-        //let socket_addr = tcp_stream.peer_addr()?;
+    pub async fn connect<T: tokio::net::ToSocketAddrs>(addr: T) -> Result<Client> {
+        let tcp_stream = tokio::net::TcpStream::connect(addr).await;
+        if tcp_stream.is_err() {
+            return Err(Io(tcp_stream.err().unwrap()));
+        }
         Ok(Client {
-            connection: Connection::new(tcp_stream),
+            connection: Connection::new(tcp_stream.unwrap()),
         })
     }
 
@@ -61,7 +65,7 @@ impl Client {
     ///
     /// The `RemotingCommand` representing the response, wrapped in a `Result`. Returns an error if
     /// the invocation fails.
-    pub async fn send_read(&mut self, request: RemotingCommand) -> anyhow::Result<RemotingCommand> {
+    pub async fn send_read(&mut self, request: RemotingCommand) -> Result<RemotingCommand> {
         self.send(request).await?;
         let response = self.read().await?;
         Ok(response)
@@ -91,13 +95,16 @@ impl Client {
     /// # Returns
     ///
     /// A `Result` indicating success or failure in sending the request.
-    pub async fn send(&mut self, request: RemotingCommand) -> anyhow::Result<()> {
+    pub async fn send(&mut self, request: RemotingCommand) -> Result<()> {
         match self.connection.framed.send(request).await {
             Ok(_) => Ok(()),
-            Err(_) => {
-                self.connection.ok = false;
-                Err(anyhow!("Failed to send request"))
-            }
+            Err(error) => match error {
+                Io(value) => {
+                    self.connection.ok = false;
+                    Err(ConnectionInvalid(value.to_string()))
+                }
+                _ => Err(error),
+            },
         }
     }
 
@@ -107,18 +114,21 @@ impl Client {
     ///
     /// The `RemotingCommand` representing the response, wrapped in a `Result`. Returns an error if
     /// reading the response fails.
-    async fn read(&mut self) -> anyhow::Result<RemotingCommand> {
+    async fn read(&mut self) -> Result<RemotingCommand> {
         match self.connection.framed.next().await {
             None => {
                 self.connection.ok = false;
-                Err(anyhow!("Failed to read response"))
+                Err(ConnectionInvalid("connection disconnection".to_string()))
             }
             Some(result) => match result {
                 Ok(response) => Ok(response),
-                Err(err) => {
-                    self.connection.ok = false;
-                    Err(anyhow!(err))
-                }
+                Err(error) => match error {
+                    Io(value) => {
+                        self.connection.ok = false;
+                        Err(ConnectionInvalid(value.to_string()))
+                    }
+                    _ => Err(error),
+                },
             },
         }
     }

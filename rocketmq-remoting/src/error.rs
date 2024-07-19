@@ -50,6 +50,12 @@ pub enum Error {
 
     #[error("Not support serialize type: {0}")]
     NotSupportSerializeType(u8),
+
+    #[error("{0}")]
+    ConnectionInvalid(String),
+
+    #[error("{0}")]
+    Elapsed(#[from] tokio::time::error::Elapsed),
 }
 
 #[cfg(test)]
