@@ -15,11 +15,6 @@
  * limitations under the License.
  */
 
-use std::collections::HashMap;
-use std::fmt::Debug;
-use std::fmt::Formatter;
-use std::time::Duration;
-
 pub use blocking_client::BlockingClient;
 pub use client::Client;
 
@@ -34,46 +29,6 @@ mod blocking_client;
 
 mod client;
 pub mod rocketmq_default_impl;
-
-#[derive(Default)]
-pub struct RemoteClient {
-    inner: HashMap<String, BlockingClient>,
-}
-
-impl Clone for RemoteClient {
-    fn clone(&self) -> Self {
-        Self {
-            inner: HashMap::new(),
-        }
-    }
-}
-
-impl Debug for RemoteClient {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str("RemoteClient")
-    }
-}
-
-impl RemoteClient {
-    /// Create a new `RemoteClient` instance.
-    pub fn new() -> Self {
-        Self {
-            inner: HashMap::new(),
-        }
-    }
-
-    pub fn invoke_oneway(
-        &mut self,
-        addr: String,
-        request: RemotingCommand,
-        timeout: Duration,
-    ) -> anyhow::Result<()> {
-        self.inner
-            .entry(addr.clone())
-            .or_insert_with(|| BlockingClient::connect(addr).unwrap())
-            .invoke_oneway(request, timeout)
-    }
-}
 
 /// `RemotingClient` trait extends `RemotingService` to provide client-specific remote interaction
 /// functionalities.

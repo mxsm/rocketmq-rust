@@ -20,6 +20,8 @@ use std::time::Duration;
 
 use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_common::common::server::config::ServerConfig;
+use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
+use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_remoting::runtime::server::RocketMQServer;
 use rocketmq_runtime::RocketMQRuntime;
 use tokio::select;
@@ -42,10 +44,12 @@ pub struct Builder {
 
 struct NameServerRuntime {
     name_server_config: Arc<NamesrvConfig>,
+    tokio_client_config: Arc<TokioClientConfig>,
     server_config: Arc<ServerConfig>,
     route_info_manager: Arc<parking_lot::RwLock<RouteInfoManager>>,
     kvconfig_manager: Arc<parking_lot::RwLock<KVConfigManager>>,
     name_server_runtime: Option<RocketMQRuntime>,
+    remoting_client: RocketmqDefaultClient,
 }
 
 impl NameServerBootstrap {
@@ -78,7 +82,7 @@ impl NameServerRuntime {
             self.name_server_config.clone(),
             self.kvconfig_manager.clone(),
         );
-        let default_request_processor = DefaultRequestProcessor::new_with(
+        let default_request_processor = DefaultRequestProcessor::new(
             self.route_info_manager.clone(),
             self.kvconfig_manager.clone(),
         );
@@ -136,17 +140,23 @@ impl Builder {
     pub fn build(self) -> NameServerBootstrap {
         let name_server_config = Arc::new(self.name_server_config.unwrap());
         let runtime = RocketMQRuntime::new_multi(10, "namesrv-thread");
+        let tokio_client_config = Arc::new(TokioClientConfig::default());
+        let remoting_client = RocketmqDefaultClient::new(tokio_client_config.clone());
+
         NameServerBootstrap {
             name_server_runtime: NameServerRuntime {
                 name_server_config: name_server_config.clone(),
+                tokio_client_config,
                 server_config: Arc::new(self.server_config.unwrap()),
-                route_info_manager: Arc::new(parking_lot::RwLock::new(
-                    RouteInfoManager::new_with_config(name_server_config.clone()),
-                )),
+                route_info_manager: Arc::new(parking_lot::RwLock::new(RouteInfoManager::new(
+                    name_server_config.clone(),
+                    Arc::new(remoting_client.clone()),
+                ))),
                 kvconfig_manager: Arc::new(parking_lot::RwLock::new(KVConfigManager::new(
                     name_server_config,
                 ))),
                 name_server_runtime: Some(runtime),
+                remoting_client,
             },
         }
     }

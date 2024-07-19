@@ -19,7 +19,6 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
 use std::time::SystemTime;
 
 use rocketmq_common::common::config::TopicConfig;
@@ -29,7 +28,8 @@ use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::common::TopicSysFlag;
 use rocketmq_common::TimeUtils;
-use rocketmq_remoting::clients::RemoteClient;
+use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
+use rocketmq_remoting::clients::RemotingClient;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
 use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
@@ -65,7 +65,6 @@ type FilterServerTable =
 type TopicQueueMappingInfoTable =
     HashMap<String /* topic */, HashMap<String /* brokerName */, TopicQueueMappingInfo>>;
 
-#[derive(Debug, Default)]
 pub struct RouteInfoManager {
     pub(crate) topic_queue_table: TopicQueueTable,
     pub(crate) broker_addr_table: BrokerAddrTable,
@@ -74,16 +73,15 @@ pub struct RouteInfoManager {
     pub(crate) filter_server_table: FilterServerTable,
     pub(crate) topic_queue_mapping_info_table: TopicQueueMappingInfoTable,
     pub(crate) namesrv_config: Arc<NamesrvConfig>,
-    pub(crate) remote_client: RemoteClient,
+    pub(crate) remoting_client: Arc<RocketmqDefaultClient>,
 }
 
 #[allow(private_interfaces)]
 impl RouteInfoManager {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn new_with_config(namesrv_config: Arc<NamesrvConfig>) -> Self {
+    pub fn new(
+        namesrv_config: Arc<NamesrvConfig>,
+        remoting_client: Arc<RocketmqDefaultClient>,
+    ) -> Self {
         RouteInfoManager {
             topic_queue_table: HashMap::new(),
             broker_addr_table: HashMap::new(),
@@ -92,7 +90,7 @@ impl RouteInfoManager {
             filter_server_table: HashMap::new(),
             topic_queue_mapping_info_table: HashMap::new(),
             namesrv_config,
-            remote_client: RemoteClient::new(),
+            remoting_client,
         }
     }
 }
@@ -599,14 +597,21 @@ impl RouteInfoManager {
             self.choose_broker_addrs_to_notify(broker_addr_map, offline_broker_addr)
         {
             for broker_addr in broker_addrs_notify {
-                let _ = self.remote_client.invoke_oneway(
-                    broker_addr,
-                    RemotingCommand::create_request_command(
-                        RequestCode::NotifyMinBrokerIdChange,
-                        request_header.clone(),
-                    ),
-                    Duration::from_millis(3000),
-                );
+                let remoting_client = self.remoting_client.clone();
+                let requst_header = request_header.clone();
+                let broker_addr = broker_addr.clone();
+                tokio::spawn(async move {
+                    let _ = remoting_client
+                        .invoke_oneway(
+                            broker_addr,
+                            RemotingCommand::create_request_command(
+                                RequestCode::NotifyMinBrokerIdChange,
+                                requst_header,
+                            ),
+                            3000,
+                        )
+                        .await;
+                });
             }
         }
     }
