@@ -18,6 +18,7 @@
 use crate::net::channel::Channel;
 use crate::protocol::remoting_command::RemotingCommand;
 use crate::runtime::server::ConnectionHandlerContext;
+use crate::Result;
 
 /// Trait for processing requests.
 #[trait_variant::make(RequestProcessor: Send )]
@@ -28,5 +29,5 @@ pub trait LocalRequestProcessor: Clone {
         channel: Channel,
         ctx: ConnectionHandlerContext,
         request: RemotingCommand,
-    ) -> Option<RemotingCommand>;
+    ) -> Result<Option<RemotingCommand>>;
 }
