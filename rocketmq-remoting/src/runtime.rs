@@ -14,42 +14,63 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::net::SocketAddr;
 
 use crate::protocol::remoting_command::RemotingCommand;
-use crate::runtime::processor::RequestProcessor;
+use crate::Result;
 
 pub mod config;
 pub mod processor;
 pub mod server;
 
-pub type BoxedRequestProcessor = Arc<Box<dyn RequestProcessor + Send + Sync + 'static>>;
-
-pub type RequestProcessorTable = HashMap<i32, BoxedRequestProcessor>;
-
+/// Trait defining hooks for RPC (Remote Procedure Call) interactions.
+///
+/// This trait provides hooks that can be implemented to execute custom logic
+/// before and after an RPC request is processed. It is designed for scenarios
+/// where additional operations such as logging, authentication, or metrics collection
+/// are required around RPC requests. Implementors of this trait must be `Send`, `Sync`,
+/// and have a `'static` lifetime, ensuring they can be safely shared across threads
+/// and have a lifetime covering the entire execution of the program.
 pub trait RPCHook: Send + Sync + 'static {
-    fn do_before_request(&self, remote_addr: &str, request: &RemotingCommand);
+    /// Executes custom logic before an RPC request is processed.
+    ///
+    /// This method allows for actions such as authentication checks, logging, or
+    /// initialization tasks to be performed prior to processing the request. It takes
+    /// a mutable reference to the `RemotingCommand` allowing for the request to be
+    /// modified before processing.
+    ///
+    /// # Arguments
+    /// * `remote_addr` - The socket address of the remote caller.
+    /// * `request` - A mutable reference to the `RemotingCommand` representing the incoming
+    ///   request.
+    ///
+    /// # Returns
+    /// A `Result` indicating the outcome of the pre-processing step. Returning an `Err`
+    /// value can be used to halt the processing of the request.
+    fn do_before_request(
+        &self,
+        remote_addr: SocketAddr,
+        request: &mut RemotingCommand,
+    ) -> Result<()>;
 
+    /// Executes custom logic after an RPC response has been prepared.
+    ///
+    /// This method allows for actions such as logging, metrics collection, or cleanup activities
+    /// to be performed after a request has been processed and a response is ready to be sent back.
+    /// It takes a mutable reference to the `RemotingCommand` allowing for the response to be
+    /// modified before sending.
+    ///
+    /// # Arguments
+    /// * `remote_addr` - The socket address of the remote caller.
+    /// * `response` - A mutable reference to the `RemotingCommand` representing the response to be
+    ///   sent back.
+    ///
+    /// # Returns
+    /// A `Result` indicating the outcome of the post-processing step. Returning an `Err`
+    /// value can be used to indicate an issue with the response preparation.
     fn do_after_response(
         &self,
-        remote_addr: &str,
-        request: &RemotingCommand,
-        response: &RemotingCommand,
-    );
+        remote_addr: SocketAddr,
+        response: &mut RemotingCommand,
+    ) -> Result<()>;
 }
-
-/*pub struct ServiceBridge {
-    //Limiting the maximum number of one-way requests.
-    pub(crate) semaphore_oneway: tokio::sync::Semaphore,
-    //Limiting the maximum number of asynchronous requests.
-    pub(crate) semaphore_async: tokio::sync::Semaphore,
-    //Cache mapping between request unique code(opaque-request header) and ResponseFuture.
-    pub(crate) response_table: HashMap<i32, ResponseFuture>,
-
-    pub(crate) processor_table: Option<RequestProcessorTable>,
-    pub(crate) default_request_processor_pair: Option<BoxedRequestProcessor>,
-
-    pub(crate) rpc_hooks: Vec<Box<dyn RPCHook>>,
-}*/
