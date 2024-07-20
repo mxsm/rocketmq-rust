@@ -35,11 +35,16 @@ pub struct TopicConfigAndMappingSerializeWrapper {
     #[serde(rename = "mappingDataVersion")]
     pub mapping_data_version: DataVersion,
 
-    #[serde(rename = "topicConfigTable")]
-    pub topic_config_table: Option<HashMap<String, TopicConfig>>,
+    #[serde(flatten)]
+    pub topic_config_serialize_wrapper: TopicConfigSerializeWrapper,
+}
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TopicConfigSerializeWrapper {
+    #[serde(rename = "topicConfigTable")]
+    pub topic_config_table: HashMap<String, TopicConfig>,
     #[serde(rename = "dataVersion")]
-    pub data_version: Option<DataVersion>,
+    pub data_version: DataVersion,
 }
 
 impl TopicConfigAndMappingSerializeWrapper {
@@ -54,12 +59,17 @@ impl TopicConfigAndMappingSerializeWrapper {
     pub fn mapping_data_version(&self) -> &DataVersion {
         &self.mapping_data_version
     }
+    pub fn topic_config_serialize_wrapper(&self) -> &TopicConfigSerializeWrapper {
+        &self.topic_config_serialize_wrapper
+    }
+}
 
-    pub fn topic_config_table(&self) -> &Option<HashMap<String, TopicConfig>> {
+impl TopicConfigSerializeWrapper {
+    pub fn topic_config_table(&self) -> &HashMap<String, TopicConfig> {
         &self.topic_config_table
     }
 
-    pub fn data_version(&self) -> &Option<DataVersion> {
+    pub fn data_version(&self) -> &DataVersion {
         &self.data_version
     }
 }
@@ -70,8 +80,16 @@ impl Default for TopicConfigAndMappingSerializeWrapper {
             topic_queue_mapping_info_map: HashMap::new(),
             topic_queue_mapping_detail_map: HashMap::new(),
             mapping_data_version: DataVersion::new(),
-            topic_config_table: None,
-            data_version: None,
+            topic_config_serialize_wrapper: TopicConfigSerializeWrapper::default(),
+        }
+    }
+}
+
+impl Default for TopicConfigSerializeWrapper {
+    fn default() -> Self {
+        Self {
+            topic_config_table: HashMap::new(),
+            data_version: DataVersion::new(),
         }
     }
 }
@@ -87,9 +105,18 @@ mod tests {
         let wrapper = TopicConfigAndMappingSerializeWrapper::default();
         assert!(wrapper.topic_queue_mapping_info_map.is_empty());
         assert!(wrapper.topic_queue_mapping_detail_map.is_empty());
-        //assert_eq!(wrapper.mapping_data_version, DataVersion::new());
-        assert!(wrapper.topic_config_table.is_none());
-        assert!(wrapper.data_version.is_none());
+        assert_eq!(wrapper.mapping_data_version, DataVersion::new());
+        assert_eq!(
+            wrapper
+                .topic_config_serialize_wrapper()
+                .topic_config_table()
+                .is_empty(),
+            true
+        );
+        assert_eq!(
+            wrapper.topic_config_serialize_wrapper().data_version(),
+            &DataVersion::new()
+        );
     }
 
     #[test]
@@ -100,8 +127,8 @@ mod tests {
         let topic_queue_mapping_detail = TopicQueueMappingDetail::default();
         let data_version = DataVersion::default();
 
-        wrapper.topic_config_table = Some(HashMap::new());
-        wrapper.data_version = Some(data_version.clone());
+        let topic_config_serialize_wrapper = TopicConfigSerializeWrapper::default();
+        wrapper.topic_config_serialize_wrapper = topic_config_serialize_wrapper.clone();
         wrapper
             .topic_queue_mapping_info_map
             .insert("test".to_string(), topic_queue_mapping_info.clone());
@@ -117,8 +144,10 @@ mod tests {
             wrapper.topic_queue_mapping_detail_map(),
             &HashMap::from([("test".to_string(), topic_queue_mapping_detail)])
         );
-        //assert_eq!(wrapper.mapping_data_version(), &DataVersion::new());
-        assert_eq!(wrapper.topic_config_table(), &Some(HashMap::new()));
-        assert_eq!(wrapper.data_version(), &Some(data_version));
+        assert_eq!(wrapper.mapping_data_version(), &data_version);
+        assert_eq!(
+            wrapper.topic_config_serialize_wrapper(),
+            &topic_config_serialize_wrapper
+        );
     }
 }

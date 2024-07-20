@@ -94,6 +94,7 @@ impl RouteInfoManager {
         }
     }
 }
+
 //impl register broker
 impl RouteInfoManager {
     pub fn register_broker(
@@ -161,9 +162,8 @@ impl RouteInfoManager {
                 if let Some(val) = self.broker_live_table.get(&addr_info_old) {
                     let old_state_version = val.data_version().state_version();
                     let new_state_version = topic_config_serialize_wrapper
+                        .topic_config_serialize_wrapper
                         .data_version()
-                        .as_ref()
-                        .unwrap()
                         .state_version();
                     if old_state_version > new_state_version {
                         warn!(
@@ -186,15 +186,16 @@ impl RouteInfoManager {
                 }
             }
         }
-        let size = if let Some(val) = topic_config_serialize_wrapper.topic_config_table() {
-            val.len()
-        } else {
-            0
-        };
+        let size = topic_config_serialize_wrapper
+            .topic_config_serialize_wrapper
+            .topic_config_table()
+            .len();
         if !broker_data.broker_addrs().contains_key(&broker_id) && size == 1 {
             warn!(
                 "Can't register topicConfigWrapper={:?} because broker[{}]={} has not registered.",
-                topic_config_serialize_wrapper.topic_config_table(),
+                topic_config_serialize_wrapper
+                    .topic_config_serialize_wrapper
+                    .topic_config_table(),
                 broker_id,
                 broker_addr
             );
@@ -214,79 +215,77 @@ impl RouteInfoManager {
         let broker_data = broker_data.clone();
         //handle master or prime slave topic config update
         if is_master || is_prime_slave {
-            if let Some(tc_table) = topic_config_serialize_wrapper.topic_config_table() {
-                let topic_queue_mapping_info_map =
-                    topic_config_serialize_wrapper.topic_queue_mapping_info_map();
+            let tc_table = topic_config_serialize_wrapper
+                .topic_config_serialize_wrapper
+                .topic_config_table();
+            let topic_queue_mapping_info_map =
+                topic_config_serialize_wrapper.topic_queue_mapping_info_map();
 
-                // Delete the topics that don't exist in tcTable from the current broker
-                // Static topic is not supported currently
-                if self.namesrv_config.delete_topic_with_broker_registration
-                    && topic_queue_mapping_info_map.is_empty()
-                {
-                    let old_topic_set = self.topic_set_of_broker_name(&broker_name);
-                    let new_topic_set = tc_table
-                        .keys()
-                        .map(|item| item.to_string())
-                        .collect::<HashSet<String>>();
-                    let to_delete_topics = new_topic_set
-                        .difference(&old_topic_set)
-                        .map(|item| item.to_string())
-                        .collect::<HashSet<String>>();
-                    for to_delete_topic in to_delete_topics {
-                        let queue_data_map = self.topic_queue_table.get_mut(&to_delete_topic);
-                        if let Some(queue_data) = queue_data_map {
-                            let removed_qd = queue_data.remove(&broker_name);
-                            if let Some(ref removed_qd_inner) = removed_qd {
-                                info!(
-                                    "broker[{}] delete topic[{}] queue[{:?}] because of master \
-                                     change",
-                                    broker_name, to_delete_topic, removed_qd_inner
-                                );
-                            }
-                            if queue_data.is_empty() {
-                                self.topic_queue_table.remove(&to_delete_topic);
-                            }
-                        }
-                    }
-                }
-                let default_data_version = DataVersion::default();
-                let data_version = topic_config_serialize_wrapper
-                    .data_version()
-                    .as_ref()
-                    .unwrap_or(&default_data_version);
-                for topic_config in tc_table.values() {
-                    let mut config = topic_config.clone();
-                    if (register_first
-                        || self.is_topic_config_changed(
-                            &cluster_name,
-                            &broker_addr,
-                            data_version,
-                            &broker_name,
-                            topic_config.topic_name.as_ref().unwrap(),
-                        ))
-                        && is_prime_slave
-                        && broker_data.enable_acting_master()
-                    {
-                        config.perm &= !PermName::PERM_WRITE;
-                    }
-                    self.create_and_update_queue_data(&broker_name, config);
-                }
-                if self.is_broker_topic_config_changed(&cluster_name, &broker_addr, data_version)
-                    || register_first
-                {
-                    for (topic, vtq_info) in topic_queue_mapping_info_map {
-                        if !self.topic_queue_mapping_info_table.contains_key(topic) {
-                            self.topic_queue_mapping_info_table
-                                .insert(topic.to_string(), HashMap::new());
-                        }
-                        self.topic_queue_mapping_info_table
-                            .get_mut(topic)
-                            .unwrap()
-                            .insert(
-                                vtq_info.bname.as_ref().unwrap().to_string(),
-                                vtq_info.clone(),
+            // Delete the topics that don't exist in tcTable from the current broker
+            // Static topic is not supported currently
+            if self.namesrv_config.delete_topic_with_broker_registration
+                && topic_queue_mapping_info_map.is_empty()
+            {
+                let old_topic_set = self.topic_set_of_broker_name(&broker_name);
+                let new_topic_set = tc_table
+                    .keys()
+                    .map(|item| item.to_string())
+                    .collect::<HashSet<String>>();
+                let to_delete_topics = new_topic_set
+                    .difference(&old_topic_set)
+                    .map(|item| item.to_string())
+                    .collect::<HashSet<String>>();
+                for to_delete_topic in to_delete_topics {
+                    let queue_data_map = self.topic_queue_table.get_mut(&to_delete_topic);
+                    if let Some(queue_data) = queue_data_map {
+                        let removed_qd = queue_data.remove(&broker_name);
+                        if let Some(ref removed_qd_inner) = removed_qd {
+                            info!(
+                                "broker[{}] delete topic[{}] queue[{:?}] because of master change",
+                                broker_name, to_delete_topic, removed_qd_inner
                             );
+                        }
+                        if queue_data.is_empty() {
+                            self.topic_queue_table.remove(&to_delete_topic);
+                        }
                     }
+                }
+            }
+            let data_version = topic_config_serialize_wrapper
+                .topic_config_serialize_wrapper
+                .data_version();
+            for topic_config in tc_table.values() {
+                let mut config = topic_config.clone();
+                if (register_first
+                    || self.is_topic_config_changed(
+                        &cluster_name,
+                        &broker_addr,
+                        data_version,
+                        &broker_name,
+                        topic_config.topic_name.as_ref().unwrap(),
+                    ))
+                    && is_prime_slave
+                    && broker_data.enable_acting_master()
+                {
+                    config.perm &= !PermName::PERM_WRITE;
+                }
+                self.create_and_update_queue_data(&broker_name, config);
+            }
+            if self.is_broker_topic_config_changed(&cluster_name, &broker_addr, data_version)
+                || register_first
+            {
+                for (topic, vtq_info) in topic_queue_mapping_info_map {
+                    if !self.topic_queue_mapping_info_table.contains_key(topic) {
+                        self.topic_queue_mapping_info_table
+                            .insert(topic.to_string(), HashMap::new());
+                    }
+                    self.topic_queue_mapping_info_table
+                        .get_mut(topic)
+                        .unwrap()
+                        .insert(
+                            vtq_info.bname.as_ref().unwrap().to_string(),
+                            vtq_info.clone(),
+                        );
                 }
             }
         }
@@ -301,11 +300,10 @@ impl RouteInfoManager {
                     .expect("Time went backwards")
                     .as_millis() as i64,
                 DEFAULT_BROKER_CHANNEL_EXPIRED_TIME,
-                if let Some(data_version) = topic_config_serialize_wrapper.data_version() {
-                    data_version.clone()
-                } else {
-                    DataVersion::default()
-                },
+                topic_config_serialize_wrapper
+                    .topic_config_serialize_wrapper
+                    .data_version()
+                    .clone(),
                 ha_server_addr.clone(),
                 remote_addr,
             ),
