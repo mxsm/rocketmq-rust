@@ -22,6 +22,7 @@ use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
+use rocketmq_remoting::Result;
 use tracing::info;
 
 pub use self::client_request_processor::ClientRequestProcessor;
@@ -50,16 +51,17 @@ impl RequestProcessor for NameServerRequestProcessor {
         channel: Channel,
         ctx: ConnectionHandlerContext,
         request: RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> Result<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         info!("process_request: {:?}", request_code);
-        match request_code {
+        let result = match request_code {
             RequestCode::GetRouteinfoByTopic => self
                 .client_request_processor
                 .process_request(channel, ctx, request),
             _ => self
                 .default_request_processor
                 .process_request(channel, ctx, request),
-        }
+        };
+        Ok(result)
     }
 }

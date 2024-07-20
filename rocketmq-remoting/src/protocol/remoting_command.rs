@@ -578,6 +578,7 @@ impl RemotingCommand {
         (self.flag & bits) == bits
     }
 
+    #[inline]
     pub fn is_oneway_rpc(&self) -> bool {
         let bits = 1 << Self::RPC_ONEWAY;
         (self.flag & bits) == bits

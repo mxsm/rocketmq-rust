@@ -20,6 +20,7 @@ use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
+use rocketmq_remoting::Result;
 use rocketmq_store::log_file::MessageStore;
 use tracing::info;
 
@@ -106,10 +107,10 @@ impl<MS: MessageStore + Send + Sync + 'static> RequestProcessor for BrokerReques
         channel: Channel,
         ctx: ConnectionHandlerContext,
         request: RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> Result<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         info!("process_request: {:?}", request_code);
-        match request_code {
+        let result = match request_code {
             RequestCode::SendMessage
             | RequestCode::SendMessageV2
             | RequestCode::SendBatchMessage
@@ -149,6 +150,7 @@ impl<MS: MessageStore + Send + Sync + 'static> RequestProcessor for BrokerReques
                     .process_request(channel, ctx, request_code, request)
                     .await
             }
-        }
+        };
+        Ok(result)
     }
 }

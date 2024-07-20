@@ -78,7 +78,7 @@ where
                     ))
                 };
                 tokio::select! {
-                    _ = handle_future => {info!("PullRequestHoldService: handle_future..........");}
+                    _ = handle_future => {}
                     _ = self_clone.shutdown.notified() => {
                         info!("PullRequestHoldService: shutdown..........");
                         break;

@@ -35,10 +35,14 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
+use crate::code::response_code::ResponseCode;
 use crate::connection::Connection;
+use crate::error::Error;
 use crate::net::channel::Channel;
 use crate::protocol::remoting_command::RemotingCommand;
 use crate::runtime::processor::RequestProcessor;
+use crate::runtime::RPCHook;
+use crate::Result;
 
 /// Default limit the max number of connections.
 const DEFAULT_MAX_CONNECTIONS: usize = 1000;
@@ -58,6 +62,7 @@ pub struct ConnectionHandler<RP> {
     shutdown: Shutdown,
     _shutdown_complete: mpsc::Sender<()>,
     conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
+    rpc_hooks: Arc<Vec<Box<dyn RPCHook>>>,
 }
 
 impl<RP> Drop for ConnectionHandler<RP> {
@@ -73,8 +78,32 @@ impl<RP> Drop for ConnectionHandler<RP> {
     }
 }
 
+impl<RP> ConnectionHandler<RP> {
+    pub fn do_before_rpc_hooks(
+        &self,
+        channel: &Channel,
+        request: &mut RemotingCommand,
+    ) -> Result<()> {
+        for hook in self.rpc_hooks.iter() {
+            hook.do_before_request(channel.remote_address(), request)?;
+        }
+        Ok(())
+    }
+
+    pub fn do_after_rpc_hooks(
+        &self,
+        channel: &Channel,
+        response: &mut RemotingCommand,
+    ) -> Result<()> {
+        for hook in self.rpc_hooks.iter() {
+            hook.do_before_request(channel.remote_address(), response)?;
+        }
+        Ok(())
+    }
+}
+
 impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
-    async fn handle(&mut self) -> anyhow::Result<()> {
+    async fn handle(&mut self) -> Result<()> {
         while !self.shutdown.is_shutdown {
             let frame = tokio::select! {
                 res = self.connection_handler_context.connection.framed.next() => res,
@@ -84,36 +113,99 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                 }
             };
 
-            let cmd = match frame {
-                Some(frame) => match frame {
-                    Ok(cmd) => cmd,
-                    Err(err) => {
-                        error!("read frame failed: {}", err);
-                        return Ok(());
-                    }
-                },
+            let mut cmd = match frame {
+                Some(frame) => frame?,
                 None => {
                     //If the frame is None, it means the connection is closed.
                     return Ok(());
                 }
             };
-            //let ctx = ConnectionHandlerContext::new(&self.connection);
+
+            let mut exception = match self.do_before_rpc_hooks(&self.channel, &mut cmd) {
+                Ok(_) => None,
+                Err(error) => Some(error),
+            };
             let opaque = cmd.opaque();
-            let channel = self.channel.clone();
-            let ctx = ArcCellWrapper::downgrade(&self.connection_handler_context);
-            let response = tokio::select! {
-                result = self.request_processor.process_request(channel,ctx,cmd) =>  result,
+            let oneway_rpc = cmd.is_oneway_rpc();
+            let mut response = if exception.is_some() {
+                Some(RemotingCommand::create_remoting_command(
+                    ResponseCode::SystemError,
+                ))
+            } else {
+                let channel = self.channel.clone();
+                let ctx = ArcCellWrapper::downgrade(&self.connection_handler_context);
+                tokio::select! {
+                    result = self.request_processor.process_request(channel,ctx,cmd) =>  result?,
+                }
             };
             if response.is_none() {
                 continue;
             }
+            exception = match self.do_before_rpc_hooks(&self.channel, response.as_mut().unwrap()) {
+                Ok(_) => None,
+                Err(error) => Some(error),
+            };
+
+            if let Some(exception_inner) = exception {
+                match exception_inner {
+                    Error::AbortProcessException(code, message) => {
+                        let response = RemotingCommand::create_response_command_with_code_remark(
+                            code, message,
+                        );
+                        tokio::select! {
+                            result =self.connection_handler_context.connection.framed.send(response.set_opaque(opaque)) => match result{
+                                Ok(_) =>{},
+                                Err(err) => {
+                                    match err {
+                                        Error::Io(io_error) => {
+                                            error!("send response failed: {}", io_error);
+                                            return Ok(())
+                                        }
+                                        _ => { error!("send response failed: {}", err);}
+                                    }
+                                },
+                            },
+                        }
+                    }
+                    _ => {
+                        if !oneway_rpc {
+                            let response =
+                                RemotingCommand::create_response_command_with_code_remark(
+                                    ResponseCode::SystemError,
+                                    exception_inner.to_string(),
+                                );
+                            tokio::select! {
+                                result =self.connection_handler_context.connection.framed.send(response.set_opaque(opaque)) => match result{
+                                    Ok(_) =>{},
+                                    Err(err) => {
+                                        match err {
+                                            Error::Io(io_error) => {
+                                                error!("send response failed: {}", io_error);
+                                                return Ok(())
+                                            }
+                                            _ => { error!("send response failed: {}", err);}
+                                        }
+                                    },
+                                },
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+
             let response = response.unwrap();
             tokio::select! {
                 result =self.connection_handler_context.connection.framed.send(response.set_opaque(opaque)) => match result{
                     Ok(_) =>{},
                     Err(err) => {
-                        error!("send response failed: {}", err);
-                        return Ok(())
+                        match err {
+                            Error::Io(io_error) => {
+                                error!("send response failed: {}", io_error);
+                                return Ok(())
+                            }
+                            _ => { error!("send response failed: {}", err);}
+                        }
                     },
                 },
             }
@@ -145,6 +237,8 @@ struct ConnectionListener<RP> {
     conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
 
     request_processor: RP,
+
+    rpc_hooks: Arc<Vec<Box<dyn RPCHook>>>,
 }
 
 impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
@@ -175,6 +269,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
                 shutdown: Shutdown::new(self.notify_shutdown.subscribe()),
                 _shutdown_complete: self.shutdown_complete_tx.clone(),
                 conn_disconnect_notify: self.conn_disconnect_notify.clone(),
+                rpc_hooks: self.rpc_hooks.clone(),
             };
 
             tokio::spawn(async move {
@@ -252,6 +347,7 @@ impl<RP: RequestProcessor + Sync + 'static> RocketMQServer<RP> {
             tokio::signal::ctrl_c(),
             request_processor,
             Some(notify_conn_disconnect),
+            vec![],
         )
         .await;
     }
@@ -262,6 +358,7 @@ pub async fn run<RP: RequestProcessor + Sync + 'static>(
     shutdown: impl Future,
     request_processor: RP,
     conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
+    rpc_hooks: Vec<Box<dyn RPCHook>>,
 ) {
     let (notify_shutdown, _) = broadcast::channel(1);
     let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::channel(1);
@@ -273,6 +370,7 @@ pub async fn run<RP: RequestProcessor + Sync + 'static>(
         conn_disconnect_notify,
         limit_connections: Arc::new(Semaphore::new(DEFAULT_MAX_CONNECTIONS)),
         request_processor,
+        rpc_hooks: Arc::new(rpc_hooks),
     };
 
     tokio::select! {
