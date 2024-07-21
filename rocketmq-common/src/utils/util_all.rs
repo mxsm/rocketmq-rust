@@ -18,6 +18,7 @@
 use std::env;
 use std::fs;
 use std::io;
+use std::net::IpAddr;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -31,11 +32,14 @@ use chrono::Local;
 use chrono::TimeZone;
 use chrono::Timelike;
 use chrono::Utc;
+use local_ip_address::Error;
 use once_cell::sync::Lazy;
 use tracing::error;
 use tracing::info;
 
 use crate::common::mix_all::MULTI_PATH_SPLITTER;
+use crate::error::Error::RuntimeException;
+use crate::Result;
 
 const HEX_ARRAY: [char; 16] = [
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F',
@@ -165,18 +169,18 @@ pub fn bytes_to_string(src: &[u8]) -> String {
 }
 
 pub fn write_int(buffer: &mut [char], pos: usize, value: i32) {
-    let value_str = format!("{:X}", value);
-    let value_chars: Vec<char> = value_str.chars().collect();
-    for (i, &c) in value_chars.iter().enumerate() {
-        buffer[pos + i] = c;
+    let mut current_pos = pos;
+    for move_bits in (0..=28).rev().step_by(4) {
+        buffer[current_pos] = HEX_ARRAY[((value >> move_bits) & 0xF) as usize];
+        current_pos += 1;
     }
 }
 
 pub fn write_short(buffer: &mut [char], pos: usize, value: i16) {
-    let value_str = format!("{:X}", value);
-    let value_chars: Vec<char> = value_str.chars().collect();
-    for (i, &c) in value_chars.iter().enumerate() {
-        buffer[pos + i] = c;
+    let mut current_pos = pos;
+    for move_bits in (0..=12).rev().step_by(4) {
+        buffer[current_pos] = HEX_ARRAY[((value >> move_bits) & 0xF) as usize];
+        current_pos += 1;
     }
 }
 
@@ -269,6 +273,22 @@ pub fn delete_empty_directory<P: AsRef<Path>>(path: P) {
             }
         }
         Err(e) => error!("Error reading directory: {}", e),
+    }
+}
+
+pub fn get_ip() -> Result<Vec<u8>> {
+    match local_ip_address::local_ip() {
+        Ok(value) => match value {
+            IpAddr::V4(ip) => Ok(ip.octets().to_vec()),
+            IpAddr::V6(ip) => Ok(ip.octets().to_vec()),
+        },
+        Err(_) => match local_ip_address::local_ipv6() {
+            Ok(value) => match value {
+                IpAddr::V4(ip) => Ok(ip.octets().to_vec()),
+                IpAddr::V6(ip) => Ok(ip.octets().to_vec()),
+            },
+            Err(value) => Err(RuntimeException(value.to_string())),
+        },
     }
 }
 

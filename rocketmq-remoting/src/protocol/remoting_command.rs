@@ -265,6 +265,11 @@ impl RemotingCommand {
         self.code = code.into();
     }
 
+    pub fn set_code_mut(&mut self, code: impl Into<i32>) -> &mut Self {
+        self.code = code.into();
+        self
+    }
+
     pub fn set_language(mut self, language: LanguageCode) -> Self {
         self.language = language;
         self
@@ -338,6 +343,11 @@ impl RemotingCommand {
         let mark = 1 << Self::RPC_TYPE;
         self.flag |= mark;
         self
+    }
+
+    pub fn mark_response_type_ref(&mut self) {
+        let mark = 1 << Self::RPC_TYPE;
+        self.flag |= mark;
     }
 
     pub fn mark_oneway_rpc(mut self) -> Self {

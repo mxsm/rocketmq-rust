@@ -381,6 +381,7 @@ impl BrokerRuntime {
             self.broker_config.clone(),
             self.message_store.as_ref().unwrap(),
             self.rebalance_lock_manager.clone(),
+            self.broker_stats_manager.clone(),
         );
         let mut pull_message_result_handler =
             ArcCellWrapper::new(Box::new(DefaultPullMessageResultHandler::new(

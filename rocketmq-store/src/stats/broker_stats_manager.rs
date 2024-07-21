@@ -485,8 +485,13 @@ impl BrokerStatsManager {
 
     pub fn inc_group_ack_nums(&self, group: &str, topic: &str, inc_value: i32) {}
     pub fn inc_broker_get_nums(&self, group: &str, inc_value: i32) {}
+    pub fn inc_broker_put_nums(&self, group: &str, inc_value: i32) {}
 
     pub fn on_topic_deleted(&self, topic: &str) {}
+
+    pub fn inc_queue_put_nums(&self, topic: &str, queue_id: i32, num: i32, times: i32) {}
+    pub fn inc_queue_put_size(&self, topic: &str, queue_id: i32, size: i32) {}
+    pub fn inc_topic_put_latency(&self, topic: &str, queue_id: i32, inc_value: i32) {}
 }
 
 pub fn create_statistics_kind_meta(
