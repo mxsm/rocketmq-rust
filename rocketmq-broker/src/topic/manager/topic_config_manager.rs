@@ -235,7 +235,7 @@ impl TopicConfigManager {
         }
         TopicConfigAndMappingSerializeWrapper {
             topic_config_serialize_wrapper: rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper {
-                topic_config_table: topic_config_table,
+                topic_config_table,
                 data_version: self.data_version.as_ref().clone(),
             },
             topic_queue_mapping_info_map,
