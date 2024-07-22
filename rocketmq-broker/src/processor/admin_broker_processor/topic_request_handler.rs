@@ -27,6 +27,7 @@ use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::body::create_topic_list_request_body::CreateTopicListRequestBody;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
+use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper;
 use rocketmq_remoting::protocol::header::create_topic_request_header::CreateTopicRequestHeader;
 use rocketmq_remoting::protocol::header::delete_topic_request_header::DeleteTopicRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
@@ -365,20 +366,20 @@ impl TopicRequestHandler {
                 .data_version
                 .lock()
                 .clone(),
-            topic_config_table: Some(
-                self.inner
-                    .topic_config_manager
-                    .topic_config_table()
-                    .lock()
-                    .clone(),
-            ),
-            data_version: Some(
-                self.inner
+            topic_config_serialize_wrapper: TopicConfigSerializeWrapper {
+                data_version: self
+                    .inner
                     .topic_config_manager
                     .data_version()
                     .as_ref()
                     .clone(),
-            ),
+                topic_config_table: self
+                    .inner
+                    .topic_config_manager
+                    .topic_config_table()
+                    .lock()
+                    .clone(),
+            },
             ..Default::default()
         };
         let content = topic_config_and_mapping_serialize_wrapper.to_json();

@@ -31,6 +31,7 @@ use rocketmq_common::ArcCellWrapper;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_common::UtilAll::compute_next_morning_time_millis;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
+use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use rocketmq_remoting::protocol::DataVersion;
@@ -925,7 +926,10 @@ impl BrokerRuntimeInner {
         data_version: DataVersion,
     ) {
         let mut serialize_wrapper = TopicConfigAndMappingSerializeWrapper {
-            data_version: Some(data_version),
+            topic_config_serialize_wrapper: TopicConfigSerializeWrapper {
+                data_version: data_version.clone(),
+                topic_config_table: Default::default(),
+            },
             ..Default::default()
         };
 
@@ -947,7 +951,9 @@ impl BrokerRuntimeInner {
                 register_topic_config,
             );
         }
-        serialize_wrapper.topic_config_table = Some(topic_config_table);
+        serialize_wrapper
+            .topic_config_serialize_wrapper
+            .topic_config_table = topic_config_table;
         let mut topic_queue_mapping_info_map = HashMap::new();
         for topic_config in topic_config_list {
             if let Some(ref value) = self
