@@ -60,7 +60,7 @@ log = "0.4.22"
 cfg-if = { workspace = true }
 lazy_static.workspace = true
 [dev-dependencies]
-mockall = "0.12.1"
+mockall = "0.13.0"
 static_assertions = { version = "1" }
 criterion = { version = "0.5", features = ["html_reports"] }
 
