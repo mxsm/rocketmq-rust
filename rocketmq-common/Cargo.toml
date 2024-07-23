@@ -59,4 +59,4 @@ hostname = "0.4"
 regex = "1.10.5"
 thiserror = { workspace = true }
 [dev-dependencies]
-mockall = "0.12.1"
+mockall = "0.13.0"
