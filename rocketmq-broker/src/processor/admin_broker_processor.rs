@@ -80,14 +80,24 @@ impl AdminBrokerProcessor {
                     .update_and_create_topic_list(channel, ctx, request_code, request)
                     .await
             }
+            RequestCode::DeleteTopicInBroker => {
+                self.topic_request_handler
+                    .delete_topic(channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::GetAllTopicConfig => {
                 self.topic_request_handler
                     .get_all_topic_config(channel, ctx, request_code, request)
                     .await
             }
-            RequestCode::DeleteTopicInBroker => {
+            RequestCode::UpdateBrokerConfig => {
                 self.topic_request_handler
-                    .delete_topic(channel, ctx, request_code, request)
+                    .update_broker_config(channel, ctx, request_code, request)
+                    .await
+            }
+            RequestCode::GetBrokerConfig => {
+                self.topic_request_handler
+                    .get_broker_config(channel, ctx, request_code, request)
                     .await
             }
             _ => Some(get_unknown_cmd_response(request_code)),
