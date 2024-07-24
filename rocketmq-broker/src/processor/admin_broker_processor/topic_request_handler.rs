@@ -16,6 +16,7 @@
  */
 
 use std::collections::HashMap;
+
 use bytes::Bytes;
 use rocketmq_common::common::attribute::attribute_parser::AttributeParser;
 use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
@@ -390,24 +391,32 @@ impl TopicRequestHandler {
         Some(response)
     }
 
-    pub async fn update_broker_config(&mut self,
-                                      _channel: Channel,
-                                      _ctx: ConnectionHandlerContext,
-                                      _request_code: RequestCode,
-                                      _request: RemotingCommand,) -> Option<RemotingCommand> {
+    pub async fn update_broker_config(
+        &mut self,
+        _channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        _request_code: RequestCode,
+        _request: RemotingCommand,
+    ) -> Option<RemotingCommand> {
         todo!()
     }
 
-    pub async fn get_broker_config(&mut self,
-                                   _channel: Channel,
-                                   _ctx: ConnectionHandlerContext,
-                                   _request_code: RequestCode,
-                                   _request: RemotingCommand,) -> Option<RemotingCommand> {
+    pub async fn get_broker_config(
+        &mut self,
+        _channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        _request_code: RequestCode,
+        _request: RemotingCommand,
+    ) -> Option<RemotingCommand> {
         let mut response = RemotingCommand::create_response_command();
         // broker config => broker config
         // default message store config => message store config
         let broker_config = self.inner.broker_config.clone();
-        let message_store_config = self.inner.default_message_store.message_store_config().clone();
+        let message_store_config = self
+            .inner
+            .default_message_store
+            .message_store_config()
+            .clone();
         let broker_config_properties = broker_config.get_properties();
         let message_store_config_properties = message_store_config.get_properties();
         let combine_map = broker_config_properties
@@ -416,8 +425,8 @@ impl TopicRequestHandler {
             .collect::<HashMap<_, _>>();
         let mut body = String::new();
         for (key, value) in combine_map.iter() {
-            body.push_str(&key.as_str());
-            body.push_str(":");
+            body.push_str(key.as_str());
+            body.push(':');
             if let Some(v) = value.downcast_ref::<i32>() {
                 body.push_str(v.to_string().as_str());
             } else if let Some(v) = value.downcast_ref::<String>() {
@@ -425,7 +434,7 @@ impl TopicRequestHandler {
             } else if let Some(v) = value.downcast_ref::<bool>() {
                 body.push_str(v.to_string().as_str());
             }
-            body.push_str("\n");
+            body.push('\n');
         }
         if !body.is_empty() {
             response.set_body_mut_ref(Some(Bytes::from(body)));
@@ -444,5 +453,4 @@ impl TopicRequestHandler {
             .clear_in_flight_message_num_by_topic_name(topic);
         self.inner.default_message_store.delete_topics(vec![topic]);
     }
-
 }

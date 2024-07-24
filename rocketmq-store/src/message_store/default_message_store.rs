@@ -16,7 +16,6 @@
  */
 #![allow(unused_variables)]
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
@@ -260,9 +259,6 @@ impl DefaultMessageStore {
     pub fn message_store_config(&self) -> Arc<MessageStoreConfig> {
         self.message_store_config.clone()
     }
-
-
-
 }
 
 impl Drop for DefaultMessageStore {
