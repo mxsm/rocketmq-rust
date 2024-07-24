@@ -108,6 +108,24 @@ impl StoreStatsService {
             broker_identity,
         }
     }
+}
+
+impl StoreStatsService {
+    pub fn get_message_times_total_found(&self) -> &AtomicUsize {
+        &self.get_message_times_total_found
+    }
+
+    pub fn get_message_times_total_miss(&self) -> &AtomicUsize {
+        &self.get_message_times_total_miss
+    }
+
+    pub fn get_message_transferred_msg_count(&self) -> &AtomicUsize {
+        &self.get_message_transferred_msg_count
+    }
+
+    pub fn get_put_message_failed_times(&self) -> &AtomicUsize {
+        &self.put_message_failed_times
+    }
 
     fn reset_put_message_time_buckets(&self) {
         let mut buckets = BTreeMap::new();
@@ -127,21 +145,9 @@ impl StoreStatsService {
         }
     }
 
+    pub fn set_put_message_entire_time_max(&self, _value: u64) {}
+
     // Add more methods as needed for functionality
-}
-
-impl StoreStatsService {
-    pub fn get_get_message_times_total_found(&self) -> &AtomicUsize {
-        &self.get_message_times_total_found
-    }
-
-    pub fn get_get_message_times_total_miss(&self) -> &AtomicUsize {
-        &self.get_message_times_total_miss
-    }
-
-    pub fn get_message_transferred_msg_count(&self) -> &AtomicUsize {
-        &self.get_message_transferred_msg_count
-    }
 }
 
 pub struct CallSnapshot {
