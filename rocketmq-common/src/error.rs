@@ -20,4 +20,7 @@ use thiserror::Error;
 pub enum Error {
     #[error("Serialization error: {0}")]
     JsonError(#[from] serde_json::Error),
+
+    #[error("{0}")]
+    RuntimeException(String),
 }

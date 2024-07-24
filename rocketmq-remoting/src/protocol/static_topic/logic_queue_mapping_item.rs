@@ -43,6 +43,20 @@ impl LogicQueueMappingItem {
         self.logic_offset + (physical_queue_offset - self.start_offset)
     }
 
+    pub fn compute_static_queue_offset_loosely(&self, physical_queue_offset: i64) -> i64 {
+        // Consider the newly mapped item
+        if self.logic_offset < 0 {
+            return -1;
+        }
+        if physical_queue_offset < self.start_offset {
+            return self.logic_offset;
+        }
+        if self.end_offset >= self.start_offset && self.end_offset < physical_queue_offset {
+            return self.logic_offset + (self.end_offset - self.start_offset);
+        }
+        self.logic_offset + (physical_queue_offset - self.start_offset)
+    }
+
     pub fn compute_physical_queue_offset(&self, static_queue_offset: i64) -> i64 {
         self.start_offset + (static_queue_offset - self.logic_offset)
     }
