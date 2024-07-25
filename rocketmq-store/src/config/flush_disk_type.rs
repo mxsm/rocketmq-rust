@@ -31,8 +31,8 @@ pub enum FlushDiskType {
 impl FlushDiskType {
     pub fn get_flush_disk_type(&self) -> &'static str {
         match self {
-            FlushDiskType::SyncFlush => "SyncFlush",
-            FlushDiskType::AsyncFlush => "AsyncFlush",
+            FlushDiskType::SyncFlush => "SYNC_FLUSH",
+            FlushDiskType::AsyncFlush => "ASYNC_FLUSH",
         }
     }
 }

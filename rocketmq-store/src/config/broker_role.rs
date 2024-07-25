@@ -30,9 +30,9 @@ pub enum BrokerRole {
 impl BrokerRole {
     pub fn get_broker_role(&self) -> &'static str {
         match self {
-            BrokerRole::AsyncMaster => "AsyncMaster",
-            BrokerRole::SyncMaster => "SyncMaster",
-            BrokerRole::Slave => "Slave",
+            BrokerRole::AsyncMaster => "ASYNC_MASTER",
+            BrokerRole::SyncMaster => "SYNC_MASTER",
+            BrokerRole::Slave => "SLAVE",
         }
     }
 }
