@@ -388,7 +388,6 @@ impl TopicRequestHandler {
         }
         Some(response)
     }
-
     fn delete_topic_in_broker(&mut self, topic: &str) {
         self.inner.topic_config_manager.delete_topic_config(topic);
         self.inner.topic_queue_mapping_manager.delete(topic);
