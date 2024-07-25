@@ -14,12 +14,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::fmt::Display;
+use std::sync::Arc;
 
 use crate::base::message_status_enum::AppendMessageStatus;
 use crate::base::message_status_enum::PutMessageStatus;
 
 /// Represents the result of an append message operation.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AppendMessageResult {
     /// Return code.
     pub status: AppendMessageStatus,
@@ -28,9 +30,9 @@ pub struct AppendMessageResult {
     /// Write Bytes.
     pub wrote_bytes: i32,
     /// Message ID.
-    pub msg_id: String,
+    pub msg_id: Option<String>,
     /// Message ID supplier.
-    // pub msg_id_supplier: Box<dyn Fn() -> String>,
+    pub msg_id_supplier: Option<Arc<Box<dyn Fn() -> String>>>,
     /// Message storage timestamp.
     pub store_timestamp: i64,
     /// Consume queue's offset (step by one).
@@ -41,13 +43,32 @@ pub struct AppendMessageResult {
     pub msg_num: i32,
 }
 
+impl Display for AppendMessageResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "AppendMessageResult [status={:?}, wrote_offset={}, wrote_bytes={}, msg_id={:?}, \
+             store_timestamp={}, logics_offset={}, page_cache_rt={}, msg_num={}]",
+            self.status,
+            self.wrote_offset,
+            self.wrote_bytes,
+            self.msg_id,
+            self.store_timestamp,
+            self.logics_offset,
+            self.page_cache_rt,
+            self.msg_num
+        )
+    }
+}
+
 impl Default for AppendMessageResult {
     fn default() -> Self {
         Self {
             status: Default::default(),
             wrote_offset: 0,
             wrote_bytes: 0,
-            msg_id: "".to_string(),
+            msg_id: None,
+            msg_id_supplier: None,
             store_timestamp: 0,
             logics_offset: 0,
             page_cache_rt: 0,
@@ -63,7 +84,7 @@ impl AppendMessageResult {
     }
 }
 
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Clone)]
 pub struct PutMessageResult {
     put_message_status: PutMessageStatus,
     append_message_result: Option<AppendMessageResult>,
@@ -154,7 +175,8 @@ mod put_message_result_tests {
             status,
             wrote_offset: 100,
             wrote_bytes: 50,
-            msg_id: "MSG_ID".to_string(),
+            msg_id: None,
+            msg_id_supplier: None,
             store_timestamp: 1609459200000,
             logics_offset: 10,
             page_cache_rt: 5,

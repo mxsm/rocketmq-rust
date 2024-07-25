@@ -112,16 +112,19 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         let is_multi_dispatch_msg = self.message_store_config.enable_multi_dispatch
             && CommitLog::is_multi_dispatch_msg(msg_inner);
         if is_multi_dispatch_msg {
-            /*if let Some(result) = self.handle_properties_for_lmq_msg(&msg_inner) {
-                return result;
-            }*/
+            unimplemented!("Multi dispatch message is not supported yet");
         }
 
         let msg_len = i32::from_be_bytes(pre_encode_buffer[0..4].try_into().unwrap());
+        //physic offset
         let wrote_offset = file_from_offset + mapped_file.get_wrote_position() as i64;
 
-        let msg_id =
-            message_utils::build_message_id(msg_inner.message_ext_inner.store_host, wrote_offset);
+        let msg_id_supplier = || -> String {
+            message_utils::build_message_id(msg_inner.message_ext_inner.store_host, wrote_offset)
+        };
+
+        /*let msg_id =
+        message_utils::build_message_id(msg_inner.message_ext_inner.store_host, wrote_offset);*/
 
         let mut queue_offset = msg_inner.queue_offset();
         //let message_num = CommitLog::get_message_num(msg_inner);
@@ -145,6 +148,7 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
                 store_timestamp: msg_inner.store_timestamp(),
                 logics_offset: queue_offset,
                 msg_num: message_num as i32,
+                msg_id_supplier: Some(Arc::new(Box::new(msg_id_supplier))),
                 ..Default::default()
             };
         }
@@ -169,10 +173,10 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
             status: AppendMessageStatus::PutOk,
             wrote_offset,
             wrote_bytes: msg_len,
-            msg_id,
             store_timestamp: msg_inner.store_timestamp(),
             logics_offset: queue_offset,
             msg_num: message_num as i32,
+            msg_id_supplier: Some(Arc::new(Box::new(msg_id_supplier))),
             ..Default::default()
         }
     }

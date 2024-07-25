@@ -519,6 +519,7 @@ impl CommitLog {
 
         let mut _unlock_mapped_file = None;
         let mut mapped_file = self.mapped_file_queue.get_last_mapped_file();
+        // current offset is physical offset
         let curr_offset = if let Some(ref mapped_file_inner) = mapped_file {
             mapped_file_inner.get_wrote_position() as u64 + mapped_file_inner.get_file_from_offset()
         } else {
@@ -552,14 +553,13 @@ impl CommitLog {
         msg.encoded_buff = Some(encoded_buff);
         let put_message_context = PutMessageContext::new(topic_queue_key);
         let lock = self.put_message_lock.lock().await;
-        self.begin_time_in_lock.store(
-            time_utils::get_current_millis(),
-            std::sync::atomic::Ordering::Release,
-        );
+        let begin_lock_timestamp = time_utils::get_current_millis();
+        self.begin_time_in_lock
+            .store(begin_lock_timestamp, std::sync::atomic::Ordering::Release);
         let start_time = Instant::now();
         // Here settings are stored timestamp, in order to ensure an orderly global
         if !self.message_store_config.duplication_enable {
-            msg.message_ext_inner.store_timestamp = time_utils::get_current_millis() as i64;
+            msg.message_ext_inner.store_timestamp = begin_lock_timestamp as i64;
         }
 
         if mapped_file.is_none() || mapped_file.as_ref().unwrap().is_full() {
@@ -570,6 +570,7 @@ impl CommitLog {
 
         if mapped_file.is_none() {
             drop(lock);
+            drop(topic_queue_lock);
             error!(
                 "create mapped file error, topic: {}  clientAddr: {}",
                 msg.topic(),
