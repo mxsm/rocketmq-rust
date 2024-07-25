@@ -427,13 +427,7 @@ impl TopicRequestHandler {
         for (key, value) in combine_map.iter() {
             body.push_str(key.as_str());
             body.push(':');
-            if let Some(v) = value.downcast_ref::<i32>() {
-                body.push_str(v.to_string().as_str());
-            } else if let Some(v) = value.downcast_ref::<String>() {
-                body.push_str(v.as_str());
-            } else if let Some(v) = value.downcast_ref::<bool>() {
-                body.push_str(v.to_string().as_str());
-            }
+            body.push_str(value.as_str());
             body.push('\n');
         }
         if !body.is_empty() {

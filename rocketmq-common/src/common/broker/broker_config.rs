@@ -284,267 +284,241 @@ impl BrokerConfig {
         format!("{}:{}", self.broker_ip1, self.listen_port)
     }
 
-    pub fn get_properties(&self) -> HashMap<String, Box<dyn Any>> {
-        let mut properties: HashMap<String, Box<dyn Any>> = HashMap::new();
+    pub fn get_properties(&self) -> HashMap<String, String> {
+        let mut properties: HashMap<String, String> = HashMap::new();
+        properties.insert("brokerName".to_string(), self.broker_name.clone());
         properties.insert(
-            "broker_identity.broker_name".to_string(),
-            Box::new(self.broker_identity.broker_name.clone()) as Box<dyn Any>,
+            "brokerClusterName".to_string(),
+            self.broker_identity.broker_cluster_name.clone(),
         );
         properties.insert(
-            "broker_identity.brokerClusterName".to_string(),
-            Box::new(self.broker_identity.broker_cluster_name.clone()) as Box<dyn Any>,
+            "brokerId".to_string(),
+            self.broker_identity.broker_id.to_string(),
         );
         properties.insert(
-            "broker_identity.brokerId".to_string(),
-            Box::new(self.broker_identity.broker_id) as Box<dyn Any>,
+            "isBrokerContainer".to_string(),
+            self.broker_identity.is_broker_container.to_string(),
         );
         properties.insert(
-            "broker_identity.isBrokerContainer".to_string(),
-            Box::new(self.broker_identity.is_broker_container) as Box<dyn Any>,
+            "isInBrokerContainer".to_string(),
+            self.broker_identity.is_in_broker_container.to_string(),
         );
         properties.insert(
-            "broker_identity.isInBrokerContainer".to_string(),
-            Box::new(self.broker_identity.is_in_broker_container) as Box<dyn Any>,
+            "defaultTopicQueueNums".to_string(),
+            self.topic_queue_config.default_topic_queue_nums.to_string(),
         );
         properties.insert(
-            "topic_queue_config.default_topic_queue_nums".to_string(),
-            Box::new(self.topic_queue_config.default_topic_queue_nums) as Box<dyn Any>,
+            "timerWheelEnable".to_string(),
+            self.timer_wheel_config.timer_wheel_enable.to_string(),
         );
         properties.insert(
-            "timer_wheel_config.timer_wheel_enable".to_string(),
-            Box::new(self.timer_wheel_config.timer_wheel_enable) as Box<dyn Any>,
+            "bindAddress".to_string(),
+            self.broker_server_config.bind_address.clone().to_string(),
         );
+        properties.insert("brokerIp1".to_string(), self.broker_ip1.clone().to_string());
         properties.insert(
-            "broker_server_config.listen_port".to_string(),
-            Box::new(self.broker_server_config.listen_port) as Box<dyn Any>,
+            "brokerIp2".to_string(),
+            self.broker_ip2.clone().unwrap_or_default(),
         );
+        properties.insert("listenPort".to_string(), self.listen_port.to_string());
         properties.insert(
-            "broker_server_config.bind_address".to_string(),
-            Box::new(self.broker_server_config.bind_address.clone()) as Box<dyn Any>,
+            "traceTopicEnable".to_string(),
+            self.trace_topic_enable.to_string(),
         );
         properties.insert(
-            "broker_ip1".to_string(),
-            Box::new(self.broker_ip1.clone()) as Box<dyn Any>,
+            "msgTraceTopicName".to_string(),
+            self.msg_trace_topic_name.clone(),
         );
         properties.insert(
-            "broker_ip2".to_string(),
-            Box::new(self.broker_ip2.clone()) as Box<dyn Any>,
+            "enableControllerMode".to_string(),
+            self.enable_controller_mode.to_string(),
         );
+        properties.insert("regionId".to_string(), self.region_id.clone());
+        properties.insert("traceOn".to_string(), self.trace_on.to_string());
         properties.insert(
-            "listen_port".to_string(),
-            Box::new(self.listen_port) as Box<dyn Any>,
+            "brokerPermission".to_string(),
+            self.broker_permission.to_string(),
         );
         properties.insert(
-            "trace_topic_enable".to_string(),
-            Box::new(self.trace_topic_enable) as Box<dyn Any>,
+            "asyncSendEnable".to_string(),
+            self.async_send_enable.to_string(),
         );
         properties.insert(
-            "msg_trace_topic_name".to_string(),
-            Box::new(self.msg_trace_topic_name.clone()) as Box<dyn Any>,
+            "storePathRootDir".to_string(),
+            self.store_path_root_dir.clone(),
         );
         properties.insert(
-            "enable_controller_mode".to_string(),
-            Box::new(self.enable_controller_mode) as Box<dyn Any>,
+            "enableSplitRegistration".to_string(),
+            self.enable_split_registration.to_string(),
         );
         properties.insert(
-            "broker_name".to_string(),
-            Box::new(self.broker_name.clone()) as Box<dyn Any>,
+            "splitRegistrationSize".to_string(),
+            self.split_registration_size.to_string(),
         );
         properties.insert(
-            "region_id".to_string(),
-            Box::new(self.region_id.clone()) as Box<dyn Any>,
+            "registerBrokerTimeoutMills".to_string(),
+            self.register_broker_timeout_mills.to_string(),
         );
         properties.insert(
-            "trace_on".to_string(),
-            Box::new(self.trace_on) as Box<dyn Any>,
+            "isInBrokerContainer".to_string(),
+            self.is_in_broker_container.to_string(),
         );
         properties.insert(
-            "broker_permission".to_string(),
-            Box::new(self.broker_permission) as Box<dyn Any>,
+            "commercialSizePerMsg".to_string(),
+            self.commercial_size_per_msg.to_string(),
         );
         properties.insert(
-            "async_send_enable".to_string(),
-            Box::new(self.async_send_enable) as Box<dyn Any>,
+            "recoverConcurrently".to_string(),
+            self.recover_concurrently.to_string(),
         );
         properties.insert(
-            "store_path_root_dir".to_string(),
-            Box::new(self.store_path_root_dir.clone()) as Box<dyn Any>,
+            "duplicationEnable".to_string(),
+            self.duplication_enable.to_string(),
         );
         properties.insert(
-            "enable_split_registration".to_string(),
-            Box::new(self.enable_split_registration) as Box<dyn Any>,
+            "startAcceptSendRequestTimeStamp".to_string(),
+            self.start_accept_send_request_time_stamp.to_string(),
         );
         properties.insert(
-            "split_registration_size".to_string(),
-            Box::new(self.split_registration_size) as Box<dyn Any>,
+            "autoCreateTopicEnable".to_string(),
+            self.auto_create_topic_enable.to_string(),
         );
         properties.insert(
-            "register_broker_timeout_mills".to_string(),
-            Box::new(self.register_broker_timeout_mills) as Box<dyn Any>,
+            "enableSingleTopicRegister".to_string(),
+            self.enable_single_topic_register.to_string(),
         );
         properties.insert(
-            "is_in_broker_container".to_string(),
-            Box::new(self.is_in_broker_container) as Box<dyn Any>,
+            "brokerTopicEnable".to_string(),
+            self.broker_topic_enable.to_string(),
         );
         properties.insert(
-            "commercial_size_per_msg".to_string(),
-            Box::new(self.commercial_size_per_msg) as Box<dyn Any>,
+            "clusterTopicEnable".to_string(),
+            self.cluster_topic_enable.to_string(),
         );
         properties.insert(
-            "recover_concurrently".to_string(),
-            Box::new(self.recover_concurrently) as Box<dyn Any>,
+            "reviveQueueNum".to_string(),
+            self.revive_queue_num.to_string(),
         );
         properties.insert(
-            "duplication_enable".to_string(),
-            Box::new(self.duplication_enable) as Box<dyn Any>,
+            "enableSlaveActingMaster".to_string(),
+            self.enable_slave_acting_master.to_string(),
         );
         properties.insert(
-            "start_accept_send_request_time_stamp".to_string(),
-            Box::new(self.start_accept_send_request_time_stamp) as Box<dyn Any>,
+            "rejectTransactionMessage".to_string(),
+            self.reject_transaction_message.to_string(),
         );
         properties.insert(
-            "auto_create_topic_enable".to_string(),
-            Box::new(self.auto_create_topic_enable) as Box<dyn Any>,
+            "enableDetailStat".to_string(),
+            self.enable_detail_stat.to_string(),
         );
         properties.insert(
-            "enable_single_topic_register".to_string(),
-            Box::new(self.enable_single_topic_register) as Box<dyn Any>,
+            "flushConsumerOffsetInterval".to_string(),
+            self.flush_consumer_offset_interval.to_string(),
         );
+        properties.insert("forceRegister".to_string(), self.force_register.to_string());
         properties.insert(
-            "broker_topic_enable".to_string(),
-            Box::new(self.broker_topic_enable) as Box<dyn Any>,
+            "registerNameServerPeriod".to_string(),
+            self.register_name_server_period.to_string(),
         );
         properties.insert(
-            "cluster_topic_enable".to_string(),
-            Box::new(self.cluster_topic_enable) as Box<dyn Any>,
+            "skipPreOnline".to_string(),
+            self.skip_pre_online.to_string(),
         );
         properties.insert(
-            "revive_queue_num".to_string(),
-            Box::new(self.revive_queue_num) as Box<dyn Any>,
+            "namesrvAddr".to_string(),
+            self.namesrv_addr.clone().unwrap_or_default(),
         );
         properties.insert(
-            "enable_slave_acting_master".to_string(),
-            Box::new(self.enable_slave_acting_master) as Box<dyn Any>,
+            "fetchNameSrvAddrByDnsLookup".to_string(),
+            self.fetch_name_srv_addr_by_dns_lookup.to_string(),
         );
         properties.insert(
-            "reject_transaction_message".to_string(),
-            Box::new(self.reject_transaction_message) as Box<dyn Any>,
+            "litePullMessageEnable".to_string(),
+            self.lite_pull_message_enable.to_string(),
         );
         properties.insert(
-            "enable_detail_stat".to_string(),
-            Box::new(self.enable_detail_stat) as Box<dyn Any>,
+            "autoCreateSubscriptionGroup".to_string(),
+            self.auto_create_subscription_group.to_string(),
         );
         properties.insert(
-            "flush_consumer_offset_interval".to_string(),
-            Box::new(self.flush_consumer_offset_interval) as Box<dyn Any>,
+            "channelExpiredTimeout".to_string(),
+            self.channel_expired_timeout.to_string(),
         );
         properties.insert(
-            "force_register".to_string(),
-            Box::new(self.force_register) as Box<dyn Any>,
+            "subscriptionExpiredTimeout".to_string(),
+            self.subscription_expired_timeout.to_string(),
         );
         properties.insert(
-            "register_name_server_period".to_string(),
-            Box::new(self.register_name_server_period) as Box<dyn Any>,
+            "enablePropertyFilter".to_string(),
+            self.enable_property_filter.to_string(),
         );
         properties.insert(
-            "skip_pre_online".to_string(),
-            Box::new(self.skip_pre_online) as Box<dyn Any>,
+            "filterSupportRetry".to_string(),
+            self.filter_support_retry.to_string(),
         );
         properties.insert(
-            "namesrv_addr".to_string(),
-            Box::new(self.namesrv_addr.clone()) as Box<dyn Any>,
+            "useServerSideResetOffset".to_string(),
+            self.use_server_side_reset_offset.to_string(),
         );
         properties.insert(
-            "fetch_name_srv_addr_by_dns_lookup".to_string(),
-            Box::new(self.fetch_name_srv_addr_by_dns_lookup) as Box<dyn Any>,
+            "slaveReadEnable".to_string(),
+            self.slave_read_enable.to_string(),
         );
         properties.insert(
-            "lite_pull_message_enable".to_string(),
-            Box::new(self.lite_pull_message_enable) as Box<dyn Any>,
+            "commercialBaseCount".to_string(),
+            self.commercial_base_count.to_string(),
         );
         properties.insert(
-            "auto_create_subscription_group".to_string(),
-            Box::new(self.auto_create_subscription_group) as Box<dyn Any>,
+            "rejectPullConsumerEnable".to_string(),
+            self.reject_pull_consumer_enable.to_string(),
         );
         properties.insert(
-            "channel_expired_timeout".to_string(),
-            Box::new(self.channel_expired_timeout) as Box<dyn Any>,
+            "consumerOffsetUpdateVersionStep".to_string(),
+            self.consumer_offset_update_version_step.to_string(),
         );
         properties.insert(
-            "subscription_expired_timeout".to_string(),
-            Box::new(self.subscription_expired_timeout) as Box<dyn Any>,
+            "enableBroadcastOffsetStore".to_string(),
+            self.enable_broadcast_offset_store.to_string(),
         );
         properties.insert(
-            "enable_property_filter".to_string(),
-            Box::new(self.enable_property_filter) as Box<dyn Any>,
+            "transferMsgByHeap".to_string(),
+            self.transfer_msg_by_heap.to_string(),
         );
         properties.insert(
-            "filter_support_retry".to_string(),
-            Box::new(self.filter_support_retry) as Box<dyn Any>,
+            "shortPollingTimeMills".to_string(),
+            self.short_polling_time_mills.to_string(),
         );
         properties.insert(
-            "use_server_side_reset_offset".to_string(),
-            Box::new(self.use_server_side_reset_offset) as Box<dyn Any>,
+            "longPollingEnable".to_string(),
+            self.long_polling_enable.to_string(),
         );
         properties.insert(
-            "slave_read_enable".to_string(),
-            Box::new(self.slave_read_enable) as Box<dyn Any>,
+            "maxErrorRateOfBloomFilter".to_string(),
+            self.max_error_rate_of_bloom_filter.to_string(),
         );
         properties.insert(
-            "commercial_base_count".to_string(),
-            Box::new(self.commercial_base_count) as Box<dyn Any>,
+            "expectConsumerNumUseFilter".to_string(),
+            self.expect_consumer_num_use_filter.to_string(),
         );
         properties.insert(
-            "reject_pull_consumer_enable".to_string(),
-            Box::new(self.reject_pull_consumer_enable) as Box<dyn Any>,
+            "bitMapLengthConsumeQueueExt".to_string(),
+            self.bit_map_length_consume_queue_ext.to_string(),
         );
         properties.insert(
-            "consumer_offset_update_version_step".to_string(),
-            Box::new(self.consumer_offset_update_version_step) as Box<dyn Any>,
+            "validateSystemTopicWhenUpdateTopic".to_string(),
+            self.validate_system_topic_when_update_topic.to_string(),
         );
         properties.insert(
-            "enable_broadcast_offset_store".to_string(),
-            Box::new(self.enable_broadcast_offset_store) as Box<dyn Any>,
+            "enableMixedMessageType".to_string(),
+            self.enable_mixed_message_type.to_string(),
         );
         properties.insert(
-            "transfer_msg_by_heap".to_string(),
-            Box::new(self.transfer_msg_by_heap) as Box<dyn Any>,
+            "autoDeleteUnusedStats".to_string(),
+            self.auto_delete_unused_stats.to_string(),
         );
         properties.insert(
-            "short_polling_time_mills".to_string(),
-            Box::new(self.short_polling_time_mills) as Box<dyn Any>,
-        );
-        properties.insert(
-            "long_polling_enable".to_string(),
-            Box::new(self.long_polling_enable) as Box<dyn Any>,
-        );
-        properties.insert(
-            "max_error_rate_of_bloom_filter".to_string(),
-            Box::new(self.max_error_rate_of_bloom_filter) as Box<dyn Any>,
-        );
-        properties.insert(
-            "expect_consumer_num_use_filter".to_string(),
-            Box::new(self.expect_consumer_num_use_filter) as Box<dyn Any>,
-        );
-        properties.insert(
-            "bit_map_length_consume_queue_ext".to_string(),
-            Box::new(self.bit_map_length_consume_queue_ext) as Box<dyn Any>,
-        );
-        properties.insert(
-            "validate_system_topic_when_update_topic".to_string(),
-            Box::new(self.validate_system_topic_when_update_topic) as Box<dyn Any>,
-        );
-        properties.insert(
-            "enable_mixed_message_type".to_string(),
-            Box::new(self.enable_mixed_message_type) as Box<dyn Any>,
-        );
-        properties.insert(
-            "auto_delete_unused_stats".to_string(),
-            Box::new(self.auto_delete_unused_stats) as Box<dyn Any>,
-        );
-        properties.insert(
-            "forward_timeout".to_string(),
-            Box::new(self.forward_timeout) as Box<dyn Any>,
+            "forwardTimeout".to_string(),
+            self.forward_timeout.to_string(),
         );
         properties
     }

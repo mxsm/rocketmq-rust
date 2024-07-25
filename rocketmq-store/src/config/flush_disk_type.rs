@@ -28,6 +28,15 @@ pub enum FlushDiskType {
     AsyncFlush,
 }
 
+impl FlushDiskType {
+    pub fn get_flush_disk_type(&self) -> &'static str {
+        match self {
+            FlushDiskType::SyncFlush => "SyncFlush",
+            FlushDiskType::AsyncFlush => "AsyncFlush",
+        }
+    }
+}
+
 impl<'de> Deserialize<'de> for FlushDiskType {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where

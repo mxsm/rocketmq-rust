@@ -15,7 +15,6 @@
  * limitations under the License.
  */
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -417,695 +416,676 @@ impl MessageStoreConfig {
         factor * CQ_STORE_UNIT_SIZE
     }
 
-    pub fn get_properties(&self) -> HashMap<String, Box<dyn Any>> {
-        let mut properties: HashMap<String, Box<dyn Any>> = HashMap::new();
+    pub fn get_properties(&self) -> HashMap<String, String> {
+        let mut properties: HashMap<String, String> = HashMap::new();
         properties.insert(
-            "store_path_root_dir".to_string(),
-            Box::new(self.store_path_root_dir.clone()) as Box<dyn Any>,
+            "storePathRootDir".to_string(),
+            self.store_path_root_dir.clone(),
         );
         properties.insert(
-            "store_path_commit_log".to_string(),
-            Box::new(self.store_path_commit_log.clone()) as Box<dyn Any>,
+            "storePathCommitLog".to_string(),
+            self.store_path_commit_log.clone().unwrap_or_default(),
         );
         properties.insert(
-            "store_path_dledger_commit_log".to_string(),
-            Box::new(self.store_path_dledger_commit_log.clone()) as Box<dyn Any>,
+            "storePathDledgerCommitLog".to_string(),
+            self.store_path_dledger_commit_log
+                .clone()
+                .unwrap_or_default(),
         );
         properties.insert(
-            "store_path_epoch_file".to_string(),
-            Box::new(self.store_path_epoch_file.clone()) as Box<dyn Any>,
+            "storePathEpochFile".to_string(),
+            self.store_path_epoch_file.clone().unwrap_or_default(),
         );
         properties.insert(
-            "store_path_broker_identity".to_string(),
-            Box::new(self.store_path_broker_identity.clone()) as Box<dyn Any>,
+            "storePathBrokerIdentity".to_string(),
+            self.store_path_broker_identity.clone().unwrap_or_default(),
         );
         properties.insert(
-            "read_only_commit_log_store_paths".to_string(),
-            Box::new(self.read_only_commit_log_store_paths.clone()) as Box<dyn Any>,
+            "readOnlyCommitLogStorePaths".to_string(),
+            self.read_only_commit_log_store_paths
+                .clone()
+                .unwrap_or_default(),
         );
         properties.insert(
-            "mapped_file_size_commit_log".to_string(),
-            Box::new(self.mapped_file_size_commit_log) as Box<dyn Any>,
+            "mappedFileSizeCommitLog".to_string(),
+            self.mapped_file_size_commit_log.to_string(),
         );
         properties.insert(
-            "compaction_mapped_file_size".to_string(),
-            Box::new(self.compaction_mapped_file_size) as Box<dyn Any>,
+            "compactionMappedFileSize".to_string(),
+            self.compaction_mapped_file_size.to_string(),
         );
         properties.insert(
-            "compaction_cq_mapped_file_size".to_string(),
-            Box::new(self.compaction_cq_mapped_file_size) as Box<dyn Any>,
+            "compactionCqMappedFileSize".to_string(),
+            self.compaction_cq_mapped_file_size.to_string(),
         );
         properties.insert(
-            "compaction_schedule_internal".to_string(),
-            Box::new(self.compaction_schedule_internal) as Box<dyn Any>,
+            "compactionScheduleInternal".to_string(),
+            self.compaction_schedule_internal.to_string(),
         );
         properties.insert(
-            "max_offset_map_size".to_string(),
-            Box::new(self.max_offset_map_size) as Box<dyn Any>,
+            "maxOffsetMapSize".to_string(),
+            self.max_offset_map_size.to_string(),
         );
         properties.insert(
-            "compaction_thread_num".to_string(),
-            Box::new(self.compaction_thread_num) as Box<dyn Any>,
+            "compactionThreadNum".to_string(),
+            self.compaction_thread_num.to_string(),
         );
         properties.insert(
-            "enable_compaction".to_string(),
-            Box::new(self.enable_compaction) as Box<dyn Any>,
+            "enableCompaction".to_string(),
+            self.enable_compaction.to_string(),
         );
         properties.insert(
-            "mapped_file_size_timer_log".to_string(),
-            Box::new(self.mapped_file_size_timer_log) as Box<dyn Any>,
+            "mappedFileSizeTimerLog".to_string(),
+            self.mapped_file_size_timer_log.to_string(),
         );
         properties.insert(
-            "timer_precision_ms".to_string(),
-            Box::new(self.timer_precision_ms) as Box<dyn Any>,
+            "timerPrecisionMs".to_string(),
+            self.timer_precision_ms.to_string(),
         );
         properties.insert(
-            "timer_roll_window_slot".to_string(),
-            Box::new(self.timer_roll_window_slot) as Box<dyn Any>,
+            "timerRollWindowSlot".to_string(),
+            self.timer_roll_window_slot.to_string(),
         );
         properties.insert(
-            "timer_flush_interval_ms".to_string(),
-            Box::new(self.timer_flush_interval_ms) as Box<dyn Any>,
+            "timerFlushIntervalMs".to_string(),
+            self.timer_flush_interval_ms.to_string(),
         );
         properties.insert(
-            "timer_get_message_thread_num".to_string(),
-            Box::new(self.timer_get_message_thread_num) as Box<dyn Any>,
+            "timerGetMessageThreadNum".to_string(),
+            self.timer_get_message_thread_num.to_string(),
         );
         properties.insert(
-            "timer_put_message_thread_num".to_string(),
-            Box::new(self.timer_put_message_thread_num) as Box<dyn Any>,
+            "timerPutMessageThreadNum".to_string(),
+            self.timer_put_message_thread_num.to_string(),
         );
         properties.insert(
-            "timer_enable_disruptor".to_string(),
-            Box::new(self.timer_enable_disruptor) as Box<dyn Any>,
+            "timerEnableDisruptor".to_string(),
+            self.timer_enable_disruptor.to_string(),
         );
         properties.insert(
-            "timer_enable_check_metrics".to_string(),
-            Box::new(self.timer_enable_check_metrics) as Box<dyn Any>,
+            "timerEnableCheckMetrics".to_string(),
+            self.timer_enable_check_metrics.to_string(),
         );
         properties.insert(
-            "timer_intercept_delay_level".to_string(),
-            Box::new(self.timer_intercept_delay_level) as Box<dyn Any>,
+            "timerInterceptDelayLevel".to_string(),
+            self.timer_intercept_delay_level.to_string(),
         );
         properties.insert(
-            "timer_max_delay_sec".to_string(),
-            Box::new(self.timer_max_delay_sec) as Box<dyn Any>,
+            "timerMaxDelaySec".to_string(),
+            self.timer_max_delay_sec.to_string(),
         );
         properties.insert(
-            "timer_wheel_enable".to_string(),
-            Box::new(self.timer_wheel_enable) as Box<dyn Any>,
+            "timerWheelEnable".to_string(),
+            self.timer_wheel_enable.to_string(),
         );
         properties.insert(
-            "disappear_time_after_start".to_string(),
-            Box::new(self.disappear_time_after_start) as Box<dyn Any>,
+            "disappearTimeAfterStart".to_string(),
+            self.disappear_time_after_start.to_string(),
         );
         properties.insert(
-            "timer_stop_enqueue".to_string(),
-            Box::new(self.timer_stop_enqueue) as Box<dyn Any>,
+            "timerStopEnqueue".to_string(),
+            self.timer_stop_enqueue.to_string(),
         );
         properties.insert(
-            "timer_check_metrics_when".to_string(),
-            Box::new(self.timer_check_metrics_when.clone()) as Box<dyn Any>,
+            "timerCheckMetricsWhen".to_string(),
+            self.timer_check_metrics_when.clone(),
         );
         properties.insert(
-            "timer_skip_unknown_error".to_string(),
-            Box::new(self.timer_skip_unknown_error) as Box<dyn Any>,
+            "timerSkipUnknownError".to_string(),
+            self.timer_skip_unknown_error.to_string(),
         );
         properties.insert(
-            "timer_warm_enable".to_string(),
-            Box::new(self.timer_warm_enable) as Box<dyn Any>,
+            "timerWarmEnable".to_string(),
+            self.timer_warm_enable.to_string(),
         );
         properties.insert(
-            "timer_stop_dequeue".to_string(),
-            Box::new(self.timer_stop_dequeue) as Box<dyn Any>,
+            "timerStopDequeue".to_string(),
+            self.timer_stop_dequeue.to_string(),
         );
         properties.insert(
-            "timer_congest_num_each_slot".to_string(),
-            Box::new(self.timer_congest_num_each_slot) as Box<dyn Any>,
+            "timerCongestNumEachSlot".to_string(),
+            self.timer_congest_num_each_slot.to_string(),
         );
         properties.insert(
-            "timer_metric_small_threshold".to_string(),
-            Box::new(self.timer_metric_small_threshold) as Box<dyn Any>,
+            "timerMetricSmallThreshold".to_string(),
+            self.timer_metric_small_threshold.to_string(),
         );
         properties.insert(
-            "timer_progress_log_interval_ms".to_string(),
-            Box::new(self.timer_progress_log_interval_ms) as Box<dyn Any>,
+            "timerProgressLogIntervalMs".to_string(),
+            self.timer_progress_log_interval_ms.to_string(),
         );
         properties.insert(
-            "store_type".to_string(),
-            Box::new(self.store_type) as Box<dyn Any>,
+            "storeType".to_string(),
+            self.store_type.get_store_type().to_string(),
         );
         properties.insert(
-            "mapped_file_size_consume_queue".to_string(),
-            Box::new(self.mapped_file_size_consume_queue) as Box<dyn Any>,
+            "mappedFileSizeConsumeQueue".to_string(),
+            self.mapped_file_size_consume_queue.to_string(),
         );
         properties.insert(
-            "enable_consume_queue_ext".to_string(),
-            Box::new(self.enable_consume_queue_ext) as Box<dyn Any>,
+            "enableConsumeQueueExt".to_string(),
+            self.enable_consume_queue_ext.to_string(),
         );
         properties.insert(
-            "mapped_file_size_consume_queue_ext".to_string(),
-            Box::new(self.mapped_file_size_consume_queue_ext) as Box<dyn Any>,
+            "mappedFileSizeConsumeQueueExt".to_string(),
+            self.mapped_file_size_consume_queue_ext.to_string(),
         );
         properties.insert(
-            "mapper_file_size_batch_consume_queue".to_string(),
-            Box::new(self.mapper_file_size_batch_consume_queue) as Box<dyn Any>,
+            "mapperFileSizeBatchConsumeQueue".to_string(),
+            self.mapper_file_size_batch_consume_queue.to_string(),
         );
         properties.insert(
-            "bit_map_length_consume_queue_ext".to_string(),
-            Box::new(self.bit_map_length_consume_queue_ext) as Box<dyn Any>,
+            "bitMapLengthConsumeQueueExt".to_string(),
+            self.bit_map_length_consume_queue_ext.to_string(),
         );
         properties.insert(
-            "flush_interval_commit_log".to_string(),
-            Box::new(self.flush_interval_commit_log) as Box<dyn Any>,
+            "flushIntervalCommitLog".to_string(),
+            self.flush_interval_commit_log.to_string(),
         );
         properties.insert(
-            "commit_interval_commit_log".to_string(),
-            Box::new(self.commit_interval_commit_log) as Box<dyn Any>,
+            "commitIntervalCommitLog".to_string(),
+            self.commit_interval_commit_log.to_string(),
         );
         properties.insert(
-            "max_recovery_commit_log_files".to_string(),
-            Box::new(self.max_recovery_commit_log_files) as Box<dyn Any>,
+            "maxRecoveryCommitLogFiles".to_string(),
+            self.max_recovery_commit_log_files.to_string(),
         );
         properties.insert(
-            "disk_space_warning_level_ratio".to_string(),
-            Box::new(self.disk_space_warning_level_ratio) as Box<dyn Any>,
+            "diskSpaceWarningLevelRatio".to_string(),
+            self.disk_space_warning_level_ratio.to_string(),
         );
         properties.insert(
-            "disk_space_clean_forcibly_ratio".to_string(),
-            Box::new(self.disk_space_clean_forcibly_ratio) as Box<dyn Any>,
+            "diskSpaceCleanForciblyRatio".to_string(),
+            self.disk_space_clean_forcibly_ratio.to_string(),
         );
         properties.insert(
-            "use_reentrant_lock_when_put_message".to_string(),
-            Box::new(self.use_reentrant_lock_when_put_message) as Box<dyn Any>,
+            "useReentrantLockWhenPutMessage".to_string(),
+            self.use_reentrant_lock_when_put_message.to_string(),
         );
         properties.insert(
-            "flush_commit_log_timed".to_string(),
-            Box::new(self.flush_commit_log_timed) as Box<dyn Any>,
+            "flushCommitLogTimed".to_string(),
+            self.flush_commit_log_timed.to_string(),
         );
         properties.insert(
-            "flush_interval_consume_queue".to_string(),
-            Box::new(self.flush_interval_consume_queue) as Box<dyn Any>,
+            "flushIntervalConsumeQueue".to_string(),
+            self.flush_interval_consume_queue.to_string(),
         );
         properties.insert(
-            "clean_resource_interval".to_string(),
-            Box::new(self.clean_resource_interval) as Box<dyn Any>,
+            "cleanResourceInterval".to_string(),
+            self.clean_resource_interval.to_string(),
         );
         properties.insert(
-            "delete_commit_log_files_interval".to_string(),
-            Box::new(self.delete_commit_log_files_interval) as Box<dyn Any>,
+            "deleteCommitLogFilesInterval".to_string(),
+            self.delete_commit_log_files_interval.to_string(),
         );
         properties.insert(
-            "delete_consume_queue_files_interval".to_string(),
-            Box::new(self.delete_consume_queue_files_interval) as Box<dyn Any>,
+            "deleteConsumeQueueFilesInterval".to_string(),
+            self.delete_consume_queue_files_interval.to_string(),
         );
         properties.insert(
-            "destroy_mapped_file_interval_forcibly".to_string(),
-            Box::new(self.destroy_mapped_file_interval_forcibly) as Box<dyn Any>,
+            "destroyMappedFileIntervalForcibly".to_string(),
+            self.destroy_mapped_file_interval_forcibly.to_string(),
         );
         properties.insert(
-            "redelete_hanged_file_interval".to_string(),
-            Box::new(self.redelete_hanged_file_interval) as Box<dyn Any>,
+            "redeleteHangedFileInterval".to_string(),
+            self.redelete_hanged_file_interval.to_string(),
         );
+        properties.insert("deleteWhen".to_string(), self.delete_when.clone());
         properties.insert(
-            "delete_when".to_string(),
-            Box::new(self.delete_when.clone()) as Box<dyn Any>,
+            "diskMaxUsedSpaceRatio".to_string(),
+            self.disk_max_used_space_ratio.to_string(),
         );
         properties.insert(
-            "disk_max_used_space_ratio".to_string(),
-            Box::new(self.disk_max_used_space_ratio) as Box<dyn Any>,
+            "fileReservedTime".to_string(),
+            self.file_reserved_time.to_string(),
         );
         properties.insert(
-            "file_reserved_time".to_string(),
-            Box::new(self.file_reserved_time) as Box<dyn Any>,
+            "deleteFileBatchMax".to_string(),
+            self.delete_file_batch_max.to_string(),
         );
         properties.insert(
-            "delete_file_batch_max".to_string(),
-            Box::new(self.delete_file_batch_max) as Box<dyn Any>,
+            "putMsgIndexHightWater".to_string(),
+            self.put_msg_index_hight_water.to_string(),
         );
         properties.insert(
-            "put_msg_index_hight_water".to_string(),
-            Box::new(self.put_msg_index_hight_water) as Box<dyn Any>,
+            "maxMessageSize".to_string(),
+            self.max_message_size.to_string(),
         );
         properties.insert(
-            "max_message_size".to_string(),
-            Box::new(self.max_message_size) as Box<dyn Any>,
+            "checkCrcOnRecover".to_string(),
+            self.check_crc_on_recover.to_string(),
         );
         properties.insert(
-            "check_crc_on_recover".to_string(),
-            Box::new(self.check_crc_on_recover) as Box<dyn Any>,
+            "flushCommitLogLeastPages".to_string(),
+            self.flush_commit_log_least_pages.to_string(),
         );
         properties.insert(
-            "flush_commit_log_least_pages".to_string(),
-            Box::new(self.flush_commit_log_least_pages) as Box<dyn Any>,
+            "commitCommitLogLeastPages".to_string(),
+            self.commit_commit_log_least_pages.to_string(),
         );
         properties.insert(
-            "commit_commit_log_least_pages".to_string(),
-            Box::new(self.commit_commit_log_least_pages) as Box<dyn Any>,
+            "flushLeastPagesWhenWarmMappedFile".to_string(),
+            self.flush_least_pages_when_warm_mapped_file.to_string(),
         );
         properties.insert(
-            "flush_least_pages_when_warm_mapped_file".to_string(),
-            Box::new(self.flush_least_pages_when_warm_mapped_file) as Box<dyn Any>,
+            "flushConsumeQueueLeastPages".to_string(),
+            self.flush_consume_queue_least_pages.to_string(),
         );
         properties.insert(
-            "flush_consume_queue_least_pages".to_string(),
-            Box::new(self.flush_consume_queue_least_pages) as Box<dyn Any>,
+            "flushCommitLogThoroughInterval".to_string(),
+            self.flush_commit_log_thorough_interval.to_string(),
         );
         properties.insert(
-            "flush_commit_log_thorough_interval".to_string(),
-            Box::new(self.flush_commit_log_thorough_interval) as Box<dyn Any>,
+            "commitCommitLogThoroughInterval".to_string(),
+            self.commit_commit_log_thorough_interval.to_string(),
         );
         properties.insert(
-            "commit_commit_log_thorough_interval".to_string(),
-            Box::new(self.commit_commit_log_thorough_interval) as Box<dyn Any>,
+            "flushConsumeQueueThoroughInterval".to_string(),
+            self.flush_consume_queue_thorough_interval.to_string(),
         );
         properties.insert(
-            "flush_consume_queue_thorough_interval".to_string(),
-            Box::new(self.flush_consume_queue_thorough_interval) as Box<dyn Any>,
+            "maxTransferBytesOnMessageInMemory".to_string(),
+            self.max_transfer_bytes_on_message_in_memory.to_string(),
         );
         properties.insert(
-            "max_transfer_bytes_on_message_in_memory".to_string(),
-            Box::new(self.max_transfer_bytes_on_message_in_memory) as Box<dyn Any>,
+            "maxTransferCountOnMessageInMemory".to_string(),
+            self.max_transfer_count_on_message_in_memory.to_string(),
         );
         properties.insert(
-            "max_transfer_count_on_message_in_memory".to_string(),
-            Box::new(self.max_transfer_count_on_message_in_memory) as Box<dyn Any>,
+            "maxTransferBytesOnMessageInDisk".to_string(),
+            self.max_transfer_bytes_on_message_in_disk.to_string(),
         );
         properties.insert(
-            "max_transfer_bytes_on_message_in_disk".to_string(),
-            Box::new(self.max_transfer_bytes_on_message_in_disk) as Box<dyn Any>,
+            "maxTransferCountOnMessageInDisk".to_string(),
+            self.max_transfer_count_on_message_in_disk.to_string(),
         );
         properties.insert(
-            "max_transfer_count_on_message_in_disk".to_string(),
-            Box::new(self.max_transfer_count_on_message_in_disk) as Box<dyn Any>,
+            "accessMessageInMemoryMaxRatio".to_string(),
+            self.access_message_in_memory_max_ratio.to_string(),
         );
         properties.insert(
-            "access_message_in_memory_max_ratio".to_string(),
-            Box::new(self.access_message_in_memory_max_ratio) as Box<dyn Any>,
+            "messageIndexEnable".to_string(),
+            self.message_index_enable.to_string(),
         );
         properties.insert(
-            "message_index_enable".to_string(),
-            Box::new(self.message_index_enable) as Box<dyn Any>,
+            "maxHashSlotNum".to_string(),
+            self.max_hash_slot_num.to_string(),
         );
+        properties.insert("maxIndexNum".to_string(), self.max_index_num.to_string());
         properties.insert(
-            "max_hash_slot_num".to_string(),
-            Box::new(self.max_hash_slot_num) as Box<dyn Any>,
+            "maxMsgsNumBatch".to_string(),
+            self.max_msgs_num_batch.to_string(),
         );
         properties.insert(
-            "max_index_num".to_string(),
-            Box::new(self.max_index_num) as Box<dyn Any>,
+            "messageIndexSafe".to_string(),
+            self.message_index_safe.to_string(),
         );
+        properties.insert("haListenPort".to_string(), self.ha_listen_port.to_string());
         properties.insert(
-            "max_msgs_num_batch".to_string(),
-            Box::new(self.max_msgs_num_batch) as Box<dyn Any>,
+            "haSendHeartbeatInterval".to_string(),
+            self.ha_send_heartbeat_interval.to_string(),
         );
         properties.insert(
-            "message_index_safe".to_string(),
-            Box::new(self.message_index_safe) as Box<dyn Any>,
+            "haHousekeepingInterval".to_string(),
+            self.ha_housekeeping_interval.to_string(),
         );
         properties.insert(
-            "ha_listen_port".to_string(),
-            Box::new(self.ha_listen_port) as Box<dyn Any>,
+            "haTransferBatchSize".to_string(),
+            self.ha_transfer_batch_size.to_string(),
         );
         properties.insert(
-            "ha_send_heartbeat_interval".to_string(),
-            Box::new(self.ha_send_heartbeat_interval) as Box<dyn Any>,
+            "haMasterAddress".to_string(),
+            self.ha_master_address.clone().unwrap_or_default(),
         );
         properties.insert(
-            "ha_housekeeping_interval".to_string(),
-            Box::new(self.ha_housekeeping_interval) as Box<dyn Any>,
+            "haMaxGapNotInSync".to_string(),
+            self.ha_max_gap_not_in_sync.to_string(),
         );
         properties.insert(
-            "ha_transfer_batch_size".to_string(),
-            Box::new(self.ha_transfer_batch_size) as Box<dyn Any>,
+            "brokerRole".to_string(),
+            self.broker_role.get_broker_role().to_string(),
         );
         properties.insert(
-            "ha_master_address".to_string(),
-            Box::new(self.ha_master_address.clone()) as Box<dyn Any>,
+            "flushDiskType".to_string(),
+            self.flush_disk_type.get_flush_disk_type().to_string(),
         );
         properties.insert(
-            "ha_max_gap_not_in_sync".to_string(),
-            Box::new(self.ha_max_gap_not_in_sync) as Box<dyn Any>,
+            "syncFlushTimeout".to_string(),
+            self.sync_flush_timeout.to_string(),
         );
         properties.insert(
-            "broker_role".to_string(),
-            Box::new(self.broker_role) as Box<dyn Any>,
+            "putMessageTimeout".to_string(),
+            self.put_message_timeout.to_string(),
         );
+        properties.insert("slaveTimeout".to_string(), self.slave_timeout.to_string());
         properties.insert(
-            "flush_disk_type".to_string(),
-            Box::new(self.flush_disk_type) as Box<dyn Any>,
+            "messageDelayLevel".to_string(),
+            self.message_delay_level.clone(),
         );
         properties.insert(
-            "sync_flush_timeout".to_string(),
-            Box::new(self.sync_flush_timeout) as Box<dyn Any>,
+            "flushDelayOffsetInterval".to_string(),
+            self.flush_delay_offset_interval.to_string(),
         );
         properties.insert(
-            "put_message_timeout".to_string(),
-            Box::new(self.put_message_timeout) as Box<dyn Any>,
+            "cleanFileForciblyEnable".to_string(),
+            self.clean_file_forcibly_enable.to_string(),
         );
         properties.insert(
-            "slave_timeout".to_string(),
-            Box::new(self.slave_timeout) as Box<dyn Any>,
+            "warmMappedFileEnable".to_string(),
+            self.warm_mapped_file_enable.to_string(),
         );
         properties.insert(
-            "message_delay_level".to_string(),
-            Box::new(self.message_delay_level.clone()) as Box<dyn Any>,
+            "offsetCheckInSlave".to_string(),
+            self.offset_check_in_slave.to_string(),
         );
         properties.insert(
-            "flush_delay_offset_interval".to_string(),
-            Box::new(self.flush_delay_offset_interval) as Box<dyn Any>,
+            "debugLockEnable".to_string(),
+            self.debug_lock_enable.to_string(),
         );
         properties.insert(
-            "clean_file_forcibly_enable".to_string(),
-            Box::new(self.clean_file_forcibly_enable) as Box<dyn Any>,
+            "duplicationEnable".to_string(),
+            self.duplication_enable.to_string(),
         );
         properties.insert(
-            "warm_mapped_file_enable".to_string(),
-            Box::new(self.warm_mapped_file_enable) as Box<dyn Any>,
+            "diskFallRecorded".to_string(),
+            self.disk_fall_recorded.to_string(),
         );
         properties.insert(
-            "offset_check_in_slave".to_string(),
-            Box::new(self.offset_check_in_slave) as Box<dyn Any>,
+            "osPageCacheBusyTimeoutMills".to_string(),
+            self.os_page_cache_busy_timeout_mills.to_string(),
         );
         properties.insert(
-            "debug_lock_enable".to_string(),
-            Box::new(self.debug_lock_enable) as Box<dyn Any>,
+            "defaultQueryMaxNum".to_string(),
+            self.default_query_max_num.to_string(),
         );
         properties.insert(
-            "duplication_enable".to_string(),
-            Box::new(self.duplication_enable) as Box<dyn Any>,
+            "transientStorePoolEnable".to_string(),
+            self.transient_store_pool_enable.to_string(),
         );
         properties.insert(
-            "disk_fall_recorded".to_string(),
-            Box::new(self.disk_fall_recorded) as Box<dyn Any>,
+            "transientStorePoolSize".to_string(),
+            self.transient_store_pool_size.to_string(),
         );
         properties.insert(
-            "os_page_cache_busy_timeout_mills".to_string(),
-            Box::new(self.os_page_cache_busy_timeout_mills) as Box<dyn Any>,
+            "fastFailIfNoBufferInStorePool".to_string(),
+            self.fast_fail_if_no_buffer_in_store_pool.to_string(),
         );
         properties.insert(
-            "default_query_max_num".to_string(),
-            Box::new(self.default_query_max_num) as Box<dyn Any>,
+            "enableDledgerCommitLog".to_string(),
+            self.enable_dledger_commit_log.to_string(),
         );
         properties.insert(
-            "transient_store_pool_enable".to_string(),
-            Box::new(self.transient_store_pool_enable) as Box<dyn Any>,
+            "dledgerGroup".to_string(),
+            self.dledger_group.clone().unwrap_or_default(),
         );
         properties.insert(
-            "transient_store_pool_size".to_string(),
-            Box::new(self.transient_store_pool_size) as Box<dyn Any>,
+            "dledgerPeers".to_string(),
+            self.dledger_peers.clone().unwrap_or_default(),
         );
         properties.insert(
-            "fast_fail_if_no_buffer_in_store_pool".to_string(),
-            Box::new(self.fast_fail_if_no_buffer_in_store_pool) as Box<dyn Any>,
+            "dledgerSelfId".to_string(),
+            self.dledger_self_id.clone().unwrap_or_default(),
         );
         properties.insert(
-            "enable_dledger_commit_log".to_string(),
-            Box::new(self.enable_dledger_commit_log) as Box<dyn Any>,
+            "preferredLeaderId".to_string(),
+            self.preferred_leader_id.clone().unwrap_or_default(),
         );
         properties.insert(
-            "dledger_group".to_string(),
-            Box::new(self.dledger_group.clone()) as Box<dyn Any>,
+            "enableBatchPush".to_string(),
+            self.enable_batch_push.to_string(),
         );
         properties.insert(
-            "dledger_peers".to_string(),
-            Box::new(self.dledger_peers.clone()) as Box<dyn Any>,
+            "enableScheduleMessageStats".to_string(),
+            self.enable_schedule_message_stats.to_string(),
         );
+        properties.insert("enableLmq".to_string(), self.enable_lmq.to_string());
         properties.insert(
-            "dledger_self_id".to_string(),
-            Box::new(self.dledger_self_id.clone()) as Box<dyn Any>,
+            "enableMultiDispatch".to_string(),
+            self.enable_multi_dispatch.to_string(),
         );
         properties.insert(
-            "preferred_leader_id".to_string(),
-            Box::new(self.preferred_leader_id.clone()) as Box<dyn Any>,
+            "maxLmqConsumeQueueNum".to_string(),
+            self.max_lmq_consume_queue_num.to_string(),
         );
         properties.insert(
-            "enable_batch_push".to_string(),
-            Box::new(self.enable_batch_push) as Box<dyn Any>,
+            "enableScheduleAsyncDeliver".to_string(),
+            self.enable_schedule_async_deliver.to_string(),
         );
         properties.insert(
-            "enable_schedule_message_stats".to_string(),
-            Box::new(self.enable_schedule_message_stats) as Box<dyn Any>,
+            "scheduleAsyncDeliverMaxPendingLimit".to_string(),
+            self.schedule_async_deliver_max_pending_limit.to_string(),
         );
         properties.insert(
-            "enable_lmq".to_string(),
-            Box::new(self.enable_lmq) as Box<dyn Any>,
+            "scheduleAsyncDeliverMaxResendNum2Blocked".to_string(),
+            self.schedule_async_deliver_max_resend_num2_blocked
+                .to_string(),
         );
         properties.insert(
-            "enable_multi_dispatch".to_string(),
-            Box::new(self.enable_multi_dispatch) as Box<dyn Any>,
+            "maxBatchDeleteFilesNum".to_string(),
+            self.max_batch_delete_files_num.to_string(),
         );
         properties.insert(
-            "max_lmq_consume_queue_num".to_string(),
-            Box::new(self.max_lmq_consume_queue_num) as Box<dyn Any>,
+            "dispatchCqThreads".to_string(),
+            self.dispatch_cq_threads.to_string(),
         );
         properties.insert(
-            "enable_schedule_async_deliver".to_string(),
-            Box::new(self.enable_schedule_async_deliver) as Box<dyn Any>,
+            "dispatchCqCacheNum".to_string(),
+            self.dispatch_cq_cache_num.to_string(),
         );
         properties.insert(
-            "schedule_async_deliver_max_pending_limit".to_string(),
-            Box::new(self.schedule_async_deliver_max_pending_limit) as Box<dyn Any>,
+            "enableAsyncReput".to_string(),
+            self.enable_async_reput.to_string(),
         );
         properties.insert(
-            "schedule_async_deliver_max_resend_num2_blocked".to_string(),
-            Box::new(self.schedule_async_deliver_max_resend_num2_blocked) as Box<dyn Any>,
+            "recheckReputOffsetFromCq".to_string(),
+            self.recheck_reput_offset_from_cq.to_string(),
         );
         properties.insert(
-            "max_batch_delete_files_num".to_string(),
-            Box::new(self.max_batch_delete_files_num) as Box<dyn Any>,
+            "maxTopicLength".to_string(),
+            self.max_topic_length.to_string(),
         );
         properties.insert(
-            "dispatch_cq_threads".to_string(),
-            Box::new(self.dispatch_cq_threads) as Box<dyn Any>,
+            "autoMessageVersionOnTopicLen".to_string(),
+            self.auto_message_version_on_topic_len.to_string(),
         );
         properties.insert(
-            "dispatch_cq_cache_num".to_string(),
-            Box::new(self.dispatch_cq_cache_num) as Box<dyn Any>,
+            "enabledAppendPropCrc".to_string(),
+            self.enabled_append_prop_crc.to_string(),
         );
         properties.insert(
-            "enable_async_reput".to_string(),
-            Box::new(self.enable_async_reput) as Box<dyn Any>,
+            "forceVerifyPropCrc".to_string(),
+            self.force_verify_prop_crc.to_string(),
         );
         properties.insert(
-            "recheck_reput_offset_from_cq".to_string(),
-            Box::new(self.recheck_reput_offset_from_cq) as Box<dyn Any>,
+            "travelCqFileNumWhenGetMessage".to_string(),
+            self.travel_cq_file_num_when_get_message.to_string(),
         );
         properties.insert(
-            "max_topic_length".to_string(),
-            Box::new(self.max_topic_length) as Box<dyn Any>,
+            "correctLogicMinOffsetSleepInterval".to_string(),
+            self.correct_logic_min_offset_sleep_interval.to_string(),
         );
         properties.insert(
-            "auto_message_version_on_topic_len".to_string(),
-            Box::new(self.auto_message_version_on_topic_len) as Box<dyn Any>,
+            "correctLogicMinOffsetForceInterval".to_string(),
+            self.correct_logic_min_offset_force_interval.to_string(),
         );
         properties.insert(
-            "enabled_append_prop_crc".to_string(),
-            Box::new(self.enabled_append_prop_crc) as Box<dyn Any>,
+            "mappedFileSwapEnable".to_string(),
+            self.mapped_file_swap_enable.to_string(),
         );
         properties.insert(
-            "force_verify_prop_crc".to_string(),
-            Box::new(self.force_verify_prop_crc) as Box<dyn Any>,
+            "commitLogForceSwapMapInterval".to_string(),
+            self.commit_log_force_swap_map_interval.to_string(),
         );
         properties.insert(
-            "travel_cq_file_num_when_get_message".to_string(),
-            Box::new(self.travel_cq_file_num_when_get_message) as Box<dyn Any>,
+            "commitLogSwapMapInterval".to_string(),
+            self.commit_log_swap_map_interval.to_string(),
         );
         properties.insert(
-            "correct_logic_min_offset_sleep_interval".to_string(),
-            Box::new(self.correct_logic_min_offset_sleep_interval) as Box<dyn Any>,
+            "commitLogSwapMapReserveFileNum".to_string(),
+            self.commit_log_swap_map_reserve_file_num.to_string(),
         );
         properties.insert(
-            "correct_logic_min_offset_force_interval".to_string(),
-            Box::new(self.correct_logic_min_offset_force_interval) as Box<dyn Any>,
+            "logicQueueForceSwapMapInterval".to_string(),
+            self.logic_queue_force_swap_map_interval.to_string(),
         );
         properties.insert(
-            "mapped_file_swap_enable".to_string(),
-            Box::new(self.mapped_file_swap_enable) as Box<dyn Any>,
+            "logicQueueSwapMapInterval".to_string(),
+            self.logic_queue_swap_map_interval.to_string(),
         );
         properties.insert(
-            "commit_log_force_swap_map_interval".to_string(),
-            Box::new(self.commit_log_force_swap_map_interval) as Box<dyn Any>,
+            "cleanSwappedMapInterval".to_string(),
+            self.clean_swapped_map_interval.to_string(),
         );
         properties.insert(
-            "commit_log_swap_map_interval".to_string(),
-            Box::new(self.commit_log_swap_map_interval) as Box<dyn Any>,
+            "logicQueueSwapMapReserveFileNum".to_string(),
+            self.logic_queue_swap_map_reserve_file_num.to_string(),
         );
         properties.insert(
-            "commit_log_swap_map_reserve_file_num".to_string(),
-            Box::new(self.commit_log_swap_map_reserve_file_num) as Box<dyn Any>,
+            "searchBcqByCacheEnable".to_string(),
+            self.search_bcq_by_cache_enable.to_string(),
         );
         properties.insert(
-            "logic_queue_force_swap_map_interval".to_string(),
-            Box::new(self.logic_queue_force_swap_map_interval) as Box<dyn Any>,
+            "dispatchFromSenderThread".to_string(),
+            self.dispatch_from_sender_thread.to_string(),
         );
         properties.insert(
-            "logic_queue_swap_map_interval".to_string(),
-            Box::new(self.logic_queue_swap_map_interval) as Box<dyn Any>,
+            "wakeCommitWhenPutMessage".to_string(),
+            self.wake_commit_when_put_message.to_string(),
         );
         properties.insert(
-            "clean_swapped_map_interval".to_string(),
-            Box::new(self.clean_swapped_map_interval) as Box<dyn Any>,
+            "wakeFlushWhenPutMessage".to_string(),
+            self.wake_flush_when_put_message.to_string(),
         );
         properties.insert(
-            "logic_queue_swap_map_reserve_file_num".to_string(),
-            Box::new(self.logic_queue_swap_map_reserve_file_num) as Box<dyn Any>,
+            "enableCleanExpiredOffset".to_string(),
+            self.enable_clean_expired_offset.to_string(),
         );
         properties.insert(
-            "search_bcq_by_cache_enable".to_string(),
-            Box::new(self.search_bcq_by_cache_enable) as Box<dyn Any>,
+            "maxAsyncPutMessageRequests".to_string(),
+            self.max_async_put_message_requests.to_string(),
         );
         properties.insert(
-            "dispatch_from_sender_thread".to_string(),
-            Box::new(self.dispatch_from_sender_thread) as Box<dyn Any>,
+            "pullBatchMaxMessageCount".to_string(),
+            self.pull_batch_max_message_count.to_string(),
         );
+        properties.insert("totalReplicas".to_string(), self.total_replicas.to_string());
         properties.insert(
-            "wake_commit_when_put_message".to_string(),
-            Box::new(self.wake_commit_when_put_message) as Box<dyn Any>,
+            "inSyncReplicas".to_string(),
+            self.in_sync_replicas.to_string(),
         );
         properties.insert(
-            "wake_flush_when_put_message".to_string(),
-            Box::new(self.wake_flush_when_put_message) as Box<dyn Any>,
+            "minInSyncReplicas".to_string(),
+            self.min_in_sync_replicas.to_string(),
         );
         properties.insert(
-            "enable_clean_expired_offset".to_string(),
-            Box::new(self.enable_clean_expired_offset) as Box<dyn Any>,
+            "allAckInSyncStateSet".to_string(),
+            self.all_ack_in_sync_state_set.to_string(),
         );
         properties.insert(
-            "max_async_put_message_requests".to_string(),
-            Box::new(self.max_async_put_message_requests) as Box<dyn Any>,
+            "enableAutoInSyncReplicas".to_string(),
+            self.enable_auto_in_sync_replicas.to_string(),
         );
         properties.insert(
-            "pull_batch_max_message_count".to_string(),
-            Box::new(self.pull_batch_max_message_count) as Box<dyn Any>,
+            "haFlowControlEnable".to_string(),
+            self.ha_flow_control_enable.to_string(),
         );
         properties.insert(
-            "total_replicas".to_string(),
-            Box::new(self.total_replicas) as Box<dyn Any>,
+            "maxHaTransferByteInSecond".to_string(),
+            self.max_ha_transfer_byte_in_second.to_string(),
         );
         properties.insert(
-            "in_sync_replicas".to_string(),
-            Box::new(self.in_sync_replicas) as Box<dyn Any>,
+            "haMaxTimeSlaveNotCatchup".to_string(),
+            self.ha_max_time_slave_not_catchup.to_string(),
         );
         properties.insert(
-            "min_in_sync_replicas".to_string(),
-            Box::new(self.min_in_sync_replicas) as Box<dyn Any>,
+            "syncMasterFlushOffsetWhenStartup".to_string(),
+            self.sync_master_flush_offset_when_startup.to_string(),
         );
         properties.insert(
-            "all_ack_in_sync_state_set".to_string(),
-            Box::new(self.all_ack_in_sync_state_set) as Box<dyn Any>,
+            "maxChecksumRange".to_string(),
+            self.max_checksum_range.to_string(),
         );
         properties.insert(
-            "enable_auto_in_sync_replicas".to_string(),
-            Box::new(self.enable_auto_in_sync_replicas) as Box<dyn Any>,
+            "replicasPerDiskPartition".to_string(),
+            self.replicas_per_disk_partition.to_string(),
         );
         properties.insert(
-            "ha_flow_control_enable".to_string(),
-            Box::new(self.ha_flow_control_enable) as Box<dyn Any>,
+            "logicalDiskSpaceCleanForciblyThreshold".to_string(),
+            self.logical_disk_space_clean_forcibly_threshold.to_string(),
         );
         properties.insert(
-            "max_ha_transfer_byte_in_second".to_string(),
-            Box::new(self.max_ha_transfer_byte_in_second) as Box<dyn Any>,
+            "maxSlaveResendLength".to_string(),
+            self.max_slave_resend_length.to_string(),
         );
         properties.insert(
-            "ha_max_time_slave_not_catchup".to_string(),
-            Box::new(self.ha_max_time_slave_not_catchup) as Box<dyn Any>,
+            "syncFromLastFile".to_string(),
+            self.sync_from_last_file.to_string(),
         );
+        properties.insert("asyncLearner".to_string(), self.async_learner.to_string());
         properties.insert(
-            "sync_master_flush_offset_when_startup".to_string(),
-            Box::new(self.sync_master_flush_offset_when_startup) as Box<dyn Any>,
+            "maxConsumeQueueScan".to_string(),
+            self.max_consume_queue_scan.to_string(),
         );
         properties.insert(
-            "max_checksum_range".to_string(),
-            Box::new(self.max_checksum_range) as Box<dyn Any>,
+            "sampleCountThreshold".to_string(),
+            self.sample_count_threshold.to_string(),
         );
         properties.insert(
-            "replicas_per_disk_partition".to_string(),
-            Box::new(self.replicas_per_disk_partition) as Box<dyn Any>,
+            "coldDataFlowControlEenable".to_string(),
+            self.cold_data_flow_control_enable.to_string(),
         );
         properties.insert(
-            "logical_disk_space_clean_forcibly_threshold".to_string(),
-            Box::new(self.logical_disk_space_clean_forcibly_threshold) as Box<dyn Any>,
+            "coldDataScanEnable".to_string(),
+            self.cold_data_scan_enable.to_string(),
         );
         properties.insert(
-            "max_slave_resend_length".to_string(),
-            Box::new(self.max_slave_resend_length) as Box<dyn Any>,
+            "dataReadAheadEnable".to_string(),
+            self.data_read_ahead_enable.to_string(),
         );
         properties.insert(
-            "sync_from_last_file".to_string(),
-            Box::new(self.sync_from_last_file) as Box<dyn Any>,
+            "timerColdDataCheckIntervalMs".to_string(),
+            self.timer_cold_data_check_interval_ms.to_string(),
         );
+        properties.insert("sampleSteps".to_string(), self.sample_steps.to_string());
         properties.insert(
-            "async_learner".to_string(),
-            Box::new(self.async_learner) as Box<dyn Any>,
+            "accessMessageInMemoryHotRatio".to_string(),
+            self.access_message_in_memory_hot_ratio.to_string(),
         );
         properties.insert(
-            "max_consume_queue_scan".to_string(),
-            Box::new(self.max_consume_queue_scan) as Box<dyn Any>,
+            "enableBuildConsumeQueueConcurrently".to_string(),
+            self.enable_build_consume_queue_concurrently.to_string(),
         );
         properties.insert(
-            "sample_count_threshold".to_string(),
-            Box::new(self.sample_count_threshold) as Box<dyn Any>,
+            "batchDispatchRequestThreadPoolNums".to_string(),
+            self.batch_dispatch_request_thread_pool_nums.to_string(),
         );
         properties.insert(
-            "cold_data_flow_control_enable".to_string(),
-            Box::new(self.cold_data_flow_control_enable) as Box<dyn Any>,
+            "cleanRocksdbDirtyCqIntervalMin".to_string(),
+            self.clean_rocksdb_dirty_cq_interval_min.to_string(),
         );
         properties.insert(
-            "cold_data_scan_enable".to_string(),
-            Box::new(self.cold_data_scan_enable) as Box<dyn Any>,
+            "statRocksdbCqIntervalSec".to_string(),
+            self.stat_rocksdb_cq_interval_sec.to_string(),
         );
         properties.insert(
-            "data_read_ahead_enable".to_string(),
-            Box::new(self.data_read_ahead_enable) as Box<dyn Any>,
+            "memTableFlushIntervalMs".to_string(),
+            self.mem_table_flush_interval_ms.to_string(),
         );
         properties.insert(
-            "timer_cold_data_check_interval_ms".to_string(),
-            Box::new(self.timer_cold_data_check_interval_ms) as Box<dyn Any>,
+            "realTimePersistRocksdbConfig".to_string(),
+            self.real_time_persist_rocksdb_config.to_string(),
         );
         properties.insert(
-            "sample_steps".to_string(),
-            Box::new(self.sample_steps) as Box<dyn Any>,
+            "enableRocksdbLog".to_string(),
+            self.enable_rocksdb_log.to_string(),
         );
         properties.insert(
-            "access_message_in_memory_hot_ratio".to_string(),
-            Box::new(self.access_message_in_memory_hot_ratio) as Box<dyn Any>,
+            "topicQueueLockNum".to_string(),
+            self.topic_queue_lock_num.to_string(),
         );
         properties.insert(
-            "enable_build_consume_queue_concurrently".to_string(),
-            Box::new(self.enable_build_consume_queue_concurrently) as Box<dyn Any>,
-        );
-        properties.insert(
-            "batch_dispatch_request_thread_pool_nums".to_string(),
-            Box::new(self.batch_dispatch_request_thread_pool_nums) as Box<dyn Any>,
-        );
-        properties.insert(
-            "clean_rocksdb_dirty_cq_interval_min".to_string(),
-            Box::new(self.clean_rocksdb_dirty_cq_interval_min) as Box<dyn Any>,
-        );
-        properties.insert(
-            "stat_rocksdb_cq_interval_sec".to_string(),
-            Box::new(self.stat_rocksdb_cq_interval_sec) as Box<dyn Any>,
-        );
-        properties.insert(
-            "mem_table_flush_interval_ms".to_string(),
-            Box::new(self.mem_table_flush_interval_ms) as Box<dyn Any>,
-        );
-        properties.insert(
-            "real_time_persist_rocksdb_config".to_string(),
-            Box::new(self.real_time_persist_rocksdb_config) as Box<dyn Any>,
-        );
-        properties.insert(
-            "enable_rocksdb_log".to_string(),
-            Box::new(self.enable_rocksdb_log) as Box<dyn Any>,
-        );
-        properties.insert(
-            "topic_queue_lock_num".to_string(),
-            Box::new(self.topic_queue_lock_num) as Box<dyn Any>,
-        );
-        properties.insert(
-            "max_filter_message_size".to_string(),
-            Box::new(self.max_filter_message_size) as Box<dyn Any>,
+            "maxFilterMessageSize".to_string(),
+            self.max_filter_message_size.to_string(),
         );
         properties
     }
