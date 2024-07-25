@@ -15,8 +15,6 @@
  * limitations under the License.
  */
 
-use std::collections::HashMap;
-
 use bytes::Bytes;
 use rocketmq_common::common::attribute::attribute_parser::AttributeParser;
 use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
@@ -390,52 +388,6 @@ impl TopicRequestHandler {
         }
         Some(response)
     }
-
-    pub async fn update_broker_config(
-        &mut self,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
-        _request_code: RequestCode,
-        _request: RemotingCommand,
-    ) -> Option<RemotingCommand> {
-        todo!()
-    }
-
-    pub async fn get_broker_config(
-        &mut self,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
-        _request_code: RequestCode,
-        _request: RemotingCommand,
-    ) -> Option<RemotingCommand> {
-        let mut response = RemotingCommand::create_response_command();
-        // broker config => broker config
-        // default message store config => message store config
-        let broker_config = self.inner.broker_config.clone();
-        let message_store_config = self
-            .inner
-            .default_message_store
-            .message_store_config()
-            .clone();
-        let broker_config_properties = broker_config.get_properties();
-        let message_store_config_properties = message_store_config.get_properties();
-        let combine_map = broker_config_properties
-            .iter()
-            .chain(message_store_config_properties.iter())
-            .collect::<HashMap<_, _>>();
-        let mut body = String::new();
-        for (key, value) in combine_map.iter() {
-            body.push_str(key.as_str());
-            body.push(':');
-            body.push_str(value.as_str());
-            body.push('\n');
-        }
-        if !body.is_empty() {
-            response.set_body_mut_ref(Some(Bytes::from(body)));
-        }
-        Some(response)
-    }
-
     fn delete_topic_in_broker(&mut self, topic: &str) {
         self.inner.topic_config_manager.delete_topic_config(topic);
         self.inner.topic_queue_mapping_manager.delete(topic);
