@@ -14,8 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+mod broker_config_request_handler;
 mod topic_request_handler;
-
 use std::sync::Arc;
 
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
@@ -28,6 +28,7 @@ use rocketmq_store::message_store::default_message_store::DefaultMessageStore;
 use tracing::warn;
 
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
+use crate::processor::admin_broker_processor::broker_config_request_handler::BrokerConfigRequestHandler;
 use crate::processor::admin_broker_processor::topic_request_handler::TopicRequestHandler;
 use crate::processor::pop_inflight_message_counter::PopInflightMessageCounter;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
@@ -36,6 +37,7 @@ use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager
 #[derive(Clone)]
 pub struct AdminBrokerProcessor {
     topic_request_handler: TopicRequestHandler,
+    broker_config_request_handler: BrokerConfigRequestHandler,
 }
 
 impl AdminBrokerProcessor {
@@ -54,9 +56,11 @@ impl AdminBrokerProcessor {
             default_message_store,
             pop_inflight_message_counter: Arc::new(PopInflightMessageCounter),
         };
-        let topic_request_handler = TopicRequestHandler::new(inner);
+        let topic_request_handler = TopicRequestHandler::new(inner.clone());
+        let broker_config_request_handler = BrokerConfigRequestHandler::new(inner.clone());
         AdminBrokerProcessor {
             topic_request_handler,
+            broker_config_request_handler,
         }
     }
 }
@@ -80,14 +84,24 @@ impl AdminBrokerProcessor {
                     .update_and_create_topic_list(channel, ctx, request_code, request)
                     .await
             }
+            RequestCode::DeleteTopicInBroker => {
+                self.topic_request_handler
+                    .delete_topic(channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::GetAllTopicConfig => {
                 self.topic_request_handler
                     .get_all_topic_config(channel, ctx, request_code, request)
                     .await
             }
-            RequestCode::DeleteTopicInBroker => {
-                self.topic_request_handler
-                    .delete_topic(channel, ctx, request_code, request)
+            RequestCode::UpdateBrokerConfig => {
+                self.broker_config_request_handler
+                    .update_broker_config(channel, ctx, request_code, request)
+                    .await
+            }
+            RequestCode::GetBrokerConfig => {
+                self.broker_config_request_handler
+                    .get_broker_config(channel, ctx, request_code, request)
                     .await
             }
             _ => Some(get_unknown_cmd_response(request_code)),

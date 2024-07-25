@@ -27,6 +27,16 @@ pub enum BrokerRole {
     Slave,
 }
 
+impl BrokerRole {
+    pub fn get_broker_role(&self) -> &'static str {
+        match self {
+            BrokerRole::AsyncMaster => "ASYNC_MASTER",
+            BrokerRole::SyncMaster => "SYNC_MASTER",
+            BrokerRole::Slave => "SLAVE",
+        }
+    }
+}
+
 impl<'de> Deserialize<'de> for BrokerRole {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
