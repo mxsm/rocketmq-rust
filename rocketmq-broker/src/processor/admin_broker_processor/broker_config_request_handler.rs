@@ -69,11 +69,8 @@ impl BrokerConfigRequestHandler {
             .chain(message_store_config_properties.iter())
             .collect::<HashMap<_, _>>();
         let mut body = String::new();
-        for (key, value) in combine_map.iter() {
-            body.push_str(key.as_str());
-            body.push(':');
-            body.push_str(value.as_str());
-            body.push('\n');
+        for (key, value) in combine_map {
+            body.push_str(&format!("{}:{}\n", key, value));
         }
         if !body.is_empty() {
             response.set_body_mut_ref(Some(Bytes::from(body)));
