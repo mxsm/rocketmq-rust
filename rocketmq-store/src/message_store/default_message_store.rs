@@ -270,6 +270,7 @@ impl Drop for DefaultMessageStore {
 }
 
 impl DefaultMessageStore {
+    #[inline]
     pub fn get_topic_config(&self, topic: &str) -> Option<TopicConfig> {
         if self.topic_config_table.lock().is_empty() {
             return None;
@@ -675,7 +676,24 @@ impl MessageStore for DefaultMessageStore {
                 return PutMessageResult::new_default(PutMessageStatus::MessageIllegal);
             }
         }
-        self.commit_log.put_message(msg).await
+        let begin_time = Instant::now();
+        //put message to commit log
+        let result = self.commit_log.put_message(msg).await;
+        let elapsed_time = begin_time.elapsed().as_millis();
+        if elapsed_time > 500 {
+            warn!(
+                "DefaultMessageStore#putMessage: CommitLog#putMessage cost {}ms",
+                elapsed_time,
+            );
+        }
+        self.store_stats_service
+            .set_put_message_entire_time_max(elapsed_time as u64);
+        if !result.is_ok() {
+            self.store_stats_service
+                .get_message_times_total_found()
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        result
     }
 
     async fn put_messages(&mut self, msg_batch: MessageExtBatch) -> PutMessageResult {
@@ -974,11 +992,11 @@ impl MessageStore for DefaultMessageStore {
 
         if GetMessageStatus::Found == status {
             self.store_stats_service
-                .get_get_message_times_total_found()
+                .get_message_times_total_found()
                 .fetch_add(1, Ordering::Relaxed);
         } else {
             self.store_stats_service
-                .get_get_message_times_total_miss()
+                .get_message_times_total_miss()
                 .fetch_add(1, Ordering::Relaxed);
         }
         let elapsed_time = begin_time.elapsed().as_millis() as u64;
