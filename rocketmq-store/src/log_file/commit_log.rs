@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-use std::cell::Cell;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::mem;
 use std::sync::atomic::AtomicU64;
@@ -85,14 +85,14 @@ pub const BLANK_MAGIC_CODE: i32 = -875286124;
 pub const CRC32_RESERVED_LEN: i32 = (MessageConst::PROPERTY_CRC32.len() + 1 + 10 + 1) as i32;
 
 struct PutMessageThreadLocal {
-    encoder: Cell<Option<MessageExtEncoder>>,
-    key: Cell<String>,
+    encoder: RefCell<Option<MessageExtEncoder>>,
+    key: RefCell<String>,
 }
 
 thread_local! {
     static PUT_MESSAGE_THREAD_LOCAL: PutMessageThreadLocal = const { PutMessageThreadLocal{
-        encoder: Cell::new(None),
-        key: Cell::new(String::new()),
+        encoder: RefCell::new(None),
+        key: RefCell::new(String::new()),
     } };
 }
 
@@ -100,21 +100,17 @@ fn encode_message_ext(
     message_ext: &MessageExtBrokerInner,
     message_store_config: &Arc<MessageStoreConfig>,
 ) -> (Option<PutMessageResult>, BytesMut) {
-    PUT_MESSAGE_THREAD_LOCAL.with(|thread_local| match thread_local.encoder.take() {
-        None => {
-            let mut encoder = MessageExtEncoder::new(Arc::clone(message_store_config));
-            let result = encoder.encode(message_ext);
-            let bytes_mut = encoder.byte_buf();
-            thread_local.encoder.set(Some(encoder));
-            (result, bytes_mut)
+    PUT_MESSAGE_THREAD_LOCAL.with(|thread_local| {
+        if thread_local.encoder.borrow().is_none() {
+            let encoder = MessageExtEncoder::new(Arc::clone(message_store_config));
+            //*thread_local.encoder.borrow_mut() = Some(encoder);
+            thread_local.encoder.replace(Some(encoder));
         }
-
-        Some(mut encoder) => {
-            let result = encoder.encode(message_ext);
-            let bytes_mut = encoder.byte_buf();
-            thread_local.encoder.set(Some(encoder));
-            (result, bytes_mut)
-        }
+        let mut ref_mut = thread_local.encoder.borrow_mut();
+        let encoder = ref_mut.as_mut().unwrap();
+        let result = encoder.encode(message_ext);
+        let bytes_mut = encoder.byte_buf();
+        (result, bytes_mut)
     })
 }
 
@@ -123,32 +119,29 @@ fn encode_message_ext_batch(
     put_message_context: &mut PutMessageContext,
     message_store_config: &Arc<MessageStoreConfig>,
 ) -> Option<BytesMut> {
-    PUT_MESSAGE_THREAD_LOCAL.with(|thread_local| match thread_local.encoder.take() {
-        None => {
-            let mut encoder = MessageExtEncoder::new(Arc::clone(message_store_config));
-            let bytes_mut = encoder.encode_batch(message_ext_batch, put_message_context);
-            thread_local.encoder.set(Some(encoder));
-            bytes_mut
+    PUT_MESSAGE_THREAD_LOCAL.with(|thread_local| {
+        if thread_local.encoder.borrow().is_none() {
+            let encoder = MessageExtEncoder::new(Arc::clone(message_store_config));
+            //*thread_local.encoder.borrow_mut() = Some(encoder);
+            thread_local.encoder.replace(Some(encoder));
         }
-
-        Some(mut encoder) => {
-            let bytes_mut = encoder.encode_batch(message_ext_batch, put_message_context);
-            thread_local.encoder.set(Some(encoder));
-            bytes_mut
-        }
+        thread_local
+            .encoder
+            .borrow_mut()
+            .as_mut()
+            .unwrap()
+            .encode_batch(message_ext_batch, put_message_context)
     })
 }
 
 fn generate_key(msg: &MessageExtBrokerInner) -> String {
     PUT_MESSAGE_THREAD_LOCAL.with(|thead_local| {
-        let mut topic_queue_key = thead_local.key.take();
+        let mut topic_queue_key = thead_local.key.borrow_mut();
         topic_queue_key.clear();
         topic_queue_key.push_str(msg.topic());
         topic_queue_key.push('-');
         topic_queue_key.push_str(msg.queue_id().to_string().as_str());
-        let key_return = topic_queue_key.to_string();
-        thead_local.key.set(topic_queue_key);
-        key_return
+        topic_queue_key.to_string()
     })
 }
 
@@ -899,7 +892,7 @@ impl CommitLog {
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
-                                 files"
+                                  files"
             );
             self.mapped_file_queue.set_flushed_where(0);
             self.mapped_file_queue.set_committed_where(0);
@@ -1079,7 +1072,7 @@ impl CommitLog {
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
-                                 files"
+                                  files"
             );
             self.mapped_file_queue.set_flushed_where(0);
             self.mapped_file_queue.set_committed_where(0);
