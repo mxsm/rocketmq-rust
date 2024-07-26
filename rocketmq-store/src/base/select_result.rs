@@ -20,7 +20,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use bytes::BytesMut;
 
-use crate::log_file::mapped_file::default_impl::DefaultMappedFile;
+use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
 
 /// Represents the result of selecting a mapped buffer.

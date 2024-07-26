@@ -26,7 +26,7 @@ use memmap2::MmapMut;
 use rocketmq_common::UtilAll::ensure_dir_ok;
 use tracing::info;
 
-use crate::log_file::mapped_file::default_impl::OS_PAGE_SIZE;
+use crate::log_file::mapped_file::default_mapped_file_impl::OS_PAGE_SIZE;
 
 pub struct StoreCheckpoint {
     file: File,

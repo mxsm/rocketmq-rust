@@ -40,7 +40,7 @@ use crate::config::message_store_config::MessageStoreConfig;
 use crate::consume_queue::consume_queue_ext::CqExtUnit;
 use crate::consume_queue::mapped_file_queue::MappedFileQueue;
 use crate::filter::MessageFilter;
-use crate::log_file::mapped_file::default_impl::DefaultMappedFile;
+use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
 use crate::queue::consume_queue_ext::ConsumeQueueExt;
 use crate::queue::queue_offset_operator::QueueOffsetOperator;

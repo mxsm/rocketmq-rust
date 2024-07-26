@@ -301,21 +301,25 @@ impl MappedFile for DefaultMappedFile {
 
     fn append_message_offset_length(&self, data: &Bytes, offset: usize, length: usize) -> bool {
         let current_pos = self.wrote_position.load(Ordering::Relaxed) as usize;
+
         if current_pos + length <= self.file_size as usize {
-            match (&mut self.get_mapped_file_mut()[current_pos..]).write_all(data.as_ref()) {
-                Ok(_) => {
+            let mut mapped_file =
+                &mut self.get_mapped_file_mut()[current_pos..current_pos + length];
+
+            if let Some(data_slice) = data.get(offset..offset + length) {
+                if mapped_file.write_all(data_slice).is_ok() {
                     self.wrote_position
                         .fetch_add(length as i32, Ordering::SeqCst);
-                    true
-                }
-                Err(_) => {
+                    return true;
+                } else {
                     error!("append_message_offset_length write_all error");
-                    false
                 }
+            } else {
+                error!("Invalid data slice");
             }
-        } else {
-            false
         }
+
+        false
     }
 
     fn get_file_from_offset(&self) -> u64 {

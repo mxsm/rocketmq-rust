@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use crate::log_file::mapped_file::default_impl::DefaultMappedFile;
+use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 
 pub struct AllocateMappedFileService {
     tx: Sender<AllocateRequest>,
