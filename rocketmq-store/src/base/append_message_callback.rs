@@ -112,16 +112,18 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         let is_multi_dispatch_msg = self.message_store_config.enable_multi_dispatch
             && CommitLog::is_multi_dispatch_msg(msg_inner);
         if is_multi_dispatch_msg {
-            /*if let Some(result) = self.handle_properties_for_lmq_msg(&msg_inner) {
-                return result;
-            }*/
+            unimplemented!("Multi dispatch message is not supported yet");
         }
 
         let msg_len = i32::from_be_bytes(pre_encode_buffer[0..4].try_into().unwrap());
+        //physic offset
         let wrote_offset = file_from_offset + mapped_file.get_wrote_position() as i64;
+        let addr = msg_inner.message_ext_inner.store_host;
+        let msg_id_supplier =
+            move || -> String { message_utils::build_message_id(addr, wrote_offset) };
 
-        let msg_id =
-            message_utils::build_message_id(msg_inner.message_ext_inner.store_host, wrote_offset);
+        /*let msg_id =
+        message_utils::build_message_id(msg_inner.message_ext_inner.store_host, wrote_offset);*/
 
         let mut queue_offset = msg_inner.queue_offset();
         //let message_num = CommitLog::get_message_num(msg_inner);
@@ -141,10 +143,10 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
                 status: AppendMessageStatus::EndOfFile,
                 wrote_offset,
                 wrote_bytes: max_blank,
-                msg_id,
                 store_timestamp: msg_inner.store_timestamp(),
                 logics_offset: queue_offset,
                 msg_num: message_num as i32,
+                msg_id_supplier: Some(Arc::new(Box::new(msg_id_supplier))),
                 ..Default::default()
             };
         }
@@ -169,10 +171,10 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
             status: AppendMessageStatus::PutOk,
             wrote_offset,
             wrote_bytes: msg_len,
-            msg_id,
             store_timestamp: msg_inner.store_timestamp(),
             logics_offset: queue_offset,
             msg_num: message_num as i32,
+            msg_id_supplier: Some(Arc::new(Box::new(msg_id_supplier))),
             ..Default::default()
         }
     }
@@ -205,6 +207,12 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         } else {
             16 + 4
         };
+        let addr = msg_batch.message_ext_broker_inner.store_host();
+        let batch_size = put_message_context.get_batch_size();
+        let phy_ops = put_message_context.get_phy_pos().to_vec();
+        let msg_id_supplier = move || -> String {
+            build_batch_message_id(addr, store_host_length, batch_size as usize, &phy_ops)
+        };
         let mut total_msg_len = 0;
         let mut msg_num = 0;
         let mut msg_pos = 0;
@@ -225,7 +233,7 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
                     status: AppendMessageStatus::EndOfFile,
                     wrote_offset,
                     wrote_bytes: max_blank,
-                    msg_id: "".to_string(),
+                    msg_id_supplier: Some(Arc::new(Box::new(msg_id_supplier))),
                     store_timestamp: msg_batch.message_ext_broker_inner.store_timestamp(),
                     logics_offset: begin_queue_offset,
                     ..Default::default()
@@ -254,17 +262,18 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
 
         let bytes = pre_encode_buffer.freeze();
         mapped_file.append_message_bytes(&bytes);
-        let msg_id = build_batch_message_id(
+        /*let msg_id = build_batch_message_id(
             msg_batch.message_ext_broker_inner.store_host(),
             store_host_length,
             put_message_context.get_batch_size() as usize,
             put_message_context.get_phy_pos(),
-        );
+        );*/
+
         AppendMessageResult {
             status: AppendMessageStatus::PutOk,
             wrote_offset,
             wrote_bytes: total_msg_len,
-            msg_id,
+            msg_id_supplier: Some(Arc::new(Box::new(msg_id_supplier))),
             store_timestamp: msg_batch.message_ext_broker_inner.store_timestamp(),
             logics_offset: begin_queue_offset,
             msg_num,

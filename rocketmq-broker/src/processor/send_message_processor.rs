@@ -717,8 +717,8 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
                 put_message_result
                     .append_message_result()
                     .unwrap()
-                    .msg_id
-                    .clone(),
+                    .get_message_id()
+                    .unwrap(),
             );
             response_header.set_queue_id(queue_id_int);
             response_header.set_queue_offset(
