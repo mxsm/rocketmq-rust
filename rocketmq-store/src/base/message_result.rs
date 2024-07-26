@@ -20,8 +20,10 @@ use std::sync::Arc;
 use crate::base::message_status_enum::AppendMessageStatus;
 use crate::base::message_status_enum::PutMessageStatus;
 
+type MessageIdSupplier = Box<dyn Fn() -> String + Send + Sync>;
+
 /// Represents the result of an append message operation.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct AppendMessageResult {
     /// Return code.
     pub status: AppendMessageStatus,
@@ -32,7 +34,7 @@ pub struct AppendMessageResult {
     /// Message ID.
     pub msg_id: Option<String>,
     /// Message ID supplier.
-    pub msg_id_supplier: Option<Arc<Box<dyn Fn() -> String>>>,
+    pub msg_id_supplier: Option<Arc<MessageIdSupplier>>,
     /// Message storage timestamp.
     pub store_timestamp: i64,
     /// Consume queue's offset (step by one).
@@ -61,26 +63,20 @@ impl Display for AppendMessageResult {
     }
 }
 
-impl Default for AppendMessageResult {
-    fn default() -> Self {
-        Self {
-            status: Default::default(),
-            wrote_offset: 0,
-            wrote_bytes: 0,
-            msg_id: None,
-            msg_id_supplier: None,
-            store_timestamp: 0,
-            logics_offset: 0,
-            page_cache_rt: 0,
-            msg_num: 0,
-        }
-    }
-}
-
 impl AppendMessageResult {
     #[inline]
     pub fn is_ok(&self) -> bool {
         self.status == AppendMessageStatus::PutOk
+    }
+
+    pub fn get_message_id(&self) -> Option<String> {
+        if self.msg_id.is_none() && self.msg_id_supplier.is_some() {
+            let msg_id_supplier = self.msg_id_supplier.as_ref().unwrap();
+            let msg_id = msg_id_supplier();
+            Some(msg_id)
+        } else {
+            self.msg_id.clone()
+        }
     }
 }
 

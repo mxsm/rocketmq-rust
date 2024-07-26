@@ -452,7 +452,7 @@ impl CommitLog {
         if elapsed_time_in_lock > 500 {
             warn!(
                 "[NOTIFYME]putMessage in lock cost time(ms)={}, bodyLength={} \
-                 AppendMessageResult={:?}",
+                 AppendMessageResult={}",
                 elapsed_time_in_lock,
                 msg_batch.message_ext_broker_inner.body_len(),
                 put_message_result.append_message_result().as_ref().unwrap(),
@@ -643,7 +643,7 @@ impl CommitLog {
         if elapsed_time_in_lock > 500 {
             warn!(
                 "[NOTIFYME]putMessage in lock cost time(ms)={}, bodyLength={} \
-                 AppendMessageResult={:?}",
+                 AppendMessageResult={}",
                 elapsed_time_in_lock,
                 msg.body_len(),
                 put_message_result.append_message_result().as_ref().unwrap(),
@@ -893,7 +893,7 @@ impl CommitLog {
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
-                                  files"
+                                   files"
             );
             self.mapped_file_queue.set_flushed_where(0);
             self.mapped_file_queue.set_committed_where(0);
@@ -1073,7 +1073,7 @@ impl CommitLog {
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
-                                  files"
+                                   files"
             );
             self.mapped_file_queue.set_flushed_where(0);
             self.mapped_file_queue.set_committed_where(0);
