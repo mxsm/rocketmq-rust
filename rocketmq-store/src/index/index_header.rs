@@ -23,7 +23,7 @@ use std::sync::Arc;
 use bytes::Buf;
 use bytes::Bytes;
 
-use crate::log_file::mapped_file::default_impl::DefaultMappedFile;
+use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
 
 pub const INDEX_HEADER_SIZE: usize = 40;

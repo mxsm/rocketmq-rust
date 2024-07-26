@@ -66,7 +66,7 @@ use crate::config::message_store_config::MessageStoreConfig;
 use crate::consume_queue::mapped_file_queue::MappedFileQueue;
 use crate::log_file::cold_data_check_service::ColdDataCheckService;
 use crate::log_file::flush_manager_impl::defalut_flush_manager::DefaultFlushManager;
-use crate::log_file::mapped_file::default_impl::DefaultMappedFile;
+use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
 use crate::message_encoder::message_ext_encoder::MessageExtEncoder;
 use crate::message_store::default_message_store::CommitLogDispatcherDefault;

@@ -20,7 +20,7 @@ use std::path::PathBuf;
 
 use bytes::Buf;
 use rocketmq_common::common::message::message_decoder;
-use rocketmq_store::log_file::mapped_file::default_impl::DefaultMappedFile;
+use rocketmq_store::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use rocketmq_store::log_file::mapped_file::MappedFile;
 use tabled::Table;
 use tabled::Tabled;

@@ -27,7 +27,7 @@ use parking_lot::RwLock;
 use rocketmq_common::UtilAll::offset_to_file_name;
 use tracing::info;
 
-use crate::log_file::mapped_file::default_impl::DefaultMappedFile;
+use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
 use crate::services::allocate_mapped_file_service::AllocateMappedFileService;
 
