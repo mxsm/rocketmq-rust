@@ -1316,7 +1316,7 @@ impl ReputMessageService {
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
         self.tx = Some(Arc::new(tx));
         let handle = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_millis(2000));
+            let mut interval = tokio::time::interval(Duration::from_millis(1));
             let mut break_flag = false;
             loop {
                 tokio::select! {
@@ -1324,7 +1324,7 @@ impl ReputMessageService {
                     _ = rx.recv() => {
                         let mut index = 0;
                         while index < 50 && inner.is_commit_log_available() {
-                            tokio::time::sleep(Duration::from_millis(500)).await;
+                            tokio::time::sleep(Duration::from_millis(100)).await;
                             if inner.is_commit_log_available() {
                                 warn!(
                                     "shutdown ReputMessageService, but CommitLog have not finish to be \

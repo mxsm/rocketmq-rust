@@ -47,6 +47,7 @@ pub mod rocketmq_serializable;
 pub mod route;
 pub mod static_topic;
 pub mod subscription;
+pub mod topic;
 
 #[repr(u8)]
 #[derive(Debug, PartialEq, Eq)]

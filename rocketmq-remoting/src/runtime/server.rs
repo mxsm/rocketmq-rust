@@ -257,6 +257,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
             // error here is non-recoverable.
             let (socket, remote_addr) = self.accept().await?;
             info!("Accepted connection, client ip:{}", remote_addr);
+            socket.set_nodelay(true).unwrap();
             let channel = Channel::new(socket.local_addr().unwrap(), remote_addr);
             //create per connection handler state
             let mut handler = ConnectionHandler {

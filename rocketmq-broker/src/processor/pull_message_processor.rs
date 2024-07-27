@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 use std::sync::Arc;
+use std::time::Instant;
 
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::constant::PermName;
@@ -42,13 +43,14 @@ use rocketmq_remoting::rpc::rpc_client::RpcClient;
 use rocketmq_remoting::rpc::rpc_client_utils::RpcClientUtils;
 use rocketmq_remoting::rpc::rpc_request::RpcRequest;
 use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
+use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::filter::MessageFilter;
 use rocketmq_store::log_file::MessageStore;
 use rocketmq_store::log_file::MAX_PULL_MSG_SIZE;
+use tokio::sync::Mutex;
 use tracing::error;
-use tracing::info;
 use tracing::warn;
 
 use crate::client::consumer_group_info::ConsumerGroupInfo;
@@ -80,6 +82,10 @@ pub struct PullMessageProcessor<MS> {
     message_store: Arc<MS>,
     cold_data_cg_ctr_service: Arc<ColdDataCgCtrService>,
     broker_outer_api: Arc<BrokerOuterAPI>,
+    // write message to consume client runtime
+    write_message_runtime: Arc<RocketMQRuntime>,
+    // write message to consume client lock
+    write_message_lock: Arc<Mutex<()>>,
 }
 
 impl<MS> PullMessageProcessor<MS> {
@@ -96,6 +102,7 @@ impl<MS> PullMessageProcessor<MS> {
         message_store: Arc<MS>,
         broker_outer_api: Arc<BrokerOuterAPI>,
     ) -> Self {
+        let cpus = num_cpus::get();
         Self {
             pull_message_result_handler,
             broker_config,
@@ -109,6 +116,11 @@ impl<MS> PullMessageProcessor<MS> {
             message_store,
             cold_data_cg_ctr_service: Arc::new(Default::default()),
             broker_outer_api,
+            write_message_runtime: Arc::new(RocketMQRuntime::new_multi(
+                cpus,
+                "write_consumer_message_runtime",
+            )),
+            write_message_lock: Arc::new(Default::default()),
         }
     }
 
@@ -375,7 +387,7 @@ where
         let mut request_header = request
             .decode_command_custom_header_fast::<PullMessageRequestHeader>()
             .unwrap();
-        info!("receive pull message request: {:?}", request_header);
+        //info!("receive pull message request: {:?}", request_header);
         let mut response_header = PullMessageResponseHeader::default();
 
         if !PermName::is_readable(self.broker_config.broker_permission) {
@@ -744,7 +756,8 @@ where
                 get_message_result.set_next_begin_offset(broadcast_init_offset);
                 Some(get_message_result)
             } else {
-                self.message_store
+                let result = self
+                    .message_store
                     .get_message(
                         group,
                         topic,
@@ -754,7 +767,15 @@ where
                         MAX_PULL_MSG_SIZE,
                         Some(message_filter.as_ref()),
                     )
-                    .await
+                    .await;
+                if result.is_none() {
+                    return Some(
+                        response
+                            .set_code(ResponseCode::SystemError)
+                            .set_remark(Some("store getMessage return None".to_string())),
+                    );
+                }
+                result
             }
         };
         if let Some(get_message_result) = get_message_result {
@@ -815,7 +836,6 @@ where
                 proxy_pull_broadcast,
             );
         }
-
         -1
     }
 
@@ -826,10 +846,12 @@ where
         request: RemotingCommand,
     ) {
         let mut self_inner = self.clone();
-        tokio::spawn(async move {
+        let lock = Arc::clone(&self.write_message_lock);
+        self.write_message_runtime.get_handle().spawn(async move {
             let broker_allow_flow_ctr_suspend = !(request.ext_fields().is_some()
                 && request.ext_fields().unwrap().contains_key(NO_SUSPEND_KEY));
             let opaque = request.opaque();
+            let instant = Instant::now();
             let response = self_inner
                 .process_request_inner(
                     RequestCode::from(request.code()),
@@ -840,12 +862,15 @@ where
                     broker_allow_flow_ctr_suspend,
                 )
                 .await;
+
             if let Some(response) = response {
                 let command = response.set_opaque(opaque).mark_response_type();
                 match ctx.upgrade() {
                     None => {}
                     Some(mut ctx) => {
+                        let guard = lock.lock().await;
                         ctx.write(command).await;
+                        drop(guard);
                     }
                 }
             }
