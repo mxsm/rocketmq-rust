@@ -56,7 +56,7 @@ impl Connection {
     /// A new `Connection` instance.
     pub fn new(tcp_stream: TcpStream) -> Connection {
         Self {
-            framed: Framed::new(tcp_stream, RemotingCommandCodec::new()),
+            framed: Framed::with_capacity(tcp_stream, RemotingCommandCodec::new(), 1024 * 4),
             ok: true,
         }
     }

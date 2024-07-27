@@ -21,6 +21,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use bytes::BytesMut;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all::MASTER_ID;
 use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
 use rocketmq_common::TimeUtils::get_current_millis;
@@ -35,15 +36,19 @@ use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::request_source::RequestSource;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+use rocketmq_remoting::protocol::topic::OffsetMovedEvent;
 use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
+use rocketmq_store::config::broker_role::BrokerRole;
+use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::filter::MessageFilter;
 use rocketmq_store::message_store::default_message_store::DefaultMessageStore;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use rocketmq_store::stats::stats_type::StatsType;
 use tracing::debug;
 use tracing::info;
+use tracing::warn;
 
 use crate::client::manager::consumer_manager::ConsumerManager;
 use crate::long_polling::long_polling_service::pull_request_hold_service::PullRequestHoldService;
@@ -59,6 +64,7 @@ use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
 pub struct DefaultPullMessageResultHandler {
     topic_config_manager: Arc<TopicConfigManager>,
+    message_store_config: Arc<MessageStoreConfig>,
     consumer_offset_manager: Arc<ConsumerOffsetManager>,
     consumer_manager: Arc<ConsumerManager>,
     broadcast_offset_manager: Arc<BroadcastOffsetManager>,
@@ -70,6 +76,7 @@ pub struct DefaultPullMessageResultHandler {
 
 impl DefaultPullMessageResultHandler {
     pub fn new(
+        message_store_config: Arc<MessageStoreConfig>,
         topic_config_manager: Arc<TopicConfigManager>,
         consumer_offset_manager: Arc<ConsumerOffsetManager>,
         consumer_manager: Arc<ConsumerManager>,
@@ -80,6 +87,7 @@ impl DefaultPullMessageResultHandler {
     ) -> Self {
         Self {
             topic_config_manager,
+            message_store_config,
             consumer_offset_manager,
             consumer_manager,
             broadcast_offset_manager,
@@ -135,15 +143,19 @@ impl PullMessageResultHandler for DefaultPullMessageResultHandler {
             broker_allow_suspend,
             code,
         );
-        let response_header = response.read_custom_header_mut::<PullMessageResponseHeader>();
-        let rewrite_result = rewrite_response_for_static_topic(
-            &request_header,
-            response_header.unwrap(),
-            &mut mapping_context,
-            code,
-        );
-        if rewrite_result.is_some() {
-            return rewrite_result;
+        {
+            let response_header = response
+                .read_custom_header_mut::<PullMessageResponseHeader>()
+                .unwrap();
+            let rewrite_result = rewrite_response_for_static_topic(
+                &request_header,
+                response_header,
+                &mut mapping_context,
+                code,
+            );
+            if rewrite_result.is_some() {
+                return rewrite_result;
+            }
         }
         self.update_broadcast_pulled_offset(
             request_header.topic.as_str(),
@@ -151,7 +163,7 @@ impl PullMessageResultHandler for DefaultPullMessageResultHandler {
             request_header.queue_id.unwrap(),
             &request_header,
             &channel,
-            Some(&response),
+            Some(&mut response),
             get_message_result.next_begin_offset(),
         );
         self.try_commit_offset(
@@ -223,12 +235,57 @@ impl PullMessageResultHandler for DefaultPullMessageResultHandler {
                         .as_ref()
                         .unwrap()
                         .suspend_pull_request(topic, queue_id, pull_request);
+                    return None;
                 }
-                None
+                Some(response)
             }
-            ResponseCode::PullOffsetMoved => Some(response),
             ResponseCode::PullRetryImmediately => Some(response),
-            _ => None,
+            ResponseCode::PullOffsetMoved => {
+                if self.message_store_config.broker_role != BrokerRole::Slave
+                    || self.message_store_config.offset_check_in_slave
+                {
+                    let response_header = response
+                        .read_custom_header_mut::<PullMessageResponseHeader>()
+                        .unwrap();
+                    let mut mq = MessageQueue::new();
+                    mq.set_topic(request_header.topic.clone());
+                    mq.set_broker_name(self.broker_config.broker_name.clone());
+                    mq.set_queue_id(request_header.queue_id.unwrap());
+
+                    let offset_moved_event = OffsetMovedEvent {
+                        consumer_group: request_header.consumer_group.clone(),
+                        message_queue: mq,
+                        offset_request: request_header.queue_offset,
+                        offset_new: get_message_result.next_begin_offset(),
+                    };
+                    warn!(
+                        "PULL_OFFSET_MOVED:correction offset. topic={}, groupId={}, \
+                         requestOffset={}, newOffset={}, suggestBrokerId={}",
+                        request_header.topic,
+                        request_header.consumer_group,
+                        offset_moved_event.offset_request,
+                        offset_moved_event.offset_new,
+                        response_header.suggest_which_broker_id.unwrap()
+                    );
+                } else {
+                    let response_header = response
+                        .read_custom_header_mut::<PullMessageResponseHeader>()
+                        .unwrap();
+                    response_header.suggest_which_broker_id =
+                        Some(subscription_group_config.broker_id());
+                    response.set_code_ref(ResponseCode::PullRetryImmediately);
+                    warn!(
+                        "PULL_OFFSET_MOVED:correction offset. topic={}, groupId={}, \
+                         requestOffset={}, suggestBrokerId={}",
+                        request_header.topic,
+                        request_header.consumer_group,
+                        request_header.queue_offset,
+                        subscription_group_config.broker_id()
+                    );
+                }
+                Some(response)
+            }
+            _ => Some(response),
         }
     }
 
@@ -491,7 +548,7 @@ impl DefaultPullMessageResultHandler {
         queue_id: i32,
         request_header: &PullMessageRequestHeader,
         channel: &Channel,
-        response: Option<&RemotingCommand>,
+        response: Option<&mut RemotingCommand>,
         next_begin_offset: i64,
     ) {
         if response.is_none() || !self.broker_config.enable_broadcast_offset_store {

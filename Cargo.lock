@@ -1494,6 +1494,7 @@ dependencies = [
  "local-ip-address",
  "log",
  "mockall",
+ "num_cpus",
  "parking_lot",
  "rand",
  "rocketmq-common",

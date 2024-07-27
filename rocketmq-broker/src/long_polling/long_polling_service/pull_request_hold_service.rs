@@ -119,10 +119,10 @@ where
             }
             let topic = key_parts[0];
             let queue_id = key_parts[1].parse::<i32>().unwrap();
-            info!(
+            /*info!(
                 "check hold request, topic: {}, queue_id: {}",
                 topic, queue_id
-            );
+            );*/
             let max_offset = self.message_store.get_max_offset_in_queue(topic, queue_id);
             self.notify_message_arriving(topic, queue_id, max_offset);
         }

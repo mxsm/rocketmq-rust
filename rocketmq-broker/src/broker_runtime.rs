@@ -386,6 +386,7 @@ impl BrokerRuntime {
         );
         let mut pull_message_result_handler =
             ArcCellWrapper::new(Box::new(DefaultPullMessageResultHandler::new(
+                self.message_store_config.clone(),
                 Arc::new(self.topic_config_manager.clone()),
                 Arc::new(self.consumer_offset_manager.clone()),
                 self.consumer_manager.clone(),

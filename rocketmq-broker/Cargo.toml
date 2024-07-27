@@ -59,6 +59,7 @@ dns-lookup = "2.0"
 log = "0.4.22"
 cfg-if = { workspace = true }
 lazy_static.workspace = true
+num_cpus = { workspace = true }
 [dev-dependencies]
 mockall = "0.13.0"
 static_assertions = { version = "1" }
