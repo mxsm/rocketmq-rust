@@ -26,6 +26,7 @@ use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::body::create_topic_list_request_body::CreateTopicListRequestBody;
+use rocketmq_remoting::protocol::body::topic::topic_list::TopicList;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper;
 use rocketmq_remoting::protocol::header::create_topic_request_header::CreateTopicRequestHeader;
@@ -386,6 +387,23 @@ impl TopicRequestHandler {
         if !content.is_empty() {
             response.set_body_mut_ref(Some(Bytes::from(content)));
         }
+        Some(response)
+    }
+
+    pub async fn get_system_topic_list_from_broker(
+        &mut self,
+        _channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        _request_code: RequestCode,
+        _request: RemotingCommand,
+    ) -> Option<RemotingCommand> {
+        let mut response = RemotingCommand::create_response_command();
+        let topics = TopicValidator::get_system_topic_set();
+        let topic_list = TopicList {
+            topic_list: topics.into_iter().map(|s| s.to_string()).collect(),
+            broker_addr: None,
+        };
+        response.set_body_mut_ref(Some(topic_list.encode()));
         Some(response)
     }
     fn delete_topic_in_broker(&mut self, topic: &str) {
