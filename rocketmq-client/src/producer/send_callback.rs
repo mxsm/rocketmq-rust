@@ -14,15 +14,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#![allow(dead_code)]
-#![allow(unused_variables)]
+use crate::producer::send_result::SendResult;
 
-use crate::error::MQClientError;
-
-pub mod base;
-mod common;
-pub mod error;
-pub mod producer;
-mod trace;
-
-pub type Result<T> = std::result::Result<T, MQClientError>;
+pub trait SendCallback {
+    fn on_success(&self, send_result: &SendResult);
+    fn on_exception(&self, e: std::io::Error);
+}

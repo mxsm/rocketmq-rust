@@ -14,15 +14,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#![allow(dead_code)]
-#![allow(unused_variables)]
+use rocketmq_common::common::message::message_queue::MessageQueue;
 
-use crate::error::MQClientError;
-
-pub mod base;
-mod common;
-pub mod error;
-pub mod producer;
-mod trace;
-
-pub type Result<T> = std::result::Result<T, MQClientError>;
+/// A trait for filtering message queues.
+///
+/// This trait defines a method for filtering message queues based on custom criteria.
+pub trait QueueFilter {
+    /// Filters a message queue.
+    ///
+    /// This method determines whether the specified message queue meets the filter criteria.
+    ///
+    /// # Arguments
+    /// * `mq` - A reference to the `MessageQueue` to be filtered.
+    ///
+    /// # Returns
+    /// A boolean value indicating whether the message queue meets the filter criteria.
+    fn filter(&self, mq: &MessageQueue) -> bool;
+}

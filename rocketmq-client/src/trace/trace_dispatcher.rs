@@ -14,15 +14,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#![allow(dead_code)]
-#![allow(unused_variables)]
+use crate::base::access_channel::AccessChannel;
+use crate::Result;
 
-use crate::error::MQClientError;
+pub enum Type {
+    Produce,
+    Consume,
+}
 
-pub mod base;
-mod common;
-pub mod error;
-pub mod producer;
-mod trace;
-
-pub type Result<T> = std::result::Result<T, MQClientError>;
+pub trait TraceDispatcher {
+    fn start(&self, name_srv_addr: &str, access_channel: AccessChannel) -> Result<()>;
+    fn append(&self, ctx: &dyn std::any::Any) -> bool;
+    fn flush(&self) -> Result<()>;
+    fn shutdown(&self);
+}

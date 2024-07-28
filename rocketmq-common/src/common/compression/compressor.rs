@@ -14,15 +14,27 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#![allow(dead_code)]
-#![allow(unused_variables)]
+pub trait Compressor {
+    /// Compress message by different compressor.
+    ///
+    /// # Arguments
+    ///
+    /// * `src` - Bytes ready to compress.
+    /// * `level` - Compression level used to balance compression rate and time consumption.
+    ///
+    /// # Returns
+    ///
+    /// Compressed byte data or an `std::io::Error`.
+    fn compress(&self, src: &[u8], level: i32) -> Result<Vec<u8>, std::io::Error>;
 
-use crate::error::MQClientError;
-
-pub mod base;
-mod common;
-pub mod error;
-pub mod producer;
-mod trace;
-
-pub type Result<T> = std::result::Result<T, MQClientError>;
+    /// Decompress message by different compressor.
+    ///
+    /// # Arguments
+    ///
+    /// * `src` - Bytes ready to decompress.
+    ///
+    /// # Returns
+    ///
+    /// Decompressed byte data or an `std::io::Error`.
+    fn decompress(&self, src: &[u8]) -> Result<Vec<u8>, std::io::Error>;
+}

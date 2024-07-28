@@ -31,7 +31,6 @@ pub const SEND_LATENCY_ENABLE: &str = "com.rocketmq.sendLatencyEnable";
 pub const START_DETECTOR_ENABLE: &str = "com.rocketmq.startDetectorEnable";
 pub const HEART_BEAT_V2: &str = "com.rocketmq.heartbeat.v2";
 
-#[allow(dead_code)]
 pub struct ClientConfig {
     pub namesrv_addr: Option<String>,
     pub client_ip: Option<String>,
@@ -62,6 +61,12 @@ pub struct ClientConfig {
     pub enable_heartbeat_channel_event_listener: bool,
     pub enable_trace: bool,
     pub trace_topic: Option<String>,
+}
+
+impl Default for ClientConfig {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ClientConfig {

@@ -34,7 +34,7 @@ use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::Regist
 use rocketmq_remoting::protocol::namesrv::RegisterBrokerResult;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::route::route_data_view::QueueData;
-use rocketmq_remoting::protocol::route::route_data_view::TopicRouteData;
+use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::remoting::RemotingService;
 use rocketmq_remoting::rpc::client_metadata::ClientMetadata;

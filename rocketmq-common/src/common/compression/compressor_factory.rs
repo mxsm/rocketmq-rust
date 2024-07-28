@@ -14,15 +14,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#![allow(dead_code)]
-#![allow(unused_variables)]
+use crate::common::compression::compression_type::CompressionType;
+use crate::common::compression::compressor::Compressor;
+use crate::common::compression::lz4_compressor::Lz4Compressor;
+use crate::common::compression::zlib_compressor::ZlibCompressor;
+use crate::common::compression::zstd_compressor::ZstdCompressor;
 
-use crate::error::MQClientError;
+pub struct CompressorFactory;
 
-pub mod base;
-mod common;
-pub mod error;
-pub mod producer;
-mod trace;
-
-pub type Result<T> = std::result::Result<T, MQClientError>;
+impl CompressorFactory {
+    pub fn get_compressor(compressor_type: CompressionType) -> Box<dyn Compressor + Send + Sync> {
+        match compressor_type {
+            CompressionType::LZ4 => Box::new(Lz4Compressor),
+            CompressionType::Zlib => Box::new(ZlibCompressor),
+            CompressionType::Zstd => Box::new(ZstdCompressor),
+        }
+    }
+}

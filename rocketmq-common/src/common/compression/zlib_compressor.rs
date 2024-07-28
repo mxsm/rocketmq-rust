@@ -14,15 +14,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#![allow(dead_code)]
-#![allow(unused_variables)]
+use std::io::Error;
 
-use crate::error::MQClientError;
+use crate::common::compression::compressor::Compressor;
 
-pub mod base;
-mod common;
-pub mod error;
-pub mod producer;
-mod trace;
+pub struct ZlibCompressor;
 
-pub type Result<T> = std::result::Result<T, MQClientError>;
+impl Compressor for ZlibCompressor {
+    fn compress(&self, src: &[u8], level: i32) -> Result<Vec<u8>, Error> {
+        todo!()
+    }
+
+    fn decompress(&self, src: &[u8]) -> Result<Vec<u8>, Error> {
+        todo!()
+    }
+}

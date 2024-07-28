@@ -41,7 +41,7 @@ use rocketmq_remoting::protocol::namesrv::RegisterBrokerResult;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
 use rocketmq_remoting::protocol::route::route_data_view::QueueData;
-use rocketmq_remoting::protocol::route::route_data_view::TopicRouteData;
+use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
 use rocketmq_remoting::protocol::DataVersion;
 use tokio::sync::broadcast;

@@ -50,7 +50,7 @@ use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::Delete
 use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::GetTopicsByClusterRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::RegisterTopicRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::protocol::route::route_data_view::TopicRouteData;
+use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::server::ConnectionHandlerContext;

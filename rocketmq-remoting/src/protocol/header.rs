@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 pub mod broker;
+pub mod check_transaction_state_request_header;
 pub mod client_request_header;
 pub mod create_topic_request_header;
 pub mod delete_topic_request_header;
