@@ -14,15 +14,28 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#![allow(dead_code)]
-#![allow(unused_variables)]
+use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 
-use crate::error::MQClientError;
+use crate::common::thread_local_index::ThreadLocalIndex;
 
-pub mod base;
-mod common;
-pub mod error;
-pub mod producer;
-mod trace;
+#[derive(Default)]
+pub struct TopicPublishInfo {
+    pub order_topic: bool,
+    pub have_topic_router_info: bool,
+    pub message_queue_list: Vec<MessageQueue>,
+    pub send_which_queue: ThreadLocalIndex,
+    pub topic_route_data: Option<TopicRouteData>,
+}
 
-pub type Result<T> = std::result::Result<T, MQClientError>;
+impl TopicPublishInfo {
+    pub fn new() -> Self {
+        TopicPublishInfo {
+            order_topic: false,
+            have_topic_router_info: false,
+            message_queue_list: vec![],
+            send_which_queue: ThreadLocalIndex,
+            topic_route_data: None,
+        }
+    }
+}

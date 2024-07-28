@@ -18,6 +18,7 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 #![feature(sync_unsafe_cell)]
+#![allow(unused_variables)]
 
 use std::borrow::Borrow;
 use std::cell::SyncUnsafeCell;

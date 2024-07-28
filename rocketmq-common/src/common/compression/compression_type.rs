@@ -15,7 +15,7 @@ use lz4_flex::decompress_size_prepended;
 
 use crate::common::sys_flag::message_sys_flag::MessageSysFlag;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Copy, Clone)]
 pub enum CompressionType {
     LZ4,
     Zstd,

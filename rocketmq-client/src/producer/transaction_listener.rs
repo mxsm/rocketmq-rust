@@ -14,15 +14,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#![allow(dead_code)]
-#![allow(unused_variables)]
+use rocketmq_common::common::message::message_single::Message;
+use rocketmq_common::common::message::message_single::MessageExt;
 
-use crate::error::MQClientError;
+use crate::producer::local_transaction_state::LocalTransactionState;
 
-pub mod base;
-mod common;
-pub mod error;
-pub mod producer;
-mod trace;
+pub trait TransactionListener: Send + Sync + 'static {
+    fn execute_local_transaction(
+        &self,
+        msg: &Message,
+        arg: &dyn std::any::Any,
+    ) -> LocalTransactionState;
 
-pub type Result<T> = std::result::Result<T, MQClientError>;
+    fn check_local_transaction(&self, msg: &MessageExt) -> LocalTransactionState;
+}

@@ -1530,6 +1530,7 @@ name = "rocketmq-client"
 version = "0.3.0"
 dependencies = [
  "num_cpus",
+ "rand",
  "rocketmq-common",
  "rocketmq-remoting",
  "serde",

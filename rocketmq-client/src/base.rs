@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-mod access_channel;
-mod client_config;
-mod mq_admin;
-mod query_result;
+pub mod access_channel;
+pub mod client_config;
+pub mod mq_admin;
+pub mod query_result;

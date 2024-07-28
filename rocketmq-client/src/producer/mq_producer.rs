@@ -19,6 +19,8 @@ use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_single::Message;
 
 use crate::producer::message_queue_selector::MessageQueueSelector;
+use crate::producer::request_callback::RequestCallback;
+use crate::producer::send_callback::SendCallback;
 use crate::producer::send_result::SendResult;
 use crate::producer::transaction_send_result::TransactionSendResult;
 use crate::Result;
@@ -31,7 +33,7 @@ pub trait MQProducerLocal {
     ///
     /// # Returns
     /// A `Result` indicating success or failure.
-    async fn start(&self) -> Result<()>;
+    async fn start(&mut self) -> Result<()>;
 
     /// Shuts down the MQ producer.
     ///
@@ -80,11 +82,7 @@ pub trait MQProducerLocal {
     /// # Arguments
     /// * `msg` - A reference to the `Message` to be sent.
     /// * `send_callback` - A callback function to be invoked with the result of the send operation.
-    async fn send_with_callback(
-        &self,
-        msg: &Message,
-        send_callback: impl FnOnce(Result<SendResult>) + Send,
-    );
+    async fn send_with_callback(&self, msg: &Message, send_callback: impl SendCallback + Send);
 
     /// Sends a message with a callback and a timeout.
     ///
@@ -98,7 +96,7 @@ pub trait MQProducerLocal {
     async fn send_with_callback_timeout(
         &self,
         msg: &Message,
-        send_callback: impl FnOnce(Result<SendResult>) + Send,
+        send_callback: impl SendCallback + Send,
         timeout: u64,
     );
 
@@ -157,7 +155,7 @@ pub trait MQProducerLocal {
         &self,
         msg: &Message,
         mq: &MessageQueue,
-        send_callback: impl FnOnce(Result<SendResult>) + Send,
+        send_callback: impl SendCallback + Send,
     );
 
     /// Sends a message to a specific queue with a callback and a timeout.
@@ -174,7 +172,7 @@ pub trait MQProducerLocal {
         &self,
         msg: &Message,
         mq: &MessageQueue,
-        send_callback: impl FnOnce(Result<SendResult>) + Send,
+        send_callback: impl SendCallback + Send,
         timeout: u64,
     );
 
@@ -245,7 +243,7 @@ pub trait MQProducerLocal {
         msg: &Message,
         selector: impl MessageQueueSelector,
         arg: &str,
-        send_callback: impl FnOnce(Result<SendResult>) + Send,
+        send_callback: impl SendCallback + Send,
     );
 
     /// Sends a message with a selector, a callback, and a timeout.
@@ -265,7 +263,7 @@ pub trait MQProducerLocal {
         msg: &Message,
         selector: impl MessageQueueSelector,
         arg: &str,
-        send_callback: impl FnOnce(Result<SendResult>) + Send,
+        send_callback: impl SendCallback + Send,
         timeout: u64,
     );
 
@@ -369,7 +367,7 @@ pub trait MQProducerLocal {
     async fn send_batch_with_callback(
         &self,
         msgs: &[Message],
-        send_callback: impl FnOnce(Result<SendResult>) + Send,
+        send_callback: impl SendCallback + Send,
     );
 
     /// Sends a batch of messages with a callback and a timeout.
@@ -384,7 +382,7 @@ pub trait MQProducerLocal {
     async fn send_batch_with_callback_timeout(
         &self,
         msgs: &[Message],
-        send_callback: impl FnOnce(Result<SendResult>) + Send,
+        send_callback: impl SendCallback + Send,
         timeout: u64,
     );
 
@@ -401,7 +399,7 @@ pub trait MQProducerLocal {
         &self,
         msgs: &[Message],
         mq: &MessageQueue,
-        send_callback: impl FnOnce(Result<SendResult>) + Send,
+        send_callback: impl SendCallback + Send,
     );
 
     /// Sends a batch of messages to a specific queue with a callback and a timeout.
@@ -419,7 +417,7 @@ pub trait MQProducerLocal {
         &self,
         msgs: &[Message],
         mq: &MessageQueue,
-        send_callback: impl FnOnce(Result<SendResult>) + Send,
+        send_callback: impl SendCallback + Send,
         timeout: u64,
     );
 
@@ -447,7 +445,7 @@ pub trait MQProducerLocal {
     async fn request_with_callback(
         &self,
         msg: &Message,
-        request_callback: impl FnOnce(Result<Message>) + Send,
+        request_callback: impl RequestCallback + Send,
         timeout: u64,
     );
 
@@ -488,7 +486,7 @@ pub trait MQProducerLocal {
         msg: &Message,
         selector: impl MessageQueueSelector,
         arg: &str,
-        request_callback: impl FnOnce(Result<Message>) + Send,
+        request_callback: impl FnOnce(Result<Message>) + Send + Sync,
         timeout: u64,
     );
 
@@ -525,7 +523,7 @@ pub trait MQProducerLocal {
         &self,
         msg: &Message,
         mq: &MessageQueue,
-        request_callback: impl FnOnce(Result<Message>) + Send,
+        request_callback: impl FnOnce(Result<Message>) + Send + Sync,
         timeout: u64,
     );
 }

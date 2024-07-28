@@ -15,3 +15,4 @@
  * limitations under the License.
  */
 pub mod route_data_view;
+pub mod topic_route_data;
