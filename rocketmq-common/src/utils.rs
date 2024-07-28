@@ -19,6 +19,8 @@ pub mod crc32_utils;
 pub mod env_utils;
 pub mod file_utils;
 pub mod message_utils;
+pub mod name_server_address_utils;
+pub mod network_util;
 pub mod parse_config_file;
 pub mod queue_type_utils;
 pub mod serde_json_utils;

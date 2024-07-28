@@ -18,5 +18,6 @@ use crate::error::MQClientError;
 
 pub mod base;
 pub mod error;
+pub mod producer;
 
 pub type Result<T> = std::result::Result<T, MQClientError>;

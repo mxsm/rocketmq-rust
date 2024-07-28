@@ -14,7 +14,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-mod access_channel;
-mod client_config;
-mod mq_admin;
-mod query_result;
+use serde::Deserialize;
+use serde::Serialize;
+
+use crate::producer::local_transaction_state::LocalTransactionState;
+use crate::producer::send_result::SendResult;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TransactionSendResult {
+    pub local_transaction_state: Option<LocalTransactionState>,
+
+    #[serde(flatten)]
+    pub send_result: Option<SendResult>,
+}
