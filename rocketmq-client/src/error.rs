@@ -14,9 +14,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use crate::error::MQClientError;
+use thiserror::Error;
 
-pub mod base;
-pub mod error;
-
-pub type Result<T> = std::result::Result<T, MQClientError>;
+#[derive(Debug, Error)]
+pub enum MQClientError {
+    #[error("Client exception occurred: {0}")]
+    ClientException(String),
+}

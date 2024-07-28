@@ -11,3 +11,6 @@ readme.workspace = true
 description.workspace = true
 
 [dependencies]
+rocketmq-common = { workspace = true }
+
+thiserror = { workspace = true }
