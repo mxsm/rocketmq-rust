@@ -672,6 +672,7 @@ impl CommitLog {
         }
     }
 
+    #[inline]
     fn assign_offset(&self, msg: &mut MessageExtBrokerInner) {
         let tran_type = MessageSysFlag::get_transaction_value(msg.sys_flag());
         if MessageSysFlag::TRANSACTION_NOT_TYPE == tran_type

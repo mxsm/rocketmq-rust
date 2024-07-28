@@ -75,36 +75,30 @@ impl IndexHeader {
     }
 
     pub fn update_byte_buffer(&self) {
-        self.mapped_file.append_message_offset_length(
-            &Bytes::copy_from_slice(&self.begin_timestamp.load(Ordering::SeqCst).to_be_bytes()),
+        self.mapped_file.put_slice(
+            &self.begin_timestamp.load(Ordering::SeqCst).to_be_bytes(),
             BEGIN_TIMESTAMP_INDEX,
-            mem::size_of::<i64>(),
         );
 
-        self.mapped_file.append_message_offset_length(
-            &Bytes::copy_from_slice(&self.end_timestamp.load(Ordering::SeqCst).to_be_bytes()),
+        self.mapped_file.put_slice(
+            &self.end_timestamp.load(Ordering::SeqCst).to_be_bytes(),
             END_TIMESTAMP_INDEX,
-            mem::size_of::<i64>(),
         );
-        self.mapped_file.append_message_offset_length(
-            &Bytes::copy_from_slice(&self.begin_phy_offset.load(Ordering::SeqCst).to_be_bytes()),
+        self.mapped_file.put_slice(
+            &self.begin_phy_offset.load(Ordering::SeqCst).to_be_bytes(),
             BEGIN_PHY_OFFSET_INDEX,
-            mem::size_of::<i64>(),
         );
-        self.mapped_file.append_message_offset_length(
-            &Bytes::copy_from_slice(&self.end_phy_offset.load(Ordering::SeqCst).to_be_bytes()),
+        self.mapped_file.put_slice(
+            &self.end_phy_offset.load(Ordering::SeqCst).to_be_bytes(),
             END_PHY_OFFSET_INDEX,
-            mem::size_of::<i64>(),
         );
-        self.mapped_file.append_message_offset_length(
-            &Bytes::copy_from_slice(&self.hash_slot_count.load(Ordering::SeqCst).to_be_bytes()),
+        self.mapped_file.put_slice(
+            &self.hash_slot_count.load(Ordering::SeqCst).to_be_bytes(),
             HASH_SLOT_COUNT_INDEX,
-            mem::size_of::<i32>(),
         );
-        self.mapped_file.append_message_offset_length(
-            &Bytes::copy_from_slice(&self.index_count.load(Ordering::SeqCst).to_be_bytes()),
+        self.mapped_file.put_slice(
+            &self.index_count.load(Ordering::SeqCst).to_be_bytes(),
             INDEX_COUNT_INDEX,
-            mem::size_of::<i32>(),
         );
     }
 

@@ -188,6 +188,97 @@ pub trait MappedFile {
     /// `true` if the append operation was successful, `false` otherwise.
     fn append_message_offset_length(&self, data: &Bytes, offset: usize, length: usize) -> bool;
 
+    /// Appends a byte array to the mapped file without updating the write position.
+    ///
+    /// This method appends the given byte array to the mapped file without updating the internal
+    /// write position. It is useful for scenarios where the write position should remain unchanged.
+    ///
+    /// # Arguments
+    /// * `data` - A reference to the byte array to be appended.
+    ///
+    /// # Returns
+    /// `true` if the append operation was successful, `false` otherwise.
+    fn append_message_bytes_no_position_update(&self, data: &bytes::Bytes) -> bool {
+        self.append_message_no_position_update(data, 0, data.len())
+    }
+
+    /// Appends a byte array to the mapped file without updating the write position.
+    ///
+    /// This method appends a specified portion of the given byte array to the mapped file without
+    /// updating the internal write position. It allows for more controlled appending by specifying
+    /// an offset and length.
+    ///
+    /// # Arguments
+    /// * `data` - A reference to the byte array to be appended.
+    /// * `offset` - The starting offset in the byte array from where bytes should be appended.
+    /// * `length` - The number of bytes to append starting from the offset.
+    ///
+    /// # Returns
+    /// `true` if the append operation was successful, `false` otherwise.
+    fn append_message_no_position_update(&self, data: &Bytes, offset: usize, length: usize)
+        -> bool;
+
+    /// Appends a byte array to the mapped file without updating the write position.
+    ///
+    /// This method appends a specified portion of the given byte array to the mapped file without
+    /// updating the internal write position. It allows for more controlled appending by specifying
+    /// an offset and length.
+    ///
+    /// # Arguments
+    /// * `data` - A reference to the byte array to be appended.
+    /// * `offset` - The starting offset in the byte array from where bytes should be appended.
+    /// * `length` - The number of bytes to append starting from the offset.
+    ///
+    /// # Returns
+    /// `true` if the append operation was successful, `false` otherwise.
+    fn append_message_offset_no_position_update(
+        &self,
+        data: &[u8],
+        offset: usize,
+        length: usize,
+    ) -> bool;
+
+    /// Appends a byte array to the mapped file without updating the write position.
+    ///
+    /// This method appends the given byte array to the mapped file without updating the internal
+    /// write position. It is useful for scenarios where the write position should remain unchanged.
+    ///
+    /// # Arguments
+    /// * `data` - A reference to the byte array to be appended.
+    ///
+    /// # Returns
+    /// `true` if the append operation was successful, `false` otherwise.
+    fn append_message_ref_no_position_update(&self, data: &[u8]) -> bool {
+        self.append_message_offset_no_position_update(data, 0, data.len())
+    }
+
+    /// Writes a segment of bytes to the mapped file.
+    ///
+    /// This method writes a specified portion of the given byte array to the mapped file, starting
+    /// at the specified position and for the specified length.
+    ///
+    /// # Arguments
+    /// * `data` - A reference to the byte array containing the data to be written.
+    /// * `start` - The starting position in the mapped file where the data should be written.
+    /// * `offset` - The offset within the byte array from where the data should be read.
+    /// * `length` - The number of bytes to write from the byte array.
+    ///
+    /// # Returns
+    /// `true` if the write operation was successful, `false` otherwise.
+    fn write_bytes_segment(&self, data: &[u8], start: usize, offset: usize, length: usize) -> bool;
+
+    /// Puts a slice of bytes into the mapped file at the specified index.
+    ///
+    /// This method writes the given byte slice to the mapped file starting at the specified index.
+    ///
+    /// # Arguments
+    /// * `data` - A reference to the byte slice to be written.
+    /// * `index` - The starting index in the mapped file where the data should be written.
+    ///
+    /// # Returns
+    /// `true` if the write operation was successful, `false` otherwise.
+    fn put_slice(&self, data: &[u8], index: usize) -> bool;
+
     /// Retrieves the file offset based on the current write position.
     ///
     /// This method calculates and returns the file offset corresponding to the current write

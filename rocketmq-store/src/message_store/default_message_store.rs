@@ -705,7 +705,21 @@ impl MessageStore for DefaultMessageStore {
             }
         }
 
-        self.commit_log.put_messages(msg_batch).await
+        let begin_time = Instant::now();
+        //put message to commit log
+        let result = self.commit_log.put_messages(msg_batch).await;
+        let elapsed_time = begin_time.elapsed().as_millis();
+        if elapsed_time > 500 {
+            warn!("not in lock eclipse time(ms) {}ms", elapsed_time,);
+        }
+        self.store_stats_service
+            .set_put_message_entire_time_max(elapsed_time as u64);
+        if !result.is_ok() {
+            self.store_stats_service
+                .get_message_times_total_found()
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        result
     }
 
     fn truncate_files(&mut self, offset_to_truncate: i64) -> bool {

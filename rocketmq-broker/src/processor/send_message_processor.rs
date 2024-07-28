@@ -254,7 +254,7 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
         }
         let mut message_ext = MessageExtBrokerInner::default();
         message_ext.message_ext_inner.message.topic = request_header.topic().to_string();
-        message_ext.message_ext_inner.queue_id = *queue_id.as_ref().unwrap();
+        message_ext.message_ext_inner.queue_id = queue_id.unwrap();
         let mut sys_flag = request_header.sys_flag;
         if TopicFilterType::MultiTag == topic_config.topic_filter_type {
             sys_flag |= MessageSysFlag::MULTI_TAGS_FLAG;
@@ -301,7 +301,7 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
                 .message_ext_inner
                 .message,
         );
-        if QueueTypeUtils::is_batch_cq(&Some(topic_config)) && batch_uniq_id.is_some() {
+        if batch_uniq_id.is_some() && QueueTypeUtils::is_batch_cq(&Some(topic_config)) {
             let sys_flag = batch_message
                 .message_ext_broker_inner
                 .message_ext_inner
@@ -367,7 +367,7 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
                 put_message_result,
                 response,
                 &request,
-                topic.as_str(),
+                topic.as_ref(),
                 transaction_id,
                 &mut send_message_context,
                 ctx,
