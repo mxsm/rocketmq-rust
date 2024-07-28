@@ -74,6 +74,18 @@ pub struct DefaultMappedFile {
     stop_timestamp: u64,
 }
 
+impl AsRef<DefaultMappedFile> for DefaultMappedFile {
+    fn as_ref(&self) -> &DefaultMappedFile {
+        self
+    }
+}
+
+impl AsMut<DefaultMappedFile> for DefaultMappedFile {
+    fn as_mut(&mut self) -> &mut DefaultMappedFile {
+        self
+    }
+}
+
 impl PartialEq for DefaultMappedFile {
     fn eq(&self, other: &Self) -> bool {
         ptr::eq(self as *const Self, other as *const Self)
@@ -244,8 +256,10 @@ impl MappedFile for DefaultMappedFile {
             message,
             put_message_context,
         );
+        self.wrote_position
+            .fetch_add(result.wrote_bytes, Ordering::AcqRel);
         self.store_timestamp
-            .store(message.store_timestamp(), Ordering::Release);
+            .store(result.store_timestamp, Ordering::Release);
         result
     }
 
@@ -275,6 +289,8 @@ impl MappedFile for DefaultMappedFile {
             put_message_context,
             enabled_append_prop_crc,
         );
+        self.wrote_position
+            .fetch_add(result.wrote_bytes, Ordering::AcqRel);
         self.store_timestamp.store(
             message.message_ext_broker_inner.store_timestamp(),
             Ordering::Release,
@@ -309,7 +325,7 @@ impl MappedFile for DefaultMappedFile {
             if let Some(data_slice) = data.get(offset..offset + length) {
                 if mapped_file.write_all(data_slice).is_ok() {
                     self.wrote_position
-                        .fetch_add(length as i32, Ordering::SeqCst);
+                        .fetch_add(length as i32, Ordering::AcqRel);
                     return true;
                 } else {
                     error!("append_message_offset_length write_all error");
@@ -318,7 +334,92 @@ impl MappedFile for DefaultMappedFile {
                 error!("Invalid data slice");
             }
         }
+        false
+    }
 
+    fn append_message_no_position_update(
+        &self,
+        data: &Bytes,
+        offset: usize,
+        length: usize,
+    ) -> bool {
+        let current_pos = self.wrote_position.load(Ordering::Relaxed) as usize;
+
+        if current_pos + length <= self.file_size as usize {
+            let mut mapped_file =
+                &mut self.get_mapped_file_mut()[current_pos..current_pos + length];
+
+            if let Some(data_slice) = data.get(offset..offset + length) {
+                if mapped_file.write_all(data_slice).is_ok() {
+                    return true;
+                } else {
+                    error!("append_message_offset_length write_all error");
+                }
+            } else {
+                error!("Invalid data slice");
+            }
+        }
+        false
+    }
+
+    fn append_message_offset_no_position_update(
+        &self,
+        data: &[u8],
+        offset: usize,
+        length: usize,
+    ) -> bool {
+        let current_pos = self.wrote_position.load(Ordering::Relaxed) as usize;
+
+        if current_pos + length <= self.file_size as usize {
+            let mut mapped_file =
+                &mut self.get_mapped_file_mut()[current_pos..current_pos + length];
+
+            if let Some(data_slice) = data.get(offset..offset + length) {
+                if mapped_file.write_all(data_slice).is_ok() {
+                    return true;
+                } else {
+                    error!("append_message_offset_length write_all error");
+                }
+            } else {
+                error!("Invalid data slice");
+            }
+        }
+        false
+    }
+
+    fn write_bytes_segment(&self, data: &[u8], start: usize, offset: usize, length: usize) -> bool {
+        if start + length <= self.file_size as usize {
+            let mut mapped_file = &mut self.get_mapped_file_mut()[start..start + length];
+            if data.len() == length {
+                if mapped_file.write_all(data).is_ok() {
+                    return true;
+                } else {
+                    error!("append_message_offset_length write_all error");
+                }
+            } else if let Some(data_slice) = data.get(offset..offset + length) {
+                if mapped_file.write_all(data_slice).is_ok() {
+                    return true;
+                } else {
+                    error!("append_message_offset_length write_all error");
+                }
+            } else {
+                error!("Invalid data slice");
+            }
+        }
+        false
+    }
+
+    fn put_slice(&self, data: &[u8], index: usize) -> bool {
+        let length = data.len();
+        let end_index = index + length;
+        if length > 0 && end_index <= self.file_size as usize {
+            let mut mapped_file = &mut self.get_mapped_file_mut()[index..end_index];
+            if mapped_file.write_all(data).is_ok() {
+                return true;
+            } else {
+                error!("append_message_offset_length write_all error");
+            }
+        }
         false
     }
 

@@ -188,6 +188,27 @@ pub trait MappedFile {
     /// `true` if the append operation was successful, `false` otherwise.
     fn append_message_offset_length(&self, data: &Bytes, offset: usize, length: usize) -> bool;
 
+    fn append_message_bytes_no_position_update(&self, data: &bytes::Bytes) -> bool {
+        self.append_message_no_position_update(data, 0, data.len())
+    }
+    fn append_message_no_position_update(&self, data: &Bytes, offset: usize, length: usize)
+        -> bool;
+
+    fn append_message_offset_no_position_update(
+        &self,
+        data: &[u8],
+        offset: usize,
+        length: usize,
+    ) -> bool;
+
+    fn append_message_ref_no_position_update(&self, data: &[u8]) -> bool {
+        self.append_message_offset_no_position_update(data, 0, data.len())
+    }
+
+    fn write_bytes_segment(&self, data: &[u8], start: usize, offset: usize, length: usize) -> bool;
+
+    fn put_slice(&self, data: &[u8], index: usize) -> bool;
+
     /// Retrieves the file offset based on the current write position.
     ///
     /// This method calculates and returns the file offset corresponding to the current write

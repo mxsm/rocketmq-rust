@@ -23,7 +23,7 @@ use crate::base::message_status_enum::PutMessageStatus;
 type MessageIdSupplier = Box<dyn Fn() -> String + Send + Sync>;
 
 /// Represents the result of an append message operation.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct AppendMessageResult {
     /// Return code.
     pub status: AppendMessageStatus,
@@ -43,6 +43,22 @@ pub struct AppendMessageResult {
     pub page_cache_rt: i64,
     /// Message number.
     pub msg_num: i32,
+}
+
+impl Default for AppendMessageResult {
+    fn default() -> Self {
+        Self {
+            status: AppendMessageStatus::UnknownError,
+            wrote_offset: 0,
+            wrote_bytes: 0,
+            msg_id: None,
+            msg_id_supplier: None,
+            store_timestamp: 0,
+            logics_offset: 0,
+            page_cache_rt: 0,
+            msg_num: 1,
+        }
+    }
 }
 
 impl Display for AppendMessageResult {

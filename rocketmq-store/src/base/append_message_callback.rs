@@ -16,16 +16,16 @@
  */
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use bytes::BufMut;
-use bytes::BytesMut;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::utils::message_utils;
 use rocketmq_common::MessageUtils::build_batch_message_id;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::SyncUnsafeCellWrapper;
 
 use crate::base::message_result::AppendMessageResult;
 use crate::base::message_status_enum::AppendMessageStatus;
@@ -76,7 +76,7 @@ pub trait AppendMessageCallback {
 const END_FILE_MIN_BLANK_LENGTH: i32 = 4 + 4;
 
 pub(crate) struct DefaultAppendMessageCallback {
-    //msg_store_item_memory: bytes::BytesMut,
+    msg_store_item_memory: SyncUnsafeCellWrapper<bytes::BytesMut>,
     crc32_reserved_length: i32,
     message_store_config: Arc<MessageStoreConfig>,
     topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
@@ -88,9 +88,9 @@ impl DefaultAppendMessageCallback {
         topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
     ) -> Self {
         Self {
-            /*            msg_store_item_memory: bytes::BytesMut::with_capacity(
+            msg_store_item_memory: SyncUnsafeCellWrapper::new(bytes::BytesMut::with_capacity(
                 END_FILE_MIN_BLANK_LENGTH as usize,
-            ),*/
+            )),
             crc32_reserved_length: CRC32_RESERVED_LEN,
             message_store_config,
             topic_config_table,
@@ -135,10 +135,12 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         }
 
         if (msg_len + END_FILE_MIN_BLANK_LENGTH) > max_blank {
-            let mut bytes = BytesMut::with_capacity(END_FILE_MIN_BLANK_LENGTH as usize);
+            let bytes = self.msg_store_item_memory.mut_from_ref();
+            bytes.clear();
             bytes.put_i32(max_blank);
             bytes.put_i32(BLANK_MAGIC_CODE);
-            mapped_file.append_message_bytes(&bytes.freeze());
+            let instant = Instant::now();
+            mapped_file.write_bytes_segment(bytes.as_ref(), wrote_offset as usize, 0, bytes.len());
             return AppendMessageResult {
                 status: AppendMessageStatus::EndOfFile,
                 wrote_offset,
@@ -147,6 +149,7 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
                 logics_offset: queue_offset,
                 msg_num: message_num as i32,
                 msg_id_supplier: Some(Arc::new(Box::new(msg_id_supplier))),
+                page_cache_rt: instant.elapsed().as_millis() as i64,
                 ..Default::default()
             };
         }
@@ -166,7 +169,8 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
 
         // msg_inner.encoded_buff = pre_encode_buffer;
         let bytes = pre_encode_buffer.freeze();
-        mapped_file.append_message_bytes(&bytes);
+        let instant = Instant::now();
+        mapped_file.append_message_bytes_no_position_update(&bytes);
         AppendMessageResult {
             status: AppendMessageStatus::PutOk,
             wrote_offset,
@@ -175,6 +179,7 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
             logics_offset: queue_offset,
             msg_num: message_num as i32,
             msg_id_supplier: Some(Arc::new(Box::new(msg_id_supplier))),
+            page_cache_rt: instant.elapsed().as_millis() as i64,
             ..Default::default()
         }
     }
@@ -188,20 +193,26 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         put_message_context: &mut PutMessageContext,
         enabled_append_prop_crc: bool,
     ) -> AppendMessageResult {
+        //physic offset--The starting point for writing this message file.If, while writing a
+        // message, it is found that the length is insufficient,the remaining length of the file
+        // and the end-of-file marker should be rewritten at this point.
         let wrote_offset = file_from_offset + mapped_file.get_wrote_position() as i64;
+        // Record ConsumeQueue information
         let queue_offset = msg_batch.message_ext_broker_inner.queue_offset();
         let begin_queue_offset = queue_offset;
 
-        let begin_time_mills = get_current_millis();
+        let begin_time_mills = Instant::now();
 
         // Assuming get_encoded_buff returns Option<ByteBuffer>
-        let mut pre_encode_buffer = msg_batch.encoded_buff.take().unwrap();
+        let mut messages_byte_buffer = msg_batch.encoded_buff.take().unwrap();
         let sys_flag = msg_batch.message_ext_broker_inner.sys_flag();
+        //born host length
         let born_host_length = if sys_flag & MessageSysFlag::BORNHOST_V6_FLAG == 0 {
             4 + 4
         } else {
             16 + 4
         };
+        //store host length
         let store_host_length = if sys_flag & MessageSysFlag::STOREHOSTADDRESS_V6_FLAG == 0 {
             4 + 4
         } else {
@@ -217,18 +228,24 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         let mut msg_num = 0;
         let mut msg_pos = 0;
         let mut index = 0;
-        while total_msg_len < pre_encode_buffer.len() as i32 {
+        while total_msg_len < messages_byte_buffer.len() as i32 {
             let msg_len = i32::from_be_bytes(
-                pre_encode_buffer[total_msg_len as usize..(total_msg_len + 4) as usize]
+                messages_byte_buffer[total_msg_len as usize..(total_msg_len + 4) as usize]
                     .try_into()
                     .unwrap(),
             );
             total_msg_len += msg_len;
             if total_msg_len + END_FILE_MIN_BLANK_LENGTH > max_blank {
-                let mut bytes = BytesMut::with_capacity(END_FILE_MIN_BLANK_LENGTH as usize);
+                let bytes = self.msg_store_item_memory.mut_from_ref();
+                bytes.clear();
                 bytes.put_i32(max_blank);
                 bytes.put_i32(BLANK_MAGIC_CODE);
-                mapped_file.append_message_bytes(&bytes.freeze());
+                mapped_file.write_bytes_segment(
+                    bytes.as_ref(),
+                    wrote_offset as usize,
+                    0,
+                    bytes.len(),
+                );
                 return AppendMessageResult {
                     status: AppendMessageStatus::EndOfFile,
                     wrote_offset,
@@ -236,16 +253,17 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
                     msg_id_supplier: Some(Arc::new(Box::new(msg_id_supplier))),
                     store_timestamp: msg_batch.message_ext_broker_inner.store_timestamp(),
                     logics_offset: begin_queue_offset,
+                    page_cache_rt: begin_time_mills.elapsed().as_millis() as i64,
                     ..Default::default()
                 };
             }
             let mut pos = msg_pos + 20;
-            pre_encode_buffer[pos..(pos + 8)].copy_from_slice(&queue_offset.to_be_bytes());
+            messages_byte_buffer[pos..(pos + 8)].copy_from_slice(&queue_offset.to_be_bytes());
             pos += 8;
             let phy_pos = wrote_offset + total_msg_len as i64 - msg_len as i64;
-            pre_encode_buffer[pos..(pos + 8)].copy_from_slice(&phy_pos.to_be_bytes());
+            messages_byte_buffer[pos..(pos + 8)].copy_from_slice(&phy_pos.to_be_bytes());
             pos += 8 + 4 + 8 + born_host_length;
-            pre_encode_buffer[pos..(pos + 8)].copy_from_slice(
+            messages_byte_buffer[pos..(pos + 8)].copy_from_slice(
                 &msg_batch
                     .message_ext_broker_inner
                     .store_timestamp()
@@ -260,15 +278,8 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
             index += 1;
         }
 
-        let bytes = pre_encode_buffer.freeze();
-        mapped_file.append_message_bytes(&bytes);
-        /*let msg_id = build_batch_message_id(
-            msg_batch.message_ext_broker_inner.store_host(),
-            store_host_length,
-            put_message_context.get_batch_size() as usize,
-            put_message_context.get_phy_pos(),
-        );*/
-
+        let bytes = messages_byte_buffer.freeze();
+        mapped_file.append_message_bytes_no_position_update(&bytes);
         AppendMessageResult {
             status: AppendMessageStatus::PutOk,
             wrote_offset,
@@ -276,6 +287,7 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
             msg_id_supplier: Some(Arc::new(Box::new(msg_id_supplier))),
             store_timestamp: msg_batch.message_ext_broker_inner.store_timestamp(),
             logics_offset: begin_queue_offset,
+            page_cache_rt: begin_time_mills.elapsed().as_millis() as i64,
             msg_num,
             ..Default::default()
         }

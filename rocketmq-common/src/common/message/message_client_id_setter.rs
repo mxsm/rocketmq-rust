@@ -66,6 +66,7 @@ pub fn create_fake_ip() -> Vec<u8> {
 pub struct MessageClientIDSetter;
 
 impl MessageClientIDSetter {
+    #[inline]
     pub fn get_uniq_id(message: &Message) -> Option<String> {
         message.get_property(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX)
     }
