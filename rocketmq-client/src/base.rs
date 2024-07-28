@@ -14,9 +14,5 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use crate::error::MQClientError;
-
-pub mod base;
-pub mod error;
-
-pub type Result<T> = std::result::Result<T, MQClientError>;
+mod mq_admin;
+mod query_result;

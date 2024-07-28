@@ -1528,6 +1528,10 @@ dependencies = [
 [[package]]
 name = "rocketmq-client"
 version = "0.3.0"
+dependencies = [
+ "rocketmq-common",
+ "thiserror",
+]
 
 [[package]]
 name = "rocketmq-common"
