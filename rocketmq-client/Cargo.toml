@@ -12,5 +12,13 @@ description.workspace = true
 
 [dependencies]
 rocketmq-common = { workspace = true }
+rocketmq-remoting = { workspace = true }
 
 thiserror = { workspace = true }
+
+#json spupport
+serde.workspace = true
+serde_json.workspace = true
+
+trait-variant = { workspace = true }
+num_cpus = "1.16.0"

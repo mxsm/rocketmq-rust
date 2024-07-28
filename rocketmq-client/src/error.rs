@@ -18,6 +18,15 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum MQClientError {
-    #[error("Client exception occurred: {0}")]
-    ClientException(String),
+    #[error("Client exception occurred: CODE:{0}, Message:{1}")]
+    MQClientException(i32, String),
+
+    #[error("Client exception occurred: CODE:{0}, broker address:{1}, Message:{2}")]
+    MQBrokerException(i32, String, String),
+
+    #[error("Client exception occurred: CODE:{0}, Message:{1}")]
+    RequestTimeoutException(i32, String),
+
+    #[error("Client exception occurred: CODE:{0}, broker address:{1}, Message:{2}")]
+    OffsetNotFoundException(i32, String, String),
 }

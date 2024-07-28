@@ -14,7 +14,24 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-mod access_channel;
-mod client_config;
-mod mq_admin;
-mod query_result;
+use std::net::IpAddr;
+
+pub struct NetworkUtil;
+
+impl NetworkUtil {
+    pub fn get_local_address() -> Option<String> {
+        match local_ip_address::local_ip() {
+            Ok(value) => match value {
+                IpAddr::V4(ip) => Some(ip.to_string()),
+                IpAddr::V6(ip) => Some(ip.to_string()),
+            },
+            Err(_) => match local_ip_address::local_ipv6() {
+                Ok(value) => match value {
+                    IpAddr::V4(ip) => Some(ip.to_string()),
+                    IpAddr::V6(ip) => Some(ip.to_string()),
+                },
+                Err(_) => None,
+            },
+        }
+    }
+}
