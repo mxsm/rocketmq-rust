@@ -109,6 +109,11 @@ impl AdminBrokerProcessor {
                     .get_system_topic_list_from_broker(channel, ctx, request_code, request)
                     .await
             }
+            RequestCode::GetTopicStatsInfo => {
+                self.topic_request_handler
+                    .get_topic_stats_info(channel, ctx, request_code, request)
+                    .await
+            }
             _ => Some(get_unknown_cmd_response(request_code)),
         }
     }
