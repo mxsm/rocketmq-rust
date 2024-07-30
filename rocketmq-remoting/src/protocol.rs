@@ -33,6 +33,7 @@ use serde::Serializer;
 
 use crate::rocketmq_serializable::RocketMQSerializable;
 
+pub mod admin;
 pub mod body;
 pub mod command_custom_header;
 pub mod filter;

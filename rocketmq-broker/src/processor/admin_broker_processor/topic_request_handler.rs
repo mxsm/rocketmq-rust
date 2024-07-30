@@ -20,17 +20,21 @@ use rocketmq_common::common::attribute::attribute_parser::AttributeParser;
 use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::key_builder::KeyBuilder;
+use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::common::TopicFilterType;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
+use rocketmq_remoting::protocol::admin::topic_offset::TopicOffset;
+use rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable;
 use rocketmq_remoting::protocol::body::create_topic_list_request_body::CreateTopicListRequestBody;
 use rocketmq_remoting::protocol::body::topic::topic_list::TopicList;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper;
 use rocketmq_remoting::protocol::header::create_topic_request_header::CreateTopicRequestHeader;
 use rocketmq_remoting::protocol::header::delete_topic_request_header::DeleteTopicRequestHeader;
+use rocketmq_remoting::protocol::header::get_topic_stats_request_header::GetTopicStatsRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
@@ -406,6 +410,68 @@ impl TopicRequestHandler {
         response.set_body_mut_ref(Some(topic_list.encode()));
         Some(response)
     }
+
+    pub async fn get_topic_stats_info(
+        &mut self,
+        _channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        _request_code: RequestCode,
+        request: RemotingCommand,
+    ) -> Option<RemotingCommand> {
+        let mut response = RemotingCommand::create_response_command();
+        let request_header = request
+            .decode_command_custom_header::<GetTopicStatsRequestHeader>()
+            .unwrap();
+        let topic = request_header.topic.as_str();
+        let topic_config = self.inner.topic_config_manager.select_topic_config(topic);
+        if topic_config.is_none() {
+            return Some(
+                response
+                    .set_code(ResponseCode::TopicNotExist)
+                    .set_remark(Some(format!("The topic[{}] not exist.", topic))),
+            );
+        }
+        let topic_config = topic_config.unwrap();
+        let max_queue_nums = topic_config
+            .write_queue_nums
+            .max(topic_config.read_queue_nums);
+        let topic_stats_table = TopicStatsTable::new();
+        for i in 0..max_queue_nums {
+            let mut message_queue = MessageQueue::new();
+            message_queue.set_topic(topic.to_string());
+            message_queue.set_broker_name(self.inner.broker_config.broker_name.clone());
+            message_queue.set_queue_id(i as i32);
+            let mut topic_offset = TopicOffset::new();
+            let min = std::cmp::max(
+                self.inner
+                    .default_message_store
+                    .get_min_offset_in_queue(topic, i as i32),
+                0,
+            );
+            let max = std::cmp::max(
+                self.inner
+                    .default_message_store
+                    .get_max_offset_in_queue(topic, i as i32),
+                0,
+            );
+            let mut timestamp = 0;
+            if max > 0 {
+                timestamp = self
+                    .inner
+                    .default_message_store
+                    .get_message_store_timestamp(topic, i as i32, max - 1);
+            }
+            topic_offset.set_min_offset(min);
+            topic_offset.set_max_offset(max);
+            topic_offset.set_last_update_timestamp(timestamp);
+            topic_stats_table
+                .get_offset_table()
+                .insert(message_queue.clone(), topic_offset);
+        }
+        response.set_body_mut_ref(Some(topic_stats_table.encode()));
+        Some(response)
+    }
+
     fn delete_topic_in_broker(&mut self, topic: &str) {
         self.inner.topic_config_manager.delete_topic_config(topic);
         self.inner.topic_queue_mapping_manager.delete(topic);

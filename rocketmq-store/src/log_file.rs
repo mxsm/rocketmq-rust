@@ -370,4 +370,22 @@ pub trait RocketMQMessageStore: Clone + 'static {
         commit_log_offset: i64,
         size: i32,
     ) -> Option<MessageExt>;
+
+    /// Gets the store time of the specified message.
+    ///
+    /// # Arguments
+    ///
+    /// * `topic` - The message topic.
+    /// * `queue_id` - The queue ID.
+    /// * `consume_queue_offset` - The consume queue offset.
+    ///
+    /// # Returns
+    ///
+    /// The store timestamp of the message.
+    fn get_message_store_timestamp(
+        &self,
+        topic: &str,
+        queue_id: i32,
+        consume_queue_offset: i64,
+    ) -> i64;
 }

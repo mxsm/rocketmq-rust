@@ -25,6 +25,8 @@ pub mod get_consumer_listby_group_response_header;
 pub mod get_earliest_msg_storetime_response_header;
 pub mod get_max_offset_response_header;
 pub mod get_min_offset_response_header;
+
+pub mod get_topic_stats_request_header;
 pub mod message_operation_header;
 pub mod namesrv;
 pub mod pull_message_request_header;

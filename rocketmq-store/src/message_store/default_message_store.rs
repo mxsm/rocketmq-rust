@@ -1224,6 +1224,26 @@ impl MessageStore for DefaultMessageStore {
             None
         }
     }
+
+    fn get_message_store_timestamp(
+        &self,
+        topic: &str,
+        queue_id: i32,
+        consume_queue_offset: i64,
+    ) -> i64 {
+        let consume_queue = self.find_consume_queue(topic, queue_id);
+        if let Some(consume_queue) = consume_queue {
+            if let Some((_, store_time)) =
+                consume_queue.get_cq_unit_and_store_time(consume_queue_offset)
+            {
+                store_time
+            } else {
+                -1
+            }
+        } else {
+            -1
+        }
+    }
 }
 
 #[derive(Clone)]
