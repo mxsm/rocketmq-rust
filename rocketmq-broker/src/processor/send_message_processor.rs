@@ -43,7 +43,7 @@ use rocketmq_common::common::TopicSysFlag::build_sys_flag;
 use rocketmq_common::utils::message_utils;
 use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
 use rocketmq_common::utils::util_all;
-use rocketmq_common::ArcCellWrapper;
+use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::CleanupPolicyUtils;
 use rocketmq_common::MessageDecoder;
 use rocketmq_common::MessageDecoder::message_properties_to_string;
@@ -191,7 +191,7 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
             inner: Inner {
                 broker_config,
                 topic_config_manager,
-                send_message_hook_vec: ArcCellWrapper::new(Vec::new()),
+                send_message_hook_vec: ArcRefCellWrapper::new(Vec::new()),
                 topic_queue_mapping_manager,
                 subscription_group_manager,
                 message_store: message_store.clone(),
@@ -929,7 +929,7 @@ const DLQ_NUMS_PER_GROUP: u32 = 1;
 #[derive(Clone)]
 pub(crate) struct Inner<MS> {
     topic_config_manager: TopicConfigManager,
-    send_message_hook_vec: ArcCellWrapper<Vec<Box<dyn SendMessageHook>>>,
+    send_message_hook_vec: ArcRefCellWrapper<Vec<Box<dyn SendMessageHook>>>,
     topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
     subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
     broker_config: Arc<BrokerConfig>,

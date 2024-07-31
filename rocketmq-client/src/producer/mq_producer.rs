@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::any::Any;
 
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_single::Message;
@@ -26,7 +27,7 @@ use crate::producer::transaction_send_result::TransactionSendResult;
 use crate::Result;
 
 #[trait_variant::make(MQProducer: Send)]
-pub trait MQProducerLocal {
+pub trait MQProducerLocal: Any {
     /// Starts the MQ producer.
     ///
     /// This method initializes and starts the MQ producer, preparing it for sending messages.
@@ -526,4 +527,8 @@ pub trait MQProducerLocal {
         request_callback: impl FnOnce(Result<Message>) + Send + Sync,
         timeout: u64,
     );
+
+    fn as_any(&self) -> &dyn Any;
+
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 }

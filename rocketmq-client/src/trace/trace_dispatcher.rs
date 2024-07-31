@@ -14,6 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::any::Any;
+
 use crate::base::access_channel::AccessChannel;
 use crate::Result;
 
@@ -22,9 +24,11 @@ pub enum Type {
     Consume,
 }
 
-pub trait TraceDispatcher {
+pub trait TraceDispatcher: Any {
     fn start(&self, name_srv_addr: &str, access_channel: AccessChannel) -> Result<()>;
     fn append(&self, ctx: &dyn std::any::Any) -> bool;
     fn flush(&self) -> Result<()>;
     fn shutdown(&self);
+    fn as_any(&self) -> &dyn Any;
+    fn as_mut_any(&mut self) -> &mut dyn Any;
 }

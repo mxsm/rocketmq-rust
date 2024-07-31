@@ -14,19 +14,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#![allow(dead_code)]
-#![allow(unused_variables)]
+use std::sync::Arc;
 
-use crate::error::MQClientError;
+use rocketmq_remoting::runtime::RPCHook;
 
-pub mod base;
-mod common;
-pub mod error;
-mod factory;
-mod hook;
-mod implementation;
-mod latency;
-pub mod producer;
-mod trace;
+use crate::base::client_config::ClientConfig;
 
-pub type Result<T> = std::result::Result<T, MQClientError>;
+pub struct MQClientInstance {}
+
+impl MQClientInstance {
+    pub fn new(
+        client_config: ClientConfig,
+        instance_index: i32,
+        client_id: String,
+        rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
+    ) -> Self {
+        MQClientInstance {}
+    }
+}

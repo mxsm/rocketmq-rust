@@ -14,7 +14,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::any::Any;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use rocketmq_common::common::compression::compression_type::CompressionType;
 use rocketmq_common::common::compression::compressor::Compressor;
@@ -24,6 +26,7 @@ use rocketmq_common::common::message::message_single::Message;
 use rocketmq_common::common::mix_all::MESSAGE_COMPRESS_LEVEL;
 use rocketmq_common::common::mix_all::MESSAGE_COMPRESS_TYPE;
 use rocketmq_common::common::topic::TopicValidator;
+use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::runtime::RPCHook;
 
@@ -37,7 +40,11 @@ use crate::producer::request_callback::RequestCallback;
 use crate::producer::send_callback::SendCallback;
 use crate::producer::send_result::SendResult;
 use crate::producer::transaction_send_result::TransactionSendResult;
+use crate::trace::async_trace_dispatcher::AsyncTraceDispatcher;
+use crate::trace::hook::end_transaction_trace_hook_impl::EndTransactionTraceHookImpl;
+use crate::trace::hook::send_message_trace_hook_impl::SendMessageTraceHookImpl;
 use crate::trace::trace_dispatcher::TraceDispatcher;
+use crate::trace::trace_dispatcher::Type;
 use crate::Result;
 
 pub struct ProducerConfig {
@@ -71,7 +78,7 @@ pub struct ProducerConfig {
     retry_another_broker_when_not_store_ok: bool,
     /// Maximum allowed message size in bytes.
     max_message_size: u32,
-    trace_dispatcher: Option<Box<dyn TraceDispatcher + Send + Sync>>,
+    trace_dispatcher: Option<Arc<Box<dyn TraceDispatcher + Send + Sync>>>,
     /// Switch flag instance for automatic batch message
     auto_batch: bool,
     /// Instance for batching message automatically
@@ -84,10 +91,96 @@ pub struct ProducerConfig {
     /// on BackpressureForAsyncMode, limit maximum message size of on-going sending async messages
     /// default is 100M
     back_pressure_for_async_send_size: u32,
-    rpc_hook: Option<Box<dyn RPCHook>>,
+    rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
     compress_level: i32,
     compress_type: CompressionType,
-    compressor: Option<Box<dyn Compressor + Send + Sync>>,
+    compressor: Option<Arc<Box<dyn Compressor + Send + Sync>>>,
+}
+
+impl ProducerConfig {
+    pub fn retry_response_codes(&self) -> &HashSet<i32> {
+        &self.retry_response_codes
+    }
+
+    pub fn producer_group(&self) -> &str {
+        &self.producer_group
+    }
+
+    pub fn topics(&self) -> &Vec<String> {
+        &self.topics
+    }
+
+    pub fn create_topic_key(&self) -> &str {
+        &self.create_topic_key
+    }
+
+    pub fn default_topic_queue_nums(&self) -> u32 {
+        self.default_topic_queue_nums
+    }
+
+    pub fn send_msg_timeout(&self) -> u32 {
+        self.send_msg_timeout
+    }
+
+    pub fn compress_msg_body_over_howmuch(&self) -> u32 {
+        self.compress_msg_body_over_howmuch
+    }
+
+    pub fn retry_times_when_send_failed(&self) -> u32 {
+        self.retry_times_when_send_failed
+    }
+
+    pub fn retry_times_when_send_async_failed(&self) -> u32 {
+        self.retry_times_when_send_async_failed
+    }
+
+    pub fn retry_another_broker_when_not_store_ok(&self) -> bool {
+        self.retry_another_broker_when_not_store_ok
+    }
+
+    pub fn max_message_size(&self) -> u32 {
+        self.max_message_size
+    }
+
+    pub fn trace_dispatcher(&self) -> &Option<Arc<Box<dyn TraceDispatcher + Send + Sync>>> {
+        &self.trace_dispatcher
+    }
+
+    pub fn auto_batch(&self) -> bool {
+        self.auto_batch
+    }
+
+    pub fn produce_accumulator(&self) -> &Option<ProduceAccumulator> {
+        &self.produce_accumulator
+    }
+
+    pub fn enable_backpressure_for_async_mode(&self) -> bool {
+        self.enable_backpressure_for_async_mode
+    }
+
+    pub fn back_pressure_for_async_send_num(&self) -> u32 {
+        self.back_pressure_for_async_send_num
+    }
+
+    pub fn back_pressure_for_async_send_size(&self) -> u32 {
+        self.back_pressure_for_async_send_size
+    }
+
+    pub fn rpc_hook(&self) -> &Option<Arc<Box<dyn RPCHook>>> {
+        &self.rpc_hook
+    }
+
+    pub fn compress_level(&self) -> i32 {
+        self.compress_level
+    }
+
+    pub fn compress_type(&self) -> CompressionType {
+        self.compress_type
+    }
+
+    pub fn compressor(&self) -> &Option<Arc<Box<dyn Compressor + Send + Sync>>> {
+        &self.compressor
+    }
 }
 
 impl Default for ProducerConfig {
@@ -131,15 +224,18 @@ impl Default for ProducerConfig {
                 .parse()
                 .unwrap(),
             compress_type: compression_type,
-            compressor: Some(CompressorFactory::get_compressor(compression_type)),
+            compressor: Some(Arc::new(CompressorFactory::get_compressor(
+                compression_type,
+            ))),
         }
     }
 }
 
+#[derive(Default)]
 pub struct DefaultMQProducer {
     client_config: ClientConfig,
-    default_mqproducer_impl: DefaultMQProducerImpl,
     producer_config: ProducerConfig,
+    default_mqproducer_impl: Option<ArcRefCellWrapper<DefaultMQProducerImpl>>,
 }
 
 impl DefaultMQProducer {
@@ -147,15 +243,11 @@ impl DefaultMQProducer {
         DefaultMQProducerBuilder::new()
     }
     pub fn new() -> Self {
-        Default::default()
+        unimplemented!()
     }
 
     pub fn client_config(&self) -> &ClientConfig {
         &self.client_config
-    }
-
-    pub fn default_mqproducer_impl(&self) -> &DefaultMQProducerImpl {
-        &self.default_mqproducer_impl
     }
 
     pub fn retry_response_codes(&self) -> &HashSet<i32> {
@@ -202,7 +294,7 @@ impl DefaultMQProducer {
         self.producer_config.max_message_size
     }
 
-    pub fn trace_dispatcher(&self) -> &Option<Box<dyn TraceDispatcher + Send + Sync>> {
+    pub fn trace_dispatcher(&self) -> &Option<Arc<Box<dyn TraceDispatcher + Send + Sync>>> {
         &self.producer_config.trace_dispatcher
     }
 
@@ -226,7 +318,7 @@ impl DefaultMQProducer {
         self.producer_config.back_pressure_for_async_send_size
     }
 
-    pub fn rpc_hook(&self) -> &Option<Box<dyn RPCHook>> {
+    pub fn rpc_hook(&self) -> &Option<Arc<Box<dyn RPCHook>>> {
         &self.producer_config.rpc_hook
     }
 
@@ -238,7 +330,7 @@ impl DefaultMQProducer {
         self.producer_config.compress_type
     }
 
-    pub fn compressor(&self) -> &Option<Box<dyn Compressor + Send + Sync>> {
+    pub fn compressor(&self) -> &Option<Arc<Box<dyn Compressor + Send + Sync>>> {
         &self.producer_config.compressor
     }
 
@@ -247,7 +339,7 @@ impl DefaultMQProducer {
     }
 
     pub fn set_default_mqproducer_impl(&mut self, default_mqproducer_impl: DefaultMQProducerImpl) {
-        self.default_mqproducer_impl = default_mqproducer_impl;
+        self.default_mqproducer_impl = Some(ArcRefCellWrapper::new(default_mqproducer_impl));
     }
 
     pub fn set_retry_response_codes(&mut self, retry_response_codes: HashSet<i32>) {
@@ -305,7 +397,7 @@ impl DefaultMQProducer {
 
     pub fn set_trace_dispatcher(
         &mut self,
-        trace_dispatcher: Option<Box<dyn TraceDispatcher + Send + Sync>>,
+        trace_dispatcher: Option<Arc<Box<dyn TraceDispatcher + Send + Sync>>>,
     ) {
         self.producer_config.trace_dispatcher = trace_dispatcher;
     }
@@ -337,7 +429,7 @@ impl DefaultMQProducer {
         self.producer_config.back_pressure_for_async_send_size = back_pressure_for_async_send_size;
     }
 
-    pub fn set_rpc_hook(&mut self, rpc_hook: Option<Box<dyn RPCHook>>) {
+    pub fn set_rpc_hook(&mut self, rpc_hook: Option<Arc<Box<dyn RPCHook>>>) {
         self.producer_config.rpc_hook = rpc_hook;
     }
 
@@ -349,30 +441,64 @@ impl DefaultMQProducer {
         self.producer_config.compress_type = compress_type;
     }
 
-    pub fn set_compressor(&mut self, compressor: Option<Box<dyn Compressor + Send + Sync>>) {
+    pub fn set_compressor(&mut self, compressor: Option<Arc<Box<dyn Compressor + Send + Sync>>>) {
         self.producer_config.compressor = compressor;
     }
 }
 
-impl Default for DefaultMQProducer {
-    fn default() -> Self {
-        Self {
-            client_config: Default::default(),
-            default_mqproducer_impl: DefaultMQProducerImpl {},
-            producer_config: Default::default(),
-        }
+impl DefaultMQProducer {
+    #[inline]
+    pub fn with_namespace(&mut self, resource: &str) -> String {
+        self.client_config.with_namespace(resource)
     }
 }
 
-impl DefaultMQProducer {}
-
 impl MQProducer for DefaultMQProducer {
     async fn start(&mut self) -> Result<()> {
+        let producer_group =
+            self.with_namespace(self.producer_config.producer_group.clone().as_str());
+        self.set_producer_group(producer_group);
+        self.default_mqproducer_impl
+            .as_mut()
+            .unwrap()
+            .start()
+            .await?;
+        if let Some(ref mut produce_accumulator) = self.producer_config.produce_accumulator {
+            produce_accumulator.start();
+        }
+        if self.client_config.enable_trace {
+            let mut dispatcher = AsyncTraceDispatcher::new(
+                self.producer_config.producer_group.as_str(),
+                Type::Produce,
+                self.client_config.trace_topic.clone().unwrap().as_str(),
+                self.producer_config.rpc_hook.clone(),
+            );
+            dispatcher.set_host_producer(self.default_mqproducer_impl.as_ref().unwrap().clone());
+            dispatcher.set_namespace_v2(self.client_config.namespace_v2.clone());
+            let dispatcher: Arc<Box<dyn TraceDispatcher + Send + Sync>> =
+                Arc::new(Box::new(dispatcher));
+            self.producer_config.trace_dispatcher = Some(dispatcher.clone());
+            let default_mqproducer_impl = self.default_mqproducer_impl.as_mut().unwrap();
+            default_mqproducer_impl
+                .register_send_message_hook(SendMessageTraceHookImpl::new(dispatcher.clone()));
+            default_mqproducer_impl
+                .register_end_transaction_hook(EndTransactionTraceHookImpl::new(dispatcher))
+        }
+
+        if let Some(ref mut trace_dispatcher) = self.producer_config.trace_dispatcher {
+            //TODO: trace
+        }
         Ok(())
     }
 
     async fn shutdown(&self) {
-        todo!()
+        if let Some(ref produce_accumulator) = self.producer_config.produce_accumulator {
+            produce_accumulator.shutdown();
+        }
+
+        if let Some(ref trace_dispatcher) = self.producer_config.trace_dispatcher {
+            trace_dispatcher.shutdown();
+        }
     }
 
     async fn fetch_publish_message_queues(&self, topic: &str) -> Result<Vec<MessageQueue>> {
@@ -605,5 +731,13 @@ impl MQProducer for DefaultMQProducer {
         timeout: u64,
     ) {
         todo!()
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
     }
 }

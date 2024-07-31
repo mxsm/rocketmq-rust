@@ -14,19 +14,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#![allow(dead_code)]
-#![allow(unused_variables)]
+use crate::hook::check_forbidden_context::CheckForbiddenContext;
+use crate::Result;
 
-use crate::error::MQClientError;
+pub trait CheckForbiddenHook: Send + Sync {
+    fn hook_name(&self) -> &str;
 
-pub mod base;
-mod common;
-pub mod error;
-mod factory;
-mod hook;
-mod implementation;
-mod latency;
-pub mod producer;
-mod trace;
-
-pub type Result<T> = std::result::Result<T, MQClientError>;
+    fn check_forbidden(&self, context: &CheckForbiddenContext) -> Result<()>;
+}

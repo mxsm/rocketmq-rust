@@ -14,19 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#![allow(dead_code)]
-#![allow(unused_variables)]
+use crate::hook::send_message_context::SendMessageContext;
 
-use crate::error::MQClientError;
+pub trait SendMessageHook: Send + Sync {
+    fn hook_name(&self) -> &str;
 
-pub mod base;
-mod common;
-pub mod error;
-mod factory;
-mod hook;
-mod implementation;
-mod latency;
-pub mod producer;
-mod trace;
+    fn send_message_before(&self, context: &SendMessageContext);
 
-pub type Result<T> = std::result::Result<T, MQClientError>;
+    fn send_message_after(&self, context: &SendMessageContext);
+}

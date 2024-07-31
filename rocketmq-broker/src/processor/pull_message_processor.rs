@@ -22,7 +22,7 @@ use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
 use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
 use rocketmq_common::common::FAQUrl;
-use rocketmq_common::ArcCellWrapper;
+use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::RemotingSysResponseCode;
@@ -70,7 +70,7 @@ use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager
 
 #[derive(Clone)]
 pub struct PullMessageProcessor<MS> {
-    pull_message_result_handler: ArcCellWrapper<Box<dyn PullMessageResultHandler>>,
+    pull_message_result_handler: ArcRefCellWrapper<Box<dyn PullMessageResultHandler>>,
     broker_config: Arc<BrokerConfig>,
     subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
     topic_config_manager: Arc<TopicConfigManager>,
@@ -90,7 +90,7 @@ pub struct PullMessageProcessor<MS> {
 
 impl<MS> PullMessageProcessor<MS> {
     pub fn new(
-        pull_message_result_handler: ArcCellWrapper<Box<dyn PullMessageResultHandler>>,
+        pull_message_result_handler: ArcRefCellWrapper<Box<dyn PullMessageResultHandler>>,
         broker_config: Arc<BrokerConfig>,
         subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
         topic_config_manager: Arc<TopicConfigManager>,

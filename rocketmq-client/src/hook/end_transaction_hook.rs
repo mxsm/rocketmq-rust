@@ -14,19 +14,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#![allow(dead_code)]
-#![allow(unused_variables)]
+use crate::hook::end_transaction_context::EndTransactionContext;
 
-use crate::error::MQClientError;
+pub trait EndTransactionHook: Send + Sync {
+    fn hook_name(&self) -> &str;
 
-pub mod base;
-mod common;
-pub mod error;
-mod factory;
-mod hook;
-mod implementation;
-mod latency;
-pub mod producer;
-mod trace;
-
-pub type Result<T> = std::result::Result<T, MQClientError>;
+    fn end_transaction(&self, context: &EndTransactionContext);
+}

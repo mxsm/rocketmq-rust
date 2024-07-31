@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use futures::SinkExt;
 use rocketmq_common::common::server::config::ServerConfig;
-use rocketmq_common::ArcCellWrapper;
+use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::WeakCellWrapper;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
@@ -57,7 +57,7 @@ pub type ConnectionHandlerContext = WeakCellWrapper<ConnectionHandlerContextWrap
 
 pub struct ConnectionHandler<RP> {
     request_processor: RP,
-    connection_handler_context: ArcCellWrapper<ConnectionHandlerContextWrapper>,
+    connection_handler_context: ArcRefCellWrapper<ConnectionHandlerContextWrapper>,
     channel: Channel,
     shutdown: Shutdown,
     _shutdown_complete: mpsc::Sender<()>,
@@ -133,7 +133,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                 ))
             } else {
                 let channel = self.channel.clone();
-                let ctx = ArcCellWrapper::downgrade(&self.connection_handler_context);
+                let ctx = ArcRefCellWrapper::downgrade(&self.connection_handler_context);
                 tokio::select! {
                     result = self.request_processor.process_request(channel,ctx,cmd) =>  result?,
                 }
@@ -263,9 +263,11 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
             let mut handler = ConnectionHandler {
                 request_processor: self.request_processor.clone(),
                 //connection: Connection::new(socket, remote_addr),
-                connection_handler_context: ArcCellWrapper::new(ConnectionHandlerContextWrapper {
-                    connection: Connection::new(socket),
-                }),
+                connection_handler_context: ArcRefCellWrapper::new(
+                    ConnectionHandlerContextWrapper {
+                        connection: Connection::new(socket),
+                    },
+                ),
                 channel,
                 shutdown: Shutdown::new(self.notify_shutdown.subscribe()),
                 _shutdown_complete: self.shutdown_complete_tx.clone(),

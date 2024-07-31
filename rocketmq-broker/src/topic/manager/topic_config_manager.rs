@@ -28,7 +28,7 @@ use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
-use rocketmq_common::ArcCellWrapper;
+use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::TopicAttributes::ALL;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper;
@@ -45,7 +45,7 @@ use crate::broker_runtime::BrokerRuntimeInner;
 
 pub(crate) struct TopicConfigManager {
     topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
-    data_version: ArcCellWrapper<DataVersion>,
+    data_version: ArcRefCellWrapper<DataVersion>,
     broker_config: Arc<BrokerConfig>,
     message_store: Option<DefaultMessageStore>,
     topic_config_table_lock: Arc<parking_lot::ReentrantMutex<()>>,
@@ -74,7 +74,7 @@ impl TopicConfigManager {
     ) -> Self {
         let mut manager = Self {
             topic_config_table: Arc::new(parking_lot::Mutex::new(HashMap::new())),
-            data_version: ArcCellWrapper::new(DataVersion::default()),
+            data_version: ArcRefCellWrapper::new(DataVersion::default()),
             broker_config,
             message_store: None,
             topic_config_table_lock: Default::default(),
@@ -534,7 +534,7 @@ impl TopicConfigManager {
         self.topic_config_table.lock().contains_key(topic)
     }
 
-    pub fn data_version(&self) -> ArcCellWrapper<DataVersion> {
+    pub fn data_version(&self) -> ArcRefCellWrapper<DataVersion> {
         self.data_version.clone()
     }
 
