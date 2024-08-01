@@ -15,4 +15,16 @@
  * limitations under the License.
  */
 
+#[derive(Default)]
 pub struct ProduceAccumulator;
+
+impl ProduceAccumulator {
+    pub fn new() -> Self {
+        ProduceAccumulator
+    }
+}
+
+impl ProduceAccumulator {
+    pub fn start(&mut self) {}
+    pub fn shutdown(&self) {}
+}

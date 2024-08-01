@@ -27,7 +27,7 @@ use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
 use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
-use rocketmq_common::ArcCellWrapper;
+use rocketmq_common::ArcRefCellWrapper;
 use tracing::info;
 
 use crate::base::dispatch_request::DispatchRequest;
@@ -332,7 +332,7 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
                 .get(&topic.to_string())
                 .cloned();
             match QueueTypeUtils::get_cq_type(&option) {
-                CQType::SimpleCQ => ArcCellWrapper::new(Box::new(ConsumeQueue::new(
+                CQType::SimpleCQ => ArcRefCellWrapper::new(Box::new(ConsumeQueue::new(
                     topic.to_string(),
                     queue_id,
                     get_store_path_consume_queue(
@@ -345,7 +345,7 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
                     self.running_flags.clone(),
                     self.store_checkpoint.clone(),
                 ))),
-                CQType::BatchCQ => ArcCellWrapper::new(Box::new(BatchConsumeQueue::new(
+                CQType::BatchCQ => ArcRefCellWrapper::new(Box::new(BatchConsumeQueue::new(
                     topic.to_string(),
                     queue_id,
                     get_store_path_batch_consume_queue(
@@ -460,7 +460,7 @@ impl ConsumeQueueStore {
     ) {
         let mut consume_queue_table = self.inner.consume_queue_table.lock();
         let topic_table = consume_queue_table.entry(topic).or_default();
-        topic_table.insert(queue_id, ArcCellWrapper::new(consume_queue));
+        topic_table.insert(queue_id, ArcRefCellWrapper::new(consume_queue));
     }
 
     fn queue_type_should_be(&self, topic: &str, cq_type: CQType) {

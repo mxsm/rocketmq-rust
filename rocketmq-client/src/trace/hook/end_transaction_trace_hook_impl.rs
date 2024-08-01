@@ -14,19 +14,28 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#![allow(dead_code)]
-#![allow(unused_variables)]
+use std::sync::Arc;
 
-use crate::error::MQClientError;
+use crate::hook::end_transaction_context::EndTransactionContext;
+use crate::hook::end_transaction_hook::EndTransactionHook;
+use crate::trace::trace_dispatcher::TraceDispatcher;
 
-pub mod base;
-mod common;
-pub mod error;
-mod factory;
-mod hook;
-mod implementation;
-mod latency;
-pub mod producer;
-mod trace;
+pub struct EndTransactionTraceHookImpl {
+    trace_dispatcher: Arc<Box<dyn TraceDispatcher + Send + Sync>>,
+}
 
-pub type Result<T> = std::result::Result<T, MQClientError>;
+impl EndTransactionTraceHookImpl {
+    pub fn new(trace_dispatcher: Arc<Box<dyn TraceDispatcher + Send + Sync>>) -> Self {
+        Self { trace_dispatcher }
+    }
+}
+
+impl EndTransactionHook for EndTransactionTraceHookImpl {
+    fn hook_name(&self) -> &str {
+        "EndTransactionTraceHookImpl"
+    }
+
+    fn end_transaction(&self, context: &EndTransactionContext) {
+        todo!()
+    }
+}

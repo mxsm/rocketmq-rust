@@ -31,7 +31,7 @@ use bytes::BytesMut;
 use lazy_static::lazy_static;
 use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
-use rocketmq_common::ArcCellWrapper;
+use rocketmq_common::ArcRefCellWrapper;
 use serde::Deserialize;
 use serde::Serialize;
 use tracing::error;
@@ -112,7 +112,7 @@ pub struct RemotingCommand {
     suspended: bool,
     #[serde(skip)]
     command_custom_header:
-        Option<ArcCellWrapper<Box<dyn CommandCustomHeader + Send + Sync + 'static>>>,
+        Option<ArcRefCellWrapper<Box<dyn CommandCustomHeader + Send + Sync + 'static>>>,
     #[serde(rename = "serializeTypeCurrentRPC")]
     serialize_type: SerializeType,
 }
@@ -235,14 +235,14 @@ impl RemotingCommand {
     where
         T: CommandCustomHeader + Sync + Send + 'static,
     {
-        self.command_custom_header = Some(ArcCellWrapper::new(Box::new(command_custom_header)));
+        self.command_custom_header = Some(ArcRefCellWrapper::new(Box::new(command_custom_header)));
         self
     }
 
     pub fn set_command_custom_header_origin(
         mut self,
         command_custom_header: Option<
-            ArcCellWrapper<Box<dyn CommandCustomHeader + Send + Sync + 'static>>,
+            ArcRefCellWrapper<Box<dyn CommandCustomHeader + Send + Sync + 'static>>,
         >,
     ) -> Self {
         self.command_custom_header = command_custom_header;
@@ -253,7 +253,7 @@ impl RemotingCommand {
     where
         T: CommandCustomHeader + Sync + Send + 'static,
     {
-        self.command_custom_header = Some(ArcCellWrapper::new(Box::new(command_custom_header)));
+        self.command_custom_header = Some(ArcRefCellWrapper::new(Box::new(command_custom_header)));
     }
 
     pub fn set_code(mut self, code: impl Into<i32>) -> Self {

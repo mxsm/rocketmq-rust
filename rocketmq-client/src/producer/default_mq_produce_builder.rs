@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use rocketmq_common::common::compression::compression_type::CompressionType;
 use rocketmq_common::common::compression::compressor::Compressor;
@@ -41,16 +42,16 @@ pub struct DefaultMQProducerBuilder {
     retry_times_when_send_async_failed: Option<u32>,
     retry_another_broker_when_not_store_ok: Option<bool>,
     max_message_size: Option<u32>,
-    trace_dispatcher: Option<Box<dyn TraceDispatcher + Send + Sync>>,
+    trace_dispatcher: Option<Arc<Box<dyn TraceDispatcher + Send + Sync>>>,
     auto_batch: Option<bool>,
     produce_accumulator: Option<ProduceAccumulator>,
     enable_backpressure_for_async_mode: Option<bool>,
     back_pressure_for_async_send_num: Option<u32>,
     back_pressure_for_async_send_size: Option<u32>,
-    rpc_hook: Option<Box<dyn RPCHook>>,
+    rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
     compress_level: Option<i32>,
     compress_type: Option<CompressionType>,
-    compressor: Option<Box<dyn Compressor + Send + Sync>>,
+    compressor: Option<Arc<Box<dyn Compressor + Send + Sync>>>,
 }
 
 impl DefaultMQProducerBuilder {
@@ -158,7 +159,7 @@ impl DefaultMQProducerBuilder {
 
     pub fn trace_dispatcher(
         mut self,
-        trace_dispatcher: Box<dyn TraceDispatcher + Send + Sync>,
+        trace_dispatcher: Arc<Box<dyn TraceDispatcher + Send + Sync>>,
     ) -> Self {
         self.trace_dispatcher = Some(trace_dispatcher);
         self
@@ -199,7 +200,7 @@ impl DefaultMQProducerBuilder {
     }
 
     pub fn rpc_hook(mut self, rpc_hook: Box<dyn RPCHook>) -> Self {
-        self.rpc_hook = Some(rpc_hook);
+        self.rpc_hook = Some(Arc::new(rpc_hook));
         self
     }
 
@@ -213,7 +214,7 @@ impl DefaultMQProducerBuilder {
         self
     }
 
-    pub fn compressor(mut self, compressor: Box<dyn Compressor + Send + Sync>) -> Self {
+    pub fn compressor(mut self, compressor: Arc<Box<dyn Compressor + Send + Sync>>) -> Self {
         self.compressor = Some(compressor);
         self
     }

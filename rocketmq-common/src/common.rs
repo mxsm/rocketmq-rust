@@ -27,6 +27,7 @@ use serde::Serializer;
 pub use crate::common::sys_flag::topic_sys_flag as TopicSysFlag;
 
 pub mod attribute;
+pub mod base;
 pub mod boundary_type;
 pub mod broker;
 pub mod compression;

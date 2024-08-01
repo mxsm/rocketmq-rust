@@ -14,19 +14,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#![allow(dead_code)]
-#![allow(unused_variables)]
+use crate::base::client_config::ClientConfig;
+use crate::latency::resolver::Resolver;
+use crate::latency::service_detector::ServiceDetector;
 
-use crate::error::MQClientError;
+pub struct MQFaultStrategy {}
 
-pub mod base;
-mod common;
-pub mod error;
-mod factory;
-mod hook;
-mod implementation;
-mod latency;
-pub mod producer;
-mod trace;
-
-pub type Result<T> = std::result::Result<T, MQClientError>;
+impl MQFaultStrategy {
+    pub fn new(
+        client_config: ClientConfig,
+        fetcher: impl Resolver,
+        service_detector: impl ServiceDetector,
+    ) -> Self {
+        Self {}
+    }
+}

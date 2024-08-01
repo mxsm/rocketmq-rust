@@ -26,7 +26,7 @@ use std::sync::Arc;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
-use rocketmq_common::ArcCellWrapper;
+use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_store::log_file::MessageStore;
@@ -60,7 +60,7 @@ impl ConsumerOffsetManager {
         ConsumerOffsetManager {
             broker_config,
             consumer_offset_wrapper: ConsumerOffsetWrapper {
-                data_version: ArcCellWrapper::new(DataVersion::default()),
+                data_version: ArcRefCellWrapper::new(DataVersion::default()),
                 offset_table: Arc::new(parking_lot::RwLock::new(HashMap::new())),
                 reset_offset_table: Arc::new(parking_lot::RwLock::new(HashMap::new())),
                 pull_offset_table: Arc::new(parking_lot::RwLock::new(HashMap::new())),
@@ -257,7 +257,7 @@ impl ConsumerOffsetManager {
 
 #[derive(Default, Clone)]
 struct ConsumerOffsetWrapper {
-    data_version: ArcCellWrapper<DataVersion>,
+    data_version: ArcRefCellWrapper<DataVersion>,
     offset_table: Arc<parking_lot::RwLock<HashMap<String /* topic@group */, HashMap<i32, i64>>>>,
     reset_offset_table: Arc<parking_lot::RwLock<HashMap<String, HashMap<i32, i64>>>>,
     pull_offset_table:
@@ -392,7 +392,7 @@ impl<'de> Deserialize<'de> for ConsumerOffsetWrapper {
                 let pull_offset_table = pull_offset_table.unwrap_or_default();
 
                 Ok(ConsumerOffsetWrapper {
-                    data_version: ArcCellWrapper::new(data_version),
+                    data_version: ArcRefCellWrapper::new(data_version),
                     offset_table: Arc::new(parking_lot::RwLock::new(offset_table)),
                     reset_offset_table: Arc::new(parking_lot::RwLock::new(reset_offset_table)),
                     pull_offset_table: Arc::new(parking_lot::RwLock::new(pull_offset_table)),

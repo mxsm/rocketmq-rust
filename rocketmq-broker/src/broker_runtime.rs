@@ -27,7 +27,7 @@ use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_common::common::statistics::state_getter::StateGetter;
-use rocketmq_common::ArcCellWrapper;
+use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_common::UtilAll::compute_next_morning_time_millis;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
@@ -385,7 +385,7 @@ impl BrokerRuntime {
             self.broker_stats_manager.clone(),
         );
         let mut pull_message_result_handler =
-            ArcCellWrapper::new(Box::new(DefaultPullMessageResultHandler::new(
+            ArcRefCellWrapper::new(Box::new(DefaultPullMessageResultHandler::new(
                 self.message_store_config.clone(),
                 Arc::new(self.topic_config_manager.clone()),
                 Arc::new(self.consumer_offset_manager.clone()),

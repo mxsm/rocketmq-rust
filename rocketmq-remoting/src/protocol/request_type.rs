@@ -14,19 +14,32 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#![allow(dead_code)]
-#![allow(unused_variables)]
+use std::fmt::Display;
 
-use crate::error::MQClientError;
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum RequestType {
+    Stream,
+}
 
-pub mod base;
-mod common;
-pub mod error;
-mod factory;
-mod hook;
-mod implementation;
-mod latency;
-pub mod producer;
-mod trace;
+impl Display for RequestType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RequestType::Stream => write!(f, "STREAM"),
+        }
+    }
+}
 
-pub type Result<T> = std::result::Result<T, MQClientError>;
+impl RequestType {
+    pub fn value_of(code: u8) -> Option<Self> {
+        match code {
+            0 => Some(RequestType::Stream),
+            _ => None,
+        }
+    }
+
+    pub fn get_code(&self) -> u8 {
+        match self {
+            RequestType::Stream => 0,
+        }
+    }
+}

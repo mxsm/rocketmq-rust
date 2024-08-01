@@ -1529,6 +1529,7 @@ dependencies = [
 name = "rocketmq-client"
 version = "0.3.0"
 dependencies = [
+ "lazy_static",
  "num_cpus",
  "rand",
  "rocketmq-common",
@@ -1536,6 +1537,11 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
  "trait-variant",
 ]
 

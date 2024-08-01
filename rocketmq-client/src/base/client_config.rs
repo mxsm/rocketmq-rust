@@ -15,10 +15,16 @@
  * limitations under the License.
  */
 use std::env;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::time::Duration;
 
 use rocketmq_common::utils::name_server_address_utils::NameServerAddressUtils;
 use rocketmq_common::utils::network_util::NetworkUtil;
+use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
+use rocketmq_remoting::protocol::request_type::RequestType;
 use rocketmq_remoting::protocol::LanguageCode;
 
 use crate::base::access_channel::AccessChannel;
@@ -31,12 +37,14 @@ pub const SEND_LATENCY_ENABLE: &str = "com.rocketmq.sendLatencyEnable";
 pub const START_DETECTOR_ENABLE: &str = "com.rocketmq.startDetectorEnable";
 pub const HEART_BEAT_V2: &str = "com.rocketmq.heartbeat.v2";
 
+#[derive(Clone)]
 pub struct ClientConfig {
     pub namesrv_addr: Option<String>,
     pub client_ip: Option<String>,
     pub instance_name: String,
     pub client_callback_executor_threads: usize,
     pub namespace: Option<String>,
+    pub namespace_initialized: Arc<AtomicBool>,
     pub namespace_v2: Option<String>,
     pub access_channel: AccessChannel,
     pub poll_name_server_interval: u32,
@@ -78,6 +86,7 @@ impl ClientConfig {
                 .unwrap_or_else(|_| "DEFAULT".to_string()),
             client_callback_executor_threads: num_cpus::get(),
             namespace: None,
+            namespace_initialized: Arc::new(AtomicBool::new(false)),
             namespace_v2: None,
             access_channel: AccessChannel::Local,
             poll_name_server_interval: Duration::from_secs(30).as_millis() as u32,
@@ -113,5 +122,60 @@ impl ClientConfig {
             enable_trace: false,
             trace_topic: None,
         }
+    }
+}
+
+impl ClientConfig {
+    pub fn with_namespace(&mut self, resource: &str) -> String {
+        NamespaceUtil::wrap_namespace(
+            self.get_namespace().unwrap_or("".to_string()).as_str(),
+            resource,
+        )
+    }
+
+    pub fn get_namespace(&mut self) -> Option<String> {
+        let namespace_initialized = self.namespace_initialized.load(Ordering::Acquire);
+        if namespace_initialized {
+            return self.namespace.clone();
+        }
+
+        if let Some(ref namespace) = self.namespace {
+            return Some(namespace.clone());
+        }
+
+        if let Some(ref namesrv_addr) = self.namesrv_addr {
+            if NameServerAddressUtils::validate_instance_endpoint(namesrv_addr) {
+                self.namespace =
+                    NameServerAddressUtils::parse_instance_id_from_endpoint(namesrv_addr);
+            }
+        }
+        self.namespace_initialized.store(true, Ordering::Release);
+        self.namespace.clone()
+    }
+
+    pub fn change_instance_name_to_pid(&mut self) {
+        if self.instance_name == "DEFAULT" {
+            self.instance_name = format!("{}-{}", std::process::id(), get_current_millis());
+        }
+    }
+
+    pub fn build_mq_client_id(&self) -> String {
+        let mut sb = String::new();
+        sb.push_str(self.client_ip.as_ref().unwrap());
+
+        sb.push('@');
+        sb.push_str(self.instance_name.as_str());
+        if let Some(unit_name) = &self.unit_name {
+            if !unit_name.is_empty() {
+                sb.push('@');
+                sb.push_str(unit_name.as_str());
+            }
+        }
+
+        if self.enable_stream_request_type {
+            sb.push('@');
+            sb.push_str(RequestType::Stream.to_string().as_str());
+        }
+        sb
     }
 }

@@ -14,4 +14,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+pub mod async_trace_dispatcher;
+pub mod hook;
 pub mod trace_dispatcher;

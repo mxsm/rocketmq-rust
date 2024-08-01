@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rand::Rng;
-use rocketmq_common::ArcCellWrapper;
+use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_runtime::RocketMQRuntime;
 use tokio::sync::Mutex;
 use tokio::task;
@@ -46,10 +46,10 @@ const LOCK_TIMEOUT_MILLIS: u64 = 3000;
 pub struct RocketmqDefaultClient {
     tokio_client_config: Arc<TokioClientConfig>,
     //cache connection
-    connection_tables: Arc<Mutex<HashMap<String /* ip:port */, ArcCellWrapper<Client>>>>,
-    namesrv_addr_list: ArcCellWrapper<Vec<String>>,
-    namesrv_addr_choosed: ArcCellWrapper<Option<String>>,
-    available_namesrv_addr_set: ArcCellWrapper<HashSet<String>>,
+    connection_tables: Arc<Mutex<HashMap<String /* ip:port */, ArcRefCellWrapper<Client>>>>,
+    namesrv_addr_list: ArcRefCellWrapper<Vec<String>>,
+    namesrv_addr_choosed: ArcRefCellWrapper<Option<String>>,
+    available_namesrv_addr_set: ArcRefCellWrapper<HashSet<String>>,
     namesrv_index: Arc<AtomicI32>,
     client_runtime: Arc<RocketMQRuntime>,
 }
@@ -58,9 +58,9 @@ impl RocketmqDefaultClient {
         Self {
             tokio_client_config,
             connection_tables: Arc::new(Mutex::new(Default::default())),
-            namesrv_addr_list: ArcCellWrapper::new(Default::default()),
-            namesrv_addr_choosed: ArcCellWrapper::new(Default::default()),
-            available_namesrv_addr_set: ArcCellWrapper::new(Default::default()),
+            namesrv_addr_list: ArcRefCellWrapper::new(Default::default()),
+            namesrv_addr_choosed: ArcRefCellWrapper::new(Default::default()),
+            available_namesrv_addr_set: ArcRefCellWrapper::new(Default::default()),
             namesrv_index: Arc::new(AtomicI32::new(init_value_index())),
             client_runtime: Arc::new(RocketMQRuntime::new_multi(10, "client-thread")),
         }
@@ -68,7 +68,7 @@ impl RocketmqDefaultClient {
 }
 
 impl RocketmqDefaultClient {
-    async fn get_and_create_nameserver_client(&self) -> Option<ArcCellWrapper<Client>> {
+    async fn get_and_create_nameserver_client(&self) -> Option<ArcRefCellWrapper<Client>> {
         let mut addr = self.namesrv_addr_choosed.as_ref().clone();
         if let Some(ref addr) = addr {
             let guard = self.connection_tables.lock().await;
@@ -122,7 +122,7 @@ impl RocketmqDefaultClient {
         None
     }
 
-    async fn get_and_create_client(&self, addr: Option<&str>) -> Option<ArcCellWrapper<Client>> {
+    async fn get_and_create_client(&self, addr: Option<&str>) -> Option<ArcRefCellWrapper<Client>> {
         match addr {
             None => self.get_and_create_nameserver_client().await,
             Some(addr) => {
@@ -146,7 +146,7 @@ impl RocketmqDefaultClient {
         &self,
         addr: &str,
         duration: Duration,
-    ) -> Option<ArcCellWrapper<Client>> {
+    ) -> Option<ArcRefCellWrapper<Client>> {
         let binding = self.connection_tables.lock().await;
         let cw = binding.get(addr);
         if let Some(cw) = cw {
@@ -179,7 +179,7 @@ impl RocketmqDefaultClient {
             {
                 Ok(client_inner) => match client_inner {
                     Ok(client_r) => {
-                        let client = ArcCellWrapper::new(client_r);
+                        let client = ArcRefCellWrapper::new(client_r);
                         self.connection_tables
                             .lock()
                             .await

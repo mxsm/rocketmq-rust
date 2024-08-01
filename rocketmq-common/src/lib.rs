@@ -65,19 +65,19 @@ impl<T: ?Sized> Clone for WeakCellWrapper<T> {
 }
 
 impl<T> WeakCellWrapper<T> {
-    pub fn upgrade(&self) -> Option<ArcCellWrapper<T>> {
+    pub fn upgrade(&self) -> Option<ArcRefCellWrapper<T>> {
         self.inner
             .upgrade()
-            .map(|value| ArcCellWrapper { inner: value })
+            .map(|value| ArcRefCellWrapper { inner: value })
     }
 }
 
 #[derive(Default)]
-pub struct ArcCellWrapper<T: ?Sized> {
+pub struct ArcRefCellWrapper<T: ?Sized> {
     inner: Arc<SyncUnsafeCell<T>>,
 }
 
-impl<T> ArcCellWrapper<T> {
+impl<T> ArcRefCellWrapper<T> {
     #[allow(clippy::mut_from_ref)]
     pub fn mut_from_ref(&self) -> &mut T {
         unsafe { &mut *self.inner.get() }
@@ -90,7 +90,7 @@ impl<T> ArcCellWrapper<T> {
     }
 }
 
-impl<T> ArcCellWrapper<T> {
+impl<T> ArcRefCellWrapper<T> {
     #[inline]
     pub fn new(value: T) -> Self {
         Self {
@@ -99,34 +99,34 @@ impl<T> ArcCellWrapper<T> {
     }
 }
 
-impl<T: ?Sized> Clone for ArcCellWrapper<T> {
+impl<T: ?Sized> Clone for ArcRefCellWrapper<T> {
     fn clone(&self) -> Self {
-        ArcCellWrapper {
+        ArcRefCellWrapper {
             inner: Arc::clone(&self.inner),
         }
     }
 }
 
-impl<T> AsRef<T> for ArcCellWrapper<T> {
+impl<T> AsRef<T> for ArcRefCellWrapper<T> {
     fn as_ref(&self) -> &T {
         unsafe { &*self.inner.get() }
     }
 }
 
-impl<T> AsMut<T> for ArcCellWrapper<T> {
+impl<T> AsMut<T> for ArcRefCellWrapper<T> {
     fn as_mut(&mut self) -> &mut T {
         unsafe { &mut *self.inner.get() }
     }
 }
 
-impl<T> Deref for ArcCellWrapper<T> {
+impl<T> Deref for ArcRefCellWrapper<T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
         self.as_ref()
     }
 }
 
-impl<T> DerefMut for ArcCellWrapper<T> {
+impl<T> DerefMut for ArcRefCellWrapper<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.as_mut()
     }
@@ -185,46 +185,46 @@ mod arc_cell_wrapper_tests {
 
     #[test]
     fn new_creates_arc_cell_wrapper_with_provided_value() {
-        let wrapper = ArcCellWrapper::new(10);
+        let wrapper = ArcRefCellWrapper::new(10);
         assert_eq!(*wrapper.as_ref(), 10);
     }
 
     #[test]
     fn clone_creates_a_new_instance_with_same_value() {
-        let wrapper = ArcCellWrapper::new(20);
+        let wrapper = ArcRefCellWrapper::new(20);
         let cloned_wrapper = wrapper.clone();
         assert_eq!(*cloned_wrapper.as_ref(), 20);
     }
 
     #[test]
     fn as_ref_returns_immutable_reference_to_value() {
-        let wrapper = ArcCellWrapper::new(30);
+        let wrapper = ArcRefCellWrapper::new(30);
         assert_eq!(*wrapper.as_ref(), 30);
     }
 
     #[test]
     fn as_mut_returns_mutable_reference_to_value() {
-        let mut wrapper = ArcCellWrapper::new(40);
+        let mut wrapper = ArcRefCellWrapper::new(40);
         *wrapper.as_mut() = 50;
         assert_eq!(*wrapper.as_ref(), 50);
     }
 
     #[test]
     fn deref_returns_reference_to_inner_value() {
-        let wrapper = ArcCellWrapper::new(60);
+        let wrapper = ArcRefCellWrapper::new(60);
         assert_eq!(*wrapper, 60);
     }
 
     #[test]
     fn deref_mut_allows_modification_of_inner_value() {
-        let mut wrapper = ArcCellWrapper::new(70);
+        let mut wrapper = ArcRefCellWrapper::new(70);
         *wrapper = 80;
         assert_eq!(*wrapper, 80);
     }
 
     #[test]
     fn multiple_clones_share_the_same_underlying_data() {
-        let wrapper = ArcCellWrapper::new(Arc::new(90));
+        let wrapper = ArcRefCellWrapper::new(Arc::new(90));
         let cloned_wrapper1 = wrapper.clone();
         let cloned_wrapper2 = wrapper.clone();
 
