@@ -1668,6 +1668,7 @@ dependencies = [
  "rocketmq-runtime",
  "serde",
  "serde_json",
+ "serde_json_any_key",
  "thiserror",
  "tokio",
  "tokio-stream",
@@ -1823,6 +1824,16 @@ dependencies = [
  "memchr",
  "ryu",
  "serde",
+]
+
+[[package]]
+name = "serde_json_any_key"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b2c409ca1209f6c4741028b9e1e56d973c868ffaef25ffbaf2471e486c2a74b3"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
