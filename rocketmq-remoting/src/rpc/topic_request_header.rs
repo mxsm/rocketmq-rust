@@ -32,6 +32,14 @@ pub struct TopicRequestHeader {
 
 impl TopicRequestHeader {
     pub const LO: &'static str = "lo";
+
+    pub fn get_lo(&self) -> Option<&bool> {
+        self.lo.as_ref()
+    }
+
+    pub fn set_lo(&mut self, lo: bool) {
+        self.lo = Some(lo);
+    }
 }
 
 impl FromMap for TopicRequestHeader {

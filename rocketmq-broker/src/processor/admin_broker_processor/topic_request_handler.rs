@@ -15,6 +15,8 @@
  * limitations under the License.
  */
 
+use std::collections::HashMap;
+
 use bytes::Bytes;
 use rocketmq_common::common::attribute::attribute_parser::AttributeParser;
 use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
@@ -34,8 +36,11 @@ use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper:
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper;
 use rocketmq_remoting::protocol::header::create_topic_request_header::CreateTopicRequestHeader;
 use rocketmq_remoting::protocol::header::delete_topic_request_header::DeleteTopicRequestHeader;
+use rocketmq_remoting::protocol::header::get_topic_config_request_header::GetTopicConfigRequestHeader;
 use rocketmq_remoting::protocol::header::get_topic_stats_request_header::GetTopicStatsRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_remoting::protocol::static_topic::topic_config_and_queue_mapping::TopicConfigAndQueueMapping;
+use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
@@ -435,7 +440,8 @@ impl TopicRequestHandler {
         let max_queue_nums = topic_config
             .write_queue_nums
             .max(topic_config.read_queue_nums);
-        let topic_stats_table = TopicStatsTable::new();
+        let mut topic_stats_table = TopicStatsTable::new();
+        let mut map = HashMap::new();
         for i in 0..max_queue_nums {
             let mut message_queue = MessageQueue::new();
             message_queue.set_topic(topic.to_string());
@@ -464,11 +470,50 @@ impl TopicRequestHandler {
             topic_offset.set_min_offset(min);
             topic_offset.set_max_offset(max);
             topic_offset.set_last_update_timestamp(timestamp);
-            topic_stats_table
-                .get_offset_table()
-                .insert(message_queue.clone(), topic_offset);
+            map.insert(message_queue, topic_offset);
         }
+        topic_stats_table.set_offset_table(map);
         response.set_body_mut_ref(Some(topic_stats_table.encode()));
+        Some(response)
+    }
+
+    pub async fn get_topic_config(
+        &mut self,
+        _channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        _request_code: RequestCode,
+        request: RemotingCommand,
+    ) -> Option<RemotingCommand> {
+        let mut response = RemotingCommand::create_response_command();
+        let request_header = request
+            .decode_command_custom_header::<GetTopicConfigRequestHeader>()
+            .unwrap();
+        let topic = request_header.topic.as_str();
+        let topic_config = self.inner.topic_config_manager.select_topic_config(topic);
+        if topic_config.is_none() {
+            return Some(
+                response
+                    .set_code(ResponseCode::TopicNotExist)
+                    .set_remark(Some(format!("No topic in this broker. topic: {}", topic))),
+            );
+        }
+        let mut topic_queue_mapping_detail: Option<TopicQueueMappingDetail> = None;
+        if let Some(value) = request_header.topic_request_header.as_ref() {
+            if let Some(lo) = value.get_lo() {
+                if *lo {
+                    topic_queue_mapping_detail = self
+                        .inner
+                        .topic_queue_mapping_manager
+                        .topic_queue_mapping_table
+                        .lock()
+                        .get(topic)
+                        .cloned();
+                }
+            }
+        }
+        let topic_config_and_queue_mapping =
+            TopicConfigAndQueueMapping::new(topic_config.unwrap(), topic_queue_mapping_detail);
+        response.set_body_mut_ref(Some(topic_config_and_queue_mapping.encode()));
         Some(response)
     }
 
