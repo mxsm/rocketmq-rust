@@ -47,6 +47,7 @@ use crate::trace::trace_dispatcher::TraceDispatcher;
 use crate::trace::trace_dispatcher::Type;
 use crate::Result;
 
+#[derive(Clone)]
 pub struct ProducerConfig {
     retry_response_codes: HashSet<i32>,
     /// Producer group conceptually aggregates all producer instances of exactly same role, which
@@ -82,7 +83,7 @@ pub struct ProducerConfig {
     /// Switch flag instance for automatic batch message
     auto_batch: bool,
     /// Instance for batching message automatically
-    produce_accumulator: Option<ProduceAccumulator>,
+    produce_accumulator: Option<ArcRefCellWrapper<ProduceAccumulator>>,
     /// Indicate whether to block message when asynchronous sending traffic is too heavy.
     enable_backpressure_for_async_mode: bool,
     /// on BackpressureForAsyncMode, limit maximum number of on-going sending async messages
@@ -150,7 +151,7 @@ impl ProducerConfig {
         self.auto_batch
     }
 
-    pub fn produce_accumulator(&self) -> &Option<ProduceAccumulator> {
+    pub fn produce_accumulator(&self) -> &Option<ArcRefCellWrapper<ProduceAccumulator>> {
         &self.produce_accumulator
     }
 
@@ -302,7 +303,7 @@ impl DefaultMQProducer {
         self.producer_config.auto_batch
     }
 
-    pub fn produce_accumulator(&self) -> &Option<ProduceAccumulator> {
+    pub fn produce_accumulator(&self) -> &Option<ArcRefCellWrapper<ProduceAccumulator>> {
         &self.producer_config.produce_accumulator
     }
 
@@ -407,7 +408,10 @@ impl DefaultMQProducer {
     }
 
     pub fn set_produce_accumulator(&mut self, produce_accumulator: Option<ProduceAccumulator>) {
-        self.producer_config.produce_accumulator = produce_accumulator;
+        if let Some(produce_accumulator) = produce_accumulator {
+            self.producer_config.produce_accumulator =
+                Some(ArcRefCellWrapper::new(produce_accumulator));
+        }
     }
 
     pub fn set_enable_backpressure_for_async_mode(
@@ -443,6 +447,10 @@ impl DefaultMQProducer {
 
     pub fn set_compressor(&mut self, compressor: Option<Arc<Box<dyn Compressor + Send + Sync>>>) {
         self.producer_config.compressor = compressor;
+    }
+
+    pub fn producer_config(&self) -> &ProducerConfig {
+        &self.producer_config
     }
 }
 

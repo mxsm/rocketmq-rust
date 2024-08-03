@@ -23,9 +23,15 @@ pub struct MQFaultStrategy {}
 impl MQFaultStrategy {
     pub fn new(
         client_config: ClientConfig,
-        fetcher: impl Resolver,
-        service_detector: impl ServiceDetector,
+        /*fetcher: impl Resolver,
+        service_detector: impl ServiceDetector,*/
     ) -> Self {
         Self {}
     }
+
+    pub fn start_detector(&mut self) {}
+
+    pub fn set_resolver(&mut self, resolver: impl Resolver) {}
+
+    pub fn set_service_detector(&mut self, service_detector: impl ServiceDetector) {}
 }
