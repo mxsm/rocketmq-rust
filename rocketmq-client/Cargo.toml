@@ -34,3 +34,6 @@ lazy_static = { workspace = true }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
+[[example]]
+name = "simple-producer"
+path = "examples/producer/simple_producer.rs"
