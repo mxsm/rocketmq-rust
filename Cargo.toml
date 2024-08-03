@@ -54,6 +54,7 @@ thiserror = "1.0.63"
 #serde
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde_json_any_key = "2.0.0"
 anyhow = "1.0"
 bytes = "1.7.1"
 rand = "0.8"

@@ -20,12 +20,14 @@ use std::collections::HashMap;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json_any_key::*;
 
 use crate::protocol::admin::topic_offset::TopicOffset;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct TopicStatsTable {
+    #[serde(with = "any_key_map")]
     offset_table: HashMap<MessageQueue, TopicOffset>,
 }
 
