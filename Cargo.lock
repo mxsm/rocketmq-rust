@@ -1534,6 +1534,7 @@ dependencies = [
  "rand",
  "rocketmq-common",
  "rocketmq-remoting",
+ "rocketmq-rust",
  "serde",
  "serde_json",
  "thiserror",

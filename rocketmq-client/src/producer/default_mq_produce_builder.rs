@@ -57,7 +57,7 @@ pub struct DefaultMQProducerBuilder {
 impl DefaultMQProducerBuilder {
     pub fn new() -> Self {
         Self {
-            client_config: None,
+            client_config: Some(Default::default()),
             default_mqproducer_impl: None,
             retry_response_codes: None,
             producer_group: None,
@@ -108,6 +108,16 @@ impl DefaultMQProducerBuilder {
 
     pub fn topics(mut self, topics: Vec<String>) -> Self {
         self.topics = Some(topics);
+        self
+    }
+
+    pub fn name_server_addr(mut self, name_server_addr: String) -> Self {
+        if let Some(client_config) = self.client_config.as_mut() {
+            client_config.namesrv_addr = Some(name_server_addr);
+            client_config
+                .namespace_initialized
+                .store(false, std::sync::atomic::Ordering::Release);
+        }
         self
     }
 
@@ -224,9 +234,7 @@ impl DefaultMQProducerBuilder {
         if let Some(client_config) = self.client_config {
             mq_producer.set_client_config(client_config);
         }
-        if let Some(default_mqproducer_impl) = self.default_mqproducer_impl {
-            mq_producer.set_default_mqproducer_impl(default_mqproducer_impl);
-        }
+
         if let Some(retry_response_codes) = self.retry_response_codes {
             mq_producer.set_retry_response_codes(retry_response_codes);
         }
@@ -290,6 +298,17 @@ impl DefaultMQProducerBuilder {
         }
         if let Some(compressor) = self.compressor {
             mq_producer.set_compressor(Some(compressor));
+        }
+
+        if let Some(default_mqproducer_impl) = self.default_mqproducer_impl {
+            mq_producer.set_default_mqproducer_impl(default_mqproducer_impl);
+        } else {
+            let producer_impl = DefaultMQProducerImpl::new(
+                mq_producer.client_config().clone(),
+                mq_producer.producer_config().clone(),
+                mq_producer.rpc_hook().clone(),
+            );
+            mq_producer.set_default_mqproducer_impl(producer_impl);
         }
 
         mq_producer

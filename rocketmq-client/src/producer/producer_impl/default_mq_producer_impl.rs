@@ -44,19 +44,20 @@ use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
 use crate::producer::transaction_listener::TransactionListener;
 use crate::Result;
 
+#[derive(Clone)]
 pub struct DefaultMQProducerImpl {
     client_config: ClientConfig,
-    producer_config: ProducerConfig,
+    producer_config: Arc<ProducerConfig>,
     topic_publish_info_table: Arc<RwLock<HashMap<String /* topic */, TopicPublishInfo>>>,
-    send_message_hook_list: Vec<Box<dyn SendMessageHook>>,
-    end_transaction_hook_list: Vec<Box<dyn EndTransactionHook>>,
-    check_forbidden_hook_list: Vec<Box<dyn CheckForbiddenHook>>,
+    send_message_hook_list: ArcRefCellWrapper<Vec<Box<dyn SendMessageHook>>>,
+    end_transaction_hook_list: ArcRefCellWrapper<Vec<Box<dyn EndTransactionHook>>>,
+    check_forbidden_hook_list: ArcRefCellWrapper<Vec<Box<dyn CheckForbiddenHook>>>,
     rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
     service_state: ServiceState,
-    client_instance: ArcRefCellWrapper<MQClientInstance>,
-    mq_fault_strategy: MQFaultStrategy,
-    semaphore_async_send_num: Semaphore,
-    semaphore_async_send_size: Semaphore,
+    client_instance: Option<ArcRefCellWrapper<MQClientInstance>>,
+    mq_fault_strategy: ArcRefCellWrapper<MQFaultStrategy>,
+    semaphore_async_send_num: Arc<Semaphore>,
+    semaphore_async_send_size: Arc<Semaphore>,
 }
 
 impl DefaultMQProducerImpl {
@@ -72,29 +73,20 @@ impl DefaultMQProducerImpl {
                 .back_pressure_for_async_send_size()
                 .max(1024 * 1024) as usize,
         );
-        let client_instance = ArcRefCellWrapper::new(MQClientInstance {});
         let topic_publish_info_table = Arc::new(RwLock::new(HashMap::new()));
-
-        let service_detector = DefaultServiceDetector {
-            client_instance: client_instance.clone(),
-            topic_publish_info_table: topic_publish_info_table.clone(),
-        };
-        let resolver = DefaultResolver {
-            client_instance: client_instance.clone(),
-        };
         DefaultMQProducerImpl {
             client_config: client_config.clone(),
-            producer_config,
+            producer_config: Arc::new(producer_config),
             topic_publish_info_table,
-            send_message_hook_list: vec![],
-            end_transaction_hook_list: vec![],
-            check_forbidden_hook_list: vec![],
+            send_message_hook_list: ArcRefCellWrapper::new(vec![]),
+            end_transaction_hook_list: ArcRefCellWrapper::new(vec![]),
+            check_forbidden_hook_list: ArcRefCellWrapper::new(vec![]),
             rpc_hook: None,
             service_state: ServiceState::CreateJust,
-            client_instance,
-            mq_fault_strategy: MQFaultStrategy::new(client_config, resolver, service_detector),
-            semaphore_async_send_num,
-            semaphore_async_send_size,
+            client_instance: None,
+            mq_fault_strategy: ArcRefCellWrapper::new(MQFaultStrategy::new(client_config)),
+            semaphore_async_send_num: Arc::new(semaphore_async_send_num),
+            semaphore_async_send_size: Arc::new(semaphore_async_send_size),
         }
     }
 }
@@ -145,12 +137,49 @@ impl DefaultMQProducerImpl {
                     self.client_config.change_instance_name_to_pid();
                 }
 
-                self.client_instance = MQClientManager::get_instance()
+                let client_instance = MQClientManager::get_instance()
                     .get_or_create_mq_client_instance(
                         self.client_config.clone(),
                         self.rpc_hook.clone(),
                     )
                     .await;
+
+                let service_detector = DefaultServiceDetector {
+                    client_instance: client_instance.clone(),
+                    topic_publish_info_table: self.topic_publish_info_table.clone(),
+                };
+                let resolver = DefaultResolver {
+                    client_instance: client_instance.clone(),
+                };
+                self.mq_fault_strategy.set_resolver(resolver);
+                self.mq_fault_strategy
+                    .set_service_detector(service_detector);
+                self.client_instance = Some(client_instance);
+                let self_clone = self.clone();
+                let register_ok = self
+                    .client_instance
+                    .as_mut()
+                    .unwrap()
+                    .register_producer(self.producer_config.producer_group(), self_clone);
+                if !register_ok {
+                    self.service_state = ServiceState::CreateJust;
+                    return Err(MQClientError::MQClientException(
+                        -1,
+                        format!(
+                            "The producer group[{}] has been created before, specify another name \
+                             please. {}",
+                            self.producer_config.producer_group(),
+                            FAQUrl::suggest_todo(FAQUrl::GROUP_NAME_DUPLICATE_URL)
+                        ),
+                    ));
+                }
+                if start_factory {
+                    self.client_instance.as_mut().unwrap().start();
+                }
+
+                self.init_topic_route();
+                self.mq_fault_strategy.start_detector();
+                self.service_state = ServiceState::Running;
             }
             ServiceState::Running => {
                 return Err(MQClientError::MQClientException(
@@ -190,6 +219,8 @@ impl DefaultMQProducerImpl {
     fn check_config(&self) -> Result<()> {
         Ok(())
     }
+
+    fn init_topic_route(&mut self) {}
 }
 
 struct DefaultServiceDetector {

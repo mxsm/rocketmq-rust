@@ -19,6 +19,7 @@ use std::sync::Arc;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::base::client_config::ClientConfig;
+use crate::producer::producer_impl::mq_producer_inner::MQProducerInner;
 
 pub struct MQClientInstance {}
 
@@ -30,5 +31,11 @@ impl MQClientInstance {
         rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
     ) -> Self {
         MQClientInstance {}
+    }
+
+    pub fn start(&mut self) {}
+
+    pub fn register_producer(&mut self, group: &str, producer: impl MQProducerInner) -> bool {
+        true
     }
 }

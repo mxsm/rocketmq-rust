@@ -15,6 +15,6 @@
  * limitations under the License.
  */
 pub(crate) mod default_mq_producer_impl;
-mod mq_producer_inner;
+pub(crate) mod mq_producer_inner;
 pub mod queue_filter;
 pub mod topic_publish_info;
