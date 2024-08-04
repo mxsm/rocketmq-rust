@@ -112,6 +112,23 @@ pub fn is_lmq(lmq_meta_data: Option<&str>) -> bool {
     }
 }
 
+pub fn get_ws_addr() -> String {
+    let ws_domain_name = env::var("rocketmq.namesrv.domain")
+        .unwrap_or_else(|_| DEFAULT_NAMESRV_ADDR_LOOKUP.to_string());
+    let ws_domain_subgroup =
+        env::var("rocketmq.namesrv.domain.subgroup").unwrap_or_else(|_| "nsaddr".to_string());
+    let mut ws_addr = format!(
+        "http://{}:8080/rocketmq/{}",
+        ws_domain_name, ws_domain_subgroup
+    );
+
+    if ws_domain_name.contains(':') {
+        ws_addr = format!("http://{}/rocketmq/{}", ws_domain_name, ws_domain_subgroup);
+    }
+
+    ws_addr
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

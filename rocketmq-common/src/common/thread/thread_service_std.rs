@@ -65,9 +65,9 @@ impl ServiceThreadStd {
         let thread = std::thread::Builder::new()
             .name(name.clone())
             .spawn(move || {
-                log::info!("Starting service thread: {}", name);
+                info!("Starting service thread: {}", name);
                 if stopped.load(std::sync::atomic::Ordering::Relaxed) {
-                    log::info!("Service thread stopped: {}", name);
+                    info!("Service thread stopped: {}", name);
                     return;
                 }
                 runnable.lock().run();

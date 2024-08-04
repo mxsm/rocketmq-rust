@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::sync::Arc;
 
 use crate::net::ResponseFuture;
 use crate::protocol::remoting_command::RemotingCommand;
@@ -52,7 +53,7 @@ pub trait RemotingService: Send {
     ///
     /// # Arguments
     /// * `hook` - An implementation of the `RPCHook` trait that will be registered.
-    fn register_rpc_hook(&mut self, hook: impl RPCHook);
+    fn register_rpc_hook(&mut self, hook: Arc<Box<dyn RPCHook>>);
 
     /// Clears all registered RPC hooks.
     ///
