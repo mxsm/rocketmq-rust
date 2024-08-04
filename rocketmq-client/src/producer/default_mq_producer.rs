@@ -236,7 +236,7 @@ impl Default for ProducerConfig {
 pub struct DefaultMQProducer {
     client_config: ClientConfig,
     producer_config: ProducerConfig,
-    default_mqproducer_impl: Option<ArcRefCellWrapper<DefaultMQProducerImpl>>,
+    pub(crate) default_mqproducer_impl: Option<ArcRefCellWrapper<DefaultMQProducerImpl>>,
 }
 
 impl DefaultMQProducer {

@@ -24,7 +24,7 @@ use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
 use crate::producer::transaction_listener::TransactionListener;
 
 #[trait_variant::make(MQProducerInner: Send)]
-pub trait MQProducerInnerLocal: Send {
+pub trait MQProducerInnerLocal: Sync + 'static {
     fn get_publish_topic_list(&self) -> HashSet<String>;
 
     fn is_publish_topic_need_update(&self, topic: &str) -> bool;

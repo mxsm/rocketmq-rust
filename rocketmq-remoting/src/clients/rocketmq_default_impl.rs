@@ -24,7 +24,6 @@ use rand::Rng;
 use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_runtime::RocketMQRuntime;
 use tokio::sync::Mutex;
-use tokio::task;
 use tokio::time;
 use tracing::debug;
 use tracing::error;
@@ -240,7 +239,13 @@ impl RemotingService for RocketmqDefaultClient {
         let client = self.clone();
         //invoke scan available name sever now
         client.scan_available_name_srv().await;
-        let handle = task::spawn(async move {
+        /*let handle = task::spawn(async move {
+            loop {
+                time::sleep(Duration::from_millis(1)).await;
+                client.scan_available_name_srv().await;
+            }
+        });*/
+        self.client_runtime.get_handle().spawn(async move {
             loop {
                 time::sleep(Duration::from_millis(1)).await;
                 client.scan_available_name_srv().await;
@@ -252,7 +257,7 @@ impl RemotingService for RocketmqDefaultClient {
         todo!()
     }
 
-    fn register_rpc_hook(&mut self, hook: impl RPCHook) {
+    fn register_rpc_hook(&mut self, hook: Arc<Box<dyn RPCHook>>) {
         todo!()
     }
 

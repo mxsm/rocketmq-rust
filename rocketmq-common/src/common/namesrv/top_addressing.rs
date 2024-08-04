@@ -14,16 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod cleanup_policy_utils;
-pub mod crc32_utils;
-pub mod env_utils;
-pub mod file_utils;
-pub mod http_tiny_client;
-pub mod message_utils;
-pub mod name_server_address_utils;
-pub mod network_util;
-pub mod parse_config_file;
-pub mod queue_type_utils;
-pub mod serde_json_utils;
-pub mod time_utils;
-pub mod util_all;
+use std::sync::Arc;
+
+use crate::common::namesrv::name_server_update_callback::NameServerUpdateCallback;
+
+pub trait TopAddressing: Send + Sync + 'static {
+    fn fetch_ns_addr(&self) -> Option<String>;
+
+    fn register_change_callback(&self, change_callback: Arc<dyn NameServerUpdateCallback>);
+}

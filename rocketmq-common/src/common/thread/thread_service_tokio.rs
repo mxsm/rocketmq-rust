@@ -24,6 +24,8 @@ use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
+use tracing::info;
+use tracing::warn;
 
 use crate::common::thread::Runnable;
 
@@ -62,7 +64,7 @@ impl ServiceThreadTokio {
             return;
         }
         let join_handle = tokio::spawn(async move {
-            log::info!("Starting service thread: {}", name);
+            info!("Starting service thread: {}", name);
             let mut guard = runnable.lock().await;
             guard.run();
         });
@@ -97,14 +99,14 @@ impl ServiceThreadTokio {
         }
         self.stopped.store(true, Ordering::Release);
         if let Some(thread) = self.thread.take() {
-            log::info!("Shutting down service thread: {}", self.name);
+            info!("Shutting down service thread: {}", self.name);
             if interrupt {
                 thread.abort();
             } else {
                 thread.await.expect("Failed to join service thread");
             }
         } else {
-            log::warn!("Service thread not started: {}", self.name);
+            warn!("Service thread not started: {}", self.name);
         }
     }
 

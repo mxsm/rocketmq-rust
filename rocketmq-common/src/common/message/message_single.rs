@@ -98,6 +98,10 @@ impl Message {
             level.to_string(),
         );
     }
+
+    pub fn get_user_property(&self, name: impl Into<String>) -> Option<String> {
+        self.properties.get(name.into().as_str()).cloned()
+    }
 }
 
 #[allow(unused_variables)]

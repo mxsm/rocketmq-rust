@@ -21,6 +21,7 @@ use std::sync::Arc;
 use rocketmq_common::common::base::service_state::ServiceState;
 use rocketmq_common::common::message::message_single::MessageExt;
 use rocketmq_common::common::mix_all::CLIENT_INNER_PRODUCER_GROUP;
+use rocketmq_common::common::mix_all::DEFAULT_PRODUCER_GROUP;
 use rocketmq_common::common::FAQUrl;
 use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_remoting::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
@@ -29,6 +30,7 @@ use tokio::sync::RwLock;
 use tokio::sync::Semaphore;
 
 use crate::base::client_config::ClientConfig;
+use crate::base::validators::Validators;
 use crate::error::MQClientError;
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::hook::check_forbidden_hook::CheckForbiddenHook;
@@ -160,7 +162,8 @@ impl DefaultMQProducerImpl {
                     .client_instance
                     .as_mut()
                     .unwrap()
-                    .register_producer(self.producer_config.producer_group(), self_clone);
+                    .register_producer(self.producer_config.producer_group(), self_clone)
+                    .await;
                 if !register_ok {
                     self.service_state = ServiceState::CreateJust;
                     return Err(MQClientError::MQClientException(
@@ -174,7 +177,8 @@ impl DefaultMQProducerImpl {
                     ));
                 }
                 if start_factory {
-                    self.client_instance.as_mut().unwrap().start();
+                    Box::pin(self.client_instance.as_mut().unwrap().start()).await?;
+                    //self.client_instance.as_mut().unwrap().start().await;
                 }
 
                 self.init_topic_route();
@@ -217,6 +221,17 @@ impl DefaultMQProducerImpl {
 
     #[inline]
     fn check_config(&self) -> Result<()> {
+        Validators::check_group(self.producer_config.producer_group())?;
+        if self.producer_config.producer_group() == DEFAULT_PRODUCER_GROUP {
+            return Err(MQClientError::MQClientException(
+                -1,
+                format!(
+                    "The specified group name[{}] is equal to default group, please specify \
+                     another one.",
+                    DEFAULT_PRODUCER_GROUP
+                ),
+            ));
+        }
         Ok(())
     }
 

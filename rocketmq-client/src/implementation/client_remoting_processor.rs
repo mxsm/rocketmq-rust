@@ -14,16 +14,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod cleanup_policy_utils;
-pub mod crc32_utils;
-pub mod env_utils;
-pub mod file_utils;
-pub mod http_tiny_client;
-pub mod message_utils;
-pub mod name_server_address_utils;
-pub mod network_util;
-pub mod parse_config_file;
-pub mod queue_type_utils;
-pub mod serde_json_utils;
-pub mod time_utils;
-pub mod util_all;
+
+use rocketmq_remoting::net::channel::Channel;
+use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_remoting::runtime::processor::RequestProcessor;
+use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
+use rocketmq_remoting::Result;
+
+#[derive(Clone)]
+pub struct ClientRemotingProcessor {}
+
+impl RequestProcessor for ClientRemotingProcessor {
+    async fn process_request(
+        &mut self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: RemotingCommand,
+    ) -> Result<Option<RemotingCommand>> {
+        todo!()
+    }
+}

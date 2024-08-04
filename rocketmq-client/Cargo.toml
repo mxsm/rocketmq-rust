@@ -14,6 +14,7 @@ description.workspace = true
 rocketmq-rust = { workspace = true }
 rocketmq-common = { workspace = true }
 rocketmq-remoting = { workspace = true }
+rocketmq-runtime = { workspace = true }
 
 thiserror = { workspace = true }
 

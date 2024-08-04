@@ -14,16 +14,5 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod cleanup_policy_utils;
-pub mod crc32_utils;
-pub mod env_utils;
-pub mod file_utils;
-pub mod http_tiny_client;
-pub mod message_utils;
-pub mod name_server_address_utils;
-pub mod network_util;
-pub mod parse_config_file;
-pub mod queue_type_utils;
-pub mod serde_json_utils;
-pub mod time_utils;
-pub mod util_all;
+
+pub trait MQAdminExtInner: Send + Sync + 'static {}
