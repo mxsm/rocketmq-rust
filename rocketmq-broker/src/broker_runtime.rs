@@ -129,7 +129,7 @@ impl Clone for BrokerRuntime {
             consumer_order_info_manager: Arc::new(Default::default()),
             message_store: self.message_store.clone(),
             broker_stats: self.broker_stats.clone(),
-            schedule_message_service: Default::default(),
+            schedule_message_service: self.schedule_message_service.clone(),
             timer_message_store: self.timer_message_store.clone(),
             broker_out_api: self.broker_out_api.clone(),
             broker_runtime: None,
@@ -445,10 +445,13 @@ impl BrokerRuntime {
 
         let admin_broker_processor = AdminBrokerProcessor::new(
             self.broker_config.clone(),
+            self.message_store_config.clone(),
             self.topic_config_manager.clone(),
             self.consumer_offset_manager.clone(),
             self.topic_queue_mapping_manager.clone(),
             self.message_store.as_ref().unwrap().clone(),
+            self.schedule_message_service.clone(),
+            self.broker_stats.clone(),
         );
 
         BrokerRequestProcessor {

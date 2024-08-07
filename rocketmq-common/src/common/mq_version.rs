@@ -15,6 +15,8 @@
  * limitations under the License.
  */
 
+use std::fmt;
+
 impl TryFrom<i32> for RocketMqVersion {
     type Error = &'static str;
 
@@ -1257,6 +1259,9 @@ impl From<RocketMqVersion> for i32 {
         }
     }
 }
+impl RocketMqVersion {
+    pub const CURRENT_VERSION: RocketMqVersion = RocketMqVersion::HigherVerSion;
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RocketMqVersion {
@@ -1873,6 +1878,12 @@ pub enum RocketMqVersion {
     V599Snapshot,
     V599,
     HigherVerSion,
+}
+
+impl fmt::Display for RocketMqVersion {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 #[cfg(test)]

@@ -18,10 +18,13 @@
 use std::collections::HashMap;
 
 use bytes::Bytes;
+use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::net::channel::Channel;
+use rocketmq_remoting::protocol::body::kv_table::KVTable;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
+use rocketmq_store::log_file::MessageStore;
 
 use crate::processor::admin_broker_processor::Inner;
 
@@ -76,5 +79,120 @@ impl BrokerConfigRequestHandler {
             response.set_body_mut_ref(Some(Bytes::from(body)));
         }
         Some(response)
+    }
+
+    pub async fn get_broker_runtime_info(
+        &mut self,
+        _channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        _request_code: RequestCode,
+        _request: RemotingCommand,
+    ) -> Option<RemotingCommand> {
+        let mut response = RemotingCommand::create_response_command();
+        let runtime_info = self.prepare_runtime_info();
+        let key_value_table = KVTable {
+            table: runtime_info,
+        };
+        response.set_body_mut_ref(Some(Bytes::from(
+            serde_json::to_string(&key_value_table).unwrap(),
+        )));
+        Some(response)
+    }
+
+    fn prepare_runtime_info(&self) -> HashMap<String, String> {
+        let mut runtime_info = self.inner.default_message_store.get_runtime_info();
+        self.inner
+            .schedule_message_service
+            .build_running_stats(&mut runtime_info);
+        runtime_info.insert(
+            "brokerActive".to_string(),
+            self.is_special_service_running().to_string(),
+        );
+        let version = RocketMqVersion::CURRENT_VERSION;
+        runtime_info.insert("brokerVersionDesc".to_string(), version.to_string());
+        runtime_info.insert("brokerVersion".to_string(), version.to_string());
+        let msg_put_total_yesterday_morning = match &self.inner.broker_stats {
+            Some(broker_stats) => broker_stats
+                .get_msg_put_total_yesterday_morning()
+                .to_string(),
+            None => String::from("No broker stats available msgPutTotalYesterdayMorning"),
+        };
+        runtime_info.insert(
+            "msgPutTotalYesterdayMorning".to_string(),
+            msg_put_total_yesterday_morning,
+        );
+
+        let msg_put_total_today_morning = match &self.inner.broker_stats {
+            Some(broker_stats) => broker_stats.get_msg_put_total_today_morning().to_string(),
+            None => String::from("No broker stats available msgPutTotalTodayMorning"),
+        };
+        runtime_info.insert(
+            "msgPutTotalTodayMorning".to_string(),
+            msg_put_total_today_morning,
+        );
+
+        let msg_put_total_today_now = match &self.inner.broker_stats {
+            Some(broker_stats) => broker_stats.get_msg_put_total_today_now().to_string(),
+            None => String::from("No broker stats available msgPutTotalTodayNow"),
+        };
+        runtime_info.insert("msgPutTotalTodayNow".to_string(), msg_put_total_today_now);
+
+        let msg_get_total_yesterday_morning = match &self.inner.broker_stats {
+            Some(broker_stats) => broker_stats
+                .get_msg_get_total_yesterday_morning()
+                .to_string(),
+            None => String::from("No broker stats available msgGetTotalYesterdayMorning"),
+        };
+        runtime_info.insert(
+            "msgGetTotalYesterdayMorning".to_string(),
+            msg_get_total_yesterday_morning,
+        );
+
+        let msg_get_total_today_morning = match &self.inner.broker_stats {
+            Some(broker_stats) => broker_stats.get_msg_get_total_today_morning().to_string(),
+            None => String::from("No broker stats available msgGetTotalTodayMorning"),
+        };
+        runtime_info.insert(
+            "msgGetTotalTodayMorning".to_string(),
+            msg_get_total_today_morning,
+        );
+
+        let msg_get_total_today_now = match &self.inner.broker_stats {
+            Some(broker_stats) => broker_stats.get_msg_get_total_today_now().to_string(),
+            None => String::from("No broker stats available msgGetTotalTodayNow"),
+        };
+        runtime_info.insert("msgGetTotalTodayNow".to_string(), msg_get_total_today_now);
+        runtime_info.insert(
+            "dispatchBehindBytes".to_string(),
+            self.inner
+                .default_message_store
+                .dispatch_behind_bytes()
+                .to_string(),
+        );
+        runtime_info.insert(
+            "pageCacheLockTimeMills".to_string(),
+            self.inner
+                .default_message_store
+                .lock_time_mills()
+                .to_string(),
+        );
+        runtime_info.insert(
+            "earliestMessageTimeStamp".to_string(),
+            self.inner
+                .default_message_store
+                .get_earliest_message_time()
+                .to_string(),
+        );
+        runtime_info.insert(
+            "startAcceptSendRequestTimeStamp".to_string(),
+            self.inner
+                .broker_config
+                .get_start_accept_send_request_time_stamp()
+                .to_string(),
+        );
+        runtime_info
+    }
+    fn is_special_service_running(&self) -> bool {
+        true
     }
 }

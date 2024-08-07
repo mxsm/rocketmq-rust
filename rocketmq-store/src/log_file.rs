@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 
@@ -176,7 +177,7 @@ pub trait RocketMQMessageStore: Clone + 'static {
     fn get_broker_stats_manager(&self) -> Option<Arc<BrokerStatsManager>>;
 
     /// Dispatch bytes that are behind.
-    fn dispatch_behind_bytes(&self);
+    fn dispatch_behind_bytes(&self) -> i64;
 
     /// Get the minimum offset in the queue.
     ///
@@ -388,4 +389,26 @@ pub trait RocketMQMessageStore: Clone + 'static {
         queue_id: i32,
         consume_queue_offset: i64,
     ) -> i64;
+
+    /// Message store runtime information, which should generally contains various statistical
+    /// information.
+    ///
+    /// # Returns
+    ///
+    /// Runtime information of the message store in format of key-value pairs.
+    fn get_runtime_info(&self) -> HashMap<String, String>;
+
+    /// Get lock time in milliseconds of the store by far.
+    ///
+    /// # Returns
+    ///
+    /// Lock time in milliseconds.
+    fn lock_time_mills(&self) -> i64;
+
+    /// Get the store time of the earliest message in this store.
+    ///
+    /// # Returns
+    ///
+    /// * `i64` - Timestamp of the earliest message in this store.
+    fn get_earliest_message_time(&self) -> i64;
 }

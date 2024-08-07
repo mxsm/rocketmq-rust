@@ -35,6 +35,7 @@ use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageVersion;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
+use rocketmq_common::common::system_clock::SystemClock;
 use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
 use rocketmq_common::utils::time_utils;
 use rocketmq_common::CRC32Utils::crc32;
@@ -1129,6 +1130,17 @@ impl CommitLog {
 
     pub fn check_self(&self) {
         self.mapped_file_queue.check_self();
+    }
+
+    pub fn lock_time_mills(&self) -> i64 {
+        let mut diff = 0;
+        let begin = self
+            .begin_time_in_lock
+            .load(std::sync::atomic::Ordering::Acquire);
+        if begin > 0 {
+            diff = SystemClock::now() - (begin as u128);
+        }
+        diff as i64
     }
 
     pub fn begin_time_in_lock(&self) -> &Arc<AtomicU64> {

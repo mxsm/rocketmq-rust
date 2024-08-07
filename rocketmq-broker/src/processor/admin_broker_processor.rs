@@ -14,8 +14,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-mod broker_config_request_handler;
-mod topic_request_handler;
 use std::sync::Arc;
 
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
@@ -24,15 +22,21 @@ use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
+use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::message_store::default_message_store::DefaultMessageStore;
+use rocketmq_store::stats::broker_stats::BrokerStats;
 use tracing::warn;
 
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
 use crate::processor::admin_broker_processor::broker_config_request_handler::BrokerConfigRequestHandler;
 use crate::processor::admin_broker_processor::topic_request_handler::TopicRequestHandler;
 use crate::processor::pop_inflight_message_counter::PopInflightMessageCounter;
+use crate::schedule::schedule_message_service::ScheduleMessageService;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
+
+mod broker_config_request_handler;
+mod topic_request_handler;
 
 #[derive(Clone)]
 pub struct AdminBrokerProcessor {
@@ -43,18 +47,24 @@ pub struct AdminBrokerProcessor {
 impl AdminBrokerProcessor {
     pub fn new(
         broker_config: Arc<BrokerConfig>,
+        message_store_config: Arc<MessageStoreConfig>,
         topic_config_manager: TopicConfigManager,
         consumer_offset_manager: ConsumerOffsetManager,
         topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
         default_message_store: DefaultMessageStore,
+        schedule_message_service: ScheduleMessageService,
+        broker_stats: Option<Arc<BrokerStats<DefaultMessageStore>>>,
     ) -> Self {
         let inner = Inner {
             broker_config,
+            message_store_config,
             topic_config_manager,
             consumer_offset_manager,
             topic_queue_mapping_manager,
             default_message_store,
             pop_inflight_message_counter: Arc::new(PopInflightMessageCounter),
+            schedule_message_service,
+            broker_stats,
         };
         let topic_request_handler = TopicRequestHandler::new(inner.clone());
         let broker_config_request_handler = BrokerConfigRequestHandler::new(inner.clone());
@@ -119,6 +129,11 @@ impl AdminBrokerProcessor {
                     .get_topic_config(channel, ctx, request_code, request)
                     .await
             }
+            RequestCode::GetBrokerRuntimeInfo => {
+                self.broker_config_request_handler
+                    .get_broker_runtime_info(channel, ctx, request_code, request)
+                    .await
+            }
             _ => Some(get_unknown_cmd_response(request_code)),
         }
     }
@@ -139,9 +154,12 @@ fn get_unknown_cmd_response(request_code: RequestCode) -> RemotingCommand {
 #[derive(Clone)]
 struct Inner {
     broker_config: Arc<BrokerConfig>,
+    message_store_config: Arc<MessageStoreConfig>,
     topic_config_manager: TopicConfigManager,
     consumer_offset_manager: ConsumerOffsetManager,
     topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
     default_message_store: DefaultMessageStore,
     pop_inflight_message_counter: Arc<PopInflightMessageCounter>,
+    schedule_message_service: ScheduleMessageService,
+    broker_stats: Option<Arc<BrokerStats<DefaultMessageStore>>>,
 }

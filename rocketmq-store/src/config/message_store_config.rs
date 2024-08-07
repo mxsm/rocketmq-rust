@@ -415,6 +415,9 @@ impl MessageStoreConfig {
             .ceil() as i32;
         factor * CQ_STORE_UNIT_SIZE
     }
+    pub fn is_timer_wheel_enable(&self) -> bool {
+        self.timer_wheel_enable
+    }
 
     pub fn get_properties(&self) -> HashMap<String, String> {
         let mut properties: HashMap<String, String> = HashMap::new();
