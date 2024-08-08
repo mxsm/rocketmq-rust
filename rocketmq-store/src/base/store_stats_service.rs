@@ -20,10 +20,12 @@ use std::collections::LinkedList;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Instant;
 
 use parking_lot::Mutex;
 use parking_lot::RwLock;
 use rocketmq_common::common::broker::broker_config::BrokerIdentity;
+use rocketmq_common::common::system_clock::SystemClock;
 use rocketmq_common::TimeUtils::get_current_millis;
 
 const FREQUENCY_OF_SAMPLING: u64 = 1000;
@@ -61,6 +63,8 @@ lazy_static::lazy_static! {
 type AtomicUsizeArray = Arc<Vec<AtomicUsize>>;
 
 pub struct StoreStatsService {
+    buckets: BTreeMap<u64, AtomicUsize>,
+    last_buckets: BTreeMap<u64, AtomicUsize>,
     put_message_failed_times: AtomicUsize,
     put_message_topic_times_total: Arc<RwLock<HashMap<String, AtomicUsize>>>,
     put_message_topic_size_total: Arc<RwLock<HashMap<String, AtomicUsize>>>,
@@ -85,6 +89,8 @@ pub struct StoreStatsService {
 impl StoreStatsService {
     pub fn new(broker_identity: Option<BrokerIdentity>) -> Self {
         Self {
+            buckets: BTreeMap::new(),
+            last_buckets: BTreeMap::new(),
             put_message_failed_times: AtomicUsize::new(0),
             put_message_topic_times_total: Arc::new(RwLock::new(HashMap::new())),
             put_message_topic_size_total: Arc::new(RwLock::new(HashMap::new())),
@@ -127,15 +133,25 @@ impl StoreStatsService {
         &self.put_message_failed_times
     }
 
-    fn reset_put_message_time_buckets(&self) {
-        let mut buckets = BTreeMap::new();
-        for (interval, times) in PUT_MESSAGE_ENTIRE_TIME_BUCKETS.iter() {
-            buckets.insert(*interval as i64, AtomicUsize::new(*times as usize));
+    fn reset_put_message_time_buckets(&mut self) {
+        let mut next_buckets: BTreeMap<u64, AtomicUsize> = BTreeMap::new();
+        let index = AtomicUsize::new(0);
+        for (&interval, &times) in PUT_MESSAGE_ENTIRE_TIME_BUCKETS.iter() {
+            for _ in 0..times {
+                next_buckets.insert(
+                    index.fetch_add(interval as usize, Ordering::SeqCst) as u64,
+                    AtomicUsize::new(0),
+                );
+            }
         }
-        let mut last_buckets = BTreeMap::new();
-        for (interval, times) in PUT_MESSAGE_ENTIRE_TIME_BUCKETS.iter() {
-            last_buckets.insert(*interval as i64, AtomicUsize::new(*times as usize));
-        }
+        next_buckets.insert(usize::MAX as u64, AtomicUsize::new(0));
+
+        self.last_buckets = self
+            .buckets
+            .iter()
+            .map(|(&key, value)| (key, AtomicUsize::new(value.load(Ordering::SeqCst))))
+            .collect();
+        self.buckets = next_buckets;
     }
 
     fn reset_put_message_distribute_time(&self) {
@@ -148,6 +164,308 @@ impl StoreStatsService {
     pub fn set_put_message_entire_time_max(&self, _value: u64) {}
 
     // Add more methods as needed for functionality
+
+    pub fn get_runtime_info(&self) -> HashMap<String, String> {
+        let mut result = HashMap::new();
+        let total_times = self.get_put_message_times_total();
+        let total_times = if total_times == 0 { 1 } else { total_times };
+        result.insert(
+            "bootTimestamp".to_string(),
+            format!("{:?}", self.message_store_boot_timestamp),
+        );
+        result.insert("runtime".to_string(), self.get_format_runtime());
+        result.insert(
+            "putMessageEntireTimeMax".to_string(),
+            self.put_message_entire_time_max
+                .load(Ordering::Relaxed)
+                .to_string(),
+        );
+        result.insert("putMessageTimesTotal".to_string(), total_times.to_string());
+        result.insert(
+            "putMessageFailedTimes".to_string(),
+            self.put_message_failed_times
+                .load(Ordering::Relaxed)
+                .to_string(),
+        );
+        result.insert(
+            "putMessageSizeTotal".to_string(),
+            self.get_put_message_size_total().to_string(),
+        );
+        result.insert(
+            "putMessageDistributeTime".to_string(),
+            self.get_put_message_distribute_time_string_info(total_times),
+        );
+        result.insert(
+            "putMessageAverageSize".to_string(),
+            (self.get_put_message_size_total() / total_times).to_string(),
+        );
+        result.insert(
+            "dispatchMaxBuffer".to_string(),
+            self.dispatch_max_buffer.load(Ordering::Relaxed).to_string(),
+        );
+        result.insert(
+            "getMessageEntireTimeMax".to_string(),
+            self.get_message_entire_time_max
+                .load(Ordering::Relaxed)
+                .to_string(),
+        );
+        result.insert("putTps".to_string(), self.get_put_tps());
+        result.insert("getFoundTps".to_string(), self.get_get_found_tps());
+        result.insert("getMissTps".to_string(), self.get_get_miss_tps());
+        result.insert("getTotalTps".to_string(), self.get_get_total_tps());
+        result.insert(
+            "getTransferredTps".to_string(),
+            self.get_get_transferred_tps(),
+        );
+        result.insert(
+            "putLatency99".to_string(),
+            format!("{:.2}", self.find_put_message_entire_time_px(0.99)),
+        );
+        result.insert(
+            "putLatency999".to_string(),
+            format!("{:.2}", self.find_put_message_entire_time_px(0.999)),
+        );
+        result
+    }
+
+    pub fn find_put_message_entire_time_px(&self, px: f64) -> f64 {
+        let last_buckets = &self.last_buckets;
+        let start = Instant::now();
+        let mut result = 0.0;
+        let total_request: u64 = last_buckets
+            .values()
+            .map(|v| v.load(Ordering::SeqCst) as u64)
+            .sum();
+        let px_index = (total_request as f64 * px).round() as u64;
+        let mut pass_count = 0;
+        let bucket_values: Vec<_> = last_buckets.keys().collect();
+        for i in 0..bucket_values.len() {
+            let count = last_buckets
+                .get(bucket_values[i])
+                .unwrap()
+                .load(Ordering::SeqCst) as u64;
+            if px_index <= pass_count + count {
+                let relative_index = px_index - pass_count;
+                if i == 0 {
+                    result = if count == 0 {
+                        0.0
+                    } else {
+                        *bucket_values[i] as f64 * relative_index as f64 / count as f64
+                    };
+                } else {
+                    let last_bucket = *bucket_values[i - 1] as f64;
+                    result = last_bucket
+                        + if count == 0 {
+                            0.0
+                        } else {
+                            (*bucket_values[i] as f64 - last_bucket) * relative_index as f64
+                                / count as f64
+                        };
+                }
+                break;
+            } else {
+                pass_count += count;
+            }
+        }
+        result
+    }
+
+    pub fn get_get_transferred_tps(&self) -> String {
+        format!(
+            "{} {} {}",
+            self.get_get_transferred_tps_time(10),
+            self.get_get_transferred_tps_time(60),
+            self.get_get_transferred_tps_time(600)
+        )
+    }
+
+    pub fn get_get_transferred_tps_time(&self, time: usize) -> String {
+        let mut result = String::new();
+        let _guard = self.sampling_lock.lock();
+        let transferred_msg_count_list = self.transferred_msg_count_list.lock();
+        let transferred_msg_count_vec: Vec<_> = transferred_msg_count_list.iter().collect();
+        if let Some(last) = transferred_msg_count_vec.last() {
+            if transferred_msg_count_vec.len() > time {
+                if let Some(last_before) =
+                    transferred_msg_count_vec.get(transferred_msg_count_vec.len() - (time + 1))
+                {
+                    result = format!("{}", CallSnapshot::get_tps(last_before, last));
+                }
+            }
+        }
+        drop(transferred_msg_count_list);
+        drop(_guard);
+        result
+    }
+
+    pub fn get_get_total_tps(&self) -> String {
+        format!(
+            "{} {} {}",
+            self.get_get_total_tps_time(10),
+            self.get_get_total_tps_time(60),
+            self.get_get_total_tps_time(600)
+        )
+    }
+
+    pub fn get_get_total_tps_time(&self, time: usize) -> String {
+        let _guard = self.sampling_lock.lock();
+        let mut found = 0.0;
+        let mut miss = 0.0;
+
+        {
+            let get_times_found_list = self.get_times_found_list.lock();
+            let get_times_found_vec: Vec<_> = get_times_found_list.iter().collect();
+            if let Some(last) = get_times_found_vec.last() {
+                if get_times_found_vec.len() > time {
+                    if let Some(last_before) =
+                        get_times_found_vec.get(get_times_found_vec.len() - (time + 1))
+                    {
+                        found = CallSnapshot::get_tps(last_before, last);
+                    }
+                }
+            }
+        }
+
+        {
+            let get_times_miss_list = self.get_times_miss_list.lock();
+            let get_times_miss_vec: Vec<_> = get_times_miss_list.iter().collect();
+            if let Some(last) = get_times_miss_vec.last() {
+                if get_times_miss_vec.len() > time {
+                    if let Some(last_before) =
+                        get_times_miss_vec.get(get_times_miss_vec.len() - (time + 1))
+                    {
+                        miss = CallSnapshot::get_tps(last_before, last);
+                    }
+                }
+            }
+        }
+
+        drop(_guard);
+        format!("{}", found + miss)
+    }
+
+    pub fn get_get_miss_tps(&self) -> String {
+        format!(
+            "{} {} {}",
+            self.get_get_miss_tps_time(10),
+            self.get_get_miss_tps_time(60),
+            self.get_get_miss_tps_time(600)
+        )
+    }
+
+    pub fn get_get_miss_tps_time(&self, time: usize) -> String {
+        let mut result = String::new();
+        let _guard = self.sampling_lock.lock();
+        let get_times_miss_list = self.get_times_miss_list.lock();
+        let get_times_miss_vec: Vec<_> = get_times_miss_list.iter().collect();
+        if let Some(last) = get_times_miss_vec.last() {
+            if get_times_miss_vec.len() > time {
+                if let Some(last_before) =
+                    get_times_miss_vec.get(get_times_miss_vec.len() - (time + 1))
+                {
+                    result = format!("{}", CallSnapshot::get_tps(last_before, last));
+                }
+            }
+        }
+        drop(get_times_miss_list);
+        drop(_guard);
+        result
+    }
+
+    pub fn get_get_found_tps(&self) -> String {
+        format!(
+            "{} {} {}",
+            self.get_get_found_tps_time(10),
+            self.get_get_found_tps_time(60),
+            self.get_get_found_tps_time(600)
+        )
+    }
+
+    pub fn get_get_found_tps_time(&self, time: usize) -> String {
+        let mut result = String::new();
+        let _guard = self.sampling_lock.lock();
+        let get_times_found_list = self.get_times_found_list.lock();
+        let get_times_found_vec: Vec<_> = get_times_found_list.iter().collect();
+        if let Some(last) = get_times_found_vec.last() {
+            if get_times_found_vec.len() > time {
+                if let Some(last_before) =
+                    get_times_found_vec.get(get_times_found_vec.len() - (time + 1))
+                {
+                    result = format!("{}", CallSnapshot::get_tps(last_before, last));
+                }
+            }
+        }
+        drop(get_times_found_list);
+        drop(_guard);
+        result
+    }
+
+    pub fn get_put_tps(&self) -> String {
+        format!(
+            "{} {} {}",
+            self.get_put_tps_time(10),
+            self.get_put_tps_time(60),
+            self.get_put_tps_time(600)
+        )
+    }
+
+    pub fn get_put_tps_time(&self, time: usize) -> String {
+        let mut result = String::new();
+        let _guard = self.sampling_lock.lock();
+        let put_times_list = self.put_times_list.lock();
+        let put_times_vec: Vec<_> = put_times_list.iter().collect();
+        if let Some(last) = put_times_vec.last() {
+            if put_times_vec.len() > time {
+                if let Some(last_before) = put_times_vec.get(put_times_vec.len() - (time + 1)) {
+                    result = format!("{}", CallSnapshot::get_tps(last_before, last));
+                }
+            }
+        }
+        drop(put_times_list);
+        drop(_guard);
+        result
+    }
+
+    pub fn get_put_message_distribute_time_string_info(&self, total: u64) -> String {
+        self.put_message_distribute_time_to_string()
+    }
+
+    pub fn put_message_distribute_time_to_string(&self) -> String {
+        let times = &self.last_put_message_distribute_time;
+        let mut result = String::new();
+        for (i, time) in times.iter().enumerate() {
+            let value = time.load(Ordering::Relaxed);
+            result.push_str(&format!(
+                "{}:{}, ",
+                PUT_MESSAGE_ENTIRE_TIME_MAX_DESC[i], value
+            ));
+        }
+        result
+    }
+
+    pub fn get_put_message_size_total(&self) -> u64 {
+        let map = self.put_message_topic_size_total.read();
+        map.values().map(|v| v.load(Ordering::Relaxed) as u64).sum()
+    }
+    pub fn get_put_message_times_total(&self) -> u64 {
+        let map = self.put_message_topic_times_total.read();
+        map.values().map(|v| v.load(Ordering::Relaxed) as u64).sum()
+    }
+
+    pub fn get_format_runtime(&self) -> String {
+        let boot_time = self.message_store_boot_timestamp;
+        let time = SystemClock::now() - boot_time as u128;
+
+        let days = time / 86400;
+        let hours = (time % 86400) / 3600;
+        let minutes = (time % 3600) / 60;
+        let seconds = time % 60;
+
+        format!(
+            "[ {} days, {} hours, {} minutes, {} seconds ]",
+            days, hours, minutes, seconds
+        )
+    }
 }
 
 pub struct CallSnapshot {

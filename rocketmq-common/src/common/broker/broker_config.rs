@@ -284,6 +284,10 @@ impl BrokerConfig {
         format!("{}:{}", self.broker_ip1, self.listen_port)
     }
 
+    pub fn get_start_accept_send_request_time_stamp(&self) -> i64 {
+        self.start_accept_send_request_time_stamp
+    }
+
     pub fn get_properties(&self) -> HashMap<String, String> {
         let mut properties: HashMap<String, String> = HashMap::new();
         properties.insert("brokerName".to_string(), self.broker_name.clone());

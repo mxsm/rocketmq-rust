@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
@@ -30,9 +31,11 @@ impl ScheduleMessageService {
     pub fn delay_level2queue_id(delay_level: i32) -> i32 {
         delay_level - 1
     }
-}
 
-impl ScheduleMessageService {
+    pub fn build_running_stats(&self, _stats: &mut HashMap<String, String>) {
+        //TODO
+    }
+
     pub fn get_max_delay_level(&self) -> i32 {
         0
     }

@@ -753,7 +753,9 @@ impl MessageStore for DefaultMessageStore {
         self.broker_stats_manager.clone()
     }
 
-    fn dispatch_behind_bytes(&self) {}
+    fn dispatch_behind_bytes(&self) -> i64 {
+        0
+    }
 
     fn get_min_offset_in_queue(&self, topic: &str, queue_id: i32) -> i64 {
         self.consume_queue_store
@@ -1243,6 +1245,18 @@ impl MessageStore for DefaultMessageStore {
         } else {
             -1
         }
+    }
+    fn get_runtime_info(&self) -> HashMap<String, String> {
+        self.store_stats_service.get_runtime_info()
+    }
+
+    fn lock_time_mills(&self) -> i64 {
+        self.commit_log.lock_time_mills()
+    }
+
+    fn get_earliest_message_time(&self) -> i64 {
+        //TODO
+        -1
     }
 }
 
