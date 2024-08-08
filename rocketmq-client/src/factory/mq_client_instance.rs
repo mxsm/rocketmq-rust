@@ -467,10 +467,10 @@ pub fn topic_route_data2topic_publish_info(
     } else if route.order_topic_conf.is_none()
         && route.topic_queue_mapping_by_broker.is_some()
         && !route
-        .topic_queue_mapping_by_broker
-        .as_ref()
-        .unwrap()
-        .is_empty()
+            .topic_queue_mapping_by_broker
+            .as_ref()
+            .unwrap()
+            .is_empty()
     {
         info.order_topic = false;
         let mq_end_points =

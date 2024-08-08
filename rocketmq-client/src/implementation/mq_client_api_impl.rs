@@ -122,7 +122,7 @@ impl MQClientAPIImpl {
             timeout_millis,
             false,
         )
-            .await
+        .await
     }
 
     #[inline]
