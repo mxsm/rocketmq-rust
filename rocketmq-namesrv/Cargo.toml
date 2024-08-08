@@ -42,7 +42,7 @@ bytes = "1.7.1"
 config.workspace = true
 parking_lot.workspace = true
 
-clap = { version = "4.5.13", features = ["derive"] }
+clap = { version = "4.5.14", features = ["derive"] }
 log = "0.4.22"
 
 [[bin]]
