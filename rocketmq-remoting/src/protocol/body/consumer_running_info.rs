@@ -14,9 +14,5 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use crate::producer::send_result::SendResult;
-
-pub trait SendCallback: Send + Sync + 'static {
-    fn on_success(&self, send_result: &SendResult);
-    fn on_exception(&self, e: std::io::Error);
-}
+#[derive(Clone)]
+pub struct ConsumerRunningInfo {}

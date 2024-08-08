@@ -34,4 +34,8 @@ impl MQFaultStrategy {
     pub fn set_resolver(&mut self, resolver: impl Resolver) {}
 
     pub fn set_service_detector(&mut self, service_detector: impl ServiceDetector) {}
+
+    pub fn is_start_detector_enable(&self) -> bool {
+        unimplemented!("not implemented")
+    }
 }

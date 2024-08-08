@@ -77,8 +77,10 @@ impl ClientMetadata {
         }
 
         {
-            let mq_end_points =
-                self.topic_route_data2endpoints_for_static_topic(topic, &topic_route_data);
+            let mq_end_points = ClientMetadata::topic_route_data2endpoints_for_static_topic(
+                topic,
+                &topic_route_data,
+            );
             if let Some(mq_end_points) = mq_end_points {
                 let mut write_guard = self.topic_end_points_table.write();
                 write_guard.insert(topic.to_string(), mq_end_points);
@@ -126,7 +128,6 @@ impl ClientMetadata {
     }
 
     pub fn topic_route_data2endpoints_for_static_topic(
-        &self,
         topic: &str,
         topic_route_data: &TopicRouteData,
     ) -> Option<HashMap<MessageQueue, String>> {

@@ -23,8 +23,7 @@ use rocketmq_remoting::protocol::header::check_transaction_state_request_header:
 use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
 use crate::producer::transaction_listener::TransactionListener;
 
-#[trait_variant::make(MQProducerInner: Send)]
-pub trait MQProducerInnerLocal: Sync + 'static {
+pub trait MQProducerInner: Send + Sync + 'static {
     fn get_publish_topic_list(&self) -> HashSet<String>;
 
     fn is_publish_topic_need_update(&self, topic: &str) -> bool;
@@ -38,7 +37,7 @@ pub trait MQProducerInnerLocal: Sync + 'static {
         check_request_header: &CheckTransactionStateRequestHeader,
     );
 
-    fn update_topic_publish_info(&self, topic: &str, info: &TopicPublishInfo);
+    fn update_topic_publish_info(&mut self, topic: String, info: Option<TopicPublishInfo>);
 
     fn is_unit_mode(&self) -> bool;
 }

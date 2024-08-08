@@ -85,7 +85,7 @@ impl RpcClientImpl {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
-            .invoke_async(addr.clone(), request_command, timeout_millis)
+            .invoke_async(Some(addr.clone()), request_command, timeout_millis)
             .await
         {
             Ok(response) => match ResponseCode::from(response.code()) {
@@ -125,7 +125,7 @@ impl RpcClientImpl {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
-            .invoke_async(addr.clone(), request_command, timeout_millis)
+            .invoke_async(Some(addr.clone()), request_command, timeout_millis)
             .await
         {
             Ok(response) => match ResponseCode::from(response.code()) {
@@ -161,7 +161,7 @@ impl RpcClientImpl {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
-            .invoke_async(addr.clone(), request_command, timeout_millis)
+            .invoke_async(Some(addr.clone()), request_command, timeout_millis)
             .await
         {
             Ok(response) => match ResponseCode::from(response.code()) {
@@ -197,7 +197,7 @@ impl RpcClientImpl {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
-            .invoke_async(addr.clone(), request_command, timeout_millis)
+            .invoke_async(Some(addr.clone()), request_command, timeout_millis)
             .await
         {
             Ok(response) => match ResponseCode::from(response.code()) {
@@ -233,7 +233,7 @@ impl RpcClientImpl {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
-            .invoke_async(addr.clone(), request_command, timeout_millis)
+            .invoke_async(Some(addr.clone()), request_command, timeout_millis)
             .await
         {
             Ok(response) => match ResponseCode::from(response.code()) {
@@ -269,7 +269,7 @@ impl RpcClientImpl {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
-            .invoke_async(addr.clone(), request_command, timeout_millis)
+            .invoke_async(Some(addr.clone()), request_command, timeout_millis)
             .await
         {
             Ok(response) => match ResponseCode::from(response.code()) {
@@ -309,7 +309,7 @@ impl RpcClientImpl {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
-            .invoke_async(addr.clone(), request_command, timeout_millis)
+            .invoke_async(Some(addr.clone()), request_command, timeout_millis)
             .await
         {
             Ok(response) => match ResponseCode::from(response.code()) {
@@ -345,7 +345,7 @@ impl RpcClientImpl {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
-            .invoke_async(addr.clone(), request_command, timeout_millis)
+            .invoke_async(Some(addr.clone()), request_command, timeout_millis)
             .await
         {
             Ok(response) => match ResponseCode::from(response.code()) {

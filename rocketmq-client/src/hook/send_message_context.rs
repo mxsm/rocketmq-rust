@@ -14,4 +14,31 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub struct SendMessageContext {}
+use std::collections::HashMap;
+use std::error::Error;
+use std::sync::Arc;
+
+use rocketmq_common::common::message::message_enum::MessageType;
+use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_common::common::message::message_single::Message;
+
+use crate::implementation::communication_mode::CommunicationMode;
+use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl;
+use crate::producer::send_result::SendResult;
+
+#[derive(Clone)]
+pub struct SendMessageContext {
+    pub producer_group: String,
+    pub message: Message,
+    pub mq: MessageQueue,
+    pub broker_addr: String,
+    pub born_host: String,
+    pub communication_mode: CommunicationMode,
+    pub send_result: Option<SendResult>,
+    pub exception: Option<Arc<Box<dyn Error>>>,
+    pub mq_trace_context: Option<Arc<Box<dyn std::any::Any>>>,
+    pub props: HashMap<String, String>,
+    pub producer: Arc<DefaultMQProducerImpl>,
+    pub msg_type: MessageType,
+    pub namespace: String,
+}

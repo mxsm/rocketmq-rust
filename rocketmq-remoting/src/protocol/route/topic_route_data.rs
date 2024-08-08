@@ -62,7 +62,7 @@ impl TopicRouteData {
         }
     }
 
-    fn from_existing(topic_route_data: &TopicRouteData) -> Self {
+    pub fn from_existing(topic_route_data: &TopicRouteData) -> Self {
         TopicRouteData {
             order_topic_conf: topic_route_data.order_topic_conf.clone(),
             queue_datas: topic_route_data.queue_datas.clone(),

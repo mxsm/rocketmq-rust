@@ -27,7 +27,7 @@ thread_local! {
 const POSITIVE_MASK: i32 = 0x7FFFFFFF;
 const MAX: i32 = i32::MAX;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ThreadLocalIndex;
 
 impl ThreadLocalIndex {

@@ -22,13 +22,17 @@ use serde::Serialize;
 
 use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::FromMap;
+use crate::rpc::topic_request_header::TopicRequestHeader;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct GetRouteInfoRequestHeader {
     pub topic: String,
 
     #[serde(rename = "acceptStandardJsonOnly")]
     pub accept_standard_json_only: Option<bool>,
+
+    #[serde(flatten)]
+    pub topic_request_header: Option<TopicRequestHeader>,
 }
 
 impl GetRouteInfoRequestHeader {
@@ -39,6 +43,7 @@ impl GetRouteInfoRequestHeader {
         GetRouteInfoRequestHeader {
             topic: topic.into(),
             accept_standard_json_only,
+            ..Default::default()
         }
     }
 }
@@ -55,6 +60,7 @@ impl FromMap for GetRouteInfoRequestHeader {
             accept_standard_json_only: map
                 .get(GetRouteInfoRequestHeader::ACCEPT_STANDARD_JSON_ONLY)
                 .and_then(|s| s.parse::<bool>().ok()),
+            topic_request_header: <TopicRequestHeader as FromMap>::from(map),
         })
     }
 }
@@ -77,6 +83,11 @@ impl CommandCustomHeader for GetRouteInfoRequestHeader {
                 );
             }
         }
+        if let Some(topic_request_header) = &self.topic_request_header {
+            if let Some(topic_request_header_map) = topic_request_header.to_map() {
+                map.extend(topic_request_header_map);
+            }
+        }
         Some(map)
     }
 }
@@ -93,6 +104,7 @@ mod tests {
         let request_header = GetRouteInfoRequestHeader {
             topic: "test".into(),
             accept_standard_json_only: None,
+            topic_request_header: None,
         };
 
         let result: Option<HashMap<String, String>> = request_header.to_map();

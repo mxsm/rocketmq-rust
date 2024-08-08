@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use rocketmq_remoting::error::Error as RemotingError;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -29,4 +30,7 @@ pub enum MQClientError {
 
     #[error("Client exception occurred: CODE:{0}, broker address:{1}, Message:{2}")]
     OffsetNotFoundException(i32, String, String),
+
+    #[error("{0}")]
+    RemotingException(#[from] RemotingError),
 }

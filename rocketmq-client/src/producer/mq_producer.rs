@@ -73,7 +73,7 @@ pub trait MQProducerLocal: Any {
     ///
     /// # Returns
     /// A `Result` containing the `SendResult`, or an error.
-    async fn send_with_timeout(&self, msg: &Message, timeout: u64) -> Result<SendResult>;
+    async fn send_with_timeout(&mut self, msg: Message, timeout: u64) -> Result<SendResult>;
 
     /// Sends a message with a callback.
     ///
@@ -83,7 +83,7 @@ pub trait MQProducerLocal: Any {
     /// # Arguments
     /// * `msg` - A reference to the `Message` to be sent.
     /// * `send_callback` - A callback function to be invoked with the result of the send operation.
-    async fn send_with_callback(&self, msg: &Message, send_callback: impl SendCallback + Send);
+    async fn send_with_callback(&self, msg: &Message, send_callback: impl SendCallback);
 
     /// Sends a message with a callback and a timeout.
     ///
@@ -97,7 +97,7 @@ pub trait MQProducerLocal: Any {
     async fn send_with_callback_timeout(
         &self,
         msg: &Message,
-        send_callback: impl SendCallback + Send,
+        send_callback: impl SendCallback,
         timeout: u64,
     );
 
@@ -156,7 +156,7 @@ pub trait MQProducerLocal: Any {
         &self,
         msg: &Message,
         mq: &MessageQueue,
-        send_callback: impl SendCallback + Send,
+        send_callback: impl SendCallback,
     );
 
     /// Sends a message to a specific queue with a callback and a timeout.
@@ -173,7 +173,7 @@ pub trait MQProducerLocal: Any {
         &self,
         msg: &Message,
         mq: &MessageQueue,
-        send_callback: impl SendCallback + Send,
+        send_callback: impl SendCallback,
         timeout: u64,
     );
 
@@ -244,7 +244,7 @@ pub trait MQProducerLocal: Any {
         msg: &Message,
         selector: impl MessageQueueSelector,
         arg: &str,
-        send_callback: impl SendCallback + Send,
+        send_callback: impl SendCallback,
     );
 
     /// Sends a message with a selector, a callback, and a timeout.
@@ -264,7 +264,7 @@ pub trait MQProducerLocal: Any {
         msg: &Message,
         selector: impl MessageQueueSelector,
         arg: &str,
-        send_callback: impl SendCallback + Send,
+        send_callback: impl SendCallback,
         timeout: u64,
     );
 
@@ -365,11 +365,7 @@ pub trait MQProducerLocal: Any {
     /// # Arguments
     /// * `msgs` - A slice of `Message` references to be sent.
     /// * `send_callback` - A callback function to be invoked with the result of the send operation.
-    async fn send_batch_with_callback(
-        &self,
-        msgs: &[Message],
-        send_callback: impl SendCallback + Send,
-    );
+    async fn send_batch_with_callback(&self, msgs: &[Message], send_callback: impl SendCallback);
 
     /// Sends a batch of messages with a callback and a timeout.
     ///
@@ -383,7 +379,7 @@ pub trait MQProducerLocal: Any {
     async fn send_batch_with_callback_timeout(
         &self,
         msgs: &[Message],
-        send_callback: impl SendCallback + Send,
+        send_callback: impl SendCallback,
         timeout: u64,
     );
 
@@ -400,7 +396,7 @@ pub trait MQProducerLocal: Any {
         &self,
         msgs: &[Message],
         mq: &MessageQueue,
-        send_callback: impl SendCallback + Send,
+        send_callback: impl SendCallback,
     );
 
     /// Sends a batch of messages to a specific queue with a callback and a timeout.
@@ -418,7 +414,7 @@ pub trait MQProducerLocal: Any {
         &self,
         msgs: &[Message],
         mq: &MessageQueue,
-        send_callback: impl SendCallback + Send,
+        send_callback: impl SendCallback,
         timeout: u64,
     );
 

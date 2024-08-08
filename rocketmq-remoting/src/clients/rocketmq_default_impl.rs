@@ -328,11 +328,11 @@ impl RemotingClient for RocketmqDefaultClient {
 
     async fn invoke_async(
         &self,
-        addr: String,
+        addr: Option<String>,
         request: RemotingCommand,
         timeout_millis: u64,
     ) -> Result<RemotingCommand> {
-        let client = self.get_and_create_client(Some(addr.as_str())).await;
+        let client = self.get_and_create_client(addr.as_deref()).await;
         match client {
             None => Err(Error::RemoteException("get client failed".to_string())),
             Some(mut client) => {

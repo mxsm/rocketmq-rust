@@ -17,6 +17,7 @@
 use rocketmq_client::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_client::producer::mq_producer::MQProducer;
 use rocketmq_client::Result;
+use rocketmq_common::common::message::message_single::Message;
 use rocketmq_rust::rocketmq;
 
 pub const MESSAGE_COUNT: usize = 1;
@@ -27,6 +28,9 @@ pub const TAG: &str = "TagA";
 
 #[rocketmq::main]
 pub async fn main() -> Result<()> {
+    //init logger
+    rocketmq_common::log::init_logger();
+
     // create a producer builder with default configuration
     let builder = DefaultMQProducer::builder();
 
@@ -36,6 +40,10 @@ pub async fn main() -> Result<()> {
         .build();
 
     producer.start().await?;
+
+    let message = Message::with_tags(TOPIC, TAG, "Hello RocketMQ".as_bytes());
+
+    producer.send_with_timeout(message, 2000).await?;
 
     producer.shutdown().await;
 

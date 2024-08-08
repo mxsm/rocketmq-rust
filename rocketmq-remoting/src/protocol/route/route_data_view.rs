@@ -106,14 +106,14 @@ impl BrokerData {
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct QueueData {
     #[serde(rename = "brokerName")]
-    broker_name: String,
+    pub broker_name: String,
     #[serde(rename = "readQueueNums")]
-    read_queue_nums: u32,
+    pub read_queue_nums: u32,
     #[serde(rename = "writeQueueNums")]
-    write_queue_nums: u32,
+    pub write_queue_nums: u32,
     pub perm: u32,
     #[serde(rename = "topicSysFlag")]
-    topic_sys_flag: u32,
+    pub topic_sys_flag: u32,
 }
 
 impl QueueData {

@@ -19,7 +19,7 @@ use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 
 use crate::common::thread_local_index::ThreadLocalIndex;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct TopicPublishInfo {
     pub order_topic: bool,
     pub have_topic_router_info: bool,
@@ -37,5 +37,9 @@ impl TopicPublishInfo {
             send_which_queue: ThreadLocalIndex,
             topic_route_data: None,
         }
+    }
+
+    pub fn ok(&self) -> bool {
+        !self.message_queue_list.is_empty()
     }
 }

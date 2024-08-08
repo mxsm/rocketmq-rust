@@ -20,14 +20,24 @@ use rocketmq_common::common::mix_all;
 use rocketmq_common::common::namesrv::default_top_addressing::DefaultTopAddressing;
 use rocketmq_common::common::namesrv::name_server_update_callback::NameServerUpdateCallback;
 use rocketmq_common::common::namesrv::top_addressing::TopAddressing;
+use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
+use rocketmq_remoting::code::request_code::RequestCode;
+use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::remoting::RemotingService;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_remoting::runtime::RPCHook;
+use tracing::warn;
 
 use crate::base::client_config::ClientConfig;
+use crate::error::MQClientError;
 use crate::implementation::client_remoting_processor::ClientRemotingProcessor;
+use crate::Result;
 
 pub struct MQClientAPIImpl {
     remoting_client: RocketmqDefaultClient,
@@ -100,5 +110,91 @@ impl MQClientAPIImpl {
         self.remoting_client
             .update_name_server_address_list(addr_vec)
             .await;
+    }
+
+    #[inline]
+    pub async fn get_default_topic_route_info_from_name_server(
+        &self,
+        timeout_millis: u64,
+    ) -> Result<Option<TopicRouteData>> {
+        self.get_topic_route_info_from_name_server_detail(
+            TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC,
+            timeout_millis,
+            false,
+        )
+            .await
+    }
+
+    #[inline]
+    pub async fn get_topic_route_info_from_name_server(
+        &self,
+        topic: &str,
+        timeout_millis: u64,
+    ) -> Result<Option<TopicRouteData>> {
+        self.get_topic_route_info_from_name_server_detail(topic, timeout_millis, true)
+            .await
+    }
+
+    #[inline]
+    pub async fn get_topic_route_info_from_name_server_detail(
+        &self,
+        topic: &str,
+        timeout_millis: u64,
+        allow_topic_not_exist: bool,
+    ) -> Result<Option<TopicRouteData>> {
+        let request_header = GetRouteInfoRequestHeader {
+            topic: topic.to_string(),
+            accept_standard_json_only: None,
+            topic_request_header: None,
+        };
+        let request = RemotingCommand::create_request_command(
+            RequestCode::GetRouteinfoByTopic,
+            request_header,
+        );
+        let response = self
+            .remoting_client
+            .invoke_async(None, request, timeout_millis)
+            .await;
+        match response {
+            Ok(result) => {
+                let code = result.code();
+                let response_code = ResponseCode::from(code);
+                match response_code {
+                    ResponseCode::Success => {
+                        let body = result.body();
+                        if body.is_some() && !body.as_ref().unwrap().is_empty() {
+                            let route_data =
+                                TopicRouteData::decode(body.as_ref().unwrap().as_ref());
+                            if let Ok(data) = route_data {
+                                return Ok(Some(data));
+                            }
+                        }
+                    }
+                    ResponseCode::TopicNotExist => {
+                        if allow_topic_not_exist {
+                            warn!(
+                                "get Topic [{}] RouteInfoFromNameServer is not exist value",
+                                topic
+                            );
+                        }
+                    }
+                    _ => {
+                        return Err(MQClientError::MQClientException(
+                            code,
+                            result.remark().cloned().unwrap_or_default(),
+                        ))
+                    }
+                }
+                return Err(MQClientError::MQClientException(
+                    code,
+                    result.remark().cloned().unwrap_or_default(),
+                ));
+            }
+            Err(err) => Err(MQClientError::RemotingException(err)),
+        }
+    }
+
+    pub fn get_name_server_address_list(&self) -> Vec<String> {
+        self.remoting_client.get_name_server_address_list()
     }
 }
