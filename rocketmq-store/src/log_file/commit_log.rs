@@ -1133,14 +1133,14 @@ impl CommitLog {
     }
 
     pub fn lock_time_mills(&self) -> i64 {
-        let mut diff = 0;
         let begin = self
             .begin_time_in_lock
             .load(std::sync::atomic::Ordering::Acquire);
         if begin > 0 {
-            diff = SystemClock::now() - (begin as u128);
+            (SystemClock::now() - (begin as u128)) as i64
+        } else {
+            0
         }
-        diff as i64
     }
 
     pub fn begin_time_in_lock(&self) -> &Arc<AtomicU64> {
