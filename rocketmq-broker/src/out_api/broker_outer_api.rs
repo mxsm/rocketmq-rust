@@ -227,7 +227,7 @@ impl BrokerOuterAPI {
         }
         match self
             .remoting_client
-            .invoke_async(namesrv_addr.clone(), request, timeout_mills)
+            .invoke_async(Some(namesrv_addr.clone()), request, timeout_mills)
             .await
         {
             Ok(response) => match From::from(response.code()) {
@@ -280,7 +280,7 @@ impl BrokerOuterAPI {
             let client = self.remoting_client.clone();
             let join_handle = tokio::spawn(async move {
                 client
-                    .invoke_async(addr, cloned_request, timeout_mills)
+                    .invoke_async(Some(addr), cloned_request, timeout_mills)
                     .await
             });
             handle_vec.push(join_handle);

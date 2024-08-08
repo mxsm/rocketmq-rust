@@ -42,6 +42,70 @@ pub struct Message {
 }
 
 impl Message {
+    pub fn new(topic: impl Into<String>, body: &[u8]) -> Self {
+        Self::with_details(topic, String::new(), String::new(), 0, body, true)
+    }
+
+    pub fn with_tags(topic: impl Into<String>, tags: impl Into<String>, body: &[u8]) -> Self {
+        Self::with_details(topic, tags, String::new(), 0, body, true)
+    }
+
+    pub fn with_keys(
+        topic: impl Into<String>,
+        tags: impl Into<String>,
+        keys: impl Into<String>,
+        body: &[u8],
+    ) -> Self {
+        Self::with_details(topic, tags, keys, 0, body, true)
+    }
+
+    pub fn with_details(
+        topic: impl Into<String>,
+        tags: impl Into<String>,
+        keys: impl Into<String>,
+        flag: i32,
+        body: &[u8],
+        wait_store_msg_ok: bool,
+    ) -> Self {
+        let topic = topic.into();
+        let tags = tags.into();
+        let keys = keys.into();
+        let mut message = Message {
+            topic,
+            flag,
+            body: Some(bytes::Bytes::copy_from_slice(body)),
+            ..Default::default()
+        };
+
+        if !tags.is_empty() {
+            message.set_tags(tags);
+        }
+
+        if !keys.is_empty() {
+            message.set_keys(keys);
+        }
+
+        message.set_wait_store_msg_ok(wait_store_msg_ok);
+        message
+    }
+
+    pub fn set_tags(&mut self, tags: String) {
+        self.properties
+            .insert(MessageConst::PROPERTY_TAGS.to_string(), tags);
+    }
+
+    pub fn set_keys(&mut self, keys: String) {
+        self.properties
+            .insert(MessageConst::PROPERTY_KEYS.to_string(), keys);
+    }
+
+    pub fn set_wait_store_msg_ok(&mut self, wait_store_msg_ok: bool) {
+        self.properties.insert(
+            MessageConst::PROPERTY_WAIT_STORE_MSG_OK.to_string(),
+            wait_store_msg_ok.to_string(),
+        );
+    }
+
     pub fn clear_property(&mut self, name: impl Into<String>) {
         self.properties.remove(name.into().as_str());
     }

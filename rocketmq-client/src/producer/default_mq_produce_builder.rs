@@ -101,8 +101,8 @@ impl DefaultMQProducerBuilder {
         self
     }
 
-    pub fn producer_group(mut self, producer_group: String) -> Self {
-        self.producer_group = Some(producer_group);
+    pub fn producer_group(mut self, producer_group: impl Into<String>) -> Self {
+        self.producer_group = Some(producer_group.into());
         self
     }
 

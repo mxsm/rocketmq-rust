@@ -14,9 +14,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use crate::producer::send_result::SendResult;
+pub struct ClientErrorCode;
 
-pub trait SendCallback: Send + Sync + 'static {
-    fn on_success(&self, send_result: &SendResult);
-    fn on_exception(&self, e: std::io::Error);
+impl ClientErrorCode {
+    pub const CONNECT_BROKER_EXCEPTION: i32 = 10001;
+    pub const ACCESS_BROKER_TIMEOUT: i32 = 10002;
+    pub const BROKER_NOT_EXIST_EXCEPTION: i32 = 10003;
+    pub const NO_NAME_SERVER_EXCEPTION: i32 = 10004;
+    pub const NOT_FOUND_TOPIC_EXCEPTION: i32 = 10005;
+    pub const REQUEST_TIMEOUT_EXCEPTION: i32 = 10006;
+    pub const CREATE_REPLY_MESSAGE_EXCEPTION: i32 = 10007;
 }

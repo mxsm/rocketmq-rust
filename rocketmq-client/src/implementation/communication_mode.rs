@@ -14,9 +14,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use crate::producer::send_result::SendResult;
-
-pub trait SendCallback: Send + Sync + 'static {
-    fn on_success(&self, send_result: &SendResult);
-    fn on_exception(&self, e: std::io::Error);
+/// Enum representing the different modes of communication.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CommunicationMode {
+    /// Synchronous communication mode.
+    Sync,
+    /// Asynchronous communication mode.
+    Async,
+    /// One-way communication mode.
+    Oneway,
 }

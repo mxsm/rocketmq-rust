@@ -14,4 +14,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub struct CheckForbiddenContext {}
+use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_common::common::message::message_single::Message;
+
+use crate::implementation::communication_mode::CommunicationMode;
+use crate::producer::send_result::SendResult;
+
+#[derive(Default)]
+pub struct CheckForbiddenContext {
+    pub name_srv_addr: Option<String>,
+    pub group: Option<String>,
+    pub message: Option<Message>,
+    pub mq: Option<MessageQueue>,
+    pub broker_addr: Option<String>,
+    pub communication_mode: Option<CommunicationMode>,
+    pub send_result: Option<SendResult>,
+    pub exception: Option<Box<dyn std::error::Error>>,
+    pub arg: Option<Box<dyn std::any::Any>>,
+    pub unit_mode: bool,
+}

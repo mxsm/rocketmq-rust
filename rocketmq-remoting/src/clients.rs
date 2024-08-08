@@ -67,7 +67,7 @@ pub trait RemotingClient: RemotingService {
     /// A `Result` containing either the response `RemotingCommand` or an `Error`.
     async fn invoke_async(
         &self,
-        addr: String,
+        addr: Option<String>,
         request: RemotingCommand,
         timeout_millis: u64,
     ) -> Result<RemotingCommand>;

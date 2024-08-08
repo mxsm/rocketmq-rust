@@ -14,4 +14,37 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub trait MQConsumerInner: Send + Sync + 'static {}
+use std::collections::HashSet;
+
+use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
+use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_remoting::protocol::body::consumer_running_info::ConsumerRunningInfo;
+use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
+use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
+use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+
+pub trait MQConsumerInner: Send + Sync + 'static {
+    fn group_name(&self) -> &str;
+
+    fn message_model(&self) -> MessageModel;
+
+    fn consume_type(&self) -> ConsumeType;
+
+    fn consume_from_where(&self) -> ConsumeFromWhere;
+
+    fn subscriptions(&self) -> &HashSet<SubscriptionData>;
+
+    fn do_rebalance(&self);
+
+    fn try_rebalance(&self) -> bool;
+
+    fn persist_consumer_offset(&self);
+
+    fn update_topic_subscribe_info(&mut self, topic: &str, info: &HashSet<MessageQueue>);
+
+    fn is_subscribe_topic_need_update(&self, topic: &str) -> bool;
+
+    fn is_unit_mode(&self) -> bool;
+
+    fn consumer_running_info(&self) -> ConsumerRunningInfo;
+}

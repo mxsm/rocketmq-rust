@@ -135,6 +135,7 @@ impl ProducerConfig {
         self.retry_times_when_send_async_failed
     }
 
+    #[inline]
     pub fn retry_another_broker_when_not_store_ok(&self) -> bool {
         self.retry_another_broker_when_not_store_ok
     }
@@ -517,18 +518,25 @@ impl MQProducer for DefaultMQProducer {
         todo!()
     }
 
-    async fn send_with_timeout(&self, msg: &Message, timeout: u64) -> Result<SendResult> {
-        todo!()
+    async fn send_with_timeout(&mut self, mut msg: Message, timeout: u64) -> Result<SendResult> {
+        msg.topic = self.with_namespace(msg.topic.as_str());
+        let result = self
+            .default_mqproducer_impl
+            .as_mut()
+            .unwrap()
+            .send(msg, timeout)
+            .await?;
+        Ok(result.unwrap())
     }
 
-    async fn send_with_callback(&self, msg: &Message, send_callback: impl SendCallback + Send) {
+    async fn send_with_callback(&self, msg: &Message, send_callback: impl SendCallback) {
         todo!()
     }
 
     async fn send_with_callback_timeout(
         &self,
         msg: &Message,
-        send_callback: impl SendCallback + Send,
+        send_callback: impl SendCallback,
         timeout: u64,
     ) {
         todo!()
@@ -555,7 +563,7 @@ impl MQProducer for DefaultMQProducer {
         &self,
         msg: &Message,
         mq: &MessageQueue,
-        send_callback: impl SendCallback + Send,
+        send_callback: impl SendCallback,
     ) {
         todo!()
     }
@@ -564,7 +572,7 @@ impl MQProducer for DefaultMQProducer {
         &self,
         msg: &Message,
         mq: &MessageQueue,
-        send_callback: impl SendCallback + Send,
+        send_callback: impl SendCallback,
         timeout: u64,
     ) {
         todo!()
@@ -598,7 +606,7 @@ impl MQProducer for DefaultMQProducer {
         msg: &Message,
         selector: impl MessageQueueSelector,
         arg: &str,
-        send_callback: impl SendCallback + Send,
+        send_callback: impl SendCallback,
     ) {
         todo!()
     }
@@ -608,7 +616,7 @@ impl MQProducer for DefaultMQProducer {
         msg: &Message,
         selector: impl MessageQueueSelector,
         arg: &str,
-        send_callback: impl SendCallback + Send,
+        send_callback: impl SendCallback,
         timeout: u64,
     ) {
         todo!()
@@ -652,18 +660,14 @@ impl MQProducer for DefaultMQProducer {
         todo!()
     }
 
-    async fn send_batch_with_callback(
-        &self,
-        msgs: &[Message],
-        send_callback: impl SendCallback + Send,
-    ) {
+    async fn send_batch_with_callback(&self, msgs: &[Message], send_callback: impl SendCallback) {
         todo!()
     }
 
     async fn send_batch_with_callback_timeout(
         &self,
         msgs: &[Message],
-        send_callback: impl SendCallback + Send,
+        send_callback: impl SendCallback,
         timeout: u64,
     ) {
         todo!()
@@ -673,7 +677,7 @@ impl MQProducer for DefaultMQProducer {
         &self,
         msgs: &[Message],
         mq: &MessageQueue,
-        send_callback: impl SendCallback + Send,
+        send_callback: impl SendCallback,
     ) {
         todo!()
     }
@@ -682,7 +686,7 @@ impl MQProducer for DefaultMQProducer {
         &self,
         msgs: &[Message],
         mq: &MessageQueue,
-        send_callback: impl SendCallback + Send,
+        send_callback: impl SendCallback,
         timeout: u64,
     ) {
         todo!()

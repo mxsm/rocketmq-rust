@@ -16,6 +16,7 @@
  */
 
 pub(crate) mod client_remoting_processor;
+pub(crate) mod communication_mode;
 pub(crate) mod mq_admin_impl;
 pub(crate) mod mq_client_api_impl;
 pub(crate) mod mq_client_manager;

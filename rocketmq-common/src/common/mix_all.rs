@@ -129,6 +129,19 @@ pub fn get_ws_addr() -> String {
     ws_addr
 }
 
+pub fn broker_vip_channel(is_change: bool, broker_addr: &str) -> String {
+    if is_change {
+        if let Some(split) = broker_addr.rfind(':') {
+            let ip = &broker_addr[..split];
+            if let Ok(port) = broker_addr[split + 1..].parse::<i32>() {
+                let broker_addr_new = format!("{}:{}", ip, port - 2);
+                return broker_addr_new;
+            }
+        }
+    }
+    broker_addr.to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
