@@ -196,6 +196,7 @@ impl MessageConst {
     pub const PROPERTY_CRC32: &'static str = "__CRC32#";
     pub const PROPERTY_DELAY_TIME_LEVEL: &'static str = "DELAY";
     pub const PROPERTY_DLQ_ORIGIN_MESSAGE_ID: &'static str = "DLQ_ORIGIN_MESSAGE_ID";
+    pub const PROPERTY_STARTDE_LIVER_TIME: &'static str = "__STARTDELIVERTIME";
     /**
      * properties for DLQ
      */

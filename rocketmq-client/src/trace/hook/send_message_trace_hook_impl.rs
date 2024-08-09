@@ -14,31 +14,32 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::sync::Arc;
+ use std::sync::Arc;
 
-use crate::hook::send_message_context::SendMessageContext;
-use crate::hook::send_message_hook::SendMessageHook;
-use crate::trace::trace_dispatcher::TraceDispatcher;
-
-pub struct SendMessageTraceHookImpl {
-    trace_dispatcher: Arc<Box<dyn TraceDispatcher + Send + Sync>>,
-}
-
-impl SendMessageTraceHookImpl {
-    pub fn new(trace_dispatcher: Arc<Box<dyn TraceDispatcher + Send + Sync>>) -> Self {
-        Self { trace_dispatcher }
-    }
-}
-impl SendMessageHook for SendMessageTraceHookImpl {
-    fn hook_name(&self) -> &str {
-        todo!()
-    }
-
-    fn send_message_before(&self, context: &SendMessageContext) {
-        todo!()
-    }
-
-    fn send_message_after(&self, context: &SendMessageContext) {
-        todo!()
-    }
-}
+ use crate::hook::send_message_context::SendMessageContext;
+ use crate::hook::send_message_hook::SendMessageHook;
+ use crate::trace::trace_dispatcher::TraceDispatcher;
+ 
+ pub struct SendMessageTraceHookImpl {
+     trace_dispatcher: Arc<Box<dyn TraceDispatcher + Send + Sync>>,
+ }
+ 
+ impl SendMessageTraceHookImpl {
+     pub fn new(trace_dispatcher: Arc<Box<dyn TraceDispatcher + Send + Sync>>) -> Self {
+         Self { trace_dispatcher }
+     }
+ }
+ impl SendMessageHook for SendMessageTraceHookImpl {
+     fn hook_name(&self) -> &str {
+         todo!()
+     }
+ 
+     fn send_message_before(&self, context: Option<&SendMessageContext<'_>>) {
+         todo!()
+     }
+ 
+     fn send_message_after(&self, context: Option<&SendMessageContext<'_>>) {
+         todo!()
+     }
+ }
+ 

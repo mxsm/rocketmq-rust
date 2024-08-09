@@ -14,12 +14,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use crate::hook::send_message_context::SendMessageContext;
+ use crate::hook::send_message_context::SendMessageContext;
 
-pub trait SendMessageHook: Send + Sync {
-    fn hook_name(&self) -> &str;
-
-    fn send_message_before(&self, context: &SendMessageContext);
-
-    fn send_message_after(&self, context: &SendMessageContext);
-}
+ pub trait SendMessageHook: Send + Sync {
+     fn hook_name(&self) -> &str;
+ 
+     fn send_message_before(&self, context: Option<&SendMessageContext<'_>>);
+ 
+     fn send_message_after(&self, context: Option<&SendMessageContext<'_>>);
+ }
+ 

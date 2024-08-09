@@ -14,12 +14,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
- use crate::hook::check_forbidden_context::CheckForbiddenContext;
- use crate::Result;
- 
- pub trait CheckForbiddenHook: Send + Sync {
-     fn hook_name(&self) -> &str;
- 
-     fn check_forbidden(&self, context: &CheckForbiddenContext<'_>) -> Result<()>;
+
+ pub struct StringUtils;
+
+ impl StringUtils {
+     #[inline]
+     pub fn is_not_empty(s: Option<&str>) -> bool {
+         s.map_or(false, |s| !s.is_empty())
+     }
  }
  

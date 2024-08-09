@@ -15,9 +15,10 @@
  * limitations under the License.
  */
 /// Enum representing the different modes of communication.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum CommunicationMode {
     /// Synchronous communication mode.
+    #[default]
     Sync,
     /// Asynchronous communication mode.
     Async,
