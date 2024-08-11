@@ -14,18 +14,31 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
+use std::time::Instant;
 
+use lazy_static::lazy_static;
+use rocketmq_common::common::message::message_batch::MessageBatch;
+use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
+use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_common::common::message::message_single::Message;
+use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::namesrv::default_top_addressing::DefaultTopAddressing;
 use rocketmq_common::common::namesrv::name_server_update_callback::NameServerUpdateCallback;
 use rocketmq_common::common::namesrv::top_addressing::TopAddressing;
 use rocketmq_common::common::topic::TopicValidator;
+use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
+use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
+use rocketmq_remoting::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
+use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::protocol::RemotingDeserializable;
@@ -36,8 +49,23 @@ use tracing::warn;
 
 use crate::base::client_config::ClientConfig;
 use crate::error::MQClientError;
+use crate::factory::mq_client_instance::MQClientInstance;
+use crate::hook::send_message_context::SendMessageContext;
 use crate::implementation::client_remoting_processor::ClientRemotingProcessor;
+use crate::implementation::communication_mode::CommunicationMode;
+use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl;
+use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
+use crate::producer::send_callback::SendCallback;
+use crate::producer::send_result::SendResult;
+use crate::producer::send_status::SendStatus;
 use crate::Result;
+
+lazy_static! {
+    static ref sendSmartMsg: bool = std::env::var("org.apache.rocketmq.client.sendSmartMsg")
+        .unwrap_or("false".to_string())
+        .parse()
+        .unwrap_or(false);
+}
 
 pub struct MQClientAPIImpl {
     remoting_client: RocketmqDefaultClient,
@@ -196,5 +224,355 @@ impl MQClientAPIImpl {
 
     pub fn get_name_server_address_list(&self) -> Vec<String> {
         self.remoting_client.get_name_server_address_list()
+    }
+
+    pub async fn send_message(
+        &mut self,
+        addr: &str,
+        broker_name: &str,
+        msg: &Message,
+        request_header: SendMessageRequestHeader,
+        timeout_millis: u64,
+        communication_mode: CommunicationMode,
+        send_callback: Option<Arc<Box<dyn SendCallback>>>,
+        topic_publish_info: Option<&TopicPublishInfo>,
+        instance: Option<ArcRefCellWrapper<MQClientInstance>>,
+        retry_times_when_send_failed: u32,
+        context: &mut Option<SendMessageContext<'_>>,
+        producer: &DefaultMQProducerImpl,
+    ) -> Result<Option<SendResult>> {
+        let begin_start_time = Instant::now();
+        let msg_type = msg.get_property(MessageConst::PROPERTY_MESSAGE_TYPE);
+        let is_reply = msg_type.is_some() && msg_type.unwrap() == mix_all::REPLY_MESSAGE_FLAG;
+        let mut request = if is_reply {
+            if *sendSmartMsg {
+                let request_header_v2 =
+                    SendMessageRequestHeaderV2::create_send_message_request_header_v2(
+                        &request_header,
+                    );
+                RemotingCommand::create_request_command(
+                    RequestCode::SendReplyMessageV2,
+                    request_header_v2,
+                )
+            } else {
+                RemotingCommand::create_request_command(
+                    RequestCode::SendReplyMessage,
+                    request_header,
+                )
+            }
+        } else {
+            let is_batch_message = msg.as_any().downcast_ref::<MessageBatch>().is_some();
+            if *sendSmartMsg || is_batch_message {
+                let request_header_v2 =
+                    SendMessageRequestHeaderV2::create_send_message_request_header_v2(
+                        &request_header,
+                    );
+                let request_code = if is_batch_message {
+                    RequestCode::SendBatchMessage
+                } else {
+                    RequestCode::SendMessageV2
+                };
+                RemotingCommand::create_request_command(request_code, request_header_v2)
+            } else {
+                RemotingCommand::create_request_command(RequestCode::SendMessage, request_header)
+            }
+        };
+        request.set_body_mut_ref(msg.body().clone());
+
+        match communication_mode {
+            CommunicationMode::Sync => {
+                let cost_time_sync = (Instant::now() - begin_start_time).as_millis() as u64;
+                if cost_time_sync > timeout_millis {
+                    return Err(MQClientError::RemotingTooMuchRequestException(
+                        "sendMessage call timeout".to_string(),
+                    ));
+                }
+            }
+            CommunicationMode::Async => {
+                let times = AtomicU32::new(0);
+                let cost_time_sync = (Instant::now() - begin_start_time).as_millis() as u64;
+                if cost_time_sync > timeout_millis {
+                    return Err(MQClientError::RemotingTooMuchRequestException(
+                        "sendMessage call timeout".to_string(),
+                    ));
+                }
+                Box::pin(self.send_message_async(
+                    addr,
+                    broker_name,
+                    msg,
+                    timeout_millis,
+                    request,
+                    send_callback,
+                    topic_publish_info,
+                    instance,
+                    retry_times_when_send_failed,
+                    &times,
+                    context,
+                    producer,
+                ))
+                .await;
+                return Ok(None);
+            }
+            CommunicationMode::Oneway => {
+                self.remoting_client
+                    .invoke_oneway(addr.to_string(), request, timeout_millis)
+                    .await;
+                return Ok(None);
+            }
+        }
+
+        unimplemented!()
+    }
+
+    pub async fn send_message_simple(
+        &mut self,
+        addr: &str,
+        broker_name: &str,
+        msg: &Message,
+        request_header: SendMessageRequestHeader,
+        timeout_millis: u64,
+        communication_mode: CommunicationMode,
+        context: &mut Option<SendMessageContext<'_>>,
+        producer: &DefaultMQProducerImpl,
+    ) -> Result<Option<SendResult>> {
+        self.send_message(
+            addr,
+            broker_name,
+            msg,
+            request_header,
+            timeout_millis,
+            communication_mode,
+            None,
+            None,
+            None,
+            0,
+            context,
+            producer,
+        )
+        .await
+    }
+
+    async fn send_message_sync(
+        &mut self,
+        addr: &str,
+        broker_name: &str,
+        msg: &Message,
+        timeout_millis: u64,
+        request: RemotingCommand,
+    ) -> Result<SendResult> {
+        let response = self
+            .remoting_client
+            .invoke_async(Some(addr.to_string()), request, timeout_millis)
+            .await?;
+        self.process_send_response(broker_name, msg, &response, addr)
+    }
+
+    async fn send_message_async(
+        &mut self,
+        addr: &str,
+        broker_name: &str,
+        msg: &Message,
+        timeout_millis: u64,
+        request: RemotingCommand,
+        send_callback: Option<Arc<Box<dyn SendCallback>>>,
+        topic_publish_info: Option<&TopicPublishInfo>,
+        instance: Option<ArcRefCellWrapper<MQClientInstance>>,
+        retry_times_when_send_failed: u32,
+        times: &AtomicU32,
+        context: &mut Option<SendMessageContext<'_>>,
+        producer: &DefaultMQProducerImpl,
+    ) {
+        let begin_start_time = Instant::now();
+        let result = self
+            .remoting_client
+            .invoke_async(Some(addr.to_string()), request.clone(), timeout_millis)
+            .await;
+        match result {
+            Ok(response) => {
+                let cost_time = (Instant::now() - begin_start_time).as_millis() as u64;
+                if send_callback.is_none() {
+                    let send_result = self.process_send_response(broker_name, msg, &response, addr);
+                    if let Ok(result) = send_result {
+                        if context.is_some() {
+                            context.as_mut().unwrap().send_result = Some(result.clone());
+                            producer.execute_send_message_hook_after(context);
+                        }
+                    }
+                    let duration = (Instant::now() - begin_start_time).as_millis() as u64;
+                    producer.update_fault_item(broker_name, duration, false, true);
+                    return;
+                }
+                let send_result = self.process_send_response(broker_name, msg, &response, addr);
+                match send_result {
+                    Ok(result) => {
+                        if context.is_some() {
+                            context.as_mut().unwrap().send_result = Some(result.clone());
+                            producer.execute_send_message_hook_after(context);
+                        }
+                        let duration = (Instant::now() - begin_start_time).as_millis() as u64;
+                        send_callback.as_ref().unwrap().on_success(&result);
+                        producer.update_fault_item(broker_name, duration, false, true);
+                    }
+                    Err(err) => {
+                        let duration = (Instant::now() - begin_start_time).as_millis() as u64;
+                        producer.update_fault_item(broker_name, duration, true, true);
+                        Box::pin(self.on_exception_impl(
+                            broker_name,
+                            msg,
+                            duration,
+                            request,
+                            send_callback,
+                            topic_publish_info,
+                            instance,
+                            retry_times_when_send_failed,
+                            times,
+                            err,
+                            context,
+                            false,
+                            producer,
+                        ))
+                        .await;
+                    }
+                }
+            }
+            Err(err) => {
+                unimplemented!()
+            }
+        }
+    }
+
+    fn process_send_response(
+        &mut self,
+        broker_name: &str,
+        msg: &Message,
+        response: &RemotingCommand,
+        addr: &str,
+    ) -> Result<SendResult> {
+        let response_code = ResponseCode::from(response.code());
+        let send_status = match response_code {
+            ResponseCode::FlushDiskTimeout => SendStatus::FlushDiskTimeout,
+            ResponseCode::FlushSlaveTimeout => SendStatus::FlushSlaveTimeout,
+            ResponseCode::SlaveNotAvailable => SendStatus::SlaveNotAvailable,
+            ResponseCode::Success => SendStatus::SendOk,
+            _ => {
+                return Err(MQClientError::MQBrokerException(
+                    response.code(),
+                    response.remark().map_or("".to_string(), |s| s.to_string()),
+                    addr.to_string(),
+                ))
+            }
+        };
+        let response_header = response
+            .decode_command_custom_header_fast::<SendMessageResponseHeader>()
+            .unwrap();
+        let mut topic = msg.topic.as_str().to_string();
+        let namespace = self.client_config.get_namespace();
+        if namespace.is_some() && !namespace.as_ref().unwrap().is_empty() {
+            topic = NamespaceUtil::without_namespace_with_namespace(
+                topic.as_str(),
+                namespace.as_ref().unwrap().as_str(),
+            );
+        }
+        let message_queue =
+            MessageQueue::from_parts(topic.as_str(), broker_name, response_header.queue_id());
+        let mut uniq_msg_id = MessageClientIDSetter::get_uniq_id(msg);
+        let msgs = msg.as_any().downcast_ref::<MessageBatch>();
+        if msgs.is_some() && response_header.batch_uniq_id().is_none() {
+            let mut sb = String::new();
+            for msg in msgs.unwrap().messages.iter() {
+                sb.push_str(if sb.is_empty() { "" } else { "," });
+                sb.push_str(MessageClientIDSetter::get_uniq_id(msg).unwrap().as_str());
+            }
+            uniq_msg_id = Some(sb);
+        }
+
+        let region_id = response
+            .ext_fields()
+            .unwrap()
+            .get(MessageConst::PROPERTY_MSG_REGION)
+            .map_or(mix_all::DEFAULT_TRACE_REGION_ID.to_string(), |s| {
+                s.to_string()
+            });
+        let trace_on = response
+            .ext_fields()
+            .unwrap()
+            .get(MessageConst::PROPERTY_TRACE_SWITCH)
+            .map_or(false, |s| s.parse().unwrap_or(false));
+        let send_result = SendResult {
+            send_status,
+            msg_id: uniq_msg_id,
+            offset_msg_id: Some(response_header.msg_id().to_string()),
+            message_queue: Some(message_queue),
+            queue_offset: response_header.queue_offset() as u64,
+            transaction_id: response_header.transaction_id().map(|s| s.to_string()),
+            region_id: Some(region_id),
+            trace_on,
+            ..Default::default()
+        };
+
+        Ok(send_result)
+    }
+
+    async fn on_exception_impl(
+        &mut self,
+        broker_name: &str,
+        msg: &Message,
+        timeout_millis: u64,
+        mut request: RemotingCommand,
+        send_callback: Option<Arc<Box<dyn SendCallback>>>,
+        topic_publish_info: Option<&TopicPublishInfo>,
+        instance: Option<ArcRefCellWrapper<MQClientInstance>>,
+        times_total: u32,
+        cur_times: &AtomicU32,
+        e: MQClientError,
+        context: &mut Option<SendMessageContext<'_>>,
+        need_retry: bool,
+        producer: &DefaultMQProducerImpl,
+    ) {
+        let tmp = cur_times.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        if need_retry && tmp < times_total {
+            let mut retry_broker_name = broker_name.to_string();
+            if let Some(topic_publish_info) = topic_publish_info {
+                let mq_chosen =
+                    producer.select_one_message_queue(topic_publish_info, Some(broker_name), false);
+                retry_broker_name = instance
+                    .as_ref()
+                    .unwrap()
+                    .get_broker_name_from_message_queue(mq_chosen.as_ref().unwrap())
+                    .await;
+            }
+            let addr = instance
+                .as_ref()
+                .unwrap()
+                .find_broker_address_in_publish(retry_broker_name.as_str())
+                .await
+                .unwrap();
+            warn!(
+                "async send msg by retry {} times. topic={}, brokerAddr={}, brokerName={}",
+                tmp,
+                msg.topic(),
+                addr,
+                retry_broker_name
+            );
+            request.set_opaque_mut(RemotingCommand::create_new_request_id());
+            Box::pin(self.send_message_async(
+                addr.as_str(),
+                retry_broker_name.as_str(),
+                msg,
+                timeout_millis,
+                request,
+                send_callback,
+                topic_publish_info,
+                instance,
+                times_total,
+                cur_times,
+                context,
+                producer,
+            ))
+            .await;
+        } else if context.is_some() {
+            context.as_mut().unwrap().exception = Some(Arc::new(Box::new(e)));
+            producer.execute_send_message_hook_after(context);
+        }
     }
 }

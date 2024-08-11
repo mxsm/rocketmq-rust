@@ -21,11 +21,11 @@ use crate::implementation::communication_mode::CommunicationMode;
 use crate::producer::send_result::SendResult;
 
 #[derive(Default)]
-pub struct CheckForbiddenContext {
+pub struct CheckForbiddenContext<'a> {
     pub name_srv_addr: Option<String>,
     pub group: Option<String>,
-    pub message: Option<Message>,
-    pub mq: Option<MessageQueue>,
+    pub message: Option<&'a Message>,
+    pub mq: Option<&'a MessageQueue>,
     pub broker_addr: Option<String>,
     pub communication_mode: Option<CommunicationMode>,
     pub send_result: Option<SendResult>,

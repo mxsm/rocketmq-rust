@@ -30,6 +30,7 @@ use parking_lot::Mutex;
 use crate::common::hasher::string_hasher::JavaStringHasher;
 use crate::common::message::message_single::Message;
 use crate::common::message::MessageConst;
+use crate::common::message::MessageTrait;
 use crate::utils::util_all;
 use crate::TimeUtils::get_current_millis;
 use crate::UtilAll::bytes_to_string;
@@ -106,6 +107,19 @@ impl MessageClientIDSetter {
         let counter_val = COUNTER.fetch_add(1, Ordering::SeqCst) as i16;
         write_short(&mut sb, pos + 8, counter_val);
         sb.into_iter().collect()
+    }
+
+    pub fn set_uniq_id(message: &mut Message) {
+        let uniq_id = Self::create_uniq_id();
+        if message
+            .get_property(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX)
+            .is_none()
+        {
+            message.put_property(
+                MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
+                uniq_id,
+            );
+        }
     }
 }
 

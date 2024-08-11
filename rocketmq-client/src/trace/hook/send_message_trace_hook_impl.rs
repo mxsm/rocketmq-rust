@@ -34,11 +34,11 @@ impl SendMessageHook for SendMessageTraceHookImpl {
         todo!()
     }
 
-    fn send_message_before(&self, context: &SendMessageContext) {
+    fn send_message_before(&self, context: &Option<SendMessageContext<'_>>) {
         todo!()
     }
 
-    fn send_message_after(&self, context: &SendMessageContext) {
+    fn send_message_after(&self, context: &Option<SendMessageContext<'_>>) {
         todo!()
     }
 }

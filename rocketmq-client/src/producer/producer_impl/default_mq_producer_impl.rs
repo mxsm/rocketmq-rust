@@ -23,29 +23,44 @@ use std::time::Instant;
 use rand::thread_rng;
 use rand::Rng;
 use rocketmq_common::common::base::service_state::ServiceState;
+use rocketmq_common::common::message::message_batch::MessageBatch;
+use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
+use rocketmq_common::common::message::message_enum::MessageType;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_single::Message;
 use rocketmq_common::common::message::message_single::MessageExt;
+use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::CLIENT_INNER_PRODUCER_GROUP;
 use rocketmq_common::common::mix_all::DEFAULT_PRODUCER_GROUP;
+use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::common::FAQUrl;
 use rocketmq_common::ArcRefCellWrapper;
+use rocketmq_common::MessageAccessor::MessageAccessor;
+use rocketmq_common::MessageDecoder;
+use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
+use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
+use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
+use rocketmq_remoting::rpc::topic_request_header::TopicRequestHeader;
 use rocketmq_remoting::runtime::RPCHook;
 use tokio::runtime::Handle;
 use tokio::sync::RwLock;
 use tokio::sync::Semaphore;
+use tokio_util::bytes::Bytes;
 use tracing::warn;
 
 use crate::base::client_config::ClientConfig;
 use crate::base::validators::Validators;
 use crate::common::client_error_code::ClientErrorCode;
 use crate::error::MQClientError;
+use crate::error::MQClientError::RemotingTooMuchRequestException;
 use crate::factory::mq_client_instance::MQClientInstance;
+use crate::hook::check_forbidden_context::CheckForbiddenContext;
 use crate::hook::check_forbidden_hook::CheckForbiddenHook;
 use crate::hook::end_transaction_hook::EndTransactionHook;
+use crate::hook::send_message_context::SendMessageContext;
 use crate::hook::send_message_hook::SendMessageHook;
 use crate::implementation::communication_mode::CommunicationMode;
 use crate::implementation::mq_client_manager::MQClientManager;
@@ -67,8 +82,8 @@ pub struct DefaultMQProducerImpl {
     producer_config: Arc<ProducerConfig>,
     topic_publish_info_table: Arc<RwLock<HashMap<String /* topic */, TopicPublishInfo>>>,
     send_message_hook_list: ArcRefCellWrapper<Vec<Box<dyn SendMessageHook>>>,
-    end_transaction_hook_list: ArcRefCellWrapper<Vec<Box<dyn EndTransactionHook>>>,
-    check_forbidden_hook_list: ArcRefCellWrapper<Vec<Box<dyn CheckForbiddenHook>>>,
+    end_transaction_hook_list: Vec<Arc<Box<dyn EndTransactionHook>>>,
+    check_forbidden_hook_list: Vec<Arc<Box<dyn CheckForbiddenHook>>>,
     rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
     service_state: ServiceState,
     client_instance: Option<ArcRefCellWrapper<MQClientInstance>>,
@@ -98,8 +113,8 @@ impl DefaultMQProducerImpl {
             producer_config: Arc::new(producer_config),
             topic_publish_info_table,
             send_message_hook_list: ArcRefCellWrapper::new(vec![]),
-            end_transaction_hook_list: ArcRefCellWrapper::new(vec![]),
-            check_forbidden_hook_list: ArcRefCellWrapper::new(vec![]),
+            end_transaction_hook_list: vec![],
+            check_forbidden_hook_list: vec![],
             rpc_hook: None,
             service_state: ServiceState::CreateJust,
             client_instance: None,
@@ -177,7 +192,7 @@ impl DefaultMQProducerImpl {
                         //send message to broker
                         let result_inner = self
                             .send_kernel_impl(
-                                &msg,
+                                &mut msg,
                                 mq.as_ref().unwrap(),
                                 communication_mode,
                                 send_callback.clone(),
@@ -188,7 +203,7 @@ impl DefaultMQProducerImpl {
 
                         match result_inner {
                             Ok(result) => {
-                                send_result = Some(result);
+                                send_result = result;
                                 match communication_mode {
                                     CommunicationMode::Sync => {
                                         if let Some(ref result) = send_result {
@@ -214,7 +229,7 @@ impl DefaultMQProducerImpl {
                                 MQClientError::MQClientException(_, _) => {
                                     end_timestamp = Instant::now();
                                     let elapsed =
-                                        (end_timestamp - begin_timestamp_prev).as_millis() as i64;
+                                        (end_timestamp - begin_timestamp_prev).as_millis() as u64;
                                     self.update_fault_item(
                                         mq.as_ref().unwrap().get_broker_name(),
                                         elapsed,
@@ -236,7 +251,7 @@ impl DefaultMQProducerImpl {
                                 MQClientError::MQBrokerException(code, _, _) => {
                                     end_timestamp = Instant::now();
                                     let elapsed =
-                                        (end_timestamp - begin_timestamp_prev).as_millis() as i64;
+                                        (end_timestamp - begin_timestamp_prev).as_millis() as u64;
                                     self.update_fault_item(
                                         mq.as_ref().unwrap().get_broker_name(),
                                         elapsed,
@@ -253,16 +268,10 @@ impl DefaultMQProducerImpl {
                                         return Err(err);
                                     }
                                 }
-                                MQClientError::RequestTimeoutException(_, _) => {
-                                    return Err(err);
-                                }
-                                MQClientError::OffsetNotFoundException(_, _, _) => {
-                                    return Err(err);
-                                }
                                 MQClientError::RemotingException(_) => {
                                     end_timestamp = Instant::now();
                                     let elapsed =
-                                        (end_timestamp - begin_timestamp_prev).as_millis() as i64;
+                                        (end_timestamp - begin_timestamp_prev).as_millis() as u64;
                                     if self.mq_fault_strategy.is_start_detector_enable() {
                                         self.update_fault_item(
                                             mq.as_ref().unwrap().get_broker_name(),
@@ -280,6 +289,10 @@ impl DefaultMQProducerImpl {
                                     }
                                     exception = Some(err);
                                     continue;
+                                }
+
+                                _ => {
+                                    return Err(err);
                                 }
                             },
                         }
@@ -303,7 +316,7 @@ impl DefaultMQProducerImpl {
     pub fn update_fault_item(
         &self,
         broker_name: &str,
-        current_latency: i64,
+        current_latency: u64,
         isolation: bool,
         reachable: bool,
     ) {
@@ -316,13 +329,13 @@ impl DefaultMQProducerImpl {
 
     async fn send_kernel_impl(
         &mut self,
-        msg: &Message,
+        msg: &mut Message,
         mq: &MessageQueue,
         communication_mode: CommunicationMode,
         send_callback: Option<Arc<Box<dyn SendCallback>>>,
         topic_publish_info: &TopicPublishInfo,
         timeout: u64,
-    ) -> Result<SendResult> {
+    ) -> Result<Option<SendResult>> {
         let begin_start_time = Instant::now();
         let mut broker_name = self
             .client_instance
@@ -364,17 +377,249 @@ impl DefaultMQProducerImpl {
             broker_addr.as_str(),
         );
         let prev_body = msg.body.clone();
+        if msg.as_any().downcast_ref::<MessageBatch>().is_none() {
+            MessageClientIDSetter::set_uniq_id(msg);
+        }
+        let mut topic_with_namespace = false;
+        if self.client_config.get_namespace().is_some() {
+            msg.set_instance_id(self.client_config.get_namespace().unwrap().as_str());
+            topic_with_namespace = true;
+        }
+        let mut sys_flag = 0i32;
+        let mut msg_body_compressed = false;
+        if self.try_to_compress_message(msg) {
+            sys_flag |= MessageSysFlag::COMPRESSED_FLAG;
+            sys_flag |= self.producer_config.compress_type().get_compression_flag();
+            msg_body_compressed = true;
+        }
+        let tran_msg = msg.get_property(MessageConst::PROPERTY_TRANSACTION_PREPARED);
+        if let Some(value) = tran_msg {
+            let value_ = value.parse().unwrap_or(false);
+            sys_flag |= MessageSysFlag::TRANSACTION_PREPARED_TYPE;
+        }
 
-        unimplemented!()
+        if self.has_check_forbidden_hook() {
+            let check_forbidden_context = CheckForbiddenContext {
+                name_srv_addr: self.client_config.get_namesrv_addr(),
+                group: Some(self.producer_config.producer_group().to_string()),
+                communication_mode: Some(communication_mode),
+                broker_addr: Some(broker_addr.clone()),
+                message: Some(msg),
+                mq: Some(mq),
+                unit_mode: self.is_unit_mode(),
+                ..Default::default()
+            };
+            self.execute_check_forbidden_hook(&check_forbidden_context)?;
+        }
+
+        let mut send_message_context = if self.has_send_message_hook() {
+            let namespace = self.client_config.get_namespace();
+            let producer_group = self.producer_config.producer_group().to_string();
+            let born_host = self.client_config.client_ip.clone();
+            let is_trans = msg.get_property(MessageConst::PROPERTY_TRANSACTION_PREPARED);
+            let msg_type_flag = msg
+                .get_property(MessageConst::PROPERTY_STARTDE_LIVER_TIME)
+                .is_some()
+                || msg
+                    .get_property(MessageConst::PROPERTY_DELAY_TIME_LEVEL)
+                    .is_some();
+            let mut send_message_context = SendMessageContext {
+                producer: Some(self.clone()),
+                producer_group: Some(producer_group),
+                communication_mode: Some(communication_mode),
+                born_host,
+                broker_addr: Some(broker_addr.clone()),
+                message: Some(msg.clone()),
+                mq: Some(mq),
+                namespace,
+                ..Default::default()
+            };
+
+            if let Some(value) = is_trans {
+                let value_ = value.parse().unwrap_or(false);
+                if value_ {
+                    send_message_context.msg_type = Some(MessageType::TransMsgHalf);
+                }
+            }
+            if msg_type_flag {
+                send_message_context.msg_type = Some(MessageType::DelayMsg);
+            }
+            let send_message_context = Some(send_message_context);
+            self.execute_send_message_hook_before(&send_message_context);
+            send_message_context
+        } else {
+            None
+        };
+
+        //build send message request header
+        let mut request_header = SendMessageRequestHeader {
+            producer_group: self.producer_config.producer_group().to_string(),
+            topic: msg.topic().to_string(),
+            default_topic: self.producer_config.create_topic_key().to_string(),
+            default_topic_queue_nums: self.producer_config.default_topic_queue_nums() as i32,
+            queue_id: Some(mq.get_queue_id()),
+            sys_flag,
+            born_timestamp: get_current_millis() as i64,
+            flag: msg.flag,
+            properties: Some(MessageDecoder::message_properties_to_string(
+                &msg.properties,
+            )),
+            reconsume_times: Some(0),
+            unit_mode: Some(self.is_unit_mode()),
+            batch: Some(msg.as_any().downcast_ref::<MessageBatch>().is_some()),
+            topic_request_header: Some(TopicRequestHeader {
+                rpc_request_header: Some(RpcRequestHeader {
+                    broker_name: Some(broker_name.clone()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        if request_header
+            .topic
+            .starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX)
+        {
+            let reconsume_times = MessageAccessor::get_reconsume_time(msg);
+            if let Some(value) = reconsume_times {
+                request_header.reconsume_times = value.parse::<i32>().map_or(Some(0), Some);
+                MessageAccessor::clear_property(msg, MessageConst::PROPERTY_MAX_RECONSUME_TIMES);
+            }
+
+            let max_reconsume_times = MessageAccessor::get_max_reconsume_times(msg);
+            if let Some(value) = max_reconsume_times {
+                request_header.max_reconsume_times = value.parse::<i32>().map_or(Some(0), Some);
+                MessageAccessor::clear_property(msg, MessageConst::PROPERTY_MAX_RECONSUME_TIMES);
+            }
+        }
+
+        let send_result = match communication_mode {
+            CommunicationMode::Async => {
+                /*let tmp_message = msg.clone();
+                let mut message_cloned = false;
+                if msg_body_compressed {
+                    message_cloned = true;
+                    msg.body = prev_body;
+                }
+
+                if topic_with_namespace {}*/
+                let cost_time_sync = (Instant::now() - begin_start_time).as_millis() as u64;
+                self.client_instance
+                    .as_ref()
+                    .unwrap()
+                    .get_mq_client_api_impl()
+                    .send_message(
+                        broker_addr.as_str(),
+                        broker_name.as_str(),
+                        msg,
+                        request_header,
+                        timeout - cost_time_sync,
+                        communication_mode,
+                        send_callback,
+                        Some(topic_publish_info),
+                        self.client_instance.clone(),
+                        self.producer_config.retry_times_when_send_async_failed(),
+                        &mut send_message_context,
+                        self,
+                    )
+                    .await?
+            }
+            CommunicationMode::Oneway | CommunicationMode::Sync => {
+                let cost_time_sync = (Instant::now() - begin_start_time).as_millis() as u64;
+                if timeout < cost_time_sync {
+                    return Err(RemotingTooMuchRequestException(
+                        "sendKernelImpl call timeout".to_string(),
+                    ));
+                }
+                self.client_instance
+                    .as_ref()
+                    .unwrap()
+                    .get_mq_client_api_impl()
+                    .send_message_simple(
+                        broker_addr.as_str(),
+                        broker_name.as_str(),
+                        msg,
+                        request_header,
+                        timeout - cost_time_sync,
+                        communication_mode,
+                        &mut send_message_context,
+                        self,
+                    )
+                    .await?
+            }
+        };
+
+        if self.has_send_message_hook() {
+            self.execute_send_message_hook_after(&send_message_context);
+        }
+        Ok(send_result)
     }
 
+    pub fn execute_send_message_hook_before(&mut self, context: &Option<SendMessageContext<'_>>) {
+        if self.has_send_message_hook() {
+            for hook in self.send_message_hook_list.iter() {
+                hook.send_message_before(context);
+            }
+        }
+    }
+
+    pub fn execute_send_message_hook_after(&self, context: &Option<SendMessageContext<'_>>) {
+        if self.has_send_message_hook() {
+            for hook in self.send_message_hook_list.iter() {
+                hook.send_message_after(context);
+            }
+        }
+    }
+
+    pub fn has_send_message_hook(&self) -> bool {
+        !self.send_message_hook_list.is_empty()
+    }
+
+    #[inline]
+    pub fn has_check_forbidden_hook(&self) -> bool {
+        !self.check_forbidden_hook_list.is_empty()
+    }
+
+    pub fn execute_check_forbidden_hook(&self, context: &CheckForbiddenContext) -> Result<()> {
+        if self.has_check_forbidden_hook() {
+            for hook in self.check_forbidden_hook_list.iter() {
+                hook.check_forbidden(context)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn try_to_compress_message(&self, msg: &mut Message) -> bool {
+        if msg.as_any().downcast_ref::<MessageBatch>().is_some() {
+            return false;
+        }
+        if let Some(body) = msg.body.as_mut() {
+            if body.len() >= self.producer_config.compress_msg_body_over_howmuch() as usize {
+                let data = self
+                    .producer_config
+                    .compressor()
+                    .as_ref()
+                    .unwrap()
+                    .compress(body, self.producer_config.compress_level());
+                if let Ok(data) = data {
+                    *body = Bytes::from(data);
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    #[inline]
     pub fn select_one_message_queue(
         &self,
         tp_info: &TopicPublishInfo,
         last_broker_name: Option<&str>,
         reset_index: bool,
     ) -> Option<MessageQueue> {
-        None
+        self.mq_fault_strategy
+            .select_one_message_queue(tp_info, last_broker_name, reset_index)
     }
 
     fn validate_name_server_setting(&self) -> Result<()> {

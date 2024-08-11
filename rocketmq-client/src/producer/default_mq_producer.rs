@@ -699,7 +699,7 @@ impl MQProducer for DefaultMQProducer {
     async fn request_with_callback(
         &self,
         msg: &Message,
-        request_callback: impl RequestCallback + Send,
+        request_callback: impl RequestCallback,
         timeout: u64,
     ) {
         todo!()

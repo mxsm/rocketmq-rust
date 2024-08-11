@@ -21,7 +21,7 @@ use rocketmq_common::common::message::message_single::Message;
 ///
 /// This trait defines a method for selecting a message queue from a list of available queues
 /// based on the provided message and an additional argument.
-pub trait MessageQueueSelector: Send {
+pub trait MessageQueueSelector: Send + Sync {
     /// Selects a message queue from the provided list.
     ///
     /// # Arguments
