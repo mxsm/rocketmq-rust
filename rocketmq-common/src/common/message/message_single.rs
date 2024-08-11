@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+use std::any::Any;
 use std::collections::HashMap;
 use std::hash::DefaultHasher;
 use std::hash::Hash;
@@ -165,6 +165,17 @@ impl Message {
 
     pub fn get_user_property(&self, name: impl Into<String>) -> Option<String> {
         self.properties.get(name.into().as_str()).cloned()
+    }
+
+    pub fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    pub fn set_instance_id(&mut self, instance_id: impl Into<String>) {
+        self.properties.insert(
+            MessageConst::PROPERTY_INSTANCE_ID.to_string(),
+            instance_id.into(),
+        );
     }
 }
 

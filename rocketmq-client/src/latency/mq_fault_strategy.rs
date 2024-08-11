@@ -14,9 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use rocketmq_common::common::message::message_queue::MessageQueue;
+
 use crate::base::client_config::ClientConfig;
 use crate::latency::resolver::Resolver;
 use crate::latency::service_detector::ServiceDetector;
+use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
 
 pub struct MQFaultStrategy {}
 
@@ -36,6 +39,15 @@ impl MQFaultStrategy {
     pub fn set_service_detector(&mut self, service_detector: impl ServiceDetector) {}
 
     pub fn is_start_detector_enable(&self) -> bool {
+        unimplemented!("not implemented")
+    }
+
+    pub fn select_one_message_queue(
+        &self,
+        tp_info: &TopicPublishInfo,
+        last_broker_name: Option<&str>,
+        reset_index: bool,
+    ) -> Option<MessageQueue> {
         unimplemented!("not implemented")
     }
 }

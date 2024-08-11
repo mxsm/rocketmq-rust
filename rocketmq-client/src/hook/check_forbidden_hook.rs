@@ -20,5 +20,5 @@ use crate::Result;
 pub trait CheckForbiddenHook: Send + Sync {
     fn hook_name(&self) -> &str;
 
-    fn check_forbidden(&self, context: &CheckForbiddenContext) -> Result<()>;
+    fn check_forbidden(&self, context: &CheckForbiddenContext<'_>) -> Result<()>;
 }

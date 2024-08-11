@@ -21,7 +21,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rocketmq_common::utils::name_server_address_utils::NameServerAddressUtils;
+use rocketmq_common::utils::name_server_address_utils::NAMESRV_ENDPOINT_PATTERN;
 use rocketmq_common::utils::network_util::NetworkUtil;
+use rocketmq_common::utils::string_utils::StringUtils;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::request_type::RequestType;
@@ -177,5 +179,17 @@ impl ClientConfig {
             sb.push_str(RequestType::Stream.to_string().as_str());
         }
         sb
+    }
+
+    pub fn get_namesrv_addr(&self) -> Option<String> {
+        if StringUtils::is_not_empty_str(self.namesrv_addr.as_deref())
+            && NAMESRV_ENDPOINT_PATTERN.is_match(self.namesrv_addr.as_ref().unwrap().as_str())
+        {
+            NameServerAddressUtils::get_name_srv_addr_from_namesrv_endpoint(
+                self.namesrv_addr.as_ref().unwrap().as_str(),
+            )
+        } else {
+            self.namesrv_addr.clone()
+        }
     }
 }

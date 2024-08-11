@@ -26,8 +26,8 @@ use crate::producer::send_result::SendResult;
 use crate::producer::transaction_send_result::TransactionSendResult;
 use crate::Result;
 
-#[trait_variant::make(MQProducer: Send)]
-pub trait MQProducerLocal: Any {
+#[trait_variant::make(MQProducer: Send + Sync)]
+pub trait MQProducerLocal: Any + 'static {
     /// Starts the MQ producer.
     ///
     /// This method initializes and starts the MQ producer, preparing it for sending messages.
@@ -442,7 +442,7 @@ pub trait MQProducerLocal: Any {
     async fn request_with_callback(
         &self,
         msg: &Message,
-        request_callback: impl RequestCallback + Send,
+        request_callback: impl RequestCallback,
         timeout: u64,
     );
 

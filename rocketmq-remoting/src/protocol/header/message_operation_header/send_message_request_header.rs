@@ -27,7 +27,7 @@ use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use crate::protocol::remoting_command::RemotingCommand;
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SendMessageRequestHeader {
     pub producer_group: String,

@@ -40,6 +40,12 @@ impl TopicRequestHeader {
     pub fn set_lo(&mut self, lo: bool) {
         self.lo = Some(lo);
     }
+
+    pub fn get_broker_name(&self) -> Option<&str> {
+        self.rpc_request_header
+            .as_ref()
+            .and_then(|v| v.broker_name.as_deref())
+    }
 }
 
 impl FromMap for TopicRequestHeader {

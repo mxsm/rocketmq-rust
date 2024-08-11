@@ -1887,6 +1887,7 @@ dependencies = [
  "lazy_static",
  "num_cpus",
  "rand",
+ "regex",
  "rocketmq-common",
  "rocketmq-remoting",
  "rocketmq-runtime",

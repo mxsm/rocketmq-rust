@@ -50,7 +50,7 @@ pub const SERIALIZE_TYPE_ENV: &str = "ROCKETMQ_SERIALIZE_TYPE";
 pub const REMOTING_VERSION_KEY: &str = "rocketmq.remoting.version";
 
 lazy_static! {
-    static ref OPAQUE_COUNTER: Arc<AtomicI32> = Arc::new(AtomicI32::new(0));
+    static ref requestId: Arc<AtomicI32> = Arc::new(AtomicI32::new(0));
     static ref CONFIG_VERSION: RwLock<i32> = RwLock::new(-1);
     static ref INIT: Once = Once::new();
     pub static ref SERIALIZE_TYPE_CONFIG_IN_THIS_SERVER: SerializeType = {
@@ -155,7 +155,7 @@ impl fmt::Display for RemotingCommand {
 
 impl Default for RemotingCommand {
     fn default() -> Self {
-        let opaque = OPAQUE_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let opaque = requestId.fetch_add(1, Ordering::AcqRel);
         RemotingCommand {
             code: 0,
             language: LanguageCode::RUST, // Replace with your actual enum variant
@@ -195,7 +195,7 @@ impl RemotingCommand {
     }
 
     pub fn get_and_add() -> i32 {
-        OPAQUE_COUNTER.fetch_add(1, Ordering::SeqCst)
+        requestId.fetch_add(1, Ordering::AcqRel)
     }
 
     pub fn set_cmd_version(self) -> Self {
@@ -690,6 +690,10 @@ impl RemotingCommand {
             None => None,
             Some(value) => Some(value.as_mut().as_mut()),
         }
+    }
+
+    pub fn create_new_request_id() -> i32 {
+        requestId.fetch_add(1, Ordering::AcqRel)
     }
 }
 

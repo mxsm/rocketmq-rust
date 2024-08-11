@@ -18,7 +18,7 @@ use rocketmq_common::common::message::message_single::Message;
 
 use crate::error::MQClientError;
 
-pub trait RequestCallback {
+pub trait RequestCallback: Sync + Send {
     fn on_success(&self, response: &Message);
     fn on_exception(&self, e: &MQClientError);
 }
