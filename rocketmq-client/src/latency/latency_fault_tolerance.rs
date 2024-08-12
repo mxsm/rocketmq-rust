@@ -14,7 +14,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub trait LatencyFaultTolerance<T> {
+use crate::latency::resolver::Resolver;
+use crate::latency::service_detector::ServiceDetector;
+
+pub trait LatencyFaultTolerance<T>: Send + Sync + 'static {
     /// Update brokers' states, to decide if they are good or not.
     ///
     /// # Arguments
@@ -105,4 +108,8 @@ pub trait LatencyFaultTolerance<T> {
     ///
     /// * `true` if the detector should be started, `false` otherwise.
     fn is_start_detector_enable(&self) -> bool;
+
+    fn set_resolver(&mut self, resolver: Box<dyn Resolver>);
+
+    fn set_service_detector(&mut self, service_detector: Box<dyn ServiceDetector>);
 }

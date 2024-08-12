@@ -429,11 +429,25 @@ impl MQClientInstance {
     }
 
     pub async fn get_broker_name_from_message_queue(&self, message_queue: &MessageQueue) -> String {
-        unimplemented!()
+        let guard = self.topic_end_points_table.read().await;
+        if let Some(broker_name) = guard.get(message_queue.get_topic()) {
+            if let Some(addr) = broker_name.get(message_queue) {
+                return addr.clone();
+            }
+        }
+        message_queue.get_broker_name().to_string()
     }
 
     pub async fn find_broker_address_in_publish(&self, broker_name: &str) -> Option<String> {
-        unimplemented!()
+        if broker_name.is_empty() {
+            return None;
+        }
+        let guard = self.broker_addr_table.read().await;
+        let map = guard.get(broker_name);
+        if let Some(map) = map {
+            return map.get(&(mix_all::MASTER_ID as i64)).cloned();
+        }
+        None
     }
 }
 

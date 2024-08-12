@@ -118,7 +118,7 @@ impl DefaultMQProducerImpl {
             rpc_hook: None,
             service_state: ServiceState::CreateJust,
             client_instance: None,
-            mq_fault_strategy: ArcRefCellWrapper::new(MQFaultStrategy::new(client_config)),
+            mq_fault_strategy: ArcRefCellWrapper::new(MQFaultStrategy::new(&client_config)),
             semaphore_async_send_num: Arc::new(semaphore_async_send_num),
             semaphore_async_send_size: Arc::new(semaphore_async_send_size),
         }
@@ -155,7 +155,8 @@ impl DefaultMQProducerImpl {
                     1
                 };
                 //let mut times = 0u32;
-                let mut brokers_sent = Vec::<String>::with_capacity(times_total as usize);
+                //let mut brokers_sent = Vec::<String>::with_capacity(times_total as usize);
+                let mut brokers_sent = vec![String::new(); times_total as usize];
                 let mut reset_index = false;
                 //handle send message
                 for times in 0..times_total {
@@ -779,9 +780,9 @@ impl DefaultMQProducerImpl {
                 let resolver = DefaultResolver {
                     client_instance: client_instance.clone(),
                 };
-                self.mq_fault_strategy.set_resolver(resolver);
+                self.mq_fault_strategy.set_resolver(Box::new(resolver));
                 self.mq_fault_strategy
-                    .set_service_detector(service_detector);
+                    .set_service_detector(Box::new(service_detector));
                 self.client_instance = Some(client_instance);
                 let self_clone = self.clone();
                 let register_ok = self

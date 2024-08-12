@@ -18,6 +18,7 @@ use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 
 use crate::common::thread_local_index::ThreadLocalIndex;
+use crate::producer::producer_impl::queue_filter::QueueFilter;
 
 #[derive(Default, Clone)]
 pub struct TopicPublishInfo {
@@ -41,5 +42,43 @@ impl TopicPublishInfo {
 
     pub fn ok(&self) -> bool {
         !self.message_queue_list.is_empty()
+    }
+
+    pub fn reset_index(&self) {
+        self.send_which_queue.reset();
+    }
+
+    pub fn select_one_message_queue(&self, filters: &[&dyn QueueFilter]) -> Option<MessageQueue> {
+        self.select_one_message_queue_with_filters(&self.message_queue_list, filters)
+    }
+
+    fn select_one_message_queue_with_filters(
+        &self,
+        message_queue_list: &[MessageQueue],
+        filters: &[&dyn QueueFilter],
+    ) -> Option<MessageQueue> {
+        if message_queue_list.is_empty() {
+            return None;
+        }
+
+        if !filters.is_empty() {
+            for _ in 0..message_queue_list.len() {
+                let index =
+                    self.send_which_queue.increment_and_get() % message_queue_list.len() as i32;
+                let mq = &message_queue_list[index as usize];
+                let mut filter_result = true;
+                for filter in filters {
+                    filter_result &= filter.filter(mq);
+                }
+                if filter_result {
+                    return Some(mq.clone());
+                }
+            }
+            return None;
+        }
+
+        let index =
+            (self.send_which_queue.increment_and_get() % message_queue_list.len() as i32).abs();
+        Some(message_queue_list[index as usize].clone())
     }
 }
