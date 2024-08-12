@@ -19,7 +19,7 @@ use rocketmq_common::common::message::message_queue::MessageQueue;
 /// A trait for filtering message queues.
 ///
 /// This trait defines a method for filtering message queues based on custom criteria.
-pub trait QueueFilter {
+pub trait QueueFilter: Send + Sync + 'static {
     /// Filters a message queue.
     ///
     /// This method determines whether the specified message queue meets the filter criteria.

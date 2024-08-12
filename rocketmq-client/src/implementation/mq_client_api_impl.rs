@@ -287,6 +287,16 @@ impl MQClientAPIImpl {
                         "sendMessage call timeout".to_string(),
                     ));
                 }
+                let result = self
+                    .send_message_sync(
+                        addr,
+                        broker_name,
+                        msg,
+                        timeout_millis - cost_time_sync,
+                        request,
+                    )
+                    .await?;
+                Ok(Some(result))
             }
             CommunicationMode::Async => {
                 let times = AtomicU32::new(0);
@@ -311,17 +321,15 @@ impl MQClientAPIImpl {
                     producer,
                 ))
                 .await;
-                return Ok(None);
+                Ok(None)
             }
             CommunicationMode::Oneway => {
                 self.remoting_client
                     .invoke_oneway(addr.to_string(), request, timeout_millis)
                     .await;
-                return Ok(None);
+                Ok(None)
             }
         }
-
-        unimplemented!()
     }
 
     pub async fn send_message_simple(
