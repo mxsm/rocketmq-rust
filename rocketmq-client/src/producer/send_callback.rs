@@ -14,7 +14,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::sync::Arc;
+
 use crate::producer::send_result::SendResult;
+
+pub(crate) type SendMessageCallback = Arc<Box<dyn SendCallback>>;
 
 pub trait SendCallback: Send + Sync + 'static {
     fn on_success(&self, send_result: &SendResult);

@@ -222,7 +222,7 @@ impl MQClientAPIImpl {
         }
     }
 
-    pub fn get_name_server_address_list(&self) -> Vec<String> {
+    pub fn get_name_server_address_list(&self) -> &[String] {
         self.remoting_client.get_name_server_address_list()
     }
 
@@ -230,7 +230,7 @@ impl MQClientAPIImpl {
         &mut self,
         addr: &str,
         broker_name: &str,
-        msg: &Message,
+        msg: &mut Message,
         request_header: SendMessageRequestHeader,
         timeout_millis: u64,
         communication_mode: CommunicationMode,
@@ -277,8 +277,14 @@ impl MQClientAPIImpl {
                 RemotingCommand::create_request_command(RequestCode::SendMessage, request_header)
             }
         };
-        request.set_body_mut_ref(msg.body().clone());
 
+        // if compressed_body is not None, set request body to compressed_body
+        if msg.compressed_body.is_some() {
+            let compressed_body = std::mem::take(&mut msg.compressed_body);
+            request.set_body_mut_ref(compressed_body);
+        } else {
+            request.set_body_mut_ref(msg.body().clone());
+        }
         match communication_mode {
             CommunicationMode::Sync => {
                 let cost_time_sync = (Instant::now() - begin_start_time).as_millis() as u64;
@@ -336,7 +342,7 @@ impl MQClientAPIImpl {
         &mut self,
         addr: &str,
         broker_name: &str,
-        msg: &Message,
+        msg: &mut Message,
         request_header: SendMessageRequestHeader,
         timeout_millis: u64,
         communication_mode: CommunicationMode,

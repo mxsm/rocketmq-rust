@@ -37,7 +37,10 @@ pub struct Message {
     pub topic: String,
     pub flag: i32,
     pub properties: HashMap<String, String>,
+    // original bytes
     pub body: Option<bytes::Bytes>,
+    // compressed bytes, maybe none, if no need to compress
+    pub compressed_body: Option<bytes::Bytes>,
     pub transaction_id: Option<String>,
 }
 

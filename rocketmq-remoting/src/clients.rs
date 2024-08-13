@@ -48,7 +48,7 @@ pub trait RemotingClient: RemotingService {
     ///
     /// # Returns
     /// A vector containing the current list of name server addresses.
-    fn get_name_server_address_list(&self) -> Vec<String>;
+    fn get_name_server_address_list(&self) -> &[String];
 
     /// Retrieves a list of available name server addresses.
     ///

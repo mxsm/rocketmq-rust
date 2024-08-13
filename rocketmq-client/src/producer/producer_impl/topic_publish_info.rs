@@ -48,6 +48,7 @@ impl TopicPublishInfo {
         self.send_which_queue.reset();
     }
 
+    #[inline]
     pub fn select_one_message_queue(&self, filters: &[&dyn QueueFilter]) -> Option<MessageQueue> {
         self.select_one_message_queue_with_filters(&self.message_queue_list, filters)
     }
