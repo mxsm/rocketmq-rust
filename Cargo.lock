@@ -1862,6 +1862,7 @@ dependencies = [
  "serde",
  "serde_json",
  "static_assertions",
+ "sysinfo",
  "tokio",
  "tokio-stream",
  "tokio-util",

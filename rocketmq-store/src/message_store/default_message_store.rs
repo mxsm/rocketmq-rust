@@ -70,6 +70,7 @@ use crate::base::query_message_result::QueryMessageResult;
 use crate::base::select_result::SelectMappedBufferResult;
 use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::base::store_stats_service::StoreStatsService;
+use crate::base::transient_store_pool::TransientStorePool;
 use crate::config::broker_role::BrokerRole;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::config::store_path_config_helper::get_store_path_batch_consume_queue;
@@ -94,6 +95,7 @@ use crate::store::running_flags::RunningFlags;
 use crate::store_path_config_helper::get_abort_file;
 use crate::store_path_config_helper::get_store_checkpoint;
 use crate::store_path_config_helper::get_store_path_consume_queue;
+use crate::timer::timer_message_store::TimerMessageStore;
 use crate::utils::store_util::TOTAL_PHYSICAL_MEMORY_SIZE;
 
 ///Using local files to store message data, which is also the default method.
@@ -126,6 +128,8 @@ pub struct DefaultMessageStore {
     notify_message_arrive_in_batch: bool,
     store_stats_service: Arc<StoreStatsService>,
     compaction_store: Arc<CompactionStore>,
+    timer_message_store: Arc<TimerMessageStore>,
+    transient_store_pool: TransientStorePool,
 }
 
 impl Clone for DefaultMessageStore {
@@ -156,6 +160,8 @@ impl Clone for DefaultMessageStore {
             notify_message_arrive_in_batch: self.notify_message_arrive_in_batch,
             store_stats_service: self.store_stats_service.clone(),
             compaction_store: self.compaction_store.clone(),
+            timer_message_store: self.timer_message_store.clone(),
+            transient_store_pool: self.transient_store_pool.clone(),
         }
     }
 }
@@ -208,6 +214,10 @@ impl DefaultMessageStore {
         ensure_dir_ok(Self::get_store_path_logic(&message_store_config).as_str());
 
         let identity = broker_config.broker_identity.clone();
+        let transient_store_pool = TransientStorePool::new(
+            message_store_config.transient_store_pool_size,
+            message_store_config.mapped_file_size_commit_log,
+        );
         Self {
             message_store_config: message_store_config.clone(),
             broker_config,
@@ -240,6 +250,8 @@ impl DefaultMessageStore {
             notify_message_arrive_in_batch,
             store_stats_service: Arc::new(StoreStatsService::new(Some(identity))),
             compaction_store: Arc::new(CompactionStore),
+            timer_message_store: Arc::new(TimerMessageStore::new_empty()),
+            transient_store_pool,
         }
     }
 
@@ -258,6 +270,12 @@ impl DefaultMessageStore {
 
     pub fn message_store_config(&self) -> Arc<MessageStoreConfig> {
         self.message_store_config.clone()
+    }
+
+    pub fn is_transient_store_pool_enable(&self) -> bool {
+        self.message_store_config.transient_store_pool_enable
+            && (self.broker_config.enable_controller_mode
+                || self.message_store_config().broker_role != BrokerRole::Slave)
     }
 }
 
@@ -1255,8 +1273,30 @@ impl MessageStore for DefaultMessageStore {
     }
 
     fn get_earliest_message_time(&self) -> i64 {
-        //TODO
         -1
+    }
+
+    fn get_timer_message_store(&self) -> Arc<TimerMessageStore> {
+        self.timer_message_store.clone()
+    }
+
+    fn set_timer_message_store(&mut self, timer_message_store: Arc<TimerMessageStore>) {
+        self.timer_message_store = timer_message_store;
+    }
+
+    fn remain_transient_store_buffer_nums(&self) -> i32 {
+        if self.is_transient_store_pool_enable() {
+            return self.transient_store_pool.available_buffer_nums() as i32;
+        }
+        i32::MAX
+    }
+
+    fn remain_how_many_data_to_commit(&self) -> i64 {
+        self.commit_log.remain_how_many_data_to_commit()
+    }
+
+    fn remain_how_many_data_to_flush(&self) -> i64 {
+        self.commit_log.remain_how_many_data_to_flush()
     }
 }
 

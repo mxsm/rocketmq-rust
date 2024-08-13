@@ -142,6 +142,22 @@ pub fn broker_vip_channel(is_change: bool, broker_addr: &str) -> String {
     broker_addr.to_string()
 }
 
+pub fn human_readable_byte_count(bytes: i64, si: bool) -> String {
+    let bytes = bytes as f64;
+    let unit = if si { 1000.0 } else { 1024.0 };
+    if bytes < unit {
+        return format!("{} B", bytes);
+    }
+    let exp = (bytes.ln() / unit.ln()).floor() as i32;
+    let pre = ['K', 'M', 'G', 'T', 'P', 'E'][(exp - 1) as usize];
+    let pre = if si {
+        pre.to_string()
+    } else {
+        format!("{}i", pre)
+    };
+    format!("{:.1} {}B", bytes / unit.powi(exp), pre)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,7 +236,6 @@ mod tests {
         let lmq_meta_data = Some("NonLMQSpecificInfo");
         assert!(!is_lmq(lmq_meta_data));
     }
-
     #[test]
     fn returns_false_for_none_metadata() {
         assert!(!is_lmq(None));

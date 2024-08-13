@@ -14,7 +14,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::sync::atomic::AtomicI64;
+
 use rocketmq_common::common::message::MessageConst;
+use rocketmq_common::common::system_clock::SystemClock;
+
+use crate::log_file::MessageStore;
+use crate::message_store::default_message_store::DefaultMessageStore;
 
 pub const TIMER_TOPIC: &str = concat!("rmq_sys_", "wheel_timer");
 pub const TIMER_OUT_MS: &str = MessageConst::PROPERTY_TIMER_OUT_MS;
@@ -37,8 +43,27 @@ pub const MAGIC_DEFAULT: i32 = 1;
 pub const MAGIC_ROLL: i32 = 1 << 1;
 pub const MAGIC_DELETE: i32 = 1 << 2;
 
-#[derive(Default, Clone)]
-pub struct TimerMessageStore {}
+pub struct TimerMessageStore {
+    pub curr_read_time_ms: AtomicI64,
+    pub curr_queue_offset: AtomicI64,
+    pub default_message_store: Option<DefaultMessageStore>,
+}
+
+impl Clone for TimerMessageStore {
+    fn clone(&self) -> Self {
+        Self {
+            curr_read_time_ms: AtomicI64::new(
+                self.curr_read_time_ms
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            ),
+            curr_queue_offset: AtomicI64::new(
+                self.curr_queue_offset
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            ),
+            default_message_store: self.default_message_store.clone(),
+        }
+    }
+}
 
 impl TimerMessageStore {
     pub fn load(&mut self) -> bool {
@@ -49,5 +74,67 @@ impl TimerMessageStore {
 
     pub fn is_reject(&self, _deliver_ms: u64) -> bool {
         false
+    }
+
+    pub fn get_dequeue_behind(&self) -> i64 {
+        self.get_dequeue_behind_millis() / 1000
+    }
+
+    pub fn get_dequeue_behind_millis(&self) -> i64 {
+        (SystemClock::now() as i64)
+            - self
+                .curr_read_time_ms
+                .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn get_enqueue_behind_messages(&self) -> i64 {
+        let temp_queue_offset = self
+            .curr_queue_offset
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let consume_queue = self
+            .default_message_store
+            .as_ref()
+            .unwrap()
+            .find_consume_queue(TIMER_TOPIC, 0);
+        let max_offset_in_queue = match consume_queue {
+            Some(queue) => queue.get_max_offset_in_queue(),
+            None => 0,
+        };
+        max_offset_in_queue - temp_queue_offset
+    }
+
+    pub fn get_all_congest_num(&self) -> i64 {
+        0
+    }
+
+    pub fn get_enqueue_tps(&self) -> f32 {
+        0.0
+    }
+
+    pub fn get_dequeue_tps(&self) -> f32 {
+        0.0
+    }
+
+    pub fn new(default_message_store: Option<DefaultMessageStore>) -> Self {
+        Self {
+            curr_read_time_ms: AtomicI64::new(0),
+            curr_queue_offset: AtomicI64::new(0),
+            default_message_store,
+        }
+    }
+
+    pub fn new_empty() -> Self {
+        Self {
+            curr_read_time_ms: AtomicI64::new(0),
+            curr_queue_offset: AtomicI64::new(0),
+            default_message_store: None,
+        }
+    }
+
+    pub fn set_default_message_store(
+        &mut self,
+        default_message_store: Option<DefaultMessageStore>,
+    ) {
+        self.default_message_store = default_message_store;
     }
 }
