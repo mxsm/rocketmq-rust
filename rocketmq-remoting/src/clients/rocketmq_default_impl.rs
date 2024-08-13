@@ -314,8 +314,8 @@ impl RemotingClient for RocketmqDefaultClient {
         }
     }
 
-    fn get_name_server_address_list(&self) -> Vec<String> {
-        self.namesrv_addr_list.as_ref().clone()
+    fn get_name_server_address_list(&self) -> &[String] {
+        self.namesrv_addr_list.as_ref()
     }
 
     fn get_available_name_srv_list(&self) -> Vec<String> {

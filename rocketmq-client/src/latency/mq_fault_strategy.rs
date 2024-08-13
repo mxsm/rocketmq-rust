@@ -152,6 +152,12 @@ impl MQFaultStrategy {
         }
         0
     }
+
+    #[inline]
+    pub fn set_send_latency_fault_enable(&mut self, send_latency_fault_enable: bool) {
+        self.send_latency_fault_enable
+            .store(send_latency_fault_enable, Ordering::Relaxed);
+    }
 }
 
 #[derive(Default, Clone)]

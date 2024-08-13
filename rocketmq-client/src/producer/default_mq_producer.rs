@@ -453,6 +453,13 @@ impl DefaultMQProducer {
     pub fn producer_config(&self) -> &ProducerConfig {
         &self.producer_config
     }
+
+    #[inline]
+    pub fn set_send_latency_fault_enable(&mut self, send_latency_fault_enable: bool) {
+        if let Some(ref mut default_mqproducer_impl) = self.default_mqproducer_impl {
+            default_mqproducer_impl.set_send_latency_fault_enable(send_latency_fault_enable);
+        }
+    }
 }
 
 impl DefaultMQProducer {
@@ -526,7 +533,7 @@ impl MQProducer for DefaultMQProducer {
             .unwrap()
             .send(msg, timeout)
             .await?;
-        Ok(result.unwrap())
+        Ok(result.expect("SendResult should not be None"))
     }
 
     async fn send_with_callback(&self, msg: &Message, send_callback: impl SendCallback) {

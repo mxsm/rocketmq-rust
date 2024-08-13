@@ -20,8 +20,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
 
-use rand::thread_rng;
-use rand::Rng;
+use rand::random;
 use rocketmq_common::common::base::service_state::ServiceState;
 use rocketmq_common::common::message::message_batch::MessageBatch;
 use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
@@ -55,6 +54,7 @@ use crate::base::client_config::ClientConfig;
 use crate::base::validators::Validators;
 use crate::common::client_error_code::ClientErrorCode;
 use crate::error::MQClientError;
+use crate::error::MQClientError::MQClientException;
 use crate::error::MQClientError::RemotingTooMuchRequestException;
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::hook::check_forbidden_context::CheckForbiddenContext;
@@ -71,6 +71,7 @@ use crate::producer::default_mq_producer::ProducerConfig;
 use crate::producer::producer_impl::mq_producer_inner::MQProducerInner;
 use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
 use crate::producer::send_callback::SendCallback;
+use crate::producer::send_callback::SendMessageCallback;
 use crate::producer::send_result::SendResult;
 use crate::producer::send_status::SendStatus;
 use crate::producer::transaction_listener::TransactionListener;
@@ -133,11 +134,11 @@ impl DefaultMQProducerImpl {
         &mut self,
         mut msg: Message,
         communication_mode: CommunicationMode,
-        send_callback: Option<Arc<Box<dyn SendCallback>>>,
+        send_callback: Option<SendMessageCallback>,
         timeout: u64,
     ) -> Result<Option<SendResult>> {
         self.make_sure_state_ok()?;
-        let invoke_id = thread_rng().gen::<u64>();
+        let invoke_id = random::<u64>();
         let begin_timestamp_first = Instant::now();
         let mut begin_timestamp_prev = begin_timestamp_first;
         let mut end_timestamp = begin_timestamp_first;
@@ -149,13 +150,11 @@ impl DefaultMQProducerImpl {
                 let mut mq: Option<MessageQueue> = None;
                 let mut exception: Option<MQClientError> = None;
                 let mut send_result: Option<SendResult> = None;
-                let times_total = if communication_mode == CommunicationMode::Async {
+                let times_total = if communication_mode == CommunicationMode::Sync {
                     self.producer_config.retry_times_when_send_failed() + 1
                 } else {
                     1
                 };
-                //let mut times = 0u32;
-                //let mut brokers_sent = Vec::<String>::with_capacity(times_total as usize);
                 let mut brokers_sent = vec![String::new(); times_total as usize];
                 let mut reset_index = false;
                 //handle send message
@@ -201,11 +200,17 @@ impl DefaultMQProducerImpl {
                                 timeout - cost_time,
                             )
                             .await;
-
+                        end_timestamp = Instant::now();
+                        self.update_fault_item(
+                            mq.as_ref().unwrap().get_broker_name(),
+                            (end_timestamp - begin_timestamp_prev).as_millis() as u64,
+                            false,
+                            true,
+                        );
                         match result_inner {
                             Ok(result) => {
                                 send_result = result;
-                                match communication_mode {
+                                return match communication_mode {
                                     CommunicationMode::Sync => {
                                         if let Some(ref result) = send_result {
                                             if result.send_status != SendStatus::SendOk
@@ -216,15 +221,12 @@ impl DefaultMQProducerImpl {
                                                 continue;
                                             }
                                         }
-                                        return Ok(send_result);
+                                        Ok(send_result)
                                     }
-                                    CommunicationMode::Async => {
-                                        return Ok(None);
+                                    CommunicationMode::Async | CommunicationMode::Oneway => {
+                                        Ok(None)
                                     }
-                                    CommunicationMode::Oneway => {
-                                        return Ok(None);
-                                    }
-                                }
+                                };
                             }
                             Err(err) => match err {
                                 MQClientError::MQClientException(_, _) => {
@@ -301,10 +303,59 @@ impl DefaultMQProducerImpl {
                         break;
                     }
                 }
+                if send_result.is_some() {
+                    return Ok(send_result);
+                }
+
+                if call_timeout {
+                    return Err(MQClientError::RemotingTooMuchRequestException(
+                        "sendDefaultImpl call timeout".to_string(),
+                    ));
+                }
+
+                let info = format!(
+                    "Send [{}] times, still failed, cost [{}]ms, Topic:{}, BrokersSent: {} {}",
+                    times_total,
+                    (Instant::now() - begin_timestamp_first).as_millis(),
+                    topic,
+                    brokers_sent.join(","),
+                    FAQUrl::suggest_todo(FAQUrl::SEND_MSG_FAILED)
+                );
+
+                return if let Some(err) = exception {
+                    match err {
+                        MQClientError::MQClientException(_, _) => Err(MQClientException(
+                            ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION,
+                            info,
+                        )),
+                        RemotingTooMuchRequestException(_) => Err(MQClientException(
+                            ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION,
+                            info,
+                        )),
+                        MQClientError::MQBrokerException(_, _, _) => Err(MQClientException(
+                            ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION,
+                            info,
+                        )),
+                        MQClientError::RequestTimeoutException(_, _) => Err(MQClientException(
+                            ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION,
+                            info,
+                        )),
+                        MQClientError::OffsetNotFoundException(_, _, _) => Err(MQClientException(
+                            ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION,
+                            info,
+                        )),
+                        MQClientError::RemotingException(_) => Err(MQClientException(
+                            ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION,
+                            info,
+                        )),
+                    }
+                } else {
+                    Err(MQClientException(-1, info))
+                };
             }
         }
         self.validate_name_server_setting()?;
-        Err(MQClientError::MQClientException(
+        Err(MQClientException(
             ClientErrorCode::NOT_FOUND_TOPIC_EXCEPTION,
             format!(
                 "No route info of this topic:{},{}",
@@ -314,6 +365,7 @@ impl DefaultMQProducerImpl {
         ))
     }
 
+    #[inline]
     pub fn update_fault_item(
         &self,
         broker_name: &str,
@@ -321,11 +373,12 @@ impl DefaultMQProducerImpl {
         isolation: bool,
         reachable: bool,
     ) {
-        /*self.mq_fault_strategy.mut_from_ref().update_fault_item(
+        self.mq_fault_strategy.mut_from_ref().update_fault_item(
             broker_name,
             current_latency,
             isolation,
-        );*/
+            reachable,
+        );
     }
 
     async fn send_kernel_impl(
@@ -377,8 +430,9 @@ impl DefaultMQProducerImpl {
             self.client_config.vip_channel_enabled,
             broker_addr.as_str(),
         );
-        let prev_body = msg.body.clone();
-        if msg.as_any().downcast_ref::<MessageBatch>().is_none() {
+        //let prev_body = msg.body.clone();
+        let batch = msg.as_any().downcast_ref::<MessageBatch>().is_some();
+        if !batch {
             MessageClientIDSetter::set_uniq_id(msg);
         }
         let mut topic_with_namespace = false;
@@ -396,7 +450,9 @@ impl DefaultMQProducerImpl {
         let tran_msg = msg.get_property(MessageConst::PROPERTY_TRANSACTION_PREPARED);
         if let Some(value) = tran_msg {
             let value_ = value.parse().unwrap_or(false);
-            sys_flag |= MessageSysFlag::TRANSACTION_PREPARED_TYPE;
+            if value_ {
+                sys_flag |= MessageSysFlag::TRANSACTION_PREPARED_TYPE;
+            }
         }
 
         if self.has_check_forbidden_hook() {
@@ -467,7 +523,7 @@ impl DefaultMQProducerImpl {
             )),
             reconsume_times: Some(0),
             unit_mode: Some(self.is_unit_mode()),
-            batch: Some(msg.as_any().downcast_ref::<MessageBatch>().is_some()),
+            batch: Some(batch),
             topic_request_header: Some(TopicRequestHeader {
                 rpc_request_header: Some(RpcRequestHeader {
                     broker_name: Some(broker_name.clone()),
@@ -485,7 +541,7 @@ impl DefaultMQProducerImpl {
             let reconsume_times = MessageAccessor::get_reconsume_time(msg);
             if let Some(value) = reconsume_times {
                 request_header.reconsume_times = value.parse::<i32>().map_or(Some(0), Some);
-                MessageAccessor::clear_property(msg, MessageConst::PROPERTY_MAX_RECONSUME_TIMES);
+                MessageAccessor::clear_property(msg, MessageConst::PROPERTY_RECONSUME_TIME);
             }
 
             let max_reconsume_times = MessageAccessor::get_max_reconsume_times(msg);
@@ -497,14 +553,15 @@ impl DefaultMQProducerImpl {
 
         let send_result = match communication_mode {
             CommunicationMode::Async => {
-                /*let tmp_message = msg.clone();
-                let mut message_cloned = false;
-                if msg_body_compressed {
-                    message_cloned = true;
-                    msg.body = prev_body;
+                if topic_with_namespace {
+                    msg.topic = NamespaceUtil::without_namespace_with_namespace(
+                        msg.topic(),
+                        self.client_config
+                            .get_namespace()
+                            .unwrap_or(String::from(""))
+                            .as_str(),
+                    );
                 }
-
-                if topic_with_namespace {}*/
                 let cost_time_sync = (Instant::now() - begin_start_time).as_millis() as u64;
                 self.client_instance
                     .as_ref()
@@ -524,7 +581,7 @@ impl DefaultMQProducerImpl {
                         &mut send_message_context,
                         self,
                     )
-                    .await?
+                    .await
             }
             CommunicationMode::Oneway | CommunicationMode::Sync => {
                 let cost_time_sync = (Instant::now() - begin_start_time).as_millis() as u64;
@@ -547,14 +604,27 @@ impl DefaultMQProducerImpl {
                         &mut send_message_context,
                         self,
                     )
-                    .await?
+                    .await
             }
         };
 
-        if self.has_send_message_hook() {
-            self.execute_send_message_hook_after(&send_message_context);
+        match send_result {
+            Ok(result) => {
+                if self.has_send_message_hook() {
+                    send_message_context.as_mut().unwrap().send_result = result.clone();
+                    self.execute_send_message_hook_after(&send_message_context);
+                }
+                Ok(result)
+            }
+            Err(err) => {
+                if self.has_send_message_hook() {
+                    //send_message_context.as_mut().unwrap().exception =
+                    // Some(Arc::new(err.clone()));
+                    self.execute_send_message_hook_after(&send_message_context);
+                }
+                Err(err)
+            }
         }
-        Ok(send_result)
     }
 
     pub fn execute_send_message_hook_before(&mut self, context: &Option<SendMessageContext<'_>>) {
@@ -604,7 +674,8 @@ impl DefaultMQProducerImpl {
                     .unwrap()
                     .compress(body, self.producer_config.compress_level());
                 if let Ok(data) = data {
-                    *body = Bytes::from(data);
+                    //store the compressed data
+                    msg.compressed_body = Some(Bytes::from(data));
                     return true;
                 }
             }
@@ -624,12 +695,12 @@ impl DefaultMQProducerImpl {
     }
 
     fn validate_name_server_setting(&self) -> Result<()> {
-        let ns_list = self
+        let binding = self
             .client_instance
             .as_ref()
             .unwrap()
-            .get_mq_client_api_impl()
-            .get_name_server_address_list();
+            .get_mq_client_api_impl();
+        let ns_list = binding.get_name_server_address_list();
         if ns_list.is_empty() {
             return Err(MQClientError::MQClientException(
                 ClientErrorCode::NO_NAME_SERVER_EXCEPTION,
@@ -863,6 +934,12 @@ impl DefaultMQProducerImpl {
     }
 
     fn init_topic_route(&mut self) {}
+
+    #[inline]
+    pub fn set_send_latency_fault_enable(&mut self, send_latency_fault_enable: bool) {
+        self.mq_fault_strategy
+            .set_send_latency_fault_enable(send_latency_fault_enable);
+    }
 }
 
 struct DefaultServiceDetector {
