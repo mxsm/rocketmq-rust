@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 
 use bytes::Bytes;
+use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::net::channel::Channel;
@@ -25,6 +26,7 @@ use rocketmq_remoting::protocol::body::kv_table::KVTable;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
 use rocketmq_store::log_file::MessageStore;
+use sysinfo::Disks;
 
 use crate::processor::admin_broker_processor::Inner;
 
@@ -190,6 +192,99 @@ impl BrokerConfigRequestHandler {
                 .get_start_accept_send_request_time_stamp()
                 .to_string(),
         );
+        let is_timer_wheel_enable = self.inner.message_store_config.is_timer_wheel_enable();
+        if is_timer_wheel_enable {
+            runtime_info.insert(
+                "timerReadBehind".to_string(),
+                self.inner
+                    .default_message_store
+                    .get_timer_message_store()
+                    .get_dequeue_behind()
+                    .to_string(),
+            );
+            runtime_info.insert(
+                "timerOffsetBehind".to_string(),
+                self.inner
+                    .default_message_store
+                    .get_timer_message_store()
+                    .get_enqueue_behind_messages()
+                    .to_string(),
+            );
+            runtime_info.insert(
+                "timerCongestNum".to_string(),
+                self.inner
+                    .default_message_store
+                    .get_timer_message_store()
+                    .get_all_congest_num()
+                    .to_string(),
+            );
+            runtime_info.insert(
+                "timerEnqueueTps".to_string(),
+                self.inner
+                    .default_message_store
+                    .get_timer_message_store()
+                    .get_enqueue_tps()
+                    .to_string(),
+            );
+            runtime_info.insert(
+                "timerDequeueTps".to_string(),
+                self.inner
+                    .default_message_store
+                    .get_timer_message_store()
+                    .get_dequeue_tps()
+                    .to_string(),
+            );
+        } else {
+            runtime_info.insert("timerReadBehind".to_string(), "0".to_string());
+            runtime_info.insert("timerOffsetBehind".to_string(), "0".to_string());
+            runtime_info.insert("timerCongestNum".to_string(), "0".to_string());
+            runtime_info.insert("timerEnqueueTps".to_string(), "0.0".to_string());
+            runtime_info.insert("timerDequeueTps".to_string(), "0.0".to_string());
+        }
+        let default_message_store = self.inner.default_message_store.clone();
+        runtime_info.insert(
+            "remainTransientStoreBufferNumbs".to_string(),
+            default_message_store
+                .remain_transient_store_buffer_nums()
+                .to_string(),
+        );
+        if default_message_store.is_transient_store_pool_enable() {
+            runtime_info.insert(
+                "remainHowManyDataToCommit".to_string(),
+                mix_all::human_readable_byte_count(
+                    default_message_store.remain_how_many_data_to_commit(),
+                    false,
+                ),
+            );
+        }
+        runtime_info.insert(
+            "remainHowManyDataToFlush".to_string(),
+            mix_all::human_readable_byte_count(
+                default_message_store.remain_how_many_data_to_flush(),
+                false,
+            ),
+        );
+        let store_path_root_dir = &self.inner.message_store_config.store_path_root_dir;
+        let commit_log_dir = std::path::Path::new(&store_path_root_dir);
+        if commit_log_dir.exists() {
+            let disks = Disks::new_with_refreshed_list();
+            let path_str = commit_log_dir.to_str().unwrap();
+            for disk in &disks {
+                if disk.mount_point().to_str() == Some(path_str) {
+                    runtime_info.insert(
+                        "commitLogDirCapacity".to_string(),
+                        format!(
+                            "Total : {}, Free : {}.",
+                            mix_all::human_readable_byte_count(disk.total_space() as i64, false),
+                            mix_all::human_readable_byte_count(
+                                disk.available_space() as i64,
+                                false,
+                            )
+                        ),
+                    );
+                }
+            }
+        }
         runtime_info
     }
     fn is_special_service_running(&self) -> bool {

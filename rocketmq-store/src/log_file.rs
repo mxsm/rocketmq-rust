@@ -34,6 +34,7 @@ use crate::hook::put_message_hook::BoxedPutMessageHook;
 use crate::queue::ArcConsumeQueue;
 use crate::stats::broker_stats_manager::BrokerStatsManager;
 use crate::store::running_flags::RunningFlags;
+use crate::timer::timer_message_store::TimerMessageStore;
 
 pub(crate) mod cold_data_check_service;
 pub mod commit_log;
@@ -411,4 +412,25 @@ pub trait RocketMQMessageStore: Clone + 'static {
     ///
     /// * `i64` - Timestamp of the earliest message in this store.
     fn get_earliest_message_time(&self) -> i64;
+
+    /// Get the store time of the earliest message in this store.
+    fn get_timer_message_store(&self) -> Arc<TimerMessageStore>;
+
+    /// Set the timer message store.
+    fn set_timer_message_store(&mut self, timer_message_store: Arc<TimerMessageStore>);
+
+    ///  Get remain transientStoreBuffer numbers
+    /// @return
+    /// * `i32` - The number of remaining transient store buffers.
+    fn remain_transient_store_buffer_nums(&self) -> i32;
+
+    ///  Get remain how many data to commit
+    /// @return
+    /// * `i64` - remain how many data to commit.
+    fn remain_how_many_data_to_commit(&self) -> i64;
+
+    ///  Get remain how many data to flush
+    /// @return
+    /// * `i64` - remain how many data to flush.
+    fn remain_how_many_data_to_flush(&self) -> i64;
 }

@@ -34,4 +34,4 @@ pub mod stats;
 pub mod store;
 pub mod store_path_config_helper;
 pub mod timer;
-mod utils;
+pub mod utils;

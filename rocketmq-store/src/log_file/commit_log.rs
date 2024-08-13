@@ -1146,6 +1146,14 @@ impl CommitLog {
     pub fn begin_time_in_lock(&self) -> &Arc<AtomicU64> {
         &self.begin_time_in_lock
     }
+
+    pub fn remain_how_many_data_to_commit(&self) -> i64 {
+        self.mapped_file_queue.remain_how_many_data_to_commit()
+    }
+
+    pub fn remain_how_many_data_to_flush(&self) -> i64 {
+        self.mapped_file_queue.remain_how_many_data_to_flush()
+    }
 }
 
 pub fn check_message_and_return_size(

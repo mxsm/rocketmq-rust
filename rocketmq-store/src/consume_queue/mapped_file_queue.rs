@@ -383,6 +383,21 @@ impl MappedFileQueue {
         }
         result
     }
+
+    pub fn remain_how_many_data_to_commit(&self) -> i64 {
+        self.get_max_wrote_position() - self.get_committed_where()
+    }
+
+    pub fn remain_how_many_data_to_flush(&self) -> i64 {
+        self.get_max_offset() - self.get_flushed_where()
+    }
+    fn get_max_wrote_position(&self) -> i64 {
+        let mapped_file = self.get_last_mapped_file();
+        match mapped_file {
+            None => 0,
+            Some(file) => file.get_file_from_offset() as i64 + file.get_wrote_position() as i64,
+        }
+    }
 }
 
 #[cfg(test)]

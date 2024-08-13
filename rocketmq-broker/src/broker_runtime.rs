@@ -302,13 +302,17 @@ impl BrokerRuntime {
     async fn initialize_message_store(&mut self) -> bool {
         if self.message_store_config.store_type == StoreType::LocalFile {
             info!("Use local file as message store");
-            let message_store = DefaultMessageStore::new(
+            let mut message_store = DefaultMessageStore::new(
                 self.message_store_config.clone(),
                 self.broker_config.clone(),
                 self.topic_config_manager.topic_config_table(),
                 Some(self.broker_stats_manager.clone()),
                 false,
             );
+            if self.message_store_config.is_timer_wheel_enable() {
+                let time_message_store = TimerMessageStore::new(Some(message_store.clone()));
+                message_store.set_timer_message_store(Arc::new(time_message_store));
+            }
             self.consumer_offset_manager
                 .set_message_store(Some(Arc::new(message_store.clone())));
             self.topic_config_manager
