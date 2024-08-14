@@ -449,6 +449,7 @@ impl BrokerRuntime {
 
         let admin_broker_processor = AdminBrokerProcessor::new(
             self.broker_config.clone(),
+            self.server_config.clone(),
             self.message_store_config.clone(),
             self.topic_config_manager.clone(),
             self.consumer_offset_manager.clone(),
