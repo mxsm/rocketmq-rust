@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::message::message_single::Message;
+use rocketmq_common::common::message::MessageTrait;
 
 use crate::implementation::communication_mode::CommunicationMode;
 use crate::producer::send_result::SendResult;
@@ -24,7 +24,7 @@ use crate::producer::send_result::SendResult;
 pub struct CheckForbiddenContext<'a> {
     pub name_srv_addr: Option<String>,
     pub group: Option<String>,
-    pub message: Option<&'a Message>,
+    pub message: Option<&'a dyn MessageTrait>,
     pub mq: Option<&'a MessageQueue>,
     pub broker_addr: Option<String>,
     pub communication_mode: Option<CommunicationMode>,

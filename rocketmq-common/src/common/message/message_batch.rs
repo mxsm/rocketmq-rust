@@ -14,55 +14,175 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+use std::any::Any;
 use std::collections::HashMap;
+use std::path::Iter;
 
 use bytes::Bytes;
 
+use crate::common::message::message_decoder;
 use crate::common::message::message_single::Message;
 use crate::common::message::message_single::MessageExtBrokerInner;
 use crate::common::message::MessageTrait;
+use crate::common::mix_all;
+use crate::error::Error::UnsupportedOperationException;
+use crate::Result;
 
+#[derive(Clone, Default)]
 pub struct MessageBatch {
-    pub messages: Vec<Message>,
+    ///`final_message` stores the batch-encoded messages.
+    pub final_message: Message,
+
+    ///`messages` stores the batch of initialized messages.
+    pub messages: Option<Vec<Message>>,
+}
+
+impl Iterator for MessageBatch {
+    type Item = Message;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match &self.messages {
+            Some(messages) => {
+                if let Some(message) = messages.iter().next() {
+                    return Some(message.clone());
+                }
+                None
+            }
+            None => None,
+        }
+    }
+}
+
+impl MessageBatch {
+    pub fn encode(&self) -> Bytes {
+        message_decoder::encode_messages(self.messages.as_ref().unwrap())
+    }
+
+    pub fn generate_from_vec(messages: Vec<Message>) -> Result<MessageBatch> {
+        if messages.is_empty() {
+            return Err(UnsupportedOperationException(
+                "MessageBatch::generate_from_vec: messages is empty".to_string(),
+            ));
+        }
+        let mut first: Option<&Message> = None;
+        for message in &messages {
+            if message.get_delay_time_level() > 0 {
+                return Err(UnsupportedOperationException(
+                    "TimeDelayLevel is not supported for batching".to_string(),
+                ));
+            }
+            if message
+                .get_topic()
+                .starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX)
+            {
+                return Err(UnsupportedOperationException(
+                    "Retry group topic is not supported for batching".to_string(),
+                ));
+            }
+            if first.is_none() {
+                first = Some(message);
+            } else {
+                let first_message = first.unwrap();
+                if first_message.get_topic() != message.get_topic() {
+                    return Err(UnsupportedOperationException(
+                        "The topic of the messages in one batch should be the same".to_string(),
+                    ));
+                }
+                if first_message.is_wait_store_msg_ok() != message.is_wait_store_msg_ok() {
+                    return Err(UnsupportedOperationException(
+                        "The waitStoreMsgOK of the messages in one batch should the same"
+                            .to_string(),
+                    ));
+                }
+            }
+        }
+        let first = first.unwrap();
+        let mut final_message = Message {
+            topic: first.topic.clone(),
+            ..Message::default()
+        };
+        final_message.set_wait_store_msg_ok(first.is_wait_store_msg_ok());
+        Ok(MessageBatch {
+            final_message,
+            messages: Some(messages),
+        })
+    }
 }
 
 #[allow(unused_variables)]
 impl MessageTrait for MessageBatch {
-    fn topic(&self) -> &str {
-        todo!()
+    fn put_property(&mut self, key: &str, value: &str) {
+        self.final_message
+            .properties
+            .insert(key.to_string(), value.to_string());
     }
 
-    fn with_topic(&mut self, topic: impl Into<String>) {
-        todo!()
+    fn clear_property(&mut self, name: &str) {
+        self.final_message.properties.remove(name);
     }
 
-    fn tags(&self) -> Option<&str> {
-        todo!()
+    fn get_property(&self, name: &str) -> Option<String> {
+        self.final_message.properties.get(name).cloned()
     }
 
-    fn with_tags(&mut self, tags: impl Into<String>) {
-        todo!()
+    fn get_topic(&self) -> &str {
+        &self.final_message.topic
     }
 
-    fn put_property(&mut self, key: impl Into<String>, value: impl Into<String>) {
-        todo!()
+    fn set_topic(&mut self, topic: &str) {
+        self.final_message.topic = topic.to_string();
     }
 
-    fn properties(&self) -> &HashMap<String, String> {
-        todo!()
+    fn get_flag(&self) -> i32 {
+        self.final_message.flag
     }
 
-    fn put_user_property(&mut self, name: impl Into<String>, value: impl Into<String>) {
-        todo!()
+    fn set_flag(&mut self, flag: i32) {
+        self.final_message.flag = flag;
     }
 
-    fn delay_time_level(&self) -> i32 {
-        todo!()
+    fn get_body(&self) -> Option<&Bytes> {
+        self.final_message.body.as_ref()
     }
 
-    fn with_delay_time_level(&self, level: i32) -> i32 {
-        todo!()
+    fn set_body(&mut self, body: Bytes) {
+        self.final_message.body = Some(body);
+    }
+
+    fn get_properties(&self) -> &HashMap<String, String> {
+        &self.final_message.properties
+    }
+
+    fn set_properties(&mut self, properties: HashMap<String, String>) {
+        self.final_message.properties = properties;
+    }
+
+    fn get_transaction_id(&self) -> &str {
+        self.final_message.transaction_id.as_deref().unwrap()
+    }
+
+    fn set_transaction_id(&mut self, transaction_id: &str) {
+        self.final_message.transaction_id = Some(transaction_id.to_string());
+    }
+
+    fn get_compressed_body_mut(&mut self) -> &mut Option<Bytes> {
+        &mut self.final_message.compressed_body
+    }
+
+    fn get_compressed_body(&self) -> Option<&Bytes> {
+        self.final_message.compressed_body.as_ref()
+    }
+
+    fn set_compressed_body_mut(&mut self, compressed_body: Bytes) {
+        self.final_message.compressed_body = Some(compressed_body);
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
     }
 }
 

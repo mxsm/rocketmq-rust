@@ -63,8 +63,8 @@ impl Validators {
     }
 
     pub fn check_message(
-        msg: &Option<Message>,
-        default_mq_producer: &DefaultMQProducer,
+        msg: Option<&Message>,
+        default_mq_producer: &mut DefaultMQProducer,
     ) -> Result<()> {
         if msg.is_none() {
             return Err(MQClientException(

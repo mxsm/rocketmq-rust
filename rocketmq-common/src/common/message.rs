@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+use std::any::Any;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::string::ToString;
@@ -32,74 +32,350 @@ pub mod message_id;
 pub mod message_queue;
 pub mod message_single;
 
-/// Trait defining the behavior of a message in a messaging system.
-pub trait MessageTrait {
-    /// Retrieves the topic of the message.
-    ///
-    /// # Returns
-    /// A string slice representing the topic of the message.
-    fn topic(&self) -> &str;
-
-    /// Sets the topic of the message.
+/// This module defines the `MessageTrait` trait, which provides a flexible interface for working
+/// with message objects in RocketMQ. It includes methods for managing message properties, keys,
+/// tags, body, and other metadata related to the message.
+pub trait MessageTrait: Any {
+    /// Sets the keys for the message.
     ///
     /// # Arguments
-    /// * `topic` - A string or a type that can be converted into a `String` representing the new
-    ///   topic of the message.
-    fn with_topic(&mut self, topic: impl Into<String>);
-
-    /// Retrieves the tags associated with the message, if any.
     ///
-    /// # Returns
-    /// An `Option` containing a string slice representing the tags of the message, or `None` if no
-    /// tags are set.
-    fn tags(&self) -> Option<&str>;
-
-    /// Sets the tags of the message.
-    ///
-    /// # Arguments
-    /// * `tags` - A string or a type that can be converted into a `String` representing the new
-    ///   tags of the message.
-    fn with_tags(&mut self, tags: impl Into<String>);
+    /// * `keys` - The keys to set, converted into a `String`.
+    fn set_keys(&mut self, keys: &str) {
+        self.put_property(MessageConst::PROPERTY_KEYS, keys);
+    }
 
     /// Adds a property to the message.
     ///
     /// # Arguments
-    /// * `key` - A string or a type that can be converted into a `String` representing the property
-    ///   key.
-    /// * `value` - A string or a type that can be converted into a `String` representing the
-    ///   property value.
-    fn put_property(&mut self, key: impl Into<String>, value: impl Into<String>);
-
-    /// Retrieves all properties of the message.
     ///
-    /// # Returns
-    /// A reference to a `HashMap` containing all properties of the message, where the key is the
-    /// property name and the value is the property value.
-    fn properties(&self) -> &HashMap<String, String>;
+    /// * `key` - The property key, converted into a `String`.
+    /// * `value` - The property value, converted into a `String`.
+    fn put_property(&mut self, key: &str, value: &str);
+
+    /// Clears a specific property from the message.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The name of the property to clear.
+    fn clear_property(&mut self, name: &str);
 
     /// Adds a user-defined property to the message.
     ///
     /// # Arguments
-    /// * `name` - A string or a type that can be converted into a `String` representing the name of
-    ///   the user-defined property.
-    /// * `value` - A string or a type that can be converted into a `String` representing the value
-    ///   of the user-defined property.
-    fn put_user_property(&mut self, name: impl Into<String>, value: impl Into<String>);
+    ///
+    /// * `name` - The name of the user property, converted into a `String`.
+    /// * `value` - The value of the user property, converted into a `String`.
+    fn put_user_property(&mut self, name: &str, value: &str) {
+        let name = name.trim();
+        let value = value.trim();
+        if STRING_HASH_SET.contains(name) {
+            panic!(
+                "The Property<{}> is used by system, input another please",
+                name
+            );
+        }
+        if value.is_empty() || name.is_empty() {
+            panic!("The name or value of property can not be null or blank string!");
+        }
+        self.put_property(name, value);
+    }
+
+    /// Retrieves a user-defined property from the message.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The name of the user property to retrieve.
+    ///
+    /// # Returns
+    ///
+    /// An `Option<String>` containing the property value if it exists, otherwise `None`.
+    fn get_user_property(&self, name: &str) -> Option<String> {
+        self.get_property(name)
+    }
+
+    /// Retrieves a property from the message.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The name of the property to retrieve.
+    ///
+    /// # Returns
+    ///
+    /// An `Option<String>` containing the property value if it exists, otherwise `None`.
+    fn get_property(&self, name: &str) -> Option<String>;
+
+    /// Retrieves the topic of the message.
+    ///
+    /// # Returns
+    ///
+    /// A reference to the topic as a `&str`.
+    fn get_topic(&self) -> &str;
+
+    /// Sets the topic for the message.
+    ///
+    /// # Arguments
+    ///
+    /// * `topic` - The topic to set, converted into a `String`.
+    fn set_topic(&mut self, topic: &str);
+
+    /// Retrieves the tags associated with the message.
+    ///
+    /// # Returns
+    ///
+    /// An `Option<String>` containing the tags if they exist, otherwise `None`.
+    fn get_tags(&self) -> Option<String> {
+        self.get_property(MessageConst::PROPERTY_TAGS)
+    }
+
+    /// Sets the tags for the message.
+    ///
+    /// # Arguments
+    ///
+    /// * `tags` - The tags to set, converted into a `String`.
+    fn set_tags(&mut self, tags: &str) {
+        self.put_property(MessageConst::PROPERTY_TAGS, tags);
+    }
+
+    /// Retrieves the keys associated with the message.
+    ///
+    /// # Returns
+    ///
+    /// An `Option<String>` containing the keys if they exist, otherwise `None`.
+    fn get_keys(&self) -> Option<String> {
+        self.get_property(MessageConst::PROPERTY_KEYS)
+    }
+
+    /// Sets multiple keys from a collection for the message.
+    ///
+    /// # Arguments
+    ///
+    /// * `key_collection` - A vector of keys to set.
+    fn set_keys_from_collection(&mut self, key_collection: Vec<String>) {
+        let keys = key_collection.join(MessageConst::KEY_SEPARATOR);
+        self.set_keys(keys.as_str());
+    }
 
     /// Retrieves the delay time level of the message.
     ///
     /// # Returns
-    /// An `i32` representing the delay time level of the message.
-    fn delay_time_level(&self) -> i32;
+    ///
+    /// An `i32` representing the delay time level.
+    fn get_delay_time_level(&self) -> i32 {
+        self.get_property(MessageConst::PROPERTY_DELAY_TIME_LEVEL)
+            .unwrap_or("0".to_string())
+            .parse()
+            .unwrap_or(0)
+    }
 
-    /// Sets the delay time level of the message.
+    /// Sets the delay time level for the message.
     ///
     /// # Arguments
-    /// * `level` - An `i32` representing the new delay time level of the message.
+    ///
+    /// * `level` - The delay time level to set.
+    fn set_delay_time_level(&mut self, level: i32) {
+        self.put_property(
+            MessageConst::PROPERTY_DELAY_TIME_LEVEL,
+            level.to_string().as_str(),
+        );
+    }
+
+    /// Checks if the message should wait for store acknowledgment.
     ///
     /// # Returns
-    /// The updated delay time level of the message.
-    fn with_delay_time_level(&self, level: i32) -> i32;
+    ///
+    /// `true` if the message should wait for store acknowledgment; `false` otherwise.
+    fn is_wait_store_msg_ok(&self) -> bool {
+        self.get_property(MessageConst::PROPERTY_WAIT_STORE_MSG_OK)
+            .unwrap_or("true".to_string())
+            .parse()
+            .unwrap_or(true)
+    }
+
+    /// Sets whether the message should wait for store acknowledgment.
+    ///
+    /// # Arguments
+    ///
+    /// * `wait_store_msg_ok` - A boolean indicating whether to wait for store acknowledgment.
+    fn set_wait_store_msg_ok(&mut self, wait_store_msg_ok: bool) {
+        self.put_property(
+            MessageConst::PROPERTY_WAIT_STORE_MSG_OK,
+            wait_store_msg_ok.to_string().as_str(),
+        );
+    }
+
+    /// Sets the instance ID for the message.
+    ///
+    /// # Arguments
+    ///
+    /// * `instance_id` - The instance ID to set.
+    fn set_instance_id(&mut self, instance_id: &str) {
+        self.put_property(MessageConst::PROPERTY_INSTANCE_ID, instance_id);
+    }
+
+    /// Retrieves the flag associated with the message.
+    ///
+    /// # Returns
+    ///
+    /// An `i32` representing the flag.
+    fn get_flag(&self) -> i32;
+
+    /// Sets the flag for the message.
+    ///
+    /// # Arguments
+    ///
+    /// * `flag` - The flag to set.
+    fn set_flag(&mut self, flag: i32);
+
+    /// Retrieves the body of the message.
+    ///
+    /// # Returns
+    ///
+    /// A byte slice (`&[u8]`) representing the body of the message.
+    fn get_body(&self) -> Option<&Bytes>;
+
+    /// Sets the body of the message.
+    ///
+    /// # Arguments
+    ///
+    /// * `body` - The byte slice (`&[u8]`) to set as the body.
+    fn set_body(&mut self, body: Bytes);
+
+    /// Retrieves all properties associated with the message.
+    ///
+    /// # Returns
+    ///
+    /// A reference to a `HashMap<String, String>` containing the properties.
+    fn get_properties(&self) -> &HashMap<String, String>;
+
+    /// Sets multiple properties for the message.
+    ///
+    /// # Arguments
+    ///
+    /// * `properties` - A `HashMap<String, String>` containing the properties to set.
+    fn set_properties(&mut self, properties: HashMap<String, String>);
+
+    /// Retrieves the buyer ID associated with the message.
+    ///
+    /// # Returns
+    ///
+    /// An `Option<String>` containing the buyer ID if it exists, otherwise `None`.
+    fn get_buyer_id(&self) -> Option<String> {
+        self.get_property(MessageConst::PROPERTY_BUYER_ID)
+    }
+
+    /// Sets the buyer ID for the message.
+    ///
+    /// # Arguments
+    ///
+    /// * `buyer_id` - The buyer ID to set.
+    fn set_buyer_id(&mut self, buyer_id: &str) {
+        self.put_property(MessageConst::PROPERTY_BUYER_ID, buyer_id);
+    }
+
+    /// Retrieves the transaction ID associated with the message.
+    ///
+    /// # Returns
+    ///
+    /// A reference to the transaction ID as a `&str`.
+    fn get_transaction_id(&self) -> &str;
+
+    /// Sets the transaction ID for the message.
+    ///
+    /// # Arguments
+    ///
+    /// * `transaction_id` - The transaction ID to set.
+    fn set_transaction_id(&mut self, transaction_id: &str);
+
+    /// Sets the delay time for the message in seconds.
+    ///
+    /// # Arguments
+    ///
+    /// * `sec` - The delay time in seconds.
+    fn set_delay_time_sec(&mut self, sec: u64) {
+        self.put_property(
+            MessageConst::PROPERTY_TIMER_DELAY_SEC,
+            sec.to_string().as_str(),
+        );
+    }
+
+    /// Retrieves the delay time for the message in seconds.
+    ///
+    /// # Returns
+    ///
+    /// The delay time in seconds.
+    fn get_delay_time_sec(&self) -> u64 {
+        self.get_property(MessageConst::PROPERTY_TIMER_DELAY_SEC)
+            .unwrap_or("0".to_string())
+            .parse()
+            .unwrap_or(0)
+    }
+
+    /// Sets the delay time for the message in milliseconds.
+    ///
+    /// # Arguments
+    ///
+    /// * `time_ms` - The delay time in milliseconds.
+    fn set_delay_time_ms(&mut self, time_ms: u64) {
+        self.put_property(
+            MessageConst::PROPERTY_TIMER_DELAY_MS,
+            time_ms.to_string().as_str(),
+        );
+    }
+
+    /// Retrieves the delay time for the message in milliseconds.
+    ///
+    /// # Returns
+    ///
+    /// The delay time in milliseconds.
+    fn get_delay_time_ms(&self) -> u64 {
+        self.get_property(MessageConst::PROPERTY_TIMER_DELAY_MS)
+            .unwrap_or("0".to_string())
+            .parse()
+            .unwrap_or(0)
+    }
+
+    /// Sets the delivery time for the message in milliseconds.
+    ///
+    /// # Arguments
+    ///
+    /// * `time_ms` - The delivery time in milliseconds.
+    fn set_deliver_time_ms(&mut self, time_ms: u64) {
+        self.put_property(
+            MessageConst::PROPERTY_TIMER_DELIVER_MS,
+            time_ms.to_string().as_str(),
+        );
+    }
+
+    /// Retrieves the delivery time for the message in milliseconds.
+    ///
+    /// # Returns
+    ///
+    /// The delivery time in milliseconds.
+    fn get_deliver_time_ms(&self) -> u64 {
+        self.get_property(MessageConst::PROPERTY_TIMER_DELIVER_MS)
+            .unwrap_or("0".to_string())
+            .parse()
+            .unwrap_or(0)
+    }
+
+    fn get_compressed_body_mut(&mut self) -> &mut Option<Bytes>;
+    fn get_compressed_body(&self) -> Option<&Bytes>;
+    fn set_compressed_body_mut(&mut self, compressed_body: Bytes);
+
+    /// Converts the message into a dynamic `Any` type.
+    ///
+    /// # Returns
+    ///
+    /// A reference to the message as `&dyn Any`.
+    fn as_any(&self) -> &dyn Any;
+
+    /// Converts the message into a mutable dynamic `Any` type.
+    ///
+    /// # Returns
+    ///
+    /// A mutable reference to the message as `&mut dyn Any`.
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
 pub const MESSAGE_MAGIC_CODE_V1: i32 = -626843481;

@@ -23,14 +23,18 @@ use std::net::SocketAddrV6;
 use std::str;
 
 use bytes::Buf;
+use bytes::BufMut;
 use bytes::Bytes;
+use bytes::BytesMut;
 
 use crate::common::compression::compression_type::CompressionType;
+use crate::common::message::message_single::Message;
 use crate::common::message::message_single::MessageExt;
 use crate::common::message::MessageVersion;
 use crate::common::sys_flag::message_sys_flag::MessageSysFlag;
 use crate::CRC32Utils::crc32;
 use crate::MessageUtils::build_message_id;
+use crate::Result;
 
 pub const CHARSET_UTF8: &str = "UTF-8";
 pub const MESSAGE_MAGIC_CODE_POSITION: usize = 4;
@@ -296,6 +300,56 @@ pub fn count_inner_msg_num(bytes: Option<Bytes>) -> u32 {
             count
         }
     }
+}
+
+pub fn encode_messages(messages: &[Message]) -> Bytes {
+    let mut bytes = BytesMut::new();
+    let mut all_size = 0;
+    for message in messages {
+        let message_bytes = encode_message(message);
+        all_size += message_bytes.len();
+        bytes.put_slice(&message_bytes);
+    }
+    bytes.freeze()
+}
+
+pub fn encode_message(message: &Message) -> Bytes {
+    let body = message.body.as_ref().unwrap();
+    let body_len = body.len();
+    let properties = message_properties_to_string(&message.properties);
+    let properties_bytes = properties.as_bytes();
+    let properties_length = properties_bytes.len();
+
+    let store_size = 4 // 1 TOTALSIZE
+         + 4 // 2 MAGICCOD
+         + 4 // 3 BODYCRC
+         + 4 // 4 FLAG
+         + 4 + body_len // 4 BODY
+         + 2 + properties_length;
+
+    let mut bytes = BytesMut::with_capacity(store_size);
+
+    // 1 TOTALSIZE
+    bytes.put_i32(store_size as i32);
+
+    // 2 MAGICCODE
+    bytes.put_i32(0);
+
+    // 3 BODYCRC
+    bytes.put_u32(0);
+
+    // 4 FLAG
+    bytes.put_i32(message.flag);
+
+    // 5 BODY
+    bytes.put_i32(body_len as i32);
+    bytes.put_slice(body);
+
+    // 6 PROPERTIES
+    bytes.put_i16(properties_length as i16);
+    bytes.put_slice(properties_bytes);
+
+    bytes.freeze()
 }
 
 #[cfg(test)]

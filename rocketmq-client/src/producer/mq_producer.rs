@@ -312,7 +312,7 @@ pub trait MQProducerLocal: Any + 'static {
     ///
     /// # Returns
     /// A `Result` containing the `SendResult`, or an error.
-    async fn send_batch(&self, msgs: &[Message]) -> Result<SendResult>;
+    async fn send_batch(&mut self, msgs: Vec<Message>) -> Result<SendResult>;
 
     /// Sends a batch of messages with a timeout.
     ///
