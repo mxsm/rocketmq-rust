@@ -41,3 +41,12 @@ parking_lot = { workspace = true }
 [[example]]
 name = "simple-producer"
 path = "examples/producer/simple_producer.rs"
+
+[[example]]
+name = "producer"
+path = "examples/quickstart/producer.rs"
+
+[[example]]
+name = "simple-batch-producer"
+path = "examples/batch/simple_batch_producer.rs"
+

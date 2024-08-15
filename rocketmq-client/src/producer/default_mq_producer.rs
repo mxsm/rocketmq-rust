@@ -21,16 +21,22 @@ use std::sync::Arc;
 use rocketmq_common::common::compression::compression_type::CompressionType;
 use rocketmq_common::common::compression::compressor::Compressor;
 use rocketmq_common::common::compression::compressor_factory::CompressorFactory;
+use rocketmq_common::common::message::message_batch::MessageBatch;
+use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_single::Message;
+use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all::MESSAGE_COMPRESS_LEVEL;
 use rocketmq_common::common::mix_all::MESSAGE_COMPRESS_TYPE;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::runtime::RPCHook;
+use tracing::error;
 
 use crate::base::client_config::ClientConfig;
+use crate::base::validators::Validators;
+use crate::error::MQClientError::MQClientException;
 use crate::producer::default_mq_produce_builder::DefaultMQProducerBuilder;
 use crate::producer::message_queue_selector::MessageQueueSelector;
 use crate::producer::mq_producer::MQProducer;
@@ -460,6 +466,29 @@ impl DefaultMQProducer {
             default_mqproducer_impl.set_send_latency_fault_enable(send_latency_fault_enable);
         }
     }
+
+    fn batch(&mut self, messages: Vec<Message>) -> Result<MessageBatch> {
+        match MessageBatch::generate_from_vec(messages) {
+            Ok(mut msg_batch) => {
+                for message in msg_batch.messages.as_mut().unwrap() {
+                    Validators::check_message(Some(message), self)?;
+                    MessageClientIDSetter::set_uniq_id(message);
+                    message.set_topic(self.with_namespace(message.get_topic()).as_str());
+                }
+                MessageClientIDSetter::set_uniq_id(&mut msg_batch.final_message);
+                msg_batch.set_body(msg_batch.encode());
+                msg_batch.set_topic(self.with_namespace(msg_batch.get_topic()).as_str());
+                Ok(msg_batch)
+            }
+            Err(err) => {
+                error!("Failed to initiate the MessageBatch: {:?}", err);
+                Err(MQClientException(
+                    -1,
+                    "Failed to initiate the MessageBatch".to_string(),
+                ))
+            }
+        }
+    }
 }
 
 impl DefaultMQProducer {
@@ -531,7 +560,7 @@ impl MQProducer for DefaultMQProducer {
             .default_mqproducer_impl
             .as_mut()
             .unwrap()
-            .send(msg, timeout)
+            .send_with_timeout(msg, timeout)
             .await?;
         Ok(result.expect("SendResult should not be None"))
     }
@@ -646,8 +675,15 @@ impl MQProducer for DefaultMQProducer {
         todo!()
     }
 
-    async fn send_batch(&self, msgs: &[Message]) -> Result<SendResult> {
-        todo!()
+    async fn send_batch(&mut self, msgs: Vec<Message>) -> Result<SendResult> {
+        let batch = self.batch(msgs)?;
+        let result = self
+            .default_mqproducer_impl
+            .as_mut()
+            .unwrap()
+            .send(batch)
+            .await?;
+        Ok(result.expect("SendResult should not be None"))
     }
 
     async fn send_batch_with_timeout(&self, msgs: &[Message], timeout: u64) -> Result<SendResult> {

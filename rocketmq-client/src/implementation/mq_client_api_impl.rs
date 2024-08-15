@@ -22,8 +22,8 @@ use lazy_static::lazy_static;
 use rocketmq_common::common::message::message_batch::MessageBatch;
 use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
 use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::message::message_single::Message;
 use rocketmq_common::common::message::MessageConst;
+use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::namesrv::default_top_addressing::DefaultTopAddressing;
 use rocketmq_common::common::namesrv::name_server_update_callback::NameServerUpdateCallback;
@@ -226,11 +226,11 @@ impl MQClientAPIImpl {
         self.remoting_client.get_name_server_address_list()
     }
 
-    pub async fn send_message(
+    pub async fn send_message<T>(
         &mut self,
         addr: &str,
         broker_name: &str,
-        msg: &mut Message,
+        msg: &mut T,
         request_header: SendMessageRequestHeader,
         timeout_millis: u64,
         communication_mode: CommunicationMode,
@@ -240,7 +240,10 @@ impl MQClientAPIImpl {
         retry_times_when_send_failed: u32,
         context: &mut Option<SendMessageContext<'_>>,
         producer: &DefaultMQProducerImpl,
-    ) -> Result<Option<SendResult>> {
+    ) -> Result<Option<SendResult>>
+    where
+        T: MessageTrait,
+    {
         let begin_start_time = Instant::now();
         let msg_type = msg.get_property(MessageConst::PROPERTY_MESSAGE_TYPE);
         let is_reply = msg_type.is_some() && msg_type.unwrap() == mix_all::REPLY_MESSAGE_FLAG;
@@ -279,11 +282,11 @@ impl MQClientAPIImpl {
         };
 
         // if compressed_body is not None, set request body to compressed_body
-        if msg.compressed_body.is_some() {
-            let compressed_body = std::mem::take(&mut msg.compressed_body);
+        if msg.get_compressed_body_mut().is_some() {
+            let compressed_body = std::mem::take(msg.get_compressed_body_mut());
             request.set_body_mut_ref(compressed_body);
         } else {
-            request.set_body_mut_ref(msg.body().clone());
+            request.set_body_mut_ref(msg.get_body().cloned());
         }
         match communication_mode {
             CommunicationMode::Sync => {
@@ -338,17 +341,20 @@ impl MQClientAPIImpl {
         }
     }
 
-    pub async fn send_message_simple(
+    pub async fn send_message_simple<T>(
         &mut self,
         addr: &str,
         broker_name: &str,
-        msg: &mut Message,
+        msg: &mut T,
         request_header: SendMessageRequestHeader,
         timeout_millis: u64,
         communication_mode: CommunicationMode,
         context: &mut Option<SendMessageContext<'_>>,
         producer: &DefaultMQProducerImpl,
-    ) -> Result<Option<SendResult>> {
+    ) -> Result<Option<SendResult>>
+    where
+        T: MessageTrait,
+    {
         self.send_message(
             addr,
             broker_name,
@@ -366,14 +372,17 @@ impl MQClientAPIImpl {
         .await
     }
 
-    async fn send_message_sync(
+    async fn send_message_sync<T>(
         &mut self,
         addr: &str,
         broker_name: &str,
-        msg: &Message,
+        msg: &T,
         timeout_millis: u64,
         request: RemotingCommand,
-    ) -> Result<SendResult> {
+    ) -> Result<SendResult>
+    where
+        T: MessageTrait,
+    {
         let response = self
             .remoting_client
             .invoke_async(Some(addr.to_string()), request, timeout_millis)
@@ -381,11 +390,11 @@ impl MQClientAPIImpl {
         self.process_send_response(broker_name, msg, &response, addr)
     }
 
-    async fn send_message_async(
+    async fn send_message_async<T: MessageTrait>(
         &mut self,
         addr: &str,
         broker_name: &str,
-        msg: &Message,
+        msg: &T,
         timeout_millis: u64,
         request: RemotingCommand,
         send_callback: Option<Arc<Box<dyn SendCallback>>>,
@@ -455,13 +464,16 @@ impl MQClientAPIImpl {
         }
     }
 
-    fn process_send_response(
+    fn process_send_response<T>(
         &mut self,
         broker_name: &str,
-        msg: &Message,
+        msg: &T,
         response: &RemotingCommand,
         addr: &str,
-    ) -> Result<SendResult> {
+    ) -> Result<SendResult>
+    where
+        T: MessageTrait,
+    {
         let response_code = ResponseCode::from(response.code());
         let send_status = match response_code {
             ResponseCode::FlushDiskTimeout => SendStatus::FlushDiskTimeout,
@@ -479,7 +491,7 @@ impl MQClientAPIImpl {
         let response_header = response
             .decode_command_custom_header_fast::<SendMessageResponseHeader>()
             .unwrap();
-        let mut topic = msg.topic.as_str().to_string();
+        let mut topic = msg.get_topic().to_string();
         let namespace = self.client_config.get_namespace();
         if namespace.is_some() && !namespace.as_ref().unwrap().is_empty() {
             topic = NamespaceUtil::without_namespace_with_namespace(
@@ -493,7 +505,7 @@ impl MQClientAPIImpl {
         let msgs = msg.as_any().downcast_ref::<MessageBatch>();
         if msgs.is_some() && response_header.batch_uniq_id().is_none() {
             let mut sb = String::new();
-            for msg in msgs.unwrap().messages.iter() {
+            for msg in msgs.unwrap().messages.as_ref().unwrap().iter() {
                 sb.push_str(if sb.is_empty() { "" } else { "," });
                 sb.push_str(MessageClientIDSetter::get_uniq_id(msg).unwrap().as_str());
             }
@@ -527,10 +539,10 @@ impl MQClientAPIImpl {
         Ok(send_result)
     }
 
-    async fn on_exception_impl(
+    async fn on_exception_impl<T: MessageTrait>(
         &mut self,
         broker_name: &str,
-        msg: &Message,
+        msg: &T,
         timeout_millis: u64,
         mut request: RemotingCommand,
         send_callback: Option<Arc<Box<dyn SendCallback>>>,
@@ -564,7 +576,7 @@ impl MQClientAPIImpl {
             warn!(
                 "async send msg by retry {} times. topic={}, brokerAddr={}, brokerName={}",
                 tmp,
-                msg.topic(),
+                msg.get_topic(),
                 addr,
                 retry_broker_name
             );

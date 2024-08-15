@@ -285,7 +285,7 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
         message_ext
             .message_ext_inner
             .message
-            .put_property(MessageConst::PROPERTY_CLUSTER.to_string(), cluster_name);
+            .put_property(MessageConst::PROPERTY_CLUSTER, cluster_name.as_str());
 
         let mut batch_message = MessageExtBatch {
             message_ext_broker_inner: message_ext,
@@ -325,8 +325,8 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
                 .message_ext_inner
                 .message
                 .put_property(
-                    MessageConst::PROPERTY_INNER_NUM.to_string(),
-                    inner_num.to_string(),
+                    MessageConst::PROPERTY_INNER_NUM,
+                    inner_num.to_string().as_str(),
                 );
             batch_message.message_ext_broker_inner.properties_string = message_properties_to_string(
                 batch_message

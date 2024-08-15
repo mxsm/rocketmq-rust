@@ -68,7 +68,10 @@ pub struct MessageClientIDSetter;
 
 impl MessageClientIDSetter {
     #[inline]
-    pub fn get_uniq_id(message: &Message) -> Option<String> {
+    pub fn get_uniq_id<T>(message: &T) -> Option<String>
+    where
+        T: MessageTrait,
+    {
         message.get_property(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX)
     }
 
@@ -109,7 +112,10 @@ impl MessageClientIDSetter {
         sb.into_iter().collect()
     }
 
-    pub fn set_uniq_id(message: &mut Message) {
+    pub fn set_uniq_id<T>(message: &mut T)
+    where
+        T: MessageTrait,
+    {
         let uniq_id = Self::create_uniq_id();
         if message
             .get_property(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX)
@@ -117,7 +123,7 @@ impl MessageClientIDSetter {
         {
             message.put_property(
                 MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
-                uniq_id,
+                uniq_id.as_str(),
             );
         }
     }

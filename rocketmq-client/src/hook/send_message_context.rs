@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use rocketmq_common::common::message::message_enum::MessageType;
 use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::message::message_single::Message;
+use rocketmq_common::common::message::MessageTrait;
 
 use crate::implementation::communication_mode::CommunicationMode;
 use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl;
@@ -29,7 +29,7 @@ use crate::producer::send_result::SendResult;
 #[derive(Default)]
 pub struct SendMessageContext<'a> {
     pub producer_group: Option<String>,
-    pub message: Option<Message>,
+    pub message: Option<Box<dyn MessageTrait + Send + Sync>>,
     pub mq: Option<&'a MessageQueue>,
     pub broker_addr: Option<String>,
     pub born_host: Option<String>,

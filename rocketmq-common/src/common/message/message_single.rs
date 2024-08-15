@@ -23,6 +23,7 @@ use std::net::SocketAddr;
 
 use bytes::Buf;
 use bytes::BufMut;
+use bytes::Bytes;
 
 use crate::common::hasher::string_hasher::JavaStringHasher;
 use crate::common::message::MessageConst;
@@ -102,13 +103,6 @@ impl Message {
             .insert(MessageConst::PROPERTY_KEYS.to_string(), keys);
     }
 
-    pub fn set_wait_store_msg_ok(&mut self, wait_store_msg_ok: bool) {
-        self.properties.insert(
-            MessageConst::PROPERTY_WAIT_STORE_MSG_OK.to_string(),
-            wait_store_msg_ok.to_string(),
-        );
-    }
-
     pub fn clear_property(&mut self, name: impl Into<String>) {
         self.properties.remove(name.into().as_str());
     }
@@ -184,40 +178,76 @@ impl Message {
 
 #[allow(unused_variables)]
 impl MessageTrait for Message {
-    fn topic(&self) -> &str {
-        todo!()
+    fn put_property(&mut self, key: &str, value: &str) {
+        self.properties.insert(key.to_string(), value.to_string());
     }
 
-    fn with_topic(&mut self, topic: impl Into<String>) {
-        todo!()
+    fn clear_property(&mut self, name: &str) {
+        self.properties.remove(name);
     }
 
-    fn tags(&self) -> Option<&str> {
-        todo!()
+    fn get_property(&self, name: &str) -> Option<String> {
+        self.properties.get(name).cloned()
     }
 
-    fn with_tags(&mut self, tags: impl Into<String>) {
-        todo!()
+    fn get_topic(&self) -> &str {
+        &self.topic
     }
 
-    fn put_property(&mut self, key: impl Into<String>, value: impl Into<String>) {
-        self.properties.insert(key.into(), value.into());
+    fn set_topic(&mut self, topic: &str) {
+        self.topic = topic.to_string();
     }
 
-    fn properties(&self) -> &HashMap<String, String> {
-        todo!()
+    fn get_flag(&self) -> i32 {
+        self.flag
     }
 
-    fn put_user_property(&mut self, name: impl Into<String>, value: impl Into<String>) {
-        todo!()
+    fn set_flag(&mut self, flag: i32) {
+        self.flag = flag;
     }
 
-    fn delay_time_level(&self) -> i32 {
-        todo!()
+    fn get_body(&self) -> Option<&Bytes> {
+        self.body.as_ref()
     }
 
-    fn with_delay_time_level(&self, level: i32) -> i32 {
-        todo!()
+    fn set_body(&mut self, body: Bytes) {
+        self.body = Some(body);
+    }
+
+    fn get_properties(&self) -> &HashMap<String, String> {
+        &self.properties
+    }
+
+    fn set_properties(&mut self, properties: HashMap<String, String>) {
+        self.properties = properties;
+    }
+
+    fn get_transaction_id(&self) -> &str {
+        self.transaction_id.as_deref().unwrap()
+    }
+
+    fn set_transaction_id(&mut self, transaction_id: &str) {
+        self.transaction_id = Some(transaction_id.to_string());
+    }
+
+    fn get_compressed_body_mut(&mut self) -> &mut Option<Bytes> {
+        &mut self.compressed_body
+    }
+
+    fn get_compressed_body(&self) -> Option<&Bytes> {
+        self.compressed_body.as_ref()
+    }
+
+    fn set_compressed_body_mut(&mut self, compressed_body: Bytes) {
+        self.compressed_body = Some(compressed_body);
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
     }
 }
 

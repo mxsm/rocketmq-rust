@@ -23,4 +23,7 @@ pub enum Error {
 
     #[error("{0}")]
     RuntimeException(String),
+
+    #[error("{0}")]
+    UnsupportedOperationException(String),
 }

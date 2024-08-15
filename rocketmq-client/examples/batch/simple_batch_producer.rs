@@ -14,21 +14,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 use rocketmq_client::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_client::producer::mq_producer::MQProducer;
-use rocketmq_client::Result;
 use rocketmq_common::common::message::message_single::Message;
 use rocketmq_rust::rocketmq;
 
-pub const MESSAGE_COUNT: usize = 1;
-pub const PRODUCER_GROUP: &str = "please_rename_unique_group_name";
+pub const PRODUCER_GROUP: &str = "BatchProducerGroupName";
 pub const DEFAULT_NAMESRVADDR: &str = "127.0.0.1:9876";
 pub const TOPIC: &str = "TopicTest";
 pub const TAG: &str = "TagA";
 
 #[rocketmq::main]
-pub async fn main() -> Result<()> {
+pub async fn main() -> rocketmq_client::Result<()> {
     //init logger
     rocketmq_common::log::init_logger();
 
@@ -39,16 +36,28 @@ pub async fn main() -> Result<()> {
         .producer_group(PRODUCER_GROUP.to_string())
         .name_server_addr(DEFAULT_NAMESRVADDR.to_string())
         .build();
-
     producer.start().await?;
 
-    for _ in 0..10 {
-        let message = Message::with_tags(TOPIC, TAG, "Hello RocketMQ".as_bytes());
-
-        let send_result = producer.send_with_timeout(message, 2000).await?;
-        println!("send result: {}", send_result);
-    }
-    producer.shutdown().await;
-
+    let mut messages = Vec::new();
+    messages.push(Message::with_keys(
+        TOPIC,
+        TAG,
+        "OrderID001",
+        "Hello world 0".as_bytes(),
+    ));
+    messages.push(Message::with_keys(
+        TOPIC,
+        TAG,
+        "OrderID002",
+        "Hello world 1".as_bytes(),
+    ));
+    messages.push(Message::with_keys(
+        TOPIC,
+        TAG,
+        "OrderID003",
+        "Hello world 2".as_bytes(),
+    ));
+    let send_result = producer.send_batch(messages).await?;
+    println!("send result: {}", send_result);
     Ok(())
 }

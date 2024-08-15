@@ -14,7 +14,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 use rocketmq_client::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_client::producer::mq_producer::MQProducer;
 use rocketmq_client::Result;

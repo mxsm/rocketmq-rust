@@ -29,6 +29,7 @@ use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_single::Message;
 use rocketmq_common::common::message::message_single::MessageExt;
 use rocketmq_common::common::message::MessageConst;
+use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::CLIENT_INNER_PRODUCER_GROUP;
 use rocketmq_common::common::mix_all::DEFAULT_PRODUCER_GROUP;
@@ -125,24 +126,40 @@ impl DefaultMQProducerImpl {
         }
     }
 
-    pub async fn send(&mut self, msg: Message, timeout: u64) -> Result<Option<SendResult>> {
+    #[inline]
+    pub async fn send_with_timeout<T>(&mut self, msg: T, timeout: u64) -> Result<Option<SendResult>>
+    where
+        T: MessageTrait + Clone + Send + Sync,
+    {
         self.send_default_impl(msg, CommunicationMode::Sync, None, timeout)
             .await
     }
 
-    async fn send_default_impl(
+    #[inline]
+    pub async fn send<T>(&mut self, msg: T) -> Result<Option<SendResult>>
+    where
+        T: MessageTrait + Clone + Send + Sync,
+    {
+        self.send_with_timeout(msg, self.producer_config.send_msg_timeout() as u64)
+            .await
+    }
+
+    async fn send_default_impl<T>(
         &mut self,
-        mut msg: Message,
+        mut msg: T,
         communication_mode: CommunicationMode,
         send_callback: Option<SendMessageCallback>,
         timeout: u64,
-    ) -> Result<Option<SendResult>> {
+    ) -> Result<Option<SendResult>>
+    where
+        T: MessageTrait + Clone + Send + Sync,
+    {
         self.make_sure_state_ok()?;
         let invoke_id = random::<u64>();
         let begin_timestamp_first = Instant::now();
         let mut begin_timestamp_prev = begin_timestamp_first;
         let mut end_timestamp = begin_timestamp_first;
-        let topic = msg.topic().to_string();
+        let topic = msg.get_topic().to_string();
         let topic_publish_info = self.try_to_find_topic_publish_info(topic.as_str()).await;
         if let Some(topic_publish_info) = topic_publish_info {
             if topic_publish_info.ok() {
@@ -179,8 +196,10 @@ impl DefaultMQProducerImpl {
                             //Reset topic with namespace during resend.
                             let namespace =
                                 self.client_config.get_namespace().unwrap_or("".to_string());
-                            msg.topic =
-                                NamespaceUtil::wrap_namespace(namespace.as_str(), topic.as_str());
+                            msg.set_topic(
+                                NamespaceUtil::wrap_namespace(namespace.as_str(), topic.as_str())
+                                    .as_str(),
+                            );
                         }
                         let cost_time =
                             (begin_timestamp_prev - begin_timestamp_first).as_millis() as u64;
@@ -200,16 +219,17 @@ impl DefaultMQProducerImpl {
                                 timeout - cost_time,
                             )
                             .await;
-                        end_timestamp = Instant::now();
-                        self.update_fault_item(
-                            mq.as_ref().unwrap().get_broker_name(),
-                            (end_timestamp - begin_timestamp_prev).as_millis() as u64,
-                            false,
-                            true,
-                        );
+
                         match result_inner {
                             Ok(result) => {
                                 send_result = result;
+                                end_timestamp = Instant::now();
+                                self.update_fault_item(
+                                    mq.as_ref().unwrap().get_broker_name(),
+                                    (end_timestamp - begin_timestamp_prev).as_millis() as u64,
+                                    false,
+                                    true,
+                                );
                                 return match communication_mode {
                                     CommunicationMode::Sync => {
                                         if let Some(ref result) = send_result {
@@ -247,7 +267,7 @@ impl DefaultMQProducerImpl {
                                         mq,
                                         err.to_string()
                                     );
-                                    warn!("{:?}", msg);
+                                    // warn!("{:?}", msg);
                                     exception = Some(err);
                                     continue;
                                 }
@@ -381,15 +401,18 @@ impl DefaultMQProducerImpl {
         );
     }
 
-    async fn send_kernel_impl(
+    async fn send_kernel_impl<T>(
         &mut self,
-        msg: &mut Message,
+        msg: &mut T,
         mq: &MessageQueue,
         communication_mode: CommunicationMode,
         send_callback: Option<Arc<Box<dyn SendCallback>>>,
         topic_publish_info: &TopicPublishInfo,
         timeout: u64,
-    ) -> Result<Option<SendResult>> {
+    ) -> Result<Option<SendResult>>
+    where
+        T: MessageTrait + Clone + Send + Sync,
+    {
         let begin_start_time = Instant::now();
         let mut broker_name = self
             .client_instance
@@ -486,7 +509,7 @@ impl DefaultMQProducerImpl {
                 communication_mode: Some(communication_mode),
                 born_host,
                 broker_addr: Some(broker_addr.clone()),
-                message: Some(msg.clone()),
+                message: Some(Box::new(msg.clone())),
                 mq: Some(mq),
                 namespace,
                 ..Default::default()
@@ -511,15 +534,15 @@ impl DefaultMQProducerImpl {
         //build send message request header
         let mut request_header = SendMessageRequestHeader {
             producer_group: self.producer_config.producer_group().to_string(),
-            topic: msg.topic().to_string(),
+            topic: msg.get_topic().to_string(),
             default_topic: self.producer_config.create_topic_key().to_string(),
             default_topic_queue_nums: self.producer_config.default_topic_queue_nums() as i32,
             queue_id: Some(mq.get_queue_id()),
             sys_flag,
             born_timestamp: get_current_millis() as i64,
-            flag: msg.flag,
+            flag: msg.get_flag(),
             properties: Some(MessageDecoder::message_properties_to_string(
-                &msg.properties,
+                msg.get_properties(),
             )),
             reconsume_times: Some(0),
             unit_mode: Some(self.is_unit_mode()),
@@ -554,12 +577,15 @@ impl DefaultMQProducerImpl {
         let send_result = match communication_mode {
             CommunicationMode::Async => {
                 if topic_with_namespace {
-                    msg.topic = NamespaceUtil::without_namespace_with_namespace(
-                        msg.topic(),
-                        self.client_config
-                            .get_namespace()
-                            .unwrap_or(String::from(""))
-                            .as_str(),
+                    msg.set_topic(
+                        NamespaceUtil::without_namespace_with_namespace(
+                            msg.get_topic(),
+                            self.client_config
+                                .get_namespace()
+                                .unwrap_or(String::from(""))
+                                .as_str(),
+                        )
+                        .as_str(),
                     );
                 }
                 let cost_time_sync = (Instant::now() - begin_start_time).as_millis() as u64;
@@ -661,25 +687,25 @@ impl DefaultMQProducerImpl {
         Ok(())
     }
 
-    fn try_to_compress_message(&self, msg: &mut Message) -> bool {
-        if msg.as_any().downcast_ref::<MessageBatch>().is_some() {
-            return false;
-        }
-        if let Some(body) = msg.body.as_mut() {
-            if body.len() >= self.producer_config.compress_msg_body_over_howmuch() as usize {
-                let data = self
-                    .producer_config
-                    .compressor()
-                    .as_ref()
-                    .unwrap()
-                    .compress(body, self.producer_config.compress_level());
-                if let Ok(data) = data {
-                    //store the compressed data
-                    msg.compressed_body = Some(Bytes::from(data));
-                    return true;
+    fn try_to_compress_message<T: MessageTrait>(&self, msg: &mut T) -> bool {
+        if let Some(message) = msg.as_any_mut().downcast_mut::<Message>() {
+            if let Some(body) = message.compressed_body.as_mut() {
+                if body.len() >= self.producer_config.compress_msg_body_over_howmuch() as usize {
+                    let data = self
+                        .producer_config
+                        .compressor()
+                        .as_ref()
+                        .unwrap()
+                        .compress(body, self.producer_config.compress_level());
+                    if let Ok(data) = data {
+                        //store the compressed data
+                        msg.set_compressed_body_mut(Bytes::from(data));
+                        return true;
+                    }
                 }
             }
         }
+
         false
     }
 
