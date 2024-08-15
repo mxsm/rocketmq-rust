@@ -189,6 +189,19 @@ impl ConsumerOffsetManager {
         }
         -1
     }
+
+    pub fn which_topic_by_consumer(&self, group: &str) -> HashSet<String> {
+        let read_guard = self.consumer_offset_wrapper.offset_table.read();
+        let mut topics = HashSet::new();
+        for (key, _) in read_guard.iter() {
+            let arr: Vec<&str> = key.split(TOPIC_GROUP_SEPARATOR).collect();
+            if arr.len() == 2 && arr[1] == group {
+                let topic = arr[0].to_string();
+                topics.insert(topic);
+            }
+        }
+        topics
+    }
 }
 
 impl ConfigManager for ConsumerOffsetManager {

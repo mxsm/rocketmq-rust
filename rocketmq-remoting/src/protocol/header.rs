@@ -36,6 +36,8 @@ pub mod query_consumer_offset_request_header;
 pub mod query_consumer_offset_response_header;
 pub mod query_message_request_header;
 pub mod query_message_response_header;
+
+pub mod query_topics_by_consumer_request_header;
 pub mod search_offset_response_header;
 pub mod unregister_client_request_header;
 pub mod update_consumer_offset_header;

@@ -17,6 +17,7 @@
 use std::sync::Arc;
 
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
@@ -47,6 +48,7 @@ pub struct AdminBrokerProcessor {
 impl AdminBrokerProcessor {
     pub fn new(
         broker_config: Arc<BrokerConfig>,
+        server_config: Arc<ServerConfig>,
         message_store_config: Arc<MessageStoreConfig>,
         topic_config_manager: TopicConfigManager,
         consumer_offset_manager: ConsumerOffsetManager,
@@ -57,6 +59,7 @@ impl AdminBrokerProcessor {
     ) -> Self {
         let inner = Inner {
             broker_config,
+            server_config,
             message_store_config,
             topic_config_manager,
             consumer_offset_manager,
@@ -134,6 +137,11 @@ impl AdminBrokerProcessor {
                     .get_broker_runtime_info(channel, ctx, request_code, request)
                     .await
             }
+            RequestCode::QueryTopicsByConsumer => {
+                self.topic_request_handler
+                    .query_topics_by_consumer(channel, ctx, request_code, request)
+                    .await
+            }
             _ => Some(get_unknown_cmd_response(request_code)),
         }
     }
@@ -154,6 +162,7 @@ fn get_unknown_cmd_response(request_code: RequestCode) -> RemotingCommand {
 #[derive(Clone)]
 struct Inner {
     broker_config: Arc<BrokerConfig>,
+    server_config: Arc<ServerConfig>,
     message_store_config: Arc<MessageStoreConfig>,
     topic_config_manager: TopicConfigManager,
     consumer_offset_manager: ConsumerOffsetManager,

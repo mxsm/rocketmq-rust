@@ -16,6 +16,7 @@
  */
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 use bytes::Bytes;
 use rocketmq_common::common::attribute::attribute_parser::AttributeParser;
@@ -38,6 +39,7 @@ use rocketmq_remoting::protocol::header::create_topic_request_header::CreateTopi
 use rocketmq_remoting::protocol::header::delete_topic_request_header::DeleteTopicRequestHeader;
 use rocketmq_remoting::protocol::header::get_topic_config_request_header::GetTopicConfigRequestHeader;
 use rocketmq_remoting::protocol::header::get_topic_stats_request_header::GetTopicStatsRequestHeader;
+use rocketmq_remoting::protocol::header::query_topics_by_consumer_request_header::QueryTopicsByConsumerRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::static_topic::topic_config_and_queue_mapping::TopicConfigAndQueueMapping;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
@@ -514,6 +516,33 @@ impl TopicRequestHandler {
         let topic_config_and_queue_mapping =
             TopicConfigAndQueueMapping::new(topic_config.unwrap(), topic_queue_mapping_detail);
         response.set_body_mut_ref(Some(topic_config_and_queue_mapping.encode()));
+        Some(response)
+    }
+
+    pub async fn query_topics_by_consumer(
+        &mut self,
+        _channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        _request_code: RequestCode,
+        request: RemotingCommand,
+    ) -> Option<RemotingCommand> {
+        let mut response = RemotingCommand::create_response_command();
+        let request_header = request
+            .decode_command_custom_header::<QueryTopicsByConsumerRequestHeader>()
+            .unwrap();
+        let topics: HashSet<String> = self
+            .inner
+            .consumer_offset_manager
+            .which_topic_by_consumer(request_header.get_group());
+        let broker_addr = format!(
+            "{}:{}",
+            self.inner.broker_config.broker_ip1, self.inner.server_config.listen_port
+        );
+        let topic_list = TopicList {
+            topic_list: topics.into_iter().collect(),
+            broker_addr: Some(broker_addr),
+        };
+        response.set_body_mut_ref(Some(topic_list.encode()));
         Some(response)
     }
 
