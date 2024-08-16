@@ -48,7 +48,7 @@ bytes = "1.7.1"
 config.workspace = true
 parking_lot.workspace = true
 
-clap = { version = "4.5.15", features = ["derive"] }
+clap = { version = "4.5.16", features = ["derive"] }
 rand = "0.8.5"
 
 #tools
