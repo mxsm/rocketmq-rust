@@ -16,8 +16,10 @@
  */
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::future::Future;
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 use std::time::Instant;
 
 use rand::random;
@@ -45,6 +47,7 @@ use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
 use rocketmq_remoting::rpc::topic_request_header::TopicRequestHeader;
 use rocketmq_remoting::runtime::RPCHook;
+use rocketmq_runtime::RocketMQRuntime;
 use tokio::runtime::Handle;
 use tokio::sync::RwLock;
 use tokio::sync::Semaphore;
@@ -71,7 +74,6 @@ use crate::latency::service_detector::ServiceDetector;
 use crate::producer::default_mq_producer::ProducerConfig;
 use crate::producer::producer_impl::mq_producer_inner::MQProducerInner;
 use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
-use crate::producer::send_callback::SendCallback;
 use crate::producer::send_callback::SendMessageCallback;
 use crate::producer::send_result::SendResult;
 use crate::producer::send_status::SendStatus;
@@ -92,6 +94,8 @@ pub struct DefaultMQProducerImpl {
     mq_fault_strategy: ArcRefCellWrapper<MQFaultStrategy>,
     semaphore_async_send_num: Arc<Semaphore>,
     semaphore_async_send_size: Arc<Semaphore>,
+    async_sender_runtime: Option<Arc<RocketMQRuntime>>,
+    default_async_sender_runtime: Option<Arc<RocketMQRuntime>>,
 }
 
 #[allow(unused_must_use)]
@@ -123,6 +127,11 @@ impl DefaultMQProducerImpl {
             mq_fault_strategy: ArcRefCellWrapper::new(MQFaultStrategy::new(&client_config)),
             semaphore_async_send_num: Arc::new(semaphore_async_send_num),
             semaphore_async_send_size: Arc::new(semaphore_async_send_size),
+            async_sender_runtime: None,
+            default_async_sender_runtime: Some(Arc::new(RocketMQRuntime::new_multi(
+                num_cpus::get(),
+                "async-sender",
+            ))),
         }
     }
 
@@ -142,6 +151,335 @@ impl DefaultMQProducerImpl {
     {
         self.send_with_timeout(msg, self.producer_config.send_msg_timeout() as u64)
             .await
+    }
+
+    #[inline]
+    pub async fn async_send_with_callback<T>(
+        &mut self,
+        msg: T,
+        send_callback: Option<SendMessageCallback>,
+    ) -> Result<()>
+    where
+        T: MessageTrait + Clone + Send + Sync,
+    {
+        self.async_send_with_callback_timeout(
+            msg,
+            send_callback,
+            self.producer_config.send_msg_timeout() as u64,
+        )
+        .await
+    }
+
+    #[inline]
+    pub async fn sync_send_with_message_queue<T>(
+        &mut self,
+        msg: T,
+        mq: MessageQueue,
+    ) -> Result<Option<SendResult>>
+    where
+        T: MessageTrait + Clone + Send + Sync,
+    {
+        self.sync_send_with_message_queue_timeout(
+            msg,
+            mq,
+            self.producer_config.send_msg_timeout() as u64,
+        )
+        .await
+    }
+
+    #[inline]
+    pub async fn sync_send_with_message_queue_timeout<T>(
+        &mut self,
+        mut msg: T,
+        mq: MessageQueue,
+        timeout: u64,
+    ) -> Result<Option<SendResult>>
+    where
+        T: MessageTrait + Clone + Send + Sync,
+    {
+        let begin_start_time = Instant::now();
+        self.make_sure_state_ok()?;
+        Validators::check_message(Some(&msg), self.producer_config.as_ref())?;
+
+        if msg.get_topic() != mq.get_topic() {
+            return Err(MQClientError::MQClientException(
+                -1,
+                format!(
+                    "message topic [{}] is not equal with message queue topic [{}]",
+                    msg.get_topic(),
+                    mq.get_topic()
+                ),
+            ));
+        }
+        let cost_time = begin_start_time.elapsed().as_millis() as u64;
+        if timeout < cost_time {
+            return Err(MQClientError::RequestTimeoutException(
+                -1,
+                format!(
+                    "send message timeout {}ms is required, but {}ms is given",
+                    timeout, cost_time
+                ),
+            ));
+        }
+        self.send_kernel_impl(
+            &mut msg,
+            &mq,
+            CommunicationMode::Sync,
+            None,
+            None,
+            timeout - cost_time,
+        )
+        .await
+    }
+
+    #[inline]
+    pub async fn async_send_with_message_queue_callback<T>(
+        &mut self,
+        msg: T,
+        mq: MessageQueue,
+        send_callback: Option<SendMessageCallback>,
+    ) -> Result<()>
+    where
+        T: MessageTrait + Clone + Send + Sync,
+    {
+        self.async_send_batch_to_queue_with_callback_timeout(
+            msg,
+            mq,
+            send_callback,
+            self.producer_config.send_msg_timeout() as u64,
+        )
+        .await
+    }
+
+    #[inline]
+    pub async fn async_send_batch_to_queue_with_callback_timeout<T>(
+        &mut self,
+        mut msg: T,
+        mq: MessageQueue,
+        send_callback: Option<SendMessageCallback>,
+        timeout: u64,
+    ) -> Result<()>
+    where
+        T: MessageTrait + Clone + Send + Sync,
+    {
+        let mut producer_impl = self.clone();
+        let begin_start_time = Instant::now();
+        let send_callback_inner = send_callback.clone();
+        let msg_len = if msg.get_body().is_some() {
+            msg.get_body().unwrap().len()
+        } else {
+            1
+        };
+        let future = async move {
+            if let Err(err) = producer_impl.make_sure_state_ok() {
+                send_callback_inner.as_ref().unwrap()(None, Some(&err));
+                return;
+            }
+            if msg.get_topic() != mq.get_topic() {
+                send_callback_inner.as_ref().unwrap()(
+                    None,
+                    Some(&MQClientError::MQClientException(
+                        -1,
+                        format!(
+                            "message topic [{}] is not equal with message queue topic [{}]",
+                            msg.get_topic(),
+                            mq.get_topic()
+                        ),
+                    )),
+                );
+                return;
+            }
+
+            let cost_time = (Instant::now() - begin_start_time).as_millis() as u64;
+            if timeout <= cost_time {
+                send_callback_inner.as_ref().unwrap()(
+                    None,
+                    Some(&RemotingTooMuchRequestException("call timeout".to_string())),
+                );
+            }
+            let result = producer_impl
+                .send_kernel_impl(
+                    &mut msg,
+                    &mq,
+                    CommunicationMode::Async,
+                    send_callback_inner.clone(),
+                    None,
+                    timeout,
+                )
+                .await;
+            match result {
+                Ok(_) => {}
+                Err(err) => {
+                    send_callback_inner.as_ref().unwrap()(None, Some(&err));
+                }
+            }
+        };
+
+        self.execute_async_message_send(future, send_callback, timeout, begin_start_time, msg_len)
+            .await
+    }
+
+    pub async fn async_send_with_callback_timeout<T>(
+        &mut self,
+        msg: T,
+        send_callback: Option<SendMessageCallback>,
+        timeout: u64,
+    ) -> Result<()>
+    where
+        T: MessageTrait + Clone + Send + Sync,
+    {
+        let mut producer_impl = self.clone();
+        let begin_start_time = Instant::now();
+        let send_callback_inner = send_callback.clone();
+        let msg_len = if msg.get_body().is_some() {
+            msg.get_body().unwrap().len()
+        } else {
+            1
+        };
+        let future = async move {
+            let cost_time = (Instant::now() - begin_start_time).as_millis() as u64;
+            if timeout <= cost_time {
+                send_callback_inner.as_ref().unwrap()(
+                    None,
+                    Some(&RemotingTooMuchRequestException(
+                        "asyncSend call timeout".to_string(),
+                    )),
+                );
+            }
+            let result = producer_impl
+                .send_default_impl(
+                    msg,
+                    CommunicationMode::Async,
+                    send_callback_inner.clone(),
+                    timeout,
+                )
+                .await;
+            match result {
+                Ok(_) => {}
+                Err(err) => {
+                    send_callback_inner.as_ref().unwrap()(None, Some(&err));
+                }
+            }
+        };
+
+        self.execute_async_message_send(future, send_callback, timeout, begin_start_time, msg_len)
+            .await
+    }
+
+    async fn execute_async_message_send<F>(
+        &mut self,
+        f: F,
+        send_callback: Option<SendMessageCallback>,
+        timeout: u64,
+        begin_start_time: Instant,
+        msg_len: usize,
+    ) -> Result<()>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        let is_enable_backpressure_for_async_mode =
+            self.producer_config.enable_backpressure_for_async_mode();
+
+        let (acquire_value_num, acquire_value_size) = if is_enable_backpressure_for_async_mode {
+            //back pressure
+            let cost_time = (Instant::now() - begin_start_time).as_millis() as u64;
+            let is_semaphore_async_numb_acquired = (timeout - cost_time) > 0;
+            if !is_semaphore_async_numb_acquired {
+                send_callback.as_ref().unwrap()(
+                    None,
+                    Some(&RemotingTooMuchRequestException(
+                        "send message tryAcquire semaphoreAsyncNum timeout".to_string(),
+                    )),
+                );
+                return Ok(());
+            }
+            let result = tokio::time::timeout(
+                Duration::from_millis(timeout - cost_time),
+                self.semaphore_async_send_num.acquire(),
+            )
+            .await;
+            let acquire_value_num = match result {
+                Ok(acquire_value) => match acquire_value {
+                    Ok(value) => Some(value),
+                    Err(_) => {
+                        send_callback.as_ref().unwrap()(
+                            None,
+                            Some(&RemotingTooMuchRequestException(
+                                "send message tryAcquire semaphoreAsyncNum timeout".to_string(),
+                            )),
+                        );
+                        return Ok(());
+                    }
+                },
+                Err(_) => {
+                    send_callback.as_ref().unwrap()(
+                        None,
+                        Some(&RemotingTooMuchRequestException(
+                            "send message tryAcquire semaphoreAsyncNum timeout".to_string(),
+                        )),
+                    );
+                    return Ok(());
+                }
+            };
+
+            //message size
+            let cost_time = (Instant::now() - begin_start_time).as_millis() as u64;
+            let is_semaphore_async_size_acquired = (timeout - cost_time) > 0;
+            if !is_semaphore_async_size_acquired {
+                send_callback.as_ref().unwrap()(
+                    None,
+                    Some(&RemotingTooMuchRequestException(
+                        "send message tryAcquire semaphoreAsyncSize timeout".to_string(),
+                    )),
+                );
+                return Ok(());
+            }
+            let result = tokio::time::timeout(
+                Duration::from_millis(timeout - cost_time),
+                self.semaphore_async_send_size.acquire_many(msg_len as u32),
+            )
+            .await;
+            let acquire_value_size = match result {
+                Ok(acquire_value) => match acquire_value {
+                    Ok(value) => Some(value),
+                    Err(_) => {
+                        send_callback.as_ref().unwrap()(
+                            None,
+                            Some(&RemotingTooMuchRequestException(
+                                "send message tryAcquire semaphoreAsyncSize timeout".to_string(),
+                            )),
+                        );
+                        return Ok(());
+                    }
+                },
+                Err(_) => {
+                    send_callback.as_ref().unwrap()(
+                        None,
+                        Some(&RemotingTooMuchRequestException(
+                            "send message tryAcquire semaphoreAsyncSize timeout".to_string(),
+                        )),
+                    );
+                    return Ok(());
+                }
+            };
+            (acquire_value_num, acquire_value_size)
+        } else {
+            (None, None)
+        };
+
+        self.get_async_sender_executor().get_handle().spawn(f);
+        drop((acquire_value_num, acquire_value_size));
+        Ok(())
+    }
+
+    #[inline]
+    pub fn get_async_sender_executor(&self) -> &Arc<RocketMQRuntime> {
+        if let Some(ref async_sender_runtime) = self.async_sender_runtime {
+            async_sender_runtime
+        } else {
+            self.default_async_sender_runtime.as_ref().unwrap()
+        }
     }
 
     async fn send_default_impl<T>(
@@ -215,7 +553,7 @@ impl DefaultMQProducerImpl {
                                 mq.as_ref().unwrap(),
                                 communication_mode,
                                 send_callback.clone(),
-                                &topic_publish_info,
+                                Some(&topic_publish_info),
                                 timeout - cost_time,
                             )
                             .await;
@@ -406,8 +744,8 @@ impl DefaultMQProducerImpl {
         msg: &mut T,
         mq: &MessageQueue,
         communication_mode: CommunicationMode,
-        send_callback: Option<Arc<Box<dyn SendCallback>>>,
-        topic_publish_info: &TopicPublishInfo,
+        send_callback: Option<SendMessageCallback>,
+        topic_publish_info: Option<&TopicPublishInfo>,
         timeout: u64,
     ) -> Result<Option<SendResult>>
     where
@@ -601,7 +939,7 @@ impl DefaultMQProducerImpl {
                         timeout - cost_time_sync,
                         communication_mode,
                         send_callback,
-                        Some(topic_publish_info),
+                        topic_publish_info,
                         self.client_instance.clone(),
                         self.producer_config.retry_times_when_send_async_failed(),
                         &mut send_message_context,

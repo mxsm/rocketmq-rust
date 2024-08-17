@@ -26,8 +26,8 @@ use crate::producer::send_result::SendResult;
 use crate::producer::transaction_send_result::TransactionSendResult;
 use crate::Result;
 
-#[trait_variant::make(MQProducer: Send + Sync)]
-pub trait MQProducerLocal: Any + 'static {
+#[trait_variant::make(MQProducer: Send)]
+pub trait MQProducerLocal {
     /// Starts the MQ producer.
     ///
     /// This method initializes and starts the MQ producer, preparing it for sending messages.
@@ -324,7 +324,11 @@ pub trait MQProducerLocal: Any + 'static {
     ///
     /// # Returns
     /// A `Result` containing the `SendResult`, or an error.
-    async fn send_batch_with_timeout(&self, msgs: &[Message], timeout: u64) -> Result<SendResult>;
+    async fn send_batch_with_timeout(
+        &mut self,
+        msgs: Vec<Message>,
+        timeout: u64,
+    ) -> Result<SendResult>;
 
     /// Sends a batch of messages to a specific queue.
     ///
@@ -336,7 +340,11 @@ pub trait MQProducerLocal: Any + 'static {
     ///
     /// # Returns
     /// A `Result` containing the `SendResult`, or an error.
-    async fn send_batch_to_queue(&self, msgs: &[Message], mq: &MessageQueue) -> Result<SendResult>;
+    async fn send_batch_to_queue(
+        &mut self,
+        msgs: Vec<Message>,
+        mq: MessageQueue,
+    ) -> Result<SendResult>;
 
     /// Sends a batch of messages to a specific queue with a timeout.
     ///
@@ -351,9 +359,9 @@ pub trait MQProducerLocal: Any + 'static {
     /// # Returns
     /// A `Result` containing the `SendResult`, or an error.
     async fn send_batch_to_queue_with_timeout(
-        &self,
-        msgs: &[Message],
-        mq: &MessageQueue,
+        &mut self,
+        msgs: Vec<Message>,
+        mq: MessageQueue,
         timeout: u64,
     ) -> Result<SendResult>;
 
@@ -365,7 +373,9 @@ pub trait MQProducerLocal: Any + 'static {
     /// # Arguments
     /// * `msgs` - A slice of `Message` references to be sent.
     /// * `send_callback` - A callback function to be invoked with the result of the send operation.
-    async fn send_batch_with_callback(&self, msgs: &[Message], send_callback: impl SendCallback);
+    async fn send_batch_with_callback<F>(&mut self, msgs: Vec<Message>, f: F) -> Result<()>
+    where
+        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static;
 
     /// Sends a batch of messages with a callback and a timeout.
     ///
@@ -376,12 +386,14 @@ pub trait MQProducerLocal: Any + 'static {
     /// * `msgs` - A slice of `Message` references to be sent.
     /// * `send_callback` - A callback function to be invoked with the result of the send operation.
     /// * `timeout` - The timeout duration in milliseconds.
-    async fn send_batch_with_callback_timeout(
-        &self,
-        msgs: &[Message],
-        send_callback: impl SendCallback,
+    async fn send_batch_with_callback_timeout<F>(
+        &mut self,
+        msgs: Vec<Message>,
+        f: F,
         timeout: u64,
-    );
+    ) -> Result<()>
+    where
+        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static;
 
     /// Sends a batch of messages to a specific queue with a callback.
     ///
@@ -392,12 +404,14 @@ pub trait MQProducerLocal: Any + 'static {
     /// * `msgs` - A slice of `Message` references to be sent.
     /// * `mq` - A reference to the `MessageQueue` where the messages should be sent.
     /// * `send_callback` - A callback function to be invoked with the result of the send operation.
-    async fn send_batch_to_queue_with_callback(
-        &self,
-        msgs: &[Message],
-        mq: &MessageQueue,
-        send_callback: impl SendCallback,
-    );
+    async fn send_batch_to_queue_with_callback<F>(
+        &mut self,
+        msgs: Vec<Message>,
+        mq: MessageQueue,
+        f: F,
+    ) -> Result<()>
+    where
+        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static;
 
     /// Sends a batch of messages to a specific queue with a callback and a timeout.
     ///
@@ -410,13 +424,15 @@ pub trait MQProducerLocal: Any + 'static {
     /// * `mq` - A reference to the `MessageQueue` where the messages should be sent.
     /// * `send_callback` - A callback function to be invoked with the result of the send operation.
     /// * `timeout` - The timeout duration in milliseconds.
-    async fn send_batch_to_queue_with_callback_timeout(
-        &self,
-        msgs: &[Message],
-        mq: &MessageQueue,
-        send_callback: impl SendCallback,
+    async fn send_batch_to_queue_with_callback_timeout<F>(
+        &mut self,
+        msgs: Vec<Message>,
+        mq: MessageQueue,
+        f: F,
         timeout: u64,
-    );
+    ) -> Result<()>
+    where
+        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static;
 
     /// Sends a request message.
     ///

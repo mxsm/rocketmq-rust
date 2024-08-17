@@ -41,11 +41,13 @@ use crate::Result;
 
 const LOCK_TIMEOUT_MILLIS: u64 = 3000;
 
+pub type ArcSyncClient = Arc<Mutex<Client>>;
+
 #[derive(Clone)]
 pub struct RocketmqDefaultClient {
     tokio_client_config: Arc<TokioClientConfig>,
     //cache connection
-    connection_tables: Arc<Mutex<HashMap<String /* ip:port */, ArcRefCellWrapper<Client>>>>,
+    connection_tables: Arc<Mutex<HashMap<String /* ip:port */, ArcSyncClient>>>,
     namesrv_addr_list: ArcRefCellWrapper<Vec<String>>,
     namesrv_addr_choosed: ArcRefCellWrapper<Option<String>>,
     available_namesrv_addr_set: ArcRefCellWrapper<HashSet<String>>,
@@ -67,61 +69,58 @@ impl RocketmqDefaultClient {
 }
 
 impl RocketmqDefaultClient {
-    async fn get_and_create_nameserver_client(&self) -> Option<ArcRefCellWrapper<Client>> {
+    async fn get_and_create_nameserver_client(&self) -> Option<ArcSyncClient> {
         let mut addr = self.namesrv_addr_choosed.as_ref().clone();
         if let Some(ref addr) = addr {
             let guard = self.connection_tables.lock().await;
             let ct = guard.get(addr);
             if let Some(ct) = ct {
-                let conn_status = ct.connection().ok;
+                let conn_status = ct.lock().await.connection().ok;
                 if conn_status {
                     return Some(ct.clone());
                 }
             }
         }
-        let connection_tables = self.connection_tables.try_lock();
-        if let Ok(connection_tables) = connection_tables {
-            addr.clone_from(self.namesrv_addr_choosed.as_ref());
-            if let Some(addr) = addr.as_ref() {
-                let ct = connection_tables.get(addr);
-                if let Some(ct) = ct {
-                    let conn_status = ct.connection().ok;
-                    if conn_status {
-                        return Some(ct.clone());
-                    }
+        let connection_tables = self.connection_tables.lock().await;
+
+        addr.clone_from(self.namesrv_addr_choosed.as_ref());
+        if let Some(addr) = addr.as_ref() {
+            let ct = connection_tables.get(addr);
+            if let Some(ct) = ct {
+                let conn_status = ct.lock().await.connection().ok;
+                if conn_status {
+                    return Some(ct.clone());
                 }
             }
-            let addr_list = self.namesrv_addr_list.as_ref();
-            if !addr_list.is_empty() {
-                let index = self
-                    .namesrv_index
-                    .fetch_and(1, std::sync::atomic::Ordering::Release)
-                    .abs();
-                let index = index as usize % addr_list.len();
-                let new_addr = addr_list[index].clone();
-                info!(
-                    "new name server is chosen. OLD: {} , NEW: {}. namesrvIndex = {}",
-                    new_addr, new_addr, index
-                );
-                self.namesrv_addr_choosed
-                    .mut_from_ref()
-                    .replace(new_addr.clone());
-                drop(connection_tables);
-                return self
-                    .create_client(
-                        new_addr.as_str(),
-                        //&mut connection_tables,
-                        Duration::from_millis(
-                            self.tokio_client_config.connect_timeout_millis as u64,
-                        ),
-                    )
-                    .await;
-            }
+        }
+        let addr_list = self.namesrv_addr_list.as_ref();
+        if !addr_list.is_empty() {
+            let index = self
+                .namesrv_index
+                .fetch_and(1, std::sync::atomic::Ordering::Release)
+                .abs();
+            let index = index as usize % addr_list.len();
+            let new_addr = addr_list[index].clone();
+            info!(
+                "new name server is chosen. OLD: {} , NEW: {}. namesrvIndex = {}",
+                new_addr, new_addr, index
+            );
+            self.namesrv_addr_choosed
+                .mut_from_ref()
+                .replace(new_addr.clone());
+            drop(connection_tables);
+            return self
+                .create_client(
+                    new_addr.as_str(),
+                    //&mut connection_tables,
+                    Duration::from_millis(self.tokio_client_config.connect_timeout_millis as u64),
+                )
+                .await;
         }
         None
     }
 
-    async fn get_and_create_client(&self, addr: Option<&str>) -> Option<ArcRefCellWrapper<Client>> {
+    async fn get_and_create_client(&self, addr: Option<&str>) -> Option<ArcSyncClient> {
         match addr {
             None => self.get_and_create_nameserver_client().await,
             Some(addr) => {
@@ -129,7 +128,7 @@ impl RocketmqDefaultClient {
                     return self.get_and_create_nameserver_client().await;
                 }
                 let client = self.connection_tables.lock().await.get(addr).cloned();
-                if client.is_some() && client.as_ref().unwrap().connection().ok {
+                if client.is_some() && client.as_ref()?.lock().await.connection().ok {
                     return client;
                 }
                 self.create_client(
@@ -141,62 +140,42 @@ impl RocketmqDefaultClient {
         }
     }
 
-    async fn create_client(
-        &self,
-        addr: &str,
-        duration: Duration,
-    ) -> Option<ArcRefCellWrapper<Client>> {
-        let binding = self.connection_tables.lock().await;
-        let cw = binding.get(addr);
+    async fn create_client(&self, addr: &str, duration: Duration) -> Option<ArcSyncClient> {
+        let mut connection_tables = self.connection_tables.lock().await;
+        let cw = connection_tables.get(addr);
         if let Some(cw) = cw {
-            if cw.connection().ok {
+            if cw.lock().await.connection().ok {
                 return Some(cw.clone());
             }
         }
-        drop(binding);
 
-        let connection_tables_lock = self.connection_tables.try_lock();
-        if let Ok(mut connection_tables) = connection_tables_lock {
-            let cw = connection_tables.get(addr);
-            if let Some(cw) = cw {
-                if cw.connection().ok {
-                    return Some(cw.clone());
-                }
-            } else {
-                let _ = connection_tables.remove(addr);
+        let cw = connection_tables.get(addr);
+        if let Some(cw) = cw {
+            if cw.lock().await.connection().ok {
+                return Some(cw.clone());
             }
-            drop(connection_tables);
-            let addr_inner = addr.to_string();
+        } else {
+            let _ = connection_tables.remove(addr);
+        }
 
-            match self
-                .client_runtime
-                .get_handle()
-                .spawn(async move {
-                    time::timeout(duration, async { Client::connect(addr_inner).await }).await?
-                })
-                .await
-            {
-                Ok(client_inner) => match client_inner {
-                    Ok(client_r) => {
-                        let client = ArcRefCellWrapper::new(client_r);
-                        self.connection_tables
-                            .lock()
-                            .await
-                            .insert(addr.to_string(), client.clone());
-                        Some(client)
-                    }
-                    Err(_) => {
-                        error!("getAndCreateClient connect to {} failed", addr);
-                        None
-                    }
-                },
+        let addr_inner = addr.to_string();
+
+        match time::timeout(duration, async { Client::connect(addr_inner).await }).await {
+            Ok(client_inner) => match client_inner {
+                Ok(client_r) => {
+                    let client = Arc::new(Mutex::new(client_r));
+                    connection_tables.insert(addr.to_string(), client.clone());
+                    Some(client)
+                }
                 Err(_) => {
                     error!("getAndCreateClient connect to {} failed", addr);
                     None
                 }
+            },
+            Err(_) => {
+                error!("getAndCreateClient connect to {} failed", addr);
+                None
             }
-        } else {
-            None
         }
     }
 
@@ -335,13 +314,13 @@ impl RemotingClient for RocketmqDefaultClient {
         let client = self.get_and_create_client(addr.as_deref()).await;
         match client {
             None => Err(Error::RemoteException("get client failed".to_string())),
-            Some(mut client) => {
+            Some(client) => {
                 match self
                     .client_runtime
                     .get_handle()
                     .spawn(async move {
                         time::timeout(Duration::from_millis(timeout_millis), async move {
-                            client.send_read(request).await
+                            client.lock().await.send_read(request).await
                         })
                         .await
                     })
@@ -366,10 +345,10 @@ impl RemotingClient for RocketmqDefaultClient {
             None => {
                 error!("get client failed");
             }
-            Some(mut client) => {
+            Some(client) => {
                 self.client_runtime.get_handle().spawn(async move {
                     match time::timeout(Duration::from_millis(timeout_millis), async move {
-                        client.send(request).await
+                        client.lock().await.send(request).await
                     })
                     .await
                     {

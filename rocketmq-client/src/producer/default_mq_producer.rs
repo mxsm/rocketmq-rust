@@ -471,7 +471,7 @@ impl DefaultMQProducer {
         match MessageBatch::generate_from_vec(messages) {
             Ok(mut msg_batch) => {
                 for message in msg_batch.messages.as_mut().unwrap() {
-                    Validators::check_message(Some(message), self)?;
+                    Validators::check_message(Some(message), &self.producer_config)?;
                     MessageClientIDSetter::set_uniq_id(message);
                     message.set_topic(self.with_namespace(message.get_topic()).as_str());
                 }
@@ -686,53 +686,116 @@ impl MQProducer for DefaultMQProducer {
         Ok(result.expect("SendResult should not be None"))
     }
 
-    async fn send_batch_with_timeout(&self, msgs: &[Message], timeout: u64) -> Result<SendResult> {
-        todo!()
+    async fn send_batch_with_timeout(
+        &mut self,
+        msgs: Vec<Message>,
+        timeout: u64,
+    ) -> Result<SendResult> {
+        let batch = self.batch(msgs)?;
+        let result = self
+            .default_mqproducer_impl
+            .as_mut()
+            .unwrap()
+            .send_with_timeout(batch, timeout)
+            .await?;
+        Ok(result.expect("SendResult should not be None"))
     }
 
-    async fn send_batch_to_queue(&self, msgs: &[Message], mq: &MessageQueue) -> Result<SendResult> {
-        todo!()
+    async fn send_batch_to_queue(
+        &mut self,
+        msgs: Vec<Message>,
+        mq: MessageQueue,
+    ) -> Result<SendResult> {
+        let batch = self.batch(msgs)?;
+        let result = self
+            .default_mqproducer_impl
+            .as_mut()
+            .unwrap()
+            .sync_send_with_message_queue(batch, mq)
+            .await?;
+        Ok(result.expect("SendResult should not be None"))
     }
 
     async fn send_batch_to_queue_with_timeout(
-        &self,
-        msgs: &[Message],
-        mq: &MessageQueue,
+        &mut self,
+        msgs: Vec<Message>,
+        mq: MessageQueue,
         timeout: u64,
     ) -> Result<SendResult> {
-        todo!()
+        let batch = self.batch(msgs)?;
+        let result = self
+            .default_mqproducer_impl
+            .as_mut()
+            .unwrap()
+            .sync_send_with_message_queue_timeout(batch, mq, timeout)
+            .await?;
+        Ok(result.expect("SendResult should not be None"))
     }
 
-    async fn send_batch_with_callback(&self, msgs: &[Message], send_callback: impl SendCallback) {
-        todo!()
+    async fn send_batch_with_callback<F>(&mut self, msgs: Vec<Message>, f: F) -> Result<()>
+    where
+        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+    {
+        let batch = self.batch(msgs)?;
+        self.default_mqproducer_impl
+            .as_mut()
+            .unwrap()
+            .async_send_with_callback(batch, Some(Arc::new(f)))
+            .await?;
+        Ok(())
     }
 
-    async fn send_batch_with_callback_timeout(
-        &self,
-        msgs: &[Message],
-        send_callback: impl SendCallback,
+    async fn send_batch_with_callback_timeout<F>(
+        &mut self,
+        msgs: Vec<Message>,
+        f: F,
         timeout: u64,
-    ) {
-        todo!()
+    ) -> Result<()>
+    where
+        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+    {
+        let batch = self.batch(msgs)?;
+        self.default_mqproducer_impl
+            .as_mut()
+            .unwrap()
+            .async_send_with_callback_timeout(batch, Some(Arc::new(f)), timeout)
+            .await?;
+        Ok(())
     }
 
-    async fn send_batch_to_queue_with_callback(
-        &self,
-        msgs: &[Message],
-        mq: &MessageQueue,
-        send_callback: impl SendCallback,
-    ) {
-        todo!()
+    async fn send_batch_to_queue_with_callback<F>(
+        &mut self,
+        msgs: Vec<Message>,
+        mq: MessageQueue,
+        f: F,
+    ) -> Result<()>
+    where
+        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+    {
+        let batch = self.batch(msgs)?;
+        self.default_mqproducer_impl
+            .as_mut()
+            .unwrap()
+            .async_send_with_message_queue_callback(batch, mq, Some(Arc::new(f)))
+            .await
     }
 
-    async fn send_batch_to_queue_with_callback_timeout(
-        &self,
-        msgs: &[Message],
-        mq: &MessageQueue,
-        send_callback: impl SendCallback,
+    async fn send_batch_to_queue_with_callback_timeout<F>(
+        &mut self,
+        msgs: Vec<Message>,
+        mq: MessageQueue,
+        f: F,
         timeout: u64,
-    ) {
-        todo!()
+    ) -> Result<()>
+    where
+        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+    {
+        let batch = self.batch(msgs)?;
+        self.default_mqproducer_impl
+            .as_mut()
+            .unwrap()
+            .async_send_batch_to_queue_with_callback_timeout(batch, mq, Some(Arc::new(f)), timeout)
+            .await
     }
 
     async fn request(&self, msg: &Message, timeout: u64) -> Result<Message> {
