@@ -18,13 +18,13 @@ use std::collections::HashMap;
 
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::constant::PermName;
-use rocketmq_common::common::message::message_single::Message;
 use rocketmq_common::common::message::MessageConst;
+use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_remoting::code::response_code::ResponseCode;
 
 use crate::error::MQClientError::MQClientException;
-use crate::producer::default_mq_producer::DefaultMQProducer;
+use crate::producer::default_mq_producer::ProducerConfig;
 use crate::Result;
 
 pub struct Validators;
@@ -62,28 +62,28 @@ impl Validators {
         Ok(())
     }
 
-    pub fn check_message(
-        msg: Option<&Message>,
-        default_mq_producer: &mut DefaultMQProducer,
-    ) -> Result<()> {
+    pub fn check_message<M>(msg: Option<&M>, producer_config: &ProducerConfig) -> Result<()>
+    where
+        M: MessageTrait,
+    {
         if msg.is_none() {
             return Err(MQClientException(
                 ResponseCode::MessageIllegal as i32,
                 "the message is null".to_string(),
             ));
         }
-        let msg = msg.as_ref().unwrap();
-        Self::check_topic(&msg.topic)?;
-        Self::is_not_allowed_send_topic(&msg.topic)?;
+        let msg = msg.unwrap();
+        Self::check_topic(msg.get_topic())?;
+        Self::is_not_allowed_send_topic(msg.get_topic())?;
 
-        if msg.body.is_none() {
+        if msg.get_body().is_none() {
             return Err(MQClientException(
                 ResponseCode::MessageIllegal as i32,
                 "the message body is null".to_string(),
             ));
         }
 
-        let length = msg.body.as_ref().unwrap().len();
+        let length = msg.get_body().unwrap().len();
         if length == 0 {
             return Err(MQClientException(
                 ResponseCode::MessageIllegal as i32,
@@ -91,12 +91,12 @@ impl Validators {
             ));
         }
 
-        if length > default_mq_producer.max_message_size() as usize {
+        if length > producer_config.max_message_size() as usize {
             return Err(MQClientException(
                 ResponseCode::MessageIllegal as i32,
                 format!(
                     "the message body size over max value, MAX: {}",
-                    default_mq_producer.max_message_size()
+                    producer_config.max_message_size()
                 ),
             ));
         }

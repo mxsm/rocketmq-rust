@@ -45,6 +45,7 @@ use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::remoting::RemotingService;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_remoting::runtime::RPCHook;
+use tracing::error;
 use tracing::warn;
 
 use crate::base::client_config::ClientConfig;
@@ -55,7 +56,7 @@ use crate::implementation::client_remoting_processor::ClientRemotingProcessor;
 use crate::implementation::communication_mode::CommunicationMode;
 use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl;
 use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
-use crate::producer::send_callback::SendCallback;
+use crate::producer::send_callback::SendMessageCallback;
 use crate::producer::send_result::SendResult;
 use crate::producer::send_status::SendStatus;
 use crate::Result;
@@ -234,7 +235,7 @@ impl MQClientAPIImpl {
         request_header: SendMessageRequestHeader,
         timeout_millis: u64,
         communication_mode: CommunicationMode,
-        send_callback: Option<Arc<Box<dyn SendCallback>>>,
+        send_callback: Option<SendMessageCallback>,
         topic_publish_info: Option<&TopicPublishInfo>,
         instance: Option<ArcRefCellWrapper<MQClientInstance>>,
         retry_times_when_send_failed: u32,
@@ -397,7 +398,7 @@ impl MQClientAPIImpl {
         msg: &T,
         timeout_millis: u64,
         request: RemotingCommand,
-        send_callback: Option<Arc<Box<dyn SendCallback>>>,
+        send_callback: Option<SendMessageCallback>,
         topic_publish_info: Option<&TopicPublishInfo>,
         instance: Option<ArcRefCellWrapper<MQClientInstance>>,
         retry_times_when_send_failed: u32,
@@ -433,7 +434,7 @@ impl MQClientAPIImpl {
                             producer.execute_send_message_hook_after(context);
                         }
                         let duration = (Instant::now() - begin_start_time).as_millis() as u64;
-                        send_callback.as_ref().unwrap().on_success(&result);
+                        send_callback.as_ref().unwrap()(Some(&result), None);
                         producer.update_fault_item(broker_name, duration, false, true);
                     }
                     Err(err) => {
@@ -459,7 +460,7 @@ impl MQClientAPIImpl {
                 }
             }
             Err(err) => {
-                unimplemented!()
+                error!("send message async error: {:?}", err);
             }
         }
     }
@@ -545,7 +546,7 @@ impl MQClientAPIImpl {
         msg: &T,
         timeout_millis: u64,
         mut request: RemotingCommand,
-        send_callback: Option<Arc<Box<dyn SendCallback>>>,
+        send_callback: Option<SendMessageCallback>,
         topic_publish_info: Option<&TopicPublishInfo>,
         instance: Option<ArcRefCellWrapper<MQClientInstance>>,
         times_total: u32,

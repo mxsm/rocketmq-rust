@@ -50,3 +50,8 @@ path = "examples/quickstart/producer.rs"
 name = "simple-batch-producer"
 path = "examples/batch/simple_batch_producer.rs"
 
+
+[[example]]
+name = "callback-batch-producer"
+path = "examples/batch/callback_batch_producer.rs"
+
