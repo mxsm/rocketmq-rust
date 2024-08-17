@@ -15,12 +15,26 @@
  * limitations under the License.
  */
 
-pub mod broker_body;
-pub mod consumer_running_info;
-pub mod create_topic_list_request_body;
-pub mod get_consumer_listby_group_response_body;
+use std::collections::HashSet;
 
-pub mod group_list;
-pub mod kv_table;
-pub mod topic;
-pub mod topic_info_wrapper;
+use serde::Deserialize;
+use serde::Serialize;
+
+#[derive(Deserialize, Serialize, Debug, Clone, Default)]
+pub struct GroupList {
+    pub group_list: HashSet<String>,
+}
+
+impl GroupList {
+    pub fn new(group_list: HashSet<String>) -> Self {
+        Self { group_list }
+    }
+
+    pub fn get_group_list(&self) -> &HashSet<String> {
+        &self.group_list
+    }
+
+    pub fn set_group_list(&mut self, group_list: HashSet<String>) {
+        self.group_list = group_list;
+    }
+}

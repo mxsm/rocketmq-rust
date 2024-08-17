@@ -241,4 +241,14 @@ impl ConsumerManager {
             listener.handle(event, group, args);
         }
     }
+
+    pub fn query_topic_consume_by_who(&self, topic: &str) -> HashSet<String> {
+        let mut groups = HashSet::new();
+        for (group, consumer_group_info) in self.consumer_table.read().iter() {
+            if consumer_group_info.find_subscription_data(topic).is_some() {
+                groups.insert(group.clone());
+            }
+        }
+        groups
+    }
 }

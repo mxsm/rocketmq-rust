@@ -32,6 +32,7 @@ use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::admin::topic_offset::TopicOffset;
 use rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable;
 use rocketmq_remoting::protocol::body::create_topic_list_request_body::CreateTopicListRequestBody;
+use rocketmq_remoting::protocol::body::group_list::GroupList;
 use rocketmq_remoting::protocol::body::topic::topic_list::TopicList;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper;
@@ -39,6 +40,7 @@ use rocketmq_remoting::protocol::header::create_topic_request_header::CreateTopi
 use rocketmq_remoting::protocol::header::delete_topic_request_header::DeleteTopicRequestHeader;
 use rocketmq_remoting::protocol::header::get_topic_config_request_header::GetTopicConfigRequestHeader;
 use rocketmq_remoting::protocol::header::get_topic_stats_request_header::GetTopicStatsRequestHeader;
+use rocketmq_remoting::protocol::header::query_topic_consume_by_who_request_header::QueryTopicConsumeByWhoRequestHeader;
 use rocketmq_remoting::protocol::header::query_topics_by_consumer_request_header::QueryTopicsByConsumerRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::static_topic::topic_config_and_queue_mapping::TopicConfigAndQueueMapping;
@@ -516,6 +518,29 @@ impl TopicRequestHandler {
         let topic_config_and_queue_mapping =
             TopicConfigAndQueueMapping::new(topic_config.unwrap(), topic_queue_mapping_detail);
         response.set_body_mut_ref(Some(topic_config_and_queue_mapping.encode()));
+        Some(response)
+    }
+
+    pub async fn query_topic_consume_by_who(
+        &mut self,
+        _channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        _request_code: RequestCode,
+        request: RemotingCommand,
+    ) -> Option<RemotingCommand> {
+        let mut response = RemotingCommand::create_response_command();
+        let request_header = request
+            .decode_command_custom_header::<QueryTopicConsumeByWhoRequestHeader>()
+            .unwrap();
+        let topic = request_header.topic.as_str();
+        let mut groups = self.inner.consume_manager.query_topic_consume_by_who(topic);
+        let group_in_offset = self
+            .inner
+            .consumer_offset_manager
+            .which_group_by_topic(topic);
+        groups.extend(group_in_offset.clone());
+        let group_list = GroupList { group_list: groups };
+        response.set_body_mut_ref(Some(group_list.encode()));
         Some(response)
     }
 

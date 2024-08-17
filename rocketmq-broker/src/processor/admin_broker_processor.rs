@@ -28,6 +28,7 @@ use rocketmq_store::message_store::default_message_store::DefaultMessageStore;
 use rocketmq_store::stats::broker_stats::BrokerStats;
 use tracing::warn;
 
+use crate::client::manager::consumer_manager::ConsumerManager;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
 use crate::processor::admin_broker_processor::broker_config_request_handler::BrokerConfigRequestHandler;
 use crate::processor::admin_broker_processor::topic_request_handler::TopicRequestHandler;
@@ -56,6 +57,7 @@ impl AdminBrokerProcessor {
         default_message_store: DefaultMessageStore,
         schedule_message_service: ScheduleMessageService,
         broker_stats: Option<Arc<BrokerStats<DefaultMessageStore>>>,
+        consume_manager: Arc<ConsumerManager>,
     ) -> Self {
         let inner = Inner {
             broker_config,
@@ -68,6 +70,7 @@ impl AdminBrokerProcessor {
             pop_inflight_message_counter: Arc::new(PopInflightMessageCounter),
             schedule_message_service,
             broker_stats,
+            consume_manager,
         };
         let topic_request_handler = TopicRequestHandler::new(inner.clone());
         let broker_config_request_handler = BrokerConfigRequestHandler::new(inner.clone());
@@ -137,6 +140,11 @@ impl AdminBrokerProcessor {
                     .get_broker_runtime_info(channel, ctx, request_code, request)
                     .await
             }
+            RequestCode::QueryTopicConsumeByWho => {
+                self.topic_request_handler
+                    .query_topic_consume_by_who(channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::QueryTopicsByConsumer => {
                 self.topic_request_handler
                     .query_topics_by_consumer(channel, ctx, request_code, request)
@@ -171,4 +179,5 @@ struct Inner {
     pop_inflight_message_counter: Arc<PopInflightMessageCounter>,
     schedule_message_service: ScheduleMessageService,
     broker_stats: Option<Arc<BrokerStats<DefaultMessageStore>>>,
+    consume_manager: Arc<ConsumerManager>,
 }
