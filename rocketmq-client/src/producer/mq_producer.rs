@@ -18,6 +18,7 @@ use std::any::Any;
 
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_single::Message;
+use rocketmq_common::common::message::MessageTrait;
 
 use crate::producer::message_queue_selector::MessageQueueSelector;
 use crate::producer::request_callback::RequestCallback;
@@ -61,7 +62,9 @@ pub trait MQProducerLocal {
     ///
     /// # Returns
     /// A `Result` containing the `SendResult`, or an error.
-    async fn send(&self, msg: &Message) -> Result<SendResult>;
+    async fn send<M>(&mut self, msg: M) -> Result<SendResult>
+    where
+        M: MessageTrait + Clone + Send + Sync;
 
     /// Sends a message with a timeout.
     ///
@@ -83,7 +86,10 @@ pub trait MQProducerLocal {
     /// # Arguments
     /// * `msg` - A reference to the `Message` to be sent.
     /// * `send_callback` - A callback function to be invoked with the result of the send operation.
-    async fn send_with_callback(&self, msg: &Message, send_callback: impl SendCallback);
+    async fn send_with_callback<M, F>(&mut self, msg: M, send_callback: F) -> Result<()>
+    where
+        M: MessageTrait + Clone + Send + Sync,
+        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static;
 
     /// Sends a message with a callback and a timeout.
     ///
@@ -94,12 +100,14 @@ pub trait MQProducerLocal {
     /// * `msg` - A reference to the `Message` to be sent.
     /// * `send_callback` - A callback function to be invoked with the result of the send operation.
     /// * `timeout` - The timeout duration in milliseconds.
-    async fn send_with_callback_timeout(
-        &self,
-        msg: &Message,
-        send_callback: impl SendCallback,
+    async fn send_with_callback_timeout<F>(
+        &mut self,
+        msg: Message,
+        send_callback: F,
         timeout: u64,
-    );
+    ) -> Result<()>
+    where
+        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static;
 
     /// Sends a message without waiting for a response.
     ///

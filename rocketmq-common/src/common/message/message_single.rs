@@ -198,18 +198,22 @@ impl MessageTrait for Message {
         self.topic = topic.to_string();
     }
 
+    #[inline]
     fn get_flag(&self) -> i32 {
         self.flag
     }
 
+    #[inline]
     fn set_flag(&mut self, flag: i32) {
         self.flag = flag;
     }
 
+    #[inline]
     fn get_body(&self) -> Option<&Bytes> {
         self.body.as_ref()
     }
 
+    #[inline]
     fn set_body(&mut self, body: Bytes) {
         self.body = Some(body);
     }
