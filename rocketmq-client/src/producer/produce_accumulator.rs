@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::hash::Hash;
 use std::hash::Hasher;
@@ -22,12 +23,13 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::thread::Builder;
 
 use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::message::message_single::Message;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::TimeUtils::get_current_millis;
+use tokio::sync::Mutex;
 
 use crate::producer::default_mq_producer::DefaultMQProducer;
 use crate::producer::send_callback::SendMessageCallback;
@@ -44,6 +46,8 @@ pub struct ProduceAccumulator {
     currently_hold_size: AtomicU64,
     instance_name: String,
     currently_hold_size_lock: Arc<parking_lot::Mutex<()>>,
+    sync_send_batchs: Arc<Mutex<HashMap<AggregateKey, ArcRefCellWrapper<MessageAccumulation>>>>,
+    async_send_batchs: Arc<Mutex<HashMap<AggregateKey, ArcRefCellWrapper<MessageAccumulation>>>>,
 }
 
 impl ProduceAccumulator {
@@ -65,8 +69,14 @@ impl ProduceAccumulator {
 }
 
 impl ProduceAccumulator {
-    pub fn start(&mut self) {}
-    pub fn shutdown(&self) {}
+    pub fn start(&mut self) {
+        self.guard_thread_for_sync_send.start();
+        self.guard_thread_for_async_send.start();
+    }
+    pub fn shutdown(&mut self) {
+        self.guard_thread_for_sync_send.shutdown();
+        self.guard_thread_for_async_send.shutdown();
+    }
 
     pub(crate) fn try_add_message<T: MessageTrait>(&self, message: &T) -> bool {
         let lock = self.currently_hold_size_lock.lock();
@@ -80,7 +90,7 @@ impl ProduceAccumulator {
         true
     }
 
-    pub(crate) fn send<M: MessageTrait>(
+    pub(crate) async fn send<M: MessageTrait + Send + Sync + 'static>(
         &mut self,
         message: M,
         mq: Option<MessageQueue>,
@@ -89,17 +99,35 @@ impl ProduceAccumulator {
         unimplemented!("send")
     }
 
-    pub(crate) fn send_callback<M: MessageTrait>(
+    pub(crate) async fn send_callback<M: MessageTrait + Send + Sync + 'static + Clone>(
         &mut self,
         message: M,
+        mq: Option<MessageQueue>,
         send_callback: Option<SendMessageCallback>,
         default_mq_producer: DefaultMQProducer,
     ) -> Result<()> {
-        unimplemented!("send")
+        let partition_key = AggregateKey::new_from_message_queue(&message, mq);
+        loop {
+            let batch =
+                self.get_or_create_async_send_batch(partition_key.clone(), &default_mq_producer);
+            /*if batch.add(message.clone(), send_callback.clone()) {
+                self.async_send_batchs.lock().await.remove(&partition_key);
+            } else {
+                return Ok(());
+            }*/
+        }
+    }
+
+    fn get_or_create_async_send_batch(
+        &mut self,
+        aggregate_key: AggregateKey,
+        default_mq_producer: &DefaultMQProducer,
+    ) -> ArcRefCellWrapper<MessageAccumulation> {
+        unimplemented!("getOrCreateAsyncSendBatch")
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct AggregateKey {
     pub topic: String,
     pub mq: Option<MessageQueue>,
@@ -163,7 +191,7 @@ impl Hash for AggregateKey {
 
 struct MessageAccumulation {
     default_mq_producer: ArcRefCellWrapper<DefaultMQProducer>,
-    messages: Vec<Message>,
+    messages: Vec<Box<dyn MessageTrait + Send + Sync + 'static>>,
     send_callbacks: Vec<SendMessageCallback>,
     keys: HashSet<String>,
     closed: Arc<AtomicBool>,
@@ -193,6 +221,14 @@ impl MessageAccumulation {
         }
     }
 
+    pub fn add<M: MessageTrait + Send + Sync + 'static>(
+        &mut self,
+        msg: M,
+        send_callback: Option<SendMessageCallback>,
+    ) -> Result<bool> {
+        unimplemented!()
+    }
+
     /*    fn ready_to_send(&self, hold_size: i32, hold_ms: u128) -> bool {
         self.messages_size.load(Ordering::SeqCst) > hold_size
             || SystemTime::now()
@@ -202,20 +238,7 @@ impl MessageAccumulation {
                 >= self.create_time + hold_ms
     }
 
-    pub fn add(&mut self, msg: Message) -> Result<usize, ()> {
-        if self.closed.load(Ordering::SeqCst) {
-            return Err(());
-        }
-        let ret = self.count;
-        self.count += 1;
-        self.messages.push_back(msg);
-        self.messages_size
-            .fetch_add(msg.get_body().len() as i32, Ordering::SeqCst);
-        if let Some(msg_keys) = msg.get_keys() {
-            self.keys.extend(msg_keys.split(',').map(|s| s.to_string()));
-        }
-        Ok(ret)
-    }
+
 
     pub fn add_with_callback(
         &mut self,
@@ -273,7 +296,52 @@ impl MessageAccumulation {
 struct GuardForSyncSendService {
     service_name: String,
 }
+
+impl GuardForSyncSendService {
+    pub fn new(service_name: &str) -> Self {
+        Self {
+            service_name: service_name.to_string(),
+        }
+    }
+
+    pub fn start(&mut self) {
+        let service_name = self.service_name.clone();
+        Builder::new()
+            .name(service_name)
+            .spawn(|| {
+                // Implementation for starting the guard thread
+            })
+            .expect("Failed to start guard thread");
+    }
+
+    pub fn shutdown(&mut self) {
+        // Implementation for shutting down the guard thread
+    }
+}
+
 #[derive(Default)]
 struct GuardForAsyncSendService {
     service_name: String,
+}
+
+impl GuardForAsyncSendService {
+    pub fn new(service_name: &str) -> Self {
+        Self {
+            service_name: service_name.to_string(),
+        }
+    }
+
+    pub fn start(&mut self) {
+        let service_name = self.service_name.clone();
+        Builder::new()
+            .name(service_name)
+            .spawn(|| {
+                // Implementation for starting the guard thread
+            })
+            .expect("Failed to start guard thread");
+    }
+
+    pub fn shutdown(&mut self) {
+        // Implementation for shutting down the guard thread
+    }
 }
