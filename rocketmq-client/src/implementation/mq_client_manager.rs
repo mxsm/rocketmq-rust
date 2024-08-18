@@ -86,7 +86,7 @@ impl MQClientManager {
         let accumulator = accumulator_table
             .entry(client_id.clone())
             .or_insert_with(|| {
-                let accumulator = ProduceAccumulator::new();
+                let accumulator = ProduceAccumulator::new(client_id.as_str());
                 info!(
                     "Created new ProduceAccumulator for clientId: [{}]",
                     client_id
