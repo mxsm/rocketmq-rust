@@ -40,7 +40,7 @@ pub trait MQProducerLocal {
     /// Shuts down the MQ producer.
     ///
     /// This method gracefully shuts down the MQ producer, releasing any resources held.
-    async fn shutdown(&self);
+    async fn shutdown(&mut self);
 
     /// Fetches the list of message queues for a given topic.
     ///

@@ -545,7 +545,7 @@ impl DefaultMQProducer {
         send_callback: Option<SendMessageCallback>,
     ) -> Result<Option<SendResult>>
     where
-        M: MessageTrait + Send + std::clone::Clone + std::marker::Sync,
+        M: MessageTrait + Send + std::clone::Clone + std::marker::Sync + 'static,
     {
         if !self.can_batch(&msg) {
             self.send_direct(msg, mq, send_callback).await
@@ -559,13 +559,15 @@ impl DefaultMQProducer {
                     .as_mut()
                     .unwrap()
                     .send(msg, mq, mq_producer)
+                    .await
             } else {
                 let mq_producer = self.clone();
                 self.producer_config
                     .produce_accumulator
                     .as_mut()
                     .unwrap()
-                    .send_callback(msg, send_callback, mq_producer)?;
+                    .send_callback(msg, mq, send_callback, mq_producer)
+                    .await?;
                 Ok(None)
             }
         }
@@ -656,8 +658,8 @@ impl MQProducer for DefaultMQProducer {
         Ok(())
     }
 
-    async fn shutdown(&self) {
-        if let Some(ref produce_accumulator) = self.producer_config.produce_accumulator {
+    async fn shutdown(&mut self) {
+        if let Some(ref mut produce_accumulator) = self.producer_config.produce_accumulator {
             produce_accumulator.shutdown();
         }
 
