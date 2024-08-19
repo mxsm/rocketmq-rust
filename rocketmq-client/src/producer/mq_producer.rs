@@ -22,7 +22,7 @@ use rocketmq_common::common::message::MessageTrait;
 
 use crate::producer::message_queue_selector::MessageQueueSelector;
 use crate::producer::request_callback::RequestCallback;
-use crate::producer::send_callback::SendCallback;
+use crate::producer::send_callback::SendMessageCallback;
 use crate::producer::send_result::SendResult;
 use crate::producer::transaction_send_result::TransactionSendResult;
 use crate::Result;
@@ -118,7 +118,9 @@ pub trait MQProducerLocal {
     ///
     /// # Returns
     /// A `Result` indicating success or failure.
-    async fn send_oneway(&self, msg: &Message) -> Result<()>;
+    async fn send_oneway<M>(&mut self, msg: M) -> Result<()>
+    where
+        M: MessageTrait + Clone + Send + Sync;
 
     /// Sends a message to a specific queue.
     ///
@@ -130,7 +132,9 @@ pub trait MQProducerLocal {
     ///
     /// # Returns
     /// A `Result` containing the `SendResult`, or an error.
-    async fn send_to_queue(&self, msg: &Message, mq: &MessageQueue) -> Result<SendResult>;
+    async fn send_to_queue<M>(&mut self, msg: M, mq: MessageQueue) -> Result<SendResult>
+    where
+        M: MessageTrait + Clone + Send + Sync;
 
     /// Sends a message to a specific queue with a timeout.
     ///
@@ -144,12 +148,14 @@ pub trait MQProducerLocal {
     ///
     /// # Returns
     /// A `Result` containing the `SendResult`, or an error.
-    async fn send_to_queue_with_timeout(
-        &self,
-        msg: &Message,
-        mq: &MessageQueue,
+    async fn send_to_queue_with_timeout<M>(
+        &mut self,
+        msg: M,
+        mq: MessageQueue,
         timeout: u64,
-    ) -> Result<SendResult>;
+    ) -> Result<SendResult>
+    where
+        M: MessageTrait + Clone + Send + Sync;
 
     /// Sends a message to a specific queue with a callback.
     ///
@@ -160,12 +166,15 @@ pub trait MQProducerLocal {
     /// * `msg` - A reference to the `Message` to be sent.
     /// * `mq` - A reference to the `MessageQueue` where the message should be sent.
     /// * `send_callback` - A callback function to be invoked with the result of the send operation.
-    async fn send_to_queue_with_callback(
-        &self,
-        msg: &Message,
-        mq: &MessageQueue,
-        send_callback: impl SendCallback,
-    );
+    async fn send_to_queue_with_callback<M, F>(
+        &mut self,
+        msg: M,
+        mq: MessageQueue,
+        send_callback: F,
+    ) -> Result<()>
+    where
+        M: MessageTrait + Clone + Send + Sync,
+        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static;
 
     /// Sends a message to a specific queue with a callback and a timeout.
     ///
@@ -177,13 +186,16 @@ pub trait MQProducerLocal {
     /// * `mq` - A reference to the `MessageQueue` where the message should be sent.
     /// * `send_callback` - A callback function to be invoked with the result of the send operation.
     /// * `timeout` - The timeout duration in milliseconds.
-    async fn send_to_queue_with_callback_timeout(
-        &self,
-        msg: &Message,
-        mq: &MessageQueue,
-        send_callback: impl SendCallback,
+    async fn send_to_queue_with_callback_timeout<M, F>(
+        &mut self,
+        msg: M,
+        mq: MessageQueue,
+        send_callback: F,
         timeout: u64,
-    );
+    ) -> Result<()>
+    where
+        M: MessageTrait + Clone + Send + Sync,
+        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static;
 
     /// Sends a message to a specific queue without waiting for a response.
     ///
@@ -196,7 +208,9 @@ pub trait MQProducerLocal {
     ///
     /// # Returns
     /// A `Result` indicating success or failure.
-    async fn send_oneway_to_queue(&self, msg: &Message, mq: &MessageQueue) -> Result<()>;
+    async fn send_oneway_to_queue<M>(&mut self, msg: M, mq: MessageQueue) -> Result<()>
+    where
+        M: MessageTrait + Clone + Send + Sync;
 
     /// Sends a message with a selector.
     ///
@@ -209,12 +223,19 @@ pub trait MQProducerLocal {
     ///
     /// # Returns
     /// A `Result` containing the `SendResult`, or an error.
-    async fn send_with_selector(
-        &self,
-        msg: &Message,
-        selector: impl MessageQueueSelector,
-        arg: &str,
-    ) -> Result<SendResult>;
+    async fn send_with_selector<M, S, T>(
+        &mut self,
+        msg: M,
+        selector: S,
+        arg: T,
+    ) -> Result<SendResult>
+    where
+        M: MessageTrait + Clone + Send + Sync,
+        S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue>
+            + Send
+            + Sync
+            + 'static,
+        T: std::any::Any + Sync + Send;
 
     /// Sends a message with a selector and a timeout.
     ///
@@ -229,13 +250,20 @@ pub trait MQProducerLocal {
     ///
     /// # Returns
     /// A `Result` containing the `SendResult`, or an error.
-    async fn send_with_selector_timeout(
-        &self,
-        msg: &Message,
-        selector: impl MessageQueueSelector,
-        arg: &str,
+    async fn send_with_selector_timeout<M, S, T>(
+        &mut self,
+        msg: M,
+        selector: S,
+        arg: T,
         timeout: u64,
-    ) -> Result<SendResult>;
+    ) -> Result<SendResult>
+    where
+        M: MessageTrait + Clone + Send + Sync,
+        S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue>
+            + Send
+            + Sync
+            + 'static,
+        T: std::any::Any + Sync + Send;
 
     /// Sends a message with a selector and a callback.
     ///
@@ -247,13 +275,20 @@ pub trait MQProducerLocal {
     /// * `selector` - A message queue selector to determine the target queue.
     /// * `arg` - An argument to be used by the selector.
     /// * `send_callback` - A callback function to be invoked with the result of the send operation.
-    async fn send_with_selector_callback(
-        &self,
-        msg: &Message,
-        selector: impl MessageQueueSelector,
-        arg: &str,
-        send_callback: impl SendCallback,
-    );
+    async fn send_with_selector_callback<M, S, T>(
+        &mut self,
+        msg: M,
+        selector: S,
+        arg: T,
+        send_callback: Option<SendMessageCallback>,
+    ) -> Result<()>
+    where
+        M: MessageTrait + Clone + Send + Sync,
+        S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue>
+            + Send
+            + Sync
+            + 'static,
+        T: std::any::Any + Sync + Send;
 
     /// Sends a message with a selector, a callback, and a timeout.
     ///
@@ -267,14 +302,21 @@ pub trait MQProducerLocal {
     /// * `arg` - An argument to be used by the selector.
     /// * `send_callback` - A callback function to be invoked with the result of the send operation.
     /// * `timeout` - The timeout duration in milliseconds.
-    async fn send_with_selector_callback_timeout(
-        &self,
-        msg: &Message,
-        selector: impl MessageQueueSelector,
-        arg: &str,
-        send_callback: impl SendCallback,
+    async fn send_with_selector_callback_timeout<M, S, T>(
+        &mut self,
+        msg: M,
+        selector: S,
+        arg: T,
+        send_callback: Option<SendMessageCallback>,
         timeout: u64,
-    );
+    ) -> Result<()>
+    where
+        M: MessageTrait + Clone + Send + Sync,
+        S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue>
+            + Send
+            + Sync
+            + 'static,
+        T: std::any::Any + Sync + Send;
 
     /// Sends a message with a selector without waiting for a response.
     ///
@@ -288,12 +330,19 @@ pub trait MQProducerLocal {
     ///
     /// # Returns
     /// A `Result` indicating success or failure.
-    async fn send_oneway_with_selector(
-        &self,
-        msg: &Message,
-        selector: impl MessageQueueSelector,
-        arg: &str,
-    ) -> Result<()>;
+    async fn send_oneway_with_selector<M, S, T>(
+        &mut self,
+        msg: M,
+        selector: S,
+        arg: T,
+    ) -> Result<()>
+    where
+        M: MessageTrait + Clone + Send + Sync,
+        S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue>
+            + Send
+            + Sync
+            + 'static,
+        T: std::any::Any + Sync + Send;
 
     /// Sends a message in a transaction.
     ///

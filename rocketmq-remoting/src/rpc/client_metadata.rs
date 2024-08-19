@@ -176,7 +176,7 @@ impl ClientMetadata {
                 for global_id in info.curr_id_map.as_ref().unwrap().keys() {
                     let mq = MessageQueue::from_parts(
                         topic,
-                        &TopicQueueMappingUtils::get_mock_broker_name(
+                        TopicQueueMappingUtils::get_mock_broker_name(
                             info.scope.as_ref().unwrap().as_str(),
                         ),
                         *global_id,
@@ -194,7 +194,7 @@ impl ClientMetadata {
             for i in 0..max_total_nums {
                 let mq = MessageQueue::from_parts(
                     topic,
-                    &TopicQueueMappingUtils::get_mock_broker_name(&scope),
+                    TopicQueueMappingUtils::get_mock_broker_name(&scope),
                     i,
                 );
                 if !mq_endpoints.contains_key(&mq) {

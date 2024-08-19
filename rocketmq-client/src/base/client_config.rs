@@ -20,6 +20,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
+use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::utils::name_server_address_utils::NameServerAddressUtils;
 use rocketmq_common::utils::name_server_address_utils::NAMESRV_ENDPOINT_PATTERN;
 use rocketmq_common::utils::network_util::NetworkUtil;
@@ -133,6 +134,17 @@ impl ClientConfig {
             self.get_namespace().unwrap_or("".to_string()).as_str(),
             resource,
         )
+    }
+
+    pub fn queue_with_namespace(&mut self, queue: &mut MessageQueue) {
+        if let Some(namespace) = self.get_namespace() {
+            if !namespace.is_empty() {
+                queue.set_topic(NamespaceUtil::wrap_namespace(
+                    namespace.as_str(),
+                    queue.get_topic(),
+                ));
+            }
+        }
     }
 
     pub fn get_namespace(&mut self) -> Option<String> {

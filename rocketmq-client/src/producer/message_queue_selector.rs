@@ -14,8 +14,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::sync::Arc;
+
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_single::Message;
+use rocketmq_common::common::message::MessageTrait;
+
+pub type MessageQueueSelectorFn = Arc<
+    dyn Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue>
+        + Send
+        + Sync,
+>;
 
 /// A trait for selecting a message queue.
 ///
