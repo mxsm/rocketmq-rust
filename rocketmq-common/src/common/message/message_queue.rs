@@ -44,10 +44,14 @@ impl MessageQueue {
         }
     }
 
-    pub fn from_parts(topic: &str, broker_name: &str, queue_id: i32) -> Self {
+    pub fn from_parts(
+        topic: impl Into<String>,
+        broker_name: impl Into<String>,
+        queue_id: i32,
+    ) -> Self {
         MessageQueue {
-            topic: topic.to_string(),
-            broker_name: broker_name.to_string(),
+            topic: topic.into(),
+            broker_name: broker_name.into(),
             queue_id,
         }
     }
@@ -60,6 +64,7 @@ impl MessageQueue {
         self.topic = topic;
     }
 
+    #[inline]
     pub fn get_broker_name(&self) -> &str {
         &self.broker_name
     }
@@ -68,6 +73,7 @@ impl MessageQueue {
         self.broker_name = broker_name;
     }
 
+    #[inline]
     pub fn get_queue_id(&self) -> i32 {
         self.queue_id
     }

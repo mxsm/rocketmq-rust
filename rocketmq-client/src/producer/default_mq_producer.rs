@@ -45,7 +45,6 @@ use crate::producer::mq_producer::MQProducer;
 use crate::producer::produce_accumulator::ProduceAccumulator;
 use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl;
 use crate::producer::request_callback::RequestCallback;
-use crate::producer::send_callback::SendCallback;
 use crate::producer::send_callback::SendMessageCallback;
 use crate::producer::send_result::SendResult;
 use crate::producer::transaction_send_result::TransactionSendResult;
@@ -737,93 +736,261 @@ impl MQProducer for DefaultMQProducer {
         Ok(())
     }
 
-    async fn send_oneway(&self, msg: &Message) -> Result<()> {
-        todo!()
+    async fn send_oneway<M>(&mut self, mut msg: M) -> Result<()>
+    where
+        M: MessageTrait + Clone + Send + Sync,
+    {
+        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
+        self.default_mqproducer_impl
+            .as_mut()
+            .unwrap()
+            .send_oneway(msg)
+            .await?;
+        Ok(())
     }
 
-    async fn send_to_queue(&self, msg: &Message, mq: &MessageQueue) -> Result<SendResult> {
-        todo!()
+    async fn send_to_queue<M>(&mut self, mut msg: M, mut mq: MessageQueue) -> Result<SendResult>
+    where
+        M: MessageTrait + Clone + Send + Sync,
+    {
+        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
+        self.client_config.queue_with_namespace(&mut mq);
+        let result =
+            if self.get_auto_batch() && msg.as_any().downcast_ref::<MessageBatch>().is_none() {
+                self.send_by_accumulator(msg, Some(mq), None).await
+            } else {
+                self.send_direct(msg, Some(mq), None).await
+            }?;
+        Ok(result.expect("SendResult should not be None"))
     }
 
-    async fn send_to_queue_with_timeout(
-        &self,
-        msg: &Message,
-        mq: &MessageQueue,
+    async fn send_to_queue_with_timeout<M>(
+        &mut self,
+        mut msg: M,
+        mut mq: MessageQueue,
         timeout: u64,
-    ) -> Result<SendResult> {
-        todo!()
+    ) -> Result<SendResult>
+    where
+        M: MessageTrait + Clone + Send + Sync,
+    {
+        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
+        self.client_config.queue_with_namespace(&mut mq);
+        let result = self
+            .default_mqproducer_impl
+            .as_mut()
+            .unwrap()
+            .sync_send_with_message_queue_timeout(msg, mq, timeout)
+            .await?;
+        Ok(result.expect("SendResult should not be None"))
     }
 
-    async fn send_to_queue_with_callback(
-        &self,
-        msg: &Message,
-        mq: &MessageQueue,
-        send_callback: impl SendCallback,
-    ) {
-        todo!()
+    async fn send_to_queue_with_callback<M, F>(
+        &mut self,
+        mut msg: M,
+        mut mq: MessageQueue,
+        send_callback: F,
+    ) -> Result<()>
+    where
+        M: MessageTrait + Clone + Send + Sync,
+        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+    {
+        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
+        self.client_config.queue_with_namespace(&mut mq);
+
+        if self.get_auto_batch() && msg.as_any().downcast_ref::<MessageBatch>().is_none() {
+            self.send_by_accumulator(msg, Some(mq), Some(Arc::new(send_callback)))
+                .await
+        } else {
+            self.send_direct(msg, Some(mq), Some(Arc::new(send_callback)))
+                .await
+        }?;
+
+        Ok(())
     }
 
-    async fn send_to_queue_with_callback_timeout(
-        &self,
-        msg: &Message,
-        mq: &MessageQueue,
-        send_callback: impl SendCallback,
+    async fn send_to_queue_with_callback_timeout<M, F>(
+        &mut self,
+        mut msg: M,
+        mq: MessageQueue,
+        send_callback: F,
         timeout: u64,
-    ) {
-        todo!()
+    ) -> Result<()>
+    where
+        M: MessageTrait + Clone + Send + Sync,
+        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+    {
+        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
+        self.default_mqproducer_impl
+            .as_mut()
+            .unwrap()
+            .async_send_batch_to_queue_with_callback_timeout(
+                msg,
+                mq,
+                Some(Arc::new(send_callback)),
+                timeout,
+            )
+            .await
     }
 
-    async fn send_oneway_to_queue(&self, msg: &Message, mq: &MessageQueue) -> Result<()> {
-        todo!()
+    async fn send_oneway_to_queue<M>(&mut self, mut msg: M, mut mq: MessageQueue) -> Result<()>
+    where
+        M: MessageTrait + Clone + Send + Sync,
+    {
+        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
+        self.client_config.queue_with_namespace(&mut mq);
+        self.default_mqproducer_impl
+            .as_mut()
+            .unwrap()
+            .send_oneway_with_message_queue(msg, mq)
+            .await
     }
 
-    async fn send_with_selector(
-        &self,
-        msg: &Message,
-        selector: impl MessageQueueSelector,
-        arg: &str,
-    ) -> Result<SendResult> {
-        todo!()
+    async fn send_with_selector<M, S, T>(
+        &mut self,
+        mut msg: M,
+        selector: S,
+        arg: T,
+    ) -> Result<SendResult>
+    where
+        M: MessageTrait + Clone + Send + Sync,
+        S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue>
+            + Send
+            + Sync
+            + 'static,
+        T: std::any::Any + Send + Sync,
+    {
+        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
+        let mut mq = self
+            .default_mqproducer_impl
+            .as_mut()
+            .unwrap()
+            .invoke_message_queue_selector(
+                &msg,
+                Arc::new(selector),
+                &arg,
+                self.producer_config.send_msg_timeout() as u64,
+            )
+            .await?;
+        self.client_config.queue_with_namespace(&mut mq);
+        let result =
+            if self.get_auto_batch() && msg.as_any().downcast_ref::<MessageBatch>().is_none() {
+                self.send_by_accumulator(msg, Some(mq), None).await
+            } else {
+                self.send_direct(msg, Some(mq), None).await
+            }?;
+
+        Ok(result.expect("SendResult should not be None"))
     }
 
-    async fn send_with_selector_timeout(
-        &self,
-        msg: &Message,
-        selector: impl MessageQueueSelector,
-        arg: &str,
+    async fn send_with_selector_timeout<M, S, T>(
+        &mut self,
+        mut msg: M,
+        selector: S,
+        arg: T,
         timeout: u64,
-    ) -> Result<SendResult> {
-        todo!()
+    ) -> Result<SendResult>
+    where
+        M: MessageTrait + Clone + Send + Sync,
+        S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue>
+            + Send
+            + Sync
+            + 'static,
+        T: std::any::Any + Sync + Send,
+    {
+        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
+        self.default_mqproducer_impl
+            .as_mut()
+            .unwrap()
+            .send_with_selector_timeout(msg, Arc::new(selector), arg, timeout)
+            .await
     }
 
-    async fn send_with_selector_callback(
-        &self,
-        msg: &Message,
-        selector: impl MessageQueueSelector,
-        arg: &str,
-        send_callback: impl SendCallback,
-    ) {
-        todo!()
+    async fn send_with_selector_callback<M, S, T>(
+        &mut self,
+        mut msg: M,
+        selector: S,
+        arg: T,
+        send_callback: Option<SendMessageCallback>,
+    ) -> Result<()>
+    where
+        M: MessageTrait + Clone + Send + Sync,
+        S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue>
+            + Send
+            + Sync
+            + 'static,
+        T: std::any::Any + Sync + Send,
+    {
+        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
+        let mut mq = self
+            .default_mqproducer_impl
+            .as_mut()
+            .unwrap()
+            .invoke_message_queue_selector(
+                &msg,
+                Arc::new(selector),
+                &arg,
+                self.producer_config.send_msg_timeout() as u64,
+            )
+            .await?;
+        self.client_config.queue_with_namespace(&mut mq);
+        if self.auto_batch() && msg.as_any().downcast_ref::<MessageBatch>().is_none() {
+            self.send_by_accumulator(msg, Some(mq), send_callback).await
+        } else {
+            self.send_direct(msg, Some(mq), send_callback).await
+        }?;
+        Ok(())
     }
 
-    async fn send_with_selector_callback_timeout(
-        &self,
-        msg: &Message,
-        selector: impl MessageQueueSelector,
-        arg: &str,
-        send_callback: impl SendCallback,
+    async fn send_with_selector_callback_timeout<M, S, T>(
+        &mut self,
+        mut msg: M,
+        selector: S,
+        arg: T,
+        send_callback: Option<SendMessageCallback>,
         timeout: u64,
-    ) {
-        todo!()
+    ) -> Result<()>
+    where
+        M: MessageTrait + Clone + Send + Sync,
+        S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue>
+            + Send
+            + Sync
+            + 'static,
+        T: std::any::Any + Sync + Send,
+    {
+        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
+        self.default_mqproducer_impl
+            .as_mut()
+            .unwrap()
+            .send_with_selector_callback_timeout(
+                msg,
+                Arc::new(selector),
+                arg,
+                send_callback,
+                timeout,
+            )
+            .await
     }
 
-    async fn send_oneway_with_selector(
-        &self,
-        msg: &Message,
-        selector: impl MessageQueueSelector,
-        arg: &str,
-    ) -> Result<()> {
-        todo!()
+    async fn send_oneway_with_selector<M, S, T>(
+        &mut self,
+        mut msg: M,
+        selector: S,
+        arg: T,
+    ) -> Result<()>
+    where
+        M: MessageTrait + Clone + Send + Sync,
+        S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue>
+            + Send
+            + Sync
+            + 'static,
+        T: std::any::Any + Sync + Send,
+    {
+        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
+        self.default_mqproducer_impl
+            .as_mut()
+            .unwrap()
+            .send_oneway_with_selector(msg, Arc::new(selector), arg)
+            .await
     }
 
     async fn send_message_in_transaction(
