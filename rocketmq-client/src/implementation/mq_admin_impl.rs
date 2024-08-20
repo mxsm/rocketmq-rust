@@ -15,15 +15,24 @@
  * limitations under the License.
  */
 use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 
 use crate::base::client_config::ClientConfig;
+use crate::error::MQClientError::MQClientException;
+use crate::factory::mq_client_instance;
+use crate::implementation::mq_client_api_impl::MQClientAPIImpl;
+use crate::Result;
 
-pub struct MQAdminImpl {}
+pub struct MQAdminImpl {
+    timeout_millis: u64,
+}
 
 impl MQAdminImpl {
     pub fn new() -> Self {
-        MQAdminImpl {}
+        MQAdminImpl {
+            timeout_millis: 60000,
+        }
     }
 }
 
@@ -51,5 +60,35 @@ impl MQAdminImpl {
             message_queues.push(message_queue);
         }
         message_queues
+    }
+
+    pub async fn fetch_publish_message_queues(
+        &mut self,
+        topic: &str,
+        mq_client_api_impl: ArcRefCellWrapper<MQClientAPIImpl>,
+        client_config: &mut ClientConfig,
+    ) -> Result<Vec<MessageQueue>> {
+        let topic_route_data = mq_client_api_impl
+            .get_topic_route_info_from_name_server_detail(topic, self.timeout_millis, true)
+            .await?;
+        if let Some(mut topic_route_data) = topic_route_data {
+            let topic_publish_info = mq_client_instance::topic_route_data2topic_publish_info(
+                topic,
+                &mut topic_route_data,
+            );
+            if topic_publish_info.ok() {
+                return Ok(self.parse_publish_message_queues(
+                    &topic_publish_info.message_queue_list,
+                    client_config,
+                ));
+            }
+        }
+        Err(MQClientException(
+            -1,
+            format!(
+                "Unknow why, Can not find Message Queue for this topic, {}",
+                topic
+            ),
+        ))
     }
 }

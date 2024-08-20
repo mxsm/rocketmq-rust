@@ -667,8 +667,13 @@ impl MQProducer for DefaultMQProducer {
         }
     }
 
-    async fn fetch_publish_message_queues(&self, topic: &str) -> Result<Vec<MessageQueue>> {
-        todo!()
+    async fn fetch_publish_message_queues(&mut self, topic: &str) -> Result<Vec<MessageQueue>> {
+        let topic = self.with_namespace(topic);
+        self.default_mqproducer_impl
+            .as_mut()
+            .unwrap()
+            .fetch_publish_message_queues(topic.as_str())
+            .await
     }
 
     async fn send<M>(&mut self, mut msg: M) -> Result<SendResult>

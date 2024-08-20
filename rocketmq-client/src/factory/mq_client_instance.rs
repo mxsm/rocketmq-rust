@@ -73,7 +73,7 @@ pub struct MQClientInstance {
      * adminExtGroup.
      */
     admin_ext_table: Arc<RwLock<HashMap<String, Box<dyn MQAdminExtInner>>>>,
-    mq_client_api_impl: ArcRefCellWrapper<MQClientAPIImpl>,
+    pub(crate) mq_client_api_impl: ArcRefCellWrapper<MQClientAPIImpl>,
     pub(crate) mq_admin_impl: ArcRefCellWrapper<MQAdminImpl>,
     topic_route_table: Arc<RwLock<HashMap<String /* Topic */, TopicRouteData>>>,
     topic_end_points_table:
@@ -122,7 +122,7 @@ impl MQClientInstance {
             consumer_table: Arc::new(Default::default()),
             admin_ext_table: Arc::new(Default::default()),
             mq_client_api_impl,
-            mq_admin_impl: ArcRefCellWrapper::new(MQAdminImpl {}),
+            mq_admin_impl: ArcRefCellWrapper::new(MQAdminImpl::new()),
             topic_route_table: Arc::new(Default::default()),
             topic_end_points_table: Arc::new(Default::default()),
             lock_namesrv: Default::default(),

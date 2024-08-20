@@ -298,7 +298,35 @@ impl DefaultMQProducerImpl {
         M: MessageTrait + Clone + Send + Sync,
         T: std::any::Any + Sync + Send,
     {
-        unimplemented!("send_with_selector_callback_timeout")
+        let begin_start_time = Instant::now();
+        let mut clone_self = self.clone();
+        let msg_len = if msg.get_body().is_some() {
+            msg.get_body().unwrap().len()
+        } else {
+            1
+        };
+        let send_callback_clone = send_callback.clone();
+        let future = async move {
+            let cost_time = begin_start_time.elapsed().as_millis() as u64;
+            if timeout <= cost_time {
+                send_callback_clone.as_ref().unwrap()(
+                    None,
+                    Some(&RemotingTooMuchRequestException("call timeout".to_string())),
+                );
+            }
+            clone_self
+                .send_select_impl(
+                    msg,
+                    selector,
+                    arg,
+                    CommunicationMode::Async,
+                    send_callback_clone,
+                    timeout - cost_time,
+                )
+                .await
+        };
+        self.execute_async_message_send(future, send_callback, timeout, begin_start_time, msg_len)
+            .await
     }
 
     pub async fn send_oneway_with_selector<M, T>(
@@ -319,23 +347,77 @@ impl DefaultMQProducerImpl {
             None,
             self.producer_config.send_msg_timeout() as u64,
         )
-        .await
+        .await?;
+        Ok(())
     }
 
     pub async fn send_select_impl<M, T>(
         &mut self,
-        msg: M,
+        mut msg: M,
         selector: MessageQueueSelectorFn,
         arg: T,
         communication_mode: CommunicationMode,
         send_message_callback: Option<SendMessageCallback>,
         timeout: u64,
-    ) -> Result<()>
+    ) -> Result<Option<SendResult>>
     where
         M: MessageTrait + Clone + Send + Sync,
         T: std::any::Any + Sync + Send,
     {
-        unimplemented!()
+        let begin_start_time = Instant::now();
+        self.make_sure_state_ok()?;
+        Validators::check_message(Some(&msg), self.producer_config.as_ref())?;
+        let topic_publish_info = self.try_to_find_topic_publish_info(msg.get_topic()).await;
+        if let Some(topic_publish_info) = topic_publish_info {
+            if topic_publish_info.ok() {
+                let message_queue_list = self
+                    .client_instance
+                    .as_mut()
+                    .unwrap()
+                    .mq_admin_impl
+                    .parse_publish_message_queues(
+                        &topic_publish_info.message_queue_list,
+                        &mut self.client_config,
+                    );
+                let mut user_message = msg.clone();
+                let user_topic = NamespaceUtil::without_namespace_with_namespace(
+                    user_message.get_topic(),
+                    self.client_config
+                        .get_namespace()
+                        .unwrap_or("".to_string())
+                        .as_str(),
+                );
+                user_message.set_topic(user_topic.as_str());
+                let message_queue = selector(&message_queue_list, &msg, &arg);
+                let cost_time = begin_start_time.elapsed().as_millis() as u64;
+                if timeout < cost_time {
+                    return Err(MQClientError::RemotingTooMuchRequestException(
+                        "sendSelectImpl call timeout".to_string(),
+                    ));
+                }
+                if let Some(message_queue) = message_queue {
+                    return self
+                        .send_kernel_impl(
+                            &mut msg,
+                            &message_queue,
+                            communication_mode,
+                            send_message_callback,
+                            None,
+                            timeout - cost_time,
+                        )
+                        .await;
+                }
+                return Err(MQClientError::MQClientException(
+                    -1,
+                    "select message queue return null.".to_string(),
+                ));
+            }
+        }
+        self.validate_name_server_setting()?;
+        Err(MQClientError::MQClientException(
+            -1,
+            format!("No route info for this topic, {}", msg.get_topic()),
+        ))
     }
 
     #[inline]
@@ -1285,11 +1367,29 @@ impl DefaultMQProducerImpl {
         M: MessageTrait + Clone + Send + Sync,
         T: std::any::Any + Sync + Send,
     {
-        self.send_with_selector_timeout_impl(msg, selector, arg, timeout, None)
+        let result = self
+            .send_select_impl(msg, selector, arg, CommunicationMode::Sync, None, timeout)
+            .await?;
+        Ok(result.expect("send result is none"))
+    }
+
+    pub async fn fetch_publish_message_queues(&mut self, topic: &str) -> Result<Vec<MessageQueue>> {
+        self.make_sure_state_ok()?;
+        let client_instance = self
+            .client_instance
+            .as_mut()
+            .unwrap()
+            .mq_client_api_impl
+            .clone();
+        self.client_instance
+            .as_mut()
+            .unwrap()
+            .mq_admin_impl
+            .fetch_publish_message_queues(topic, client_instance, &mut self.client_config)
             .await
     }
 
-    async fn send_with_selector_timeout_impl<M, T>(
+    /*    async fn send_with_selector_timeout_impl<M, T>(
         &mut self,
         mut msg: M,
         selector: MessageQueueSelectorFn,
@@ -1356,7 +1456,7 @@ impl DefaultMQProducerImpl {
             -1,
             "No route info for this topic, ".to_string(),
         ))
-    }
+    }*/
 }
 
 impl MQProducerInner for DefaultMQProducerImpl {
