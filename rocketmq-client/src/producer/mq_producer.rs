@@ -51,7 +51,7 @@ pub trait MQProducerLocal {
     ///
     /// # Returns
     /// A `Result` containing a vector of `MessageQueue` objects, or an error.
-    async fn fetch_publish_message_queues(&self, topic: &str) -> Result<Vec<MessageQueue>>;
+    async fn fetch_publish_message_queues(&mut self, topic: &str) -> Result<Vec<MessageQueue>>;
 
     /// Sends a message.
     ///
