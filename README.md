@@ -2,9 +2,9 @@
 
 ![GitHub last commit](https://img.shields.io/github/last-commit/mxsm/rocketmq-rust) [![Crates.io](https://img.shields.io/crates/v/rocketmq-rust.svg)](https://crates.io/crates/rocketmq-rust) [![Docs.rs](https://docs.rs/rocketmq-rust/badge.svg)](https://docs.rs/rocketmq-rust) [![CI](https://github.com/mxsm/rocketmq-rust/workflows/CI/badge.svg)](https://github.com/mxsm/rocketmq-rust/actions) [![CodeCov][codecov-image]][codecov-url] ![GitHub contributors](https://img.shields.io/github/contributors/mxsm/rocketmq-rust) ![Crates.io License](https://img.shields.io/crates/l/rocketmq-rust) ![GitHub repo size](https://img.shields.io/github/repo-size/mxsm/rocketmq-rust) ![Static Badge](https://img.shields.io/badge/MSRV-1.75.0%2B-25b373)
 
-![](resources/rocketmq-rust.jpg)
-
  Welcome to [Apache Rocketmq](https://github.com/apache/rocketmq) Rust implementation (Unofficial ). **RocketMQ-Rust** is a reimplementation of the Apache RocketMQ message middleware in the Rust language. This project aims to provide Rust developers with a high-performance and reliable message queue service, making full use of the features of the Rust language.
+
+![](resources/rocketmq-rust.jpg)
 
 ### RocketMQ-Rust Features
 
