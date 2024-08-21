@@ -31,6 +31,7 @@ use tracing::warn;
 use crate::client::manager::consumer_manager::ConsumerManager;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
 use crate::processor::admin_broker_processor::broker_config_request_handler::BrokerConfigRequestHandler;
+use crate::processor::admin_broker_processor::consumer_request_handler::ConsumerRequestHandler;
 use crate::processor::admin_broker_processor::topic_request_handler::TopicRequestHandler;
 use crate::processor::pop_inflight_message_counter::PopInflightMessageCounter;
 use crate::schedule::schedule_message_service::ScheduleMessageService;
@@ -38,12 +39,14 @@ use crate::topic::manager::topic_config_manager::TopicConfigManager;
 use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
 
 mod broker_config_request_handler;
+mod consumer_request_handler;
 mod topic_request_handler;
 
 #[derive(Clone)]
 pub struct AdminBrokerProcessor {
     topic_request_handler: TopicRequestHandler,
     broker_config_request_handler: BrokerConfigRequestHandler,
+    consumer_request_handler: ConsumerRequestHandler,
 }
 
 impl AdminBrokerProcessor {
@@ -74,9 +77,11 @@ impl AdminBrokerProcessor {
         };
         let topic_request_handler = TopicRequestHandler::new(inner.clone());
         let broker_config_request_handler = BrokerConfigRequestHandler::new(inner.clone());
+        let consumer_request_handler = ConsumerRequestHandler::new(inner.clone());
         AdminBrokerProcessor {
             topic_request_handler,
             broker_config_request_handler,
+            consumer_request_handler,
         }
     }
 }
@@ -128,6 +133,11 @@ impl AdminBrokerProcessor {
             RequestCode::GetTopicStatsInfo => {
                 self.topic_request_handler
                     .get_topic_stats_info(channel, ctx, request_code, request)
+                    .await
+            }
+            RequestCode::GetConsumerConnectionList => {
+                self.consumer_request_handler
+                    .get_consumer_connection_list(channel, ctx, request_code, request)
                     .await
             }
             RequestCode::GetTopicConfig => {

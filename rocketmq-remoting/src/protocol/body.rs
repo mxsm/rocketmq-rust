@@ -20,6 +20,9 @@ pub mod consumer_running_info;
 pub mod create_topic_list_request_body;
 pub mod get_consumer_listby_group_response_body;
 
+pub mod consumer_connection;
+
+pub mod connection;
 pub mod group_list;
 pub mod kv_table;
 pub mod topic;
