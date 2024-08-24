@@ -37,6 +37,7 @@ use rocketmq_common::common::mix_all::CLIENT_INNER_PRODUCER_GROUP;
 use rocketmq_common::common::mix_all::DEFAULT_PRODUCER_GROUP;
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::common::FAQUrl;
+use rocketmq_common::utils::correlation_id_util::CorrelationIdUtil;
 use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::MessageDecoder;
@@ -60,6 +61,7 @@ use crate::common::client_error_code::ClientErrorCode;
 use crate::error::MQClientError;
 use crate::error::MQClientError::MQClientException;
 use crate::error::MQClientError::RemotingTooMuchRequestException;
+use crate::error::MQClientError::RequestTimeoutException;
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::hook::check_forbidden_context::CheckForbiddenContext;
 use crate::hook::check_forbidden_hook::CheckForbiddenHook;
@@ -75,6 +77,8 @@ use crate::producer::default_mq_producer::ProducerConfig;
 use crate::producer::message_queue_selector::MessageQueueSelectorFn;
 use crate::producer::producer_impl::mq_producer_inner::MQProducerInner;
 use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
+use crate::producer::request_future_holder::REQUEST_FUTURE_HOLDER;
+use crate::producer::request_response_future::RequestResponseFuture;
 use crate::producer::send_callback::SendMessageCallback;
 use crate::producer::send_result::SendResult;
 use crate::producer::send_status::SendStatus;
@@ -1387,6 +1391,137 @@ impl DefaultMQProducerImpl {
             .mq_admin_impl
             .fetch_publish_message_queues(topic, client_instance, &mut self.client_config)
             .await
+    }
+
+    pub async fn request(&mut self, mut msg: Message, timeout: u64) -> Result<Message> {
+        let begin_timestamp = Instant::now();
+        self.prepare_send_request(&mut msg, timeout).await;
+        let correlation_id = msg
+            .get_property(MessageConst::PROPERTY_CORRELATION_ID)
+            .unwrap();
+        let request_response_future = Arc::new(RequestResponseFuture::new(
+            correlation_id.clone(),
+            timeout,
+            None,
+        ));
+        REQUEST_FUTURE_HOLDER
+            .put_request(correlation_id.clone(), request_response_future.clone())
+            .await;
+        let request_response_future_inner = request_response_future.clone();
+        let send_callback = move |result: Option<&SendResult>,
+                                  err: Option<&dyn std::error::Error>| {
+            if result.is_some() {
+                request_response_future_inner.set_send_request_ok(true);
+            }
+            if let Some(error) = err {
+                request_response_future_inner.set_send_request_ok(false);
+                request_response_future_inner.put_response_message(None);
+                request_response_future_inner.set_cause(Box::new(
+                    MQClientError::MQClientException(-1, error.to_string()),
+                ));
+            }
+        };
+        let topic = msg.topic.clone();
+        self.send_default_impl(
+            msg,
+            CommunicationMode::Async,
+            Some(Arc::new(send_callback)),
+            timeout,
+        )
+        .await?;
+
+        let result = self
+            .wait_response(
+                topic.as_str(),
+                timeout,
+                request_response_future,
+                begin_timestamp.elapsed().as_millis() as u64,
+            )
+            .await;
+
+        REQUEST_FUTURE_HOLDER
+            .remove_request(correlation_id.as_str())
+            .await;
+        result
+    }
+
+    async fn wait_response(
+        &mut self,
+        topic: &str,
+        timeout: u64,
+        request_response_future: Arc<RequestResponseFuture>,
+        cost: u64,
+    ) -> Result<Message> {
+        let response_message = request_response_future
+            .wait_response_message(Duration::from_millis(timeout - cost))
+            .await;
+
+        if let Some(response_message) = response_message {
+            Ok(response_message)
+        } else if request_response_future.is_send_request_ok().await {
+            Err(RequestTimeoutException(
+                ClientErrorCode::REQUEST_TIMEOUT_EXCEPTION,
+                format!(
+                    "send request message to <{}> OK, but wait reply message timeout, {} ms.",
+                    topic, timeout
+                ),
+            ))
+        } else {
+            Err(MQClientException(
+                -1,
+                format!(
+                    "send request message to <{}> fail, {}",
+                    topic,
+                    request_response_future.get_cause().await.unwrap()
+                ),
+            ))
+        }
+    }
+
+    async fn prepare_send_request(&mut self, msg: &mut Message, timeout: u64) {
+        let correlation_id = CorrelationIdUtil::create_correlation_id();
+        let request_client_id = self.client_instance.as_mut().unwrap().client_id.clone();
+        MessageAccessor::put_property(
+            msg,
+            MessageConst::PROPERTY_CORRELATION_ID,
+            correlation_id.as_str(),
+        );
+        MessageAccessor::put_property(
+            msg,
+            MessageConst::PROPERTY_MESSAGE_REPLY_TO_CLIENT,
+            request_client_id.as_str(),
+        );
+        MessageAccessor::put_property(
+            msg,
+            MessageConst::PROPERTY_MESSAGE_TTL,
+            timeout.to_string().as_str(),
+        );
+        let guard = self
+            .client_instance
+            .as_mut()
+            .unwrap()
+            .topic_route_table
+            .read()
+            .await;
+        let has_route_data = guard.contains_key(msg.get_topic());
+        drop(guard);
+        if !has_route_data {
+            let begin_timestamp = Instant::now();
+            self.try_to_find_topic_publish_info(msg.get_topic()).await;
+            self.client_instance
+                .as_mut()
+                .unwrap()
+                .send_heartbeat_to_all_broker_with_lock()
+                .await;
+            let cost = begin_timestamp.elapsed().as_millis() as u64;
+            if cost > 500 {
+                warn!(
+                    "prepare send request for <{}> cost {} ms",
+                    msg.get_topic(),
+                    cost
+                );
+            }
+        }
     }
 
     /*    async fn send_with_selector_timeout_impl<M, T>(

@@ -1129,8 +1129,13 @@ impl MQProducer for DefaultMQProducer {
             .await
     }
 
-    async fn request(&self, msg: &Message, timeout: u64) -> Result<Message> {
-        todo!()
+    async fn request(&mut self, mut msg: Message, timeout: u64) -> Result<Message> {
+        msg.set_topic(self.with_namespace(msg.topic.as_str()).as_str());
+        self.default_mqproducer_impl
+            .as_mut()
+            .unwrap()
+            .request(msg, timeout)
+            .await
     }
 
     async fn request_with_callback(

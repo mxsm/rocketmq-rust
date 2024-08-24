@@ -54,9 +54,8 @@ pub enum Error {
     #[error("{0}")]
     ConnectionInvalid(String),
 
-    #[error("{0}")]
-    Elapsed(#[from] tokio::time::error::Elapsed),
-
+    /*    #[error("{0}")]
+    Elapsed(#[from] tokio::time::error::Elapsed),*/
     #[error("{0}-{1}")]
     AbortProcessException(i32, String),
 }

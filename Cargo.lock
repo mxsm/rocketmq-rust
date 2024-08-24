@@ -1902,6 +1902,7 @@ version = "0.3.0"
 dependencies = [
  "lazy_static",
  "num_cpus",
+ "once_cell",
  "parking_lot",
  "rand",
  "regex",
@@ -1960,6 +1961,7 @@ dependencies = [
  "tracing-subscriber",
  "trait-variant",
  "url",
+ "uuid",
  "zstd",
 ]
 
