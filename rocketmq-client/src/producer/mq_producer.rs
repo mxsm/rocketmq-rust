@@ -501,7 +501,7 @@ pub trait MQProducerLocal {
     ///
     /// # Returns
     /// A `Result` containing the response `Message`, or an error.
-    async fn request(&self, msg: &Message, timeout: u64) -> Result<Message>;
+    async fn request(&mut self, msg: Message, timeout: u64) -> Result<Message>;
 
     /// Sends a request message with a callback.
     ///

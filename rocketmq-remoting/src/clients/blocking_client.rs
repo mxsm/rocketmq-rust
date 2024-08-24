@@ -15,10 +15,6 @@
  * limitations under the License.
  */
 
-use std::time::Duration;
-
-use crate::protocol::remoting_command::RemotingCommand;
-
 pub struct BlockingClient {
     /// The asynchronous `Client`.
     inner: crate::clients::Client,
@@ -57,7 +53,7 @@ impl BlockingClient {
         Ok(BlockingClient { inner, rt })
     }
 
-    pub fn invoke_oneway(
+    /*    pub fn invoke_oneway(
         &mut self,
         request: RemotingCommand,
         timeout: Duration,
@@ -69,5 +65,5 @@ impl BlockingClient {
             Ok(value) => value,
             Err(err) => Err(crate::error::Error::Elapsed(err)),
         }
-    }
+    }*/
 }

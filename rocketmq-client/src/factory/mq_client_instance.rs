@@ -56,7 +56,7 @@ use crate::Result;
 #[derive(Clone)]
 pub struct MQClientInstance {
     client_config: Arc<ClientConfig>,
-    client_id: String,
+    pub(crate) client_id: String,
     boot_timestamp: u64,
     /**
      * The container of the producer in the current client. The key is the name of
@@ -75,7 +75,7 @@ pub struct MQClientInstance {
     admin_ext_table: Arc<RwLock<HashMap<String, Box<dyn MQAdminExtInner>>>>,
     pub(crate) mq_client_api_impl: ArcRefCellWrapper<MQClientAPIImpl>,
     pub(crate) mq_admin_impl: ArcRefCellWrapper<MQAdminImpl>,
-    topic_route_table: Arc<RwLock<HashMap<String /* Topic */, TopicRouteData>>>,
+    pub(crate) topic_route_table: Arc<RwLock<HashMap<String /* Topic */, TopicRouteData>>>,
     topic_end_points_table:
         Arc<RwLock<HashMap<String /* Topic */, HashMap<MessageQueue, String /* brokerName */>>>>,
     lock_namesrv: Arc<Mutex<()>>,

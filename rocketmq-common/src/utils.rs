@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 pub mod cleanup_policy_utils;
+pub mod correlation_id_util;
 pub mod crc32_utils;
 pub mod env_utils;
 pub mod file_utils;

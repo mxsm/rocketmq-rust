@@ -14,18 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod default_mq_produce_builder;
-pub mod default_mq_producer;
-pub mod local_transaction_state;
-pub mod message_queue_selector;
-pub mod mq_producer;
-pub mod produce_accumulator;
-pub mod producer_impl;
-pub mod request_callback;
-pub(crate) mod request_future_holder;
-pub(crate) mod request_response_future;
-pub mod send_callback;
-pub mod send_result;
-pub mod send_status;
-pub mod transaction_listener;
-pub mod transaction_send_result;
+use uuid::Uuid;
+
+pub struct CorrelationIdUtil;
+
+impl CorrelationIdUtil {
+    pub fn create_correlation_id() -> String {
+        Uuid::new_v4().to_string()
+    }
+}

@@ -21,6 +21,10 @@ use crate::common::message::MessageTrait;
 pub struct MessageAccessor;
 
 impl MessageAccessor {
+    pub fn put_property<T: MessageTrait>(msg: &mut T, name: &str, value: &str) {
+        msg.put_property(name, value);
+    }
+
     pub fn clear_property<T: MessageTrait>(msg: &mut T, name: &str) {
         msg.clear_property(name);
     }
