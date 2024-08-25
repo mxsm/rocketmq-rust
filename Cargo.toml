@@ -21,7 +21,8 @@ edition = "2021"
 homepage = "https://github.com/mxsm/rocketmq-rust"
 repository = "https://github.com/mxsm/rocketmq-rust"
 license = "MIT OR Apache-2.0"
-keywords = ["rocketmq", "rust", "mq"]
+keywords = ["apache-rocketmq", "rocketmq-rust", "rocketmq-rs", "rust", "rocketmq-client"]
+categories = ["asynchronous", "network-programming", "message-queue", "rocketmq"]
 readme = "README.md"
 description = """
 Unofficial Rust implementation of Apache RocketMQ
