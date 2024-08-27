@@ -18,10 +18,11 @@
 pub use blocking_client::BlockingClient;
 pub use client::Client;
 
-use crate::net::ResponseFuture;
+use crate::base::response_future::ResponseFuture;
 use crate::protocol::remoting_command::RemotingCommand;
 use crate::remoting::InvokeCallback;
 use crate::remoting::RemotingService;
+use crate::runtime::processor::RequestProcessor;
 use crate::Result;
 
 mod async_client;
@@ -91,6 +92,8 @@ pub trait RemotingClient: RemotingService {
     /// # Arguments
     /// * `addrs` - A list of addresses whose clients should be closed.
     fn close_clients(&mut self, addrs: Vec<String>);
+
+    fn register_processor(&mut self, processor: impl RequestProcessor + Sync);
 }
 
 impl<T> InvokeCallback for T

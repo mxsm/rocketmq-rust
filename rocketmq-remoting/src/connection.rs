@@ -14,11 +14,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+use futures_util::stream::SplitSink;
+use futures_util::stream::SplitStream;
+use futures_util::StreamExt;
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
 use crate::codec::remoting_command_codec::RemotingCommandCodec;
+use crate::protocol::remoting_command::RemotingCommand;
 
 /// Send and receive `Frame` values from a remote peer.
 ///
@@ -36,7 +39,9 @@ use crate::codec::remoting_command_codec::RemotingCommandCodec;
 pub struct Connection {
     /// The `Framed` instance used for reading from and writing to the TCP stream.
     /// It leverages the `RemotingCommandCodec` for encoding and decoding frames.
-    pub(crate) framed: Framed<TcpStream, RemotingCommandCodec>,
+    //pub(crate) framed: Framed<TcpStream, RemotingCommandCodec>,
+    pub(crate) writer: SplitSink<Framed<TcpStream, RemotingCommandCodec>, RemotingCommand>,
+    pub(crate) reader: SplitStream<Framed<TcpStream, RemotingCommandCodec>>,
 
     /// A boolean flag indicating the current state of the connection.
     /// `true` means the connection is in a good state, while `false` indicates
@@ -55,15 +60,25 @@ impl Connection {
     ///
     /// A new `Connection` instance.
     pub fn new(tcp_stream: TcpStream) -> Connection {
+        let framed = Framed::with_capacity(tcp_stream, RemotingCommandCodec::new(), 1024 * 4);
+        let (writer, reader) = framed.split();
         Self {
-            framed: Framed::with_capacity(tcp_stream, RemotingCommandCodec::new(), 1024 * 4),
+            writer,
+            reader,
             ok: true,
         }
     }
 }
 
 impl Connection {
-    pub fn framed(&self) -> &Framed<TcpStream, RemotingCommandCodec> {
+    /*pub fn framed(&self) -> &Framed<TcpStream, RemotingCommandCodec> {
         &self.framed
+    }*/
+    pub fn reader(&self) -> &SplitStream<Framed<TcpStream, RemotingCommandCodec>> {
+        &self.reader
+    }
+
+    pub fn writer(&self) -> &SplitSink<Framed<TcpStream, RemotingCommandCodec>, RemotingCommand> {
+        &self.writer
     }
 }

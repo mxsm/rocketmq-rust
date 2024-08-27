@@ -37,6 +37,7 @@ use rocketmq_remoting::protocol::route::route_data_view::QueueData;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::remoting::RemotingService;
+use rocketmq_remoting::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
 use rocketmq_remoting::rpc::client_metadata::ClientMetadata;
 use rocketmq_remoting::rpc::rpc_client_impl::RpcClientImpl;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
@@ -55,7 +56,8 @@ pub struct BrokerOuterAPI {
 
 impl BrokerOuterAPI {
     pub fn new(tokio_client_config: Arc<TokioClientConfig>) -> Self {
-        let client = RocketmqDefaultClient::new(tokio_client_config);
+        let client =
+            RocketmqDefaultClient::new(tokio_client_config, DefaultRemotingRequestProcessor);
         let client_metadata = ClientMetadata::new();
         Self {
             remoting_client: client.clone(),
@@ -69,7 +71,8 @@ impl BrokerOuterAPI {
         tokio_client_config: Arc<TokioClientConfig>,
         rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
     ) -> Self {
-        let mut client = RocketmqDefaultClient::new(tokio_client_config);
+        let mut client =
+            RocketmqDefaultClient::new(tokio_client_config, DefaultRemotingRequestProcessor);
         let client_metadata = ClientMetadata::new();
         if let Some(rpc_hook) = rpc_hook {
             client.register_rpc_hook(rpc_hook);

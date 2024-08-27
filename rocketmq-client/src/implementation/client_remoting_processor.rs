@@ -14,12 +14,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
 use rocketmq_remoting::Result;
+use tracing::info;
 
 #[derive(Clone)]
 pub struct ClientRemotingProcessor {}
@@ -31,6 +32,18 @@ impl RequestProcessor for ClientRemotingProcessor {
         ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> Result<Option<RemotingCommand>> {
-        todo!()
+        let request_code = RequestCode::from(request.code());
+        info!("process_request: {:?}", request_code);
+
+        match request_code {
+            RequestCode::PushReplyMessageToClient => {
+                info!("PushReplyMessageToClient");
+                Ok(None)
+            }
+            _ => {
+                info!("Unknown request code: {:?}", request_code);
+                Ok(None)
+            }
+        }
     }
 }

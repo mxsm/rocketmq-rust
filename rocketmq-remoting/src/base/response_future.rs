@@ -14,20 +14,31 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-use crate::net::channel::Channel;
 use crate::protocol::remoting_command::RemotingCommand;
-use crate::runtime::server::ConnectionHandlerContext;
 use crate::Result;
 
-/// Trait for processing requests.
-#[trait_variant::make(RequestProcessor: Send )]
-pub trait LocalRequestProcessor {
-    /// Process a request.
-    async fn process_request(
-        &mut self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        request: RemotingCommand,
-    ) -> Result<Option<RemotingCommand>>;
+pub struct ResponseFuture {
+    pub(crate) opaque: i32,
+    pub(crate) timeout_millis: u64,
+    pub(crate) send_request_ok: bool,
+    //pub(crate) response_command: Option<RemotingCommand>,
+    pub(crate) tx: tokio::sync::oneshot::Sender<Result<RemotingCommand>>,
+}
+
+impl ResponseFuture {
+    pub fn new(
+        opaque: i32,
+        timeout_millis: u64,
+        send_request_ok: bool,
+        //response_command: Option<RemotingCommand>,
+        tx: tokio::sync::oneshot::Sender<Result<RemotingCommand>>,
+    ) -> Self {
+        Self {
+            opaque,
+            timeout_millis,
+            send_request_ok,
+            // response_command,
+            tx,
+        }
+    }
 }

@@ -45,12 +45,13 @@ impl BlockingClient {
     /// # drop(client);
     /// }
     /// ```
-    pub fn connect<T: tokio::net::ToSocketAddrs>(addr: T) -> anyhow::Result<BlockingClient> {
-        let rt = tokio::runtime::Builder::new_current_thread()
+    pub fn connect<T: tokio::net::ToSocketAddrs>(_addr: T) -> anyhow::Result<BlockingClient> {
+        /*let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
         let inner = rt.block_on(crate::clients::Client::connect(addr))?;
-        Ok(BlockingClient { inner, rt })
+        Ok(BlockingClient { inner, rt })*/
+        unimplemented!("BlockingClient::connect")
     }
 
     /*    pub fn invoke_oneway(
