@@ -14,20 +14,4 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-use crate::net::channel::Channel;
-use crate::protocol::remoting_command::RemotingCommand;
-use crate::runtime::server::ConnectionHandlerContext;
-use crate::Result;
-
-/// Trait for processing requests.
-#[trait_variant::make(RequestProcessor: Send )]
-pub trait LocalRequestProcessor {
-    /// Process a request.
-    async fn process_request(
-        &mut self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        request: RemotingCommand,
-    ) -> Result<Option<RemotingCommand>>;
-}
+pub mod default_request_processor;

@@ -21,13 +21,13 @@ use std::time::Duration;
 use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
+use rocketmq_remoting::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_remoting::runtime::server::RocketMQServer;
 use rocketmq_runtime::RocketMQRuntime;
 use tokio::select;
 use tokio::sync::broadcast;
 
-use crate::processor::default_request_processor::DefaultRequestProcessor;
 use crate::processor::ClientRequestProcessor;
 use crate::processor::NameServerRequestProcessor;
 use crate::KVConfigManager;
@@ -82,10 +82,11 @@ impl NameServerRuntime {
             self.name_server_config.clone(),
             self.kvconfig_manager.clone(),
         );
-        let default_request_processor = DefaultRequestProcessor::new(
-            self.route_info_manager.clone(),
-            self.kvconfig_manager.clone(),
-        );
+        let default_request_processor =
+            crate::processor::default_request_processor::DefaultRequestProcessor::new(
+                self.route_info_manager.clone(),
+                self.kvconfig_manager.clone(),
+            );
 
         let route_info_manager_arc = self.route_info_manager.clone();
         self.name_server_runtime
@@ -141,7 +142,10 @@ impl Builder {
         let name_server_config = Arc::new(self.name_server_config.unwrap());
         let runtime = RocketMQRuntime::new_multi(10, "namesrv-thread");
         let tokio_client_config = Arc::new(TokioClientConfig::default());
-        let remoting_client = RocketmqDefaultClient::new(tokio_client_config.clone());
+        let remoting_client = RocketmqDefaultClient::new(
+            tokio_client_config.clone(),
+            DefaultRemotingRequestProcessor,
+        );
 
         NameServerBootstrap {
             name_server_runtime: NameServerRuntime {

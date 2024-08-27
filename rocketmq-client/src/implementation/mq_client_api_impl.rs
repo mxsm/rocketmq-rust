@@ -43,6 +43,7 @@ use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::remoting::RemotingService;
+use rocketmq_remoting::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_remoting::runtime::RPCHook;
 use tracing::error;
@@ -89,7 +90,8 @@ impl MQClientAPIImpl {
         rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
         client_config: ClientConfig,
     ) -> Self {
-        let mut default_client = RocketmqDefaultClient::new(tokio_client_config);
+        let mut default_client =
+            RocketmqDefaultClient::new(tokio_client_config, DefaultRemotingRequestProcessor);
         if let Some(hook) = rpc_hook {
             default_client.register_rpc_hook(hook);
         }

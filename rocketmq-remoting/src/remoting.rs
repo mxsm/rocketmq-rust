@@ -16,7 +16,7 @@
  */
 use std::sync::Arc;
 
-use crate::net::ResponseFuture;
+use crate::base::response_future::ResponseFuture;
 use crate::protocol::remoting_command::RemotingCommand;
 use crate::runtime::RPCHook;
 

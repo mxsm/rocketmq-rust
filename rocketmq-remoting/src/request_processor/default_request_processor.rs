@@ -17,17 +17,20 @@
 
 use crate::net::channel::Channel;
 use crate::protocol::remoting_command::RemotingCommand;
+use crate::runtime::processor::RequestProcessor;
 use crate::runtime::server::ConnectionHandlerContext;
 use crate::Result;
 
-/// Trait for processing requests.
-#[trait_variant::make(RequestProcessor: Send )]
-pub trait LocalRequestProcessor {
-    /// Process a request.
+#[derive(Clone)]
+pub struct DefaultRemotingRequestProcessor;
+
+impl RequestProcessor for DefaultRemotingRequestProcessor {
     async fn process_request(
         &mut self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
+        _channel: Channel,
+        _ctx: ConnectionHandlerContext,
         request: RemotingCommand,
-    ) -> Result<Option<RemotingCommand>>;
+    ) -> Result<Option<RemotingCommand>> {
+        Ok(Some(request))
+    }
 }

@@ -106,7 +106,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
     async fn handle(&mut self) -> Result<()> {
         while !self.shutdown.is_shutdown {
             let frame = tokio::select! {
-                res = self.connection_handler_context.connection.framed.next() => res,
+                res = self.connection_handler_context.connection.reader.next() => res,
                 _ = self.shutdown.recv() =>{
                     //If a shutdown signal is received, return from `handle`.
                     return Ok(());
@@ -153,7 +153,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                             code, message,
                         );
                         tokio::select! {
-                            result =self.connection_handler_context.connection.framed.send(response.set_opaque(opaque)) => match result{
+                            result =self.connection_handler_context.connection.writer.send(response.set_opaque(opaque)) => match result{
                                 Ok(_) =>{},
                                 Err(err) => {
                                     match err {
@@ -175,7 +175,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                                     exception_inner.to_string(),
                                 );
                             tokio::select! {
-                                result =self.connection_handler_context.connection.framed.send(response.set_opaque(opaque)) => match result{
+                                result =self.connection_handler_context.connection.writer.send(response.set_opaque(opaque)) => match result{
                                     Ok(_) =>{},
                                     Err(err) => {
                                         match err {
@@ -196,7 +196,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
 
             let response = response.unwrap();
             tokio::select! {
-                result =self.connection_handler_context.connection.framed.send(response.set_opaque(opaque)) => match result{
+                result =self.connection_handler_context.connection.writer.send(response.set_opaque(opaque)) => match result{
                     Ok(_) =>{},
                     Err(err) => {
                         match err {
@@ -332,7 +332,7 @@ impl<RP> RocketMQServer<RP> {
     }
 }
 
-impl<RP: RequestProcessor + Sync + 'static> RocketMQServer<RP> {
+impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
     pub async fn run(&self, request_processor: RP) {
         let listener = TcpListener::bind(&format!(
             "{}:{}",
@@ -356,7 +356,7 @@ impl<RP: RequestProcessor + Sync + 'static> RocketMQServer<RP> {
     }
 }
 
-pub async fn run<RP: RequestProcessor + Sync + 'static>(
+pub async fn run<RP: RequestProcessor + Sync + 'static + Clone>(
     listener: TcpListener,
     shutdown: impl Future,
     request_processor: RP,
@@ -457,7 +457,7 @@ impl ConnectionHandlerContextWrapper {
     }
 
     pub async fn write(&mut self, cmd: RemotingCommand) {
-        match self.connection.framed.send(cmd).await {
+        match self.connection.writer.send(cmd).await {
             Ok(_) => {}
             Err(error) => {
                 error!("send response failed: {}", error);
