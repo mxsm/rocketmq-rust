@@ -21,14 +21,19 @@ use futures_util::StreamExt;
 use rocketmq_common::ArcRefCellWrapper;
 use tokio::sync::mpsc::Receiver;
 use tracing::error;
+use tracing::info;
+use tracing::warn;
 
+use crate::base::connection_net_event::ConnectionNetEvent;
 use crate::base::response_future::ResponseFuture;
+use crate::code::response_code::ResponseCode;
 use crate::connection::Connection;
 use crate::error::Error::ConnectionInvalid;
 use crate::error::Error::Io;
 use crate::error::Error::RemoteException;
 use crate::net::channel::Channel;
 use crate::protocol::remoting_command::RemotingCommand;
+use crate::protocol::RemotingCommandType;
 use crate::runtime::processor::RequestProcessor;
 use crate::runtime::server::ConnectionHandlerContextWrapper;
 use crate::Result;
@@ -51,6 +56,7 @@ struct ClientInner {
     response_table: HashMap<i32, ResponseFuture>,
     channel: Channel,
     ctx: ArcRefCellWrapper<ConnectionHandlerContextWrapper>,
+    tx: tokio::sync::mpsc::Sender<SendMessage>,
 }
 
 type SendMessage = (
@@ -71,32 +77,55 @@ async fn run_recv<PR: RequestProcessor>(
 ) {
     while let Some(response) = client.ctx.connection.reader.next().await {
         match response {
-            Ok(response) => {
-                let opaque = response.opaque();
-                let process_result = processor
-                    .process_request(
-                        client.channel.clone(),
-                        ArcRefCellWrapper::downgrade(&client.ctx),
-                        response,
-                    )
-                    .await;
-                match process_result {
-                    Ok(result) => {
-                        if let Some(command) = result {
-                            if let Some(response_future) = client.response_table.remove(&opaque) {
-                                let _ = response_future.tx.send(Ok(command));
+            Ok(msg) => match msg.get_type() {
+                // handle request
+                RemotingCommandType::REQUEST => {
+                    info!(
+                        ">>>>>>>>>>>>>>>>>>>receive request, code={}, address={}",
+                        msg.code(),
+                        client.channel.remote_address()
+                    );
+                    let opaque = msg.opaque();
+                    let process_result = processor
+                        .process_request(
+                            client.channel.clone(),
+                            ArcRefCellWrapper::downgrade(&client.ctx),
+                            msg,
+                        )
+                        .await;
+                    match process_result {
+                        Ok(response) => {
+                            if let Some(response) = response {
+                                let _ = client
+                                    .tx
+                                    .send((response.set_opaque(opaque), None, None))
+                                    .await;
                             }
                         }
-                    }
-                    Err(err) => {
-                        if let Some(response_future) = client.response_table.remove(&opaque) {
-                            let _ = response_future
-                                .tx
-                                .send(Err(RemoteException(err.to_string())));
+                        Err(err) => {
+                            error!("process request error: {:?}", err);
+                            let command = RemotingCommand::create_response_command()
+                                .set_opaque(opaque)
+                                .set_code(ResponseCode::SystemBusy)
+                                .set_remark(Some("System busy".to_string()));
+                            client.tx.send((command, None, None)).await.unwrap();
                         }
                     }
                 }
-            }
+                // handle response
+                RemotingCommandType::RESPONSE => {
+                    let opaque = msg.opaque();
+                    if let Some(response_future) = client.response_table.remove(&opaque) {
+                        let _ = response_future.tx.send(Ok(msg));
+                    } else {
+                        warn!(
+                            "receive response, cmd={}, but not matched any request, address={}",
+                            msg,
+                            client.channel.remote_address()
+                        )
+                    }
+                }
+            },
             Err(error) => match error {
                 Io(value) => {
                     client.ctx.connection.ok = false;
@@ -115,6 +144,7 @@ impl ClientInner {
     pub async fn connect<T, PR>(
         addr: T,
         processor: PR,
+        tx: Option<&tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
     ) -> Result<(
         tokio::sync::mpsc::Sender<SendMessage>,
         ArcRefCellWrapper<ClientInner>,
@@ -130,16 +160,24 @@ impl ClientInner {
         let stream = tcp_stream?;
         let channel = Channel::new(stream.local_addr()?, stream.peer_addr()?);
         let connection = Connection::new(stream);
+        let (tx_, rx) = tokio::sync::mpsc::channel(1024);
         let client = ClientInner {
             ctx: ArcRefCellWrapper::new(ConnectionHandlerContextWrapper::new(connection)),
             response_table: HashMap::new(),
             channel,
+            tx: tx_.clone(),
         };
         let client = ArcRefCellWrapper::new(client);
-        let (tx, rx) = tokio::sync::mpsc::channel(32);
+
         tokio::spawn(run_recv(client.clone(), processor));
         tokio::spawn(run_send(client.clone(), rx));
-        Ok((tx, client))
+        if let Some(tx) = tx {
+            let _ = tx.send(ConnectionNetEvent::CONNECTED(
+                client.channel.remote_address(),
+                client.channel.clone(),
+            ));
+        }
+        Ok((tx_, client))
     }
 
     pub async fn send(
@@ -152,7 +190,7 @@ impl ClientInner {
         if let Some(tx) = tx {
             self.response_table.insert(
                 opaque,
-                ResponseFuture::new(opaque, timeout_millis.unwrap_or(0), false, tx),
+                ResponseFuture::new(opaque, timeout_millis.unwrap_or(0), true, tx),
             );
         }
         match self.ctx.connection.writer.send(request).await {
@@ -182,7 +220,11 @@ impl Client {
     /// # Returns
     ///
     /// A new `Client` instance wrapped in a `Result`. Returns an error if the connection fails.
-    pub async fn connect<T, PR>(addr: T, processor: PR) -> Result<Client>
+    pub async fn connect<T, PR>(
+        addr: T,
+        processor: PR,
+        tx: Option<&tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
+    ) -> Result<Client>
     where
         T: tokio::net::ToSocketAddrs,
         PR: RequestProcessor + 'static,
@@ -194,7 +236,7 @@ impl Client {
         Ok(Client {
             connection: Connection::new(tcp_stream?),
         })*/
-        let (tx, inner) = ClientInner::connect(addr, processor).await?;
+        let (tx, inner) = ClientInner::connect(addr, processor, tx).await?;
         Ok(Client {
             //connection: inner.connection.clone(),
             inner,

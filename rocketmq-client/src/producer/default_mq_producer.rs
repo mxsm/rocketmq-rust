@@ -44,7 +44,6 @@ use crate::producer::message_queue_selector::MessageQueueSelector;
 use crate::producer::mq_producer::MQProducer;
 use crate::producer::produce_accumulator::ProduceAccumulator;
 use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl;
-use crate::producer::request_callback::RequestCallback;
 use crate::producer::send_callback::SendMessageCallback;
 use crate::producer::send_result::SendResult;
 use crate::producer::transaction_send_result::TransactionSendResult;
@@ -1138,22 +1137,37 @@ impl MQProducer for DefaultMQProducer {
             .await
     }
 
-    async fn request_with_callback(
-        &self,
-        msg: &Message,
-        request_callback: impl RequestCallback,
+    async fn request_with_callback<F>(
+        &mut self,
+        mut msg: Message,
+        request_callback: F,
         timeout: u64,
-    ) {
-        todo!()
+    ) -> Result<()>
+    where
+        F: Fn(Option<&dyn MessageTrait>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+    {
+        msg.set_topic(self.with_namespace(msg.topic.as_str()).as_str());
+        self.default_mqproducer_impl
+            .as_mut()
+            .unwrap()
+            .request_with_callback(msg, Arc::new(request_callback), timeout)
+            .await
     }
 
-    async fn request_with_selector(
-        &self,
-        msg: &Message,
-        selector: impl MessageQueueSelector,
-        arg: &str,
+    async fn request_with_selector<S, T>(
+        &mut self,
+        msg: Message,
+        selector: S,
+        arg: T,
         timeout: u64,
-    ) -> Result<Message> {
+    ) -> Result<Message>
+    where
+        S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue>
+            + Send
+            + Sync
+            + 'static,
+        T: std::any::Any + Sync + Send,
+    {
         todo!()
     }
 

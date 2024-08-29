@@ -14,6 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod connection_net_event;
-pub mod remoting_fn;
-pub mod response_future;
+use std::sync::Arc;
+
+use crate::net::channel::Channel;
+
+pub type ConnectedListener = Arc<dyn Fn(String, Channel) + Sync + Send>;

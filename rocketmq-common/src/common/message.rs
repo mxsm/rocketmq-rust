@@ -33,6 +33,7 @@ pub mod message_queue;
 pub mod message_single;
 
 /// This module defines the `MessageTrait` trait, which provides a flexible interface for working
+///
 /// with message objects in RocketMQ. It includes methods for managing message properties, keys,
 /// tags, body, and other metadata related to the message.
 pub trait MessageTrait: Any {
