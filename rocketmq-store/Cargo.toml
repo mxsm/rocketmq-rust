@@ -59,7 +59,7 @@ log = "0.4.22"
 
 memmap2 = "0.9.4"
 trait-variant.workspace = true
-sysinfo = "0.31.3"
+sysinfo = "0.31.4"
 once_cell = { workspace = true }
 [dev-dependencies]
 tempfile = "3.12.0"
