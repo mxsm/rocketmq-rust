@@ -77,6 +77,7 @@ use crate::producer::default_mq_producer::ProducerConfig;
 use crate::producer::message_queue_selector::MessageQueueSelectorFn;
 use crate::producer::producer_impl::mq_producer_inner::MQProducerInner;
 use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
+use crate::producer::request_callback::RequestCallbackFn;
 use crate::producer::request_future_holder::REQUEST_FUTURE_HOLDER;
 use crate::producer::request_response_future::RequestResponseFuture;
 use crate::producer::send_callback::SendMessageCallback;
@@ -1393,6 +1394,53 @@ impl DefaultMQProducerImpl {
             .await
     }
 
+    pub async fn request_with_callback(
+        &mut self,
+        mut msg: Message,
+        request_callback: RequestCallbackFn,
+        timeout: u64,
+    ) -> Result<()> {
+        let begin_timestamp = Instant::now();
+        self.prepare_send_request(&mut msg, timeout).await;
+        let correlation_id = msg
+            .get_property(MessageConst::PROPERTY_CORRELATION_ID)
+            .unwrap();
+        let request_response_future = Arc::new(RequestResponseFuture::new(
+            correlation_id.clone(),
+            timeout,
+            Some(request_callback.clone()),
+        ));
+        let cost = begin_timestamp.elapsed().as_millis() as u64;
+        REQUEST_FUTURE_HOLDER
+            .put_request(correlation_id.clone(), request_response_future.clone())
+            .await;
+        let send_callback = move |result: Option<&SendResult>,
+                                  err: Option<&dyn std::error::Error>| {
+            if result.is_some() {
+                request_response_future.set_send_request_ok(true);
+                request_response_future.execute_request_callback();
+                return;
+            }
+            if let Some(error) = err {
+                request_response_future.set_cause(Box::new(MQClientError::MQClientException(
+                    -1,
+                    error.to_string(),
+                )));
+                Self::request_fail(correlation_id.as_str());
+            }
+        };
+        unimplemented!("request_with_callback")
+    }
+
+    async fn request_fail(correlation_id: &str) {
+        let request_response_future = REQUEST_FUTURE_HOLDER.get_request(correlation_id).await;
+        if let Some(request_response_future) = request_response_future {
+            request_response_future.set_send_request_ok(false);
+            request_response_future.put_response_message(None);
+            request_response_future.execute_request_callback();
+        }
+    }
+
     pub async fn request(&mut self, mut msg: Message, timeout: u64) -> Result<Message> {
         let begin_timestamp = Instant::now();
         self.prepare_send_request(&mut msg, timeout).await;
@@ -1412,9 +1460,10 @@ impl DefaultMQProducerImpl {
                                   err: Option<&dyn std::error::Error>| {
             if result.is_some() {
                 request_response_future_inner.set_send_request_ok(true);
+                return;
             }
             if let Some(error) = err {
-                request_response_future_inner.set_send_request_ok(false);
+                //request_response_future_inner.set_send_request_ok(false);
                 request_response_future_inner.put_response_message(None);
                 request_response_future_inner.set_cause(Box::new(
                     MQClientError::MQClientException(-1, error.to_string()),
@@ -1422,21 +1471,17 @@ impl DefaultMQProducerImpl {
             }
         };
         let topic = msg.topic.clone();
+        let cost = begin_timestamp.elapsed().as_millis() as u64;
         self.send_default_impl(
             msg,
             CommunicationMode::Async,
             Some(Arc::new(send_callback)),
-            timeout,
+            timeout - cost,
         )
         .await?;
 
         let result = self
-            .wait_response(
-                topic.as_str(),
-                timeout,
-                request_response_future,
-                begin_timestamp.elapsed().as_millis() as u64,
-            )
+            .wait_response(topic.as_str(), timeout, request_response_future, cost)
             .await;
 
         REQUEST_FUTURE_HOLDER
@@ -1472,7 +1517,9 @@ impl DefaultMQProducerImpl {
                 format!(
                     "send request message to <{}> fail, {}",
                     topic,
-                    request_response_future.get_cause().await.unwrap()
+                    request_response_future
+                        .get_cause()
+                        .map_or("".to_string(), |cause| { cause.to_string() })
                 ),
             ))
         }

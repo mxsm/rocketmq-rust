@@ -16,16 +16,19 @@
  */
 use std::error::Error;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicPtr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
 use rocketmq_common::common::message::message_single::Message;
-use tokio::sync::Mutex;
 use tokio::sync::Notify;
 
 use crate::producer::request_callback::RequestCallbackFn;
+
+type AtomicMessagePtr = AtomicPtr<Option<Message>>;
+type AtomicCausePtr = AtomicPtr<Box<dyn Error + Send + Sync>>;
 
 pub struct RequestResponseFuture {
     correlation_id: String,
@@ -34,9 +37,11 @@ pub struct RequestResponseFuture {
     request_msg: Option<Message>,
     timeout_millis: u64,
     notify: Arc<Notify>,
-    response_msg: Arc<Mutex<Option<Message>>>,
+    //response_msg: Arc<Mutex<Option<Message>>>,
+    response_msg: AtomicMessagePtr,
     send_request_ok: Arc<AtomicBool>,
-    cause: Arc<Mutex<Option<Box<dyn Error + Send + Sync>>>>,
+    cause: AtomicCausePtr,
+    //cause: Arc<Mutex<Option<Box<dyn Error + Send + Sync>>>>,
 }
 
 impl RequestResponseFuture {
@@ -52,14 +57,16 @@ impl RequestResponseFuture {
             request_msg: None,
             timeout_millis,
             notify: Arc::new(Notify::new()),
-            response_msg: Arc::new(Mutex::new(None)),
+            // response_msg: Arc::new(Mutex::new(None)),
+            response_msg: AtomicPtr::new(std::ptr::null_mut()),
             send_request_ok: Arc::new(AtomicBool::new(false)),
-            cause: Arc::new(Mutex::new(None)),
+            cause: AtomicPtr::new(std::ptr::null_mut()),
+            //cause: Arc::new(Mutex::new(None)),
         }
     }
 
     pub async fn execute_request_callback(&self) {
-        if let Some(callback) = &self.request_callback {
+        /*if let Some(callback) = &self.request_callback {
             let send_request_ok = self.send_request_ok.load(Ordering::Acquire);
             let cause = self.cause.lock().await;
             let response_msg = self.response_msg.lock().await;
@@ -70,7 +77,8 @@ impl RequestResponseFuture {
             } else if let Some(e) = &*cause {
                 callback(None, Some(&**e));
             }
-        }
+        }*/
+        unimplemented!()
     }
 
     pub fn is_timeout(&self) -> bool {
@@ -78,19 +86,26 @@ impl RequestResponseFuture {
     }
 
     pub async fn wait_response_message(&self, timeout: Duration) -> Option<Message> {
-        if tokio::time::timeout(timeout, self.notify.notified())
+        /*if tokio::time::timeout(timeout, self.notify.notified())
             .await
             .is_ok()
         {
-            let response = self.response_msg.lock().await;
-            return response.clone();
+            return self.get_response_msg();
         }
-        None
+        None*/
+
+        match tokio::time::timeout(timeout, self.notify.notified()).await {
+            Ok(_) => self.get_response_msg(),
+            Err(error) => {
+                self.set_cause(Box::new(error));
+                None
+            }
+        }
     }
 
     pub async fn put_response_message(&self, response_msg: Option<Message>) {
-        let mut response = self.response_msg.lock().await;
-        *response = response_msg;
+        let raw = Box::into_raw(Box::new(response_msg));
+        self.response_msg.store(raw, Ordering::Release);
         self.notify.notify_waiters();
     }
 
@@ -119,13 +134,19 @@ impl RequestResponseFuture {
         Arc::clone(&self.notify)
     }
 
-    pub async fn get_response_msg(&self) -> Option<Message> {
-        self.response_msg.lock().await.clone()
+    #[inline]
+    pub fn get_response_msg(&self) -> Option<Message> {
+        let raw = self.response_msg.load(Ordering::Acquire);
+        if raw.is_null() {
+            return None;
+        }
+        let response_msg = unsafe { Box::from_raw(raw) };
+        *response_msg
     }
 
-    pub async fn set_response_msg(&self, response_msg: Message) {
-        let mut response = self.response_msg.lock().await;
-        *response = Some(response_msg);
+    pub fn set_response_msg(&self, response_msg: Message) {
+        let raw = Box::into_raw(Box::new(Some(response_msg)));
+        self.response_msg.store(raw, Ordering::Release);
     }
 
     pub async fn is_send_request_ok(&self) -> bool {
@@ -140,13 +161,20 @@ impl RequestResponseFuture {
         self.request_msg.as_ref()
     }
 
-    pub async fn get_cause(&self) -> Option<Box<dyn Error + Send + Sync>> {
+    pub fn get_cause(&self) -> Option<Box<dyn Error + Send + Sync>> {
         //self.cause.lock().await.clone()
-        unimplemented!()
+        let raw = self.cause.load(Ordering::Acquire);
+        if raw.is_null() {
+            return None;
+        }
+        let cause = unsafe { Box::from_raw(raw) };
+        Some(*cause)
     }
 
-    pub async fn set_cause(&self, cause: Box<dyn Error + Send + Sync>) {
-        let mut err = self.cause.lock().await;
-        *err = Some(cause);
+    pub fn set_cause(&self, cause: Box<dyn Error + Send + Sync>) {
+        /*let mut err = self.cause.lock().await;
+         *err = Some(cause); */
+        let raw = Box::into_raw(Box::new(cause));
+        self.cause.store(raw, Ordering::Release);
     }
 }

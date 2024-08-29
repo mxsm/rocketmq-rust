@@ -25,7 +25,7 @@ use rocketmq_common::utils::name_server_address_utils::NameServerAddressUtils;
 use rocketmq_common::utils::name_server_address_utils::NAMESRV_ENDPOINT_PATTERN;
 use rocketmq_common::utils::network_util::NetworkUtil;
 use rocketmq_common::utils::string_utils::StringUtils;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::get_current_nano;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::request_type::RequestType;
 use rocketmq_remoting::protocol::LanguageCode;
@@ -98,22 +98,28 @@ impl ClientConfig {
             pull_time_delay_millis_when_exception: 1000,
             unit_mode: false,
             unit_name: None,
-            decode_read_body: env::var(DECODE_READ_BODY).unwrap_or_else(|_| "true".to_string())
-                == "true",
+            decode_read_body: env::var(DECODE_READ_BODY)
+                .unwrap_or_else(|_| "true".to_string())
+                .parse::<bool>()
+                .unwrap_or(true),
             decode_decompress_body: env::var(DECODE_DECOMPRESS_BODY)
                 .unwrap_or_else(|_| "true".to_string())
-                == "true",
+                .parse::<bool>()
+                .unwrap_or(true),
             vip_channel_enabled: env::var(SEND_MESSAGE_WITH_VIP_CHANNEL_PROPERTY)
                 .unwrap_or_else(|_| "false".to_string())
-                == "false",
-            use_heartbeat_v2: env::var(HEART_BEAT_V2).unwrap_or_else(|_| "false".to_string())
-                == "false",
+                .parse::<bool>()
+                .unwrap_or(false),
+            use_heartbeat_v2: env::var(HEART_BEAT_V2)
+                .unwrap_or_else(|_| "false".to_string())
+                .parse::<bool>()
+                .unwrap_or(false),
             use_tls: false,
             socks_proxy_config: env::var(SOCKS_PROXY_CONFIG).unwrap_or_else(|_| "{}".to_string()),
             mq_client_api_timeout: Duration::from_secs(3).as_millis() as u64,
             detect_timeout: 200,
             detect_interval: Duration::from_secs(2).as_millis() as u32,
-            language: LanguageCode::JAVA,
+            language: LanguageCode::RUST,
             enable_stream_request_type: false,
             send_latency_enable: env::var(SEND_LATENCY_ENABLE)
                 .unwrap_or_else(|_| "false".to_string())
@@ -169,7 +175,7 @@ impl ClientConfig {
 
     pub fn change_instance_name_to_pid(&mut self) {
         if self.instance_name == "DEFAULT" {
-            self.instance_name = format!("{}-{}", std::process::id(), get_current_millis());
+            self.instance_name = format!("{}#{}", std::process::id(), get_current_nano());
         }
     }
 
@@ -190,6 +196,7 @@ impl ClientConfig {
             sb.push('@');
             sb.push_str(RequestType::Stream.to_string().as_str());
         }
+
         sb
     }
 

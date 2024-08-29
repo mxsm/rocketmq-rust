@@ -17,6 +17,7 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -27,7 +28,12 @@ use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_remoting::base::connection_net_event::ConnectionNetEvent;
+use rocketmq_remoting::protocol::heartbeat::consumer_data::ConsumerData;
+use rocketmq_remoting::protocol::heartbeat::heartbeat_data::HeartbeatData;
+use rocketmq_remoting::protocol::heartbeat::producer_data::ProducerData;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::rpc::client_metadata::ClientMetadata;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_remoting::runtime::RPCHook;
@@ -87,6 +93,9 @@ pub struct MQClientInstance {
     default_mqproducer: ArcRefCellWrapper<DefaultMQProducer>,
     instance_runtime: Arc<RocketMQRuntime>,
     broker_addr_table: Arc<RwLock<HashMap<String, HashMap<i64, String>>>>,
+    broker_version_table:
+        Arc<RwLock<HashMap<String /* Broker Name */, HashMap<String /* address */, i32>>>>,
+    send_heartbeat_times_total: Arc<AtomicI64>,
 }
 
 impl MQClientInstance {
@@ -96,11 +105,15 @@ impl MQClientInstance {
         client_id: String,
         rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
     ) -> Self {
+        let broker_addr_table = Arc::new(Default::default());
+        let (tx, _) = tokio::sync::broadcast::channel::<ConnectionNetEvent>(16);
+        let mut rx = tx.subscribe();
         let mq_client_api_impl = ArcRefCellWrapper::new(MQClientAPIImpl::new(
             Arc::new(TokioClientConfig::default()),
             ClientRemotingProcessor {},
             rpc_hook,
             client_config.clone(),
+            Some(tx),
         ));
         if let Some(namesrv_addr) = client_config.namesrv_addr.as_deref() {
             let handle = Handle::current();
@@ -114,7 +127,7 @@ impl MQClientInstance {
                 })
             });
         }
-        MQClientInstance {
+        let instance = MQClientInstance {
             client_config: Arc::new(client_config.clone()),
             client_id,
             boot_timestamp: get_current_millis(),
@@ -133,14 +146,47 @@ impl MQClientInstance {
             default_mqproducer: ArcRefCellWrapper::new(
                 DefaultMQProducer::builder()
                     .producer_group(mix_all::CLIENT_INNER_PRODUCER_GROUP)
+                    .client_config(client_config.clone())
                     .build(),
             ),
             instance_runtime: Arc::new(RocketMQRuntime::new_multi(
                 num_cpus::get(),
                 "mq-client-instance",
             )),
-            broker_addr_table: Arc::new(Default::default()),
-        }
+            broker_addr_table,
+            broker_version_table: Arc::new(Default::default()),
+            send_heartbeat_times_total: Arc::new(AtomicI64::new(0)),
+        };
+        let instance_ = instance.clone();
+        tokio::spawn(async move {
+            while let Ok(value) = rx.recv().await {
+                match value {
+                    ConnectionNetEvent::CONNECTED(remote_address, _) => {
+                        info!("ConnectionNetEvent CONNECTED");
+                        let broker_addr_table = instance_.broker_addr_table.read().await;
+                        for (broker_name, broker_addrs) in broker_addr_table.iter() {
+                            for (id, addr) in broker_addrs.iter() {
+                                if addr == remote_address.to_string().as_str()
+                                    && instance_
+                                        .send_heartbeat_to_broker(*id, broker_name, addr)
+                                        .await
+                                {
+                                    instance_.re_balance_immediately().await;
+                                }
+                            }
+                        }
+                    }
+                    ConnectionNetEvent::DISCONNECTED => {}
+                    ConnectionNetEvent::EXCEPTION => {}
+                }
+            }
+            warn!("ConnectionNetEvent recv error");
+        });
+        instance
+    }
+
+    pub async fn re_balance_immediately(&self) {
+        println!("re_balance_immediately")
     }
 
     pub async fn start(&mut self) -> Result<()> {
@@ -235,7 +281,7 @@ impl MQClientInstance {
         let mut client_instance = self.clone();
         let heartbeat_broker_interval = self.client_config.heartbeat_broker_interval;
         self.instance_runtime.get_handle().spawn(async move {
-            info!("ScheduledTask sendHeartbeatToAllBroker started");
+            info!("ScheduledTask send_heartbeat_to_all_broker started");
             tokio::time::sleep(Duration::from_secs(1)).await;
             loop {
                 let current_execution_time = tokio::time::Instant::now();
@@ -420,8 +466,36 @@ impl MQClientInstance {
     pub async fn clean_offline_broker(&mut self) {
         println!("cleanOfflineBroker")
     }
-    pub async fn send_heartbeat_to_all_broker_with_lock(&mut self) {
-        println!("sendHeartbeatToAllBroker")
+    pub async fn send_heartbeat_to_all_broker_with_lock(&mut self) -> bool {
+        match self.lock_heartbeat.try_lock() {
+            Ok(_) => {
+                if self.client_config.use_heartbeat_v2 {
+                    self.send_heartbeat_to_all_broker_v2(false).await
+                } else {
+                    self.send_heartbeat_to_all_broker().await
+                }
+            }
+            Err(_) => {
+                warn!("lock heartBeat, but failed. [{}]", self.client_id);
+                false
+            }
+        }
+    }
+
+    pub async fn send_heartbeat_to_all_broker_with_lock_v2(&mut self, is_rebalance: bool) -> bool {
+        match self.lock_heartbeat.try_lock() {
+            Ok(_) => {
+                if self.client_config.use_heartbeat_v2 {
+                    self.send_heartbeat_to_all_broker_v2(false).await
+                } else {
+                    self.send_heartbeat_to_all_broker().await
+                }
+            }
+            Err(_) => {
+                warn!("lock heartBeat, but failed. [{}]", self.client_id);
+                false
+            }
+        }
     }
 
     pub fn get_mq_client_api_impl(&self) -> ArcRefCellWrapper<MQClientAPIImpl> {
@@ -448,6 +522,171 @@ impl MQClientInstance {
             return map.get(&(mix_all::MASTER_ID as i64)).cloned();
         }
         None
+    }
+
+    async fn send_heartbeat_to_all_broker_v2(&self, is_rebalance: bool) -> bool {
+        unimplemented!()
+    }
+
+    async fn send_heartbeat_to_all_broker(&self) -> bool {
+        let heartbeat_data = self.prepare_heartbeat_data(false).await;
+        let producer_empty = heartbeat_data.producer_data_set.is_empty();
+        let consumer_empty = heartbeat_data.consumer_data_set.is_empty();
+        if producer_empty && consumer_empty {
+            warn!(
+                "sending heartbeat, but no consumer and no producer. [{}]",
+                self.client_id
+            );
+            return false;
+        }
+        let broker_addr_table = self.broker_addr_table.read().await;
+        if broker_addr_table.is_empty() {
+            return false;
+        }
+        for (broker_name, broker_addrs) in broker_addr_table.iter() {
+            if broker_addrs.is_empty() {
+                continue;
+            }
+            for (id, addr) in broker_addrs.iter() {
+                if addr.is_empty() {
+                    continue;
+                }
+                if consumer_empty && *id != mix_all::MASTER_ID as i64 {
+                    continue;
+                }
+                self.send_heartbeat_to_broker_inner(*id, broker_name, addr, &heartbeat_data)
+                    .await;
+            }
+        }
+
+        true
+    }
+
+    pub async fn send_heartbeat_to_broker(&self, id: i64, broker_name: &str, addr: &str) -> bool {
+        if self.lock_heartbeat.try_lock().is_ok() {
+            let heartbeat_data = self.prepare_heartbeat_data(false).await;
+            let producer_empty = heartbeat_data.producer_data_set.is_empty();
+            let consumer_empty = heartbeat_data.consumer_data_set.is_empty();
+            if producer_empty && consumer_empty {
+                warn!(
+                    "sending heartbeat, but no consumer and no producer. [{}]",
+                    self.client_id
+                );
+                return false;
+            }
+
+            if self.client_config.use_heartbeat_v2 {
+                unimplemented!("sendHeartbeatToBrokerV2")
+            } else {
+                self.send_heartbeat_to_broker_inner(id, broker_name, addr, &heartbeat_data)
+                    .await
+            }
+        } else {
+            false
+        }
+    }
+
+    async fn send_heartbeat_to_broker_inner(
+        &self,
+        id: i64,
+        broker_name: &str,
+        addr: &str,
+        heartbeat_data: &HeartbeatData,
+    ) -> bool {
+        if let Ok(version) = self
+            .mq_client_api_impl
+            .mut_from_ref()
+            .send_heartbeat(
+                addr,
+                heartbeat_data,
+                self.client_config.mq_client_api_timeout,
+            )
+            .await
+        {
+            let mut broker_version_table = self.broker_version_table.write().await;
+            let map = broker_version_table.get_mut(broker_name);
+            if let Some(map) = map {
+                map.insert(addr.to_string(), version);
+            } else {
+                let mut map = HashMap::new();
+                map.insert(addr.to_string(), version);
+                broker_version_table.insert(broker_name.to_string(), map);
+            }
+
+            let times = self
+                .send_heartbeat_times_total
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if times % 20 == 0 {
+                info!(
+                    "send heart beat to broker[{} {} {}] success",
+                    broker_name, id, addr,
+                );
+            }
+            return true;
+        }
+        if self.is_broker_in_name_server(addr).await {
+            warn!(
+                "send heart beat to broker[{} {} {}] failed",
+                broker_name, id, addr
+            );
+        } else {
+            warn!(
+                "send heart beat to broker[{} {} {}] exception, because the broker not up, forget \
+                 it",
+                broker_name, id, addr
+            )
+        }
+        false
+    }
+
+    async fn is_broker_in_name_server(&self, broker_name: &str) -> bool {
+        let broker_addr_table = self.topic_route_table.read().await;
+        for (_, value) in broker_addr_table.iter() {
+            for bd in value.broker_datas.iter() {
+                for (_, value) in bd.broker_addrs().iter() {
+                    if value.as_str() == broker_name {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    async fn prepare_heartbeat_data(&self, is_without_sub: bool) -> HeartbeatData {
+        let mut heartbeat_data = HeartbeatData {
+            client_id: self.client_id.clone(),
+            ..Default::default()
+        };
+
+        let consumer_table = self.consumer_table.read().await;
+        for (_, value) in consumer_table.iter() {
+            let mut consumer_data = ConsumerData {
+                group_name: value.group_name().to_json(),
+                consume_type: value.consume_type(),
+                message_model: value.message_model(),
+                consume_from_where: value.consume_from_where(),
+                subscription_data_set: value.subscriptions().clone(),
+                unit_mode: value.is_unit_mode(),
+            };
+            if !is_without_sub {
+                value.subscriptions().iter().for_each(|sub| {
+                    consumer_data.subscription_data_set.insert(sub.clone());
+                });
+            }
+            heartbeat_data.consumer_data_set.insert(consumer_data);
+        }
+        drop(consumer_table);
+        let producer_table = self.producer_table.read().await;
+        for (group_name, _) in producer_table.iter() {
+            let producer_data = ProducerData {
+                group_name: group_name.clone(),
+            };
+            heartbeat_data.producer_data_set.insert(producer_data);
+        }
+        drop(producer_table);
+        heartbeat_data.is_without_sub = is_without_sub;
+        heartbeat_data
     }
 }
 

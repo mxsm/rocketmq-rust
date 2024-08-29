@@ -38,6 +38,7 @@ regex = { version = "1.10.6", features = [] }
 
 parking_lot = { workspace = true }
 once_cell = { workspace = true }
+bytes = { workspace = true }
 [[example]]
 name = "simple-producer"
 path = "examples/producer/simple_producer.rs"
@@ -55,3 +56,6 @@ path = "examples/batch/simple_batch_producer.rs"
 name = "callback-batch-producer"
 path = "examples/batch/callback_batch_producer.rs"
 
+[[example]]
+name = "request-producer"
+path = "examples/rpc/request_producer.rs"

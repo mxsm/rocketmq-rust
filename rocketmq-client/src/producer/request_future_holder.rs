@@ -68,7 +68,7 @@ impl RequestFutureHolder {
                 ClientErrorCode::REQUEST_TIMEOUT_EXCEPTION,
                 "request timeout, no reply message.".to_string(),
             ));
-            rf.set_cause(cause).await;
+            rf.set_cause(cause);
             rf.execute_request_callback().await;
         }
     }
@@ -99,5 +99,10 @@ impl RequestFutureHolder {
     pub async fn remove_request(&self, correlation_id: &str) {
         let mut table = self.request_future_table.write().await;
         table.remove(correlation_id);
+    }
+
+    pub async fn get_request(&self, correlation_id: &str) -> Option<Arc<RequestResponseFuture>> {
+        let table = self.request_future_table.read().await;
+        table.get(correlation_id).cloned()
     }
 }

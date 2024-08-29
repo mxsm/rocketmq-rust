@@ -18,6 +18,7 @@ use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 use std::time::Instant;
 
+use bytes::Bytes;
 use lazy_static::lazy_static;
 use rocketmq_common::common::message::message_batch::MessageBatch;
 use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
@@ -30,20 +31,23 @@ use rocketmq_common::common::namesrv::name_server_update_callback::NameServerUpd
 use rocketmq_common::common::namesrv::top_addressing::TopAddressing;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::ArcRefCellWrapper;
+use rocketmq_remoting::base::connection_net_event::ConnectionNetEvent;
 use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+use rocketmq_remoting::protocol::header::heartbeat_request_header::HeartbeatRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
+use rocketmq_remoting::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::protocol::RemotingDeserializable;
+use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::remoting::RemotingService;
-use rocketmq_remoting::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_remoting::runtime::RPCHook;
 use tracing::error;
@@ -70,9 +74,9 @@ lazy_static! {
 }
 
 pub struct MQClientAPIImpl {
-    remoting_client: RocketmqDefaultClient,
+    remoting_client: RocketmqDefaultClient<ClientRemotingProcessor>,
     top_addressing: Box<dyn TopAddressing>,
-    client_remoting_processor: ClientRemotingProcessor,
+    // client_remoting_processor: ClientRemotingProcessor,
     name_srv_addr: Option<String>,
     client_config: ClientConfig,
 }
@@ -89,9 +93,10 @@ impl MQClientAPIImpl {
         client_remoting_processor: ClientRemotingProcessor,
         rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
         client_config: ClientConfig,
+        tx: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
     ) -> Self {
         let mut default_client =
-            RocketmqDefaultClient::new(tokio_client_config, DefaultRemotingRequestProcessor);
+            RocketmqDefaultClient::new_with_cl(tokio_client_config, client_remoting_processor, tx);
         if let Some(hook) = rpc_hook {
             default_client.register_rpc_hook(hook);
         }
@@ -102,7 +107,7 @@ impl MQClientAPIImpl {
                 mix_all::get_ws_addr(),
                 client_config.unit_name.clone(),
             )),
-            client_remoting_processor,
+            //client_remoting_processor,
             name_srv_addr: None,
             client_config,
         }
@@ -603,5 +608,31 @@ impl MQClientAPIImpl {
             context.as_mut().unwrap().exception = Some(Arc::new(Box::new(e)));
             producer.execute_send_message_hook_after(context);
         }
+    }
+
+    pub async fn send_heartbeat(
+        &mut self,
+        addr: &str,
+        heartbeat_data: &HeartbeatData,
+        timeout_millis: u64,
+    ) -> Result<i32> {
+        let request = RemotingCommand::create_request_command(
+            RequestCode::HeartBeat,
+            HeartbeatRequestHeader::default(),
+        )
+        .set_language(self.client_config.language)
+        .set_body(Some(Bytes::from(heartbeat_data.encode())));
+        let response = self
+            .remoting_client
+            .invoke_async(Some(addr.to_string()), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            return Ok(response.version());
+        }
+        Err(MQClientError::MQBrokerException(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string()),
+            addr.to_string(),
+        ))
     }
 }

@@ -14,6 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::collections::HashMap;
+
 use crate::common::message::message_single::Message;
 use crate::common::message::MessageConst;
 use crate::common::message::MessageTrait;
@@ -21,6 +23,11 @@ use crate::common::message::MessageTrait;
 pub struct MessageAccessor;
 
 impl MessageAccessor {
+    #[inline]
+    pub fn set_properties<T: MessageTrait>(msg: &mut T, properties: HashMap<String, String>) {
+        msg.set_properties(properties);
+    }
+
     pub fn put_property<T: MessageTrait>(msg: &mut T, name: &str, value: &str) {
         msg.put_property(name, value);
     }

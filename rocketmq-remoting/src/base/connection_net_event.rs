@@ -14,6 +14,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod connection_net_event;
-pub mod remoting_fn;
-pub mod response_future;
+use std::net::SocketAddr;
+
+use crate::net::channel::Channel;
+
+#[derive(Debug, Clone)]
+pub enum ConnectionNetEvent {
+    CONNECTED(SocketAddr, Channel),
+    DISCONNECTED,
+    EXCEPTION,
+}

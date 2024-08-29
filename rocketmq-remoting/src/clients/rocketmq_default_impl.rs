@@ -30,6 +30,7 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
+use crate::base::connection_net_event::ConnectionNetEvent;
 use crate::clients::Client;
 use crate::clients::RemotingClient;
 use crate::error::Error;
@@ -56,9 +57,18 @@ pub struct RocketmqDefaultClient<PR = DefaultRemotingRequestProcessor> {
     namesrv_index: Arc<AtomicI32>,
     client_runtime: Arc<RocketMQRuntime>,
     processor: PR,
+    tx: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
 }
 impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
     pub fn new(tokio_client_config: Arc<TokioClientConfig>, processor: PR) -> Self {
+        Self::new_with_cl(tokio_client_config, processor, None)
+    }
+
+    pub fn new_with_cl(
+        tokio_client_config: Arc<TokioClientConfig>,
+        processor: PR,
+        tx: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
+    ) -> Self {
         Self {
             tokio_client_config,
             connection_tables: Arc::new(Mutex::new(Default::default())),
@@ -68,6 +78,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             namesrv_index: Arc::new(AtomicI32::new(init_value_index())),
             client_runtime: Arc::new(RocketMQRuntime::new_multi(10, "client-thread")),
             processor,
+            tx,
         }
     }
 }
@@ -170,7 +181,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         let addr_inner = addr.to_string();
 
         match time::timeout(duration, async {
-            Client::connect(addr_inner, self.processor.clone()).await
+            Client::connect(addr_inner, self.processor.clone(), self.tx.as_ref()).await
         })
         .await
         {
