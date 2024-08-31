@@ -16,6 +16,10 @@
  */
 use std::any::Any;
 use std::collections::HashMap;
+use std::fmt;
+use std::fmt::Debug;
+use std::fmt::Display;
+use std::fmt::Formatter;
 use std::path::Iter;
 
 use bytes::Bytes;
@@ -28,7 +32,7 @@ use crate::common::mix_all;
 use crate::error::Error::UnsupportedOperationException;
 use crate::Result;
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct MessageBatch {
     ///`final_message` stores the batch-encoded messages.
     pub final_message: Message,
@@ -106,6 +110,25 @@ impl MessageBatch {
             final_message,
             messages: Some(messages),
         })
+    }
+}
+
+impl fmt::Display for MessageBatch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let messages_str = match &self.messages {
+            Some(messages) => messages
+                .iter()
+                .map(|msg| msg.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+            None => "None".to_string(),
+        };
+
+        write!(
+            f,
+            "MessageBatch {{ final_message: {}, messages: {} }}",
+            self.final_message, messages_str
+        )
     }
 }
 

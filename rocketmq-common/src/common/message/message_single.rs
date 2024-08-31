@@ -16,6 +16,9 @@
  */
 use std::any::Any;
 use std::collections::HashMap;
+use std::fmt;
+use std::fmt::Display;
+use std::fmt::Formatter;
 use std::hash::DefaultHasher;
 use std::hash::Hash;
 use std::hash::Hasher;
@@ -174,6 +177,44 @@ impl Message {
             MessageConst::PROPERTY_INSTANCE_ID.to_string(),
             instance_id.into(),
         );
+    }
+}
+
+impl Display for Message {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let properties_str = self
+            .properties
+            .iter()
+            .map(|(k, v)| format!("{}: {}", k, v))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let body_str = match &self.body {
+            Some(body) => format!("Some({:?})", body),
+            None => "None".to_string(),
+        };
+
+        let compressed_body_str = match &self.compressed_body {
+            Some(compressed_body) => format!("Some({:?})", compressed_body),
+            None => "None".to_string(),
+        };
+
+        let transaction_id_str = match &self.transaction_id {
+            Some(transaction_id) => transaction_id.to_string(),
+            None => "None".to_string(),
+        };
+
+        write!(
+            f,
+            "Message {{ topic: {}, flag: {}, properties: {{ {} }}, body: {}, compressed_body: {}, \
+             transaction_id: {} }}",
+            self.topic,
+            self.flag,
+            properties_str,
+            body_str,
+            compressed_body_str,
+            transaction_id_str
+        )
     }
 }
 

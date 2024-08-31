@@ -16,6 +16,9 @@
  */
 use std::any::Any;
 use std::collections::HashMap;
+use std::fmt;
+use std::fmt::Display;
+use std::fmt::Formatter;
 use std::net::SocketAddr;
 
 use bytes::Buf;
@@ -245,6 +248,32 @@ impl Default for MessageExt {
     }
 }
 
+impl fmt::Display for MessageExt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "MessageExt {{ message: {}, broker_name: {}, queue_id: {}, store_size: {}, \
+             queue_offset: {}, sys_flag: {}, born_timestamp: {}, born_host: {}, store_timestamp: \
+             {}, store_host: {}, msg_id: {}, commit_log_offset: {}, body_crc: {}, \
+             reconsume_times: {}, prepared_transaction_offset: {} }}",
+            self.message,
+            self.broker_name,
+            self.queue_id,
+            self.store_size,
+            self.queue_offset,
+            self.sys_flag,
+            self.born_timestamp,
+            self.born_host,
+            self.store_timestamp,
+            self.store_host,
+            self.msg_id,
+            self.commit_log_offset,
+            self.body_crc,
+            self.reconsume_times,
+            self.prepared_transaction_offset
+        )
+    }
+}
 impl MessageTrait for MessageExt {
     fn put_property(&mut self, key: &str, value: &str) {
         self.message.put_property(key, value);
