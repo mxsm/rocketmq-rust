@@ -393,7 +393,7 @@ mod tests {
     use std::sync::Arc;
 
     use rocketmq_common::common::config::TopicConfig;
-    use rocketmq_common::common::message::message_single::MessageExt;
+    use rocketmq_common::common::message::message_ext::MessageExt;
     use rocketmq_store::base::message_status_enum::PutMessageStatus;
 
     use super::*;
