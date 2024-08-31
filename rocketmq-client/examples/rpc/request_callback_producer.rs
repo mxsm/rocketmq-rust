@@ -45,7 +45,7 @@ pub async fn main() -> Result<()> {
     producer
         .request_with_callback(
             Message::with_tags(TOPIC, "", "Hello RocketMQ".as_bytes()),
-            move |message, result| {
+            move |message, _result| {
                 println!(">>>>>>>>>>>>>>>send result: {:?}", message);
                 let _ = tx.send(());
             },
