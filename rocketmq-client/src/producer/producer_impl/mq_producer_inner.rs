@@ -17,7 +17,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use rocketmq_common::common::message::message_single::MessageExt;
+use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_remoting::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
 
 use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;

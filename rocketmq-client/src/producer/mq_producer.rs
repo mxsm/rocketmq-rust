@@ -20,7 +20,6 @@ use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_single::Message;
 use rocketmq_common::common::message::MessageTrait;
 
-use crate::producer::message_queue_selector::MessageQueueSelector;
 use crate::producer::send_callback::SendMessageCallback;
 use crate::producer::send_result::SendResult;
 use crate::producer::transaction_send_result::TransactionSendResult;
@@ -28,63 +27,71 @@ use crate::Result;
 
 #[trait_variant::make(MQProducer: Send)]
 pub trait MQProducerLocal {
-    /// Starts the MQ producer.
-    ///
-    /// This method initializes and starts the MQ producer, preparing it for sending messages.
+    /// Starts the producer.
     ///
     /// # Returns
-    /// A `Result` indicating success or failure.
+    ///
+    /// * `Result<()>` - An empty result indicating success or failure.
     async fn start(&mut self) -> Result<()>;
 
-    /// Shuts down the MQ producer.
-    ///
-    /// This method gracefully shuts down the MQ producer, releasing any resources held.
+    /// Shuts down the producer.
     async fn shutdown(&mut self);
 
     /// Fetches the list of message queues for a given topic.
     ///
-    /// This method retrieves the list of message queues available for the specified topic.
-    ///
     /// # Arguments
-    /// * `topic` - The topic for which to fetch the message queues.
+    ///
+    /// * `topic` - A string slice that holds the name of the topic.
     ///
     /// # Returns
-    /// A `Result` containing a vector of `MessageQueue` objects, or an error.
+    ///
+    /// * `Result<Vec<MessageQueue>>` - A result containing a vector of message queues or an error.
     async fn fetch_publish_message_queues(&mut self, topic: &str) -> Result<Vec<MessageQueue>>;
 
     /// Sends a message.
     ///
-    /// This method sends the specified message to the MQ.
+    /// # Type Parameters
+    ///
+    /// * `M` - A type that implements `MessageTrait`, `Clone`, `Send`, and `Sync`.
     ///
     /// # Arguments
-    /// * `msg` - A reference to the `Message` to be sent.
+    ///
+    /// * `msg` - The message to be sent.
     ///
     /// # Returns
-    /// A `Result` containing the `SendResult`, or an error.
+    ///
+    /// * `Result<SendResult>` - A result containing the send result or an error.
     async fn send<M>(&mut self, msg: M) -> Result<SendResult>
     where
         M: MessageTrait + Clone + Send + Sync;
 
     /// Sends a message with a timeout.
     ///
-    /// This method sends the specified message to the MQ, with a specified timeout.
-    ///
     /// # Arguments
-    /// * `msg` - A reference to the `Message` to be sent.
+    ///
+    /// * `msg` - The message to be sent.
     /// * `timeout` - The timeout duration in milliseconds.
     ///
     /// # Returns
-    /// A `Result` containing the `SendResult`, or an error.
+    ///
+    /// * `Result<SendResult>` - A result containing the send result or an error.
     async fn send_with_timeout(&mut self, msg: Message, timeout: u64) -> Result<SendResult>;
 
     /// Sends a message with a callback.
     ///
-    /// This method sends the specified message to the MQ and invokes the provided callback
-    /// with the result of the send operation.
+    /// # Type Parameters
+    ///
+    /// * `M` - A type that implements `MessageTrait`, `Clone`, `Send`, and `Sync`.
+    /// * `F` - A function type for the callback.
     ///
     /// # Arguments
-    /// * `msg` - A reference to the `Message` to be sent.
-    /// * `send_callback` - A callback function to be invoked with the result of the send operation.
+    ///
+    /// * `msg` - The message to be sent.
+    /// * `send_callback` - The callback function to be executed after sending the message.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<()>` - An empty result indicating success or failure.
     async fn send_with_callback<M, F>(&mut self, msg: M, send_callback: F) -> Result<()>
     where
         M: MessageTrait + Clone + Send + Sync,
@@ -92,13 +99,19 @@ pub trait MQProducerLocal {
 
     /// Sends a message with a callback and a timeout.
     ///
-    /// This method sends the specified message to the MQ, with a specified timeout, and invokes
-    /// the provided callback with the result of the send operation.
+    /// # Type Parameters
+    ///
+    /// * `F` - A function type for the callback.
     ///
     /// # Arguments
-    /// * `msg` - A reference to the `Message` to be sent.
-    /// * `send_callback` - A callback function to be invoked with the result of the send operation.
+    ///
+    /// * `msg` - The message to be sent.
+    /// * `send_callback` - The callback function to be executed after sending the message.
     /// * `timeout` - The timeout duration in milliseconds.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<()>` - An empty result indicating success or failure.
     async fn send_with_callback_timeout<F>(
         &mut self,
         msg: Message,
@@ -110,43 +123,54 @@ pub trait MQProducerLocal {
 
     /// Sends a message without waiting for a response.
     ///
-    /// This method sends the specified message to the MQ without waiting for a response.
+    /// # Type Parameters
+    ///
+    /// * `M` - A type that implements `MessageTrait`, `Clone`, `Send`, and `Sync`.
     ///
     /// # Arguments
-    /// * `msg` - A reference to the `Message` to be sent.
+    ///
+    /// * `msg` - The message to be sent.
     ///
     /// # Returns
-    /// A `Result` indicating success or failure.
+    ///
+    /// * `Result<()>` - An empty result indicating success or failure.
     async fn send_oneway<M>(&mut self, msg: M) -> Result<()>
     where
         M: MessageTrait + Clone + Send + Sync;
 
-    /// Sends a message to a specific queue.
+    /// Sends a message to a specific message queue.
     ///
-    /// This method sends the specified message to the given message queue.
+    /// # Type Parameters
+    ///
+    /// * `M` - A type that implements `MessageTrait`, `Clone`, `Send`, and `Sync`.
     ///
     /// # Arguments
-    /// * `msg` - A reference to the `Message` to be sent.
-    /// * `mq` - A reference to the `MessageQueue` where the message should be sent.
+    ///
+    /// * `msg` - The message to be sent.
+    /// * `mq` - The message queue to which the message will be sent.
     ///
     /// # Returns
-    /// A `Result` containing the `SendResult`, or an error.
+    ///
+    /// * `Result<SendResult>` - A result containing the send result or an error.
     async fn send_to_queue<M>(&mut self, msg: M, mq: MessageQueue) -> Result<SendResult>
     where
         M: MessageTrait + Clone + Send + Sync;
 
-    /// Sends a message to a specific queue with a timeout.
+    /// Sends a message to a specific message queue with a timeout.
     ///
-    /// This method sends the specified message to the given message queue, with a specified
-    /// timeout.
+    /// # Type Parameters
+    ///
+    /// * `M` - A type that implements `MessageTrait`, `Clone`, `Send`, and `Sync`.
     ///
     /// # Arguments
-    /// * `msg` - A reference to the `Message` to be sent.
-    /// * `mq` - A reference to the `MessageQueue` where the message should be sent.
+    ///
+    /// * `msg` - The message to be sent.
+    /// * `mq` - The message queue to which the message will be sent.
     /// * `timeout` - The timeout duration in milliseconds.
     ///
     /// # Returns
-    /// A `Result` containing the `SendResult`, or an error.
+    ///
+    /// * `Result<SendResult>` - A result containing the send result or an error.
     async fn send_to_queue_with_timeout<M>(
         &mut self,
         msg: M,
@@ -156,15 +180,22 @@ pub trait MQProducerLocal {
     where
         M: MessageTrait + Clone + Send + Sync;
 
-    /// Sends a message to a specific queue with a callback.
+    /// Sends a message to a specific message queue with a callback.
     ///
-    /// This method sends the specified message to the given message queue and invokes the provided
-    /// callback with the result of the send operation.
+    /// # Type Parameters
+    ///
+    /// * `M` - A type that implements `MessageTrait`, `Clone`, `Send`, and `Sync`.
+    /// * `F` - A function type for the callback.
     ///
     /// # Arguments
-    /// * `msg` - A reference to the `Message` to be sent.
-    /// * `mq` - A reference to the `MessageQueue` where the message should be sent.
-    /// * `send_callback` - A callback function to be invoked with the result of the send operation.
+    ///
+    /// * `msg` - The message to be sent.
+    /// * `mq` - The message queue to which the message will be sent.
+    /// * `send_callback` - The callback function to be executed after sending the message.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<()>` - An empty result indicating success or failure.
     async fn send_to_queue_with_callback<M, F>(
         &mut self,
         msg: M,
@@ -175,16 +206,23 @@ pub trait MQProducerLocal {
         M: MessageTrait + Clone + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static;
 
-    /// Sends a message to a specific queue with a callback and a timeout.
+    /// Sends a message to a specific message queue with a callback and a timeout.
     ///
-    /// This method sends the specified message to the given message queue, with a specified
-    /// timeout, and invokes the provided callback with the result of the send operation.
+    /// # Type Parameters
+    ///
+    /// * `M` - A type that implements `MessageTrait`, `Clone`, `Send`, and `Sync`.
+    /// * `F` - A function type for the callback.
     ///
     /// # Arguments
-    /// * `msg` - A reference to the `Message` to be sent.
-    /// * `mq` - A reference to the `MessageQueue` where the message should be sent.
-    /// * `send_callback` - A callback function to be invoked with the result of the send operation.
+    ///
+    /// * `msg` - The message to be sent.
+    /// * `mq` - The message queue to which the message will be sent.
+    /// * `send_callback` - The callback function to be executed after sending the message.
     /// * `timeout` - The timeout duration in milliseconds.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<()>` - An empty result indicating success or failure.
     async fn send_to_queue_with_callback_timeout<M, F>(
         &mut self,
         msg: M,
@@ -196,32 +234,41 @@ pub trait MQProducerLocal {
         M: MessageTrait + Clone + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static;
 
-    /// Sends a message to a specific queue without waiting for a response.
+    /// Sends a message to a specific message queue without waiting for a response.
     ///
-    /// This method sends the specified message to the given message queue without waiting for a
-    /// response.
+    /// # Type Parameters
+    ///
+    /// * `M` - A type that implements `MessageTrait`, `Clone`, `Send`, and `Sync`.
     ///
     /// # Arguments
-    /// * `msg` - A reference to the `Message` to be sent.
-    /// * `mq` - A reference to the `MessageQueue` where the message should be sent.
+    ///
+    /// * `msg` - The message to be sent.
+    /// * `mq` - The message queue to which the message will be sent.
     ///
     /// # Returns
-    /// A `Result` indicating success or failure.
+    ///
+    /// * `Result<()>` - An empty result indicating success or failure.
     async fn send_oneway_to_queue<M>(&mut self, msg: M, mq: MessageQueue) -> Result<()>
     where
         M: MessageTrait + Clone + Send + Sync;
 
-    /// Sends a message with a selector.
+    /// Sends a message with a selector function to choose the message queue.
     ///
-    /// This method sends the specified message to the MQ using the provided message queue selector.
+    /// # Type Parameters
+    ///
+    /// * `M` - A type that implements `MessageTrait`, `Clone`, `Send`, and `Sync`.
+    /// * `S` - A function type for the selector.
+    /// * `T` - A type for the argument passed to the selector.
     ///
     /// # Arguments
-    /// * `msg` - A reference to the `Message` to be sent.
-    /// * `selector` - A message queue selector to determine the target queue.
-    /// * `arg` - An argument to be used by the selector.
+    ///
+    /// * `msg` - The message to be sent.
+    /// * `selector` - The selector function to choose the message queue.
+    /// * `arg` - The argument passed to the selector function.
     ///
     /// # Returns
-    /// A `Result` containing the `SendResult`, or an error.
+    ///
+    /// * `Result<SendResult>` - A result containing the send result or an error.
     async fn send_with_selector<M, S, T>(
         &mut self,
         msg: M,
@@ -236,19 +283,24 @@ pub trait MQProducerLocal {
             + 'static,
         T: std::any::Any + Sync + Send;
 
-    /// Sends a message with a selector and a timeout.
+    /// Sends a message with a selector function to choose the message queue and a timeout.
     ///
-    /// This method sends the specified message to the MQ using the provided message queue selector,
-    /// with a specified timeout.
+    /// # Type Parameters
+    ///
+    /// * `M` - A type that implements `MessageTrait`, `Clone`, `Send`, and `Sync`.
+    /// * `S` - A function type for the selector.
+    /// * `T` - A type for the argument passed to the selector.
     ///
     /// # Arguments
-    /// * `msg` - A reference to the `Message` to be sent.
-    /// * `selector` - A message queue selector to determine the target queue.
-    /// * `arg` - An argument to be used by the selector.
+    ///
+    /// * `msg` - The message to be sent.
+    /// * `selector` - The selector function to choose the message queue.
+    /// * `arg` - The argument passed to the selector function.
     /// * `timeout` - The timeout duration in milliseconds.
     ///
     /// # Returns
-    /// A `Result` containing the `SendResult`, or an error.
+    ///
+    /// * `Result<SendResult>` - A result containing the send result or an error.
     async fn send_with_selector_timeout<M, S, T>(
         &mut self,
         msg: M,
@@ -264,16 +316,24 @@ pub trait MQProducerLocal {
             + 'static,
         T: std::any::Any + Sync + Send;
 
-    /// Sends a message with a selector and a callback.
+    /// Sends a message with a selector function to choose the message queue and a callback.
     ///
-    /// This method sends the specified message to the MQ using the provided message queue selector
-    /// and invokes the provided callback with the result of the send operation.
+    /// # Type Parameters
+    ///
+    /// * `M` - A type that implements `MessageTrait`, `Clone`, `Send`, and `Sync`.
+    /// * `S` - A function type for the selector.
+    /// * `T` - A type for the argument passed to the selector.
     ///
     /// # Arguments
-    /// * `msg` - A reference to the `Message` to be sent.
-    /// * `selector` - A message queue selector to determine the target queue.
-    /// * `arg` - An argument to be used by the selector.
-    /// * `send_callback` - A callback function to be invoked with the result of the send operation.
+    ///
+    /// * `msg` - The message to be sent.
+    /// * `selector` - The selector function to choose the message queue.
+    /// * `arg` - The argument passed to the selector function.
+    /// * `send_callback` - The callback function to be executed after sending the message.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<()>` - An empty result indicating success or failure.
     async fn send_with_selector_callback<M, S, T>(
         &mut self,
         msg: M,
@@ -289,18 +349,26 @@ pub trait MQProducerLocal {
             + 'static,
         T: std::any::Any + Sync + Send;
 
-    /// Sends a message with a selector, a callback, and a timeout.
+    /// Sends a message with a selector function to choose the message queue, a callback, and a
+    /// timeout.
     ///
-    /// This method sends the specified message to the MQ using the provided message queue selector,
-    /// with a specified timeout, and invokes the provided callback with the result of the send
-    /// operation.
+    /// # Type Parameters
+    ///
+    /// * `M` - A type that implements `MessageTrait`, `Clone`, `Send`, and `Sync`.
+    /// * `S` - A function type for the selector.
+    /// * `T` - A type for the argument passed to the selector.
     ///
     /// # Arguments
-    /// * `msg` - A reference to the `Message` to be sent.
-    /// * `selector` - A message queue selector to determine the target queue.
-    /// * `arg` - An argument to be used by the selector.
-    /// * `send_callback` - A callback function to be invoked with the result of the send operation.
+    ///
+    /// * `msg` - The message to be sent.
+    /// * `selector` - The selector function to choose the message queue.
+    /// * `arg` - The argument passed to the selector function.
+    /// * `send_callback` - The callback function to be executed after sending the message.
     /// * `timeout` - The timeout duration in milliseconds.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<()>` - An empty result indicating success or failure.
     async fn send_with_selector_callback_timeout<M, S, T>(
         &mut self,
         msg: M,
@@ -317,18 +385,24 @@ pub trait MQProducerLocal {
             + 'static,
         T: std::any::Any + Sync + Send;
 
-    /// Sends a message with a selector without waiting for a response.
+    /// Sends a message with a selector function to choose the message queue without waiting for a
+    /// response.
     ///
-    /// This method sends the specified message to the MQ using the provided message queue selector
-    /// without waiting for a response.
+    /// # Type Parameters
+    ///
+    /// * `M` - A type that implements `MessageTrait`, `Clone`, `Send`, and `Sync`.
+    /// * `S` - A function type for the selector.
+    /// * `T` - A type for the argument passed to the selector.
     ///
     /// # Arguments
-    /// * `msg` - A reference to the `Message` to be sent.
-    /// * `selector` - A message queue selector to determine the target queue.
-    /// * `arg` - An argument to be used by the selector.
+    ///
+    /// * `msg` - The message to be sent.
+    /// * `selector` - The selector function to choose the message queue.
+    /// * `arg` - The argument passed to the selector function.
     ///
     /// # Returns
-    /// A `Result` indicating success or failure.
+    ///
+    /// * `Result<()>` - An empty result indicating success or failure.
     async fn send_oneway_with_selector<M, S, T>(
         &mut self,
         msg: M,
@@ -345,14 +419,15 @@ pub trait MQProducerLocal {
 
     /// Sends a message in a transaction.
     ///
-    /// This method sends the specified message to the MQ as part of a transaction.
-    ///
     /// # Arguments
-    /// * `msg` - A reference to the `Message` to be sent.
-    /// * `arg` - An argument to be used in the transaction.
+    ///
+    /// * `msg` - A reference to the message to be sent.
+    /// * `arg` - A string slice that holds the argument for the transaction.
     ///
     /// # Returns
-    /// A `Result` containing the `TransactionSendResult`, or an error.
+    ///
+    /// * `Result<TransactionSendResult>` - A result containing the transaction send result or an
+    ///   error.
     async fn send_message_in_transaction(
         &self,
         msg: &Message,
@@ -361,59 +436,58 @@ pub trait MQProducerLocal {
 
     /// Sends a batch of messages.
     ///
-    /// This method sends the specified batch of messages to the MQ.
-    ///
     /// # Arguments
-    /// * `msgs` - A slice of `Message` references to be sent.
+    ///
+    /// * `msgs` - A vector of messages to be sent.
     ///
     /// # Returns
-    /// A `Result` containing the `SendResult`, or an error.
+    ///
+    /// * `Result<SendResult>` - A result containing the send result or an error.
     async fn send_batch(&mut self, msgs: Vec<Message>) -> Result<SendResult>;
 
     /// Sends a batch of messages with a timeout.
     ///
-    /// This method sends the specified batch of messages to the MQ, with a specified timeout.
-    ///
     /// # Arguments
-    /// * `msgs` - A slice of `Message` references to be sent.
+    ///
+    /// * `msgs` - A vector of messages to be sent.
     /// * `timeout` - The timeout duration in milliseconds.
     ///
     /// # Returns
-    /// A `Result` containing the `SendResult`, or an error.
+    ///
+    /// * `Result<SendResult>` - A result containing the send result or an error.
     async fn send_batch_with_timeout(
         &mut self,
         msgs: Vec<Message>,
         timeout: u64,
     ) -> Result<SendResult>;
 
-    /// Sends a batch of messages to a specific queue.
-    ///
-    /// This method sends the specified batch of messages to the given message queue.
+    /// Sends a batch of messages to a specific message queue.
     ///
     /// # Arguments
-    /// * `msgs` - A slice of `Message` references to be sent.
-    /// * `mq` - A reference to the `MessageQueue` where the messages should be sent.
+    ///
+    /// * `msgs` - A vector of messages to be sent.
+    /// * `mq` - The message queue to which the messages will be sent.
     ///
     /// # Returns
-    /// A `Result` containing the `SendResult`, or an error.
+    ///
+    /// * `Result<SendResult>` - A result containing the send result or an error.
     async fn send_batch_to_queue(
         &mut self,
         msgs: Vec<Message>,
         mq: MessageQueue,
     ) -> Result<SendResult>;
 
-    /// Sends a batch of messages to a specific queue with a timeout.
-    ///
-    /// This method sends the specified batch of messages to the given message queue, with a
-    /// specified timeout.
+    /// Sends a batch of messages to a specific message queue with a timeout.
     ///
     /// # Arguments
-    /// * `msgs` - A slice of `Message` references to be sent.
-    /// * `mq` - A reference to the `MessageQueue` where the messages should be sent.
+    ///
+    /// * `msgs` - A vector of messages to be sent.
+    /// * `mq` - The message queue to which the messages will be sent.
     /// * `timeout` - The timeout duration in milliseconds.
     ///
     /// # Returns
-    /// A `Result` containing the `SendResult`, or an error.
+    ///
+    /// * `Result<SendResult>` - A result containing the send result or an error.
     async fn send_batch_to_queue_with_timeout(
         &mut self,
         msgs: Vec<Message>,
@@ -423,25 +497,29 @@ pub trait MQProducerLocal {
 
     /// Sends a batch of messages with a callback.
     ///
-    /// This method sends the specified batch of messages to the MQ and invokes the provided
-    /// callback with the result of the send operation.
-    ///
     /// # Arguments
-    /// * `msgs` - A slice of `Message` references to be sent.
-    /// * `send_callback` - A callback function to be invoked with the result of the send operation.
+    ///
+    /// * `msgs` - A vector of messages to be sent.
+    /// * `f` - The callback function to be executed after sending the messages.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<()>` - An empty result indicating success or failure.
     async fn send_batch_with_callback<F>(&mut self, msgs: Vec<Message>, f: F) -> Result<()>
     where
         F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static;
 
     /// Sends a batch of messages with a callback and a timeout.
     ///
-    /// This method sends the specified batch of messages to the MQ, with a specified timeout, and
-    /// invokes the provided callback with the result of the send operation.
-    ///
     /// # Arguments
-    /// * `msgs` - A slice of `Message` references to be sent.
-    /// * `send_callback` - A callback function to be invoked with the result of the send operation.
+    ///
+    /// * `msgs` - A vector of messages to be sent.
+    /// * `f` - The callback function to be executed after sending the messages.
     /// * `timeout` - The timeout duration in milliseconds.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<()>` - An empty result indicating success or failure.
     async fn send_batch_with_callback_timeout<F>(
         &mut self,
         msgs: Vec<Message>,
@@ -451,15 +529,17 @@ pub trait MQProducerLocal {
     where
         F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static;
 
-    /// Sends a batch of messages to a specific queue with a callback.
-    ///
-    /// This method sends the specified batch of messages to the given message queue and invokes the
-    /// provided callback with the result of the send operation.
+    /// Sends a batch of messages to a specific message queue with a callback.
     ///
     /// # Arguments
-    /// * `msgs` - A slice of `Message` references to be sent.
-    /// * `mq` - A reference to the `MessageQueue` where the messages should be sent.
-    /// * `send_callback` - A callback function to be invoked with the result of the send operation.
+    ///
+    /// * `msgs` - A vector of messages to be sent.
+    /// * `mq` - The message queue to which the messages will be sent.
+    /// * `f` - The callback function to be executed after sending the messages.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<()>` - An empty result indicating success or failure.
     async fn send_batch_to_queue_with_callback<F>(
         &mut self,
         msgs: Vec<Message>,
@@ -469,17 +549,18 @@ pub trait MQProducerLocal {
     where
         F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static;
 
-    /// Sends a batch of messages to a specific queue with a callback and a timeout.
-    ///
-    /// This method sends the specified batch of messages to the given message queue, with a
-    /// specified timeout, and invokes the provided callback with the result of the send
-    /// operation.
+    /// Sends a batch of messages to a specific message queue with a callback and a timeout.
     ///
     /// # Arguments
-    /// * `msgs` - A slice of `Message` references to be sent.
-    /// * `mq` - A reference to the `MessageQueue` where the messages should be sent.
-    /// * `send_callback` - A callback function to be invoked with the result of the send operation.
+    ///
+    /// * `msgs` - A vector of messages to be sent.
+    /// * `mq` - The message queue to which the messages will be sent.
+    /// * `f` - The callback function to be executed after sending the messages.
     /// * `timeout` - The timeout duration in milliseconds.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<()>` - An empty result indicating success or failure.
     async fn send_batch_to_queue_with_callback_timeout<F>(
         &mut self,
         msgs: Vec<Message>,
@@ -492,119 +573,184 @@ pub trait MQProducerLocal {
 
     /// Sends a request message.
     ///
-    /// This method sends the specified request message to the MQ and waits for a response.
+    /// # Type Parameters
+    ///
+    /// * `M` - A type that implements `MessageTrait`, `Clone`, `Send`, and `Sync`.
     ///
     /// # Arguments
-    /// * `msg` - A reference to the `Message` to be sent.
+    ///
+    /// * `msg` - The message to be sent.
     /// * `timeout` - The timeout duration in milliseconds.
     ///
     /// # Returns
-    /// A `Result` containing the response `Message`, or an error.
-    async fn request(&mut self, msg: Message, timeout: u64) -> Result<Message>;
+    ///
+    /// * `Result<Box<dyn MessageTrait + Send>>` - A result containing the response message or an
+    ///   error.
+    async fn request<M>(&mut self, msg: M, timeout: u64) -> Result<Box<dyn MessageTrait + Send>>
+    where
+        M: MessageTrait + Clone + Send + Sync;
 
     /// Sends a request message with a callback.
     ///
-    /// This method sends the specified request message to the MQ and invokes the provided callback
-    /// with the response message.
+    /// # Type Parameters
+    ///
+    /// * `F` - A function type for the callback.
+    /// * `M` - A type that implements `MessageTrait`, `Clone`, `Send`, and `Sync`.
     ///
     /// # Arguments
-    /// * `msg` - A reference to the `Message` to be sent.
-    /// * `request_callback` - A callback function to be invoked with the response message.
+    ///
+    /// * `msg` - The message to be sent.
+    /// * `request_callback` - The callback function to be executed after receiving the response.
     /// * `timeout` - The timeout duration in milliseconds.
-    async fn request_with_callback<F>(
+    ///
+    /// # Returns
+    ///
+    /// * `Result<()>` - An empty result indicating success or failure.
+    async fn request_with_callback<F, M>(
         &mut self,
-        msg: Message,
+        msg: M,
         request_callback: F,
         timeout: u64,
     ) -> Result<()>
     where
-        F: Fn(Option<&dyn MessageTrait>, Option<&dyn std::error::Error>) + Send + Sync + 'static;
+        F: Fn(Option<&dyn MessageTrait>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+        M: MessageTrait + Clone + Send + Sync;
 
-    /// Sends a request message with a selector.
+    /// Sends a request message with a selector function to choose the message queue.
     ///
-    /// This method sends the specified request message to the MQ using the provided message queue
-    /// selector and waits for a response.
+    /// # Type Parameters
+    ///
+    /// * `M` - A type that implements `MessageTrait`, `Clone`, `Send`, and `Sync`.
+    /// * `S` - A function type for the selector.
+    /// * `T` - A type for the argument passed to the selector.
     ///
     /// # Arguments
-    /// * `msg` - A reference to the `Message` to be sent.
-    /// * `selector` - A message queue selector to determine the target queue.
-    /// * `arg` - An argument to be used by the selector.
+    ///
+    /// * `msg` - The message to be sent.
+    /// * `selector` - The selector function to choose the message queue.
+    /// * `arg` - The argument passed to the selector function.
     /// * `timeout` - The timeout duration in milliseconds.
     ///
     /// # Returns
-    /// A `Result` containing the response `Message`, or an error.
-    async fn request_with_selector<S, T>(
+    ///
+    /// * `Result<Box<dyn MessageTrait + Send>>` - A result containing the response message or an
+    ///   error.
+    async fn request_with_selector<M, S, T>(
         &mut self,
-        msg: Message,
+        msg: M,
         selector: S,
         arg: T,
         timeout: u64,
-    ) -> Result<Message>
+    ) -> Result<Box<dyn MessageTrait + Send>>
     where
         S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue>
             + Send
             + Sync
             + 'static,
-        T: std::any::Any + Sync + Send;
+        T: std::any::Any + Sync + Send,
+        M: MessageTrait + Clone + Send + Sync;
 
-    /// Sends a request message with a selector and a callback.
+    /// Sends a request message with a selector function to choose the message queue and a callback.
     ///
-    /// This method sends the specified request message to the MQ using the provided message queue
-    /// selector and invokes the provided callback with the response message.
+    /// # Type Parameters
+    ///
+    /// * `M` - A type that implements `MessageTrait`, `Clone`, `Send`, and `Sync`.
+    /// * `S` - A function type for the selector.
+    /// * `T` - A type for the argument passed to the selector.
+    /// * `F` - A function type for the callback.
     ///
     /// # Arguments
-    /// * `msg` - A reference to the `Message` to be sent.
-    /// * `selector` - A message queue selector to determine the target queue.
-    /// * `arg` - An argument to be used by the selector.
-    /// * `request_callback` - A callback function to be invoked with the response message.
-    /// * `timeout` - The timeout duration in milliseconds.
-    async fn request_with_selector_callback(
-        &self,
-        msg: &Message,
-        selector: impl MessageQueueSelector,
-        arg: &str,
-        request_callback: impl FnOnce(Result<Message>) + Send + Sync,
-        timeout: u64,
-    );
-
-    /// Sends a request message to a specific queue.
     ///
-    /// This method sends the specified request message to the given message queue and waits for a
-    /// response.
-    ///
-    /// # Arguments
-    /// * `msg` - A reference to the `Message` to be sent.
-    /// * `mq` - A reference to the `MessageQueue` where the message should be sent.
+    /// * `msg` - The message to be sent.
+    /// * `selector` - The selector function to choose the message queue.
+    /// * `arg` - The argument passed to the selector function.
+    /// * `request_callback` - The callback function to be executed after receiving the response.
     /// * `timeout` - The timeout duration in milliseconds.
     ///
     /// # Returns
-    /// A `Result` containing the response `Message`, or an error.
-    async fn request_to_queue(
-        &self,
-        msg: &Message,
-        mq: &MessageQueue,
-        timeout: u64,
-    ) -> Result<Message>;
-
-    /// Sends a request message to a specific queue with a callback.
     ///
-    /// This method sends the specified request message to the given message queue and invokes the
-    /// provided callback with the response message.
+    /// * `Result<()>` - An empty result indicating success or failure.
+    async fn request_with_selector_callback<M, S, T, F>(
+        &mut self,
+        msg: M,
+        selector: S,
+        arg: T,
+        request_callback: F,
+        timeout: u64,
+    ) -> Result<()>
+    where
+        S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue>
+            + Send
+            + Sync
+            + 'static,
+        F: Fn(Option<&dyn MessageTrait>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+        T: std::any::Any + Sync + Send,
+        M: MessageTrait + Clone + Send + Sync;
+
+    /// Sends a request message to a specific message queue.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `M` - A type that implements `MessageTrait`, `Clone`, `Send`, and `Sync`.
     ///
     /// # Arguments
-    /// * `msg` - A reference to the `Message` to be sent.
-    /// * `mq` - A reference to the `MessageQueue` where the message should be sent.
-    /// * `request_callback` - A callback function to be invoked with the response message.
+    ///
+    /// * `msg` - The message to be sent.
+    /// * `mq` - The message queue to which the message will be sent.
     /// * `timeout` - The timeout duration in milliseconds.
-    async fn request_to_queue_with_callback(
-        &self,
-        msg: &Message,
-        mq: &MessageQueue,
-        request_callback: impl FnOnce(Result<Message>) + Send + Sync,
+    ///
+    /// # Returns
+    ///
+    /// * `Result<Box<dyn MessageTrait + Send>>` - A result containing the response message or an
+    ///   error.
+    async fn request_to_queue<M>(
+        &mut self,
+        msg: M,
+        mq: MessageQueue,
         timeout: u64,
-    );
+    ) -> Result<Box<dyn MessageTrait + Send>>
+    where
+        M: MessageTrait + Clone + Send + Sync;
 
+    /// Sends a request message to a specific message queue with a callback.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `M` - A type that implements `MessageTrait`, `Clone`, `Send`, and `Sync`.
+    /// * `F` - A function type for the callback.
+    ///
+    /// # Arguments
+    ///
+    /// * `msg` - The message to be sent.
+    /// * `mq` - The message queue to which the message will be sent.
+    /// * `request_callback` - The callback function to be executed after receiving the response.
+    /// * `timeout` - The timeout duration in milliseconds.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<()>` - An empty result indicating success or failure.
+    async fn request_to_queue_with_callback<M, F>(
+        &mut self,
+        msg: M,
+        mq: MessageQueue,
+        request_callback: F,
+        timeout: u64,
+    ) -> Result<()>
+    where
+        F: Fn(Option<&dyn MessageTrait>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+        M: MessageTrait + Clone + Send + Sync;
+
+    /// Returns a reference to the object as a trait object of type `Any`.
+    ///
+    /// # Returns
+    ///
+    /// * `&dyn Any` - A reference to the object as a trait object of type `Any`.
     fn as_any(&self) -> &dyn Any;
 
+    /// Returns a mutable reference to the object as a trait object of type `Any`.
+    ///
+    /// # Returns
+    ///
+    /// * `&mut dyn Any` - A mutable reference to the object as a trait object of type `Any`.
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }

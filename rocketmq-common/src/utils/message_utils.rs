@@ -22,7 +22,7 @@ use std::net::SocketAddr;
 
 use bytes::BufMut;
 
-use crate::common::message::message_single::MessageExt;
+use crate::common::message::message_ext::MessageExt;
 use crate::common::message::MessageConst;
 use crate::MessageDecoder::PROPERTY_SEPARATOR;
 use crate::UtilAll::bytes_to_string;
@@ -142,7 +142,7 @@ mod tests {
     use bytes::BytesMut;
 
     use super::*;
-    use crate::common::message::message_single::MessageExt;
+    use crate::common::message::message_ext::MessageExt;
 
     #[test]
     fn test_get_sharding_key_index() {

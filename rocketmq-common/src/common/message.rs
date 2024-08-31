@@ -17,6 +17,8 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fmt::Debug;
+use std::fmt::Display;
 use std::string::ToString;
 
 use bytes::Buf;
@@ -25,9 +27,11 @@ use lazy_static::lazy_static;
 
 pub mod message_accessor;
 pub mod message_batch;
+pub mod message_client_ext;
 pub mod message_client_id_setter;
 pub mod message_decoder;
 pub mod message_enum;
+pub mod message_ext;
 pub mod message_id;
 pub mod message_queue;
 pub mod message_single;
@@ -36,7 +40,7 @@ pub mod message_single;
 ///
 /// with message objects in RocketMQ. It includes methods for managing message properties, keys,
 /// tags, body, and other metadata related to the message.
-pub trait MessageTrait: Any {
+pub trait MessageTrait: Any + Display + Debug {
     /// Sets the keys for the message.
     ///
     /// # Arguments

@@ -31,7 +31,7 @@ use std::time::Instant;
 use bytes::Buf;
 use rocketmq_common::common::attribute::cleanup_policy::CleanupPolicy;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
-use rocketmq_common::common::message::message_single::MessageExt;
+use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::mix_all::is_lmq;
 use rocketmq_common::common::mix_all::is_sys_consumer_group_for_no_cold_read_limit;
 use rocketmq_common::common::mix_all::MULTI_DISPATCH_QUEUE_SPLITTER;

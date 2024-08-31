@@ -27,9 +27,9 @@ use rocketmq_common::common::base::service_state::ServiceState;
 use rocketmq_common::common::message::message_batch::MessageBatch;
 use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
 use rocketmq_common::common::message::message_enum::MessageType;
+use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_single::Message;
-use rocketmq_common::common::message::message_single::MessageExt;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all;
@@ -1394,12 +1394,87 @@ impl DefaultMQProducerImpl {
             .await
     }
 
-    pub async fn request_with_callback(
+    pub async fn request_with_selector<M, S, T>(
         &mut self,
-        mut msg: Message,
+        mut msg: M,
+        selector: S,
+        arg: T,
+        timeout: u64,
+    ) -> Result<Box<dyn MessageTrait + Send>>
+    where
+        S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue>
+            + Send
+            + Sync
+            + 'static,
+        T: std::any::Any + Sync + Send,
+        M: MessageTrait + Clone + Send + Sync,
+    {
+        let begin_timestamp = Instant::now();
+        self.prepare_send_request(&mut msg, timeout).await;
+        let correlation_id = msg
+            .get_property(MessageConst::PROPERTY_CORRELATION_ID)
+            .unwrap();
+        let request_response_future = Arc::new(RequestResponseFuture::new(
+            correlation_id.clone(),
+            timeout,
+            None,
+        ));
+        REQUEST_FUTURE_HOLDER
+            .put_request(correlation_id.clone(), request_response_future.clone())
+            .await;
+        let cost = begin_timestamp.elapsed().as_millis() as u64;
+        let request_response_future_inner = request_response_future.clone();
+        let send_callback = move |result: Option<&SendResult>,
+                                  err: Option<&dyn std::error::Error>| {
+            if result.is_some() {
+                request_response_future_inner.set_send_request_ok(true);
+                return;
+            }
+            if let Some(error) = err {
+                request_response_future_inner.set_send_request_ok(false);
+                request_response_future_inner.put_response_message(None);
+                request_response_future_inner.set_cause(Box::new(
+                    MQClientError::MQClientException(-1, error.to_string()),
+                ));
+            }
+        };
+        let topic = msg.get_topic().to_string();
+        let _ = self
+            .send_select_impl(
+                msg,
+                Arc::new(selector),
+                arg,
+                CommunicationMode::Async,
+                Some(Arc::new(send_callback)),
+                timeout - cost,
+            )
+            .await?;
+        let result = self
+            .wait_response(&topic, timeout, request_response_future, cost)
+            .await;
+
+        REQUEST_FUTURE_HOLDER
+            .remove_request(correlation_id.as_str())
+            .await;
+        result
+    }
+
+    pub async fn request_with_selector_callback<M, S, T>(
+        &mut self,
+        mut msg: M,
+        selector: S,
+        arg: T,
         request_callback: RequestCallbackFn,
         timeout: u64,
-    ) -> Result<()> {
+    ) -> Result<()>
+    where
+        S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue>
+            + Send
+            + Sync
+            + 'static,
+        T: std::any::Any + Sync + Send,
+        M: MessageTrait + Clone + Send + Sync,
+    {
         let begin_timestamp = Instant::now();
         self.prepare_send_request(&mut msg, timeout).await;
         let correlation_id = msg
@@ -1410,10 +1485,10 @@ impl DefaultMQProducerImpl {
             timeout,
             Some(request_callback.clone()),
         ));
-        let cost = begin_timestamp.elapsed().as_millis() as u64;
         REQUEST_FUTURE_HOLDER
             .put_request(correlation_id.clone(), request_response_future.clone())
             .await;
+        let cost = begin_timestamp.elapsed().as_millis() as u64;
         let send_callback = move |result: Option<&SendResult>,
                                   err: Option<&dyn std::error::Error>| {
             if result.is_some() {
@@ -1429,7 +1504,175 @@ impl DefaultMQProducerImpl {
                 Self::request_fail(correlation_id.as_str());
             }
         };
-        unimplemented!("request_with_callback")
+        let _ = self
+            .send_select_impl(
+                msg,
+                Arc::new(selector),
+                arg,
+                CommunicationMode::Async,
+                Some(Arc::new(send_callback)),
+                timeout - cost,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn request_to_queue<M>(
+        &mut self,
+        mut msg: M,
+        mq: MessageQueue,
+        timeout: u64,
+    ) -> Result<Box<dyn MessageTrait + Send>>
+    where
+        M: MessageTrait + Clone + Send + Sync,
+    {
+        let begin_timestamp = Instant::now();
+        self.prepare_send_request(&mut msg, timeout).await;
+        let correlation_id = msg
+            .get_property(MessageConst::PROPERTY_CORRELATION_ID)
+            .unwrap();
+        let request_response_future = Arc::new(RequestResponseFuture::new(
+            correlation_id.clone(),
+            timeout,
+            None,
+        ));
+        REQUEST_FUTURE_HOLDER
+            .put_request(correlation_id.clone(), request_response_future.clone())
+            .await;
+        let cost = begin_timestamp.elapsed().as_millis() as u64;
+        let request_response_future_inner = request_response_future.clone();
+        let send_callback = move |result: Option<&SendResult>,
+                                  err: Option<&dyn std::error::Error>| {
+            if result.is_some() {
+                request_response_future_inner.set_send_request_ok(true);
+                return;
+            }
+            if let Some(error) = err {
+                request_response_future_inner.set_send_request_ok(false);
+                request_response_future_inner.put_response_message(None);
+                request_response_future_inner.set_cause(Box::new(
+                    MQClientError::MQClientException(-1, error.to_string()),
+                ));
+            }
+        };
+        let topic = msg.get_topic().to_string();
+        let _ = self
+            .send_kernel_impl(
+                &mut msg,
+                &mq,
+                CommunicationMode::Async,
+                Some(Arc::new(send_callback)),
+                None,
+                timeout - cost,
+            )
+            .await?;
+        let result = self
+            .wait_response(&topic, timeout, request_response_future, cost)
+            .await;
+
+        REQUEST_FUTURE_HOLDER
+            .remove_request(correlation_id.as_str())
+            .await;
+        result
+    }
+
+    pub async fn request_to_queue_with_callback<M>(
+        &mut self,
+        mut msg: M,
+        mq: MessageQueue,
+        request_callback: RequestCallbackFn,
+        timeout: u64,
+    ) -> Result<()>
+    where
+        M: MessageTrait + Clone + Send + Sync,
+    {
+        let begin_timestamp = Instant::now();
+        self.prepare_send_request(&mut msg, timeout).await;
+        let correlation_id = msg
+            .get_property(MessageConst::PROPERTY_CORRELATION_ID)
+            .unwrap();
+        let request_response_future = Arc::new(RequestResponseFuture::new(
+            correlation_id.clone(),
+            timeout,
+            Some(request_callback.clone()),
+        ));
+        REQUEST_FUTURE_HOLDER
+            .put_request(correlation_id.clone(), request_response_future.clone())
+            .await;
+        let cost = begin_timestamp.elapsed().as_millis() as u64;
+        let send_callback = move |result: Option<&SendResult>,
+                                  err: Option<&dyn std::error::Error>| {
+            if result.is_some() {
+                request_response_future.set_send_request_ok(true);
+                return;
+            }
+            if let Some(error) = err {
+                request_response_future.set_cause(Box::new(MQClientError::MQClientException(
+                    -1,
+                    error.to_string(),
+                )));
+                Self::request_fail(correlation_id.as_str());
+            }
+        };
+        let _ = self
+            .send_kernel_impl(
+                &mut msg,
+                &mq,
+                CommunicationMode::Async,
+                Some(Arc::new(send_callback)),
+                None,
+                timeout - cost,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn request_with_callback<M>(
+        &mut self,
+        mut msg: M,
+        request_callback: RequestCallbackFn,
+        timeout: u64,
+    ) -> Result<()>
+    where
+        M: MessageTrait + Clone + Send + Sync,
+    {
+        let begin_timestamp = Instant::now();
+        self.prepare_send_request(&mut msg, timeout).await;
+        let correlation_id = msg
+            .get_property(MessageConst::PROPERTY_CORRELATION_ID)
+            .unwrap();
+        let request_response_future = Arc::new(RequestResponseFuture::new(
+            correlation_id.clone(),
+            timeout,
+            Some(request_callback.clone()),
+        ));
+        REQUEST_FUTURE_HOLDER
+            .put_request(correlation_id.clone(), request_response_future.clone())
+            .await;
+        let cost = begin_timestamp.elapsed().as_millis() as u64;
+        let send_callback = move |result: Option<&SendResult>,
+                                  err: Option<&dyn std::error::Error>| {
+            if result.is_some() {
+                request_response_future.set_send_request_ok(true);
+                request_response_future.execute_request_callback();
+                return;
+            }
+            if let Some(error) = err {
+                request_response_future.set_cause(Box::new(MQClientError::MQClientException(
+                    -1,
+                    error.to_string(),
+                )));
+                Self::request_fail(correlation_id.as_str());
+            }
+        };
+        self.send_default_impl(
+            msg,
+            CommunicationMode::Async,
+            Some(Arc::new(send_callback)),
+            timeout - cost,
+        )
+        .await?;
+        Ok(())
     }
 
     async fn request_fail(correlation_id: &str) {
@@ -1441,7 +1684,14 @@ impl DefaultMQProducerImpl {
         }
     }
 
-    pub async fn request(&mut self, mut msg: Message, timeout: u64) -> Result<Message> {
+    pub async fn request<M>(
+        &mut self,
+        mut msg: M,
+        timeout: u64,
+    ) -> Result<Box<dyn MessageTrait + Send>>
+    where
+        M: MessageTrait + Clone + Send + Sync,
+    {
         let begin_timestamp = Instant::now();
         self.prepare_send_request(&mut msg, timeout).await;
         let correlation_id = msg
@@ -1470,7 +1720,7 @@ impl DefaultMQProducerImpl {
                 ));
             }
         };
-        let topic = msg.topic.clone();
+        let topic = msg.get_topic().to_string();
         let cost = begin_timestamp.elapsed().as_millis() as u64;
         self.send_default_impl(
             msg,
@@ -1481,7 +1731,7 @@ impl DefaultMQProducerImpl {
         .await?;
 
         let result = self
-            .wait_response(topic.as_str(), timeout, request_response_future, cost)
+            .wait_response(&topic, timeout, request_response_future, cost)
             .await;
 
         REQUEST_FUTURE_HOLDER
@@ -1496,7 +1746,7 @@ impl DefaultMQProducerImpl {
         timeout: u64,
         request_response_future: Arc<RequestResponseFuture>,
         cost: u64,
-    ) -> Result<Message> {
+    ) -> Result<Box<dyn MessageTrait + Send>> {
         let response_message = request_response_future
             .wait_response_message(Duration::from_millis(timeout - cost))
             .await;
@@ -1525,7 +1775,10 @@ impl DefaultMQProducerImpl {
         }
     }
 
-    async fn prepare_send_request(&mut self, msg: &mut Message, timeout: u64) {
+    async fn prepare_send_request<M>(&mut self, msg: &mut M, timeout: u64)
+    where
+        M: MessageTrait,
+    {
         let correlation_id = CorrelationIdUtil::create_correlation_id();
         let request_client_id = self.client_instance.as_mut().unwrap().client_id.clone();
         MessageAccessor::put_property(

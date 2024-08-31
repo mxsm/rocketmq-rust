@@ -28,8 +28,8 @@ use bytes::Bytes;
 use bytes::BytesMut;
 
 use crate::common::compression::compression_type::CompressionType;
+use crate::common::message::message_ext::MessageExt;
 use crate::common::message::message_single::Message;
-use crate::common::message::message_single::MessageExt;
 use crate::common::message::MessageVersion;
 use crate::common::sys_flag::message_sys_flag::MessageSysFlag;
 use crate::CRC32Utils::crc32;

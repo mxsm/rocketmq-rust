@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
-use rocketmq_common::common::message::message_single::MessageExt;
+use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
 use rocketmq_common::TimeUtils::get_current_millis;
 

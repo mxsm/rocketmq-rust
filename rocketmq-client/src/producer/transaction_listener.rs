@@ -14,8 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_single::Message;
-use rocketmq_common::common::message::message_single::MessageExt;
 
 use crate::producer::local_transaction_state::LocalTransactionState;
 
