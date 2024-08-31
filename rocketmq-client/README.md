@@ -8,11 +8,11 @@ This project is the Rust implementation of Apache RocketMQ client. It is based o
 
 First, start the RocketMQ NameServer and Broker services.
 
-- [**Send a single message**](#Send a single message)
+- [**Send a single message**](#Send-a-single-message)
 
-- [**Send batch messages**](#Send batch messages)
+- [**Send batch messages**](#Send-batch-messages)
 
-- [**Send RPC messages**](#Send RPC messages)
+- [**Send RPC messages**](#Send-RPC-messages)
 
 [**For more examples, you can check here**](https://github.com/mxsm/rocketmq-rust/tree/main/rocketmq-client/examples)
 
