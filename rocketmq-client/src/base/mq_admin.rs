@@ -16,8 +16,8 @@
  */
 use std::collections::HashMap;
 
+use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::message::message_single::MessageExt;
 
 use crate::base::query_result::QueryResult;
 use crate::Result;

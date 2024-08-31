@@ -28,7 +28,7 @@ use rocketmq_common::common::key_builder::KeyBuilder;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
 use rocketmq_common::common::message::message_enum::MessageType;
-use rocketmq_common::common::message::message_single::MessageExt;
+use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;

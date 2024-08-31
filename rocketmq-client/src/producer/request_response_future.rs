@@ -23,11 +23,12 @@ use std::time::Duration;
 use std::time::Instant;
 
 use rocketmq_common::common::message::message_single::Message;
+use rocketmq_common::common::message::MessageTrait;
 use tokio::sync::Notify;
 
 use crate::producer::request_callback::RequestCallbackFn;
 
-type AtomicMessagePtr = AtomicPtr<Option<Message>>;
+type AtomicMessagePtr = AtomicPtr<Option<Box<dyn MessageTrait + Send>>>;
 type AtomicCausePtr = AtomicPtr<Box<dyn Error + Send + Sync>>;
 
 pub struct RequestResponseFuture {
@@ -66,26 +67,26 @@ impl RequestResponseFuture {
     }
 
     pub async fn execute_request_callback(&self) {
-        /*if let Some(callback) = &self.request_callback {
+        if let Some(ref callback) = self.request_callback {
             let send_request_ok = self.send_request_ok.load(Ordering::Acquire);
-            let cause = self.cause.lock().await;
-            let response_msg = self.response_msg.lock().await;
-            if send_request_ok && cause.is_none() {
-                if let Some(response) = &*response_msg {
-                    callback(Some(response), None);
-                }
-            } else if let Some(e) = &*cause {
-                callback(None, Some(&**e));
+            if send_request_ok && self.get_cause().is_none() {
+                let response_msg = self.get_response_msg();
+                callback(Some(&*response_msg.unwrap()), None);
+            } else {
+                let cause = self.get_cause();
+                callback(None, Some(&*cause.unwrap()));
             }
-        }*/
-        unimplemented!()
+        }
     }
 
     pub fn is_timeout(&self) -> bool {
         self.begin_timestamp.elapsed() > Duration::from_millis(self.timeout_millis)
     }
 
-    pub async fn wait_response_message(&self, timeout: Duration) -> Option<Message> {
+    pub async fn wait_response_message(
+        &self,
+        timeout: Duration,
+    ) -> Option<Box<dyn MessageTrait + Send>> {
         /*if tokio::time::timeout(timeout, self.notify.notified())
             .await
             .is_ok()
@@ -103,7 +104,7 @@ impl RequestResponseFuture {
         }
     }
 
-    pub async fn put_response_message(&self, response_msg: Option<Message>) {
+    pub fn put_response_message(&self, response_msg: Option<Box<dyn MessageTrait + Send>>) {
         let raw = Box::into_raw(Box::new(response_msg));
         self.response_msg.store(raw, Ordering::Release);
         self.notify.notify_waiters();
@@ -126,6 +127,13 @@ impl RequestResponseFuture {
         self.request_callback.as_ref()
     }
 
+    pub fn on_success(&self) {
+        if let Some(callback) = &self.request_callback {
+            let response_msg = self.get_response_msg();
+            callback(Some(&*response_msg.unwrap()), None);
+        }
+    }
+
     pub fn get_begin_timestamp(&self) -> Instant {
         self.begin_timestamp
     }
@@ -135,7 +143,7 @@ impl RequestResponseFuture {
     }
 
     #[inline]
-    pub fn get_response_msg(&self) -> Option<Message> {
+    pub fn get_response_msg(&self) -> Option<Box<dyn MessageTrait + Send>> {
         let raw = self.response_msg.load(Ordering::Acquire);
         if raw.is_null() {
             return None;
@@ -144,7 +152,7 @@ impl RequestResponseFuture {
         *response_msg
     }
 
-    pub fn set_response_msg(&self, response_msg: Message) {
+    pub fn set_response_msg(&self, response_msg: Box<dyn MessageTrait + Send>) {
         let raw = Box::into_raw(Box::new(Some(response_msg)));
         self.response_msg.store(raw, Ordering::Release);
     }

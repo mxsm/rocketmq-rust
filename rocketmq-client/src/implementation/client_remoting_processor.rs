@@ -18,7 +18,7 @@ use std::net::SocketAddr;
 
 use bytes::Bytes;
 use rocketmq_common::common::compression::compressor_factory::CompressorFactory;
-use rocketmq_common::common::message::message_single::MessageExt;
+use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::MessageAccessor::MessageAccessor;
@@ -143,14 +143,9 @@ impl ClientRemotingProcessor {
             .get_request(correlation_id.as_str())
             .await
         {
-            request_response_future
-                .put_response_message(Some(reply_msg.message.clone()))
-                .await;
+            request_response_future.put_response_message(Some(Box::new(reply_msg)));
             if request_response_future.get_request_callback().is_some() {
-                request_response_future.get_request_callback().unwrap()(
-                    Some(&reply_msg.message),
-                    None,
-                );
+                request_response_future.on_success();
             }
         } else {
             warn!(

@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::common::message::message_single::MessageExt;
+use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::hook::put_message_hook::PutMessageHook;
 

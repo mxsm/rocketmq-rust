@@ -14,27 +14,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use rocketmq_common::common::message::message_ext::MessageExt;
+use crate::common::message::message_ext::MessageExt;
 
-use crate::base::message_result::PutMessageResult;
-
-/// Trait for hook executed before putting a message.
-pub trait PutMessageHook {
-    /// Returns the name of the hook.
-    fn hook_name(&self) -> String;
-
-    /// Execute before putting a message.
-    /// For example, message verification or special message transformation.
-    ///
-    /// # Arguments
-    ///
-    /// * `msg` - The message to be put
-    ///
-    /// # Returns
-    ///
-    /// The result of putting the message
-    fn execute_before_put_message(&self, msg: &MessageExt) -> Option<PutMessageResult>;
+#[derive(Clone, Debug, Default)]
+pub struct MessageClientExt {
+    pub message_ext_inner: MessageExt,
 }
-
-/// Alias for `Arc<dyn PutMessageHook>`.
-pub type BoxedPutMessageHook = Box<dyn PutMessageHook + Send + Sync + 'static>;

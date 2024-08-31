@@ -25,9 +25,11 @@ use lazy_static::lazy_static;
 
 pub mod message_accessor;
 pub mod message_batch;
+pub mod message_client_ext;
 pub mod message_client_id_setter;
 pub mod message_decoder;
 pub mod message_enum;
+pub mod message_ext;
 pub mod message_id;
 pub mod message_queue;
 pub mod message_single;

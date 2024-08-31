@@ -40,7 +40,6 @@ use crate::base::client_config::ClientConfig;
 use crate::base::validators::Validators;
 use crate::error::MQClientError::MQClientException;
 use crate::producer::default_mq_produce_builder::DefaultMQProducerBuilder;
-use crate::producer::message_queue_selector::MessageQueueSelector;
 use crate::producer::mq_producer::MQProducer;
 use crate::producer::produce_accumulator::ProduceAccumulator;
 use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl;
@@ -1128,8 +1127,11 @@ impl MQProducer for DefaultMQProducer {
             .await
     }
 
-    async fn request(&mut self, mut msg: Message, timeout: u64) -> Result<Message> {
-        msg.set_topic(self.with_namespace(msg.topic.as_str()).as_str());
+    async fn request<M>(&mut self, mut msg: M, timeout: u64) -> Result<Box<dyn MessageTrait + Send>>
+    where
+        M: MessageTrait + Clone + Send + Sync,
+    {
+        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
         self.default_mqproducer_impl
             .as_mut()
             .unwrap()
@@ -1137,16 +1139,17 @@ impl MQProducer for DefaultMQProducer {
             .await
     }
 
-    async fn request_with_callback<F>(
+    async fn request_with_callback<F, M>(
         &mut self,
-        mut msg: Message,
+        mut msg: M,
         request_callback: F,
         timeout: u64,
     ) -> Result<()>
     where
         F: Fn(Option<&dyn MessageTrait>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+        M: MessageTrait + Clone + Send + Sync,
     {
-        msg.set_topic(self.with_namespace(msg.topic.as_str()).as_str());
+        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
         self.default_mqproducer_impl
             .as_mut()
             .unwrap()
@@ -1154,51 +1157,88 @@ impl MQProducer for DefaultMQProducer {
             .await
     }
 
-    async fn request_with_selector<S, T>(
+    async fn request_with_selector<M, S, T>(
         &mut self,
-        msg: Message,
+        mut msg: M,
         selector: S,
         arg: T,
         timeout: u64,
-    ) -> Result<Message>
+    ) -> Result<Box<dyn MessageTrait + Send>>
     where
         S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue>
             + Send
             + Sync
             + 'static,
         T: std::any::Any + Sync + Send,
+        M: MessageTrait + Clone + Send + Sync,
     {
-        todo!()
+        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
+        self.default_mqproducer_impl
+            .as_mut()
+            .unwrap()
+            .request_with_selector(msg, selector, arg, timeout)
+            .await
     }
 
-    async fn request_with_selector_callback(
-        &self,
-        msg: &Message,
-        selector: impl MessageQueueSelector,
-        arg: &str,
-        request_callback: impl FnOnce(crate::Result<Message>) + Send + Sync,
+    async fn request_with_selector_callback<M, S, T, F>(
+        &mut self,
+        mut msg: M,
+        selector: S,
+        arg: T,
+        request_callback: F,
         timeout: u64,
-    ) {
-        todo!()
+    ) -> Result<()>
+    where
+        S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue>
+            + Send
+            + Sync
+            + 'static,
+        F: Fn(Option<&dyn MessageTrait>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+        T: std::any::Any + Sync + Send,
+        M: MessageTrait + Clone + Send + Sync,
+    {
+        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
+        self.default_mqproducer_impl
+            .as_mut()
+            .unwrap()
+            .request_with_selector_callback(msg, selector, arg, Arc::new(request_callback), timeout)
+            .await
     }
 
-    async fn request_to_queue(
-        &self,
-        msg: &Message,
-        mq: &MessageQueue,
+    async fn request_to_queue<M>(
+        &mut self,
+        mut msg: M,
+        mq: MessageQueue,
         timeout: u64,
-    ) -> Result<Message> {
-        todo!()
+    ) -> Result<Box<dyn MessageTrait + Send>>
+    where
+        M: MessageTrait + Clone + Send + Sync,
+    {
+        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
+        self.default_mqproducer_impl
+            .as_mut()
+            .unwrap()
+            .request_to_queue(msg, mq, timeout)
+            .await
     }
 
-    async fn request_to_queue_with_callback(
-        &self,
-        msg: &Message,
-        mq: &MessageQueue,
-        request_callback: impl FnOnce(crate::Result<Message>) + Send + Sync,
+    async fn request_to_queue_with_callback<M, F>(
+        &mut self,
+        mut msg: M,
+        mq: MessageQueue,
+        request_callback: F,
         timeout: u64,
-    ) {
-        todo!()
+    ) -> Result<()>
+    where
+        F: Fn(Option<&dyn MessageTrait>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+        M: MessageTrait + Clone + Send + Sync,
+    {
+        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
+        self.default_mqproducer_impl
+            .as_mut()
+            .unwrap()
+            .request_to_queue_with_callback(msg, mq, Arc::new(request_callback), timeout)
+            .await
     }
 
     fn as_any(&self) -> &dyn Any {

@@ -16,7 +16,7 @@
  */
 use std::fmt;
 
-use rocketmq_common::common::message::message_single::MessageExt;
+use rocketmq_common::common::message::message_ext::MessageExt;
 
 #[derive(Debug, Clone, Default)]
 pub struct QueryResult {
