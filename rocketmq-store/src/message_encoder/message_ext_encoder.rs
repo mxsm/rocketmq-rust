@@ -20,7 +20,7 @@ use bytes::Buf;
 use bytes::BufMut;
 use bytes::BytesMut;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
-use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
+use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::message::MessageVersion;
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::CRC32Utils::crc32;

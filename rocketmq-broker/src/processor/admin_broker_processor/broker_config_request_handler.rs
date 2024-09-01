@@ -24,7 +24,7 @@ use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::body::kv_table::KVTable;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
+use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_store::log_file::MessageStore;
 use sysinfo::Disks;
 

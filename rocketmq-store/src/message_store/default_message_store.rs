@@ -43,7 +43,7 @@ use rocketmq_common::{
     common::{
         broker::broker_config::BrokerConfig,
         config::TopicConfig,
-        message::{message_single::MessageExtBrokerInner, MessageConst},
+        message::{message_ext_broker_inner::MessageExtBrokerInner, MessageConst},
         sys_flag::message_sys_flag::MessageSysFlag,
         //thread::thread_service_tokio::ThreadService,
     },

@@ -17,6 +17,7 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Display;
 use std::string::ToString;
@@ -32,6 +33,7 @@ pub mod message_client_id_setter;
 pub mod message_decoder;
 pub mod message_enum;
 pub mod message_ext;
+pub mod message_ext_broker_inner;
 pub mod message_id;
 pub mod message_queue;
 pub mod message_single;
@@ -395,6 +397,15 @@ pub enum MessageVersion {
 impl Default for MessageVersion {
     fn default() -> Self {
         Self::V1
+    }
+}
+
+impl fmt::Display for MessageVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MessageVersion::V1 => write!(f, "V1"),
+            MessageVersion::V2 => write!(f, "V2"),
+        }
     }
 }
 

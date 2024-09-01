@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
+use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 
 use crate::base::message_result::AppendMessageResult;
 use crate::base::message_status_enum::PutMessageStatus;

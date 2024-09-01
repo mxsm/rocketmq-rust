@@ -17,8 +17,8 @@
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
-use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
 use rocketmq_remoting::Result;
 use rocketmq_store::log_file::MessageStore;
 use tracing::info;
@@ -118,6 +118,13 @@ impl<MS: MessageStore + Send + Sync + 'static> RequestProcessor for BrokerReques
                     .process_request(channel, ctx, request_code, request)
                     .await
             }
+
+            RequestCode::SendReplyMessage | RequestCode::SendReplyMessageV2 => {
+                self.reply_message_processor
+                    .process_request(channel, ctx, request_code, request)
+                    .await
+            }
+
             RequestCode::HeartBeat
             | RequestCode::UnregisterClient
             | RequestCode::CheckClientConfig => {

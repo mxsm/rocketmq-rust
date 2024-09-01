@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
-use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
+use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 
 use crate::base::append_message_callback::AppendMessageCallback;
 use crate::base::compaction_append_msg_callback::CompactionAppendMsgCallback;

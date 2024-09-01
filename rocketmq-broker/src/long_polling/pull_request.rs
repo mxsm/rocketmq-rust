@@ -20,7 +20,7 @@ use std::sync::Arc;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
+use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_store::filter::MessageFilter;
 
 #[derive(Clone)]

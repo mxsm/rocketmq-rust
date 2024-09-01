@@ -20,8 +20,8 @@ use crate::protocol::remoting_command::RemotingCommand;
 use crate::Result;
 
 pub mod config;
+pub mod connection_handler_context;
 pub mod processor;
-pub mod server;
 
 /// Trait defining hooks for RPC (Remote Procedure Call) interactions.
 ///

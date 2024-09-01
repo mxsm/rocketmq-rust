@@ -24,7 +24,7 @@ use rocketmq_remoting::protocol::header::query_message_request_header::QueryMess
 use rocketmq_remoting::protocol::header::query_message_response_header::QueryMessageResponseHeader;
 use rocketmq_remoting::protocol::header::view_message_request_header::ViewMessageRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
+use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::log_file::MessageStore;
 

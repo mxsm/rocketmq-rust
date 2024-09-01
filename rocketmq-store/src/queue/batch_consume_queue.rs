@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use rocketmq_common::common::attribute::cq_type::CQType;
 use rocketmq_common::common::boundary_type::BoundaryType;
-use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
+use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use tracing::info;
 
 use crate::base::dispatch_request::DispatchRequest;

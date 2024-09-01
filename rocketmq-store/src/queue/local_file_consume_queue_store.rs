@@ -25,7 +25,7 @@ use bytes::Bytes;
 use rocketmq_common::common::attribute::cq_type::CQType;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
+use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
 use rocketmq_common::ArcRefCellWrapper;
 use tracing::info;

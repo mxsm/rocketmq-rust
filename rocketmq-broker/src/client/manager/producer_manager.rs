@@ -19,15 +19,18 @@ use std::collections::HashMap;
 
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::net::channel::Channel;
+use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use tracing::info;
 
 use crate::client::client_channel_info::ClientChannelInfo;
 
 #[derive(Default)]
 pub struct ProducerManager {
-    group_channel_table:
-        parking_lot::Mutex<HashMap<String /* group name */, HashMap<Channel, ClientChannelInfo>>>,
-    client_channel_table: parking_lot::Mutex<HashMap<String, Channel /* client ip:port */>>,
+    group_channel_table: parking_lot::Mutex<
+        HashMap<String /* group name */, HashMap<ConnectionHandlerContext, ClientChannelInfo>>,
+    >,
+    client_channel_table:
+        parking_lot::Mutex<HashMap<String, ConnectionHandlerContext /* client ip:port */>>,
 }
 
 impl ProducerManager {
@@ -49,12 +52,18 @@ impl ProducerManager {
         !channels.unwrap().is_empty()
     }
 
-    pub fn unregister_producer(&self, group: &str, client_channel_info: &ClientChannelInfo) {
+    pub fn unregister_producer(
+        &self,
+        group: &str,
+        client_channel_info: &ClientChannelInfo,
+        ctx: &ConnectionHandlerContext,
+    ) {
         let mut mutex_guard = self.group_channel_table.lock();
         let channel_table = mutex_guard.get_mut(group);
         if let Some(ct) = channel_table {
             if !ct.is_empty() {
-                let old = ct.remove(client_channel_info.channel());
+                let old = ct.remove(ctx);
+                //let old = ct.remove(client_channel_info.channel());
                 if old.is_some() {
                     info!(
                         "unregister a producer[{}] from groupChannelTable {:?}",
@@ -94,5 +103,9 @@ impl ProducerManager {
             client_channel_info.client_id().clone(),
             client_channel_info.channel().clone(),
         );
+    }
+
+    pub fn find_channel(&self, client_id: &str) -> Option<Channel> {
+        self.client_channel_table.lock().get(client_id).cloned()
     }
 }

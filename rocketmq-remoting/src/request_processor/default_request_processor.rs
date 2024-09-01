@@ -17,8 +17,8 @@
 
 use crate::net::channel::Channel;
 use crate::protocol::remoting_command::RemotingCommand;
+use crate::runtime::connection_handler_context::ConnectionHandlerContext;
 use crate::runtime::processor::RequestProcessor;
-use crate::runtime::server::ConnectionHandlerContext;
 use crate::Result;
 
 #[derive(Clone)]

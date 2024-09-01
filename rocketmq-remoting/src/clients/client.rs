@@ -34,8 +34,8 @@ use crate::error::Error::RemoteException;
 use crate::net::channel::Channel;
 use crate::protocol::remoting_command::RemotingCommand;
 use crate::protocol::RemotingCommandType;
+use crate::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 use crate::runtime::processor::RequestProcessor;
-use crate::runtime::server::ConnectionHandlerContextWrapper;
 use crate::Result;
 
 #[derive(Clone)]
@@ -162,7 +162,10 @@ impl ClientInner {
         let connection = Connection::new(stream);
         let (tx_, rx) = tokio::sync::mpsc::channel(1024);
         let client = ClientInner {
-            ctx: ArcRefCellWrapper::new(ConnectionHandlerContextWrapper::new(connection)),
+            ctx: ArcRefCellWrapper::new(ConnectionHandlerContextWrapper::new(
+                connection,
+                channel.clone(),
+            )),
             response_table: HashMap::new(),
             channel,
             tx: tx_.clone(),

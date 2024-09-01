@@ -31,7 +31,7 @@ use rocketmq_remoting::protocol::header::unregister_client_request_header::Unreg
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
+use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_store::log_file::MessageStore;
 use tracing::info;
 
@@ -101,7 +101,7 @@ where
     fn unregister_client(
         &self,
         channel: Channel,
-        _ctx: ConnectionHandlerContext,
+        ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
         let request_header = request
@@ -117,7 +117,7 @@ where
 
         if let Some(ref group) = request_header.producer_group {
             self.producer_manager
-                .unregister_producer(group, &client_channel_info);
+                .unregister_producer(group, &client_channel_info, &ctx);
         }
 
         if let Some(ref _group) = request_header.consumer_group {

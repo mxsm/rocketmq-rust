@@ -36,7 +36,7 @@ use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
-use rocketmq_remoting::runtime::server::RocketMQServer;
+use rocketmq_remoting::server::server::RocketMQServer;
 use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_store::base::store_enum::StoreType;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
@@ -69,6 +69,7 @@ use crate::processor::default_pull_message_result_handler::DefaultPullMessageRes
 use crate::processor::pull_message_processor::PullMessageProcessor;
 use crate::processor::pull_message_result_handler::PullMessageResultHandler;
 use crate::processor::query_message_processor::QueryMessageProcessor;
+use crate::processor::reply_message_processor::ReplyMessageProcessor;
 use crate::processor::send_message_processor::SendMessageProcessor;
 use crate::processor::BrokerRequestProcessor;
 use crate::schedule::schedule_message_service::ScheduleMessageService;
@@ -388,6 +389,16 @@ impl BrokerRuntime {
             self.rebalance_lock_manager.clone(),
             self.broker_stats_manager.clone(),
         );
+        let reply_message_processor = ReplyMessageProcessor::new(
+            self.topic_queue_mapping_manager.clone(),
+            self.subscription_group_manager.clone(),
+            self.topic_config_manager.clone(),
+            self.broker_config.clone(),
+            self.message_store.as_ref().unwrap(),
+            self.rebalance_lock_manager.clone(),
+            self.broker_stats_manager.clone(),
+            Some(self.producer_manager.clone()),
+        );
         let mut pull_message_result_handler =
             ArcRefCellWrapper::new(Box::new(DefaultPullMessageResultHandler::new(
                 self.message_store_config.clone(),
@@ -469,7 +480,7 @@ impl BrokerRuntime {
             change_invisible_time_processor: Default::default(),
             notification_processor: Default::default(),
             polling_info_processor: Default::default(),
-            reply_message_processor: Default::default(),
+            reply_message_processor,
             admin_broker_processor,
             client_manage_processor: ClientManageProcessor::new(
                 self.broker_config.clone(),

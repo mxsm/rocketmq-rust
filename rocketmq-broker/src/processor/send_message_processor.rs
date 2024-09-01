@@ -29,7 +29,7 @@ use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
 use rocketmq_common::common::message::message_enum::MessageType;
 use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
+use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all;
@@ -61,7 +61,7 @@ use rocketmq_remoting::protocol::header::message_operation_header::TopicRequestH
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
-use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
+use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::log_file::MessageStore;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
@@ -69,6 +69,7 @@ use rocketmq_store::stats::stats_type::StatsType;
 use tracing::info;
 use tracing::warn;
 
+use crate::client::manager::producer_manager::ProducerManager;
 use crate::client::rebalance::rebalance_lock_manager::RebalanceLockManager;
 use crate::mqtrace::send_message_context::SendMessageContext;
 use crate::mqtrace::send_message_hook::SendMessageHook;
@@ -197,6 +198,7 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
                 message_store: message_store.clone(),
                 rebalance_lock_manager,
                 broker_stats_manager,
+                producer_manager: None,
             },
             store_host,
         }
@@ -621,38 +623,38 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
                       response.set_code_ref(ResponseCode::SlaveNotAvailable);
                   },
                   rocketmq_store::base::message_status_enum::PutMessageStatus::ServiceNotAvailable => {
-                      response.set_code_mut(ResponseCode::ServiceNotAvailable).set_remark_ref(Some("service not available now. It may be caused by one of the following reasons: the broker's disk is full %s, messages are put to the slave, message store has been shut down, etc.".to_string()));
+                      response.set_code_mut(ResponseCode::ServiceNotAvailable).set_remark_mut(Some("service not available now. It may be caused by one of the following reasons: the broker's disk is full %s, messages are put to the slave, message store has been shut down, etc.".to_string()));
                   },
                   rocketmq_store::base::message_status_enum::PutMessageStatus::CreateMappedFileFailed => {
-                     response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_ref(Some("create mapped file failed, server is busy or broken.".to_string()));
+                     response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut(Some("create mapped file failed, server is busy or broken.".to_string()));
                   },
                   rocketmq_store::base::message_status_enum::PutMessageStatus::MessageIllegal |
                   rocketmq_store::base::message_status_enum::PutMessageStatus::PropertiesSizeExceeded => {
-                     response.set_code_mut(ResponseCode::MessageIllegal).set_remark_ref(Some("the message is illegal, maybe msg body or properties length not matched. msg body length limit B, msg properties length limit 32KB.".to_string()));
+                     response.set_code_mut(ResponseCode::MessageIllegal).set_remark_mut(Some("the message is illegal, maybe msg body or properties length not matched. msg body length limit B, msg properties length limit 32KB.".to_string()));
                   },
                   rocketmq_store::base::message_status_enum::PutMessageStatus::OsPageCacheBusy =>{
-                      response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_ref(Some("[PC_SYNCHRONIZED]broker busy, start flow control for a while".to_string()));
+                      response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut(Some("[PC_SYNCHRONIZED]broker busy, start flow control for a while".to_string()));
                   },
                   rocketmq_store::base::message_status_enum::PutMessageStatus::UnknownError => {
-                     response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_ref(Some("UNKNOWN_ERROR".to_string()));
+                     response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut(Some("UNKNOWN_ERROR".to_string()));
                   },
                   rocketmq_store::base::message_status_enum::PutMessageStatus::InSyncReplicasNotEnough => {
-                      response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_ref(Some("in-sync replicas not enough".to_string()));
+                      response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut(Some("in-sync replicas not enough".to_string()));
                   },
                   rocketmq_store::base::message_status_enum::PutMessageStatus::LmqConsumeQueueNumExceeded => {
-                      response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_ref(Some("[LMQ_CONSUME_QUEUE_NUM_EXCEEDED]broker config enableLmq and enableMultiDispatch, lmq consumeQueue num exceed maxLmqConsumeQueueNum config num, default limit 2w.".to_string()));
+                      response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut(Some("[LMQ_CONSUME_QUEUE_NUM_EXCEEDED]broker config enableLmq and enableMultiDispatch, lmq consumeQueue num exceed maxLmqConsumeQueueNum config num, default limit 2w.".to_string()));
                   },
                   rocketmq_store::base::message_status_enum::PutMessageStatus::WheelTimerFlowControl => {
-                      response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_ref(Some("timer message is under flow control, max num limit is %d or the current value is greater than %d and less than %d, trigger random flow control".to_string()));
+                      response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut(Some("timer message is under flow control, max num limit is %d or the current value is greater than %d and less than %d, trigger random flow control".to_string()));
                   },
                   rocketmq_store::base::message_status_enum::PutMessageStatus::WheelTimerMsgIllegal => {
-                      response.set_code_mut(ResponseCode::MessageIllegal).set_remark_ref(Some("timer message illegal, the delay time should not be bigger than the max delay %dms; or if set del msg, the delay time should be bigger than the current time".to_string()));
+                      response.set_code_mut(ResponseCode::MessageIllegal).set_remark_mut(Some("timer message illegal, the delay time should not be bigger than the max delay %dms; or if set del msg, the delay time should be bigger than the current time".to_string()));
                   },
                   rocketmq_store::base::message_status_enum::PutMessageStatus::WheelTimerNotEnable => {
-                      response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_ref(Some("accurate timer message is not enabled, timerWheelEnable is %s".to_string()));
+                      response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut(Some("accurate timer message is not enabled, timerWheelEnable is %s".to_string()));
                   },
                   _ => {
-                      response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_ref(Some("UNKNOWN_ERROR DEFAULT".to_string()));
+                      response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut(Some("UNKNOWN_ERROR DEFAULT".to_string()));
                   }
               }
 
@@ -928,14 +930,15 @@ const DLQ_NUMS_PER_GROUP: u32 = 1;
 
 #[derive(Clone)]
 pub(crate) struct Inner<MS> {
-    topic_config_manager: TopicConfigManager,
-    send_message_hook_vec: ArcRefCellWrapper<Vec<Box<dyn SendMessageHook>>>,
-    topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
-    subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
-    broker_config: Arc<BrokerConfig>,
-    message_store: MS,
-    rebalance_lock_manager: Arc<RebalanceLockManager>,
-    broker_stats_manager: Arc<BrokerStatsManager>,
+    pub(crate) topic_config_manager: TopicConfigManager,
+    pub(crate) send_message_hook_vec: ArcRefCellWrapper<Vec<Box<dyn SendMessageHook>>>,
+    pub(crate) topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
+    pub(crate) subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
+    pub(crate) broker_config: Arc<BrokerConfig>,
+    pub(crate) message_store: MS,
+    pub(crate) rebalance_lock_manager: Arc<RebalanceLockManager>,
+    pub(crate) broker_stats_manager: Arc<BrokerStatsManager>,
+    pub(crate) producer_manager: Option<Arc<ProducerManager>>,
 }
 
 impl<MS> Inner<MS> {

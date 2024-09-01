@@ -22,6 +22,8 @@
 pub use broker_bootstrap::BrokerBootstrap;
 pub use broker_bootstrap::Builder;
 
+use crate::error::BrokerError;
+
 pub mod command;
 
 pub(crate) mod broker;
@@ -31,6 +33,7 @@ pub(crate) mod broker_runtime;
 pub(crate) mod client;
 pub(crate) mod coldctr;
 pub(crate) mod controller;
+pub(crate) mod error;
 pub(crate) mod filter;
 pub(crate) mod hook;
 pub(crate) mod long_polling;
@@ -44,3 +47,4 @@ pub(crate) mod topic;
 pub(crate) mod util;
 
 type RemotingError = rocketmq_remoting::error::Error;
+type BrokerResult<T> = Result<T, BrokerError>;

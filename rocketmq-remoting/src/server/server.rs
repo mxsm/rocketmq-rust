@@ -40,6 +40,7 @@ use crate::connection::Connection;
 use crate::error::Error;
 use crate::net::channel::Channel;
 use crate::protocol::remoting_command::RemotingCommand;
+use crate::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 use crate::runtime::processor::RequestProcessor;
 use crate::runtime::RPCHook;
 use crate::Result;
@@ -52,8 +53,6 @@ type Tx = mpsc::UnboundedSender<RemotingCommand>;
 
 /// Shorthand for the receive half of the message channel.
 type Rx = mpsc::UnboundedReceiver<RemotingCommand>;
-
-pub type ConnectionHandlerContext = WeakCellWrapper<ConnectionHandlerContextWrapper>;
 
 pub struct ConnectionHandler<RP> {
     request_processor: RP,
@@ -266,6 +265,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
                 connection_handler_context: ArcRefCellWrapper::new(
                     ConnectionHandlerContextWrapper {
                         connection: Connection::new(socket),
+                        channel: channel.clone(),
                     },
                 ),
                 channel,
@@ -440,40 +440,5 @@ impl Shutdown {
 
         // Remember that the signal has been received.
         self.is_shutdown = true;
-    }
-}
-
-pub struct ConnectionHandlerContextWrapper {
-    pub(crate) connection: Connection,
-}
-
-impl ConnectionHandlerContextWrapper {
-    pub fn new(connection: Connection) -> Self {
-        Self { connection }
-    }
-
-    pub fn connection(&self) -> &Connection {
-        &self.connection
-    }
-
-    pub async fn write(&mut self, cmd: RemotingCommand) {
-        match self.connection.writer.send(cmd).await {
-            Ok(_) => {}
-            Err(error) => {
-                error!("send response failed: {}", error);
-            }
-        }
-    }
-}
-
-impl AsRef<ConnectionHandlerContextWrapper> for ConnectionHandlerContextWrapper {
-    fn as_ref(&self) -> &ConnectionHandlerContextWrapper {
-        self
-    }
-}
-
-impl AsMut<ConnectionHandlerContextWrapper> for ConnectionHandlerContextWrapper {
-    fn as_mut(&mut self) -> &mut ConnectionHandlerContextWrapper {
-        self
     }
 }

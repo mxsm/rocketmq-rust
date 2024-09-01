@@ -23,7 +23,7 @@ use rocketmq_remoting::protocol::body::consumer_connection::ConsumerConnection;
 use rocketmq_remoting::protocol::header::get_consumer_connection_list_request_header::GetConsumerConnectionListRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingSerializable;
-use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
+use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 
 use crate::processor::admin_broker_processor::Inner;
 

@@ -14,18 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use thiserror::Error;
 
-#[derive(Default, Clone)]
-pub struct PeekMessageProcessor {}
-
-impl PeekMessageProcessor {
-    fn process_request(
-        &self,
-        _ctx: ConnectionHandlerContext,
-        _request: RemotingCommand,
-    ) -> RemotingCommand {
-        todo!()
-    }
-}
+#[derive(Debug, Clone, Error)]
+pub enum BrokerError {}

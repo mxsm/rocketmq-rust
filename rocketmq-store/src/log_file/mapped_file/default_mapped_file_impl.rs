@@ -30,7 +30,7 @@ use bytes::Bytes;
 use bytes::BytesMut;
 use memmap2::MmapMut;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
-use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
+use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::SyncUnsafeCellWrapper;
 use rocketmq_common::UtilAll::ensure_dir_ok;
 use tracing::debug;
