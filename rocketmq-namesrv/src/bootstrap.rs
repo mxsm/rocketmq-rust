@@ -23,7 +23,7 @@ use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
 use rocketmq_remoting::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
-use rocketmq_remoting::server::server::RocketMQServer;
+use rocketmq_remoting::remoting_server::server::RocketMQServer;
 use rocketmq_runtime::RocketMQRuntime;
 use tokio::select;
 use tokio::sync::broadcast;

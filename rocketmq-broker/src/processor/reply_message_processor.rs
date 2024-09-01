@@ -18,6 +18,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use log::warn;
+use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::message::MessageConst;
@@ -36,9 +37,12 @@ use rocketmq_remoting::protocol::header::message_operation_header::TopicRequestH
 use rocketmq_remoting::protocol::header::reply_message_request_header::ReplyMessageRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_store::base::message_result::PutMessageResult;
+use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::log_file::MessageStore;
 use rocketmq_store::message_store::default_message_store::DefaultMessageStore;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
+use rocketmq_store::stats::stats_type::StatsType;
 
 use crate::client::manager::producer_manager::ProducerManager;
 use crate::client::rebalance::rebalance_lock_manager::RebalanceLockManager;
@@ -79,31 +83,41 @@ impl<MS: MessageStore> ReplyMessageProcessor<MS> {
                 rebalance_lock_manager,
                 broker_stats_manager,
                 producer_manager,
+                broker_to_client: Default::default(),
             },
             store_host,
         }
     }
 }
-impl<M> ReplyMessageProcessor<M> {
+impl<MS: MessageStore> ReplyMessageProcessor<MS> {
     pub async fn process_request(
         &mut self,
         channel: Channel,
         ctx: ConnectionHandlerContext,
-        request_code: RequestCode,
+        _request_code: RequestCode,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
         let request_header = parse_request_header(&request);
-        if request_header.is_none() {
-            return None;
-        }
         let mut request_header = request_header?;
-        let mqtrace_context =
+        let mut mqtrace_context =
             self.inner
                 .build_msg_context(&channel, &ctx, &mut request_header, &request);
         self.inner
             .execute_send_message_hook_before(&mqtrace_context);
-        //self.inner.execute_send_message_hook_after()
-        unimplemented!()
+
+        let mut response = self
+            .process_reply_message_request(
+                &ctx,
+                &channel,
+                request,
+                &mut mqtrace_context,
+                request_header,
+            )
+            .await;
+
+        self.inner
+            .execute_send_message_hook_after(Some(&mut response), &mut mqtrace_context);
+        Some(response)
     }
 
     async fn process_reply_message_request(
@@ -111,13 +125,10 @@ impl<M> ReplyMessageProcessor<M> {
         ctx: &ConnectionHandlerContext,
         channel: &Channel,
         request: RemotingCommand,
-        send_message_context: &SendMessageContext,
+        send_message_context: &mut SendMessageContext,
         request_header: SendMessageRequestHeader,
     ) -> RemotingCommand {
-        let mut response = RemotingCommand::create_response_command_with_header(
-            SendMessageResponseHeader::default(),
-        )
-        .set_opaque(request.opaque());
+        let mut response = RemotingCommand::create_response_command().set_opaque(request.opaque());
 
         response
             .add_ext_field(
@@ -156,36 +167,205 @@ impl<M> ReplyMessageProcessor<M> {
             queue_id_int = self.inner.random_queue_id(topic_config.write_queue_nums) as i32;
         }
 
-        let mut message_ext = MessageExtBrokerInner::default();
-        message_ext.set_topic(request_header.topic());
-        message_ext.message_ext_inner.queue_id = queue_id_int;
+        let mut msg_inner = MessageExtBrokerInner::default();
+        msg_inner.set_topic(request_header.topic());
+        msg_inner.message_ext_inner.queue_id = queue_id_int;
         if let Some(body) = request.body() {
-            message_ext.set_body(body.clone());
+            msg_inner.set_body(body.clone());
         }
-        message_ext.set_flag(request_header.flag);
+        msg_inner.set_flag(request_header.flag);
         MessageAccessor::set_properties(
-            &mut message_ext,
+            &mut msg_inner,
             MessageDecoder::string_to_message_properties(request_header.properties.as_ref()),
         );
-        message_ext.properties_string = request_header.properties.unwrap_or("".to_string());
-        message_ext.message_ext_inner.born_timestamp = request_header.born_timestamp;
-        message_ext.message_ext_inner.born_host = channel.remote_address();
-        message_ext.message_ext_inner.store_host = self.store_host;
-        message_ext.message_ext_inner.reconsume_times = request_header.reconsume_times.unwrap_or(0);
+        msg_inner.properties_string = request_header.properties.clone().unwrap_or("".to_string());
+        msg_inner.message_ext_inner.born_timestamp = request_header.born_timestamp;
+        msg_inner.message_ext_inner.born_host = channel.remote_address();
+        msg_inner.message_ext_inner.store_host = self.store_host;
+        msg_inner.message_ext_inner.reconsume_times = request_header.reconsume_times.unwrap_or(0);
 
-        /*if self.inner.broker_config.store_reply_message_enable {
-            self.inner.message_store.put_message(message_ext.clone());
-        }*/
-        unimplemented!("process_reply_message_request")
+        let mut push_reply_result = self
+            .push_reply_message(ctx, &request_header, &msg_inner)
+            .await;
+        let mut response_header = SendMessageResponseHeader::default();
+        Self::handle_push_reply_result(
+            &mut push_reply_result,
+            &mut response,
+            &mut response_header,
+            queue_id_int,
+        );
+
+        if self.inner.broker_config.store_reply_message_enable {
+            let put_message_result = self.inner.message_store.put_message(msg_inner).await;
+            self.handle_put_message_result(
+                put_message_result,
+                &request,
+                &mut response_header,
+                send_message_context,
+                queue_id_int,
+                TopicMessageType::Normal,
+                request_header.topic(),
+            );
+        }
+        response.set_command_custom_header(response_header)
     }
 
-    /* fn push_reply_message<M: MessageTrait>(
+    fn handle_put_message_result(
         &mut self,
-        ctx: &ConnectionHandlerContext,
-        channel: &Channel,
+        put_message_result: PutMessageResult,
+        request: &RemotingCommand,
+        response_header: &mut SendMessageResponseHeader,
+        send_message_context: &mut SendMessageContext,
+        queue_id_int: i32,
+        _message_type: TopicMessageType,
+        topic: &str,
+    ) {
+        let put_ok = match put_message_result.put_message_status() {
+            PutMessageStatus::PutOk
+            | PutMessageStatus::FlushDiskTimeout
+            | PutMessageStatus::FlushSlaveTimeout
+            | PutMessageStatus::SlaveNotAvailable => true,
+            PutMessageStatus::ServiceNotAvailable => {
+                warn!(
+                    "service not available now. It may be caused by one of the following reasons: \
+                     the broker's disk is full, messages are put to the slave, message store has \
+                     been shut down, etc."
+                );
+                false
+            }
+            PutMessageStatus::CreateMappedFileFailed => {
+                warn!("create mapped file failed, remoting_server is busy or broken.");
+                false
+            }
+            PutMessageStatus::MessageIllegal => {
+                /* warn!(
+                "the message is illegal, maybe msg body or properties length not matched. msg body length limit {}B.",
+                self.inner..getMaxMessageSize())*/
+                false
+            }
+            PutMessageStatus::PropertiesSizeExceeded => {
+                warn!("the message is illegal, maybe msg properties length limit 32KB.");
+                false
+            }
+            PutMessageStatus::OsPageCacheBusy => {
+                warn!("[PC_SYNCHRONIZED]broker busy, start flow control for a while");
+                false
+            }
+            PutMessageStatus::UnknownError => {
+                warn!("UNKNOWN_ERROR");
+                false
+            }
+            _ => {
+                warn!("UNKNOWN_ERROR DEFAULT");
+                false
+            }
+        };
+        let owner = request
+            .get_ext_fields()
+            .unwrap()
+            .get(BrokerStatsManager::COMMERCIAL_OWNER)
+            .cloned();
+        let commercial_size_per_msg = self.inner.broker_config.commercial_size_per_msg;
+        if put_ok {
+            self.inner.broker_stats_manager.inc_topic_put_nums(
+                topic,
+                put_message_result.append_message_result().unwrap().msg_num,
+                1,
+            );
+            self.inner.broker_stats_manager.inc_topic_put_size(
+                topic,
+                put_message_result
+                    .append_message_result()
+                    .unwrap()
+                    .wrote_bytes,
+            );
+            self.inner.broker_stats_manager.inc_broker_put_nums(
+                topic,
+                put_message_result.append_message_result().unwrap().msg_num,
+            );
+            response_header.set_msg_id(
+                put_message_result
+                    .append_message_result()
+                    .unwrap()
+                    .msg_id
+                    .clone()
+                    .unwrap_or_default(),
+            );
+            response_header.set_queue_id(queue_id_int);
+            response_header.set_queue_offset(
+                put_message_result
+                    .append_message_result()
+                    .unwrap()
+                    .logics_offset,
+            );
+            if self.inner.has_send_message_hook() {
+                let msg_id = response_header.msg_id().to_string();
+                let queue_id = Some(response_header.queue_id());
+                let queue_offset = Some(response_header.queue_offset());
+                send_message_context.msg_id = msg_id;
+                send_message_context.queue_id = queue_id;
+                send_message_context.queue_offset = queue_offset;
+                let commercial_base_count = self.inner.broker_config.commercial_base_count;
+                let wrote_size = put_message_result
+                    .append_message_result()
+                    .unwrap()
+                    .wrote_bytes;
+                let commercial_msg_num =
+                    (wrote_size as f64 / commercial_size_per_msg as f64).ceil() as i32;
+                let inc_value = commercial_msg_num * commercial_base_count;
+                send_message_context.commercial_send_stats = StatsType::SendSuccess;
+                send_message_context.commercial_send_times = inc_value;
+                send_message_context.commercial_send_size = wrote_size;
+                send_message_context.commercial_owner = owner.unwrap_or_default();
+            }
+        } else if self.inner.has_send_message_hook() {
+            let wrote_size = request.get_body().map_or(0, |body| body.len());
+            let inc_value = (wrote_size as f64 / commercial_size_per_msg as f64).ceil() as i32;
+            send_message_context.commercial_send_stats = StatsType::SendFailure;
+            send_message_context.commercial_send_times = inc_value;
+            send_message_context.commercial_send_size = wrote_size as i32;
+            send_message_context.commercial_owner = owner.unwrap_or_default();
+        }
+    }
+
+    fn handle_push_reply_result(
+        push_reply_result: &mut PushReplyResult,
+        response: &mut RemotingCommand,
+        response_header: &mut SendMessageResponseHeader,
+        queue_id_int: i32,
+    ) {
+        if !push_reply_result.0 {
+            response.set_code_mut(ResponseCode::SystemError);
+            response.set_remark_mut(Some(push_reply_result.1.clone()));
+        } else {
+            response.set_code_mut(ResponseCode::Success);
+            response.set_remark_mut(None);
+            response_header.set_msg_id("0");
+            response_header.set_queue_id(queue_id_int);
+            response_header.set_queue_offset(0);
+        }
+    }
+
+    async fn push_reply_message<M: MessageTrait>(
+        &mut self,
+        _ctx: &ConnectionHandlerContext,
+        request_header: &SendMessageRequestHeader,
         msg: &M,
     ) -> PushReplyResult {
         let reply_message_request_header = ReplyMessageRequestHeader {
+            store_host: self.store_host.to_string(),
+            store_timestamp: get_current_millis() as i64,
+            producer_group: request_header.producer_group.clone(),
+            topic: request_header.topic.clone(),
+            default_topic: request_header.default_topic.clone(),
+            default_topic_queue_nums: request_header.default_topic_queue_nums,
+            queue_id: request_header.queue_id.unwrap_or(0),
+            sys_flag: request_header.sys_flag,
+            born_timestamp: request_header.born_timestamp,
+            flag: request_header.flag,
+            properties: request_header.properties.clone(),
+            reconsume_times: request_header.reconsume_times,
+            unit_mode: request_header.unit_mode,
             ..Default::default()
         };
         let command = RemotingCommand::create_request_command(
@@ -196,7 +376,41 @@ impl<M> ReplyMessageProcessor<M> {
         let sender_id = msg.get_property(MessageConst::PROPERTY_MESSAGE_REPLY_TO_CLIENT);
         let mut push_reply_result = PushReplyResult(false, "".to_string());
         if let Some(sender_id) = sender_id {
-            self.inner.producer_manager.as_ref().unwrap().fin
+            let channel = self
+                .inner
+                .producer_manager
+                .as_ref()
+                .unwrap()
+                .find_channel(sender_id.as_str());
+            if let Some(mut channel) = channel {
+                let push_response = self
+                    .inner
+                    .broker_to_client
+                    .call_client(&mut channel, command, 3000)
+                    .await;
+                match push_response {
+                    Ok(response) => {
+                        if response.code() == ResponseCode::Success as i32 {
+                            push_reply_result.0 = true;
+                        } else {
+                            push_reply_result.1 = format!(
+                                "push reply message to client failed, response code: {},{}",
+                                response.code(),
+                                sender_id
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        push_reply_result.1 = format!(
+                            "push reply message to client failed, error: {},{}",
+                            error, sender_id
+                        );
+                    }
+                };
+            } else {
+                warn!("can not find channel by sender_id: {}", sender_id);
+                push_reply_result.1 = format!("can not find channel by sender_id: {}", sender_id);
+            }
         } else {
             warn!(
                 " {}is null, can not reply message",
@@ -208,7 +422,7 @@ impl<M> ReplyMessageProcessor<M> {
             );
         }
         push_reply_result
-    }*/
+    }
 }
 
 fn parse_request_header(request: &RemotingCommand) -> Option<SendMessageRequestHeader> {

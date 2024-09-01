@@ -70,6 +70,7 @@ use tracing::info;
 use tracing::warn;
 
 use crate::client::manager::producer_manager::ProducerManager;
+use crate::client::net::broker_to_client::Broker2Client;
 use crate::client::rebalance::rebalance_lock_manager::RebalanceLockManager;
 use crate::mqtrace::send_message_context::SendMessageContext;
 use crate::mqtrace::send_message_hook::SendMessageHook;
@@ -199,6 +200,7 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
                 rebalance_lock_manager,
                 broker_stats_manager,
                 producer_manager: None,
+                broker_to_client: Default::default(),
             },
             store_host,
         }
@@ -626,7 +628,7 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
                       response.set_code_mut(ResponseCode::ServiceNotAvailable).set_remark_mut(Some("service not available now. It may be caused by one of the following reasons: the broker's disk is full %s, messages are put to the slave, message store has been shut down, etc.".to_string()));
                   },
                   rocketmq_store::base::message_status_enum::PutMessageStatus::CreateMappedFileFailed => {
-                     response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut(Some("create mapped file failed, server is busy or broken.".to_string()));
+                     response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut(Some("create mapped file failed, remoting_server is busy or broken.".to_string()));
                   },
                   rocketmq_store::base::message_status_enum::PutMessageStatus::MessageIllegal |
                   rocketmq_store::base::message_status_enum::PutMessageStatus::PropertiesSizeExceeded => {
@@ -939,9 +941,14 @@ pub(crate) struct Inner<MS> {
     pub(crate) rebalance_lock_manager: Arc<RebalanceLockManager>,
     pub(crate) broker_stats_manager: Arc<BrokerStatsManager>,
     pub(crate) producer_manager: Option<Arc<ProducerManager>>,
+    pub(crate) broker_to_client: Broker2Client,
 }
 
 impl<MS> Inner<MS> {
+    pub fn has_send_message_hook(&self) -> bool {
+        self.send_message_hook_vec.is_empty()
+    }
+
     pub(crate) fn execute_send_message_hook_before(&self, context: &SendMessageContext) {
         for hook in self.send_message_hook_vec.iter() {
             hook.send_message_before(context);

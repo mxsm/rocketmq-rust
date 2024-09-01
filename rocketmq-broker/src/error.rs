@@ -16,5 +16,8 @@
  */
 use thiserror::Error;
 
-#[derive(Debug, Clone, Error)]
-pub enum BrokerError {}
+#[derive(Debug, Error)]
+pub enum BrokerError {
+    #[error("broker client error: {0}")]
+    BrokerClientError(#[from] rocketmq_remoting::error::Error),
+}

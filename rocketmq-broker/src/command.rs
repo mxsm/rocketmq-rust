@@ -33,7 +33,7 @@ pub struct Args {
     #[arg(short = 'm', long, required = false)]
     pub print_important_config: bool,
 
-    /// Name server address list, eg: '192.168.0.1:9876;192.168.0.2:9876'
+    /// Name remoting_server address list, eg: '192.168.0.1:9876;192.168.0.2:9876'
     #[arg(
         short,
         long,

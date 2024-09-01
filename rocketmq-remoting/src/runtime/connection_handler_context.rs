@@ -26,29 +26,34 @@ pub type ConnectionHandlerContext = WeakCellWrapper<ConnectionHandlerContextWrap
 
 #[derive(Hash, Eq, PartialEq)]
 pub struct ConnectionHandlerContextWrapper {
-    pub(crate) connection: Connection,
+    // pub(crate) connection: Connection,
     pub(crate) channel: Channel,
 }
 
 impl ConnectionHandlerContextWrapper {
-    pub fn new(connection: Connection, channel: Channel) -> Self {
+    // pub fn new(connection: Connection, channel: Channel) -> Self {
+    pub fn new(channel: Channel) -> Self {
         Self {
-            connection,
+            //connection,
             channel,
         }
     }
 
     pub fn connection(&self) -> &Connection {
-        &self.connection
+        self.channel.connection_ref()
     }
 
     pub async fn write(&mut self, cmd: RemotingCommand) {
-        match self.connection.writer.send(cmd).await {
+        match self.channel.connection_mut().writer.send(cmd).await {
             Ok(_) => {}
             Err(error) => {
                 error!("send response failed: {}", error);
             }
         }
+    }
+
+    pub fn channel(&self) -> &Channel {
+        &self.channel
     }
 }
 

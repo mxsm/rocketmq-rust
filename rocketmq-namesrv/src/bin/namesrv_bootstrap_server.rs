@@ -34,7 +34,7 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Rocketmq(Rust) home: {}", home);
     info!(
-        "Rocketmq name server(Rust) running on: {}:{}",
+        "Rocketmq name remoting_server(Rust) running on: {}:{}",
         args.ip, args.port
     );
     let config_file = PathBuf::from(home).join("conf").join("namesrv.toml");
@@ -56,10 +56,10 @@ async fn main() -> anyhow::Result<()> {
 #[command(
     author = "mxsm",
     version = "0.1.0",
-    about = "RocketMQ Name server(Rust)"
+    about = "RocketMQ Name remoting_server(Rust)"
 )]
 struct Args {
-    /// rocketmq name server port
+    /// rocketmq name remoting_server port
     #[arg(
         short,
         long,
@@ -70,7 +70,7 @@ struct Args {
     )]
     port: u32,
 
-    /// rocketmq name server ip
+    /// rocketmq name remoting_server ip
     #[arg(
         short,
         long,
@@ -79,7 +79,7 @@ struct Args {
         required = false
     )]
     ip: String,
-    /// rocketmq name server config file
+    /// rocketmq name remoting_server config file
     #[arg(short, long, value_name = "FILE", default_missing_value = "None")]
     config: Option<PathBuf>,
 }

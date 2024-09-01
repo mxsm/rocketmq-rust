@@ -161,7 +161,7 @@ impl MQClientInstance {
         tokio::spawn(async move {
             while let Ok(value) = rx.recv().await {
                 match value {
-                    ConnectionNetEvent::CONNECTED(remote_address, _) => {
+                    ConnectionNetEvent::CONNECTED(remote_address) => {
                         info!("ConnectionNetEvent CONNECTED");
                         let broker_addr_table = instance_.broker_addr_table.read().await;
                         for (broker_name, broker_addrs) in broker_addr_table.iter() {
@@ -193,7 +193,7 @@ impl MQClientInstance {
         match self.service_state {
             ServiceState::CreateJust => {
                 self.service_state = ServiceState::StartFailed;
-                // If not specified,looking address from name server
+                // If not specified,looking address from name remoting_server
                 if self.client_config.namesrv_addr.is_none() {
                     self.mq_client_api_impl.fetch_name_server_addr().await;
                 }

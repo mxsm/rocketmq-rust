@@ -119,7 +119,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             let index = index as usize % addr_list.len();
             let new_addr = addr_list[index].clone();
             info!(
-                "new name server is chosen. OLD: {} , NEW: {}. namesrvIndex = {}",
+                "new name remoting_server is chosen. OLD: {} , NEW: {}. namesrvIndex = {}",
                 new_addr, new_addr, index
             );
             self.namesrv_addr_choosed
@@ -206,7 +206,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
 
     async fn scan_available_name_srv(&self) {
         if self.namesrv_addr_list.as_ref().is_empty() {
-            debug!("scanAvailableNameSrv addresses of name server is null!");
+            debug!("scanAvailableNameSrv addresses of name remoting_server is null!");
             return;
         }
         for address in self.available_namesrv_addr_set.as_ref().iter() {
@@ -294,7 +294,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
                 // You can implement it using various algorithms like Fisher-Yates shuffle
 
                 info!(
-                    "name server address updated. NEW : {:?} , OLD: {:?}",
+                    "name remoting_server address updated. NEW : {:?} , OLD: {:?}",
                     addrs, old
                 );
                 old.clone_from(&addrs);
@@ -346,7 +346,6 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
                     .spawn(async move {
                         time::timeout(Duration::from_millis(timeout_millis), async move {
                             client.send_read(request, timeout_millis).await
-                            //client.lock().await.send_read(request).await
                         })
                         .await
                     })

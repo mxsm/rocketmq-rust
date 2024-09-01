@@ -24,7 +24,7 @@ use crate::protocol::command_custom_header::FromMap;
 use crate::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
 
 /// Represents the header of a reply message request.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ReplyMessageRequestHeader {
     /// Producer group associated with the message.

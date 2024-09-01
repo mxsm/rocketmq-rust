@@ -26,11 +26,9 @@ use crate::client::client_channel_info::ClientChannelInfo;
 
 #[derive(Default)]
 pub struct ProducerManager {
-    group_channel_table: parking_lot::Mutex<
-        HashMap<String /* group name */, HashMap<ConnectionHandlerContext, ClientChannelInfo>>,
-    >,
-    client_channel_table:
-        parking_lot::Mutex<HashMap<String, ConnectionHandlerContext /* client ip:port */>>,
+    group_channel_table:
+        parking_lot::Mutex<HashMap<String /* group name */, HashMap<Channel, ClientChannelInfo>>>,
+    client_channel_table: parking_lot::Mutex<HashMap<String, Channel /* client ip:port */>>,
 }
 
 impl ProducerManager {
@@ -62,13 +60,15 @@ impl ProducerManager {
         let channel_table = mutex_guard.get_mut(group);
         if let Some(ct) = channel_table {
             if !ct.is_empty() {
-                let old = ct.remove(ctx);
-                //let old = ct.remove(client_channel_info.channel());
-                if old.is_some() {
-                    info!(
-                        "unregister a producer[{}] from groupChannelTable {:?}",
-                        group, client_channel_info
-                    );
+                if let Some(ctx) = ctx.upgrade() {
+                    let old = ct.remove(ctx.channel());
+                    //let old = ct.remove(client_channel_info.channel());
+                    if old.is_some() {
+                        info!(
+                            "unregister a producer[{}] from groupChannelTable {:?}",
+                            group, client_channel_info
+                        );
+                    }
                 }
             }
             if ct.is_empty() {
@@ -84,7 +84,8 @@ impl ProducerManager {
     pub fn register_producer(&self, group: &str, client_channel_info: &ClientChannelInfo) {
         let mut group_channel_table = self.group_channel_table.lock();
 
-        let channel_table = group_channel_table.entry(group.to_owned()).or_default();
+        let key = group.to_string();
+        let channel_table = group_channel_table.entry(key).or_default();
 
         if let Some(client_channel_info_found) =
             channel_table.get_mut(client_channel_info.channel())

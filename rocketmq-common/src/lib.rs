@@ -22,6 +22,8 @@
 
 use std::borrow::Borrow;
 use std::cell::SyncUnsafeCell;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::sync::Arc;
@@ -56,6 +58,30 @@ pub struct WeakCellWrapper<T: ?Sized> {
     inner: Weak<SyncUnsafeCell<T>>,
 }
 
+// Implementation of PartialEq for WeakCellWrapper<T>
+impl<T: PartialEq> PartialEq for WeakCellWrapper<T> {
+    fn eq(&self, other: &Self) -> bool {
+        // Upgrade the Weak references to Arc, then compare the inner values
+        if let (Some(self_arc), Some(other_arc)) = (self.inner.upgrade(), other.inner.upgrade()) {
+            unsafe { *self_arc.get() == *other_arc.get() }
+        } else {
+            false
+        }
+    }
+}
+
+// Implementation of Eq for WeakCellWrapper<T>
+impl<T: PartialEq> Eq for WeakCellWrapper<T> {}
+
+// Implementation of Hash for WeakCellWrapper<T>
+impl<T: Hash> Hash for WeakCellWrapper<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        if let Some(arc) = self.inner.upgrade() {
+            unsafe { (*arc.get()).hash(state) }
+        }
+    }
+}
+
 impl<T: ?Sized> Clone for WeakCellWrapper<T> {
     fn clone(&self) -> Self {
         WeakCellWrapper {
@@ -77,6 +103,25 @@ pub struct ArcRefCellWrapper<T: ?Sized> {
     inner: Arc<SyncUnsafeCell<T>>,
 }
 
+// Implementation of PartialEq for ArcRefCellWrapper<T>
+impl<T: PartialEq> PartialEq for ArcRefCellWrapper<T> {
+    fn eq(&self, other: &Self) -> bool {
+        // Compare the inner values by borrowing them unsafely
+        unsafe { *self.inner.get() == *other.inner.get() }
+    }
+}
+
+impl<T: Hash> Hash for ArcRefCellWrapper<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // Compute the hash of the inner value
+        unsafe { (*self.inner.get()).hash(state) }
+    }
+}
+
+// Implementation of Eq for ArcRefCellWrapper<T>
+// Eq implies PartialEq, so we don't need to add any methods here
+impl<T: PartialEq> Eq for ArcRefCellWrapper<T> {}
+
 impl<T> ArcRefCellWrapper<T> {
     #[allow(clippy::mut_from_ref)]
     pub fn mut_from_ref(&self) -> &mut T {
@@ -87,6 +132,10 @@ impl<T> ArcRefCellWrapper<T> {
         WeakCellWrapper {
             inner: Arc::downgrade(&this.inner),
         }
+    }
+
+    pub fn get_inner(&self) -> &Arc<SyncUnsafeCell<T>> {
+        &self.inner
     }
 }
 

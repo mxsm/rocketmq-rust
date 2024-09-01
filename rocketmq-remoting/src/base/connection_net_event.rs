@@ -16,11 +16,9 @@
  */
 use std::net::SocketAddr;
 
-use crate::net::channel::Channel;
-
 #[derive(Debug, Clone)]
 pub enum ConnectionNetEvent {
-    CONNECTED(SocketAddr, Channel),
+    CONNECTED(SocketAddr),
     DISCONNECTED,
     EXCEPTION,
 }

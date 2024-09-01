@@ -77,10 +77,8 @@ impl PartialEq for Connection {
         self.ok == other.ok
 
         // Compare the addr: *const _ess of writer and reader
-            && (&self.writer as *const SplitSink<Framed<TcpStream, RemotingCommandCodec>, RemotingCommand>
-                == &other.writer as *const SplitSink<Framed<TcpStream, RemotingCommandCodec>, RemotingCommand>)
-            && (&self.reader as *const SplitStream<Framed<TcpStream, RemotingCommandCodec>>
-                == &other.reader as *const SplitStream<Framed<TcpStream, RemotingCommandCodec>>)
+            && (std::ptr::eq(&self.writer, &other.writer))
+            && (std::ptr::eq(&self.reader, &other.reader))
     }
 }
 

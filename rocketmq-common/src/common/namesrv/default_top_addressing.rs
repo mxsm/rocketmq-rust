@@ -92,7 +92,7 @@ impl DefaultTopAddressing {
             }
             Err(e) => {
                 if verbose {
-                    error!("fetch name server address exception: {}", e);
+                    error!("fetch name remoting_server address exception: {}", e);
                 }
             }
         }

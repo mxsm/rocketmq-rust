@@ -19,7 +19,7 @@ use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::LanguageCode;
 
-#[derive(Debug, Clone, Hash)]
+#[derive(Debug, Clone, Hash, PartialEq)]
 pub struct ClientChannelInfo {
     channel: Channel,
     client_id: String,

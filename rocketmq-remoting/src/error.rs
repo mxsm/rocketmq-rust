@@ -58,6 +58,12 @@ pub enum Error {
     Elapsed(#[from] tokio::time::error::Elapsed),*/
     #[error("{0}-{1}")]
     AbortProcessException(i32, String),
+
+    #[error("Channel Send Request failed: {0}")]
+    ChannelSendRequestFailed(String),
+
+    #[error("Channel recv Request failed: {0}")]
+    ChannelRecvRequestFailed(String),
 }
 
 #[cfg(test)]

@@ -35,6 +35,6 @@ pub mod remoting;
 pub mod request_processor;
 pub mod rpc;
 pub mod runtime;
-pub mod server;
+pub mod remoting_server;
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

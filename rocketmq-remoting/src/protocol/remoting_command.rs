@@ -526,6 +526,7 @@ impl RemotingCommand {
         self.version
     }
 
+    #[inline]
     pub fn opaque(&self) -> i32 {
         self.opaque
     }
