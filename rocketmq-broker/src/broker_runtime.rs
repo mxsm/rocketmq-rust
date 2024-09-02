@@ -35,8 +35,8 @@ use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper:
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use rocketmq_remoting::protocol::DataVersion;
-use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_remoting::remoting_server::server::RocketMQServer;
+use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_store::base::store_enum::StoreType;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;

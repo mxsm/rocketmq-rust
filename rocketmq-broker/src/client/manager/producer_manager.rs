@@ -80,7 +80,7 @@ impl ProducerManager {
             }
         }
     }
-    
+
     #[allow(clippy::mutable_key_type)]
     pub fn register_producer(&self, group: &str, client_channel_info: &ClientChannelInfo) {
         let mut group_channel_table = self.group_channel_table.lock();

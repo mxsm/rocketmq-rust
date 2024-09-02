@@ -236,8 +236,8 @@ impl BrokerOuterAPI {
             Ok(response) => match From::from(response.code()) {
                 ResponseCode::Success => {
                     info!(
-                        "Register broker to name remoting_server success, namesrv_addr={} response \
-                         body={:?}",
+                        "Register broker to name remoting_server success, namesrv_addr={} \
+                         response body={:?}",
                         namesrv_addr,
                         response.body()
                     );

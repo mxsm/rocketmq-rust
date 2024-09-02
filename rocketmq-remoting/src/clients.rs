@@ -34,9 +34,9 @@ pub mod rocketmq_default_impl;
 /// `RemotingClient` trait extends `RemotingService` to provide client-specific remote interaction
 /// functionalities.
 ///
-/// This trait defines methods for managing name remoting_server addresses, invoking commands asynchronously
-/// or without expecting a response, checking if an address is reachable, and closing clients
-/// connected to specific addresses.
+/// This trait defines methods for managing name remoting_server addresses, invoking commands
+/// asynchronously or without expecting a response, checking if an address is reachable, and closing
+/// clients connected to specific addresses.
 #[allow(async_fn_in_trait)]
 pub trait RemotingClient: RemotingService {
     /// Updates the list of name remoting_server addresses.

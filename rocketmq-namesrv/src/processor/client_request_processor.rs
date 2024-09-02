@@ -68,7 +68,10 @@ impl ClientRequestProcessor {
                 >= Duration::from_secs(self.namesrv_config.wait_seconds_for_service as u64)
                     .as_millis() as u64;
         if self.namesrv_config.need_wait_for_service && !namesrv_ready {
-            warn!("name remoting_server not ready. request code {} ", request.code());
+            warn!(
+                "name remoting_server not ready. request code {} ",
+                request.code()
+            );
             return RemotingCommand::create_response_command_with_code(
                 RemotingSysResponseCode::SystemError,
             )
