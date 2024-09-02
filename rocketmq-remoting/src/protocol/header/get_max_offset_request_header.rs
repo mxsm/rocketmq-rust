@@ -92,7 +92,7 @@ impl FromMap for GetMaxOffsetRequestHeader {
 }
 
 impl TopicRequestHeaderTrait for GetMaxOffsetRequestHeader {
-    fn with_lo(&mut self, lo: Option<bool>) {
+    fn set_lo(&mut self, lo: Option<bool>) {
         todo!()
     }
 
@@ -100,7 +100,7 @@ impl TopicRequestHeaderTrait for GetMaxOffsetRequestHeader {
         todo!()
     }
 
-    fn with_topic(&mut self, topic: String) {
+    fn set_topic(&mut self, topic: String) {
         todo!()
     }
 
@@ -112,7 +112,7 @@ impl TopicRequestHeaderTrait for GetMaxOffsetRequestHeader {
         todo!()
     }
 
-    fn with_broker_name(&mut self, broker_name: String) {
+    fn set_broker_name(&mut self, broker_name: String) {
         todo!()
     }
 
@@ -120,7 +120,7 @@ impl TopicRequestHeaderTrait for GetMaxOffsetRequestHeader {
         todo!()
     }
 
-    fn with_namespace(&mut self, namespace: String) {
+    fn set_namespace(&mut self, namespace: String) {
         todo!()
     }
 
@@ -128,7 +128,7 @@ impl TopicRequestHeaderTrait for GetMaxOffsetRequestHeader {
         todo!()
     }
 
-    fn with_namespaced(&mut self, namespaced: bool) {
+    fn set_namespaced(&mut self, namespaced: bool) {
         todo!()
     }
 
@@ -136,7 +136,7 @@ impl TopicRequestHeaderTrait for GetMaxOffsetRequestHeader {
         todo!()
     }
 
-    fn with_oneway(&mut self, oneway: bool) {
+    fn set_oneway(&mut self, oneway: bool) {
         todo!()
     }
 

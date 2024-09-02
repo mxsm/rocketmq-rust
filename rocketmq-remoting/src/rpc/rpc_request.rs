@@ -16,17 +16,27 @@
  */
 use std::any::Any;
 
+use crate::protocol::command_custom_header::CommandCustomHeader;
+use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use crate::rpc::rpc_request_header::RpcRequestHeader;
 
 #[derive(Default)]
 pub struct RpcRequest {
     pub code: i32,
-    pub header: RpcRequestHeader,
+    pub header: Option<Box<dyn TopicRequestHeaderTrait + Send + Sync + 'static>>,
     pub body: Option<Box<dyn Any + Send>>,
 }
 
 impl RpcRequest {
-    pub fn new(code: i32, header: RpcRequestHeader, body: Option<Box<dyn Any + Send>>) -> Self {
-        Self { code, header, body }
+    pub fn new(
+        code: i32,
+        header: impl TopicRequestHeaderTrait,
+        body: Option<Box<dyn Any + Send>>,
+    ) -> Self {
+        Self {
+            code,
+            header: Some(header),
+            body,
+        }
     }
 }

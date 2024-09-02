@@ -382,7 +382,8 @@ impl RpcClient for RpcClientImpl {
         }
         let bname = request
             .header
-            .broker_name
+            .unwrap()
+            .broker_name()
             .as_ref()
             .cloned()
             .unwrap_or(String::new());

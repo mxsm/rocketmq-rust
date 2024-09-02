@@ -82,7 +82,7 @@ impl FromMap for QueryConsumerOffsetRequestHeader {
 }
 
 impl TopicRequestHeaderTrait for QueryConsumerOffsetRequestHeader {
-    fn with_lo(&mut self, lo: Option<bool>) {
+    fn set_lo(&mut self, lo: Option<bool>) {
         self.topic_request_header.as_mut().unwrap().lo = lo;
     }
 
@@ -90,7 +90,7 @@ impl TopicRequestHeaderTrait for QueryConsumerOffsetRequestHeader {
         self.topic_request_header.as_ref().unwrap().lo
     }
 
-    fn with_topic(&mut self, topic: String) {
+    fn set_topic(&mut self, topic: String) {
         self.topic = topic;
     }
 
@@ -109,7 +109,7 @@ impl TopicRequestHeaderTrait for QueryConsumerOffsetRequestHeader {
             .as_deref()
     }
 
-    fn with_broker_name(&mut self, broker_name: String) {
+    fn set_broker_name(&mut self, broker_name: String) {
         self.topic_request_header
             .as_mut()
             .unwrap()
@@ -130,7 +130,7 @@ impl TopicRequestHeaderTrait for QueryConsumerOffsetRequestHeader {
             .as_deref()
     }
 
-    fn with_namespace(&mut self, namespace: String) {
+    fn set_namespace(&mut self, namespace: String) {
         self.topic_request_header
             .as_mut()
             .unwrap()
@@ -150,7 +150,7 @@ impl TopicRequestHeaderTrait for QueryConsumerOffsetRequestHeader {
             .namespaced
     }
 
-    fn with_namespaced(&mut self, namespaced: bool) {
+    fn set_namespaced(&mut self, namespaced: bool) {
         self.topic_request_header
             .as_mut()
             .unwrap()
@@ -170,7 +170,7 @@ impl TopicRequestHeaderTrait for QueryConsumerOffsetRequestHeader {
             .oneway
     }
 
-    fn with_oneway(&mut self, oneway: bool) {
+    fn set_oneway(&mut self, oneway: bool) {
         self.topic_request_header
             .as_mut()
             .unwrap()

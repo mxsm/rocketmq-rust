@@ -108,8 +108,8 @@ impl OffsetRequestHandler {
             i64::MAX,
             true,
         )?;
-        request_header.with_broker_name(max_item.bname.clone()?);
-        request_header.with_lo(Some(false));
+        request_header.set_broker_name(max_item.bname.clone()?);
+        request_header.set_lo(Some(false));
         request_header.queue_id = max_item.queue_id;
         let max_physical_offset = if max_item.bname == mapping_detail.topic_queue_mapping_info.bname
         {
