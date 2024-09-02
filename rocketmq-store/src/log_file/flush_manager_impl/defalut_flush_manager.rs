@@ -17,7 +17,7 @@
 use std::sync::Arc;
 use std::sync::Weak;
 
-use rocketmq_common::common::message::message_single::MessageExtBrokerInner;
+use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::TimeUtils::get_current_millis;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;

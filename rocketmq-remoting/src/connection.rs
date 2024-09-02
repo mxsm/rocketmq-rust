@@ -14,6 +14,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::hash::Hash;
+use std::hash::Hasher;
+
 use futures_util::stream::SplitSink;
 use futures_util::stream::SplitStream;
 use futures_util::StreamExt;
@@ -35,7 +38,6 @@ use crate::protocol::remoting_command::RemotingCommand;
 ///
 /// When sending frames, the frame is first encoded into the write buffer.
 /// The contents of the write buffer are then written to the socket.
-
 pub struct Connection {
     /// The `Framed` instance used for reading from and writing to the TCP stream.
     /// It leverages the `RemotingCommandCodec` for encoding and decoding frames.
@@ -48,6 +50,39 @@ pub struct Connection {
     /// there are issues with the connection.
     pub(crate) ok: bool,
 }
+
+impl Hash for Connection {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // Hash the boolean flag
+        self.ok.hash(state);
+
+        // Use the addr: *const _ess of writer and reader to hash them (they serve as a unique
+        // identifier for these components)
+        let writer_addr: *const SplitSink<
+            Framed<TcpStream, RemotingCommandCodec>,
+            RemotingCommand,
+        > = &self.writer
+            as *const SplitSink<Framed<TcpStream, RemotingCommandCodec>, RemotingCommand>;
+        let reader_addr: *const SplitStream<Framed<TcpStream, RemotingCommandCodec>> =
+            &self.reader as *const SplitStream<Framed<TcpStream, RemotingCommandCodec>>;
+
+        writer_addr.hash(state);
+        reader_addr.hash(state);
+    }
+}
+
+impl PartialEq for Connection {
+    fn eq(&self, other: &Self) -> bool {
+        // Compare the boolean flag
+        self.ok == other.ok
+
+        // Compare the addr: *const _ess of writer and reader
+            && (std::ptr::eq(&self.writer, &other.writer))
+            && (std::ptr::eq(&self.reader, &other.reader))
+    }
+}
+
+impl Eq for Connection {}
 
 impl Connection {
     /// Creates a new `Connection` instance.

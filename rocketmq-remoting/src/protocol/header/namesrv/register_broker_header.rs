@@ -39,7 +39,7 @@ pub struct RegisterBrokerRequestHeader {
     #[serde(rename = "clusterName")]
     pub cluster_name: String,
 
-    /// The address of the highly available (HA) server associated with the broker.
+    /// The address of the highly available (HA) remoting_server associated with the broker.
     #[serde(rename = "haServerAddr")]
     pub ha_server_addr: String,
 
@@ -81,7 +81,7 @@ impl RegisterBrokerRequestHeader {
     /// * `broker_name` - The name of the broker.
     /// * `broker_addr` - The address of the broker.
     /// * `cluster_name` - The name of the cluster.
-    /// * `ha_server_addr` - The address of the HA server.
+    /// * `ha_server_addr` - The address of the HA remoting_server.
     /// * `broker_id` - The unique identifier for the broker.
     /// * `heartbeat_timeout_millis` - The optional heartbeat timeout in milliseconds.
     /// * `enable_acting_master` - The optional flag indicating whether acting as the master is

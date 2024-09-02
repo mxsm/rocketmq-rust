@@ -1243,7 +1243,7 @@ impl DefaultMQProducerImpl {
             return Err(MQClientError::MQClientException(
                 ClientErrorCode::NO_NAME_SERVER_EXCEPTION,
                 format!(
-                    "No name server address, please set it. {}",
+                    "No name remoting_server address, please set it. {}",
                     FAQUrl::suggest_todo(FAQUrl::NAME_SERVER_ADDR_NOT_EXIST_URL)
                 ),
             ));

@@ -26,7 +26,7 @@ pub struct BlockingClient {
 
 #[allow(clippy::needless_doctest_main)]
 impl BlockingClient {
-    /// Establish a connection with the rocketmq server located at `addr`.
+    /// Establish a connection with the rocketmq remoting_server located at `addr`.
     ///
     /// `addr` may be any type that can be asynchronously converted to a
     /// `SocketAddr`. This includes `SocketAddr` and strings. The `ToSocketAddrs`

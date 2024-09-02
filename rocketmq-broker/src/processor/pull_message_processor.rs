@@ -42,7 +42,7 @@ use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_utils::TopicQ
 use rocketmq_remoting::rpc::rpc_client::RpcClient;
 use rocketmq_remoting::rpc::rpc_client_utils::RpcClientUtils;
 use rocketmq_remoting::rpc::rpc_request::RpcRequest;
-use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
+use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;

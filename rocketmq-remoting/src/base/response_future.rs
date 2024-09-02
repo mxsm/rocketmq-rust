@@ -14,6 +14,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::hash::Hash;
+use std::hash::Hasher;
+
 use crate::protocol::remoting_command::RemotingCommand;
 use crate::Result;
 
@@ -23,6 +26,24 @@ pub struct ResponseFuture {
     pub(crate) send_request_ok: bool,
     //pub(crate) response_command: Option<RemotingCommand>,
     pub(crate) tx: tokio::sync::oneshot::Sender<Result<RemotingCommand>>,
+}
+
+impl PartialEq for ResponseFuture {
+    fn eq(&self, other: &Self) -> bool {
+        self.opaque == other.opaque
+            && self.timeout_millis == other.timeout_millis
+            && self.send_request_ok == other.send_request_ok
+    }
+}
+
+impl Eq for ResponseFuture {}
+
+impl Hash for ResponseFuture {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.opaque.hash(state);
+        self.timeout_millis.hash(state);
+        self.send_request_ok.hash(state);
+    }
 }
 
 impl ResponseFuture {

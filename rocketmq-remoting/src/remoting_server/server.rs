@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+use std::collections::HashMap;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -23,7 +23,6 @@ use std::time::Duration;
 use futures::SinkExt;
 use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_common::ArcRefCellWrapper;
-use rocketmq_common::WeakCellWrapper;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::broadcast;
@@ -35,11 +34,14 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
+use crate::base::response_future::ResponseFuture;
 use crate::code::response_code::ResponseCode;
 use crate::connection::Connection;
 use crate::error::Error;
 use crate::net::channel::Channel;
 use crate::protocol::remoting_command::RemotingCommand;
+use crate::protocol::RemotingCommandType;
+use crate::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 use crate::runtime::processor::RequestProcessor;
 use crate::runtime::RPCHook;
 use crate::Result;
@@ -53,8 +55,6 @@ type Tx = mpsc::UnboundedSender<RemotingCommand>;
 /// Shorthand for the receive half of the message channel.
 type Rx = mpsc::UnboundedReceiver<RemotingCommand>;
 
-pub type ConnectionHandlerContext = WeakCellWrapper<ConnectionHandlerContextWrapper>;
-
 pub struct ConnectionHandler<RP> {
     request_processor: RP,
     connection_handler_context: ArcRefCellWrapper<ConnectionHandlerContextWrapper>,
@@ -63,6 +63,7 @@ pub struct ConnectionHandler<RP> {
     _shutdown_complete: mpsc::Sender<()>,
     conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
     rpc_hooks: Arc<Vec<Box<dyn RPCHook>>>,
+    response_table: ArcRefCellWrapper<HashMap<i32, ResponseFuture>>,
 }
 
 impl<RP> Drop for ConnectionHandler<RP> {
@@ -106,7 +107,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
     async fn handle(&mut self) -> Result<()> {
         while !self.shutdown.is_shutdown {
             let frame = tokio::select! {
-                res = self.connection_handler_context.connection.reader.next() => res,
+                res = self.connection_handler_context.channel.connection.reader.next() => res,
                 _ = self.shutdown.recv() =>{
                     //If a shutdown signal is received, return from `handle`.
                     return Ok(());
@@ -120,7 +121,22 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                     return Ok(());
                 }
             };
+            //handle response
+            if cmd.get_type() == RemotingCommandType::RESPONSE {
+                let future_response = self.response_table.remove(&cmd.opaque());
+                if let Some(future_response) = future_response {
+                    let _ = future_response.tx.send(Ok(cmd));
+                } else {
+                    warn!(
+                        "receive response, cmd={}, but not matched any request, address={}",
+                        cmd,
+                        self.connection_handler_context.channel.remote_address()
+                    )
+                }
+                continue;
+            }
 
+            //handle request
             let mut exception = match self.do_before_rpc_hooks(&self.channel, &mut cmd) {
                 Ok(_) => None,
                 Err(error) => Some(error),
@@ -153,7 +169,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                             code, message,
                         );
                         tokio::select! {
-                            result =self.connection_handler_context.connection.writer.send(response.set_opaque(opaque)) => match result{
+                            result =self.connection_handler_context.channel.connection.writer.send(response.set_opaque(opaque)) => match result{
                                 Ok(_) =>{},
                                 Err(err) => {
                                     match err {
@@ -175,7 +191,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                                     exception_inner.to_string(),
                                 );
                             tokio::select! {
-                                result =self.connection_handler_context.connection.writer.send(response.set_opaque(opaque)) => match result{
+                                result =self.connection_handler_context.channel.connection.writer.send(response.set_opaque(opaque)) => match result{
                                     Ok(_) =>{},
                                     Err(err) => {
                                         match err {
@@ -196,7 +212,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
 
             let response = response.unwrap();
             tokio::select! {
-                result =self.connection_handler_context.connection.writer.send(response.set_opaque(opaque)) => match result{
+                result =self.connection_handler_context.channel.connection.writer.send(response.set_opaque(opaque)) => match result{
                     Ok(_) =>{},
                     Err(err) => {
                         match err {
@@ -258,14 +274,17 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
             let (socket, remote_addr) = self.accept().await?;
             info!("Accepted connection, client ip:{}", remote_addr);
             socket.set_nodelay(true).expect("set nodelay failed");
-            let channel = Channel::new(socket.local_addr().unwrap(), remote_addr);
+
+            let response_table = ArcRefCellWrapper::new(HashMap::with_capacity(128));
+            let channel = Channel::new(socket.local_addr()?, remote_addr, Connection::new(socket));
             //create per connection handler state
             let mut handler = ConnectionHandler {
                 request_processor: self.request_processor.clone(),
                 //connection: Connection::new(socket, remote_addr),
                 connection_handler_context: ArcRefCellWrapper::new(
                     ConnectionHandlerContextWrapper {
-                        connection: Connection::new(socket),
+                        // connection: Connection::new(socket),
+                        channel: channel.clone(),
                     },
                 ),
                 channel,
@@ -273,6 +292,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
                 _shutdown_complete: self.shutdown_complete_tx.clone(),
                 conn_disconnect_notify: self.conn_disconnect_notify.clone(),
                 rpc_hooks: self.rpc_hooks.clone(),
+                response_table,
             };
 
             tokio::spawn(async move {
@@ -280,7 +300,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
                     error!(cause = ?err, "connection error");
                 }
                 warn!(
-                    "The client[IP={}] disconnected from the server.",
+                    "The client[IP={}] disconnected from the remoting_server.",
                     remote_addr
                 );
                 /*  if let Some(ref sender) = handler.conn_disconnect_notify {
@@ -379,7 +399,7 @@ pub async fn run<RP: RequestProcessor + Sync + 'static + Clone>(
     tokio::select! {
         res = listener.run() => {
             // If an error is received here, accepting connections from the TCP
-            // listener failed multiple times and the server is giving up and
+            // listener failed multiple times and the remoting_server is giving up and
             // shutting down.
             //
             // Errors encountered when handling individual connections do not
@@ -440,40 +460,5 @@ impl Shutdown {
 
         // Remember that the signal has been received.
         self.is_shutdown = true;
-    }
-}
-
-pub struct ConnectionHandlerContextWrapper {
-    pub(crate) connection: Connection,
-}
-
-impl ConnectionHandlerContextWrapper {
-    pub fn new(connection: Connection) -> Self {
-        Self { connection }
-    }
-
-    pub fn connection(&self) -> &Connection {
-        &self.connection
-    }
-
-    pub async fn write(&mut self, cmd: RemotingCommand) {
-        match self.connection.writer.send(cmd).await {
-            Ok(_) => {}
-            Err(error) => {
-                error!("send response failed: {}", error);
-            }
-        }
-    }
-}
-
-impl AsRef<ConnectionHandlerContextWrapper> for ConnectionHandlerContextWrapper {
-    fn as_ref(&self) -> &ConnectionHandlerContextWrapper {
-        self
-    }
-}
-
-impl AsMut<ConnectionHandlerContextWrapper> for ConnectionHandlerContextWrapper {
-    fn as_mut(&mut self) -> &mut ConnectionHandlerContextWrapper {
-        self
     }
 }

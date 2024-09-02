@@ -190,11 +190,11 @@ impl BrokerOuterAPI {
                         if let Some(v) = value {
                             register_broker_result_list.push(v);
                         } else {
-                            error!("Register broker to name server error");
+                            error!("Register broker to name remoting_server error");
                         }
                     }
                     Err(e) => {
-                        error!("Register broker to name server error, error={}", e);
+                        error!("Register broker to name remoting_server error, error={}", e);
                     }
                 }
             }
@@ -212,7 +212,7 @@ impl BrokerOuterAPI {
         body: Vec<u8>,
     ) -> Option<RegisterBrokerResult> {
         debug!(
-            "Register broker to name server, namesrv_addr={},request_code={:?}, \
+            "Register broker to name remoting_server, namesrv_addr={},request_code={:?}, \
              request_header={:?}, body={:?}",
             namesrv_addr,
             RequestCode::RegisterBroker,
@@ -236,8 +236,8 @@ impl BrokerOuterAPI {
             Ok(response) => match From::from(response.code()) {
                 ResponseCode::Success => {
                     info!(
-                        "Register broker to name server success, namesrv_addr={} response \
-                         body={:?}",
+                        "Register broker to name remoting_server success, namesrv_addr={} \
+                         response body={:?}",
                         namesrv_addr,
                         response.body()
                     );
@@ -258,7 +258,7 @@ impl BrokerOuterAPI {
             },
             Err(err) => {
                 error!(
-                    "Register broker to name server error, namesrv_addr={}, error={}",
+                    "Register broker to name remoting_server error, namesrv_addr={}, error={}",
                     namesrv_addr, err
                 );
                 None
@@ -266,7 +266,7 @@ impl BrokerOuterAPI {
         }
     }
 
-    /// Register the topic route info of single topic to all name server nodes.
+    /// Register the topic route info of single topic to all name remoting_server nodes.
     /// This method is used to replace incremental broker registration feature.
     pub async fn register_single_topic_all(
         &self,

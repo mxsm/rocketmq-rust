@@ -17,6 +17,8 @@
 
 use crate::remoting::RemotingService;
 
+pub mod server;
+
 pub trait RemotingServer: RemotingService {
     /*fn register_processor(
         &mut self,

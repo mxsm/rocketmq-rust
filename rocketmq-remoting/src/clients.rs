@@ -34,27 +34,27 @@ pub mod rocketmq_default_impl;
 /// `RemotingClient` trait extends `RemotingService` to provide client-specific remote interaction
 /// functionalities.
 ///
-/// This trait defines methods for managing name server addresses, invoking commands asynchronously
-/// or without expecting a response, checking if an address is reachable, and closing clients
-/// connected to specific addresses.
+/// This trait defines methods for managing name remoting_server addresses, invoking commands
+/// asynchronously or without expecting a response, checking if an address is reachable, and closing
+/// clients connected to specific addresses.
 #[allow(async_fn_in_trait)]
 pub trait RemotingClient: RemotingService {
-    /// Updates the list of name server addresses.
+    /// Updates the list of name remoting_server addresses.
     ///
     /// # Arguments
-    /// * `addrs` - A list of name server addresses to update.
+    /// * `addrs` - A list of name remoting_server addresses to update.
     async fn update_name_server_address_list(&self, addrs: Vec<String>);
 
-    /// Retrieves the current list of name server addresses.
+    /// Retrieves the current list of name remoting_server addresses.
     ///
     /// # Returns
-    /// A vector containing the current list of name server addresses.
+    /// A vector containing the current list of name remoting_server addresses.
     fn get_name_server_address_list(&self) -> &[String];
 
-    /// Retrieves a list of available name server addresses.
+    /// Retrieves a list of available name remoting_server addresses.
     ///
     /// # Returns
-    /// A vector containing the list of available name server addresses.
+    /// A vector containing the list of available name remoting_server addresses.
     fn get_available_name_srv_list(&self) -> Vec<String>;
 
     /// Asynchronously invokes a command on a specified address.

@@ -303,7 +303,7 @@ impl RemotingCommand {
         self
     }
 
-    pub fn set_remark_ref(&mut self, remark: Option<String>) {
+    pub fn set_remark_mut(&mut self, remark: Option<String>) {
         self.remark = remark;
     }
 
@@ -526,6 +526,7 @@ impl RemotingCommand {
         self.version
     }
 
+    #[inline]
     pub fn opaque(&self) -> i32 {
         self.opaque
     }

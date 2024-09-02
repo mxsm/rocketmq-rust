@@ -17,7 +17,7 @@
 
 use crate::net::channel::Channel;
 use crate::protocol::remoting_command::RemotingCommand;
-use crate::runtime::server::ConnectionHandlerContext;
+use crate::runtime::connection_handler_context::ConnectionHandlerContext;
 use crate::Result;
 
 /// Trait for processing requests.

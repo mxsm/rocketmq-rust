@@ -37,7 +37,7 @@ use rocketmq_remoting::protocol::request_source::RequestSource;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_remoting::protocol::topic::OffsetMovedEvent;
-use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
+use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::config::broker_role::BrokerRole;
@@ -413,7 +413,7 @@ impl DefaultPullMessageResultHandler {
         client_address: &str,
     ) {
         let mut response_header = PullMessageResponseHeader::default();
-        response.set_remark_ref(Some(format!("{:?}", get_message_result.status())));
+        response.set_remark_mut(Some(format!("{:?}", get_message_result.status())));
         response_header.next_begin_offset = Some(get_message_result.next_begin_offset());
         response_header.min_offset = Some(get_message_result.min_offset());
         response_header.max_offset = Some(get_message_result.max_offset());

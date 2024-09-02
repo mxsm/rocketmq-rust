@@ -31,7 +31,7 @@ use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateCo
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
 use rocketmq_remoting::protocol::RemotingSerializable;
-use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
+use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_store::log_file::MessageStore;
 use tracing::info;
 use tracing::warn;

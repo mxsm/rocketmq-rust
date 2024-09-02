@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
+use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 
 #[derive(Default, Clone)]
 pub struct AckMessageProcessor {}

@@ -30,7 +30,7 @@ use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingSerializable;
-use rocketmq_remoting::runtime::server::ConnectionHandlerContext;
+use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use tracing::warn;
 
 use crate::kvconfig::kvconfig_mananger::KVConfigManager;
@@ -68,11 +68,14 @@ impl ClientRequestProcessor {
                 >= Duration::from_secs(self.namesrv_config.wait_seconds_for_service as u64)
                     .as_millis() as u64;
         if self.namesrv_config.need_wait_for_service && !namesrv_ready {
-            warn!("name server not ready. request code {} ", request.code());
+            warn!(
+                "name remoting_server not ready. request code {} ",
+                request.code()
+            );
             return RemotingCommand::create_response_command_with_code(
                 RemotingSysResponseCode::SystemError,
             )
-            .set_remark(Some(String::from("name server not ready")));
+            .set_remark(Some(String::from("name remoting_server not ready")));
         }
         match self
             .route_info_manager
@@ -81,7 +84,7 @@ impl ClientRequestProcessor {
         {
             None => RemotingCommand::create_response_command_with_code(ResponseCode::TopicNotExist)
                 .set_remark(Some(format!(
-                    "No topic route info in name server for the topic:{}{}",
+                    "No topic route info in name remoting_server for the topic:{}{}",
                     request_header.topic,
                     FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
                 ))),

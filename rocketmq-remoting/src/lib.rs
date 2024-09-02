@@ -32,9 +32,9 @@ pub use crate::protocol::rocketmq_serializable;
 
 pub mod base;
 pub mod remoting;
+pub mod remoting_server;
 pub mod request_processor;
 pub mod rpc;
 pub mod runtime;
-pub mod server;
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

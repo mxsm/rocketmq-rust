@@ -213,7 +213,7 @@ where
             if let Some(request_list) = mpr.clone_list_and_clear() {
                 for request in request_list {
                     info!(
-                        "notify master online, wakeup {:?} {}",
+                        "notify master online, wakeup {} {}",
                         request.client_channel(),
                         request.request_command()
                     );

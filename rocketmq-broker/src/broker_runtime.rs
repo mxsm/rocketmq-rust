@@ -35,8 +35,8 @@ use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper:
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use rocketmq_remoting::protocol::DataVersion;
+use rocketmq_remoting::remoting_server::server::RocketMQServer;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
-use rocketmq_remoting::runtime::server::RocketMQServer;
 use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_store::base::store_enum::StoreType;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
@@ -69,6 +69,7 @@ use crate::processor::default_pull_message_result_handler::DefaultPullMessageRes
 use crate::processor::pull_message_processor::PullMessageProcessor;
 use crate::processor::pull_message_result_handler::PullMessageResultHandler;
 use crate::processor::query_message_processor::QueryMessageProcessor;
+use crate::processor::reply_message_processor::ReplyMessageProcessor;
 use crate::processor::send_message_processor::SendMessageProcessor;
 use crate::processor::BrokerRequestProcessor;
 use crate::schedule::schedule_message_service::ScheduleMessageService;
@@ -371,7 +372,7 @@ impl BrokerRuntime {
 
     fn initialize_remoting_server(&mut self) {
 
-        // fast broker server implementation in future versions
+        // fast broker remoting_server implementation in future versions
     }
 
     fn initialize_resources(&mut self) {
@@ -387,6 +388,16 @@ impl BrokerRuntime {
             self.message_store.as_ref().unwrap(),
             self.rebalance_lock_manager.clone(),
             self.broker_stats_manager.clone(),
+        );
+        let reply_message_processor = ReplyMessageProcessor::new(
+            self.topic_queue_mapping_manager.clone(),
+            self.subscription_group_manager.clone(),
+            self.topic_config_manager.clone(),
+            self.broker_config.clone(),
+            self.message_store.as_ref().unwrap(),
+            self.rebalance_lock_manager.clone(),
+            self.broker_stats_manager.clone(),
+            Some(self.producer_manager.clone()),
         );
         let mut pull_message_result_handler =
             ArcRefCellWrapper::new(Box::new(DefaultPullMessageResultHandler::new(
@@ -469,7 +480,7 @@ impl BrokerRuntime {
             change_invisible_time_processor: Default::default(),
             notification_processor: Default::default(),
             polling_info_processor: Default::default(),
-            reply_message_processor: Default::default(),
+            reply_message_processor,
             admin_broker_processor,
             client_manage_processor: ClientManageProcessor::new(
                 self.broker_config.clone(),
@@ -592,7 +603,7 @@ impl BrokerRuntime {
         if let Some(ref namesrv_address) = self.broker_config.namesrv_addr.clone() {
             self.update_namesrv_addr().await;
             info!(
-                "Set user specified name server address: {}",
+                "Set user specified name remoting_server address: {}",
                 namesrv_address
             );
             let mut broker_runtime = self.clone();
@@ -634,9 +645,9 @@ impl BrokerRuntime {
             .expect("Message store start error");
 
         let server = RocketMQServer::new(self.server_config.clone());
-        //start nomarl broker server
+        //start nomarl broker remoting_server
         tokio::spawn(async move { server.run(request_processor).await });
-        //start fast broker server
+        //start fast broker remoting_server
         let mut fast_server_config = (*self.server_config).clone();
         fast_server_config.listen_port = self.server_config.listen_port - 2;
         let fast_server = RocketMQServer::new(Arc::new(fast_server_config));
@@ -768,7 +779,7 @@ impl BrokerRuntime {
 
     pub(crate) fn start_service_without_condition(&mut self) {}
 
-    /// Register broker to name server
+    /// Register broker to name remoting_server
     pub(crate) async fn register_broker_all(
         &mut self,
         check_order_config: bool,
