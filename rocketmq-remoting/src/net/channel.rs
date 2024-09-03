@@ -134,10 +134,11 @@ impl Channel {
         local_address: SocketAddr,
         remote_address: SocketAddr,
         connection: Connection,
+        response_table: ArcRefCellWrapper<HashMap<i32, ResponseFuture>>,
     ) -> Self {
         let channel_id = Uuid::new_v4().to_string();
         let (tx, rx) = tokio::sync::mpsc::channel(1024);
-        let response_table = ArcRefCellWrapper::new(HashMap::with_capacity(32));
+        //let response_table = ArcRefCellWrapper::new(HashMap::with_capacity(32));
         let connection = ArcRefCellWrapper::new(connection);
         tokio::spawn(run_send(connection.clone(), rx, response_table.clone()));
         Self {

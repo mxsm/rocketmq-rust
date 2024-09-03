@@ -15,7 +15,6 @@
  * limitations under the License.
  */
 use std::any::Any;
-use std::sync::Arc;
 
 use rocketmq_common::common::message::message_queue::MessageQueue;
 
@@ -24,16 +23,18 @@ use crate::clients::RemotingClient;
 use crate::code::request_code::RequestCode;
 use crate::code::response_code::ResponseCode;
 use crate::error::Error::RpcException;
+use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::header::get_earliest_msg_storetime_response_header::GetEarliestMsgStoretimeResponseHeader;
 use crate::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader;
 use crate::protocol::header::get_min_offset_response_header::GetMinOffsetResponseHeader;
+use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use crate::protocol::header::pull_message_response_header::PullMessageResponseHeader;
 use crate::protocol::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader;
 use crate::protocol::header::search_offset_response_header::SearchOffsetResponseHeader;
 use crate::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetResponseHeader;
 use crate::rpc::client_metadata::ClientMetadata;
 use crate::rpc::rpc_client::RpcClient;
-use crate::rpc::rpc_client_hook::RpcClientHook;
+use crate::rpc::rpc_client_hook::RpcClientHookFn;
 use crate::rpc::rpc_client_utils::RpcClientUtils;
 use crate::rpc::rpc_request::RpcRequest;
 use crate::rpc::rpc_response::RpcResponse;
@@ -43,7 +44,7 @@ use crate::Result;
 pub struct RpcClientImpl {
     client_metadata: ClientMetadata,
     remoting_client: RocketmqDefaultClient,
-    client_hook_list: Vec<Arc<Box<dyn RpcClientHook + Send + Sync + 'static>>>,
+    client_hook_list: Vec<RpcClientHookFn>,
 }
 
 impl RpcClientImpl {
@@ -55,10 +56,7 @@ impl RpcClientImpl {
         }
     }
 
-    pub fn register_client_hook(
-        &mut self,
-        client_hook: Arc<Box<dyn RpcClientHook + Send + Sync + 'static>>,
-    ) {
+    pub fn register_client_hook(&mut self, client_hook: RpcClientHookFn) {
         self.client_hook_list.push(client_hook);
     }
 
@@ -76,10 +74,10 @@ impl RpcClientImpl {
         }
     }
 
-    async fn handle_pull_message(
+    async fn handle_pull_message<H: CommandCustomHeader + TopicRequestHeaderTrait>(
         &self,
         addr: String,
-        request: RpcRequest,
+        request: RpcRequest<H>,
         timeout_millis: u64,
     ) -> Result<RpcResponse> {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
@@ -116,10 +114,10 @@ impl RpcClientImpl {
         }
     }
 
-    async fn handle_get_min_offset(
+    async fn handle_get_min_offset<H: CommandCustomHeader + TopicRequestHeaderTrait>(
         &self,
         addr: String,
-        request: RpcRequest,
+        request: RpcRequest<H>,
         timeout_millis: u64,
     ) -> Result<RpcResponse> {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
@@ -152,10 +150,10 @@ impl RpcClientImpl {
             )),
         }
     }
-    async fn handle_get_max_offset(
+    async fn handle_get_max_offset<H: CommandCustomHeader + TopicRequestHeaderTrait>(
         &self,
         addr: String,
-        request: RpcRequest,
+        request: RpcRequest<H>,
         timeout_millis: u64,
     ) -> Result<RpcResponse> {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
@@ -188,10 +186,10 @@ impl RpcClientImpl {
             )),
         }
     }
-    async fn handle_search_offset(
+    async fn handle_search_offset<H: CommandCustomHeader + TopicRequestHeaderTrait>(
         &self,
         addr: String,
-        request: RpcRequest,
+        request: RpcRequest<H>,
         timeout_millis: u64,
     ) -> Result<RpcResponse> {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
@@ -224,10 +222,10 @@ impl RpcClientImpl {
             )),
         }
     }
-    async fn handle_get_earliest_msg_storetime(
+    async fn handle_get_earliest_msg_storetime<H: CommandCustomHeader + TopicRequestHeaderTrait>(
         &self,
         addr: String,
-        request: RpcRequest,
+        request: RpcRequest<H>,
         timeout_millis: u64,
     ) -> Result<RpcResponse> {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
@@ -260,10 +258,10 @@ impl RpcClientImpl {
             )),
         }
     }
-    async fn handle_query_consumer_offset(
+    async fn handle_query_consumer_offset<H: CommandCustomHeader + TopicRequestHeaderTrait>(
         &self,
         addr: String,
-        request: RpcRequest,
+        request: RpcRequest<H>,
         timeout_millis: u64,
     ) -> Result<RpcResponse> {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
@@ -300,10 +298,10 @@ impl RpcClientImpl {
             )),
         }
     }
-    async fn handle_update_consumer_offset(
+    async fn handle_update_consumer_offset<H: CommandCustomHeader + TopicRequestHeaderTrait>(
         &self,
         addr: String,
-        request: RpcRequest,
+        request: RpcRequest<H>,
         timeout_millis: u64,
     ) -> Result<RpcResponse> {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
@@ -336,10 +334,10 @@ impl RpcClientImpl {
             )),
         }
     }
-    async fn handle_common_body_request(
+    async fn handle_common_body_request<H: CommandCustomHeader + TopicRequestHeaderTrait>(
         &self,
         addr: String,
-        request: RpcRequest,
+        request: RpcRequest<H>,
         timeout_millis: u64,
     ) -> Result<RpcResponse> {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
@@ -371,10 +369,15 @@ impl RpcClientImpl {
 }
 
 impl RpcClient for RpcClientImpl {
-    async fn invoke(&self, request: RpcRequest, timeout_millis: u64) -> Result<RpcResponse> {
+    async fn invoke<H: CommandCustomHeader + TopicRequestHeaderTrait>(
+        &self,
+        request: RpcRequest<H>,
+        timeout_millis: u64,
+    ) -> Result<RpcResponse> {
         if !self.client_hook_list.is_empty() {
             for hook in self.client_hook_list.iter() {
-                let result = hook.before_request(&request)?;
+                // let result = hook.before_request(&request)?;
+                let result = hook(Some(&request.header), None)?;
                 if let Some(result) = result {
                     return Ok(result);
                 }
@@ -382,11 +385,8 @@ impl RpcClient for RpcClientImpl {
         }
         let bname = request
             .header
-            .unwrap()
             .broker_name()
-            .as_ref()
-            .cloned()
-            .unwrap_or(String::new());
+            .map_or("".to_string(), |value| value.to_string());
         let addr = self.get_broker_addr_by_name_or_exception(bname.as_ref())?;
         let result = match RequestCode::from(request.code) {
             RequestCode::PullMessage => {
@@ -435,14 +435,15 @@ impl RpcClient for RpcClientImpl {
         Ok(result)
     }
 
-    async fn invoke_mq(
+    async fn invoke_mq<H: CommandCustomHeader + TopicRequestHeaderTrait>(
         &self,
         mq: MessageQueue,
-        mut request: RpcRequest,
+        mut request: RpcRequest<H>,
         timeout_millis: u64,
     ) -> Result<RpcResponse> {
-        let bname = self.client_metadata.get_broker_name_from_message_queue(&mq);
-        request.header.broker_name = bname;
+        if let Some(broker_name) = self.client_metadata.get_broker_name_from_message_queue(&mq) {
+            request.header.set_broker_name(broker_name);
+        }
         self.invoke(request, timeout_millis).await
     }
 }

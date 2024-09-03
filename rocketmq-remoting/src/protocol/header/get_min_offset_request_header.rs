@@ -21,6 +21,7 @@ use serde::Serialize;
 
 use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::FromMap;
+use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -68,5 +69,113 @@ impl FromMap for GetMinOffsetRequestHeader {
                 .unwrap_or_default(),
             topic_request_header: <TopicRequestHeader as FromMap>::from(map),
         })
+    }
+}
+
+impl TopicRequestHeaderTrait for GetMinOffsetRequestHeader {
+    fn set_lo(&mut self, lo: Option<bool>) {
+        self.topic_request_header.as_mut().unwrap().lo = lo;
+    }
+
+    fn lo(&self) -> Option<bool> {
+        self.topic_request_header.as_ref().unwrap().lo
+    }
+
+    fn set_topic(&mut self, topic: String) {
+        self.topic = topic;
+    }
+
+    fn topic(&self) -> &str {
+        self.topic.as_str()
+    }
+
+    fn broker_name(&self) -> Option<&str> {
+        self.topic_request_header
+            .as_ref()
+            .unwrap()
+            .rpc_request_header
+            .as_ref()
+            .unwrap()
+            .broker_name
+            .as_deref()
+    }
+
+    fn set_broker_name(&mut self, broker_name: String) {
+        self.topic_request_header
+            .as_mut()
+            .unwrap()
+            .rpc_request_header
+            .as_mut()
+            .unwrap()
+            .broker_name = Some(broker_name);
+    }
+
+    fn namespace(&self) -> Option<&str> {
+        self.topic_request_header
+            .as_ref()
+            .unwrap()
+            .rpc_request_header
+            .as_ref()
+            .unwrap()
+            .namespace
+            .as_deref()
+    }
+
+    fn set_namespace(&mut self, namespace: String) {
+        self.topic_request_header
+            .as_mut()
+            .unwrap()
+            .rpc_request_header
+            .as_mut()
+            .unwrap()
+            .namespace = Some(namespace);
+    }
+
+    fn namespaced(&self) -> Option<bool> {
+        self.topic_request_header
+            .as_ref()
+            .unwrap()
+            .rpc_request_header
+            .as_ref()
+            .unwrap()
+            .namespaced
+    }
+
+    fn set_namespaced(&mut self, namespaced: bool) {
+        self.topic_request_header
+            .as_mut()
+            .unwrap()
+            .rpc_request_header
+            .as_mut()
+            .unwrap()
+            .namespaced = Some(namespaced);
+    }
+
+    fn oneway(&self) -> Option<bool> {
+        self.topic_request_header
+            .as_ref()
+            .unwrap()
+            .rpc_request_header
+            .as_ref()
+            .unwrap()
+            .oneway
+    }
+
+    fn set_oneway(&mut self, oneway: bool) {
+        self.topic_request_header
+            .as_mut()
+            .unwrap()
+            .rpc_request_header
+            .as_mut()
+            .unwrap()
+            .oneway = Some(oneway);
+    }
+
+    fn queue_id(&self) -> Option<i32> {
+        Some(self.queue_id)
+    }
+
+    fn set_queue_id(&mut self, queue_id: Option<i32>) {
+        self.queue_id = queue_id.unwrap_or_default();
     }
 }

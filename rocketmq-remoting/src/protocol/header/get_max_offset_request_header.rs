@@ -93,58 +93,108 @@ impl FromMap for GetMaxOffsetRequestHeader {
 
 impl TopicRequestHeaderTrait for GetMaxOffsetRequestHeader {
     fn set_lo(&mut self, lo: Option<bool>) {
-        todo!()
+        self.topic_request_header.as_mut().unwrap().lo = lo;
     }
 
     fn lo(&self) -> Option<bool> {
-        todo!()
+        self.topic_request_header.as_ref().unwrap().lo
     }
 
     fn set_topic(&mut self, topic: String) {
-        todo!()
+        self.topic = topic;
     }
 
     fn topic(&self) -> &str {
-        todo!()
+        self.topic.as_str()
     }
 
     fn broker_name(&self) -> Option<&str> {
-        todo!()
+        self.topic_request_header
+            .as_ref()
+            .unwrap()
+            .rpc_request_header
+            .as_ref()
+            .unwrap()
+            .broker_name
+            .as_deref()
     }
 
     fn set_broker_name(&mut self, broker_name: String) {
-        todo!()
+        self.topic_request_header
+            .as_mut()
+            .unwrap()
+            .rpc_request_header
+            .as_mut()
+            .unwrap()
+            .broker_name = Some(broker_name);
     }
 
     fn namespace(&self) -> Option<&str> {
-        todo!()
+        self.topic_request_header
+            .as_ref()
+            .unwrap()
+            .rpc_request_header
+            .as_ref()
+            .unwrap()
+            .namespace
+            .as_deref()
     }
 
     fn set_namespace(&mut self, namespace: String) {
-        todo!()
+        self.topic_request_header
+            .as_mut()
+            .unwrap()
+            .rpc_request_header
+            .as_mut()
+            .unwrap()
+            .namespace = Some(namespace);
     }
 
     fn namespaced(&self) -> Option<bool> {
-        todo!()
+        self.topic_request_header
+            .as_ref()
+            .unwrap()
+            .rpc_request_header
+            .as_ref()
+            .unwrap()
+            .namespaced
     }
 
     fn set_namespaced(&mut self, namespaced: bool) {
-        todo!()
+        self.topic_request_header
+            .as_mut()
+            .unwrap()
+            .rpc_request_header
+            .as_mut()
+            .unwrap()
+            .namespaced = Some(namespaced);
     }
 
     fn oneway(&self) -> Option<bool> {
-        todo!()
+        self.topic_request_header
+            .as_ref()
+            .unwrap()
+            .rpc_request_header
+            .as_ref()
+            .unwrap()
+            .oneway
     }
 
     fn set_oneway(&mut self, oneway: bool) {
-        todo!()
+        self.topic_request_header
+            .as_mut()
+            .unwrap()
+            .rpc_request_header
+            .as_mut()
+            .unwrap()
+            .oneway = Some(oneway);
     }
 
     fn queue_id(&self) -> Option<i32> {
-        todo!()
+        Some(self.queue_id)
     }
 
     fn set_queue_id(&mut self, queue_id: Option<i32>) {
-        todo!()
+        self.queue_id = queue_id.unwrap_or_default();
     }
 }

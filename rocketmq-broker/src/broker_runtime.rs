@@ -469,6 +469,7 @@ impl BrokerRuntime {
             self.schedule_message_service.clone(),
             self.broker_stats.clone(),
             self.consumer_manager.clone(),
+            self.broker_out_api.clone(),
         );
 
         BrokerRequestProcessor {

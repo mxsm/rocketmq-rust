@@ -53,7 +53,7 @@ pub struct Client {
 }
 
 struct ClientInner {
-    response_table: HashMap<i32, ResponseFuture>,
+    response_table: ArcRefCellWrapper<HashMap<i32, ResponseFuture>>,
     channel: Channel,
     ctx: ArcRefCellWrapper<ConnectionHandlerContextWrapper>,
     tx: tokio::sync::mpsc::Sender<SendMessage>,
@@ -161,8 +161,13 @@ impl ClientInner {
         let local_addr = stream.local_addr()?;
         let remote_address = stream.peer_addr()?;
         let connection = Connection::new(stream);
-
-        let channel = Channel::new(local_addr, remote_address, connection);
+        let response_table = ArcRefCellWrapper::new(HashMap::with_capacity(128));
+        let channel = Channel::new(
+            local_addr,
+            remote_address,
+            connection,
+            response_table.clone(),
+        );
 
         let (tx_, rx) = tokio::sync::mpsc::channel(1024);
         let client = ClientInner {
@@ -170,7 +175,7 @@ impl ClientInner {
                 //connection,
                 channel.clone(),
             )),
-            response_table: HashMap::with_capacity(128),
+            response_table,
             channel,
             tx: tx_.clone(),
         };

@@ -30,6 +30,7 @@ use tracing::warn;
 
 use crate::client::manager::consumer_manager::ConsumerManager;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
+use crate::out_api::broker_outer_api::BrokerOuterAPI;
 use crate::processor::admin_broker_processor::broker_config_request_handler::BrokerConfigRequestHandler;
 use crate::processor::admin_broker_processor::consumer_request_handler::ConsumerRequestHandler;
 use crate::processor::admin_broker_processor::offset_request_handler::OffsetRequestHandler;
@@ -64,6 +65,7 @@ impl AdminBrokerProcessor {
         schedule_message_service: ScheduleMessageService,
         broker_stats: Option<Arc<BrokerStats<DefaultMessageStore>>>,
         consume_manager: Arc<ConsumerManager>,
+        broker_out_api: Arc<BrokerOuterAPI>,
     ) -> Self {
         let inner = Inner {
             broker_config,
@@ -77,6 +79,7 @@ impl AdminBrokerProcessor {
             schedule_message_service,
             broker_stats,
             consume_manager,
+            broker_out_api,
         };
         let topic_request_handler = TopicRequestHandler::new(inner.clone());
         let broker_config_request_handler = BrokerConfigRequestHandler::new(inner.clone());
@@ -206,4 +209,5 @@ struct Inner {
     schedule_message_service: ScheduleMessageService,
     broker_stats: Option<Arc<BrokerStats<DefaultMessageStore>>>,
     consume_manager: Arc<ConsumerManager>,
+    broker_out_api: Arc<BrokerOuterAPI>,
 }

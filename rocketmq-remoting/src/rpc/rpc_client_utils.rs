@@ -20,6 +20,8 @@ use std::any::Any;
 use bytes::Bytes;
 use bytes::BytesMut;
 
+use crate::protocol::command_custom_header::CommandCustomHeader;
+use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use crate::protocol::remoting_command::RemotingCommand;
 use crate::protocol::RemotingSerializable;
 use crate::rpc::rpc_request::RpcRequest;
@@ -28,7 +30,9 @@ use crate::rpc::rpc_response::RpcResponse;
 pub struct RpcClientUtils;
 
 impl RpcClientUtils {
-    pub fn create_command_for_rpc_request(rpc_request: RpcRequest) -> RemotingCommand {
+    pub fn create_command_for_rpc_request<H: CommandCustomHeader + TopicRequestHeaderTrait>(
+        rpc_request: RpcRequest<H>,
+    ) -> RemotingCommand {
         let result = RemotingCommand::create_request_command(rpc_request.code, rpc_request.header);
         if let Some(body) = rpc_request.body {
             return result.set_body(Self::encode_body(&*body));

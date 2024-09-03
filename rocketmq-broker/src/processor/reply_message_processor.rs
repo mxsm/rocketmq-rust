@@ -185,7 +185,7 @@ impl<MS: MessageStore> ReplyMessageProcessor<MS> {
         msg_inner.message_ext_inner.reconsume_times = request_header.reconsume_times.unwrap_or(0);
 
         let mut push_reply_result = self
-            .push_reply_message(ctx, &request_header, &msg_inner)
+            .push_reply_message(channel, ctx, &request_header, &msg_inner)
             .await;
         let mut response_header = SendMessageResponseHeader::default();
         Self::handle_push_reply_result(
@@ -348,11 +348,13 @@ impl<MS: MessageStore> ReplyMessageProcessor<MS> {
 
     async fn push_reply_message<M: MessageTrait>(
         &mut self,
+        channel: &Channel,
         _ctx: &ConnectionHandlerContext,
         request_header: &SendMessageRequestHeader,
         msg: &M,
     ) -> PushReplyResult {
         let reply_message_request_header = ReplyMessageRequestHeader {
+            born_host: channel.remote_address().to_string(),
             store_host: self.store_host.to_string(),
             store_timestamp: get_current_millis() as i64,
             producer_group: request_header.producer_group.clone(),

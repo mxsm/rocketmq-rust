@@ -14,13 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use crate::protocol::command_custom_header::CommandCustomHeader;
 
 pub mod send_message_request_header;
 pub mod send_message_request_header_v2;
 pub mod send_message_response_header;
 
-pub trait TopicRequestHeaderTrait: CommandCustomHeader {
+pub trait TopicRequestHeaderTrait: Sync + Send {
     fn set_lo(&mut self, lo: Option<bool>);
 
     fn lo(&self) -> Option<bool>;

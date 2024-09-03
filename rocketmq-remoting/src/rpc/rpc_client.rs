@@ -16,18 +16,24 @@
  */
 use rocketmq_common::common::message::message_queue::MessageQueue;
 
+use crate::protocol::command_custom_header::CommandCustomHeader;
+use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use crate::rpc::rpc_request::RpcRequest;
 use crate::rpc::rpc_response::RpcResponse;
 use crate::Result;
 
 #[trait_variant::make(RpcClient:Send)]
 pub trait RpcClientLocal {
-    async fn invoke(&self, request: RpcRequest, timeout_millis: u64) -> Result<RpcResponse>;
+    async fn invoke<H: CommandCustomHeader + TopicRequestHeaderTrait>(
+        &self,
+        request: RpcRequest<H>,
+        timeout_millis: u64,
+    ) -> Result<RpcResponse>;
 
-    async fn invoke_mq(
+    async fn invoke_mq<H: CommandCustomHeader + TopicRequestHeaderTrait>(
         &self,
         mq: MessageQueue,
-        request: RpcRequest,
+        request: RpcRequest<H>,
         timeout_millis: u64,
     ) -> Result<RpcResponse>;
 }
