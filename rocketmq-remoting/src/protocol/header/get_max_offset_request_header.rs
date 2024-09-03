@@ -22,66 +22,76 @@ use serde::Serialize;
 use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::FromMap;
 use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
-use crate::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
+use crate::rpc::topic_request_header::TopicRequestHeader;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct QueryConsumerOffsetRequestHeader {
-    pub consumer_group: String,
+pub struct GetMaxOffsetRequestHeader {
     pub topic: String,
+
     pub queue_id: i32,
-    pub set_zero_if_not_found: Option<bool>,
+
+    pub committed: bool,
+
     #[serde(flatten)]
     pub topic_request_header: Option<TopicRequestHeader>,
 }
 
-impl QueryConsumerOffsetRequestHeader {
-    pub const CONSUMER_GROUP: &'static str = "consumerGroup";
-    pub const TOPIC: &'static str = "topic";
-    pub const QUEUE_ID: &'static str = "queueId";
-    pub const SET_ZERO_IF_NOT_FOUND: &'static str = "setZeroIfNotFound";
+impl Default for GetMaxOffsetRequestHeader {
+    fn default() -> Self {
+        GetMaxOffsetRequestHeader {
+            topic: Default::default(),
+            queue_id: Default::default(),
+            committed: true,
+            topic_request_header: Default::default(),
+        }
+    }
 }
 
-impl CommandCustomHeader for QueryConsumerOffsetRequestHeader {
+impl GetMaxOffsetRequestHeader {
+    pub const TOPIC: &'static str = "topic";
+    pub const QUEUE_ID: &'static str = "queueId";
+    pub const COMMITTED: &'static str = "committed";
+}
+
+impl CommandCustomHeader for GetMaxOffsetRequestHeader {
     fn to_map(&self) -> Option<HashMap<String, String>> {
         let mut map = HashMap::new();
-        map.insert(
-            Self::CONSUMER_GROUP.to_string(),
-            self.consumer_group.clone(),
-        );
         map.insert(Self::TOPIC.to_string(), self.topic.clone());
         map.insert(Self::QUEUE_ID.to_string(), self.queue_id.to_string());
-        if let Some(value) = self.set_zero_if_not_found {
-            map.insert(Self::SET_ZERO_IF_NOT_FOUND.to_string(), value.to_string());
-        }
-        if let Some(ref value) = self.topic_request_header {
-            if let Some(val) = value.to_map() {
-                map.extend(val);
+        map.insert(Self::COMMITTED.to_string(), self.committed.to_string());
+        if let Some(topic_request_header) = &self.topic_request_header {
+            if let Some(topic_request_header_map) = topic_request_header.to_map() {
+                map.extend(topic_request_header_map);
             }
         }
         Some(map)
     }
 }
 
-impl FromMap for QueryConsumerOffsetRequestHeader {
+impl FromMap for GetMaxOffsetRequestHeader {
     type Target = Self;
 
     fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
-        Some(QueryConsumerOffsetRequestHeader {
-            consumer_group: map.get(Self::CONSUMER_GROUP).cloned().unwrap_or_default(),
-            topic: map.get(Self::TOPIC).cloned().unwrap_or_default(),
+        Some(GetMaxOffsetRequestHeader {
+            topic: map
+                .get(GetMaxOffsetRequestHeader::TOPIC)
+                .map(|s| s.to_string())
+                .unwrap_or_default(),
             queue_id: map
-                .get(Self::QUEUE_ID)
-                .map_or(0, |value| value.parse::<i32>().unwrap()),
-            set_zero_if_not_found: map
-                .get(Self::SET_ZERO_IF_NOT_FOUND)
-                .and_then(|value| value.parse::<bool>().ok()),
+                .get(GetMaxOffsetRequestHeader::QUEUE_ID)
+                .map(|s| s.parse().unwrap())
+                .unwrap_or_default(),
+            committed: map
+                .get(GetMaxOffsetRequestHeader::COMMITTED)
+                .map(|s| s.parse().unwrap())
+                .unwrap_or(true),
             topic_request_header: <TopicRequestHeader as FromMap>::from(map),
         })
     }
 }
 
-impl TopicRequestHeaderTrait for QueryConsumerOffsetRequestHeader {
+impl TopicRequestHeaderTrait for GetMaxOffsetRequestHeader {
     fn set_lo(&mut self, lo: Option<bool>) {
         self.topic_request_header.as_mut().unwrap().lo = lo;
     }
@@ -102,7 +112,7 @@ impl TopicRequestHeaderTrait for QueryConsumerOffsetRequestHeader {
         self.topic_request_header
             .as_ref()
             .unwrap()
-            .rpc
+            .rpc_request_header
             .as_ref()
             .unwrap()
             .broker_name
@@ -113,7 +123,7 @@ impl TopicRequestHeaderTrait for QueryConsumerOffsetRequestHeader {
         self.topic_request_header
             .as_mut()
             .unwrap()
-            .rpc
+            .rpc_request_header
             .as_mut()
             .unwrap()
             .broker_name = Some(broker_name);
@@ -123,7 +133,7 @@ impl TopicRequestHeaderTrait for QueryConsumerOffsetRequestHeader {
         self.topic_request_header
             .as_ref()
             .unwrap()
-            .rpc
+            .rpc_request_header
             .as_ref()
             .unwrap()
             .namespace
@@ -134,7 +144,7 @@ impl TopicRequestHeaderTrait for QueryConsumerOffsetRequestHeader {
         self.topic_request_header
             .as_mut()
             .unwrap()
-            .rpc
+            .rpc_request_header
             .as_mut()
             .unwrap()
             .namespace = Some(namespace);
@@ -144,7 +154,7 @@ impl TopicRequestHeaderTrait for QueryConsumerOffsetRequestHeader {
         self.topic_request_header
             .as_ref()
             .unwrap()
-            .rpc
+            .rpc_request_header
             .as_ref()
             .unwrap()
             .namespaced
@@ -154,7 +164,7 @@ impl TopicRequestHeaderTrait for QueryConsumerOffsetRequestHeader {
         self.topic_request_header
             .as_mut()
             .unwrap()
-            .rpc
+            .rpc_request_header
             .as_mut()
             .unwrap()
             .namespaced = Some(namespaced);
@@ -164,7 +174,7 @@ impl TopicRequestHeaderTrait for QueryConsumerOffsetRequestHeader {
         self.topic_request_header
             .as_ref()
             .unwrap()
-            .rpc
+            .rpc_request_header
             .as_ref()
             .unwrap()
             .oneway
@@ -174,7 +184,7 @@ impl TopicRequestHeaderTrait for QueryConsumerOffsetRequestHeader {
         self.topic_request_header
             .as_mut()
             .unwrap()
-            .rpc
+            .rpc_request_header
             .as_mut()
             .unwrap()
             .oneway = Some(oneway);
@@ -185,69 +195,6 @@ impl TopicRequestHeaderTrait for QueryConsumerOffsetRequestHeader {
     }
 
     fn set_queue_id(&mut self, queue_id: Option<i32>) {
-        self.queue_id = queue_id.unwrap();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::HashMap;
-
-    use super::*;
-
-    #[test]
-    fn query_consumer_offset_request_header_to_map() {
-        let header = QueryConsumerOffsetRequestHeader {
-            consumer_group: "test_group".to_string(),
-            topic: "test_topic".to_string(),
-            queue_id: 1,
-            set_zero_if_not_found: Some(true),
-            topic_request_header: None,
-        };
-
-        let map = header.to_map().unwrap();
-        assert_eq!(
-            map.get(QueryConsumerOffsetRequestHeader::CONSUMER_GROUP),
-            Some(&"test_group".to_string())
-        );
-        assert_eq!(
-            map.get(QueryConsumerOffsetRequestHeader::TOPIC),
-            Some(&"test_topic".to_string())
-        );
-        assert_eq!(
-            map.get(QueryConsumerOffsetRequestHeader::QUEUE_ID),
-            Some(&"1".to_string())
-        );
-        assert_eq!(
-            map.get(QueryConsumerOffsetRequestHeader::SET_ZERO_IF_NOT_FOUND),
-            Some(&"true".to_string())
-        );
-    }
-
-    #[test]
-    fn query_consumer_offset_request_header_from_map() {
-        let mut map = HashMap::new();
-        map.insert(
-            QueryConsumerOffsetRequestHeader::CONSUMER_GROUP.to_string(),
-            "test_group".to_string(),
-        );
-        map.insert(
-            QueryConsumerOffsetRequestHeader::TOPIC.to_string(),
-            "test_topic".to_string(),
-        );
-        map.insert(
-            QueryConsumerOffsetRequestHeader::QUEUE_ID.to_string(),
-            "1".to_string(),
-        );
-        map.insert(
-            QueryConsumerOffsetRequestHeader::SET_ZERO_IF_NOT_FOUND.to_string(),
-            "true".to_string(),
-        );
-
-        let header = <QueryConsumerOffsetRequestHeader as FromMap>::from(&map).unwrap();
-        assert_eq!(header.consumer_group, "test_group");
-        assert_eq!(header.topic, "test_topic");
-        assert_eq!(header.queue_id, 1);
-        assert_eq!(header.set_zero_if_not_found, Some(true));
+        self.queue_id = queue_id.unwrap_or_default();
     }
 }

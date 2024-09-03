@@ -14,34 +14,35 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 pub mod send_message_request_header;
 pub mod send_message_request_header_v2;
 pub mod send_message_response_header;
 
-pub trait TopicRequestHeaderTrait {
-    fn with_lo(&mut self, lo: Option<bool>);
+pub trait TopicRequestHeaderTrait: Sync + Send {
+    fn set_lo(&mut self, lo: Option<bool>);
 
     fn lo(&self) -> Option<bool>;
 
-    fn with_topic(&mut self, topic: String);
+    fn set_topic(&mut self, topic: String);
 
     fn topic(&self) -> &str;
 
     fn broker_name(&self) -> Option<&str>;
 
-    fn with_broker_name(&mut self, broker_name: String);
+    fn set_broker_name(&mut self, broker_name: String);
 
     fn namespace(&self) -> Option<&str>;
 
-    fn with_namespace(&mut self, namespace: String);
+    fn set_namespace(&mut self, namespace: String);
 
     fn namespaced(&self) -> Option<bool>;
 
-    fn with_namespaced(&mut self, namespaced: bool);
+    fn set_namespaced(&mut self, namespaced: bool);
 
     fn oneway(&self) -> Option<bool>;
 
-    fn with_oneway(&mut self, oneway: bool);
+    fn set_oneway(&mut self, oneway: bool);
 
     fn queue_id(&self) -> Option<i32>;
 

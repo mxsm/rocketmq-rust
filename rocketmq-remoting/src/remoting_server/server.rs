@@ -276,7 +276,12 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
             socket.set_nodelay(true).expect("set nodelay failed");
 
             let response_table = ArcRefCellWrapper::new(HashMap::with_capacity(128));
-            let channel = Channel::new(socket.local_addr()?, remote_addr, Connection::new(socket));
+            let channel = Channel::new(
+                socket.local_addr()?,
+                remote_addr,
+                Connection::new(socket),
+                response_table.clone(),
+            );
             //create per connection handler state
             let mut handler = ConnectionHandler {
                 request_processor: self.request_processor.clone(),

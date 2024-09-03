@@ -38,6 +38,8 @@ pub mod query_message_request_header;
 pub mod query_message_response_header;
 
 pub mod get_consumer_connection_list_request_header;
+pub mod get_max_offset_request_header;
+pub mod get_min_offset_request_header;
 pub mod heartbeat_request_header;
 pub mod query_topic_consume_by_who_request_header;
 pub mod query_topics_by_consumer_request_header;

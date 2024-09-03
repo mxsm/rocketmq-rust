@@ -193,13 +193,7 @@ impl<MS> PullMessageProcessor<MS> {
         request_header.sys_flag = sys_flag;
         let rpc_request = RpcRequest::new(
             RequestCode::PullMessage.to_i32(),
-            request_header
-                .topic_request
-                .as_ref()
-                .unwrap()
-                .rpc
-                .clone()
-                .unwrap(),
+            request_header.clone(),
             None,
         );
         let rpc_response = self
@@ -219,7 +213,7 @@ impl<MS> PullMessageProcessor<MS> {
         let response_header = rpc_response.get_header_mut_from_ref::<PullMessageResponseHeader>();
         let rewrite_result = rewrite_response_for_static_topic(
             request_header,
-            response_header.unwrap(),
+            response_header?,
             mapping_context,
             ResponseCode::from(rpc_response.code),
         );
