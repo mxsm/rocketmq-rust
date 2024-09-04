@@ -26,6 +26,7 @@ use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerCon
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::message_store::default_message_store::DefaultMessageStore;
 use rocketmq_store::stats::broker_stats::BrokerStats;
+use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use tracing::warn;
 
 use crate::client::manager::consumer_manager::ConsumerManager;
@@ -66,6 +67,7 @@ impl AdminBrokerProcessor {
         broker_stats: Option<Arc<BrokerStats<DefaultMessageStore>>>,
         consume_manager: Arc<ConsumerManager>,
         broker_out_api: Arc<BrokerOuterAPI>,
+        broker_stats_manager: Arc<BrokerStatsManager>,
     ) -> Self {
         let inner = Inner {
             broker_config,
@@ -80,6 +82,7 @@ impl AdminBrokerProcessor {
             broker_stats,
             consume_manager,
             broker_out_api,
+            broker_stats_manager,
         };
         let topic_request_handler = TopicRequestHandler::new(inner.clone());
         let broker_config_request_handler = BrokerConfigRequestHandler::new(inner.clone());
@@ -148,6 +151,11 @@ impl AdminBrokerProcessor {
                     .get_consumer_connection_list(channel, ctx, request_code, request)
                     .await
             }
+            RequestCode::GetConsumeStats => {
+                self.consumer_request_handler
+                    .get_consume_stats(channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::GetTopicConfig => {
                 self.topic_request_handler
                     .get_topic_config(channel, ctx, request_code, request)
@@ -210,4 +218,5 @@ struct Inner {
     broker_stats: Option<Arc<BrokerStats<DefaultMessageStore>>>,
     consume_manager: Arc<ConsumerManager>,
     broker_out_api: Arc<BrokerOuterAPI>,
+    broker_stats_manager: Arc<BrokerStatsManager>,
 }
