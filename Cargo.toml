@@ -42,7 +42,7 @@ rocketmq-client = { version = "0.3.0", path = "./rocketmq-client" }
 
 tokio = { version = "1.40", features = ["full"] }
 tokio-util = { version = "0.7.12", features = ["full"] }
-tokio-stream = { version = "0.1.15", features = ["full"] }
+tokio-stream = { version = "0.1.16", features = ["full"] }
 
 log = "0.4.22"
 env_logger = "0.11.5"
