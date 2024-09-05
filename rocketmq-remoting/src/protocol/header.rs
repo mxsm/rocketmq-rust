@@ -27,7 +27,12 @@ pub mod get_max_offset_response_header;
 pub mod get_min_offset_response_header;
 pub mod get_topic_stats_request_header;
 
+pub mod get_consume_stats_request_header;
+pub mod get_consumer_connection_list_request_header;
+pub mod get_max_offset_request_header;
+pub mod get_min_offset_request_header;
 pub mod get_topic_config_request_header;
+pub mod heartbeat_request_header;
 pub mod message_operation_header;
 pub mod namesrv;
 pub mod pull_message_request_header;
@@ -36,11 +41,6 @@ pub mod query_consumer_offset_request_header;
 pub mod query_consumer_offset_response_header;
 pub mod query_message_request_header;
 pub mod query_message_response_header;
-
-pub mod get_consumer_connection_list_request_header;
-pub mod get_max_offset_request_header;
-pub mod get_min_offset_request_header;
-pub mod heartbeat_request_header;
 pub mod query_topic_consume_by_who_request_header;
 pub mod query_topics_by_consumer_request_header;
 pub mod reply_message_request_header;

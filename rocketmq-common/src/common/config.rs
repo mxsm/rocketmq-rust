@@ -156,4 +156,8 @@ impl TopicConfig {
             false
         }
     }
+
+    pub fn get_read_queue_nums(&self) -> u32 {
+        self.read_queue_nums
+    }
 }

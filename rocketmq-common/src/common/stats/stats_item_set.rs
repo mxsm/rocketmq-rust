@@ -14,11 +14,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use crate::common::stats::stats_snapshot::StatsSnapshot;
+
 #[derive(Debug)]
 pub struct StatsItemSet {}
 
 impl StatsItemSet {
     pub fn new(_stats_name: String) -> Self {
         StatsItemSet {}
+    }
+
+    pub fn get_stats_data_in_minute(&self, stats_key: &str) -> StatsSnapshot {
+        StatsSnapshot::new()
     }
 }

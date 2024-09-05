@@ -15,5 +15,7 @@
  * limitations under the License.
  */
 
+pub mod consume_stats;
+pub mod offset_wrapper;
 pub mod topic_offset;
 pub mod topic_stats_table;

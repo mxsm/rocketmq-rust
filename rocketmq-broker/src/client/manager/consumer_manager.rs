@@ -105,6 +105,14 @@ impl ConsumerManager {
         }
         None
     }
+
+    pub fn find_subscription_data_count(&self, group: &str) -> usize {
+        if let Some(consumer_group_info) = self.get_consumer_group_info(group) {
+            return consumer_group_info.get_subscription_table().read().len();
+        }
+        0
+    }
+
     pub fn get_consumer_group_info(&self, group: &str) -> Option<ConsumerGroupInfo> {
         self.get_consumer_group_info_internal(group, false)
     }

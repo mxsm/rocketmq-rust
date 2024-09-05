@@ -492,6 +492,26 @@ impl BrokerStatsManager {
     pub fn inc_queue_put_nums(&self, topic: &str, queue_id: i32, num: i32, times: i32) {}
     pub fn inc_queue_put_size(&self, topic: &str, queue_id: i32, size: i32) {}
     pub fn inc_topic_put_latency(&self, topic: &str, queue_id: i32, inc_value: i32) {}
+
+    pub fn tps_group_get_nums(&self, group: &str, topic: &str) -> f64 {
+        let stats_key = build_stats_key(Some(topic), Some(group));
+        match self.stats_table.read().get(Stats::GROUP_GET_NUMS) {
+            Some(stats) => stats.get_stats_data_in_minute(&stats_key).get_tps(),
+            None => 0.0,
+        }
+    }
+}
+
+pub fn build_stats_key(topic: Option<&str>, group: Option<&str>) -> String {
+    let mut str_builder = String::new();
+    if let Some(t) = topic {
+        str_builder.push_str(t);
+    }
+    str_builder.push('@');
+    if let Some(g) = group {
+        str_builder.push_str(g);
+    }
+    str_builder
 }
 
 pub fn create_statistics_kind_meta(
