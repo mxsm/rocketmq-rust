@@ -89,7 +89,7 @@ pub struct MQClientInstance {
 
     service_state: ServiceState,
     pull_message_service: ArcRefCellWrapper<PullMessageService>,
-    rebalance_service: ArcRefCellWrapper<RebalanceService>,
+    rebalance_service: RebalanceService,
     default_mqproducer: ArcRefCellWrapper<DefaultMQProducer>,
     instance_runtime: Arc<RocketMQRuntime>,
     broker_addr_table: Arc<RwLock<HashMap<String, HashMap<i64, String>>>>,
@@ -142,7 +142,7 @@ impl MQClientInstance {
             lock_heartbeat: Default::default(),
             service_state: ServiceState::CreateJust,
             pull_message_service: ArcRefCellWrapper::new(PullMessageService {}),
-            rebalance_service: ArcRefCellWrapper::new(RebalanceService {}),
+            rebalance_service: RebalanceService::new(),
             default_mqproducer: ArcRefCellWrapper::new(
                 DefaultMQProducer::builder()
                     .producer_group(mix_all::CLIENT_INNER_PRODUCER_GROUP)
@@ -186,7 +186,7 @@ impl MQClientInstance {
     }
 
     pub async fn re_balance_immediately(&self) {
-        println!("re_balance_immediately")
+        self.rebalance_service.wakeup();
     }
 
     pub async fn start(&mut self) -> Result<()> {
@@ -204,7 +204,7 @@ impl MQClientInstance {
                 // Start pull service
                 self.pull_message_service.start().await;
                 // Start rebalance service
-                self.rebalance_service.start().await;
+                self.rebalance_service.start(self.clone()).await;
                 // Start push service
                 self.default_mqproducer
                     .default_mqproducer_impl
@@ -687,6 +687,24 @@ impl MQClientInstance {
         drop(producer_table);
         heartbeat_data.is_without_sub = is_without_sub;
         heartbeat_data
+    }
+
+    pub async fn register_consumer(&mut self, group: &str, consumer: impl MQConsumerInner) -> bool {
+        let mut consumer_table = self.consumer_table.write().await;
+        if consumer_table.contains_key(group) {
+            warn!("the consumer group[{}] exist already.", group);
+            return false;
+        }
+        consumer_table.insert(group.to_string(), Box::new(consumer));
+        true
+    }
+
+    pub async fn check_client_in_broker(&mut self) -> Result<()> {
+        unimplemented!()
+    }
+
+    pub async fn do_rebalance(&mut self) -> bool {
+        unimplemented!()
     }
 }
 

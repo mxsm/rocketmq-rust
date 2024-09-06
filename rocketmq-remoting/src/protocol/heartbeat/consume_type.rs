@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 use std::fmt;
+use std::fmt::Display;
 
 use serde::Deserialize;
 use serde::Deserializer;
@@ -85,5 +86,15 @@ impl<'de> Deserialize<'de> for ConsumeType {
         }
 
         deserializer.deserialize_str(ConsumeTypeVisitor)
+    }
+}
+
+impl Display for ConsumeType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ConsumeType::ConsumeActively => write!(f, "PULL"),
+            ConsumeType::ConsumePassively => write!(f, "PUSH"),
+            ConsumeType::ConsumePop => write!(f, "POP"),
+        }
     }
 }

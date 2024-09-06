@@ -14,6 +14,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod consume_message_trace_hook_impl;
-pub mod end_transaction_trace_hook_impl;
-pub mod send_message_trace_hook_impl;
+use std::sync::Arc;
+
+use crate::consumer::pull_result::PullResult;
+
+pub type PullCallbackFn =
+    Arc<dyn Fn(Option<PullResult>, Option<&dyn std::error::Error>) + Send + Sync>;
+
+pub trait PullCallback {
+    fn on_success(&self, pull_result: PullResult);
+    fn on_exception(&self, e: &dyn std::error::Error);
+}

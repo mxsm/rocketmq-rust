@@ -14,6 +14,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod consume_message_trace_hook_impl;
-pub mod end_transaction_trace_hook_impl;
-pub mod send_message_trace_hook_impl;
+use crate::hook::filter_message_context::FilterMessageContext;
+
+pub trait FilterMessageHook {
+    fn hook_name(&self) -> &str;
+
+    fn filter_message(&self, context: Option<&FilterMessageContext>);
+}

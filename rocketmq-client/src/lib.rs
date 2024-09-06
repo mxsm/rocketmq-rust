@@ -22,7 +22,7 @@ use crate::error::MQClientError;
 mod admin;
 pub mod base;
 mod common;
-mod consumer;
+pub mod consumer;
 pub mod error;
 mod factory;
 mod hook;

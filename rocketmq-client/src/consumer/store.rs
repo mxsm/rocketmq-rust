@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod consume_message_trace_hook_impl;
-pub mod end_transaction_trace_hook_impl;
-pub mod send_message_trace_hook_impl;
+pub(crate) mod local_file_offset_store;
+pub(crate) mod offset_store;
+pub(crate) mod read_offset_type;
+pub(crate) mod remote_broker_offset_store;

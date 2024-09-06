@@ -14,6 +14,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod consume_message_trace_hook_impl;
-pub mod end_transaction_trace_hook_impl;
-pub mod send_message_trace_hook_impl;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use rocketmq_common::common::message::message_ext::MessageExt;
+use rocketmq_common::common::message::message_queue::MessageQueue;
+
+use crate::base::access_channel::AccessChannel;
+
+#[derive(Default)]
+pub struct ConsumeMessageContext {
+    pub consumer_group: String,
+    pub msg_list: Vec<MessageExt>,
+    pub mq: Option<MessageQueue>,
+    pub success: bool,
+    pub status: String,
+    pub mq_trace_context: Option<Arc<Box<dyn std::any::Any + Send + Sync>>>,
+    pub props: HashMap<String, String>,
+    pub namespace: String,
+    pub access_channel: AccessChannel,
+}

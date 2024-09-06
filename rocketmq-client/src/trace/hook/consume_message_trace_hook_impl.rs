@@ -14,6 +14,32 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod consume_message_trace_hook_impl;
-pub mod end_transaction_trace_hook_impl;
-pub mod send_message_trace_hook_impl;
+use std::sync::Arc;
+
+use crate::hook::consume_message_context::ConsumeMessageContext;
+use crate::hook::consume_message_hook::ConsumeMessageHook;
+use crate::trace::trace_dispatcher::TraceDispatcher;
+
+pub struct ConsumeMessageTraceHookImpl {
+    trace_dispatcher: Arc<Box<dyn TraceDispatcher + Send + Sync>>,
+}
+
+impl ConsumeMessageTraceHookImpl {
+    pub fn new(trace_dispatcher: Arc<Box<dyn TraceDispatcher + Send + Sync>>) -> Self {
+        Self { trace_dispatcher }
+    }
+}
+
+impl ConsumeMessageHook for ConsumeMessageTraceHookImpl {
+    fn hook_name(&self) -> &str {
+        todo!()
+    }
+
+    fn consume_message_before(&self, context: Option<&ConsumeMessageContext>) {
+        todo!()
+    }
+
+    fn consume_message_after(&self, context: Option<&ConsumeMessageContext>) {
+        todo!()
+    }
+}

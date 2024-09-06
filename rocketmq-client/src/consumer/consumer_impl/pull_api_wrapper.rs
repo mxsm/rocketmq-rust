@@ -14,6 +14,29 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod consume_message_trace_hook_impl;
-pub mod end_transaction_trace_hook_impl;
-pub mod send_message_trace_hook_impl;
+use std::sync::Arc;
+
+use rocketmq_common::ArcRefCellWrapper;
+
+use crate::factory::mq_client_instance::MQClientInstance;
+use crate::hook::filter_message_hook::FilterMessageHook;
+
+#[derive(Clone)]
+pub struct PullAPIWrapper;
+
+impl PullAPIWrapper {
+    pub fn new(
+        mq_client_factory: ArcRefCellWrapper<MQClientInstance>,
+        consumer_group: String,
+        unit_mode: bool,
+    ) -> Self {
+        unimplemented!("PullAPIWrapper::new")
+    }
+
+    pub fn register_filter_message_hook(
+        &mut self,
+        filter_message_hook_list: Vec<Arc<Box<dyn FilterMessageHook + Send + Sync>>>,
+    ) {
+        unimplemented!("PullAPIWrapper::registerFilterMessageHook")
+    }
+}

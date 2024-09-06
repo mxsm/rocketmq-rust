@@ -20,8 +20,9 @@ use serde::Deserializer;
 use serde::Serialize;
 use serde::Serializer;
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
 pub enum AccessChannel {
+    #[default]
     Local,
     Cloud,
 }
