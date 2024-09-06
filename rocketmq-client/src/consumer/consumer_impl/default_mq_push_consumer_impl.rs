@@ -286,7 +286,7 @@ impl DefaultMQPushConsumerImpl {
             .send_heartbeat_to_all_broker_with_lock()
             .await
         {
-            client_instance.rebalance_immediately().await;
+            client_instance.re_balance_immediately().await;
         }
         Ok(())
     }

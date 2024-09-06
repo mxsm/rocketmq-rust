@@ -22,7 +22,7 @@ use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::protocol::body::pop_process_queue_info::PopProcessQueueInfo;
 
 static PULL_MAX_IDLE_TIME: Lazy<u64> = Lazy::new(|| {
-    std::env::var("ROCKETMQ_CLIENT_PULL_PULL_MAX_IDLE_TIME")
+    std::env::var("rocketmq.client.pull.pullMaxIdleTime")
         .unwrap_or_else(|_| "120000".into())
         .parse()
         .unwrap_or(120000)
