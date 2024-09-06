@@ -14,6 +14,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod consume_message_trace_hook_impl;
-pub mod end_transaction_trace_hook_impl;
-pub mod send_message_trace_hook_impl;
+use rocketmq_common::common::message::message_ext::MessageExt;
+use rocketmq_common::common::message::message_queue::MessageQueue;
+
+use crate::base::mq_admin::MQAdmin;
+use crate::Result;
+
+#[trait_variant::make(MQConsumer: Send)]
+pub trait MQConsumerLocal: MQAdmin {
+    async fn send_message_back(
+        &mut self,
+        msg: MessageExt,
+        delay_level: i32,
+        broker_name: &str,
+    ) -> Result<()>;
+
+    async fn fetch_subscribe_message_queues(&mut self, topic: &str) -> Result<Vec<MessageQueue>>;
+}

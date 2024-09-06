@@ -14,6 +14,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod consume_message_trace_hook_impl;
-pub mod end_transaction_trace_hook_impl;
-pub mod send_message_trace_hook_impl;
+use rocketmq_common::common::message::message_queue::MessageQueue;
+
+pub trait AllocateMessageQueueStrategy: Send + Sync {
+    fn allocate(
+        &self,
+        consumer_group: &str,
+        current_cid: &str,
+        mq_all: &[MessageQueue],
+        cid_all: &[String],
+    ) -> Vec<MessageQueue>;
+
+    fn get_name(&self) -> &str;
+}

@@ -14,5 +14,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+pub(crate) mod consume_message_concurrently_service;
+pub(crate) mod consume_message_orderly_service;
+pub(crate) mod consume_message_pop_concurrently_service;
+pub(crate) mod consume_message_pop_orderly_service;
+pub(crate) mod consume_message_service;
+pub(crate) mod default_mq_push_consumer_impl;
+pub(crate) mod pop_process_queue;
+pub(crate) mod process_queue;
+pub(crate) mod pull_api_wrapper;
 pub(crate) mod pull_message_service;
+pub(crate) mod rebalance_impl;
+pub(crate) mod rebalance_push_impl;
 pub(crate) mod rebalance_service;

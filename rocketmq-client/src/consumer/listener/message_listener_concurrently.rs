@@ -14,6 +14,26 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod consume_message_trace_hook_impl;
-pub mod end_transaction_trace_hook_impl;
-pub mod send_message_trace_hook_impl;
+use std::sync::Arc;
+
+use rocketmq_common::common::message::message_ext::MessageExt;
+
+use crate::consumer::listener::consume_concurrently_context::ConsumeConcurrentlyContext;
+use crate::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
+use crate::Result;
+
+pub trait MessageListenerConcurrently: Sync + Send {
+    fn consume_message(
+        &self,
+        msgs: Vec<MessageExt>,
+        context: ConsumeConcurrentlyContext,
+    ) -> Result<ConsumeConcurrentlyStatus>;
+}
+
+pub type ArcBoxMessageListenerConcurrently = Arc<Box<dyn MessageListenerConcurrently>>;
+
+pub type MessageListenerConcurrentlyFn = Arc<
+    dyn Fn(Vec<MessageExt>, ConsumeConcurrentlyContext) -> Result<ConsumeConcurrentlyStatus>
+        + Send
+        + Sync,
+>;

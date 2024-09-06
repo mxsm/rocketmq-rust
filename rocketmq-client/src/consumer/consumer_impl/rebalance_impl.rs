@@ -14,6 +14,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod consume_message_trace_hook_impl;
-pub mod end_transaction_trace_hook_impl;
-pub mod send_message_trace_hook_impl;
+use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+
+pub struct RebalanceImpl;
+
+impl RebalanceImpl {
+    pub fn new() -> Self {
+        RebalanceImpl {}
+    }
+
+    pub async fn put_subscription_data(&self, topic: &str, subscription_data: SubscriptionData) {
+        // TODO
+        unimplemented!("put_subscription_data")
+    }
+}

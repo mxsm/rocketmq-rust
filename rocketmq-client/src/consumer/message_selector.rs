@@ -14,6 +14,33 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod consume_message_trace_hook_impl;
-pub mod end_transaction_trace_hook_impl;
-pub mod send_message_trace_hook_impl;
+
+pub struct MessageSelector {
+    type_: String,
+    expression: String,
+}
+
+impl MessageSelector {
+    fn new(type_: &str, expression: &str) -> Self {
+        Self {
+            r#type_: type_.to_string(),
+            expression: expression.to_string(),
+        }
+    }
+
+    pub fn by_sql(sql: &str) -> Self {
+        Self::new("SQL92", sql)
+    }
+
+    pub fn by_tag(tag: &str) -> Self {
+        Self::new("TAG", tag)
+    }
+
+    pub fn get_expression_type(&self) -> &str {
+        &self.type_
+    }
+
+    pub fn get_expression(&self) -> &str {
+        &self.expression
+    }
+}

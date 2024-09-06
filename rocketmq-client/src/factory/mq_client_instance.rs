@@ -688,6 +688,24 @@ impl MQClientInstance {
         heartbeat_data.is_without_sub = is_without_sub;
         heartbeat_data
     }
+
+    pub async fn register_consumer(&mut self, group: &str, consumer: impl MQConsumerInner) -> bool {
+        let mut consumer_table = self.consumer_table.write().await;
+        if consumer_table.contains_key(group) {
+            warn!("the consumer group[{}] exist already.", group);
+            return false;
+        }
+        consumer_table.insert(group.to_string(), Box::new(consumer));
+        true
+    }
+
+    pub async fn check_client_in_broker(&mut self) -> Result<()> {
+        unimplemented!()
+    }
+
+    pub async fn rebalance_immediately(&mut self) {
+        unimplemented!()
+    }
 }
 
 pub fn topic_route_data2topic_publish_info(

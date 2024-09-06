@@ -14,6 +14,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod consume_message_trace_hook_impl;
-pub mod end_transaction_trace_hook_impl;
-pub mod send_message_trace_hook_impl;
+use std::collections::HashSet;
+
+use rocketmq_common::common::message::message_queue::MessageQueue;
+
+pub trait MessageQueueListener: Send + Sync {
+    fn message_queue_changed(
+        &self,
+        topic: &str,
+        mq_all: &HashSet<MessageQueue>,
+        mq_assigned: &HashSet<MessageQueue>,
+    );
+}

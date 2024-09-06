@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 use std::fmt;
+use std::fmt::Display;
 
 use serde::Deserialize;
 use serde::Deserializer;
@@ -80,5 +81,11 @@ impl<'de> Deserialize<'de> for MessageModel {
         }
 
         deserializer.deserialize_str(MessageModelVisitor)
+    }
+}
+
+impl Display for MessageModel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.get_mode_cn())
     }
 }

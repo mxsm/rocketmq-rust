@@ -32,6 +32,33 @@ pub enum ConsumeFromWhere {
     ConsumeFromTimestamp,
 }
 
+impl From<i32> for ConsumeFromWhere {
+    fn from(value: i32) -> Self {
+        match value {
+            0 => ConsumeFromWhere::ConsumeFromLastOffset,
+            1 => ConsumeFromWhere::ConsumeFromLastOffsetAndFromMinWhenBootFirst,
+            2 => ConsumeFromWhere::ConsumeFromMinOffset,
+            3 => ConsumeFromWhere::ConsumeFromMaxOffset,
+            4 => ConsumeFromWhere::ConsumeFromFirstOffset,
+            5 => ConsumeFromWhere::ConsumeFromTimestamp,
+            _ => ConsumeFromWhere::ConsumeFromLastOffset,
+        }
+    }
+}
+
+impl From<ConsumeFromWhere> for i32 {
+    fn from(consume_from_where: ConsumeFromWhere) -> i32 {
+        match consume_from_where {
+            ConsumeFromWhere::ConsumeFromLastOffset => 0,
+            ConsumeFromWhere::ConsumeFromLastOffsetAndFromMinWhenBootFirst => 1,
+            ConsumeFromWhere::ConsumeFromMinOffset => 2,
+            ConsumeFromWhere::ConsumeFromMaxOffset => 3,
+            ConsumeFromWhere::ConsumeFromFirstOffset => 4,
+            ConsumeFromWhere::ConsumeFromTimestamp => 5,
+        }
+    }
+}
+
 impl Serialize for ConsumeFromWhere {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
