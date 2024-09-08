@@ -36,19 +36,13 @@ static REBALANCE_LOCK_INTERVAL: Lazy<u64> = Lazy::new(|| {
         .unwrap_or(20000)
 });
 
-static PULL_MAX_IDLE_TIME: Lazy<u64> = Lazy::new(|| {
-    std::env::var("rocketmq.client.pull.pullMaxIdleTime")
-        .unwrap_or_else(|_| "120000".into())
-        .parse()
-        .unwrap_or(120000)
-});
-
+#[derive(Clone)]
 pub(crate) struct ProcessQueue {
-    tree_map_lock: RwLock<()>,
+    tree_map_lock: Arc<RwLock<()>>,
     msg_tree_map: Arc<RwLock<std::collections::BTreeMap<i64, MessageExt>>>,
     msg_count: Arc<AtomicI64>,
     msg_size: Arc<AtomicI64>,
-    consume_lock: RwLock<()>,
+    consume_lock: Arc<RwLock<()>>,
     consuming_msg_orderly_tree_map: Arc<RwLock<std::collections::BTreeMap<i64, MessageExt>>>,
     try_unlock_times: Arc<AtomicI64>,
     queue_offset_max: Arc<std::sync::Mutex<i64>>,
@@ -64,11 +58,11 @@ pub(crate) struct ProcessQueue {
 impl ProcessQueue {
     pub(crate) fn new() -> Self {
         ProcessQueue {
-            tree_map_lock: RwLock::new(()),
+            tree_map_lock: Arc::new(RwLock::new(())),
             msg_tree_map: Arc::new(RwLock::new(std::collections::BTreeMap::new())),
             msg_count: Arc::new(AtomicI64::new(0)),
             msg_size: Arc::new(AtomicI64::new(0)),
-            consume_lock: RwLock::new(()),
+            consume_lock: Arc::new(RwLock::new(())),
             consuming_msg_orderly_tree_map: Arc::new(
                 RwLock::new(std::collections::BTreeMap::new()),
             ),

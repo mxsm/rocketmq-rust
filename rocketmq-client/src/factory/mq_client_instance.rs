@@ -22,6 +22,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use rand::seq::SliceRandom;
 use rocketmq_common::common::base::service_state::ServiceState;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::message::message_queue::MessageQueue;
@@ -46,8 +47,9 @@ use tracing::warn;
 
 use crate::admin::mq_admin_ext_inner::MQAdminExtInner;
 use crate::base::client_config::ClientConfig;
+use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
 use crate::consumer::consumer_impl::pull_message_service::PullMessageService;
-use crate::consumer::consumer_impl::rebalance_service::RebalanceService;
+use crate::consumer::consumer_impl::re_balance::rebalance_service::RebalanceService;
 use crate::consumer::mq_consumer_inner::MQConsumerInner;
 use crate::error::MQClientError::MQClientException;
 use crate::implementation::client_remoting_processor::ClientRemotingProcessor;
@@ -60,7 +62,10 @@ use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
 use crate::Result;
 
 #[derive(Clone)]
-pub struct MQClientInstance {
+pub struct MQClientInstance<C = DefaultMQPushConsumerImpl>
+where
+    C: Clone,
+{
     client_config: Arc<ClientConfig>,
     pub(crate) client_id: String,
     boot_timestamp: u64,
@@ -71,9 +76,9 @@ pub struct MQClientInstance {
     producer_table: Arc<RwLock<HashMap<String, Box<dyn MQProducerInner>>>>,
     /**
      * The container of the consumer in the current client. The key is the name of
-     * consumerGroup.
+     * consumer_group.
      */
-    consumer_table: Arc<RwLock<HashMap<String, Box<dyn MQConsumerInner>>>>,
+    consumer_table: Arc<RwLock<HashMap<String, C>>>,
     /**
      * The container of the adminExt in the current client. The key is the name of
      * adminExtGroup.
@@ -98,7 +103,10 @@ pub struct MQClientInstance {
     send_heartbeat_times_total: Arc<AtomicI64>,
 }
 
-impl MQClientInstance {
+impl<C> MQClientInstance<C>
+where
+    C: MQConsumerInner + Clone,
+{
     pub fn new(
         client_config: ClientConfig,
         instance_index: i32,
@@ -187,6 +195,18 @@ impl MQClientInstance {
 
     pub async fn re_balance_immediately(&self) {
         self.rebalance_service.wakeup();
+    }
+
+    pub fn re_balance_later(&self, delay_millis: Duration) {
+        if delay_millis <= Duration::from_millis(0) {
+            self.rebalance_service.wakeup();
+        } else {
+            let service = self.rebalance_service.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(delay_millis).await;
+                service.wakeup();
+            });
+        }
     }
 
     pub async fn start(&mut self) -> Result<()> {
@@ -323,6 +343,26 @@ impl MQClientInstance {
     pub async fn update_topic_route_info_from_name_server_topic(&mut self, topic: &str) -> bool {
         self.update_topic_route_info_from_name_server_default(topic, false, None)
             .await
+    }
+
+    pub async fn find_consumer_id_list(&self, topic: &str, group: &str) -> Option<Vec<String>> {
+        let broker_addr = self.find_broker_addr_by_topic(topic).await?;
+
+        None
+    }
+
+    pub async fn find_broker_addr_by_topic(&self, topic: &str) -> Option<String> {
+        let topic_route_table = self.topic_route_table.read().await;
+        if let Some(topic_route_data) = topic_route_table.get(topic) {
+            let brokers = &topic_route_data.broker_datas;
+            if !brokers.is_empty() {
+                let bd = brokers.choose(&mut rand::thread_rng());
+                if let Some(bd) = bd {
+                    return bd.select_broker_addr();
+                }
+            }
+        }
+        None
     }
 
     pub async fn update_topic_route_info_from_name_server_default(
@@ -689,13 +729,13 @@ impl MQClientInstance {
         heartbeat_data
     }
 
-    pub async fn register_consumer(&mut self, group: &str, consumer: impl MQConsumerInner) -> bool {
+    pub async fn register_consumer(&mut self, group: &str, consumer: C) -> bool {
         let mut consumer_table = self.consumer_table.write().await;
         if consumer_table.contains_key(group) {
             warn!("the consumer group[{}] exist already.", group);
             return false;
         }
-        consumer_table.insert(group.to_string(), Box::new(consumer));
+        consumer_table.insert(group.to_string(), consumer);
         true
     }
 
@@ -704,7 +744,16 @@ impl MQClientInstance {
     }
 
     pub async fn do_rebalance(&mut self) -> bool {
-        unimplemented!()
+        let mut balanced = true;
+        let consumer_table = self.consumer_table.read().await;
+        for (_, value) in consumer_table.iter() {
+            let result = value.try_rebalance().await;
+            if let Err(e) = result {
+                warn!("rebalance exception, {}", e);
+                balanced = false;
+            }
+        }
+        balanced
     }
 }
 

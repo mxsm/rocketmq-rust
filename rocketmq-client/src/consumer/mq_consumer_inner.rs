@@ -23,7 +23,9 @@ use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 
-pub trait MQConsumerInner: Send + Sync + 'static {
+use crate::Result;
+#[trait_variant::make(MQConsumerInner: Send)]
+pub trait MQConsumerInnerLocal: Sync + 'static {
     fn group_name(&self) -> &str;
 
     fn message_model(&self) -> MessageModel;
@@ -36,7 +38,7 @@ pub trait MQConsumerInner: Send + Sync + 'static {
 
     fn do_rebalance(&self);
 
-    fn try_rebalance(&self) -> bool;
+    async fn try_rebalance(&self) -> Result<bool>;
 
     fn persist_consumer_offset(&self);
 

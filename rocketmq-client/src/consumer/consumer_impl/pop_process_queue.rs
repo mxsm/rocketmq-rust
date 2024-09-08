@@ -16,21 +16,17 @@
  */
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
-use once_cell::sync::Lazy;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::protocol::body::pop_process_queue_info::PopProcessQueueInfo;
 
-static PULL_MAX_IDLE_TIME: Lazy<u64> = Lazy::new(|| {
-    std::env::var("rocketmq.client.pull.pullMaxIdleTime")
-        .unwrap_or_else(|_| "120000".into())
-        .parse()
-        .unwrap_or(120000)
-});
+use crate::consumer::consumer_impl::PULL_MAX_IDLE_TIME;
 
+#[derive(Clone)]
 pub(crate) struct PopProcessQueue {
     last_pop_timestamp: u64,
-    wait_ack_counter: AtomicUsize,
+    wait_ack_counter: Arc<AtomicUsize>,
     dropped: bool,
 }
 
@@ -38,7 +34,7 @@ impl PopProcessQueue {
     pub(crate) fn new() -> Self {
         PopProcessQueue {
             last_pop_timestamp: get_current_millis(),
-            wait_ack_counter: AtomicUsize::new(0),
+            wait_ack_counter: Arc::new(AtomicUsize::new(0)),
             dropped: false,
         }
     }

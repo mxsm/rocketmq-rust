@@ -56,8 +56,7 @@ pub struct ConsumerConfig {
     pub(crate) message_model: MessageModel,
     pub(crate) consume_from_where: ConsumeFromWhere,
     pub(crate) consume_timestamp: Option<String>,
-    pub(crate) allocate_message_queue_strategy:
-        Option<Arc<Box<dyn AllocateMessageQueueStrategy + Sync + Send>>>,
+    pub(crate) allocate_message_queue_strategy: Option<Arc<dyn AllocateMessageQueueStrategy>>,
     pub(crate) subscription: ArcRefCellWrapper<HashMap<String, String>>,
     pub(crate) message_listener: Option<ArcRefCellWrapper<MessageListener>>,
     pub(crate) message_queue_listener: Option<Arc<Box<dyn MessageQueueListener>>>,
@@ -104,10 +103,8 @@ impl ConsumerConfig {
         &self.consume_timestamp
     }
 
-    pub fn allocate_message_queue_strategy(
-        &self,
-    ) -> &Option<Arc<Box<dyn AllocateMessageQueueStrategy + Sync + Send>>> {
-        &self.allocate_message_queue_strategy
+    pub fn allocate_message_queue_strategy(&self) -> Option<Arc<dyn AllocateMessageQueueStrategy>> {
+        self.allocate_message_queue_strategy.clone()
     }
 
     pub fn subscription(&self) -> &ArcRefCellWrapper<HashMap<String, String>> {
@@ -236,11 +233,9 @@ impl ConsumerConfig {
 
     pub fn set_allocate_message_queue_strategy(
         &mut self,
-        allocate_message_queue_strategy: Option<
-            Arc<Box<dyn AllocateMessageQueueStrategy + Send + Sync>>,
-        >,
+        allocate_message_queue_strategy: Arc<dyn AllocateMessageQueueStrategy>,
     ) {
-        self.allocate_message_queue_strategy = allocate_message_queue_strategy;
+        self.allocate_message_queue_strategy = Some(allocate_message_queue_strategy);
     }
 
     pub fn set_subscription(&mut self, subscription: ArcRefCellWrapper<HashMap<String, String>>) {

@@ -16,6 +16,7 @@
  */
 #![allow(dead_code)]
 #![allow(unused_variables)]
+extern crate core;
 
 use crate::error::MQClientError;
 

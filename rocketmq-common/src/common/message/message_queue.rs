@@ -17,16 +17,19 @@
 
 use std::cmp::Ordering;
 use std::fmt;
+use std::hash::Hash;
+use std::hash::Hasher;
 
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Hash, Serialize, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageQueue {
     topic: String,
     broker_name: String,
     queue_id: i32,
 }
+
 impl MessageQueue {
     pub fn new() -> Self {
         MessageQueue {
@@ -83,11 +86,47 @@ impl MessageQueue {
     }
 }
 
+impl PartialEq for MessageQueue {
+    fn eq(&self, other: &Self) -> bool {
+        self.topic == other.topic
+            && self.broker_name == other.broker_name
+            && self.queue_id == other.queue_id
+    }
+}
+
+impl Eq for MessageQueue {}
+
+impl Hash for MessageQueue {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.topic.hash(state);
+        self.broker_name.hash(state);
+        self.queue_id.hash(state);
+    }
+}
+
+impl Ord for MessageQueue {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match self.topic.cmp(&other.topic) {
+            Ordering::Equal => match self.broker_name.cmp(&other.broker_name) {
+                Ordering::Equal => self.queue_id.cmp(&other.queue_id),
+                other => other,
+            },
+            other => other,
+        }
+    }
+}
+
+impl PartialOrd for MessageQueue {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 impl fmt::Display for MessageQueue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "MessageQueue [topic={}, brokerName={}, queueId={}]",
+            "MessageQueue [topic={}, broker_name={}, queue_id={}]",
             self.topic, self.broker_name, self.queue_id
         )
     }

@@ -17,6 +17,8 @@
 
 use std::collections::HashMap;
 
+use rand::seq::IteratorRandom;
+use rocketmq_common::common::mix_all;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -100,6 +102,18 @@ impl BrokerData {
 
     pub fn enable_acting_master(&self) -> bool {
         self.enable_acting_master
+    }
+
+    pub fn select_broker_addr(&self) -> Option<String> {
+        let master_address = self.broker_addrs.get(&(mix_all::MASTER_ID as i64)).cloned();
+        if master_address.is_none() {
+            return self
+                .broker_addrs
+                .values()
+                .choose(&mut rand::thread_rng())
+                .cloned();
+        }
+        master_address
     }
 }
 
