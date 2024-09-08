@@ -27,4 +27,5 @@ pub mod mq_push_consumer;
 mod pull_callback;
 mod pull_result;
 mod pull_status;
+pub mod rebalance_strategy;
 mod store;

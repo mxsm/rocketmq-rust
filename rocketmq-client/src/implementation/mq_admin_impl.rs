@@ -19,7 +19,7 @@ use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 
 use crate::base::client_config::ClientConfig;
-use crate::error::MQClientError::MQClientException;
+use crate::error::MQClientError::MQClientErr;
 use crate::factory::mq_client_instance;
 use crate::implementation::mq_client_api_impl::MQClientAPIImpl;
 use crate::Result;
@@ -83,7 +83,7 @@ impl MQAdminImpl {
                 ));
             }
         }
-        Err(MQClientException(
+        Err(MQClientErr(
             -1,
             format!(
                 "Unknow why, Can not find Message Queue for this topic, {}",

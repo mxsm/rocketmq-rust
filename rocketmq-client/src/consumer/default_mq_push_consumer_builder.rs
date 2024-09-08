@@ -27,11 +27,13 @@ use crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrate
 use crate::consumer::default_mq_push_consumer::ConsumerConfig;
 use crate::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
 use crate::consumer::message_queue_listener::MessageQueueListener;
+use crate::consumer::mq_push_consumer::MQPushConsumer;
 use crate::trace::trace_dispatcher::TraceDispatcher;
 
 pub struct DefaultMQPushConsumerBuilder {
     client_config: Option<ClientConfig>,
     consumer_group: Option<String>,
+    topic_sub_expression: (Option<String>, Option<String>),
     message_model: Option<MessageModel>,
     consume_from_where: Option<ConsumeFromWhere>,
     consume_timestamp: Option<String>,
@@ -71,6 +73,7 @@ impl Default for DefaultMQPushConsumerBuilder {
         Self {
             client_config: Some(Default::default()),
             consumer_group: None,
+            topic_sub_expression: (None, None),
             message_model: None,
             consume_from_where: None,
             consume_timestamp: None,
@@ -150,8 +153,13 @@ impl DefaultMQPushConsumerBuilder {
         self
     }
 
-    pub fn subscription(mut self, subscription: HashMap<String, String>) -> Self {
-        self.subscription = Some(ArcRefCellWrapper::new(subscription));
+    pub fn subscribe(
+        mut self,
+        topic: impl Into<String>,
+        sub_expression: impl Into<String>,
+    ) -> Self {
+        self.topic_sub_expression.0 = Some(topic.into());
+        self.topic_sub_expression.1 = Some(sub_expression.into());
         self
     }
 
@@ -318,9 +326,10 @@ impl DefaultMQPushConsumerBuilder {
 
         consumer_config.consume_timestamp = self.consume_timestamp.take();
 
-        consumer_config.allocate_message_queue_strategy =
-            self.allocate_message_queue_strategy.take();
-
+        if self.allocate_message_queue_strategy.is_some() {
+            consumer_config.allocate_message_queue_strategy =
+                self.allocate_message_queue_strategy.take();
+        }
         if let Some(subscription) = self.subscription {
             consumer_config.subscription = subscription;
         }
@@ -401,9 +410,17 @@ impl DefaultMQPushConsumerBuilder {
         }
         consumer_config.rpc_hook = self.rpc_hook.clone();
 
-        DefaultMQPushConsumer::new(
+        let mut consumer = DefaultMQPushConsumer::new(
             self.client_config.take().unwrap_or_default(),
             consumer_config,
-        )
+        );
+        if self.topic_sub_expression.0.is_some() && self.topic_sub_expression.1.is_some() {
+            let topic = self.topic_sub_expression.0.take().unwrap();
+            let sub_expression = self.topic_sub_expression.1.take().unwrap();
+            consumer
+                .subscribe(&topic, &sub_expression)
+                .expect("subscribe failed");
+        }
+        consumer
     }
 }

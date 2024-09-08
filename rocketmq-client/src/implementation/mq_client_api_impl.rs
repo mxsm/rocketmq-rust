@@ -215,18 +215,18 @@ impl MQClientAPIImpl {
                         }
                     }
                     _ => {
-                        return Err(MQClientError::MQClientException(
+                        return Err(MQClientError::MQClientErr(
                             code,
                             result.remark().cloned().unwrap_or_default(),
                         ))
                     }
                 }
-                return Err(MQClientError::MQClientException(
+                return Err(MQClientError::MQClientErr(
                     code,
                     result.remark().cloned().unwrap_or_default(),
                 ));
             }
-            Err(err) => Err(MQClientError::RemotingException(err)),
+            Err(err) => Err(MQClientError::RemotingError(err)),
         }
     }
 
@@ -300,7 +300,7 @@ impl MQClientAPIImpl {
             CommunicationMode::Sync => {
                 let cost_time_sync = (Instant::now() - begin_start_time).as_millis() as u64;
                 if cost_time_sync > timeout_millis {
-                    return Err(MQClientError::RemotingTooMuchRequestException(
+                    return Err(MQClientError::RemotingTooMuchRequestError(
                         "sendMessage call timeout".to_string(),
                     ));
                 }
@@ -319,7 +319,7 @@ impl MQClientAPIImpl {
                 let times = AtomicU32::new(0);
                 let cost_time_sync = (Instant::now() - begin_start_time).as_millis() as u64;
                 if cost_time_sync > timeout_millis {
-                    return Err(MQClientError::RemotingTooMuchRequestException(
+                    return Err(MQClientError::RemotingTooMuchRequestError(
                         "sendMessage call timeout".to_string(),
                     ));
                 }
@@ -489,7 +489,7 @@ impl MQClientAPIImpl {
             ResponseCode::SlaveNotAvailable => SendStatus::SlaveNotAvailable,
             ResponseCode::Success => SendStatus::SendOk,
             _ => {
-                return Err(MQClientError::MQBrokerException(
+                return Err(MQClientError::MQBrokerError(
                     response.code(),
                     response.remark().map_or("".to_string(), |s| s.to_string()),
                     addr.to_string(),
@@ -629,7 +629,7 @@ impl MQClientAPIImpl {
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             return Ok(response.version());
         }
-        Err(MQClientError::MQBrokerException(
+        Err(MQClientError::MQBrokerError(
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string()),
             addr.to_string(),

@@ -59,9 +59,9 @@ use crate::base::client_config::ClientConfig;
 use crate::base::validators::Validators;
 use crate::common::client_error_code::ClientErrorCode;
 use crate::error::MQClientError;
-use crate::error::MQClientError::MQClientException;
-use crate::error::MQClientError::RemotingTooMuchRequestException;
-use crate::error::MQClientError::RequestTimeoutException;
+use crate::error::MQClientError::MQClientErr;
+use crate::error::MQClientError::RemotingTooMuchRequestError;
+use crate::error::MQClientError::RequestTimeoutError;
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::hook::check_forbidden_context::CheckForbiddenContext;
 use crate::hook::check_forbidden_hook::CheckForbiddenHook;
@@ -242,7 +242,7 @@ impl DefaultMQProducerImpl {
         Validators::check_message(Some(&msg), self.producer_config.as_ref())?;
 
         if msg.get_topic() != mq.get_topic() {
-            return Err(MQClientError::MQClientException(
+            return Err(MQClientError::MQClientErr(
                 -1,
                 format!(
                     "message topic [{}] is not equal with message queue topic [{}]",
@@ -253,7 +253,7 @@ impl DefaultMQProducerImpl {
         }
         let cost_time = begin_start_time.elapsed().as_millis() as u64;
         if timeout < cost_time {
-            return Err(MQClientError::RequestTimeoutException(
+            return Err(MQClientError::RequestTimeoutError(
                 -1,
                 format!(
                     "send message timeout {}ms is required, but {}ms is given",
@@ -316,7 +316,7 @@ impl DefaultMQProducerImpl {
             if timeout <= cost_time {
                 send_callback_clone.as_ref().unwrap()(
                     None,
-                    Some(&RemotingTooMuchRequestException("call timeout".to_string())),
+                    Some(&RemotingTooMuchRequestError("call timeout".to_string())),
                 );
             }
             clone_self
@@ -396,7 +396,7 @@ impl DefaultMQProducerImpl {
                 let message_queue = selector(&message_queue_list, &msg, &arg);
                 let cost_time = begin_start_time.elapsed().as_millis() as u64;
                 if timeout < cost_time {
-                    return Err(MQClientError::RemotingTooMuchRequestException(
+                    return Err(MQClientError::RemotingTooMuchRequestError(
                         "sendSelectImpl call timeout".to_string(),
                     ));
                 }
@@ -412,14 +412,14 @@ impl DefaultMQProducerImpl {
                         )
                         .await;
                 }
-                return Err(MQClientError::MQClientException(
+                return Err(MQClientError::MQClientErr(
                     -1,
                     "select message queue return null.".to_string(),
                 ));
             }
         }
         self.validate_name_server_setting()?;
-        Err(MQClientError::MQClientException(
+        Err(MQClientError::MQClientErr(
             -1,
             format!("No route info for this topic, {}", msg.get_topic()),
         ))
@@ -452,7 +452,7 @@ impl DefaultMQProducerImpl {
             if msg.get_topic() != mq.get_topic() {
                 send_callback_inner.as_ref().unwrap()(
                     None,
-                    Some(&MQClientError::MQClientException(
+                    Some(&MQClientError::MQClientErr(
                         -1,
                         format!(
                             "message topic [{}] is not equal with message queue topic [{}]",
@@ -468,7 +468,7 @@ impl DefaultMQProducerImpl {
             if timeout <= cost_time {
                 send_callback_inner.as_ref().unwrap()(
                     None,
-                    Some(&RemotingTooMuchRequestException("call timeout".to_string())),
+                    Some(&RemotingTooMuchRequestError("call timeout".to_string())),
                 );
             }
             let result = producer_impl
@@ -515,7 +515,7 @@ impl DefaultMQProducerImpl {
             if timeout <= cost_time {
                 send_callback_inner.as_ref().unwrap()(
                     None,
-                    Some(&RemotingTooMuchRequestException(
+                    Some(&RemotingTooMuchRequestError(
                         "asyncSend call timeout".to_string(),
                     )),
                 );
@@ -562,7 +562,7 @@ impl DefaultMQProducerImpl {
             if !is_semaphore_async_numb_acquired {
                 send_callback.as_ref().unwrap()(
                     None,
-                    Some(&RemotingTooMuchRequestException(
+                    Some(&RemotingTooMuchRequestError(
                         "send message tryAcquire semaphoreAsyncNum timeout".to_string(),
                     )),
                 );
@@ -579,7 +579,7 @@ impl DefaultMQProducerImpl {
                     Err(_) => {
                         send_callback.as_ref().unwrap()(
                             None,
-                            Some(&RemotingTooMuchRequestException(
+                            Some(&RemotingTooMuchRequestError(
                                 "send message tryAcquire semaphoreAsyncNum timeout".to_string(),
                             )),
                         );
@@ -589,7 +589,7 @@ impl DefaultMQProducerImpl {
                 Err(_) => {
                     send_callback.as_ref().unwrap()(
                         None,
-                        Some(&RemotingTooMuchRequestException(
+                        Some(&RemotingTooMuchRequestError(
                             "send message tryAcquire semaphoreAsyncNum timeout".to_string(),
                         )),
                     );
@@ -603,7 +603,7 @@ impl DefaultMQProducerImpl {
             if !is_semaphore_async_size_acquired {
                 send_callback.as_ref().unwrap()(
                     None,
-                    Some(&RemotingTooMuchRequestException(
+                    Some(&RemotingTooMuchRequestError(
                         "send message tryAcquire semaphoreAsyncSize timeout".to_string(),
                     )),
                 );
@@ -620,7 +620,7 @@ impl DefaultMQProducerImpl {
                     Err(_) => {
                         send_callback.as_ref().unwrap()(
                             None,
-                            Some(&RemotingTooMuchRequestException(
+                            Some(&RemotingTooMuchRequestError(
                                 "send message tryAcquire semaphoreAsyncSize timeout".to_string(),
                             )),
                         );
@@ -630,7 +630,7 @@ impl DefaultMQProducerImpl {
                 Err(_) => {
                     send_callback.as_ref().unwrap()(
                         None,
-                        Some(&RemotingTooMuchRequestException(
+                        Some(&RemotingTooMuchRequestError(
                             "send message tryAcquire semaphoreAsyncSize timeout".to_string(),
                         )),
                     );
@@ -761,7 +761,7 @@ impl DefaultMQProducerImpl {
                                 };
                             }
                             Err(err) => match err {
-                                MQClientError::MQClientException(_, _) => {
+                                MQClientError::MQClientErr(_, _) => {
                                     end_timestamp = Instant::now();
                                     let elapsed =
                                         (end_timestamp - begin_timestamp_prev).as_millis() as u64;
@@ -783,7 +783,7 @@ impl DefaultMQProducerImpl {
                                     exception = Some(err);
                                     continue;
                                 }
-                                MQClientError::MQBrokerException(code, _, _) => {
+                                MQClientError::MQBrokerError(code, _, _) => {
                                     end_timestamp = Instant::now();
                                     let elapsed =
                                         (end_timestamp - begin_timestamp_prev).as_millis() as u64;
@@ -803,7 +803,7 @@ impl DefaultMQProducerImpl {
                                         return Err(err);
                                     }
                                 }
-                                MQClientError::RemotingException(_) => {
+                                MQClientError::RemotingError(_) => {
                                     end_timestamp = Instant::now();
                                     let elapsed =
                                         (end_timestamp - begin_timestamp_prev).as_millis() as u64;
@@ -840,7 +840,7 @@ impl DefaultMQProducerImpl {
                 }
 
                 if call_timeout {
-                    return Err(MQClientError::RemotingTooMuchRequestException(
+                    return Err(MQClientError::RemotingTooMuchRequestError(
                         "sendDefaultImpl call timeout".to_string(),
                     ));
                 }
@@ -856,38 +856,41 @@ impl DefaultMQProducerImpl {
 
                 return if let Some(err) = exception {
                     match err {
-                        MQClientError::MQClientException(_, _) => Err(MQClientException(
+                        MQClientError::MQClientErr(_, _) => Err(MQClientErr(
                             ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION,
                             info,
                         )),
-                        RemotingTooMuchRequestException(_) => Err(MQClientException(
+                        RemotingTooMuchRequestError(_) => Err(MQClientErr(
                             ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION,
                             info,
                         )),
-                        MQClientError::MQBrokerException(_, _, _) => Err(MQClientException(
+                        MQClientError::MQBrokerError(_, _, _) => Err(MQClientErr(
                             ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION,
                             info,
                         )),
-                        MQClientError::RequestTimeoutException(_, _) => Err(MQClientException(
+                        MQClientError::RequestTimeoutError(_, _) => Err(MQClientErr(
                             ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION,
                             info,
                         )),
-                        MQClientError::OffsetNotFoundException(_, _, _) => Err(MQClientException(
+                        MQClientError::OffsetNotFoundError(_, _, _) => Err(MQClientErr(
                             ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION,
                             info,
                         )),
-                        MQClientError::RemotingException(_) => Err(MQClientException(
+                        MQClientError::RemotingError(_) => Err(MQClientErr(
                             ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION,
                             info,
                         )),
+                        _ => {
+                            unimplemented!("not support error type");
+                        }
                     }
                 } else {
-                    Err(MQClientException(-1, info))
+                    Err(MQClientErr(-1, info))
                 };
             }
         }
         self.validate_name_server_setting()?;
-        Err(MQClientException(
+        Err(MQClientErr(
             ClientErrorCode::NOT_FOUND_TOPIC_EXCEPTION,
             format!(
                 "No route info of this topic:{},{}",
@@ -955,7 +958,7 @@ impl DefaultMQProducerImpl {
         }
 
         if broker_addr.is_none() {
-            return Err(MQClientError::MQClientException(
+            return Err(MQClientError::MQClientErr(
                 -1,
                 format!("The broker[{}] not exist", broker_name,),
             ));
@@ -1124,7 +1127,7 @@ impl DefaultMQProducerImpl {
             CommunicationMode::Oneway | CommunicationMode::Sync => {
                 let cost_time_sync = (Instant::now() - begin_start_time).as_millis() as u64;
                 if timeout < cost_time_sync {
-                    return Err(RemotingTooMuchRequestException(
+                    return Err(RemotingTooMuchRequestError(
                         "sendKernelImpl call timeout".to_string(),
                     ));
                 }
@@ -1240,7 +1243,7 @@ impl DefaultMQProducerImpl {
             .get_mq_client_api_impl();
         let ns_list = binding.get_name_server_address_list();
         if ns_list.is_empty() {
-            return Err(MQClientError::MQClientException(
+            return Err(MQClientError::MQClientErr(
                 ClientErrorCode::NO_NAME_SERVER_EXCEPTION,
                 format!(
                     "No name remoting_server address, please set it. {}",
@@ -1291,7 +1294,7 @@ impl DefaultMQProducerImpl {
 
     fn make_sure_state_ok(&self) -> Result<()> {
         if self.service_state != ServiceState::Running {
-            return Err(MQClientError::MQClientException(
+            return Err(MQClientError::MQClientErr(
                 -1,
                 format!(
                     "The producer service state not OK, {:?} {}",
@@ -1341,21 +1344,21 @@ impl DefaultMQProducerImpl {
                 let message_queue = selector(&message_queue_list, msg, arg);
                 let cost_time = begin_start_time.elapsed().as_millis() as u64;
                 if timeout < cost_time {
-                    return Err(MQClientError::RemotingTooMuchRequestException(
+                    return Err(MQClientError::RemotingTooMuchRequestError(
                         "sendSelectImpl call timeout".to_string(),
                     ));
                 }
                 if let Some(message_queue) = message_queue {
                     return Ok(message_queue);
                 }
-                return Err(MQClientError::MQClientException(
+                return Err(MQClientError::MQClientErr(
                     -1,
                     "select message queue return None.".to_string(),
                 ));
             }
         }
         self.validate_name_server_setting();
-        Err(MQClientException(
+        Err(MQClientErr(
             -1,
             "select message queue return null.".to_string(),
         ))
@@ -1433,9 +1436,8 @@ impl DefaultMQProducerImpl {
             if let Some(error) = err {
                 request_response_future_inner.set_send_request_ok(false);
                 request_response_future_inner.put_response_message(None);
-                request_response_future_inner.set_cause(Box::new(
-                    MQClientError::MQClientException(-1, error.to_string()),
-                ));
+                request_response_future_inner
+                    .set_cause(Box::new(MQClientError::MQClientErr(-1, error.to_string())));
             }
         };
         let topic = msg.get_topic().to_string();
@@ -1497,10 +1499,8 @@ impl DefaultMQProducerImpl {
                 return;
             }
             if let Some(error) = err {
-                request_response_future.set_cause(Box::new(MQClientError::MQClientException(
-                    -1,
-                    error.to_string(),
-                )));
+                request_response_future
+                    .set_cause(Box::new(MQClientError::MQClientErr(-1, error.to_string())));
                 Self::request_fail(correlation_id.as_str());
             }
         };
@@ -1550,9 +1550,8 @@ impl DefaultMQProducerImpl {
             if let Some(error) = err {
                 request_response_future_inner.set_send_request_ok(false);
                 request_response_future_inner.put_response_message(None);
-                request_response_future_inner.set_cause(Box::new(
-                    MQClientError::MQClientException(-1, error.to_string()),
-                ));
+                request_response_future_inner
+                    .set_cause(Box::new(MQClientError::MQClientErr(-1, error.to_string())));
             }
         };
         let topic = msg.get_topic().to_string();
@@ -1607,10 +1606,8 @@ impl DefaultMQProducerImpl {
                 return;
             }
             if let Some(error) = err {
-                request_response_future.set_cause(Box::new(MQClientError::MQClientException(
-                    -1,
-                    error.to_string(),
-                )));
+                request_response_future
+                    .set_cause(Box::new(MQClientError::MQClientErr(-1, error.to_string())));
                 Self::request_fail(correlation_id.as_str());
             }
         };
@@ -1658,10 +1655,8 @@ impl DefaultMQProducerImpl {
                 return;
             }
             if let Some(error) = err {
-                request_response_future.set_cause(Box::new(MQClientError::MQClientException(
-                    -1,
-                    error.to_string(),
-                )));
+                request_response_future
+                    .set_cause(Box::new(MQClientError::MQClientErr(-1, error.to_string())));
                 Self::request_fail(correlation_id.as_str());
             }
         };
@@ -1715,9 +1710,8 @@ impl DefaultMQProducerImpl {
             if let Some(error) = err {
                 //request_response_future_inner.set_send_request_ok(false);
                 request_response_future_inner.put_response_message(None);
-                request_response_future_inner.set_cause(Box::new(
-                    MQClientError::MQClientException(-1, error.to_string()),
-                ));
+                request_response_future_inner
+                    .set_cause(Box::new(MQClientError::MQClientErr(-1, error.to_string())));
             }
         };
         let topic = msg.get_topic().to_string();
@@ -1754,7 +1748,7 @@ impl DefaultMQProducerImpl {
         if let Some(response_message) = response_message {
             Ok(response_message)
         } else if request_response_future.is_send_request_ok().await {
-            Err(RequestTimeoutException(
+            Err(RequestTimeoutError(
                 ClientErrorCode::REQUEST_TIMEOUT_EXCEPTION,
                 format!(
                     "send request message to <{}> OK, but wait reply message timeout, {} ms.",
@@ -1762,7 +1756,7 @@ impl DefaultMQProducerImpl {
                 ),
             ))
         } else {
-            Err(MQClientException(
+            Err(MQClientErr(
                 -1,
                 format!(
                     "send request message to <{}> fail, {}",
@@ -1992,7 +1986,7 @@ impl DefaultMQProducerImpl {
                     .await;
                 if !register_ok {
                     self.service_state = ServiceState::CreateJust;
-                    return Err(MQClientError::MQClientException(
+                    return Err(MQClientError::MQClientErr(
                         -1,
                         format!(
                             "The producer group[{}] has been created before, specify another name \
@@ -2012,19 +2006,19 @@ impl DefaultMQProducerImpl {
                 self.service_state = ServiceState::Running;
             }
             ServiceState::Running => {
-                return Err(MQClientError::MQClientException(
+                return Err(MQClientError::MQClientErr(
                     -1,
                     "The producer service state is Running".to_string(),
                 ));
             }
             ServiceState::ShutdownAlready => {
-                return Err(MQClientError::MQClientException(
+                return Err(MQClientError::MQClientErr(
                     -1,
                     "The producer service state is ShutdownAlready".to_string(),
                 ));
             }
             ServiceState::StartFailed => {
-                return Err(MQClientError::MQClientException(
+                return Err(MQClientError::MQClientErr(
                     -1,
                     format!(
                         "The producer service state not OK, maybe started once,{:?},{}",
@@ -2049,7 +2043,7 @@ impl DefaultMQProducerImpl {
     fn check_config(&self) -> Result<()> {
         Validators::check_group(self.producer_config.producer_group())?;
         if self.producer_config.producer_group() == DEFAULT_PRODUCER_GROUP {
-            return Err(MQClientError::MQClientException(
+            return Err(MQClientError::MQClientErr(
                 -1,
                 format!(
                     "The specified group name[{}] is equal to default group, please specify \

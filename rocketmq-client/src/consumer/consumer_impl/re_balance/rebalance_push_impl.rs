@@ -26,6 +26,7 @@ use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 
 use crate::base::client_config::ClientConfig;
 use crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
+use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
 use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
 use crate::consumer::consumer_impl::pop_request::PopRequest;
 use crate::consumer::consumer_impl::process_queue::ProcessQueue;
@@ -38,27 +39,39 @@ use crate::Result;
 
 pub struct RebalancePushImpl {
     client_config: ClientConfig,
-    consumer_config: ConsumerConfig,
+    consumer_config: ArcRefCellWrapper<ConsumerConfig>,
     rebalance_impl: RebalanceImpl<RebalancePushImpl>,
+    default_mqpush_consumer_impl: Option<WeakCellWrapper<DefaultMQPushConsumerImpl>>,
 }
 
 impl RebalancePushImpl {
-    pub fn new(client_config: ClientConfig, consumer_config: ConsumerConfig) -> Self {
+    pub fn new(
+        client_config: ClientConfig,
+        consumer_config: ArcRefCellWrapper<ConsumerConfig>,
+    ) -> Self {
         RebalancePushImpl {
             client_config,
             consumer_config,
             rebalance_impl: RebalanceImpl::new(None, None, None, None),
+            default_mqpush_consumer_impl: None,
         }
     }
 }
 
 impl RebalancePushImpl {
+    pub fn set_default_mqpush_consumer_impl(
+        &mut self,
+        default_mqpush_consumer_impl: WeakCellWrapper<DefaultMQPushConsumerImpl>,
+    ) {
+        self.default_mqpush_consumer_impl = Some(default_mqpush_consumer_impl);
+    }
+
     pub fn set_consumer_group(&mut self, consumer_group: String) {
-        todo!()
+        self.rebalance_impl.consumer_group = Some(consumer_group);
     }
 
     pub fn set_message_model(&mut self, message_model: MessageModel) {
-        todo!()
+        self.rebalance_impl.message_model = Some(message_model);
     }
 
     pub fn set_allocate_message_queue_strategy(
@@ -68,11 +81,8 @@ impl RebalancePushImpl {
         self.rebalance_impl.allocate_message_queue_strategy = Some(allocate_message_queue_strategy);
     }
 
-    pub fn set_mq_client_factory(
-        &mut self,
-        mq_client_factory: ArcRefCellWrapper<MQClientInstance>,
-    ) {
-        todo!()
+    pub fn set_mq_client_factory(&mut self, client_instance: ArcRefCellWrapper<MQClientInstance>) {
+        self.rebalance_impl.client_instance = Some(client_instance);
     }
 
     pub async fn put_subscription_data(
@@ -80,12 +90,23 @@ impl RebalancePushImpl {
         topic: &str,
         subscription_data: SubscriptionData,
     ) {
-        // TODO
-        unimplemented!("put_subscription_data")
+        let mut subscription_inner = self.rebalance_impl.subscription_inner.write().await;
+        subscription_inner.insert(topic.to_string(), subscription_data);
     }
 
-    pub fn client_rebalance(&mut self, topic: &str) -> bool {
-        true
+    pub fn client_rebalance(&self, topic: &str) -> bool {
+        self.consumer_config.client_rebalance
+            || self.rebalance_impl.message_model.unwrap() == MessageModel::Broadcasting
+            || if let Some(default_mqpush_consumer_impl) = self
+                .default_mqpush_consumer_impl
+                .as_ref()
+                .unwrap()
+                .upgrade()
+            {
+                default_mqpush_consumer_impl.is_consume_orderly()
+            } else {
+                false
+            }
     }
 
     pub fn set_rebalance_impl(&mut self, rebalance_impl: WeakCellWrapper<RebalancePushImpl>) {
@@ -140,12 +161,13 @@ impl Rebalance for RebalancePushImpl {
         todo!()
     }
 
+    #[inline]
     fn create_process_queue(&self) -> ProcessQueue {
-        todo!()
+        ProcessQueue::new()
     }
 
     fn create_pop_process_queue(&self) -> PopProcessQueue {
-        todo!()
+        PopProcessQueue::new()
     }
 
     fn remove_process_queue(&self, mq: MessageQueue) {
