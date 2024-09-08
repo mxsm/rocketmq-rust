@@ -17,6 +17,7 @@
 
 use std::collections::HashSet;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use rocketmq_common::common::base::service_state::ServiceState;
@@ -44,7 +45,7 @@ use crate::consumer::consumer_impl::consume_message_service::ConsumeMessageConcu
 use crate::consumer::consumer_impl::consume_message_service::ConsumeMessageOrderlyServiceGeneral;
 use crate::consumer::consumer_impl::consume_message_service::ConsumeMessageServiceTrait;
 use crate::consumer::consumer_impl::pull_api_wrapper::PullAPIWrapper;
-use crate::consumer::consumer_impl::rebalance_push_impl::RebalancePushImpl;
+use crate::consumer::consumer_impl::re_balance::rebalance_push_impl::RebalancePushImpl;
 use crate::consumer::default_mq_push_consumer::ConsumerConfig;
 use crate::consumer::listener::message_listener::MessageListener;
 use crate::consumer::mq_consumer_inner::MQConsumerInner;
@@ -76,7 +77,7 @@ pub struct DefaultMQPushConsumerImpl {
     filter_message_hook_list: Vec<Arc<Box<dyn FilterMessageHook + Send + Sync>>>,
     rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
     service_state: ServiceState,
-    mq_client_factory: Option<ArcRefCellWrapper<MQClientInstance>>,
+    mq_client_factory: Option<ArcRefCellWrapper<MQClientInstance<DefaultMQPushConsumerImpl>>>,
     pull_api_wrapper: Option<ArcRefCellWrapper<PullAPIWrapper>>,
     pause: Arc<AtomicBool>,
     consume_orderly: bool,
@@ -109,10 +110,13 @@ impl DefaultMQPushConsumerImpl {
         consumer_config: ConsumerConfig,
         rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
     ) -> Self {
-        Self {
-            client_config,
-            consumer_config,
-            rebalance_impl: ArcRefCellWrapper::new(RebalancePushImpl),
+        let mut this = Self {
+            client_config: client_config.clone(),
+            consumer_config: consumer_config.clone(),
+            rebalance_impl: ArcRefCellWrapper::new(RebalancePushImpl::new(
+                client_config,
+                consumer_config,
+            )),
             filter_message_hook_list: vec![],
             rpc_hook,
             service_state: ServiceState::CreateJust,
@@ -129,7 +133,10 @@ impl DefaultMQPushConsumerImpl {
             pop_delay_level: Arc::new([
                 10, 30, 60, 120, 180, 240, 300, 360, 420, 480, 540, 600, 1200, 1800, 3600, 7200,
             ]),
-        }
+        };
+        let wrapper = ArcRefCellWrapper::downgrade(&this.rebalance_impl);
+        this.rebalance_impl.set_rebalance_impl(wrapper);
+        this
     }
 }
 
@@ -138,7 +145,7 @@ impl DefaultMQPushConsumerImpl {
         match self.service_state {
             ServiceState::CreateJust => {
                 info!(
-                    "the consumer [{}] start beginning. messageModel={}, isUnitMode={}",
+                    "the consumer [{}] start beginning. message_model={}, isUnitMode={}",
                     self.consumer_config.consumer_group,
                     self.consumer_config.message_model,
                     self.consumer_config.unit_mode
@@ -160,7 +167,12 @@ impl DefaultMQPushConsumerImpl {
                 self.rebalance_impl
                     .set_message_model(self.consumer_config.message_model);
                 self.rebalance_impl.set_allocate_message_queue_strategy(
-                    self.consumer_config.allocate_message_queue_strategy.clone(),
+                    self.consumer_config
+                        .allocate_message_queue_strategy
+                        .clone()
+                        .expect(
+                            "allocate_message_queue_strategy is null, please set it before start",
+                        ),
                 );
                 self.rebalance_impl
                     .set_mq_client_factory(client_instance.clone());
@@ -249,7 +261,7 @@ impl DefaultMQPushConsumerImpl {
 
                 self.mq_client_factory.as_mut().unwrap().start().await?;
                 info!(
-                    "the consumer [{}] start OK, messageModel={}, isUnitMode={}",
+                    "the consumer [{}] start OK, message_model={}, isUnitMode={}",
                     self.consumer_config.consumer_group,
                     self.consumer_config.message_model,
                     self.consumer_config.unit_mode
@@ -301,7 +313,7 @@ impl DefaultMQPushConsumerImpl {
             return Err(MQClientError::MQClientException(
                 -1,
                 format!(
-                    "consumerGroup is empty, {}",
+                    "consumer_group is empty, {}",
                     FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
                 ),
             ));
@@ -311,7 +323,7 @@ impl DefaultMQPushConsumerImpl {
             return Err(MQClientError::MQClientException(
                 -1,
                 format!(
-                    "consumerGroup can not equal {} please specify another one.{}",
+                    "consumer_group can not equal {} please specify another one.{}",
                     DEFAULT_CONSUMER_GROUP,
                     FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
                 ),
@@ -340,7 +352,7 @@ impl DefaultMQPushConsumerImpl {
             return Err(MQClientError::MQClientException(
                 -1,
                 format!(
-                    "allocateMessageQueueStrategy is null{}",
+                    "allocate_message_queue_strategy is null{}",
                     FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
                 ),
             ));
@@ -611,8 +623,11 @@ impl MQConsumerInner for DefaultMQPushConsumerImpl {
         todo!()
     }
 
-    fn try_rebalance(&self) -> bool {
-        todo!()
+    async fn try_rebalance(&self) -> Result<bool> {
+        if !self.pause.load(Ordering::Acquire) {
+            //self.rebalance_impl.do
+        }
+        unimplemented!()
     }
 
     fn persist_consumer_offset(&self) {

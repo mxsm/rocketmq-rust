@@ -16,6 +16,8 @@
  */
 use rocketmq_common::common::message::message_queue::MessageQueue;
 
+use crate::Result;
+
 pub trait AllocateMessageQueueStrategy: Send + Sync {
     fn allocate(
         &self,
@@ -23,7 +25,7 @@ pub trait AllocateMessageQueueStrategy: Send + Sync {
         current_cid: &str,
         mq_all: &[MessageQueue],
         cid_all: &[String],
-    ) -> Vec<MessageQueue>;
+    ) -> Result<Vec<MessageQueue>>;
 
     fn get_name(&self) -> &str;
 }

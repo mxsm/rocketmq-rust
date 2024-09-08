@@ -35,8 +35,7 @@ pub struct DefaultMQPushConsumerBuilder {
     message_model: Option<MessageModel>,
     consume_from_where: Option<ConsumeFromWhere>,
     consume_timestamp: Option<String>,
-    allocate_message_queue_strategy:
-        Option<Arc<Box<dyn AllocateMessageQueueStrategy + Sync + Send>>>,
+    allocate_message_queue_strategy: Option<Arc<dyn AllocateMessageQueueStrategy>>,
     subscription: Option<ArcRefCellWrapper<HashMap<String, String>>>,
 
     message_queue_listener: Option<Arc<Box<dyn MessageQueueListener>>>,
@@ -145,11 +144,9 @@ impl DefaultMQPushConsumerBuilder {
 
     pub fn allocate_message_queue_strategy(
         mut self,
-        allocate_message_queue_strategy: Option<
-            Arc<Box<dyn AllocateMessageQueueStrategy + Sync + Send>>,
-        >,
+        allocate_message_queue_strategy: Arc<dyn AllocateMessageQueueStrategy>,
     ) -> Self {
-        self.allocate_message_queue_strategy = allocate_message_queue_strategy;
+        self.allocate_message_queue_strategy = Some(allocate_message_queue_strategy);
         self
     }
 

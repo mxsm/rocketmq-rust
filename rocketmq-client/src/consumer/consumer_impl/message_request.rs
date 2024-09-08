@@ -14,17 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+use rocketmq_common::common::message::message_enum::MessageRequestMode;
 
-pub struct RebalanceImpl;
-
-impl RebalanceImpl {
-    pub fn new() -> Self {
-        RebalanceImpl {}
-    }
-
-    pub async fn put_subscription_data(&self, topic: &str, subscription_data: SubscriptionData) {
-        // TODO
-        unimplemented!("put_subscription_data")
-    }
+pub trait MessageRequest {
+    fn get_message_request_mode(&self) -> MessageRequestMode;
 }
