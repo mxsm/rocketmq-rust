@@ -46,7 +46,7 @@ pub(crate) struct RebalanceImpl<R> {
     pub(crate) consumer_group: Option<String>,
     pub(crate) message_model: Option<MessageModel>,
     pub(crate) allocate_message_queue_strategy: Option<Arc<dyn AllocateMessageQueueStrategy>>,
-    pub(crate) mqclient_instance: Option<ArcRefCellWrapper<MQClientInstance>>,
+    pub(crate) client_instance: Option<ArcRefCellWrapper<MQClientInstance>>,
     pub(crate) sub_rebalance_impl: Option<WeakCellWrapper<R>>,
 }
 
@@ -68,7 +68,7 @@ where
             consumer_group,
             message_model,
             allocate_message_queue_strategy,
-            mqclient_instance,
+            client_instance: mqclient_instance,
             sub_rebalance_impl: None,
         }
     }
@@ -130,7 +130,7 @@ where
                 let topic_subscribe_info_table_inner = self.topic_subscribe_info_table.read().await;
                 let mq_set = topic_subscribe_info_table_inner.get(topic);
                 let ci_all = self
-                    .mqclient_instance
+                    .client_instance
                     .as_ref()
                     .unwrap()
                     .find_consumer_id_list(topic, self.consumer_group.as_ref().unwrap())
@@ -171,7 +171,7 @@ where
                         .unwrap()
                         .allocate(
                             self.consumer_group.as_ref().unwrap(),
-                            self.mqclient_instance.as_ref().unwrap().client_id.as_ref(),
+                            self.client_instance.as_ref().unwrap().client_id.as_ref(),
                             mq_all.as_slice(),
                             ci_all.as_slice(),
                         ) {

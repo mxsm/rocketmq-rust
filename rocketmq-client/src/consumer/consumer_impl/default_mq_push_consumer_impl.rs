@@ -27,6 +27,7 @@ use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::DEFAULT_CONSUMER_GROUP;
 use rocketmq_common::common::FAQUrl;
 use rocketmq_common::ArcRefCellWrapper;
+use rocketmq_common::WeakCellWrapper;
 use rocketmq_remoting::protocol::body::consumer_running_info::ConsumerRunningInfo;
 use rocketmq_remoting::protocol::filter::filter_api::FilterAPI;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
@@ -72,12 +73,12 @@ const DO_NOT_UPDATE_TOPIC_SUBSCRIBE_INFO_WHEN_SUBSCRIPTION_CHANGED: bool = false
 #[derive(Clone)]
 pub struct DefaultMQPushConsumerImpl {
     client_config: ClientConfig,
-    consumer_config: ConsumerConfig,
+    consumer_config: ArcRefCellWrapper<ConsumerConfig>,
     rebalance_impl: ArcRefCellWrapper<RebalancePushImpl>,
     filter_message_hook_list: Vec<Arc<Box<dyn FilterMessageHook + Send + Sync>>>,
     rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
     service_state: ServiceState,
-    mq_client_factory: Option<ArcRefCellWrapper<MQClientInstance<DefaultMQPushConsumerImpl>>>,
+    client_instance: Option<ArcRefCellWrapper<MQClientInstance<DefaultMQPushConsumerImpl>>>,
     pull_api_wrapper: Option<ArcRefCellWrapper<PullAPIWrapper>>,
     pause: Arc<AtomicBool>,
     consume_orderly: bool,
@@ -107,7 +108,7 @@ pub struct DefaultMQPushConsumerImpl {
 impl DefaultMQPushConsumerImpl {
     pub fn new(
         client_config: ClientConfig,
-        consumer_config: ConsumerConfig,
+        consumer_config: ArcRefCellWrapper<ConsumerConfig>,
         rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
     ) -> Self {
         let mut this = Self {
@@ -120,7 +121,7 @@ impl DefaultMQPushConsumerImpl {
             filter_message_hook_list: vec![],
             rpc_hook,
             service_state: ServiceState::CreateJust,
-            mq_client_factory: None,
+            client_instance: None,
             pull_api_wrapper: None,
             pause: Arc::new(AtomicBool::new(false)),
             consume_orderly: false,
@@ -137,6 +138,19 @@ impl DefaultMQPushConsumerImpl {
         let wrapper = ArcRefCellWrapper::downgrade(&this.rebalance_impl);
         this.rebalance_impl.set_rebalance_impl(wrapper);
         this
+    }
+
+    pub fn set_default_mqpush_consumer_impl(
+        &mut self,
+        default_mqpush_consumer_impl: WeakCellWrapper<DefaultMQPushConsumerImpl>,
+    ) {
+        self.rebalance_impl
+            .set_default_mqpush_consumer_impl(default_mqpush_consumer_impl);
+    }
+
+    #[inline]
+    pub fn is_consume_orderly(&self) -> bool {
+        self.consume_orderly
     }
 }
 
@@ -253,13 +267,13 @@ impl DefaultMQPushConsumerImpl {
                         .start();
                 }
                 let consumer_impl = self.clone();
-                self.mq_client_factory
+                self.client_instance
                     .as_mut()
                     .unwrap()
                     .register_consumer(self.consumer_config.consumer_group.as_str(), consumer_impl)
                     .await;
 
-                self.mq_client_factory.as_mut().unwrap().start().await?;
+                self.client_instance.as_mut().unwrap().start().await?;
                 info!(
                     "the consumer [{}] start OK, message_model={}, isUnitMode={}",
                     self.consumer_config.consumer_group,
@@ -269,19 +283,19 @@ impl DefaultMQPushConsumerImpl {
                 self.service_state = ServiceState::Running;
             }
             ServiceState::Running => {
-                return Err(MQClientError::MQClientException(
+                return Err(MQClientError::MQClientErr(
                     -1,
                     "The PushConsumer service state is Running".to_string(),
                 ));
             }
             ServiceState::ShutdownAlready => {
-                return Err(MQClientError::MQClientException(
+                return Err(MQClientError::MQClientErr(
                     -1,
                     "The PushConsumer service state is ShutdownAlready".to_string(),
                 ));
             }
             ServiceState::StartFailed => {
-                return Err(MQClientError::MQClientException(
+                return Err(MQClientError::MQClientErr(
                     -1,
                     format!(
                         "The PushConsumer service state not OK, maybe started once,{:?},{}",
@@ -292,7 +306,7 @@ impl DefaultMQPushConsumerImpl {
             }
         }
         self.update_topic_subscribe_info_when_subscription_changed();
-        let client_instance = self.mq_client_factory.as_mut().unwrap();
+        let client_instance = self.client_instance.as_mut().unwrap();
         client_instance.check_client_in_broker().await?;
         if client_instance
             .send_heartbeat_to_all_broker_with_lock()
@@ -310,7 +324,7 @@ impl DefaultMQPushConsumerImpl {
     fn check_config(&mut self) -> Result<()> {
         Validators::check_group(self.consumer_config.consumer_group.as_str())?;
         if self.consumer_config.consumer_group.is_empty() {
-            return Err(MQClientError::MQClientException(
+            return Err(MQClientError::MQClientErr(
                 -1,
                 format!(
                     "consumer_group is empty, {}",
@@ -320,7 +334,7 @@ impl DefaultMQPushConsumerImpl {
         }
 
         if self.consumer_config.consumer_group == DEFAULT_CONSUMER_GROUP {
-            return Err(MQClientError::MQClientException(
+            return Err(MQClientError::MQClientErr(
                 -1,
                 format!(
                     "consumer_group can not equal {} please specify another one.{}",
@@ -349,7 +363,7 @@ impl DefaultMQPushConsumerImpl {
             .allocate_message_queue_strategy
             .is_none()
         {
-            return Err(MQClientError::MQClientException(
+            return Err(MQClientError::MQClientErr(
                 -1,
                 format!(
                     "allocate_message_queue_strategy is null{}",
@@ -358,18 +372,18 @@ impl DefaultMQPushConsumerImpl {
             ));
         }
 
-        if self.consumer_config.subscription.is_empty() {
-            return Err(MQClientError::MQClientException(
+        /*        if self.consumer_config.subscription.is_empty() {
+            return Err(MQClientError::MQClientErr(
                 -1,
                 format!(
                     "subscription is null{}",
                     FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
                 ),
             ));
-        }
+        }*/
 
         if self.consumer_config.message_listener.is_none() {
-            return Err(MQClientError::MQClientException(
+            return Err(MQClientError::MQClientErr(
                 -1,
                 format!(
                     "messageListener is null{}",
@@ -393,7 +407,7 @@ impl DefaultMQPushConsumerImpl {
                 .message_listener_concurrently
                 .is_some()
         {
-            return Err(MQClientError::MQClientException(
+            return Err(MQClientError::MQClientErr(
                 -1,
                 format!(
                     "messageListener must be instanceof MessageListenerOrderly or \
@@ -406,7 +420,7 @@ impl DefaultMQPushConsumerImpl {
         let consume_thread_min = self.consumer_config.consume_thread_min;
         let consume_thread_max = self.consumer_config.consume_thread_max;
         if !(1..=1000).contains(&consume_thread_min) {
-            return Err(MQClientError::MQClientException(
+            return Err(MQClientError::MQClientErr(
                 -1,
                 format!(
                     "consumeThreadMin Out of range [1, 1000]{}",
@@ -415,7 +429,7 @@ impl DefaultMQPushConsumerImpl {
             ));
         }
         if !(1..=1000).contains(&consume_thread_max) {
-            return Err(MQClientError::MQClientException(
+            return Err(MQClientError::MQClientErr(
                 -1,
                 format!(
                     "consumeThreadMax Out of range [1, 1000]{}",
@@ -424,7 +438,7 @@ impl DefaultMQPushConsumerImpl {
             ));
         }
         if consume_thread_min > consume_thread_max {
-            return Err(MQClientError::MQClientException(
+            return Err(MQClientError::MQClientErr(
                 -1,
                 format!(
                     "consumeThreadMin ({}) is larger than consumeThreadMax ({})",
@@ -436,7 +450,7 @@ impl DefaultMQPushConsumerImpl {
         if self.consumer_config.consume_concurrently_max_span < 1
             || self.consumer_config.consume_concurrently_max_span > 65535
         {
-            return Err(MQClientError::MQClientException(
+            return Err(MQClientError::MQClientErr(
                 -1,
                 format!(
                     "consumeConcurrentlyMaxSpan Out of range [1, 65535]{}",
@@ -448,7 +462,7 @@ impl DefaultMQPushConsumerImpl {
         if self.consumer_config.pull_threshold_for_queue < 1
             || self.consumer_config.pull_threshold_for_queue > 65535
         {
-            return Err(MQClientError::MQClientException(
+            return Err(MQClientError::MQClientErr(
                 -1,
                 format!(
                     "pullThresholdForQueue Out of range [1, 65535]{}",
@@ -461,7 +475,7 @@ impl DefaultMQPushConsumerImpl {
             && (self.consumer_config.pull_threshold_for_topic < 1
                 || self.consumer_config.pull_threshold_for_topic > 6553500)
         {
-            return Err(MQClientError::MQClientException(
+            return Err(MQClientError::MQClientErr(
                 -1,
                 format!(
                     "pullThresholdForTopic Out of range [1, 65535]{}",
@@ -473,7 +487,7 @@ impl DefaultMQPushConsumerImpl {
         if self.consumer_config.pull_threshold_size_for_queue < 1
             || self.consumer_config.pull_threshold_size_for_queue > 1024
         {
-            return Err(MQClientError::MQClientException(
+            return Err(MQClientError::MQClientErr(
                 -1,
                 format!(
                     "pullThresholdSizeForQueue Out of range [1, 1024]{}",
@@ -486,7 +500,7 @@ impl DefaultMQPushConsumerImpl {
             && (self.consumer_config.pull_threshold_size_for_topic < 1
                 || self.consumer_config.pull_threshold_size_for_topic > 102400)
         {
-            return Err(MQClientError::MQClientException(
+            return Err(MQClientError::MQClientErr(
                 -1,
                 format!(
                     "pullThresholdSizeForTopic Out of range [1, 102400]{}",
@@ -496,7 +510,7 @@ impl DefaultMQPushConsumerImpl {
         }
 
         if self.consumer_config.pull_interval > 65535 {
-            return Err(MQClientError::MQClientException(
+            return Err(MQClientError::MQClientErr(
                 -1,
                 format!(
                     "pullInterval Out of range [0, 65535]{}",
@@ -508,7 +522,7 @@ impl DefaultMQPushConsumerImpl {
         if self.consumer_config.consume_message_batch_max_size < 1
             || self.consumer_config.consume_message_batch_max_size > 1024
         {
-            return Err(MQClientError::MQClientException(
+            return Err(MQClientError::MQClientErr(
                 -1,
                 format!(
                     "consumeMessageBatchMaxSize Out of range [1, 1024]{}",
@@ -518,7 +532,7 @@ impl DefaultMQPushConsumerImpl {
         }
 
         if self.consumer_config.pull_batch_size < 1 || self.consumer_config.pull_batch_size > 1024 {
-            return Err(MQClientError::MQClientException(
+            return Err(MQClientError::MQClientErr(
                 -1,
                 format!(
                     "pullBatchSize Out of range [1, 1024]{}",
@@ -530,7 +544,7 @@ impl DefaultMQPushConsumerImpl {
         if self.consumer_config.pop_invisible_time < MIN_POP_INVISIBLE_TIME
             || self.consumer_config.pop_invisible_time > MAX_POP_INVISIBLE_TIME
         {
-            return Err(MQClientError::MQClientException(
+            return Err(MQClientError::MQClientErr(
                 -1,
                 format!(
                     "popInvisibleTime Out of range [{}, {}]{}",
@@ -542,7 +556,7 @@ impl DefaultMQPushConsumerImpl {
         }
 
         if self.consumer_config.pop_batch_nums < 1 || self.consumer_config.pop_batch_nums > 32 {
-            return Err(MQClientError::MQClientException(
+            return Err(MQClientError::MQClientErr(
                 -1,
                 format!(
                     "popBatchNums Out of range [1, 32]{}",
@@ -573,7 +587,7 @@ impl DefaultMQPushConsumerImpl {
                     SubscriptionData::SUB_ALL,
                 )
                 .map_err(|e| {
-                    MQClientError::MQClientException(
+                    MQClientError::MQClientErr(
                         -1,
                         format!("buildSubscriptionData exception, {}", e),
                     )
@@ -595,6 +609,26 @@ impl DefaultMQPushConsumerImpl {
         message_listener: Option<ArcRefCellWrapper<MessageListener>>,
     ) {
         self.message_listener = message_listener;
+    }
+
+    pub async fn subscribe(&mut self, topic: &str, sub_expression: &str) -> Result<()> {
+        let subscription_data = FilterAPI::build_subscription_data(topic, sub_expression);
+        if let Err(e) = subscription_data {
+            return Err(MQClientError::MQClientErr(
+                -1,
+                format!("buildSubscriptionData exception, {}", e),
+            ));
+        }
+        let subscription_data = subscription_data.unwrap();
+        self.rebalance_impl
+            .put_subscription_data(topic, subscription_data)
+            .await;
+        if let Some(ref mut client_instance) = self.client_instance {
+            client_instance
+                .send_heartbeat_to_all_broker_with_lock()
+                .await;
+        }
+        Ok(())
     }
 }
 

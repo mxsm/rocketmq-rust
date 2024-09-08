@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::thread;
 
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_common::common::message::message_ext::MessageExt;
@@ -27,6 +28,7 @@ use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::runtime::RPCHook;
+use tokio::runtime::Handle;
 
 use crate::base::client_config::ClientConfig;
 use crate::base::mq_admin::MQAdmin;
@@ -45,6 +47,7 @@ use crate::consumer::message_queue_listener::MessageQueueListener;
 use crate::consumer::message_selector::MessageSelector;
 use crate::consumer::mq_consumer::MQConsumer;
 use crate::consumer::mq_push_consumer::MQPushConsumer;
+use crate::consumer::rebalance_strategy::allocate_message_queue_averagely::AllocateMessageQueueAveragely;
 use crate::trace::async_trace_dispatcher::AsyncTraceDispatcher;
 use crate::trace::hook::consume_message_trace_hook_impl::ConsumeMessageTraceHookImpl;
 use crate::trace::trace_dispatcher::TraceDispatcher;
@@ -53,6 +56,8 @@ use crate::trace::trace_dispatcher::Type;
 #[derive(Clone)]
 pub struct ConsumerConfig {
     pub(crate) consumer_group: String,
+    pub(crate) topic: String,
+    pub(crate) sub_expression: String,
     pub(crate) message_model: MessageModel,
     pub(crate) consume_from_where: ConsumeFromWhere,
     pub(crate) consume_timestamp: Option<String>,
@@ -369,12 +374,14 @@ impl Default for ConsumerConfig {
     fn default() -> Self {
         ConsumerConfig {
             consumer_group: String::new(),
+            topic: "".to_string(),
+            sub_expression: "".to_string(),
             message_model: MessageModel::Clustering,
             consume_from_where: ConsumeFromWhere::ConsumeFromLastOffset,
             consume_timestamp: Some(util_all::time_millis_to_human_string3(
                 (get_current_millis() - (1000 * 60 * 30)) as i64,
             )),
-            allocate_message_queue_strategy: None,
+            allocate_message_queue_strategy: Some(Arc::new(AllocateMessageQueueAveragely)),
             subscription: ArcRefCellWrapper::new(HashMap::new()),
             message_listener: None,
             message_queue_listener: None,
@@ -410,7 +417,7 @@ impl Default for ConsumerConfig {
 #[derive(Clone)]
 pub struct DefaultMQPushConsumer {
     client_config: ClientConfig,
-    consumer_config: ConsumerConfig,
+    consumer_config: ArcRefCellWrapper<ConsumerConfig>,
     pub(crate) default_mqpush_consumer_impl: Option<ArcRefCellWrapper<DefaultMQPushConsumerImpl>>,
 }
 
@@ -488,7 +495,7 @@ impl MQAdmin for DefaultMQPushConsumer {
 
 impl MQPushConsumer for DefaultMQPushConsumer {
     async fn start(&mut self) -> crate::Result<()> {
-        let consumer_group = NamespaceUtil::without_namespace_with_namespace(
+        let consumer_group = NamespaceUtil::wrap_namespace(
             self.client_config
                 .get_namespace()
                 .unwrap_or("".to_string())
@@ -575,8 +582,27 @@ impl MQPushConsumer for DefaultMQPushConsumer {
         todo!()
     }
 
-    async fn subscribe(&mut self, topic: &str, sub_expression: &str) -> crate::Result<()> {
-        todo!()
+    fn subscribe(&mut self, topic: &str, sub_expression: &str) -> crate::Result<()> {
+        let handle = Handle::current();
+        let mut default_mqpush_consumer_impl = self.default_mqpush_consumer_impl.clone();
+        let topic = topic.to_string();
+        let sub_expression = sub_expression.to_string();
+        match thread::spawn(move || {
+            handle.block_on(async move {
+                default_mqpush_consumer_impl
+                    .as_mut()
+                    .unwrap()
+                    .subscribe(topic.as_str(), sub_expression.as_str())
+                    .await
+            })
+        })
+        .join()
+        {
+            Ok(value) => value,
+            Err(er) => {
+                panic!("Error: {:?}", er);
+            }
+        }
     }
 
     async fn subscribe_with_selector(
@@ -614,17 +640,19 @@ impl DefaultMQPushConsumer {
         client_config: ClientConfig,
         consumer_config: ConsumerConfig,
     ) -> DefaultMQPushConsumer {
-        let default_mqpush_consumer_impl = DefaultMQPushConsumerImpl::new(
-            client_config.clone(),
-            consumer_config.clone(),
-            consumer_config.rpc_hook.clone(),
-        );
+        let consumer_config = ArcRefCellWrapper::new(consumer_config);
+        let mut default_mqpush_consumer_impl =
+            ArcRefCellWrapper::new(DefaultMQPushConsumerImpl::new(
+                client_config.clone(),
+                consumer_config.clone(),
+                consumer_config.rpc_hook.clone(),
+            ));
+        let wrapper = ArcRefCellWrapper::downgrade(&default_mqpush_consumer_impl);
+        default_mqpush_consumer_impl.set_default_mqpush_consumer_impl(wrapper);
         DefaultMQPushConsumer {
             client_config,
             consumer_config,
-            default_mqpush_consumer_impl: Some(ArcRefCellWrapper::new(
-                default_mqpush_consumer_impl,
-            )),
+            default_mqpush_consumer_impl: Some(default_mqpush_consumer_impl),
         }
     }
 

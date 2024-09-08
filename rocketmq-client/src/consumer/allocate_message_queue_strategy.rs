@@ -27,5 +27,5 @@ pub trait AllocateMessageQueueStrategy: Send + Sync {
         cid_all: &[String],
     ) -> Result<Vec<MessageQueue>>;
 
-    fn get_name(&self) -> &str;
+    fn get_name(&self) -> &'static str;
 }

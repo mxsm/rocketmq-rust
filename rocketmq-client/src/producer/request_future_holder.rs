@@ -26,7 +26,7 @@ use tokio::task;
 use tokio::time::interval;
 
 use crate::common::client_error_code::ClientErrorCode;
-use crate::error::MQClientError::RequestTimeoutException;
+use crate::error::MQClientError::RequestTimeoutError;
 use crate::producer::request_response_future::RequestResponseFuture;
 
 pub static REQUEST_FUTURE_HOLDER: Lazy<Arc<RequestFutureHolder>> =
@@ -64,7 +64,7 @@ impl RequestFutureHolder {
         }
 
         for rf in rf_list {
-            let cause = Box::new(RequestTimeoutException(
+            let cause = Box::new(RequestTimeoutError(
                 ClientErrorCode::REQUEST_TIMEOUT_EXCEPTION,
                 "request timeout, no reply message.".to_string(),
             ));

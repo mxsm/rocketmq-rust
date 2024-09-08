@@ -89,7 +89,7 @@ pub trait MQPushConsumerLocal: MQConsumer {
     /// # Returns
     ///
     /// * `Result<()>` - An empty result indicating success or an error.
-    async fn subscribe(&mut self, topic: &str, sub_expression: &str) -> Result<()>;
+    fn subscribe(&mut self, topic: &str, sub_expression: &str) -> Result<()>;
 
     /// Subscribes to a topic with an optional message selector.
     ///

@@ -51,7 +51,7 @@ use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPush
 use crate::consumer::consumer_impl::pull_message_service::PullMessageService;
 use crate::consumer::consumer_impl::re_balance::rebalance_service::RebalanceService;
 use crate::consumer::mq_consumer_inner::MQConsumerInner;
-use crate::error::MQClientError::MQClientException;
+use crate::error::MQClientError::MQClientErr;
 use crate::implementation::client_remoting_processor::ClientRemotingProcessor;
 use crate::implementation::mq_admin_impl::MQAdminImpl;
 use crate::implementation::mq_client_api_impl::MQClientAPIImpl;
@@ -238,7 +238,7 @@ where
             ServiceState::Running => {}
             ServiceState::ShutdownAlready => {}
             ServiceState::StartFailed => {
-                return Err(MQClientException(
+                return Err(MQClientErr(
                     -1,
                     format!(
                         "The Factory object[{}] has been created before, and failed.",

@@ -15,8 +15,12 @@
  * limitations under the License.
  */
 use rocketmq_client::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
+use rocketmq_client::consumer::listener::consume_concurrently_context::ConsumeConcurrentlyContext;
+use rocketmq_client::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
+use rocketmq_client::consumer::listener::message_listener_concurrently::MessageListenerConcurrently;
 use rocketmq_client::consumer::mq_push_consumer::MQPushConsumer;
 use rocketmq_client::Result;
+use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_rust::rocketmq;
 
 pub const MESSAGE_COUNT: usize = 1;
@@ -37,14 +41,24 @@ pub async fn main() -> Result<()> {
         .consumer_group(CONSUMER_GROUP.to_string())
         .name_server_addr(DEFAULT_NAMESRVADDR.to_string())
         .build();
-
-    /*consumer.register_message_listener_concurrently(|msgs, _context| {
-        for msg in msgs {
-            println!("Receive message: {:?}", msg);
-        }
-        Ok(())
-    });*/
+    consumer.subscribe(TOPIC, "*")?;
+    consumer.register_message_listener_concurrently(MyMessageListener);
     consumer.start().await?;
 
     Ok(())
+}
+
+pub struct MyMessageListener;
+
+impl MessageListenerConcurrently for MyMessageListener {
+    fn consume_message(
+        &self,
+        msgs: Vec<MessageExt>,
+        _context: ConsumeConcurrentlyContext,
+    ) -> Result<ConsumeConcurrentlyStatus> {
+        for msg in msgs {
+            println!("Receive message: {:?}", msg);
+        }
+        Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
+    }
 }
