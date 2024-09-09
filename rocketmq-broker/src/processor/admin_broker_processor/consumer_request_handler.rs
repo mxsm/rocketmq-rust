@@ -17,6 +17,7 @@
 
 use std::collections::HashSet;
 
+use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
@@ -215,5 +216,26 @@ impl ConsumerRequestHandler {
         let body = consume_stats.encode();
         response.set_body_mut_ref(Some(body));
         Some(response)
+    }
+
+    pub async fn get_all_consumer_offset(
+        &mut self,
+        _channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        _request_code: RequestCode,
+        _request: RemotingCommand,
+    ) -> Option<RemotingCommand> {
+        let mut response = RemotingCommand::create_response_command();
+        let content = self.inner.consumer_offset_manager.encode();
+        if !content.is_empty() {
+            response.set_body_mut_ref(Some(content));
+            Some(response)
+        } else {
+            Some(
+                response
+                    .set_code(ResponseCode::SystemError)
+                    .set_remark(Some("No consumer offset in this broker".to_string())),
+            )
+        }
     }
 }
