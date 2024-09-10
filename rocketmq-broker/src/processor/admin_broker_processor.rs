@@ -156,6 +156,11 @@ impl AdminBrokerProcessor {
                     .get_consume_stats(channel, ctx, request_code, request)
                     .await
             }
+            RequestCode::GetAllConsumerOffset => {
+                self.consumer_request_handler
+                    .get_all_consumer_offset(channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::GetTopicConfig => {
                 self.topic_request_handler
                     .get_topic_config(channel, ctx, request_code, request)
