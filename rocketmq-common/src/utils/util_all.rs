@@ -29,6 +29,9 @@ use std::time::UNIX_EPOCH;
 use chrono::DateTime;
 use chrono::Datelike;
 use chrono::Local;
+use chrono::NaiveDateTime;
+use chrono::ParseError;
+use chrono::ParseResult;
 use chrono::TimeZone;
 use chrono::Timelike;
 use chrono::Utc;
@@ -40,6 +43,10 @@ use tracing::info;
 use crate::common::mix_all::MULTI_PATH_SPLITTER;
 use crate::error::Error::RuntimeException;
 use crate::Result;
+
+pub const YYYY_MM_DD_HH_MM_SS: &str = "%Y-%m-%d %H:%M:%S%";
+pub const YYYY_MM_DD_HH_MM_SS_SSS: &str = "%Y-%m-%d %H:%M:%S%.f";
+pub const YYYYMMDDHHMMSS: &str = "%Y%m%d%H%M%S%";
 
 const HEX_ARRAY: [char; 16] = [
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F',
@@ -289,6 +296,13 @@ pub fn get_ip() -> Result<Vec<u8>> {
             },
             Err(value) => Err(RuntimeException(value.to_string())),
         },
+    }
+}
+
+pub fn parse_date(date: &str, pattern: &str) -> Option<NaiveDateTime> {
+    match NaiveDateTime::parse_from_str(date, pattern) {
+        Ok(value) => Some(value),
+        Err(_) => None,
     }
 }
 

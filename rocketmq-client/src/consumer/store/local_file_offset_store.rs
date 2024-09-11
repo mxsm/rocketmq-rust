@@ -49,11 +49,11 @@ impl OffsetStoreTrait for LocalFileOffsetStore {
         todo!()
     }
 
-    async fn persist_all(&self, mqs: &HashSet<MessageQueue>) {
+    async fn persist_all(&mut self, mqs: &HashSet<MessageQueue>) {
         todo!()
     }
 
-    async fn persist(&self, mq: &MessageQueue) {
+    async fn persist(&mut self, mq: &MessageQueue) {
         todo!()
     }
 
@@ -66,7 +66,7 @@ impl OffsetStoreTrait for LocalFileOffsetStore {
     }
 
     async fn update_consume_offset_to_broker(
-        &self,
+        &mut self,
         mq: &MessageQueue,
         offset: i64,
         is_oneway: bool,

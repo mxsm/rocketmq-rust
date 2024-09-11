@@ -15,6 +15,8 @@
  * limitations under the License.
  */
 
+pub mod consume_init_mode;
+
 use std::ops::Deref;
 
 pub struct PermName;

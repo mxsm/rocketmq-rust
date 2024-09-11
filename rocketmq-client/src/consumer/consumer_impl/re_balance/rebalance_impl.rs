@@ -23,15 +23,18 @@ use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::WeakCellWrapper;
+use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use tokio::sync::RwLock;
 use tracing::error;
+use tracing::info;
 use tracing::warn;
 
 use crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
 use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
 use crate::consumer::consumer_impl::process_queue::ProcessQueue;
+use crate::consumer::consumer_impl::pull_request::PullRequest;
 use crate::consumer::consumer_impl::re_balance::Rebalance;
 use crate::factory::mq_client_instance::MQClientInstance;
 
@@ -80,8 +83,8 @@ where
 
     pub async fn do_rebalance(&mut self, is_order: bool) -> bool {
         let mut balanced = true;
-        let arc = self.subscription_inner.clone();
-        let sub_table = arc.read().await;
+        let sub_inner = self.subscription_inner.clone();
+        let sub_table = sub_inner.read().await;
         if !sub_table.is_empty() {
             for (topic, _) in sub_table.iter() {
                 if !self.client_rebalance(topic) && self.try_query_assignment(topic).await {
@@ -97,8 +100,12 @@ where
         balanced
     }
 
+    #[inline]
     pub fn client_rebalance(&mut self, topic: &str) -> bool {
-        true
+        match self.sub_rebalance_impl.as_mut().unwrap().upgrade() {
+            None => true,
+            Some(mut value) => value.client_rebalance(topic),
+        }
     }
 
     async fn try_query_assignment(&self, topic: &str) -> bool {
@@ -106,32 +113,142 @@ where
     }
 
     async fn truncate_message_queue_not_my_topic(&self) {
-        unimplemented!("try_query_assignment")
+        unimplemented!("truncate_message_queue_not_my_topic")
     }
 
     async fn get_rebalance_result_from_broker(&self, topic: &str, is_order: bool) -> bool {
-        unimplemented!("try_query_assignment")
+        unimplemented!("get_rebalance_result_from_broker")
     }
 
     async fn update_process_queue_table_in_rebalance(
-        &self,
+        &mut self,
         topic: &str,
         mq_set: &HashSet<MessageQueue>,
         is_order: bool,
     ) -> bool {
-        unimplemented!("try_query_assignment")
+        let mut changed = false;
+        let mut remove_queue_map = HashMap::new();
+        let process_queue_table_cloned = self.process_queue_table.clone();
+        let mut process_queue_table = process_queue_table_cloned.write().await;
+        // Drop process queues no longer belong to me
+        for (mq, pq) in process_queue_table.iter() {
+            if mq.get_topic() == topic {
+                if !mq_set.contains(mq) {
+                    pq.set_dropped(true);
+                    remove_queue_map.insert(mq.clone(), pq.clone());
+                } else if pq.is_pull_expired() {
+                    if let Some(sub_rebalance) = self.sub_rebalance_impl.as_mut().unwrap().upgrade()
+                    {
+                        if sub_rebalance.consume_type() == ConsumeType::ConsumePassively {
+                            pq.set_dropped(true);
+                            remove_queue_map.insert(mq.clone(), pq.clone());
+                            error!(
+                                "[BUG]doRebalance, {:?}, try remove unnecessary mq, {}, because \
+                                 pull is pause, so try to fixed it",
+                                self.consumer_group,
+                                mq.get_topic()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // Remove message queues no longer belong to me
+        for (mq, pq) in remove_queue_map {
+            if let Some(mut sub_rebalance) = self.sub_rebalance_impl.as_mut().unwrap().upgrade() {
+                if sub_rebalance
+                    .remove_unnecessary_message_queue(&mq, &pq)
+                    .await
+                {
+                    process_queue_table.remove(&mq);
+                    changed = true;
+                    info!(
+                        "doRebalance, {:?}, remove unnecessary mq, {}",
+                        self.consumer_group,
+                        mq.get_topic()
+                    );
+                }
+            }
+        }
+        // Add new message queue
+        let mut all_mq_locked = true;
+        let mut pull_request_list = Vec::new();
+        let sub_rebalance_impl = self.sub_rebalance_impl.as_mut().unwrap().upgrade();
+        if sub_rebalance_impl.is_none() {
+            return false;
+        }
+        let mut sub_rebalance_impl = sub_rebalance_impl.unwrap();
+        for mq in mq_set {
+            if !process_queue_table.contains_key(mq) {
+                if is_order && !self.lock(mq) {
+                    warn!(
+                        "doRebalance, {:?}, add a new mq failed, {}, because lock failed",
+                        self.consumer_group,
+                        mq.get_topic()
+                    );
+                    all_mq_locked = false;
+                    continue;
+                }
+
+                sub_rebalance_impl.remove_dirty_offset(mq).await;
+                let pq = ProcessQueue::new();
+                pq.set_locked(true);
+                let next_offset = sub_rebalance_impl.compute_pull_from_where(mq).await;
+                if next_offset >= 0 {
+                    if process_queue_table.insert(mq.clone(), pq.clone()).is_none() {
+                        info!(
+                            "doRebalance, {:?}, add a new mq, {}",
+                            self.consumer_group,
+                            mq.get_topic()
+                        );
+                        pull_request_list.push(PullRequest::new(
+                            self.consumer_group.as_ref().unwrap().clone(),
+                            mq.clone(),
+                            pq,
+                            next_offset,
+                        ));
+                        changed = true;
+                    } else {
+                        info!(
+                            "doRebalance, {:?}, mq already exists, {}",
+                            self.consumer_group,
+                            mq.get_topic()
+                        );
+                    }
+                } else {
+                    warn!(
+                        "doRebalance, {:?}, add new mq failed, {}",
+                        self.consumer_group,
+                        mq.get_topic()
+                    );
+                }
+            }
+        }
+
+        if !all_mq_locked {
+            self.client_instance.as_mut().unwrap().rebalance_later(500);
+        }
+
+        sub_rebalance_impl
+            .dispatch_pull_request(pull_request_list, 500)
+            .await;
+
+        changed
     }
-    async fn rebalance_by_topic(&self, topic: &str, is_order: bool) -> bool {
+
+    async fn rebalance_by_topic(&mut self, topic: &str, is_order: bool) -> bool {
         match self.message_model.unwrap() {
             MessageModel::Broadcasting => {
                 unimplemented!("Broadcasting")
             }
             MessageModel::Clustering => {
-                let topic_subscribe_info_table_inner = self.topic_subscribe_info_table.read().await;
+                let topic_sub_cloned = self.topic_subscribe_info_table.clone();
+                let topic_subscribe_info_table_inner = topic_sub_cloned.write().await;
                 let mq_set = topic_subscribe_info_table_inner.get(topic);
                 let ci_all = self
                     .client_instance
-                    .as_ref()
+                    .as_mut()
                     .unwrap()
                     .find_consumer_id_list(topic, self.consumer_group.as_ref().unwrap())
                     .await;
@@ -139,11 +256,9 @@ where
                     if let Some(sub_rebalance_impl) =
                         self.sub_rebalance_impl.as_ref().unwrap().upgrade()
                     {
-                        sub_rebalance_impl.message_queue_changed(
-                            topic,
-                            &HashSet::new(),
-                            &HashSet::new(),
-                        );
+                        sub_rebalance_impl
+                            .message_queue_changed(topic, &HashSet::new(), &HashSet::new())
+                            .await;
                         warn!(
                             "doRebalance, {}, but the topic[{}] not exist.",
                             self.consumer_group.as_ref().unwrap(),
@@ -203,11 +318,9 @@ where
                         if let Some(sub_rebalance_impl) =
                             self.sub_rebalance_impl.as_ref().unwrap().upgrade()
                         {
-                            sub_rebalance_impl.message_queue_changed(
-                                topic,
-                                mq_set,
-                                &allocate_result_set,
-                            );
+                            sub_rebalance_impl
+                                .message_queue_changed(topic, mq_set, &allocate_result_set)
+                                .await;
                         }
                     }
                     return allocate_result_set.eq(&self.get_working_message_queue(topic));
@@ -218,6 +331,10 @@ where
     }
 
     pub fn get_working_message_queue(&self, topic: &str) -> HashSet<MessageQueue> {
+        unimplemented!()
+    }
+
+    pub fn lock(&self, mq: &MessageQueue) -> bool {
         unimplemented!()
     }
 }

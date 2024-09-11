@@ -36,12 +36,17 @@ use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::protocol::body::check_client_request_body::CheckClientRequestBody;
+use rocketmq_remoting::protocol::body::get_consumer_listby_group_response_body::GetConsumerListByGroupResponseBody;
 use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+use rocketmq_remoting::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
 use rocketmq_remoting::protocol::header::heartbeat_request_header::HeartbeatRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
+use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
 use rocketmq_remoting::protocol::heartbeat::heartbeat_data::HeartbeatData;
+use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
@@ -634,5 +639,134 @@ impl MQClientAPIImpl {
             response.remark().map_or("".to_string(), |s| s.to_string()),
             addr.to_string(),
         ))
+    }
+
+    pub async fn check_client_in_broker(
+        &mut self,
+        broker_addr: &str,
+        consumer_group: &str,
+        client_id: &str,
+        subscription_data: &SubscriptionData,
+        timeout_millis: u64,
+    ) -> Result<()> {
+        let mut request = RemotingCommand::create_remoting_command(RequestCode::CheckClientConfig);
+        let body = CheckClientRequestBody::new(
+            client_id.to_string(),
+            consumer_group.to_string(),
+            subscription_data.clone(),
+        );
+        request.set_body_mut_ref(Some(body.encode()));
+        let response = self
+            .remoting_client
+            .invoke_async(
+                Some(mix_all::broker_vip_channel(
+                    self.client_config.vip_channel_enabled,
+                    broker_addr,
+                )),
+                request,
+                timeout_millis,
+            )
+            .await?;
+        if ResponseCode::from(response.code()) != ResponseCode::Success {
+            return Err(MQClientError::MQClientErr(
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string()),
+            ));
+        }
+        Ok(())
+    }
+
+    pub async fn get_consumer_id_list_by_group(
+        &mut self,
+        addr: &str,
+        consumer_group: &str,
+        timeout_millis: u64,
+    ) -> Result<Vec<String>> {
+        let request_header = GetConsumerListByGroupRequestHeader {
+            consumer_group: consumer_group.to_string(),
+            rpc: None,
+        };
+        let request = RemotingCommand::create_request_command(
+            RequestCode::GetConsumerListByGroup,
+            request_header,
+        );
+        let response = self
+            .remoting_client
+            .invoke_async(
+                Some(mix_all::broker_vip_channel(
+                    self.client_config.vip_channel_enabled,
+                    addr,
+                )),
+                request,
+                timeout_millis,
+            )
+            .await?;
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {
+                let body = response.body();
+                if let Some(body) = response.body() {
+                    return match GetConsumerListByGroupResponseBody::decode(body) {
+                        Ok(value) => Ok(value.consumer_id_list),
+                        Err(e) => Err(MQClientError::MQClientErr(
+                            -1,
+                            response.remark().map_or("".to_string(), |s| s.to_string()),
+                        )),
+                    };
+                }
+            }
+            _ => {
+                return Err(MQClientError::MQBrokerError(
+                    response.code(),
+                    response.remark().map_or("".to_string(), |s| s.to_string()),
+                    addr.to_string(),
+                ));
+            }
+        }
+        Err(MQClientError::MQBrokerError(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string()),
+            addr.to_string(),
+        ))
+    }
+
+    pub async fn update_consumer_offset_oneway(
+        &mut self,
+        addr: &str,
+        request_header: UpdateConsumerOffsetRequestHeader,
+        timeout_millis: u64,
+    ) -> Result<()> {
+        let request = RemotingCommand::create_request_command(
+            RequestCode::UpdateConsumerOffset,
+            request_header,
+        );
+        self.remoting_client
+            .invoke_oneway(addr.to_string(), request, timeout_millis)
+            .await;
+        Ok(())
+    }
+
+    pub async fn update_consumer_offset(
+        &mut self,
+        addr: &str,
+        request_header: UpdateConsumerOffsetRequestHeader,
+        timeout_millis: u64,
+    ) -> Result<()> {
+        let request = RemotingCommand::create_request_command(
+            RequestCode::UpdateConsumerOffset,
+            request_header,
+        );
+        let response = self
+            .remoting_client
+            .invoke_async(Some(addr.to_string()), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) != ResponseCode::Success {
+            Err(MQClientError::MQBrokerError(
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string()),
+                addr.to_string(),
+            ))
+        } else {
+            Ok(())
+        }
     }
 }

@@ -19,6 +19,7 @@ use std::collections::HashSet;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::thread;
 
 use rocketmq_common::common::base::service_state::ServiceState;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
@@ -34,6 +35,7 @@ use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::runtime::RPCHook;
+use tokio::runtime::Handle;
 use tracing::info;
 
 use crate::base::client_config::ClientConfig;
@@ -45,8 +47,11 @@ use crate::consumer::consumer_impl::consume_message_pop_orderly_service::Consume
 use crate::consumer::consumer_impl::consume_message_service::ConsumeMessageConcurrentlyServiceGeneral;
 use crate::consumer::consumer_impl::consume_message_service::ConsumeMessageOrderlyServiceGeneral;
 use crate::consumer::consumer_impl::consume_message_service::ConsumeMessageServiceTrait;
+use crate::consumer::consumer_impl::pop_request::PopRequest;
 use crate::consumer::consumer_impl::pull_api_wrapper::PullAPIWrapper;
+use crate::consumer::consumer_impl::pull_request::PullRequest;
 use crate::consumer::consumer_impl::re_balance::rebalance_push_impl::RebalancePushImpl;
+use crate::consumer::consumer_impl::re_balance::Rebalance;
 use crate::consumer::default_mq_push_consumer::ConsumerConfig;
 use crate::consumer::listener::message_listener::MessageListener;
 use crate::consumer::mq_consumer_inner::MQConsumerInner;
@@ -72,7 +77,7 @@ const DO_NOT_UPDATE_TOPIC_SUBSCRIBE_INFO_WHEN_SUBSCRIPTION_CHANGED: bool = false
 
 #[derive(Clone)]
 pub struct DefaultMQPushConsumerImpl {
-    client_config: ClientConfig,
+    client_config: ArcRefCellWrapper<ClientConfig>,
     consumer_config: ArcRefCellWrapper<ConsumerConfig>,
     rebalance_impl: ArcRefCellWrapper<RebalancePushImpl>,
     filter_message_hook_list: Vec<Arc<Box<dyn FilterMessageHook + Send + Sync>>>,
@@ -83,7 +88,7 @@ pub struct DefaultMQPushConsumerImpl {
     pause: Arc<AtomicBool>,
     consume_orderly: bool,
     message_listener: Option<ArcRefCellWrapper<MessageListener>>,
-    offset_store: Option<ArcRefCellWrapper<OffsetStore>>,
+    pub(crate) offset_store: Option<ArcRefCellWrapper<OffsetStore>>,
     consume_message_concurrently_service: Option<
         ArcRefCellWrapper<
             ConsumeMessageConcurrentlyServiceGeneral<
@@ -112,7 +117,7 @@ impl DefaultMQPushConsumerImpl {
         rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
     ) -> Self {
         let mut this = Self {
-            client_config: client_config.clone(),
+            client_config: ArcRefCellWrapper::new(client_config.clone()),
             consumer_config: consumer_config.clone(),
             rebalance_impl: ArcRefCellWrapper::new(RebalancePushImpl::new(
                 client_config,
@@ -145,7 +150,14 @@ impl DefaultMQPushConsumerImpl {
         default_mqpush_consumer_impl: WeakCellWrapper<DefaultMQPushConsumerImpl>,
     ) {
         self.rebalance_impl
-            .set_default_mqpush_consumer_impl(default_mqpush_consumer_impl);
+            .set_default_mqpush_consumer_impl(default_mqpush_consumer_impl.clone());
+        if let Some(ref mut consume_message_concurrently_service) =
+            self.consume_message_concurrently_service
+        {
+            consume_message_concurrently_service
+                .consume_message_concurrently_service
+                .default_mqpush_consumer_impl = Some(default_mqpush_consumer_impl);
+        }
     }
 
     #[inline]
@@ -172,10 +184,11 @@ impl DefaultMQPushConsumerImpl {
                 }
                 let client_instance = MQClientManager::get_instance()
                     .get_or_create_mq_client_instance(
-                        self.client_config.clone(),
+                        self.client_config.as_ref().clone(),
                         self.rpc_hook.clone(),
                     )
                     .await;
+                self.client_instance = Some(client_instance.clone());
                 self.rebalance_impl
                     .set_consumer_group(self.consumer_config.consumer_group.clone());
                 self.rebalance_impl
@@ -223,14 +236,28 @@ impl DefaultMQPushConsumerImpl {
 
                 if let Some(message_listener) = self.message_listener.as_ref() {
                     if message_listener.message_listener_concurrently.is_some() {
+                        let (listener, _) = message_listener
+                            .message_listener_concurrently
+                            .clone()
+                            .unwrap();
                         self.consume_orderly = false;
                         self.consume_message_concurrently_service = Some(ArcRefCellWrapper::new(
                             ConsumeMessageConcurrentlyServiceGeneral {
                                 consume_message_concurrently_service:
-                                    ConsumeMessageConcurrentlyService,
+                                    ConsumeMessageConcurrentlyService::new(
+                                        self.client_config.clone(),
+                                        self.consumer_config.clone(),
+                                        self.consumer_config.consumer_group.clone(),
+                                        listener.clone().expect("listener is None"),
+                                    ),
 
                                 consume_message_pop_concurrently_service:
-                                    ConsumeMessagePopConcurrentlyService,
+                                    ConsumeMessagePopConcurrentlyService::new(
+                                        self.client_config.clone(),
+                                        self.consumer_config.clone(),
+                                        self.consumer_config.consumer_group.clone(),
+                                        listener.expect("listener is None"),
+                                    ),
                             },
                         ));
                     } else if message_listener.message_listener_orderly.is_some() {
@@ -305,7 +332,8 @@ impl DefaultMQPushConsumerImpl {
                 ));
             }
         }
-        self.update_topic_subscribe_info_when_subscription_changed();
+        self.update_topic_subscribe_info_when_subscription_changed()
+            .await;
         let client_instance = self.client_instance.as_mut().unwrap();
         client_instance.check_client_in_broker().await?;
         if client_instance
@@ -317,8 +345,19 @@ impl DefaultMQPushConsumerImpl {
         Ok(())
     }
 
-    fn update_topic_subscribe_info_when_subscription_changed(&mut self) {
-        unimplemented!("updateTopicSubscribeInfoWhenSubscriptionChanged");
+    async fn update_topic_subscribe_info_when_subscription_changed(&mut self) {
+        if DO_NOT_UPDATE_TOPIC_SUBSCRIBE_INFO_WHEN_SUBSCRIPTION_CHANGED {
+            return;
+        }
+        let sub_table = self.rebalance_impl.get_subscription_inner();
+        let sub_table_inner = sub_table.read().await;
+        let keys = sub_table_inner.keys().clone();
+        let client = self.client_instance.as_mut().unwrap();
+        for topic in keys {
+            client
+                .update_topic_route_info_from_name_server_topic(topic)
+                .await;
+        }
     }
 
     fn check_config(&mut self) -> Result<()> {
@@ -630,27 +669,65 @@ impl DefaultMQPushConsumerImpl {
         }
         Ok(())
     }
+
+    pub async fn execute_pull_request_immediately(&mut self, pull_request: PullRequest) {
+        self.client_instance
+            .as_mut()
+            .unwrap()
+            .pull_message_service
+            .execute_pull_request_immediately(pull_request)
+            .await;
+    }
+    pub fn execute_pull_request_later(&mut self, pull_request: PullRequest, time_delay: u64) {
+        self.client_instance
+            .as_mut()
+            .unwrap()
+            .pull_message_service
+            .execute_pull_request_later(pull_request, time_delay);
+    }
+
+    pub(crate) async fn pop_message(&mut self, pop_request: PopRequest) {
+        unimplemented!("popMessage");
+    }
+
+    pub(crate) async fn pull_message(&mut self, pull_request: PullRequest) {
+        unimplemented!("pull_message");
+    }
 }
 
 impl MQConsumerInner for DefaultMQPushConsumerImpl {
     fn group_name(&self) -> &str {
-        todo!()
+        self.consumer_config.consumer_group()
     }
 
     fn message_model(&self) -> MessageModel {
-        todo!()
+        self.consumer_config.message_model
     }
 
     fn consume_type(&self) -> ConsumeType {
-        todo!()
+        ConsumeType::ConsumePassively
     }
 
     fn consume_from_where(&self) -> ConsumeFromWhere {
-        todo!()
+        self.consumer_config.consume_from_where
     }
 
-    fn subscriptions(&self) -> &HashSet<SubscriptionData> {
-        todo!()
+    fn subscriptions(&self) -> HashSet<SubscriptionData> {
+        let inner = self
+            .rebalance_impl
+            .rebalance_impl_inner
+            .subscription_inner
+            .clone();
+
+        let handle = Handle::current();
+        thread::spawn(move || {
+            handle.block_on(async move {
+                let inner = inner.read().await;
+                inner.values().cloned().collect()
+            })
+        })
+        .join()
+        .unwrap()
     }
 
     fn do_rebalance(&self) {
@@ -659,25 +736,50 @@ impl MQConsumerInner for DefaultMQPushConsumerImpl {
 
     async fn try_rebalance(&self) -> Result<bool> {
         if !self.pause.load(Ordering::Acquire) {
-            //self.rebalance_impl.do
+            return Ok(self
+                .rebalance_impl
+                .mut_from_ref()
+                .do_rebalance(self.consume_orderly)
+                .await);
         }
-        unimplemented!()
+        Ok(false)
     }
 
     fn persist_consumer_offset(&self) {
         todo!()
     }
 
-    fn update_topic_subscribe_info(&mut self, topic: &str, info: &HashSet<MessageQueue>) {
-        todo!()
+    async fn update_topic_subscribe_info(&mut self, topic: &str, info: &HashSet<MessageQueue>) {
+        let sub_table = self.rebalance_impl.get_subscription_inner();
+        let sub_table_inner = sub_table.read().await;
+        if sub_table_inner.contains_key(topic) {
+            let mut guard = self
+                .rebalance_impl
+                .rebalance_impl_inner
+                .topic_subscribe_info_table
+                .write()
+                .await;
+            guard.insert(topic.to_string(), info.clone());
+        }
     }
 
-    fn is_subscribe_topic_need_update(&self, topic: &str) -> bool {
-        todo!()
+    async fn is_subscribe_topic_need_update(&self, topic: &str) -> bool {
+        let sub_table = self.rebalance_impl.get_subscription_inner();
+        let sub_table_inner = sub_table.read().await;
+        if sub_table_inner.contains_key(topic) {
+            let guard = self
+                .rebalance_impl
+                .rebalance_impl_inner
+                .topic_subscribe_info_table
+                .read()
+                .await;
+            return !guard.contains_key(topic);
+        }
+        false
     }
 
     fn is_unit_mode(&self) -> bool {
-        todo!()
+        self.consumer_config.unit_mode
     }
 
     fn consumer_running_info(&self) -> ConsumerRunningInfo {

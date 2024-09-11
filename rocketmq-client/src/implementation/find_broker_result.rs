@@ -14,21 +14,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::fmt::Display;
 
-pub mod broker_body;
-pub mod consumer_running_info;
-pub mod create_topic_list_request_body;
-pub mod get_consumer_listby_group_response_body;
+#[derive(Debug, Clone, Default)]
+pub struct FindBrokerResult {
+    pub broker_addr: String,
+    pub slave: bool,
+    pub broker_version: i32,
+}
 
-pub mod consumer_connection;
-
-pub mod check_client_request_body;
-pub mod cm_result;
-pub mod connection;
-pub mod consume_message_directly_result;
-pub mod group_list;
-pub mod kv_table;
-pub mod pop_process_queue_info;
-pub mod process_queue_info;
-pub mod topic;
-pub mod topic_info_wrapper;
+impl Display for FindBrokerResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "FindBrokerResult [broker_addr={}, slave={}, broker_version={}]",
+            self.broker_addr, self.slave, self.broker_version
+        )
+    }
+}

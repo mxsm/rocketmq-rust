@@ -21,6 +21,7 @@ use once_cell::sync::Lazy;
 use tokio::select;
 use tokio::sync::Notify;
 use tokio::time::Instant;
+use tracing::info;
 
 use crate::consumer::mq_consumer_inner::MQConsumerInner;
 use crate::factory::mq_client_instance::MQClientInstance;
@@ -64,6 +65,7 @@ impl RebalanceService {
             let mut last_rebalance_timestamp = Instant::now();
             let min_interval = *MIN_INTERVAL;
             let mut real_wait_interval = *WAIT_INTERVAL;
+            info!(">>>>>>>>>RebalanceService started<<<<<<<<<");
             loop {
                 select! {
                     _ = notify.notified() => {}

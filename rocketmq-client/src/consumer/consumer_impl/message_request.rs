@@ -14,8 +14,26 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::any::Any;
+
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
 
-pub trait MessageRequest {
+pub trait MessageRequest: MessageRequestAny {
     fn get_message_request_mode(&self) -> MessageRequestMode;
+}
+
+pub trait MessageRequestAny: Any {
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+
+    fn as_any(&self) -> &dyn Any;
+}
+
+impl<T: MessageRequest> MessageRequestAny for T {
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }

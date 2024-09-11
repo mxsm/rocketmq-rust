@@ -25,6 +25,7 @@ use std::time::Duration;
 use rand::seq::SliceRandom;
 use rocketmq_common::common::base::service_state::ServiceState;
 use rocketmq_common::common::constant::PermName;
+use rocketmq_common::common::filter::expression_type::ExpressionType;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::ArcRefCellWrapper;
@@ -34,7 +35,6 @@ use rocketmq_remoting::protocol::heartbeat::consumer_data::ConsumerData;
 use rocketmq_remoting::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_remoting::protocol::heartbeat::producer_data::ProducerData;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
-use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::rpc::client_metadata::ClientMetadata;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_remoting::runtime::RPCHook;
@@ -42,6 +42,7 @@ use rocketmq_runtime::RocketMQRuntime;
 use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
+use tracing::error;
 use tracing::info;
 use tracing::warn;
 
@@ -53,6 +54,7 @@ use crate::consumer::consumer_impl::re_balance::rebalance_service::RebalanceServ
 use crate::consumer::mq_consumer_inner::MQConsumerInner;
 use crate::error::MQClientError::MQClientErr;
 use crate::implementation::client_remoting_processor::ClientRemotingProcessor;
+use crate::implementation::find_broker_result::FindBrokerResult;
 use crate::implementation::mq_admin_impl::MQAdminImpl;
 use crate::implementation::mq_client_api_impl::MQClientAPIImpl;
 use crate::producer::default_mq_producer::DefaultMQProducer;
@@ -93,7 +95,7 @@ where
     lock_heartbeat: Arc<Mutex<()>>,
 
     service_state: ServiceState,
-    pull_message_service: ArcRefCellWrapper<PullMessageService>,
+    pub(crate) pull_message_service: ArcRefCellWrapper<PullMessageService>,
     rebalance_service: RebalanceService,
     default_mqproducer: ArcRefCellWrapper<DefaultMQProducer>,
     instance_runtime: Arc<RocketMQRuntime>,
@@ -149,7 +151,7 @@ where
             lock_namesrv: Default::default(),
             lock_heartbeat: Default::default(),
             service_state: ServiceState::CreateJust,
-            pull_message_service: ArcRefCellWrapper::new(PullMessageService {}),
+            pull_message_service: ArcRefCellWrapper::new(PullMessageService::new()),
             rebalance_service: RebalanceService::new(),
             default_mqproducer: ArcRefCellWrapper::new(
                 DefaultMQProducer::builder()
@@ -222,7 +224,8 @@ where
                 // Start various schedule tasks
                 self.start_scheduled_task();
                 // Start pull service
-                self.pull_message_service.start().await;
+                let instance = self.clone();
+                self.pull_message_service.start(instance).await;
                 // Start rebalance service
                 self.rebalance_service.start(self.clone()).await;
                 // Start push service
@@ -336,7 +339,28 @@ where
     }
 
     pub async fn update_topic_route_info_from_name_server(&mut self) {
-        println!("updateTopicRouteInfoFromNameServer")
+        let mut topic_list = HashSet::new();
+
+        {
+            let producer_table = self.producer_table.read().await;
+            for (_, value) in producer_table.iter() {
+                topic_list.extend(value.get_publish_topic_list());
+            }
+        }
+
+        {
+            let consumer_table = self.consumer_table.read().await;
+            for (_, value) in consumer_table.iter() {
+                value.subscriptions().iter().for_each(|sub| {
+                    topic_list.insert(sub.topic.clone());
+                });
+            }
+        }
+
+        for topic in topic_list.iter() {
+            self.update_topic_route_info_from_name_server_topic(topic)
+                .await;
+        }
     }
 
     #[inline]
@@ -345,9 +369,34 @@ where
             .await
     }
 
-    pub async fn find_consumer_id_list(&self, topic: &str, group: &str) -> Option<Vec<String>> {
-        let broker_addr = self.find_broker_addr_by_topic(topic).await?;
-
+    pub async fn find_consumer_id_list(&mut self, topic: &str, group: &str) -> Option<Vec<String>> {
+        let mut broker_addr = self.find_broker_addr_by_topic(topic).await;
+        if broker_addr.is_none() {
+            self.update_topic_route_info_from_name_server_topic(topic)
+                .await;
+            broker_addr = self.find_broker_addr_by_topic(topic).await;
+        }
+        if let Some(broker_addr) = broker_addr {
+            match self
+                .mq_client_api_impl
+                .get_consumer_id_list_by_group(
+                    broker_addr.as_str(),
+                    group,
+                    self.client_config.mq_client_api_timeout,
+                )
+                .await
+            {
+                Ok(value) => return Some(value),
+                Err(e) => {
+                    warn!(
+                        "getConsumerIdListByGroup exception,{}  {}, err:{}",
+                        broker_addr,
+                        group,
+                        e.to_string()
+                    );
+                }
+            }
+        }
         None
     }
 
@@ -456,7 +505,9 @@ where
                         let subscribe_info =
                             topic_route_data2topic_subscribe_info(topic, &topic_route_data);
                         for (_, value) in consumer_table.iter_mut() {
-                            value.update_topic_subscribe_info(topic, &subscribe_info);
+                            value
+                                .update_topic_subscribe_info(topic, &subscribe_info)
+                                .await;
                         }
                     }
                 }
@@ -492,7 +543,7 @@ where
         let consumer_table = self.consumer_table.read().await;
         for (key, value) in consumer_table.iter() {
             if !result {
-                result = value.is_subscribe_topic_need_update(topic);
+                result = value.is_subscribe_topic_need_update(topic).await;
                 break;
             }
         }
@@ -702,11 +753,11 @@ where
         let consumer_table = self.consumer_table.read().await;
         for (_, value) in consumer_table.iter() {
             let mut consumer_data = ConsumerData {
-                group_name: value.group_name().to_json(),
+                group_name: value.group_name().to_string(),
                 consume_type: value.consume_type(),
                 message_model: value.message_model(),
                 consume_from_where: value.consume_from_where(),
-                subscription_data_set: value.subscriptions().clone(),
+                subscription_data_set: value.subscriptions(),
                 unit_mode: value.is_unit_mode(),
             };
             if !is_without_sub {
@@ -740,20 +791,143 @@ where
     }
 
     pub async fn check_client_in_broker(&mut self) -> Result<()> {
-        unimplemented!()
+        let consumer_table = self.consumer_table.read().await;
+        for (key, value) in consumer_table.iter() {
+            let subscription_inner = value.subscriptions();
+            if subscription_inner.is_empty() {
+                return Ok(());
+            }
+            for subscription_data in subscription_inner.iter() {
+                if ExpressionType::is_tag_type(Some(subscription_data.expression_type.as_str())) {
+                    continue;
+                }
+                let addr = self
+                    .find_broker_addr_by_topic(subscription_data.topic.as_str())
+                    .await;
+                if let Some(addr) = addr {
+                    match self
+                        .mq_client_api_impl
+                        .check_client_in_broker(
+                            addr.as_str(),
+                            key,
+                            self.client_id.as_str(),
+                            subscription_data,
+                            self.client_config.mq_client_api_timeout,
+                        )
+                        .await
+                    {
+                        Ok(_) => {}
+                        Err(e) => match e {
+                            MQClientErr(code, desc) => {
+                                return Err(MQClientErr(code, desc));
+                            }
+                            _ => {
+                                let desc = format!(
+                                    "Check client in broker error, maybe because you use {} to \
+                                     filter message, but server has not been upgraded to \
+                                     support!This error would not affect the launch of consumer, \
+                                     but may has impact on message receiving if you have use the \
+                                     new features which are not supported by server, please check \
+                                     the log!",
+                                    subscription_data.expression_type
+                                );
+                                return Err(MQClientErr(-1, desc));
+                            }
+                        },
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 
     pub async fn do_rebalance(&mut self) -> bool {
         let mut balanced = true;
         let consumer_table = self.consumer_table.read().await;
-        for (_, value) in consumer_table.iter() {
-            let result = value.try_rebalance().await;
-            if let Err(e) = result {
-                warn!("rebalance exception, {}", e);
-                balanced = false;
+        for (key, value) in consumer_table.iter() {
+            match value.try_rebalance().await {
+                Ok(result) => {
+                    balanced = result;
+                }
+                Err(e) => {
+                    error!(
+                        "doRebalance for consumer group [{}] exception:{}",
+                        key,
+                        e.to_string()
+                    );
+                }
             }
         }
         balanced
+    }
+
+    pub fn rebalance_later(&mut self, delay_millis: u64) {
+        if delay_millis == 0 {
+            self.rebalance_service.wakeup();
+        } else {
+            let service = self.rebalance_service.clone();
+            self.instance_runtime.get_handle().spawn(async move {
+                tokio::time::sleep(Duration::from_millis(delay_millis)).await;
+                service.wakeup();
+            });
+        }
+    }
+
+    pub async fn find_broker_address_in_subscribe(
+        &mut self,
+        broker_name: &str,
+        broker_id: u64,
+        only_this_broker: bool,
+    ) -> Option<FindBrokerResult> {
+        if broker_name.is_empty() {
+            return None;
+        }
+        let broker_addr_table = self.broker_addr_table.read().await;
+        let map = broker_addr_table.get(broker_name);
+        let mut broker_addr = None;
+        let mut slave = false;
+        let mut found = false;
+
+        if let Some(map) = map {
+            broker_addr = map.get(&(broker_id as i64));
+            slave = broker_id != mix_all::MASTER_ID;
+            found = broker_addr.is_some();
+            if !found && slave {
+                broker_addr = map.get(&((broker_id + 1) as i64));
+                found = broker_addr.is_some();
+            }
+            if !found && !only_this_broker {
+                unimplemented!("findBrokerAddressInSubscribe")
+            }
+        }
+        if found {
+            let broker_addr = broker_addr.cloned()?;
+            let broker_version = self
+                .find_broker_version(broker_name, broker_addr.as_str())
+                .await;
+            Some(FindBrokerResult {
+                broker_addr,
+                slave,
+                broker_version,
+            })
+        } else {
+            None
+        }
+    }
+    async fn find_broker_version(&self, broker_name: &str, broker_addr: &str) -> i32 {
+        let broker_version_table = self.broker_version_table.read().await;
+        if let Some(map) = broker_version_table.get(broker_name) {
+            if let Some(version) = map.get(broker_addr) {
+                return *version;
+            }
+        }
+        0
+    }
+
+    pub async fn select_consumer(&self, group: &str) -> Option<C> {
+        let consumer_table = self.consumer_table.read().await;
+        consumer_table.get(group).cloned()
     }
 }
 
@@ -841,7 +1015,27 @@ pub fn topic_route_data2topic_publish_info(
 
 pub fn topic_route_data2topic_subscribe_info(
     topic: &str,
-    topic_route_data: &TopicRouteData,
+    route: &TopicRouteData,
 ) -> HashSet<MessageQueue> {
-    unimplemented!("topicRouteData2TopicSubscribeInfo")
+    if let Some(ref topic_queue_mapping_by_broker) = route.topic_queue_mapping_by_broker {
+        if !topic_queue_mapping_by_broker.is_empty() {
+            let mq_endpoints =
+                ClientMetadata::topic_route_data2endpoints_for_static_topic(topic, route);
+            return mq_endpoints
+                .unwrap_or_default()
+                .keys()
+                .cloned()
+                .collect::<HashSet<MessageQueue>>();
+        }
+    }
+    let mut mq_list = HashSet::new();
+    for qd in &route.queue_datas {
+        if PermName::is_readable(qd.perm) {
+            for i in 0..qd.read_queue_nums {
+                let mq = MessageQueue::from_parts(topic, qd.broker_name.as_str(), i as i32);
+                mq_list.insert(mq);
+            }
+        }
+    }
+    mq_list
 }

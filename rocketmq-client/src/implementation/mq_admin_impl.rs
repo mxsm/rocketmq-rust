@@ -91,4 +91,11 @@ impl MQAdminImpl {
             ),
         ))
     }
+
+    pub async fn max_offset(&mut self, mq: &MessageQueue) -> Result<i64> {
+        unimplemented!("max_offset")
+    }
+    pub async fn search_offset(&mut self, mq: &MessageQueue, timestamp: u64) -> Result<i64> {
+        unimplemented!("max_offset")
+    }
 }
