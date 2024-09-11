@@ -1890,7 +1890,20 @@ impl DefaultMQProducerImpl {
 
 impl MQProducerInner for DefaultMQProducerImpl {
     fn get_publish_topic_list(&self) -> HashSet<String> {
-        todo!()
+        let handle = Handle::current();
+        let topic_publish_info_table = self.topic_publish_info_table.clone();
+        thread::spawn(move || {
+            handle.block_on(async move {
+                topic_publish_info_table
+                    .read()
+                    .await
+                    .iter()
+                    .map(|(k, _)| k.clone())
+                    .collect()
+            })
+        })
+        .join()
+        .unwrap()
     }
 
     fn is_publish_topic_need_update(&self, topic: &str) -> bool {

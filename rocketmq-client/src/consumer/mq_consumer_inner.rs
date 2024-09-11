@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 use std::collections::HashSet;
 
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
@@ -25,7 +26,7 @@ use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 
 use crate::Result;
 #[trait_variant::make(MQConsumerInner: Send)]
-pub trait MQConsumerInnerLocal: Sync + 'static {
+pub trait MQConsumerInnerLocal: MQConsumerInnerAny + Sync + 'static {
     fn group_name(&self) -> &str;
 
     fn message_model(&self) -> MessageModel;
@@ -34,7 +35,7 @@ pub trait MQConsumerInnerLocal: Sync + 'static {
 
     fn consume_from_where(&self) -> ConsumeFromWhere;
 
-    fn subscriptions(&self) -> &HashSet<SubscriptionData>;
+    fn subscriptions(&self) -> HashSet<SubscriptionData>;
 
     fn do_rebalance(&self);
 
@@ -42,11 +43,27 @@ pub trait MQConsumerInnerLocal: Sync + 'static {
 
     fn persist_consumer_offset(&self);
 
-    fn update_topic_subscribe_info(&mut self, topic: &str, info: &HashSet<MessageQueue>);
+    async fn update_topic_subscribe_info(&mut self, topic: &str, info: &HashSet<MessageQueue>);
 
-    fn is_subscribe_topic_need_update(&self, topic: &str) -> bool;
+    async fn is_subscribe_topic_need_update(&self, topic: &str) -> bool;
 
     fn is_unit_mode(&self) -> bool;
 
     fn consumer_running_info(&self) -> ConsumerRunningInfo;
+}
+
+pub trait MQConsumerInnerAny: std::any::Any {
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+
+    fn as_any(&self) -> &dyn std::any::Any;
+}
+
+impl<T: MQConsumerInner> MQConsumerInnerAny for T {
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }

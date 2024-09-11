@@ -14,6 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+mod controllable_offset;
 pub(crate) mod local_file_offset_store;
 pub(crate) mod offset_store;
 pub(crate) mod read_offset_type;

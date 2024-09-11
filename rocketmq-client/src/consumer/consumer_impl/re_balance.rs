@@ -31,17 +31,16 @@ pub(crate) mod rebalance_service;
 
 #[trait_variant::make(Rebalance: Send)]
 pub trait RebalanceLocal {
-    fn message_queue_changed(
+    async fn message_queue_changed(
         &self,
         topic: &str,
         mq_all: &HashSet<MessageQueue>,
         mq_divided: &HashSet<MessageQueue>,
     );
-    fn remove_unnecessary_message_queue(
-        &self,
-        topic: &str,
-        mq: MessageQueue,
-        pq: ProcessQueue,
+    async fn remove_unnecessary_message_queue(
+        &mut self,
+        mq: &MessageQueue,
+        pq: &ProcessQueue,
     ) -> bool;
 
     fn remove_unnecessary_pop_message_queue(&self, mq: MessageQueue, pq: ProcessQueue) -> bool;
@@ -54,13 +53,14 @@ pub trait RebalanceLocal {
     }
 
     fn consume_type(&self) -> ConsumeType;
-    fn remove_dirty_offset(&self, mq: MessageQueue);
+    async fn remove_dirty_offset(&self, mq: &MessageQueue);
 
-    fn compute_pull_from_where_with_exception(&self, mq: MessageQueue) -> Result<i64>;
+    async fn compute_pull_from_where_with_exception(&mut self, mq: &MessageQueue) -> Result<i64>;
+    async fn compute_pull_from_where(&mut self, mq: &MessageQueue) -> i64;
 
     fn get_consume_init_mode(&self) -> i32;
-    fn dispatch_pull_request(&self, pull_request_list: Vec<PullRequest>, delay: i64);
-    fn dispatch_pop_pull_request(&self, pull_request_list: Vec<PopRequest>, delay: i64);
+    async fn dispatch_pull_request(&self, pull_request_list: Vec<PullRequest>, delay: u64);
+    fn dispatch_pop_pull_request(&self, pull_request_list: Vec<PopRequest>, delay: u64);
     fn create_process_queue(&self) -> ProcessQueue;
     fn create_pop_process_queue(&self) -> PopProcessQueue;
     fn remove_process_queue(&self, mq: MessageQueue);
@@ -69,7 +69,5 @@ pub trait RebalanceLocal {
     fn unlock_all(&self, oneway: bool);
     async fn do_rebalance(&mut self, is_order: bool) -> bool;
 
-    fn client_rebalance(&mut self, topic: &str) -> bool {
-        true
-    }
+    fn client_rebalance(&mut self, topic: &str) -> bool;
 }

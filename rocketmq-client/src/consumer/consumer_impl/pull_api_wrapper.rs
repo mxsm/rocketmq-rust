@@ -14,15 +14,28 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::collections::HashMap;
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
+use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_common::common::mix_all;
 use rocketmq_common::ArcRefCellWrapper;
+use tokio::sync::RwLock;
 
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::hook::filter_message_hook::FilterMessageHook;
 
 #[derive(Clone)]
-pub struct PullAPIWrapper;
+pub struct PullAPIWrapper {
+    mq_client_factory: ArcRefCellWrapper<MQClientInstance>,
+    consumer_group: String,
+    unit_mode: bool,
+    pull_from_which_node_table: Arc<RwLock<HashMap<MessageQueue, AtomicU64>>>,
+    connect_broker_by_user: bool,
+    default_broker_id: u64,
+    filter_message_hook_list: Vec<Arc<Box<dyn FilterMessageHook + Send + Sync>>>,
+}
 
 impl PullAPIWrapper {
     pub fn new(
@@ -30,13 +43,21 @@ impl PullAPIWrapper {
         consumer_group: String,
         unit_mode: bool,
     ) -> Self {
-        unimplemented!("PullAPIWrapper::new")
+        Self {
+            mq_client_factory,
+            consumer_group,
+            unit_mode,
+            pull_from_which_node_table: Arc::new(RwLock::new(HashMap::with_capacity(64))),
+            connect_broker_by_user: false,
+            default_broker_id: mix_all::MASTER_ID,
+            filter_message_hook_list: Vec::new(),
+        }
     }
 
     pub fn register_filter_message_hook(
         &mut self,
         filter_message_hook_list: Vec<Arc<Box<dyn FilterMessageHook + Send + Sync>>>,
     ) {
-        unimplemented!("PullAPIWrapper::registerFilterMessageHook")
+        self.filter_message_hook_list = filter_message_hook_list;
     }
 }

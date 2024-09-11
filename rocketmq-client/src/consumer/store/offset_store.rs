@@ -92,20 +92,20 @@ impl OffsetStore {
         0
     }
 
-    pub async fn persist_all(&self, mqs: &HashSet<MessageQueue>) {
-        if let Some(store) = &self.remote_broker_offset_store {
+    pub async fn persist_all(&mut self, mqs: &HashSet<MessageQueue>) {
+        if let Some(ref mut store) = self.remote_broker_offset_store {
             store.persist_all(mqs).await;
         }
-        if let Some(store) = &self.local_file_offset_store {
+        if let Some(ref mut store) = self.local_file_offset_store {
             store.persist_all(mqs).await;
         }
     }
 
-    pub async fn persist(&self, mq: &MessageQueue) {
-        if let Some(store) = &self.remote_broker_offset_store {
+    pub async fn persist(&mut self, mq: &MessageQueue) {
+        if let Some(ref mut store) = self.remote_broker_offset_store {
             store.persist(mq).await;
         }
-        if let Some(store) = &self.local_file_offset_store {
+        if let Some(ref mut store) = self.local_file_offset_store {
             store.persist(mq).await;
         }
     }
@@ -129,20 +129,20 @@ impl OffsetStore {
     }
 
     pub async fn update_consume_offset_to_broker(
-        &self,
+        &mut self,
         mq: &MessageQueue,
         offset: i64,
         is_oneway: bool,
     ) -> Result<()> {
-        if let Some(store) = &self.remote_broker_offset_store {
-            return store
+        if let Some(ref mut store) = self.remote_broker_offset_store {
+            store
                 .update_consume_offset_to_broker(mq, offset, is_oneway)
-                .await;
+                .await?;
         }
-        if let Some(store) = &self.local_file_offset_store {
-            return store
+        if let Some(ref mut store) = self.local_file_offset_store {
+            store
                 .update_consume_offset_to_broker(mq, offset, is_oneway)
-                .await;
+                .await?;
         }
         Ok(())
     }
@@ -156,16 +156,16 @@ pub trait OffsetStoreTrait {
     async fn update_and_freeze_offset(&self, mq: &MessageQueue, offset: i64);
     async fn read_offset(&self, mq: &MessageQueue, type_: ReadOffsetType) -> i64;
 
-    async fn persist_all(&self, mqs: &HashSet<MessageQueue>);
+    async fn persist_all(&mut self, mqs: &HashSet<MessageQueue>);
 
-    async fn persist(&self, mq: &MessageQueue);
+    async fn persist(&mut self, mq: &MessageQueue);
 
     async fn remove_offset(&self, mq: &MessageQueue);
 
     async fn clone_offset_table(&self, topic: &str) -> HashMap<MessageQueue, i64>;
 
     async fn update_consume_offset_to_broker(
-        &self,
+        &mut self,
         mq: &MessageQueue,
         offset: i64,
         is_oneway: bool,

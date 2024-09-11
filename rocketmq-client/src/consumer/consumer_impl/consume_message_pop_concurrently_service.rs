@@ -14,19 +14,50 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::sync::Arc;
+
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_common::ArcRefCellWrapper;
+use rocketmq_common::WeakCellWrapper;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 
+use crate::base::client_config::ClientConfig;
 use crate::consumer::consumer_impl::consume_message_service::ConsumeMessageServiceTrait;
+use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
 use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
 use crate::consumer::consumer_impl::process_queue::ProcessQueue;
+use crate::consumer::default_mq_push_consumer::ConsumerConfig;
+use crate::consumer::listener::message_listener_concurrently::ArcBoxMessageListenerConcurrently;
 
-pub struct ConsumeMessagePopConcurrentlyService;
+pub struct ConsumeMessagePopConcurrentlyService {
+    pub(crate) default_mqpush_consumer_impl: Option<WeakCellWrapper<DefaultMQPushConsumerImpl>>,
+    pub(crate) client_config: ArcRefCellWrapper<ClientConfig>,
+    pub(crate) consumer_config: ArcRefCellWrapper<ConsumerConfig>,
+    pub(crate) consumer_group: Arc<String>,
+    pub(crate) message_listener: ArcBoxMessageListenerConcurrently,
+}
+
+impl ConsumeMessagePopConcurrentlyService {
+    pub fn new(
+        client_config: ArcRefCellWrapper<ClientConfig>,
+        consumer_config: ArcRefCellWrapper<ConsumerConfig>,
+        consumer_group: String,
+        message_listener: ArcBoxMessageListenerConcurrently,
+    ) -> Self {
+        Self {
+            default_mqpush_consumer_impl: None,
+            client_config,
+            consumer_config,
+            consumer_group: Arc::new(consumer_group),
+            message_listener,
+        }
+    }
+}
 
 impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
     fn start(&mut self) {
-        todo!()
+        // nothing to do
     }
 
     fn shutdown(&self, await_terminate_millis: u64) {
