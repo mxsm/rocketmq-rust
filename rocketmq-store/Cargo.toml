@@ -57,7 +57,7 @@ num_cpus.workspace = true
 tempfile = "3.12.0"
 log = "0.4.22"
 
-memmap2 = "0.9.4"
+memmap2 = "0.9.5"
 trait-variant.workspace = true
 sysinfo = "0.31.4"
 once_cell = { workspace = true }
