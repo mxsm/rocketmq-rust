@@ -54,7 +54,7 @@ rand = "0.8.5"
 #tools
 dirs.workspace = true
 
-local-ip-address = "0.6.2"
+local-ip-address = "0.6.3"
 dns-lookup = "2.0"
 log = "0.4.22"
 cfg-if = { workspace = true }
