@@ -38,7 +38,7 @@ futures-sink = "0.3.0"
 futures-io = { version = "0.3.0" }
 futures-util = { version = "0.3.0" }
 futures = "0.3.29"
-bytes = "1.7.1"
+bytes = "1.7.2"
 config.workspace = true
 parking_lot.workspace = true
 
