@@ -547,6 +547,10 @@ impl RemotingCommand {
         &self.body
     }
 
+    pub fn take_body(&mut self) -> Option<Bytes> {
+        self.body.take()
+    }
+
     pub fn suspended(&self) -> bool {
         self.suspended
     }

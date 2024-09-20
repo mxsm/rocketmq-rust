@@ -14,27 +14,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::fmt::Display;
+use crate::consumer::pull_result::PullResult;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ServiceState {
-    /// Service just created, not started
-    CreateJust,
-    /// Service running
-    Running,
-    /// Service shutdown
-    ShutdownAlready,
-    /// Service start failure
-    StartFailed,
-}
-
-impl Display for ServiceState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ServiceState::CreateJust => write!(f, "CreateJust"),
-            ServiceState::Running => write!(f, "Running"),
-            ServiceState::ShutdownAlready => write!(f, "ShutdownAlready"),
-            ServiceState::StartFailed => write!(f, "StartFailed"),
-        }
-    }
+pub(crate) struct PullResultExt {
+    pub(crate) pull_result: PullResult,
+    pub(crate) suggest_which_broker_id: u64,
+    pub(crate) message_binary: Option<bytes::Bytes>,
+    pub(crate) offset_delta: Option<i64>,
 }

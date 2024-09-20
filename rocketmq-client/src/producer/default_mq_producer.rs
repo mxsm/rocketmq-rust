@@ -752,12 +752,12 @@ impl MQProducer for DefaultMQProducer {
         Ok(())
     }
 
-    async fn send_to_queue<M>(&mut self, mut msg: M, mut mq: MessageQueue) -> Result<SendResult>
+    async fn send_to_queue<M>(&mut self, mut msg: M, mq: MessageQueue) -> Result<SendResult>
     where
         M: MessageTrait + Clone + Send + Sync,
     {
         msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
-        self.client_config.queue_with_namespace(&mut mq);
+        let mq = self.client_config.queue_with_namespace(mq);
         let result =
             if self.get_auto_batch() && msg.as_any().downcast_ref::<MessageBatch>().is_none() {
                 self.send_by_accumulator(msg, Some(mq), None).await
@@ -770,14 +770,14 @@ impl MQProducer for DefaultMQProducer {
     async fn send_to_queue_with_timeout<M>(
         &mut self,
         mut msg: M,
-        mut mq: MessageQueue,
+        mq: MessageQueue,
         timeout: u64,
     ) -> Result<SendResult>
     where
         M: MessageTrait + Clone + Send + Sync,
     {
         msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
-        self.client_config.queue_with_namespace(&mut mq);
+        let mq = self.client_config.queue_with_namespace(mq);
         let result = self
             .default_mqproducer_impl
             .as_mut()
@@ -790,7 +790,7 @@ impl MQProducer for DefaultMQProducer {
     async fn send_to_queue_with_callback<M, F>(
         &mut self,
         mut msg: M,
-        mut mq: MessageQueue,
+        mq: MessageQueue,
         send_callback: F,
     ) -> Result<()>
     where
@@ -798,7 +798,7 @@ impl MQProducer for DefaultMQProducer {
         F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
     {
         msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
-        self.client_config.queue_with_namespace(&mut mq);
+        let mq = self.client_config.queue_with_namespace(mq);
 
         if self.get_auto_batch() && msg.as_any().downcast_ref::<MessageBatch>().is_none() {
             self.send_by_accumulator(msg, Some(mq), Some(Arc::new(send_callback)))
@@ -835,12 +835,12 @@ impl MQProducer for DefaultMQProducer {
             .await
     }
 
-    async fn send_oneway_to_queue<M>(&mut self, mut msg: M, mut mq: MessageQueue) -> Result<()>
+    async fn send_oneway_to_queue<M>(&mut self, mut msg: M, mq: MessageQueue) -> Result<()>
     where
         M: MessageTrait + Clone + Send + Sync,
     {
         msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
-        self.client_config.queue_with_namespace(&mut mq);
+        let mq = self.client_config.queue_with_namespace(mq);
         self.default_mqproducer_impl
             .as_mut()
             .unwrap()
@@ -863,7 +863,7 @@ impl MQProducer for DefaultMQProducer {
         T: std::any::Any + Send + Sync,
     {
         msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
-        let mut mq = self
+        let mq = self
             .default_mqproducer_impl
             .as_mut()
             .unwrap()
@@ -874,7 +874,7 @@ impl MQProducer for DefaultMQProducer {
                 self.producer_config.send_msg_timeout() as u64,
             )
             .await?;
-        self.client_config.queue_with_namespace(&mut mq);
+        let mq = self.client_config.queue_with_namespace(mq);
         let result =
             if self.get_auto_batch() && msg.as_any().downcast_ref::<MessageBatch>().is_none() {
                 self.send_by_accumulator(msg, Some(mq), None).await
@@ -924,7 +924,7 @@ impl MQProducer for DefaultMQProducer {
         T: std::any::Any + Sync + Send,
     {
         msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
-        let mut mq = self
+        let mq = self
             .default_mqproducer_impl
             .as_mut()
             .unwrap()
@@ -935,7 +935,7 @@ impl MQProducer for DefaultMQProducer {
                 self.producer_config.send_msg_timeout() as u64,
             )
             .await?;
-        self.client_config.queue_with_namespace(&mut mq);
+        let mq = self.client_config.queue_with_namespace(mq);
         if self.auto_batch() && msg.as_any().downcast_ref::<MessageBatch>().is_none() {
             self.send_by_accumulator(msg, Some(mq), send_callback).await
         } else {

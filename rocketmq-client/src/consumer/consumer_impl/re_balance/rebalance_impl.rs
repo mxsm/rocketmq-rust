@@ -42,7 +42,7 @@ const TIMEOUT_CHECK_TIMES: u32 = 3;
 const QUERY_ASSIGNMENT_TIMEOUT: u32 = 3000;
 
 pub(crate) struct RebalanceImpl<R> {
-    pub(crate) process_queue_table: Arc<RwLock<HashMap<MessageQueue, ProcessQueue>>>,
+    pub(crate) process_queue_table: Arc<RwLock<HashMap<MessageQueue, Arc<ProcessQueue>>>>,
     pub(crate) pop_process_queue_table: Arc<RwLock<HashMap<MessageQueue, PopProcessQueue>>>,
     pub(crate) topic_subscribe_info_table: Arc<RwLock<HashMap<String, HashSet<MessageQueue>>>>,
     pub(crate) subscription_inner: Arc<RwLock<HashMap<String, SubscriptionData>>>,
@@ -51,6 +51,8 @@ pub(crate) struct RebalanceImpl<R> {
     pub(crate) allocate_message_queue_strategy: Option<Arc<dyn AllocateMessageQueueStrategy>>,
     pub(crate) client_instance: Option<ArcRefCellWrapper<MQClientInstance>>,
     pub(crate) sub_rebalance_impl: Option<WeakCellWrapper<R>>,
+    pub(crate) topic_broker_rebalance: Arc<RwLock<HashMap<String, String>>>,
+    pub(crate) topic_client_rebalance: Arc<RwLock<HashMap<String, String>>>,
 }
 
 impl<R> RebalanceImpl<R>
@@ -73,6 +75,8 @@ where
             allocate_message_queue_strategy,
             client_instance: mqclient_instance,
             sub_rebalance_impl: None,
+            topic_broker_rebalance: Arc::new(RwLock::new(HashMap::with_capacity(64))),
+            topic_client_rebalance: Arc::new(RwLock::new(HashMap::with_capacity(64))),
         }
     }
 
@@ -81,12 +85,18 @@ where
         subscription_inner.insert(topic.to_string(), subscription_data);
     }
 
+    #[inline]
     pub async fn do_rebalance(&mut self, is_order: bool) -> bool {
         let mut balanced = true;
-        let sub_inner = self.subscription_inner.clone();
-        let sub_table = sub_inner.read().await;
+        let sub_table = self.subscription_inner.read().await;
         if !sub_table.is_empty() {
-            for (topic, _) in sub_table.iter() {
+            let topics = sub_table
+                .keys()
+                .map(|item| item.to_string())
+                .collect::<HashSet<String>>();
+            drop(sub_table);
+            for topic in &topics {
+                //try_query_assignment unimplemented
                 if !self.client_rebalance(topic) && self.try_query_assignment(topic).await {
                     if !self.get_rebalance_result_from_broker(topic, is_order).await {
                         balanced = false;
@@ -113,7 +123,41 @@ where
     }
 
     async fn truncate_message_queue_not_my_topic(&self) {
-        unimplemented!("truncate_message_queue_not_my_topic")
+        let sub_table = self.subscription_inner.read().await;
+
+        let mut process_queue_table = self.process_queue_table.write().await;
+        process_queue_table.retain(|mq, pq| {
+            if !sub_table.contains_key(mq.get_topic()) {
+                pq.set_dropped(true);
+                info!(
+                    "doRebalance, {}, truncateMessageQueueNotMyTopic remove unnecessary mq, {}",
+                    self.consumer_group.as_ref().unwrap(),
+                    mq.get_topic()
+                );
+                false
+            } else {
+                true
+            }
+        });
+        let mut pop_process_queue_table = self.pop_process_queue_table.write().await;
+        pop_process_queue_table.retain(|mq, pq| {
+            if !sub_table.contains_key(mq.get_topic()) {
+                pq.set_dropped(true);
+                info!(
+                    "doRebalance, {}, truncateMessageQueueNotMyTopic remove unnecessary pop mq, {}",
+                    self.consumer_group.as_ref().unwrap(),
+                    mq.get_topic()
+                );
+                false
+            } else {
+                true
+            }
+        });
+
+        let mut topic_client_rebalance = self.topic_client_rebalance.write().await;
+        topic_client_rebalance.retain(|topic, _| sub_table.contains_key(topic));
+        let mut topic_broker_rebalance = self.topic_broker_rebalance.write().await;
+        topic_broker_rebalance.retain(|topic, _| sub_table.contains_key(topic));
     }
 
     async fn get_rebalance_result_from_broker(&self, topic: &str, is_order: bool) -> bool {
@@ -192,7 +236,7 @@ where
                 }
 
                 sub_rebalance_impl.remove_dirty_offset(mq).await;
-                let pq = ProcessQueue::new();
+                let pq = Arc::new(ProcessQueue::new());
                 pq.set_locked(true);
                 let next_offset = sub_rebalance_impl.compute_pull_from_where(mq).await;
                 if next_offset >= 0 {
@@ -253,7 +297,7 @@ where
                     .find_consumer_id_list(topic, self.consumer_group.as_ref().unwrap())
                     .await;
                 if ci_all.is_none() && !topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
-                    if let Some(sub_rebalance_impl) =
+                    if let Some(mut sub_rebalance_impl) =
                         self.sub_rebalance_impl.as_ref().unwrap().upgrade()
                     {
                         sub_rebalance_impl
@@ -315,7 +359,7 @@ where
                         .await;
                     if changed {
                         // info
-                        if let Some(sub_rebalance_impl) =
+                        if let Some(mut sub_rebalance_impl) =
                             self.sub_rebalance_impl.as_ref().unwrap().upgrade()
                         {
                             sub_rebalance_impl
@@ -323,15 +367,28 @@ where
                                 .await;
                         }
                     }
-                    return allocate_result_set.eq(&self.get_working_message_queue(topic));
+                    return allocate_result_set.eq(&self.get_working_message_queue(topic).await);
                 }
                 true
             }
         }
     }
 
-    pub fn get_working_message_queue(&self, topic: &str) -> HashSet<MessageQueue> {
-        unimplemented!()
+    pub async fn get_working_message_queue(&self, topic: &str) -> HashSet<MessageQueue> {
+        let mut queue_set = HashSet::new();
+        let process_queue_table = self.process_queue_table.read().await;
+        for (mq, pq) in process_queue_table.iter() {
+            if mq.get_topic() == topic && !pq.is_dropped() {
+                queue_set.insert(mq.clone());
+            }
+        }
+        let pop_process_queue_table = self.pop_process_queue_table.read().await;
+        for (mq, pq) in pop_process_queue_table.iter() {
+            if mq.get_topic() == topic && !pq.is_dropped() {
+                queue_set.insert(mq.clone());
+            }
+        }
+        queue_set
     }
 
     pub fn lock(&self, mq: &MessageQueue) -> bool {

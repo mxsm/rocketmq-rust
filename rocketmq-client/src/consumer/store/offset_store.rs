@@ -82,11 +82,11 @@ impl OffsetStore {
         }
     }
     pub async fn read_offset(&self, mq: &MessageQueue, type_: ReadOffsetType) -> i64 {
-        if let Some(store) = &self.remote_broker_offset_store {
+        if let Some(ref store) = self.remote_broker_offset_store {
             return store.read_offset(mq, type_).await;
         }
 
-        if let Some(store) = &self.local_file_offset_store {
+        if let Some(ref store) = self.local_file_offset_store {
             return store.read_offset(mq, type_).await;
         }
         0

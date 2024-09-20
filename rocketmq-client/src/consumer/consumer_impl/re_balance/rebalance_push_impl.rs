@@ -149,7 +149,7 @@ impl RebalancePushImpl {
 
 impl Rebalance for RebalancePushImpl {
     async fn message_queue_changed(
-        &self,
+        &mut self,
         topic: &str,
         mq_all: &HashSet<MessageQueue>,
         mq_divided: &HashSet<MessageQueue>,
@@ -167,9 +167,27 @@ impl Rebalance for RebalancePushImpl {
         let process_queue_table = self.rebalance_impl_inner.process_queue_table.read().await;
         let current_queue_count = process_queue_table.len();
         if current_queue_count != 0 {
-            unimplemented!()
+            let pull_threshold_for_topic = self.consumer_config.pull_threshold_for_topic;
+            if pull_threshold_for_topic != -1 {
+                let new_val = 1.max(pull_threshold_for_topic / current_queue_count as i32);
+                info!(
+                    "The pullThresholdForQueue is changed from {} to {}",
+                    pull_threshold_for_topic, new_val
+                );
+                self.consumer_config.pull_threshold_for_topic = new_val;
+            }
+            let pull_threshold_size_for_topic = self.consumer_config.pull_threshold_size_for_topic;
+            if pull_threshold_size_for_topic != -1 {
+                let new_val = 1.max(pull_threshold_size_for_topic / current_queue_count as i32);
+                info!(
+                    "The pullThresholdSizeForQueue is changed from {} to {}",
+                    pull_threshold_size_for_topic, new_val
+                );
+                self.consumer_config.pull_threshold_size_for_topic = new_val;
+            }
         }
-        self.rebalance_impl_inner
+        let _ = self
+            .rebalance_impl_inner
             .client_instance
             .as_ref()
             .unwrap()
@@ -394,8 +412,21 @@ impl Rebalance for RebalancePushImpl {
         PopProcessQueue::new()
     }
 
-    fn remove_process_queue(&self, mq: MessageQueue) {
-        todo!()
+    async fn remove_process_queue(&mut self, mq: &MessageQueue) {
+        let mut process_queue_table = self.rebalance_impl_inner.process_queue_table.write().await;
+        let prev = process_queue_table.remove(mq);
+        drop(process_queue_table);
+        if let Some(pq) = prev {
+            let droped = pq.is_dropped();
+            pq.set_dropped(true);
+            self.remove_unnecessary_message_queue(mq, &pq).await;
+            info!(
+                "Fix Offset, {}, remove unnecessary mq, {} Droped: {}",
+                self.rebalance_impl_inner.consumer_group.as_ref().unwrap(),
+                mq,
+                droped
+            );
+        }
     }
 
     fn unlock(&self, mq: MessageQueue, oneway: bool) {

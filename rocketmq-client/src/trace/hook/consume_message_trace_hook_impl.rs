@@ -35,11 +35,11 @@ impl ConsumeMessageHook for ConsumeMessageTraceHookImpl {
         todo!()
     }
 
-    fn consume_message_before(&self, context: Option<&ConsumeMessageContext>) {
+    fn consume_message_before(&self, context: Option<&mut ConsumeMessageContext>) {
         todo!()
     }
 
-    fn consume_message_after(&self, context: Option<&ConsumeMessageContext>) {
+    fn consume_message_after(&self, context: Option<&mut ConsumeMessageContext>) {
         todo!()
     }
 }

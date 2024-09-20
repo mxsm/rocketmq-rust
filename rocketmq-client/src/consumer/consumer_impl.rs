@@ -29,6 +29,7 @@ pub(crate) mod process_queue;
 pub(crate) mod pull_api_wrapper;
 pub(crate) mod pull_message_service;
 pub(crate) mod pull_request;
+pub(crate) mod pull_request_ext;
 pub(crate) mod re_balance;
 
 pub(crate) static PULL_MAX_IDLE_TIME: Lazy<u64> = Lazy::new(|| {

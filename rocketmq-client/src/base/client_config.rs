@@ -142,15 +142,18 @@ impl ClientConfig {
         )
     }
 
-    pub fn queue_with_namespace(&mut self, queue: &mut MessageQueue) {
+    pub fn queue_with_namespace(&mut self, queue: MessageQueue) -> MessageQueue {
         if let Some(namespace) = self.get_namespace() {
             if !namespace.is_empty() {
-                queue.set_topic(NamespaceUtil::wrap_namespace(
+                let mut message_queue = queue.clone();
+                message_queue.set_topic(NamespaceUtil::wrap_namespace(
                     namespace.as_str(),
                     queue.get_topic(),
                 ));
+                return message_queue;
             }
         }
+        queue
     }
 
     pub fn get_namespace(&mut self) -> Option<String> {

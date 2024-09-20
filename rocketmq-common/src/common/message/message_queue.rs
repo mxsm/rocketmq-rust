@@ -63,6 +63,7 @@ impl MessageQueue {
         &self.topic
     }
 
+    #[inline]
     pub fn set_topic(&mut self, topic: String) {
         self.topic = topic;
     }

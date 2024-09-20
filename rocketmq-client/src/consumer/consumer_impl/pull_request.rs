@@ -16,6 +16,7 @@
  */
 use std::hash::Hash;
 use std::hash::Hasher;
+use std::sync::Arc;
 
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_common::common::message::message_queue::MessageQueue;
@@ -24,19 +25,19 @@ use crate::consumer::consumer_impl::message_request::MessageRequest;
 use crate::consumer::consumer_impl::process_queue::ProcessQueue;
 
 #[derive(Clone)]
-pub struct PullRequest {
-    consumer_group: String,
-    message_queue: MessageQueue,
-    process_queue: ProcessQueue,
-    next_offset: i64,
-    previously_locked: bool,
+pub(crate) struct PullRequest {
+    pub(crate) consumer_group: String,
+    pub(crate) message_queue: MessageQueue,
+    pub(crate) process_queue: Arc<ProcessQueue>,
+    pub(crate) next_offset: i64,
+    pub(crate) previously_locked: bool,
 }
 
 impl PullRequest {
     pub fn new(
         consumer_group: String,
         message_queue: MessageQueue,
-        process_queue: ProcessQueue,
+        process_queue: Arc<ProcessQueue>,
         next_offset: i64,
     ) -> Self {
         PullRequest {
@@ -80,11 +81,11 @@ impl PullRequest {
         self.next_offset = next_offset;
     }
 
-    pub fn get_process_queue(&self) -> &ProcessQueue {
+    pub fn get_process_queue(&self) -> &Arc<ProcessQueue> {
         &self.process_queue
     }
 
-    pub fn set_process_queue(&mut self, process_queue: ProcessQueue) {
+    pub fn set_process_queue(&mut self, process_queue: Arc<ProcessQueue>) {
         self.process_queue = process_queue;
     }
 }

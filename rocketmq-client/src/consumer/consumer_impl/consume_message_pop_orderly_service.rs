@@ -14,8 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::sync::Arc;
+
+use rocketmq_common::common::message::message_client_ext::MessageClientExt;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 
 use crate::consumer::consumer_impl::consume_message_service::ConsumeMessageServiceTrait;
@@ -59,9 +63,9 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
 
     async fn submit_consume_request(
         &self,
-        msgs: Vec<MessageExt>,
-        process_queue: &ProcessQueue,
-        message_queue: &MessageQueue,
+        msgs: Vec<ArcRefCellWrapper<MessageClientExt>>,
+        process_queue: Arc<ProcessQueue>,
+        message_queue: MessageQueue,
         dispatch_to_consume: bool,
     ) {
         todo!()

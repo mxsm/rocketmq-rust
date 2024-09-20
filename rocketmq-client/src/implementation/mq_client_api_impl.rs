@@ -22,6 +22,7 @@ use bytes::Bytes;
 use lazy_static::lazy_static;
 use rocketmq_common::common::message::message_batch::MessageBatch;
 use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
+use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
@@ -29,6 +30,7 @@ use rocketmq_common::common::mix_all;
 use rocketmq_common::common::namesrv::default_top_addressing::DefaultTopAddressing;
 use rocketmq_common::common::namesrv::name_server_update_callback::NameServerUpdateCallback;
 use rocketmq_common::common::namesrv::top_addressing::TopAddressing;
+use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_remoting::base::connection_net_event::ConnectionNetEvent;
@@ -39,11 +41,16 @@ use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::body::check_client_request_body::CheckClientRequestBody;
 use rocketmq_remoting::protocol::body::get_consumer_listby_group_response_body::GetConsumerListByGroupResponseBody;
 use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+use rocketmq_remoting::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
 use rocketmq_remoting::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
 use rocketmq_remoting::protocol::header::heartbeat_request_header::HeartbeatRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
+use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
+use rocketmq_remoting::protocol::header::pull_message_response_header::PullMessageResponseHeader;
+use rocketmq_remoting::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
+use rocketmq_remoting::protocol::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader;
 use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
 use rocketmq_remoting::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
@@ -53,13 +60,19 @@ use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::remoting::RemotingService;
+use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_remoting::runtime::RPCHook;
 use tracing::error;
 use tracing::warn;
 
 use crate::base::client_config::ClientConfig;
+use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
+use crate::consumer::pull_callback::PullCallback;
+use crate::consumer::pull_result::PullResult;
+use crate::consumer::pull_status::PullStatus;
 use crate::error::MQClientError;
+use crate::error::MQClientError::MQBrokerError;
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::hook::send_message_context::SendMessageContext;
 use crate::implementation::client_remoting_processor::ClientRemotingProcessor;
@@ -740,7 +753,11 @@ impl MQClientAPIImpl {
             request_header,
         );
         self.remoting_client
-            .invoke_oneway(addr.to_string(), request, timeout_millis)
+            .invoke_oneway(
+                mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr),
+                request,
+                timeout_millis,
+            )
             .await;
         Ok(())
     }
@@ -767,6 +784,214 @@ impl MQClientAPIImpl {
             ))
         } else {
             Ok(())
+        }
+    }
+
+    pub async fn query_consumer_offset(
+        &mut self,
+        addr: &str,
+        request_header: QueryConsumerOffsetRequestHeader,
+        timeout_millis: u64,
+    ) -> Result<i64> {
+        let request = RemotingCommand::create_request_command(
+            RequestCode::QueryConsumerOffset,
+            request_header,
+        );
+        let response = self
+            .remoting_client
+            .invoke_async(
+                Some(mix_all::broker_vip_channel(
+                    self.client_config.vip_channel_enabled,
+                    addr,
+                )),
+                request,
+                timeout_millis,
+            )
+            .await?;
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {
+                let response_header = response
+                    .decode_command_custom_header::<QueryConsumerOffsetResponseHeader>()
+                    .unwrap();
+                return Ok(response_header.offset.unwrap());
+            }
+            ResponseCode::QueryNotFound => {
+                return Err(MQClientError::OffsetNotFoundError(
+                    response.code(),
+                    response.remark().map_or("".to_string(), |s| s.to_string()),
+                    addr.to_string(),
+                ))
+            }
+            _ => {}
+        }
+        Err(MQClientError::MQBrokerError(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string()),
+            addr.to_string(),
+        ))
+    }
+
+    pub async fn pull_message<PCB>(
+        &mut self,
+        addr: &str,
+        request_header: PullMessageRequestHeader,
+        timeout_millis: u64,
+        communication_mode: CommunicationMode,
+        pull_callback: PCB,
+    ) -> Result<Option<PullResultExt>>
+    where
+        PCB: PullCallback,
+    {
+        let request = if PullSysFlag::has_lite_pull_flag(request_header.sys_flag as u32) {
+            RemotingCommand::create_request_command(RequestCode::LitePullMessage, request_header)
+        } else {
+            RemotingCommand::create_request_command(RequestCode::PullMessage, request_header)
+        };
+        match communication_mode {
+            CommunicationMode::Sync => {
+                let result_ext = self
+                    .pull_message_sync(addr, request, timeout_millis)
+                    .await?;
+                Ok(Some(result_ext))
+            }
+            CommunicationMode::Async => {
+                self.pull_message_async(addr, request, timeout_millis, pull_callback)
+                    .await?;
+                Ok(None)
+            }
+            CommunicationMode::Oneway => Ok(None),
+        }
+    }
+
+    async fn pull_message_sync(
+        &mut self,
+        addr: &str,
+        request: RemotingCommand,
+        timeout_millis: u64,
+    ) -> Result<PullResultExt> {
+        let response = self
+            .remoting_client
+            .invoke_async(Some(addr.to_string()), request, timeout_millis)
+            .await?;
+        self.process_pull_response(response, addr).await
+    }
+
+    async fn pull_message_async<PCB>(
+        &mut self,
+        addr: &str,
+        request: RemotingCommand,
+        timeout_millis: u64,
+        mut pull_callback: PCB,
+    ) -> Result<()>
+    where
+        PCB: PullCallback,
+    {
+        match self
+            .remoting_client
+            .invoke_async(Some(addr.to_string()), request, timeout_millis)
+            .await
+        {
+            Ok(response) => {
+                let result = self.process_pull_response(response, addr).await;
+                match result {
+                    Ok(pull_result) => {
+                        pull_callback.on_success(pull_result).await;
+                    }
+                    Err(error) => {
+                        pull_callback.on_exception(Box::new(error));
+                    }
+                }
+            }
+            Err(err) => {
+                pull_callback.on_exception(Box::new(err));
+            }
+        }
+        Ok(())
+    }
+
+    async fn process_pull_response(
+        &mut self,
+        mut response: RemotingCommand,
+        addr: &str,
+    ) -> Result<PullResultExt> {
+        let pull_status = match ResponseCode::from(response.code()) {
+            ResponseCode::Success => PullStatus::Found,
+            ResponseCode::PullNotFound => PullStatus::NoNewMsg,
+            ResponseCode::PullRetryImmediately => PullStatus::NoMatchedMsg,
+            ResponseCode::PullOffsetMoved => PullStatus::OffsetIllegal,
+            _ => {
+                return Err(MQBrokerError(
+                    response.code(),
+                    response.remark().map_or("".to_string(), |s| s.to_string()),
+                    addr.to_string(),
+                ))
+            }
+        };
+        let response_header = response
+            .decode_command_custom_header::<PullMessageResponseHeader>()
+            .unwrap();
+        let pull_result = PullResultExt {
+            pull_result: PullResult {
+                pull_status,
+                next_begin_offset: response_header.next_begin_offset.unwrap_or(0) as u64,
+                min_offset: response_header.min_offset.unwrap_or(0) as u64,
+                max_offset: response_header.max_offset.unwrap_or(0) as u64,
+                msg_found_list: vec![],
+            },
+            suggest_which_broker_id: response_header.suggest_which_broker_id.unwrap_or(0),
+            message_binary: response.take_body(),
+            offset_delta: response_header.offset_delta,
+        };
+        Ok(pull_result)
+    }
+
+    pub async fn consumer_send_message_back(
+        &mut self,
+        addr: &str,
+        broker_name: &str,
+        msg: &MessageExt,
+        consumer_group: &str,
+        delay_level: i32,
+        timeout_millis: u64,
+        max_consume_retry_times: i32,
+    ) -> Result<()> {
+        let header = ConsumerSendMsgBackRequestHeader {
+            offset: msg.commit_log_offset,
+            group: consumer_group.to_string(),
+            delay_level,
+            origin_msg_id: Some(msg.msg_id.clone()),
+            origin_topic: Some(msg.get_topic().to_string()),
+            unit_mode: false,
+            max_reconsume_times: Some(max_consume_retry_times),
+            rpc_request_header: Some(RpcRequestHeader {
+                namespace: None,
+                namespaced: None,
+                broker_name: Some(broker_name.to_string()),
+                oneway: None,
+            }),
+        };
+
+        let request_command =
+            RemotingCommand::create_request_command(RequestCode::ConsumerSendMsgBack, header);
+        let response = self
+            .remoting_client
+            .invoke_async(
+                Some(mix_all::broker_vip_channel(
+                    self.client_config.vip_channel_enabled,
+                    addr,
+                )),
+                request_command,
+                timeout_millis,
+            )
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            Ok(())
+        } else {
+            Err(MQBrokerError(
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string()),
+                addr.to_string(),
+            ))
         }
     }
 }

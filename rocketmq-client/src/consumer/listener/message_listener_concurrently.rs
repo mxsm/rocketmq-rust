@@ -25,8 +25,8 @@ use crate::Result;
 pub trait MessageListenerConcurrently: Sync + Send {
     fn consume_message(
         &self,
-        msgs: Vec<MessageExt>,
-        context: ConsumeConcurrentlyContext,
+        msgs: &[&MessageExt],
+        context: &ConsumeConcurrentlyContext,
     ) -> Result<ConsumeConcurrentlyStatus>;
 }
 
