@@ -16,26 +16,27 @@
  */
 use std::fmt;
 
-use rocketmq_common::common::message::message_ext::MessageExt;
+use rocketmq_common::common::message::message_client_ext::MessageClientExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 
-pub struct FilterMessageContext {
-    consumer_group: String,
-    msg_list: Vec<MessageExt>,
-    mq: MessageQueue,
-    arg: Option<Box<dyn std::any::Any>>,
-    unit_mode: bool,
+#[derive(Default)]
+pub struct FilterMessageContext<'a> {
+    pub(crate) consumer_group: Option<String>,
+    pub(crate) msg_list: &'a [MessageClientExt],
+    pub(crate) mq: Option<&'a MessageQueue>,
+    pub(crate) arg: Option<Box<dyn std::any::Any>>,
+    pub(crate) unit_mode: bool,
 }
 
-impl FilterMessageContext {
+impl<'a> FilterMessageContext<'a> {
     pub fn new(
-        consumer_group: String,
-        msg_list: Vec<MessageExt>,
-        mq: MessageQueue,
+        consumer_group: Option<String>,
+        msg_list: &'a [MessageClientExt],
+        mq: Option<&'a MessageQueue>,
         arg: Option<Box<dyn std::any::Any>>,
         unit_mode: bool,
     ) -> Self {
-        Self {
+        FilterMessageContext {
             consumer_group,
             msg_list,
             mq,
@@ -44,40 +45,40 @@ impl FilterMessageContext {
         }
     }
 
-    pub fn consumer_group(&self) -> &str {
+    pub fn consumer_group(&self) -> &Option<String> {
         &self.consumer_group
     }
 
-    pub fn set_consumer_group(&mut self, consumer_group: String) {
-        self.consumer_group = consumer_group;
+    pub fn msg_list(&self) -> &'a [MessageClientExt] {
+        self.msg_list
     }
 
-    pub fn msg_list(&self) -> &Vec<MessageExt> {
-        &self.msg_list
+    pub fn mq(&self) -> Option<&'a MessageQueue> {
+        self.mq
     }
 
-    pub fn set_msg_list(&mut self, msg_list: Vec<MessageExt>) {
-        self.msg_list = msg_list;
-    }
-
-    pub fn mq(&self) -> &MessageQueue {
-        &self.mq
-    }
-
-    pub fn set_mq(&mut self, mq: MessageQueue) {
-        self.mq = mq;
-    }
-
-    pub fn arg(&self) -> Option<&Box<dyn std::any::Any>> {
-        self.arg.as_ref()
-    }
-
-    pub fn set_arg(&mut self, arg: Option<Box<dyn std::any::Any>>) {
-        self.arg = arg;
+    pub fn arg(&self) -> &Option<Box<dyn std::any::Any>> {
+        &self.arg
     }
 
     pub fn unit_mode(&self) -> bool {
         self.unit_mode
+    }
+
+    pub fn set_consumer_group(&mut self, consumer_group: Option<String>) {
+        self.consumer_group = consumer_group;
+    }
+
+    pub fn set_msg_list(&mut self, msg_list: &'a [MessageClientExt]) {
+        self.msg_list = msg_list;
+    }
+
+    pub fn set_mq(&mut self, mq: Option<&'a MessageQueue>) {
+        self.mq = mq;
+    }
+
+    pub fn set_arg(&mut self, arg: Option<Box<dyn std::any::Any>>) {
+        self.arg = arg;
     }
 
     pub fn set_unit_mode(&mut self, unit_mode: bool) {
@@ -85,11 +86,11 @@ impl FilterMessageContext {
     }
 }
 
-impl fmt::Debug for FilterMessageContext {
+impl fmt::Debug for FilterMessageContext<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "FilterMessageContext {{ consumer_group: {}, msg_list: {:?}, mq: {:?}, arg: {:?}, \
+            "FilterMessageContext {{ consumer_group: {:?}, msg_list: {:?}, mq: {:?}, arg: {:?}, \
              unit_mode: {} }}",
             self.consumer_group, self.msg_list, self.mq, self.arg, self.unit_mode
         )

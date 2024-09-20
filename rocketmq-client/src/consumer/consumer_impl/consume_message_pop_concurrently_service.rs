@@ -16,6 +16,7 @@
  */
 use std::sync::Arc;
 
+use rocketmq_common::common::message::message_client_ext::MessageClientExt;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::ArcRefCellWrapper;
@@ -90,9 +91,9 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
 
     async fn submit_consume_request(
         &self,
-        msgs: Vec<MessageExt>,
-        process_queue: &ProcessQueue,
-        message_queue: &MessageQueue,
+        msgs: Vec<ArcRefCellWrapper<MessageClientExt>>,
+        process_queue: Arc<ProcessQueue>,
+        message_queue: MessageQueue,
         dispatch_to_consume: bool,
     ) {
         todo!()

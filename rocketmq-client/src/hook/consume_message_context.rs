@@ -17,20 +17,21 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use rocketmq_common::common::message::message_ext::MessageExt;
+use rocketmq_common::common::message::message_client_ext::MessageClientExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_common::ArcRefCellWrapper;
 
 use crate::base::access_channel::AccessChannel;
 
 #[derive(Default)]
-pub struct ConsumeMessageContext {
+pub struct ConsumeMessageContext<'a> {
     pub consumer_group: String,
-    pub msg_list: Vec<MessageExt>,
+    pub msg_list: &'a [ArcRefCellWrapper<MessageClientExt>],
     pub mq: Option<MessageQueue>,
     pub success: bool,
     pub status: String,
     pub mq_trace_context: Option<Arc<Box<dyn std::any::Any + Send + Sync>>>,
     pub props: HashMap<String, String>,
     pub namespace: String,
-    pub access_channel: AccessChannel,
+    pub access_channel: Option<AccessChannel>,
 }

@@ -68,7 +68,7 @@ pub struct MQClientInstance<C = DefaultMQPushConsumerImpl>
 where
     C: Clone,
 {
-    client_config: Arc<ClientConfig>,
+    pub(crate) client_config: Arc<ClientConfig>,
     pub(crate) client_id: String,
     boot_timestamp: u64,
     /**
@@ -97,7 +97,7 @@ where
     service_state: ServiceState,
     pub(crate) pull_message_service: ArcRefCellWrapper<PullMessageService>,
     rebalance_service: RebalanceService,
-    default_mqproducer: ArcRefCellWrapper<DefaultMQProducer>,
+    pub(crate) default_producer: ArcRefCellWrapper<DefaultMQProducer>,
     instance_runtime: Arc<RocketMQRuntime>,
     broker_addr_table: Arc<RwLock<HashMap<String, HashMap<i64, String>>>>,
     broker_version_table:
@@ -153,7 +153,7 @@ where
             service_state: ServiceState::CreateJust,
             pull_message_service: ArcRefCellWrapper::new(PullMessageService::new()),
             rebalance_service: RebalanceService::new(),
-            default_mqproducer: ArcRefCellWrapper::new(
+            default_producer: ArcRefCellWrapper::new(
                 DefaultMQProducer::builder()
                     .producer_group(mix_all::CLIENT_INNER_PRODUCER_GROUP)
                     .client_config(client_config.clone())
@@ -181,7 +181,7 @@ where
                                         .send_heartbeat_to_broker(*id, broker_name, addr)
                                         .await
                                 {
-                                    instance_.re_balance_immediately().await;
+                                    instance_.re_balance_immediately();
                                 }
                             }
                         }
@@ -195,7 +195,7 @@ where
         instance
     }
 
-    pub async fn re_balance_immediately(&self) {
+    pub fn re_balance_immediately(&self) {
         self.rebalance_service.wakeup();
     }
 
@@ -229,7 +229,7 @@ where
                 // Start rebalance service
                 self.rebalance_service.start(self.clone()).await;
                 // Start push service
-                self.default_mqproducer
+                self.default_producer
                     .default_mqproducer_impl
                     .as_mut()
                     .unwrap()
@@ -848,7 +848,9 @@ where
         for (key, value) in consumer_table.iter() {
             match value.try_rebalance().await {
                 Ok(result) => {
-                    balanced = result;
+                    if !result {
+                        balanced = false;
+                    }
                 }
                 Err(e) => {
                     error!(
@@ -898,7 +900,11 @@ where
                 found = broker_addr.is_some();
             }
             if !found && !only_this_broker {
-                unimplemented!("findBrokerAddressInSubscribe")
+                if let Some((key, value)) = map.iter().next() {
+                    //broker_addr = Some(value.clone());
+                    slave = *key != mix_all::MASTER_ID as i64;
+                    found = !value.is_empty();
+                }
             }
         }
         if found {

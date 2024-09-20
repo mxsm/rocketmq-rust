@@ -54,6 +54,10 @@ impl Message {
         Self::with_details(topic, String::new(), String::new(), 0, body, true)
     }
 
+    pub fn new_body(topic: impl Into<String>, body: Option<Bytes>) -> Self {
+        Self::with_details_body(topic, String::new(), String::new(), 0, body, true)
+    }
+
     pub fn with_tags(topic: impl Into<String>, tags: impl Into<String>, body: &[u8]) -> Self {
         Self::with_details(topic, tags, String::new(), 0, body, true)
     }
@@ -82,6 +86,36 @@ impl Message {
             topic,
             flag,
             body: Some(bytes::Bytes::copy_from_slice(body)),
+            ..Default::default()
+        };
+
+        if !tags.is_empty() {
+            message.set_tags(tags);
+        }
+
+        if !keys.is_empty() {
+            message.set_keys(keys);
+        }
+
+        message.set_wait_store_msg_ok(wait_store_msg_ok);
+        message
+    }
+
+    pub fn with_details_body(
+        topic: impl Into<String>,
+        tags: impl Into<String>,
+        keys: impl Into<String>,
+        flag: i32,
+        body: Option<Bytes>,
+        wait_store_msg_ok: bool,
+    ) -> Self {
+        let topic = topic.into();
+        let tags = tags.into();
+        let keys = keys.into();
+        let mut message = Message {
+            topic,
+            flag,
+            body,
             ..Default::default()
         };
 

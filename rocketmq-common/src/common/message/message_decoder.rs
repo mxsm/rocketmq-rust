@@ -28,11 +28,14 @@ use bytes::Bytes;
 use bytes::BytesMut;
 
 use crate::common::compression::compression_type::CompressionType;
+use crate::common::message::message_client_ext::MessageClientExt;
 use crate::common::message::message_ext::MessageExt;
 use crate::common::message::message_single::Message;
+use crate::common::message::MessageTrait;
 use crate::common::message::MessageVersion;
 use crate::common::sys_flag::message_sys_flag::MessageSysFlag;
 use crate::CRC32Utils::crc32;
+use crate::MessageAccessor::MessageAccessor;
 use crate::MessageUtils::build_message_id;
 use crate::Result;
 
@@ -52,6 +55,32 @@ pub const SYSFLAG_POSITION: usize = 4 + 4 + 4 + 4 + 4 + 8 + 8;
 pub const BORN_TIMESTAMP_POSITION: usize = 4 + 4 + 4 + 4 + 4 + 8 + 8 + 4 + 8;
 
 pub fn string_to_message_properties(properties: Option<&String>) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    if let Some(properties) = properties {
+        let mut index = 0;
+        let len = properties.len();
+        while index < len {
+            let new_index = properties[index..]
+                .find(PROPERTY_SEPARATOR)
+                .map_or(len, |i| index + i);
+            if new_index - index >= 3 {
+                if let Some(kv_sep_index) = properties[index..new_index].find(NAME_VALUE_SEPARATOR)
+                {
+                    let kv_sep_index = index + kv_sep_index;
+                    if kv_sep_index > index && kv_sep_index < new_index - 1 {
+                        let k = &properties[index..kv_sep_index];
+                        let v = &properties[kv_sep_index + 1..new_index];
+                        map.insert(k.to_string(), v.to_string());
+                    }
+                }
+            }
+            index = new_index + 1;
+        }
+    }
+    map
+}
+
+pub fn str_to_message_properties(properties: Option<&str>) -> HashMap<String, String> {
     let mut map = HashMap::new();
     if let Some(properties) = properties {
         let mut index = 0;
@@ -97,6 +126,41 @@ pub fn message_properties_to_string(properties: &HashMap<String, String>) -> Str
     sb
 }
 
+pub fn decode_client(
+    byte_buffer: &mut Bytes,
+    read_body: bool,
+    de_compress_body: bool,
+    is_set_properties_string: bool,
+    check_crc: bool,
+) -> Option<MessageClientExt> {
+    /*if let Some(msg_ext) = decode(
+        byte_buffer,
+        read_body,
+        de_compress_body,
+        false,
+        is_set_properties_string,
+        check_crc,
+    ) {
+        Some(MessageClientExt {
+            message_ext_inner: msg_ext,
+        })
+    } else {
+        None
+    }*/
+    decode(
+        byte_buffer,
+        read_body,
+        de_compress_body,
+        false,
+        is_set_properties_string,
+        check_crc,
+    )
+    .map(|msg_ext| MessageClientExt {
+        message_ext_inner: msg_ext,
+    })
+}
+
+//this method will optimize later
 pub fn decode(
     byte_buffer: &mut Bytes,
     read_body: bool,
@@ -321,11 +385,11 @@ pub fn encode_message(message: &Message) -> Bytes {
     let properties_length = properties_bytes.len();
 
     let store_size = 4 // 1 TOTALSIZE
-         + 4 // 2 MAGICCOD
-         + 4 // 3 BODYCRC
-         + 4 // 4 FLAG
-         + 4 + body_len // 4 BODY
-         + 2 + properties_length;
+          + 4 // 2 MAGICCOD
+          + 4 // 3 BODYCRC
+          + 4 // 4 FLAG
+          + 4 + body_len // 4 BODY
+          + 2 + properties_length;
 
     let mut bytes = BytesMut::with_capacity(store_size);
 
@@ -350,6 +414,108 @@ pub fn encode_message(message: &Message) -> Bytes {
     bytes.put_slice(properties_bytes);
 
     bytes.freeze()
+}
+
+pub fn decodes_batch(
+    byte_buffer: &mut Bytes,
+    read_body: bool,
+    decompress_body: bool,
+) -> Vec<MessageExt> {
+    let mut messages = Vec::new();
+    while byte_buffer.has_remaining() {
+        if let Some(msg_ext) = decode(byte_buffer, read_body, decompress_body, false, false, false)
+        {
+            messages.push(msg_ext);
+        } else {
+            break;
+        }
+    }
+    messages
+}
+
+pub fn decodes_batch_client(
+    byte_buffer: &mut Bytes,
+    read_body: bool,
+    decompress_body: bool,
+) -> Vec<MessageClientExt> {
+    let mut messages = Vec::new();
+    while byte_buffer.has_remaining() {
+        if let Some(msg_ext) = decode_client(byte_buffer, read_body, decompress_body, false, false)
+        {
+            messages.push(msg_ext);
+        } else {
+            break;
+        }
+    }
+    messages
+}
+
+pub fn decode_message_client(mut message_ext: MessageExt, vec_: &mut Vec<MessageClientExt>) {
+    let messages = decode_messages(message_ext.message.body.as_mut().unwrap());
+    for message in messages {
+        let mut message_client_ext = MessageClientExt {
+            message_ext_inner: MessageExt {
+                message,
+                ..MessageExt::default()
+            },
+        };
+        message_client_ext.set_topic(message_ext.get_topic());
+        message_client_ext.message_ext_inner.queue_offset = message_ext.queue_offset;
+        message_client_ext.message_ext_inner.queue_id = message_ext.queue_id;
+        message_client_ext.set_flag(message_ext.get_flag());
+        //MessageAccessor::set_properties(&mut
+        // message_client_ext,message.get_properties().clone()); messageClientExt.
+        // setBody(message.getBody())
+        message_client_ext.message_ext_inner.store_host = message_ext.store_host;
+        message_client_ext.message_ext_inner.born_host = message_ext.born_host;
+        message_client_ext.message_ext_inner.store_timestamp = message_ext.store_timestamp;
+        message_client_ext.message_ext_inner.born_timestamp = message_ext.born_timestamp;
+        message_client_ext.message_ext_inner.sys_flag = message_ext.sys_flag;
+        message_client_ext.message_ext_inner.commit_log_offset = message_ext.commit_log_offset;
+        message_client_ext.set_wait_store_msg_ok(message_ext.is_wait_store_msg_ok());
+        vec_.push(message_client_ext);
+    }
+}
+
+pub fn decode_messages(buffer: &mut Bytes) -> Vec<Message> {
+    let mut messages = Vec::new();
+    while buffer.has_remaining() {
+        let message = decode_message(buffer);
+        messages.push(message);
+    }
+    messages
+}
+
+pub fn decode_message(buffer: &mut Bytes) -> Message {
+    // 1 TOTALSIZE
+    let _ = buffer.get_i32();
+
+    // 2 MAGICCODE
+    let _ = buffer.get_i32();
+
+    // 3 BODYCRC
+    let _ = buffer.get_i32();
+
+    // 4 FLAG
+    let flag = buffer.get_i32();
+
+    // 5 BODY
+    let body_len = buffer.get_i32();
+    let body = buffer.split_to(body_len as usize);
+
+    // 6 properties
+    let properties_length = buffer.get_i16();
+    let properties = buffer.split_to(properties_length as usize);
+    //string_to_message_properties(Some(&String::from_utf8_lossy(properties.as_ref()).
+    // to_string()));
+    let message_properties = str_to_message_properties(Some(str::from_utf8(&properties).unwrap()));
+
+    Message {
+        body: Some(body),
+        properties: message_properties,
+        flag,
+        ..Message::default()
+    }
 }
 
 #[cfg(test)]

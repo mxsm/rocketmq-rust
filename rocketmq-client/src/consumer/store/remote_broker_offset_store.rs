@@ -22,6 +22,7 @@ use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
+use rocketmq_remoting::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
 use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
 use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
 use tokio::sync::Mutex;
@@ -52,7 +53,62 @@ impl RemoteBrokerOffsetStore {
     }
 
     async fn fetch_consume_offset_from_broker(&self, mq: &MessageQueue) -> Result<i64> {
-        todo!()
+        let broker_name = self
+            .client_instance
+            .get_broker_name_from_message_queue(mq)
+            .await;
+        let mut find_broker_result = self
+            .client_instance
+            .mut_from_ref()
+            .find_broker_address_in_subscribe(broker_name.as_str(), mix_all::MASTER_ID, true)
+            .await;
+
+        if find_broker_result.is_none() {
+            self.client_instance
+                .mut_from_ref()
+                .update_topic_route_info_from_name_server_topic(mq.get_topic())
+                .await;
+            let broker_name = self
+                .client_instance
+                .get_broker_name_from_message_queue(mq)
+                .await;
+            find_broker_result = self
+                .client_instance
+                .mut_from_ref()
+                .find_broker_address_in_subscribe(broker_name.as_str(), mix_all::MASTER_ID, false)
+                .await;
+        }
+        if let Some(find_broker_result) = find_broker_result {
+            let request_header = QueryConsumerOffsetRequestHeader {
+                consumer_group: self.group_name.clone(),
+                topic: mq.get_topic().to_string(),
+                queue_id: mq.get_queue_id(),
+                set_zero_if_not_found: None,
+                topic_request_header: Some(TopicRequestHeader {
+                    lo: None,
+                    rpc: Some(RpcRequestHeader {
+                        namespace: None,
+                        namespaced: None,
+                        broker_name: Some(mq.get_broker_name().to_string()),
+                        oneway: None,
+                    }),
+                }),
+            };
+            self.client_instance
+                .mut_from_ref()
+                .mq_client_api_impl
+                .query_consumer_offset(
+                    find_broker_result.broker_addr.as_str(),
+                    request_header,
+                    5_000,
+                )
+                .await
+        } else {
+            Err(MQClientError::MQClientErr(
+                -1,
+                format!("broker not found, {}", mq.get_broker_name()),
+            ))
+        }
     }
 }
 

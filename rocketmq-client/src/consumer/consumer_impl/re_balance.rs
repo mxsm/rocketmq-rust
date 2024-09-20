@@ -32,7 +32,7 @@ pub(crate) mod rebalance_service;
 #[trait_variant::make(Rebalance: Send)]
 pub trait RebalanceLocal {
     async fn message_queue_changed(
-        &self,
+        &mut self,
         topic: &str,
         mq_all: &HashSet<MessageQueue>,
         mq_divided: &HashSet<MessageQueue>,
@@ -63,7 +63,7 @@ pub trait RebalanceLocal {
     fn dispatch_pop_pull_request(&self, pull_request_list: Vec<PopRequest>, delay: u64);
     fn create_process_queue(&self) -> ProcessQueue;
     fn create_pop_process_queue(&self) -> PopProcessQueue;
-    fn remove_process_queue(&self, mq: MessageQueue);
+    async fn remove_process_queue(&mut self, mq: &MessageQueue);
     fn unlock(&self, mq: MessageQueue, oneway: bool);
     fn lock_all(&self);
     fn unlock_all(&self, oneway: bool);

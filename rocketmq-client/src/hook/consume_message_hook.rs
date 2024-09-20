@@ -19,7 +19,7 @@ use crate::hook::consume_message_context::ConsumeMessageContext;
 pub trait ConsumeMessageHook {
     fn hook_name(&self) -> &str;
 
-    fn consume_message_before(&self, context: Option<&ConsumeMessageContext>);
+    fn consume_message_before(&self, context: Option<&mut ConsumeMessageContext>);
 
-    fn consume_message_after(&self, context: Option<&ConsumeMessageContext>);
+    fn consume_message_after(&self, context: Option<&mut ConsumeMessageContext>);
 }
