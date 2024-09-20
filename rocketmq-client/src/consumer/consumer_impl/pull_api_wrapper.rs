@@ -193,7 +193,7 @@ impl PullAPIWrapper {
             }
             pull_result_ext.pull_result.msg_found_list = msg_list_filter_again
                 .into_iter()
-                .map(|item| ArcRefCellWrapper::new(item))
+                .map(ArcRefCellWrapper::new)
                 .collect::<Vec<_>>();
         }
     }
