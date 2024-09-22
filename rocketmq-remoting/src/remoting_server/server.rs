@@ -106,6 +106,7 @@ impl<RP> ConnectionHandler<RP> {
 impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
     async fn handle(&mut self) -> Result<()> {
         while !self.shutdown.is_shutdown {
+            //Get the next frame from the connection.
             let frame = tokio::select! {
                 res = self.connection_handler_context.channel.connection.reader.next() => res,
                 _ = self.shutdown.recv() =>{
@@ -135,81 +136,47 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                 }
                 continue;
             }
-
-            //handle request
-            let mut exception = match self.do_before_rpc_hooks(&self.channel, &mut cmd) {
+            let opaque = cmd.opaque();
+            let oneway_rpc = cmd.is_oneway_rpc();
+            //before handle request hooks
+            let exception = match self.do_before_rpc_hooks(&self.channel, &mut cmd) {
                 Ok(_) => None,
                 Err(error) => Some(error),
             };
-            let opaque = cmd.opaque();
-            let oneway_rpc = cmd.is_oneway_rpc();
-            let mut response = if exception.is_some() {
-                Some(RemotingCommand::create_remoting_command(
-                    ResponseCode::SystemError,
-                ))
-            } else {
+            //handle error if return have
+            match self.handle_error(oneway_rpc, opaque, exception).await {
+                HandleErrorResult::Continue => continue,
+                HandleErrorResult::ReturnMethod => return Ok(()),
+                HandleErrorResult::GoHead => {}
+            }
+
+            let mut response = {
                 let channel = self.channel.clone();
                 let ctx = ArcRefCellWrapper::downgrade(&self.connection_handler_context);
                 tokio::select! {
-                    result = self.request_processor.process_request(channel,ctx,cmd) =>  result?,
+                    result = self.request_processor.process_request(channel,ctx,cmd) =>  match result{
+                        Ok(value) => value,
+                        Err(_err) => Some(RemotingCommand::create_response_command_with_code(
+                                        ResponseCode::SystemError,
+                                    )),
+                    },
                 }
             };
-            if response.is_none() {
+
+            let exception =
+                match self.do_before_rpc_hooks(&self.channel, response.as_mut().unwrap()) {
+                    Ok(_) => None,
+                    Err(error) => Some(error),
+                };
+
+            match self.handle_error(oneway_rpc, opaque, exception).await {
+                HandleErrorResult::Continue => continue,
+                HandleErrorResult::ReturnMethod => return Ok(()),
+                HandleErrorResult::GoHead => {}
+            }
+            if response.is_none() || oneway_rpc {
                 continue;
             }
-            exception = match self.do_before_rpc_hooks(&self.channel, response.as_mut().unwrap()) {
-                Ok(_) => None,
-                Err(error) => Some(error),
-            };
-
-            if let Some(exception_inner) = exception {
-                match exception_inner {
-                    Error::AbortProcessException(code, message) => {
-                        let response = RemotingCommand::create_response_command_with_code_remark(
-                            code, message,
-                        );
-                        tokio::select! {
-                            result =self.connection_handler_context.channel.connection.writer.send(response.set_opaque(opaque)) => match result{
-                                Ok(_) =>{},
-                                Err(err) => {
-                                    match err {
-                                        Error::Io(io_error) => {
-                                            error!("send response failed: {}", io_error);
-                                            return Ok(())
-                                        }
-                                        _ => { error!("send response failed: {}", err);}
-                                    }
-                                },
-                            },
-                        }
-                    }
-                    _ => {
-                        if !oneway_rpc {
-                            let response =
-                                RemotingCommand::create_response_command_with_code_remark(
-                                    ResponseCode::SystemError,
-                                    exception_inner.to_string(),
-                                );
-                            tokio::select! {
-                                result =self.connection_handler_context.channel.connection.writer.send(response.set_opaque(opaque)) => match result{
-                                    Ok(_) =>{},
-                                    Err(err) => {
-                                        match err {
-                                            Error::Io(io_error) => {
-                                                error!("send response failed: {}", io_error);
-                                                return Ok(())
-                                            }
-                                            _ => { error!("send response failed: {}", err);}
-                                        }
-                                    },
-                                },
-                            }
-                        }
-                    }
-                }
-                continue;
-            }
-
             let response = response.unwrap();
             tokio::select! {
                 result =self.connection_handler_context.channel.connection.writer.send(response.set_opaque(opaque)) => match result{
@@ -217,7 +184,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                     Err(err) => {
                         match err {
                             Error::Io(io_error) => {
-                                error!("send response failed: {}", io_error);
+                                error!("connection disconnect: {}", io_error);
                                 return Ok(())
                             }
                             _ => { error!("send response failed: {}", err);}
@@ -228,6 +195,70 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
         }
         Ok(())
     }
+
+    async fn handle_error(
+        &mut self,
+        oneway_rpc: bool,
+        opaque: i32,
+        exception: Option<Error>,
+    ) -> HandleErrorResult {
+        if let Some(exception_inner) = exception {
+            match exception_inner {
+                Error::AbortProcessException(code, message) => {
+                    if oneway_rpc {
+                        return HandleErrorResult::Continue;
+                    }
+                    let response =
+                        RemotingCommand::create_response_command_with_code_remark(code, message);
+                    tokio::select! {
+                        result =self.connection_handler_context.channel.connection.writer.send(response.set_opaque(opaque)) => match result{
+                            Ok(_) =>{},
+                            Err(err) => {
+                                match err {
+                                    Error::Io(io_error) => {
+                                        error!("send response failed: {}", io_error);
+                                        return HandleErrorResult::ReturnMethod;
+                                    }
+                                    _ => { error!("send response failed: {}", err);}
+                                }
+                            },
+                        },
+                    }
+                }
+                _ => {
+                    if !oneway_rpc {
+                        let response = RemotingCommand::create_response_command_with_code_remark(
+                            ResponseCode::SystemError,
+                            exception_inner.to_string(),
+                        );
+                        tokio::select! {
+                            result =self.connection_handler_context.channel.connection.writer.send(response.set_opaque(opaque)) => match result{
+                                Ok(_) =>{},
+                                Err(err) => {
+                                    match err {
+                                        Error::Io(io_error) => {
+                                            error!("send response failed: {}", io_error);
+                                            return HandleErrorResult::ReturnMethod;
+                                        }
+                                        _ => { error!("send response failed: {}", err);}
+                                    }
+                                },
+                            },
+                        }
+                    }
+                }
+            }
+            HandleErrorResult::Continue
+        } else {
+            HandleErrorResult::GoHead
+        }
+    }
+}
+
+enum HandleErrorResult {
+    Continue,
+    ReturnMethod,
+    GoHead,
 }
 
 /// Server listener state. Created in the `run` call. It includes a `run` method
