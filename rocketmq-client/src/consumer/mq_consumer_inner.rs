@@ -41,7 +41,7 @@ pub trait MQConsumerInnerLocal: MQConsumerInnerAny + Sync + 'static {
 
     async fn try_rebalance(&self) -> Result<bool>;
 
-    fn persist_consumer_offset(&self);
+    async fn persist_consumer_offset(&self);
 
     async fn update_topic_subscribe_info(&mut self, topic: &str, info: &HashSet<MessageQueue>);
 

@@ -45,7 +45,7 @@ where
 pub trait ConsumeMessageServiceTrait {
     fn start(&mut self);
 
-    fn shutdown(&self, await_terminate_millis: u64);
+    fn shutdown(&mut self, await_terminate_millis: u64);
 
     fn update_core_pool_size(&self, core_pool_size: usize);
 

@@ -33,7 +33,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
         todo!()
     }
 
-    fn shutdown(&self, await_terminate_millis: u64) {
+    fn shutdown(&mut self, await_terminate_millis: u64) {
         todo!()
     }
 

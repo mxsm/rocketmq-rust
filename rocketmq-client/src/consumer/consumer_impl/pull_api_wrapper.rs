@@ -43,6 +43,7 @@ use crate::factory::mq_client_instance::MQClientInstance;
 use crate::hook::filter_message_context::FilterMessageContext;
 use crate::hook::filter_message_hook::FilterMessageHook;
 use crate::implementation::communication_mode::CommunicationMode;
+use crate::implementation::mq_client_api_impl::MQClientAPIImpl;
 use crate::Result;
 
 #[derive(Clone)]
@@ -107,6 +108,7 @@ impl PullAPIWrapper {
                 self.client_instance.client_config.decode_read_body,
                 self.client_instance.client_config.decode_decompress_body,
             );
+
             let mut need_decode_inner_message = false;
             for msg in &msg_vec {
                 if MessageSysFlag::check(
@@ -191,6 +193,7 @@ impl PullAPIWrapper {
                     msg.message_ext_inner.queue_offset += offset_delta;
                 }
             }
+
             pull_result_ext.pull_result.msg_found_list = msg_list_filter_again
                 .into_iter()
                 .map(ArcRefCellWrapper::new)
@@ -233,7 +236,7 @@ impl PullAPIWrapper {
         pull_callback: PCB,
     ) -> Result<Option<PullResultExt>>
     where
-        PCB: PullCallback,
+        PCB: PullCallback + 'static,
     {
         let broker_name = self
             .client_instance
@@ -320,16 +323,16 @@ impl PullAPIWrapper {
                     .compute_pull_from_which_filter_server(mq.get_topic(), broker_addr.as_str())
                     .await?;
             }
-            self.client_instance
-                .get_mq_client_api_impl()
-                .pull_message(
-                    broker_addr.as_str(),
-                    request_header,
-                    timeout_millis,
-                    communication_mode,
-                    pull_callback,
-                )
-                .await
+
+            MQClientAPIImpl::pull_message(
+                self.client_instance.get_mq_client_api_impl(),
+                broker_addr,
+                request_header,
+                timeout_millis,
+                communication_mode,
+                pull_callback,
+            )
+            .await
         } else {
             Err(MQClientErr(
                 -1,

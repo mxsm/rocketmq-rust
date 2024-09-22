@@ -373,7 +373,8 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
             Some(mut client) => {
                 self.client_runtime.get_handle().spawn(async move {
                     match time::timeout(Duration::from_millis(timeout_millis), async move {
-                        //client.lock().await.send(request).await
+                        let mut request = request;
+                        request.mark_oneway_rpc_ref();
                         client.send(request).await
                     })
                     .await

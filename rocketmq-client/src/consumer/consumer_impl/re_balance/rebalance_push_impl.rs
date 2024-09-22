@@ -459,4 +459,8 @@ impl Rebalance for RebalancePushImpl {
                 false
             }
     }
+
+    fn destroy(&mut self) {
+        unimplemented!()
+    }
 }

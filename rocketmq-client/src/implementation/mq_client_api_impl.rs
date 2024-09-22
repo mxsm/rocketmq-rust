@@ -51,6 +51,7 @@ use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessag
 use rocketmq_remoting::protocol::header::pull_message_response_header::PullMessageResponseHeader;
 use rocketmq_remoting::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
 use rocketmq_remoting::protocol::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader;
+use rocketmq_remoting::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
 use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
 use rocketmq_remoting::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
@@ -832,15 +833,15 @@ impl MQClientAPIImpl {
     }
 
     pub async fn pull_message<PCB>(
-        &mut self,
-        addr: &str,
+        mut this: ArcRefCellWrapper<Self>,
+        addr: String,
         request_header: PullMessageRequestHeader,
         timeout_millis: u64,
         communication_mode: CommunicationMode,
         pull_callback: PCB,
     ) -> Result<Option<PullResultExt>>
     where
-        PCB: PullCallback,
+        PCB: PullCallback + 'static,
     {
         let request = if PullSysFlag::has_lite_pull_flag(request_header.sys_flag as u32) {
             RemotingCommand::create_request_command(RequestCode::LitePullMessage, request_header)
@@ -849,14 +850,22 @@ impl MQClientAPIImpl {
         };
         match communication_mode {
             CommunicationMode::Sync => {
-                let result_ext = self
-                    .pull_message_sync(addr, request, timeout_millis)
+                let result_ext = this
+                    .pull_message_sync(addr.as_str(), request, timeout_millis)
                     .await?;
                 Ok(Some(result_ext))
             }
             CommunicationMode::Async => {
-                self.pull_message_async(addr, request, timeout_millis, pull_callback)
-                    .await?;
+                tokio::spawn(async move {
+                    let instant = Instant::now();
+                    let _ = this
+                        .pull_message_async(addr.as_str(), request, timeout_millis, pull_callback)
+                        .await;
+                    println!(
+                        ">>>>>>>>>>>>>>>>>>pull_message_async cost: {:?}",
+                        instant.elapsed()
+                    );
+                });
                 Ok(None)
             }
             CommunicationMode::Oneway => Ok(None),
@@ -892,7 +901,12 @@ impl MQClientAPIImpl {
             .await
         {
             Ok(response) => {
+                println!(
+                    "++++++++++++++++++++++++pull_message_async response: {}",
+                    response
+                );
                 let result = self.process_pull_response(response, addr).await;
+
                 match result {
                     Ok(pull_result) => {
                         pull_callback.on_success(pull_result).await;
@@ -983,6 +997,37 @@ impl MQClientAPIImpl {
                 request_command,
                 timeout_millis,
             )
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            Ok(())
+        } else {
+            Err(MQBrokerError(
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string()),
+                addr.to_string(),
+            ))
+        }
+    }
+
+    pub async fn unregister_client(
+        &mut self,
+        addr: &str,
+        client_id: &str,
+        producer_group: Option<String>,
+        consumer_group: Option<String>,
+        timeout_millis: u64,
+    ) -> Result<()> {
+        let request_header = UnregisterClientRequestHeader {
+            client_id: client_id.to_string(),
+            producer_group,
+            consumer_group,
+            rpc_request_header: None,
+        };
+        let request =
+            RemotingCommand::create_request_command(RequestCode::UnregisterClient, request_header);
+        let response = self
+            .remoting_client
+            .invoke_async(Some(addr.to_string()), request, timeout_millis)
             .await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             Ok(())

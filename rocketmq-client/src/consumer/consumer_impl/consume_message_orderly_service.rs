@@ -33,8 +33,8 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
         todo!()
     }
 
-    fn shutdown(&self, await_terminate_millis: u64) {
-        todo!()
+    fn shutdown(&mut self, await_terminate_millis: u64) {
+        unimplemented!("shutdown")
     }
 
     fn update_core_pool_size(&self, core_pool_size: usize) {
