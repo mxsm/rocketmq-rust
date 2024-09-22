@@ -284,11 +284,13 @@ impl RemotingCommand {
         self
     }
 
+    #[inline]
     pub fn set_opaque(mut self, opaque: i32) -> Self {
         self.opaque = opaque;
         self
     }
 
+    #[inline]
     pub fn set_opaque_mut(&mut self, opaque: i32) {
         self.opaque = opaque;
     }
