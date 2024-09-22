@@ -29,7 +29,7 @@ use crate::consumer::consumer_impl::process_queue::ProcessQueue;
 pub struct ConsumeMessagePopOrderlyService;
 
 impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
-    fn start(&mut self) {
+    fn start(&mut self, this: ArcRefCellWrapper<Self>) {
         todo!()
     }
 
@@ -63,6 +63,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
 
     async fn submit_consume_request(
         &self,
+        this: ArcRefCellWrapper<Self>,
         msgs: Vec<ArcRefCellWrapper<MessageClientExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
