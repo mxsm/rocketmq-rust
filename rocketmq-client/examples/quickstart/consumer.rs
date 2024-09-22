@@ -32,7 +32,7 @@ pub const TAG: &str = "*";
 #[rocketmq::main]
 pub async fn main() -> Result<()> {
     //init logger
-    rocketmq_common::log::init_logger();
+    //rocketmq_common::log::init_logger();
 
     // create a producer builder with default configuration
     let builder = DefaultMQPushConsumer::builder();

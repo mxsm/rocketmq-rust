@@ -30,7 +30,6 @@ use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_common::WeakCellWrapper;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
-use rocketmq_runtime::RocketMQRuntime;
 use tracing::info;
 use tracing::warn;
 
@@ -53,7 +52,7 @@ pub struct ConsumeMessageConcurrentlyService {
     pub(crate) consumer_config: ArcRefCellWrapper<ConsumerConfig>,
     pub(crate) consumer_group: Arc<String>,
     pub(crate) message_listener: ArcBoxMessageListenerConcurrently,
-    pub(crate) consume_runtime: Arc<RocketMQRuntime>,
+    // pub(crate) consume_runtime: Arc<RocketMQRuntime>,
 }
 
 impl ConsumeMessageConcurrentlyService {
@@ -71,10 +70,10 @@ impl ConsumeMessageConcurrentlyService {
             consumer_config,
             consumer_group: Arc::new(consumer_group),
             message_listener,
-            consume_runtime: Arc::new(RocketMQRuntime::new_multi(
+            /*consume_runtime: Arc::new(RocketMQRuntime::new_multi(
                 consume_thread as usize,
                 "ConsumeMessageThread_",
-            )),
+            )),*/
         }
     }
 }
@@ -140,12 +139,6 @@ impl ConsumeMessageConcurrentlyService {
                 }
                 if !msg_back_failed.is_empty() {
                     consume_request.msgs.append(&mut msg_back_success);
-                    /*                   let msg_back_failed_switched = msg_back_failed
-                    .into_iter()
-                    .map(|msg| MessageClientExt {
-                        message_ext_inner: msg,
-                    })
-                    .collect();*/
                     self.submit_consume_request_later(
                         msg_back_failed,
                         consume_request.process_queue.clone(),
@@ -182,7 +175,7 @@ impl ConsumeMessageConcurrentlyService {
         message_queue: MessageQueue,
     ) {
         let this = self.clone();
-        self.consume_runtime.get_handle().spawn(async move {
+        tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(5)).await;
             this.submit_consume_request(msgs, process_queue, message_queue, true)
                 .await;
@@ -231,8 +224,8 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
         });
     }
 
-    fn shutdown(&self, await_terminate_millis: u64) {
-        todo!()
+    fn shutdown(&mut self, await_terminate_millis: u64) {
+        // todo!()
     }
 
     fn update_core_pool_size(&self, core_pool_size: usize) {
@@ -267,7 +260,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
         dispatch_to_consume: bool,
     ) {
         let consume_batch_size = self.consumer_config.consume_message_batch_max_size;
-        if msgs.len() < consume_batch_size as usize {
+        if msgs.len() <= consume_batch_size as usize {
             let mut consume_request = ConsumeRequest {
                 msgs: msgs.clone(),
                 message_listener: self.message_listener.clone(),
@@ -278,7 +271,8 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
                 default_mqpush_consumer_impl: self.default_mqpush_consumer_impl.clone(),
             };
             let consume_message_concurrently_service = self.clone();
-            self.consume_runtime.get_handle().spawn(async move {
+
+            tokio::spawn(async move {
                 consume_request
                     .run(consume_message_concurrently_service)
                     .await
@@ -301,7 +295,12 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
                     default_mqpush_consumer_impl: self.default_mqpush_consumer_impl.clone(),
                 };
                 let consume_message_concurrently_service = self.clone();
-                self.consume_runtime.get_handle().spawn(async move {
+                /*                self.consume_runtime.get_handle().spawn(async move {
+                    consume_request
+                        .run(consume_message_concurrently_service)
+                        .await
+                });*/
+                tokio::spawn(async move {
                     consume_request
                         .run(consume_message_concurrently_service)
                         .await

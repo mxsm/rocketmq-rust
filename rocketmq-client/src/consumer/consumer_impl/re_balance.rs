@@ -70,4 +70,5 @@ pub trait RebalanceLocal {
     async fn do_rebalance(&mut self, is_order: bool) -> bool;
 
     fn client_rebalance(&mut self, topic: &str) -> bool;
+    fn destroy(&mut self);
 }

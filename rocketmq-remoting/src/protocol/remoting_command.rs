@@ -357,6 +357,10 @@ impl RemotingCommand {
         self.flag |= mark;
         self
     }
+    pub fn mark_oneway_rpc_ref(&mut self) {
+        let mark = 1 << Self::RPC_ONEWAY;
+        self.flag |= mark;
+    }
 
     pub fn get_serialize_type(&self) -> SerializeType {
         self.serialize_type

@@ -47,6 +47,7 @@ use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::runtime::RPCHook;
 use tokio::runtime::Handle;
+use tokio::sync::Mutex;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -96,6 +97,7 @@ const _1MB: u64 = 1024 * 1024;
 
 #[derive(Clone)]
 pub struct DefaultMQPushConsumerImpl {
+    pub(crate) global_lock: Arc<Mutex<()>>,
     pub(crate) pull_time_delay_mills_when_exception: u64,
     pub(crate) client_config: ArcRefCellWrapper<ClientConfig>,
     pub(crate) consumer_config: ArcRefCellWrapper<ConsumerConfig>,
@@ -139,6 +141,7 @@ impl DefaultMQPushConsumerImpl {
         rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
     ) -> Self {
         let mut this = Self {
+            global_lock: Arc::new(Default::default()),
             pull_time_delay_mills_when_exception: 3_000,
             client_config: ArcRefCellWrapper::new(client_config.clone()),
             consumer_config: consumer_config.clone(),
@@ -370,6 +373,52 @@ impl DefaultMQPushConsumerImpl {
             client_instance.re_balance_immediately();
         }
         Ok(())
+    }
+
+    pub async fn shutdown(&mut self, await_terminate_millis: u64) {
+        let _lock = self.global_lock.lock().await;
+        match *self.service_state {
+            ServiceState::CreateJust => {
+                warn!(
+                    "the consumer [{}] do not start, so do nothing",
+                    self.consumer_config.consumer_group
+                );
+            }
+            ServiceState::Running => {
+                if let Some(consume_message_concurrently_service) =
+                    self.consume_message_concurrently_service.as_mut()
+                {
+                    consume_message_concurrently_service
+                        .consume_message_concurrently_service
+                        .shutdown(await_terminate_millis);
+                }
+                self.persist_consumer_offset().await;
+                let client = self.client_instance.as_mut().unwrap();
+                client
+                    .unregister_consumer(self.consumer_config.consumer_group.as_str())
+                    .await;
+                client.shutdown().await;
+                info!(
+                    "the consumer [{}] shutdown OK",
+                    self.consumer_config.consumer_group.as_str()
+                );
+                self.rebalance_impl.destroy();
+                *self.service_state = ServiceState::ShutdownAlready;
+            }
+            ServiceState::ShutdownAlready => {
+                warn!(
+                    "the consumer [{}] has been shutdown, do nothing",
+                    self.consumer_config.consumer_group
+                );
+            }
+            ServiceState::StartFailed => {
+                warn!(
+                    "the consumer [{}] start failed, do nothing",
+                    self.consumer_config.consumer_group
+                );
+            }
+        }
+        drop(_lock);
     }
 
     async fn update_topic_subscribe_info_when_subscription_changed(&mut self) {
@@ -1239,8 +1288,27 @@ impl MQConsumerInner for DefaultMQPushConsumerImpl {
         Ok(false)
     }
 
-    fn persist_consumer_offset(&self) {
-        todo!()
+    async fn persist_consumer_offset(&self) {
+        if let Err(err) = self.make_sure_state_ok() {
+            error!(
+                "group: {} persistConsumerOffset exception:{}",
+                self.consumer_config.consumer_group, err
+            );
+        } else {
+            let guard = self
+                .rebalance_impl
+                .rebalance_impl_inner
+                .process_queue_table
+                .read()
+                .await;
+            let allocate_mq = guard.keys().cloned().collect::<HashSet<_>>();
+            self.offset_store
+                .as_ref()
+                .unwrap()
+                .mut_from_ref()
+                .persist_all(&allocate_mq)
+                .await;
+        }
     }
 
     async fn update_topic_subscribe_info(&mut self, topic: &str, info: &HashSet<MessageQueue>) {

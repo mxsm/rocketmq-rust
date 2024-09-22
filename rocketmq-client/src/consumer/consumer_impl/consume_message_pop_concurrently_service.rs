@@ -61,7 +61,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
         // nothing to do
     }
 
-    fn shutdown(&self, await_terminate_millis: u64) {
+    fn shutdown(&mut self, await_terminate_millis: u64) {
         todo!()
     }
 

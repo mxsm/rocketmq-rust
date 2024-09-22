@@ -31,7 +31,7 @@ pub struct UnregisterClientRequestHeader {
     pub producer_group: Option<String>,
     pub consumer_group: Option<String>,
     #[serde(flatten)]
-    pub rpc_request_header: RpcRequestHeader,
+    pub rpc_request_header: Option<RpcRequestHeader>,
 }
 
 impl UnregisterClientRequestHeader {
@@ -55,27 +55,33 @@ impl FromMap for UnregisterClientRequestHeader {
             consumer_group: map
                 .get(UnregisterClientRequestHeader::CONSUMER_GROUP)
                 .cloned(),
-            rpc_request_header: <RpcRequestHeader as FromMap>::from(map).unwrap(),
+            rpc_request_header: <RpcRequestHeader as FromMap>::from(map),
         })
     }
 }
 
 impl CommandCustomHeader for UnregisterClientRequestHeader {
     fn to_map(&self) -> Option<HashMap<String, String>> {
-        let mut map = self.rpc_request_header.to_map();
-        map.as_mut()
-            .unwrap()
-            .insert(Self::CLIENT_ID.to_string(), self.client_id.clone());
-        if let Some(ref producer_group) = self.producer_group {
-            map.as_mut()
-                .unwrap()
-                .insert(Self::PRODUCER_GROUP.to_string(), producer_group.clone());
+        let mut map = HashMap::new();
+        map.insert(
+            UnregisterClientRequestHeader::CLIENT_ID.to_string(),
+            self.client_id.clone(),
+        );
+        if let Some(producer_group) = &self.producer_group {
+            map.insert(
+                UnregisterClientRequestHeader::PRODUCER_GROUP.to_string(),
+                producer_group.clone(),
+            );
         }
-        if let Some(ref consumer_group) = self.consumer_group {
-            map.as_mut()
-                .unwrap()
-                .insert(Self::CONSUMER_GROUP.to_string(), consumer_group.clone());
+        if let Some(consumer_group) = &self.consumer_group {
+            map.insert(
+                UnregisterClientRequestHeader::CONSUMER_GROUP.to_string(),
+                consumer_group.clone(),
+            );
         }
-        map
+        if let Some(rpc_request_header) = &self.rpc_request_header {
+            map.extend(rpc_request_header.to_map()?);
+        }
+        Some(map)
     }
 }

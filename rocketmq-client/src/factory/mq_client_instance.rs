@@ -253,6 +253,8 @@ where
         Ok(())
     }
 
+    pub async fn shutdown(&mut self) {}
+
     pub async fn register_producer(&mut self, group: &str, producer: impl MQProducerInner) -> bool {
         if group.is_empty() {
             return false;
@@ -551,7 +553,10 @@ where
     }
 
     pub async fn persist_all_consumer_offset(&mut self) {
-        println!("updateTopicRouteInfoFromNameServer")
+        let consumer_table = self.consumer_table.read().await;
+        for (_, value) in consumer_table.iter() {
+            value.persist_consumer_offset().await;
+        }
     }
 
     pub async fn clean_offline_broker(&mut self) {
@@ -934,6 +939,43 @@ where
     pub async fn select_consumer(&self, group: &str) -> Option<C> {
         let consumer_table = self.consumer_table.read().await;
         consumer_table.get(group).cloned()
+    }
+
+    pub async fn unregister_consumer(&mut self, group: impl Into<String>) {
+        self.unregister_client(None, Some(group.into())).await;
+    }
+    pub async fn unregister_producer(&mut self, group: impl Into<String>) {
+        self.unregister_client(Some(group.into()), None).await;
+    }
+
+    async fn unregister_client(
+        &mut self,
+        producer_group: Option<String>,
+        consumer_group: Option<String>,
+    ) {
+        let broker_addr_table = self.broker_addr_table.read().await;
+        for (broker_name, broker_addrs) in broker_addr_table.iter() {
+            for (id, addr) in broker_addrs.iter() {
+                if let Err(err) = self
+                    .mq_client_api_impl
+                    .unregister_client(
+                        addr,
+                        self.client_id.as_str(),
+                        producer_group.clone(),
+                        consumer_group.clone(),
+                        self.client_config.mq_client_api_timeout,
+                    )
+                    .await
+                {
+                } else {
+                    info!(
+                        "unregister client[Producer: {:?} Consumer: {:?}] from broker[{} {} {}] \
+                         success",
+                        producer_group, consumer_group, broker_name, id, addr,
+                    );
+                }
+            }
+        }
     }
 }
 

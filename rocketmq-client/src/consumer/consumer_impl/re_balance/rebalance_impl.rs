@@ -273,7 +273,11 @@ where
         if !all_mq_locked {
             self.client_instance.as_mut().unwrap().rebalance_later(500);
         }
-
+        println!(
+            "PullRequestList============================={}================{}",
+            topic,
+            pull_request_list.len()
+        );
         sub_rebalance_impl
             .dispatch_pull_request(pull_request_list, 500)
             .await;
@@ -290,13 +294,14 @@ where
                 let topic_sub_cloned = self.topic_subscribe_info_table.clone();
                 let topic_subscribe_info_table_inner = topic_sub_cloned.write().await;
                 let mq_set = topic_subscribe_info_table_inner.get(topic);
-                let ci_all = self
+                //get consumer id list from broker
+                let cid_all = self
                     .client_instance
                     .as_mut()
                     .unwrap()
                     .find_consumer_id_list(topic, self.consumer_group.as_ref().unwrap())
                     .await;
-                if ci_all.is_none() && !topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
+                if cid_all.is_none() && !topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
                     if let Some(mut sub_rebalance_impl) =
                         self.sub_rebalance_impl.as_ref().unwrap().upgrade()
                     {
@@ -310,30 +315,28 @@ where
                         );
                     }
                 }
-                if ci_all.is_none() {
+                if cid_all.is_none() {
                     warn!(
                         "doRebalance, {}, but the topic[{}] not exist.",
                         self.consumer_group.as_ref().unwrap(),
                         topic
                     );
                 }
-                if mq_set.is_some() && ci_all.is_some() {
+                if mq_set.is_some() && cid_all.is_some() {
                     let mq_set = mq_set.unwrap();
                     let mut mq_all = mq_set.iter().cloned().collect::<Vec<MessageQueue>>();
                     mq_all.sort();
-                    let mut ci_all = ci_all.unwrap();
+                    let mut ci_all = cid_all.unwrap();
                     ci_all.sort();
 
-                    let allocate_result = match self
-                        .allocate_message_queue_strategy
-                        .as_ref()
-                        .unwrap()
-                        .allocate(
-                            self.consumer_group.as_ref().unwrap(),
-                            self.client_instance.as_ref().unwrap().client_id.as_ref(),
-                            mq_all.as_slice(),
-                            ci_all.as_slice(),
-                        ) {
+                    let strategy = self.allocate_message_queue_strategy.as_ref().unwrap();
+                    let strategy_name = strategy.get_name();
+                    let allocate_result = match strategy.allocate(
+                        self.consumer_group.as_ref().unwrap(),
+                        self.client_instance.as_ref().unwrap().client_id.as_ref(),
+                        mq_all.as_slice(),
+                        ci_all.as_slice(),
+                    ) {
                         Ok(value) => value,
                         Err(e) => {
                             error!(
@@ -358,7 +361,21 @@ where
                         )
                         .await;
                     if changed {
-                        // info
+                        info!(
+                            "client rebalanced result changed. \
+                             allocateMessageQueueStrategyName={}, group={}, topic={}, \
+                             clientId={}, mqAllSize={}, cidAllSize={}, rebalanceResultSize={}, \
+                             rebalanceResultSet={:?}",
+                            strategy_name,
+                            self.consumer_group.as_ref().unwrap(),
+                            topic,
+                            self.client_instance.as_ref().unwrap().client_id,
+                            mq_set.len(),
+                            ci_all.len(),
+                            allocate_result_set.len(),
+                            allocate_result_set
+                        );
+
                         if let Some(mut sub_rebalance_impl) =
                             self.sub_rebalance_impl.as_ref().unwrap().upgrade()
                         {
