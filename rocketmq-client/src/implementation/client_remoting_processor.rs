@@ -15,12 +15,14 @@
  * limitations under the License.
  */
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use bytes::Bytes;
 use rocketmq_common::common::compression::compressor_factory::CompressorFactory;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
+use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::MessageDecoder;
 use rocketmq_common::TimeUtils::get_current_millis;
@@ -36,10 +38,21 @@ use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
+use crate::factory::mq_client_instance::MQClientInstance;
 use crate::producer::request_future_holder::REQUEST_FUTURE_HOLDER;
 
 #[derive(Clone)]
-pub struct ClientRemotingProcessor;
+pub struct ClientRemotingProcessor {
+    pub(crate) client_instance: Option<ArcRefCellWrapper<MQClientInstance>>,
+}
+
+impl ClientRemotingProcessor {
+    pub fn new() -> Self {
+        Self {
+            client_instance: None,
+        }
+    }
+}
 
 impl RequestProcessor for ClientRemotingProcessor {
     async fn process_request(

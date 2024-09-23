@@ -46,7 +46,6 @@ const LOCK_TIMEOUT_MILLIS: u64 = 3000;
 
 pub type ArcSyncClient = Arc<Mutex<Client>>;
 
-#[derive(Clone)]
 pub struct RocketmqDefaultClient<PR = DefaultRemotingRequestProcessor> {
     tokio_client_config: Arc<TokioClientConfig>,
     //cache connection

@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use once_cell::sync::Lazy;
+use rocketmq_common::ArcRefCellWrapper;
 use tokio::select;
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -56,7 +57,7 @@ impl RebalanceService {
         }
     }
 
-    pub async fn start<C>(&mut self, mut instance: MQClientInstance<C>)
+    pub async fn start<C>(&mut self, mut instance: ArcRefCellWrapper<MQClientInstance<C>>)
     where
         C: MQConsumerInner + Clone,
     {

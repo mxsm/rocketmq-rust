@@ -38,7 +38,7 @@ impl PullMessageService {
             pull_tx: None,
         }
     }
-    pub async fn start<C>(&mut self, instance: MQClientInstance<C>)
+    pub async fn start<C>(&mut self, instance: ArcRefCellWrapper<MQClientInstance<C>>)
     where
         C: MQConsumerInner + Clone,
     {
@@ -46,17 +46,16 @@ impl PullMessageService {
         let (pull_tx, mut pull_rx) = tokio::sync::mpsc::channel(1024 * 4);
         self.pop_tx = Some(pop_tx);
         self.pull_tx = Some(pull_tx);
-        let instance_wrapper = ArcRefCellWrapper::new(instance);
-        let instance_wrapper_clone = instance_wrapper.clone();
+        //let instance_wrapper = ArcRefCellWrapper::new(instance);
+        let instance_wrapper_clone = instance.clone();
         tokio::spawn(async move {
             info!(
                 ">>>>>>>>>>>>>>>>>>>>>>>PullMessageService [PopRequest] \
                  started<<<<<<<<<<<<<<<<<<<<<<<<<<<<"
             );
             while let Some(request) = pop_rx.recv().await {
-                if let Some(mut consumer) = instance_wrapper
-                    .select_consumer(request.get_consumer_group())
-                    .await
+                if let Some(mut consumer) =
+                    instance.select_consumer(request.get_consumer_group()).await
                 {
                     consumer
                         .as_any_mut()

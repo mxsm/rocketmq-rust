@@ -348,8 +348,8 @@ impl DefaultMQPushConsumerImpl {
                     .unwrap()
                     .register_consumer(self.consumer_config.consumer_group.as_str(), consumer_impl)
                     .await;
-
-                self.client_instance.as_mut().unwrap().start().await?;
+                let cloned = self.client_instance.as_mut().cloned().unwrap();
+                self.client_instance.as_mut().unwrap().start(cloned).await?;
                 info!(
                     "the consumer [{}] start OK, message_model={}, isUnitMode={}",
                     self.consumer_config.consumer_group,

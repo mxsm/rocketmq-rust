@@ -2010,7 +2010,8 @@ impl DefaultMQProducerImpl {
                     ));
                 }
                 if start_factory {
-                    Box::pin(self.client_instance.as_mut().unwrap().start()).await?;
+                    let cloned = self.client_instance.as_mut().cloned().unwrap();
+                    Box::pin(self.client_instance.as_mut().unwrap().start(cloned)).await?;
                     //self.client_instance.as_mut().unwrap().start().await;
                 }
 

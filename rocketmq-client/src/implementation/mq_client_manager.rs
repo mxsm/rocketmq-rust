@@ -72,7 +72,10 @@ impl MQClientManager {
                 rpc_hook,
             );
             info!("Created new MQClientInstance for clientId: [{}]", client_id);
-            ArcRefCellWrapper::new(instance)
+            let new = ArcRefCellWrapper::new(instance);
+            MQClientInstance::set_connection_listener(new.clone());
+
+            new
         });
         instance.clone()
     }
