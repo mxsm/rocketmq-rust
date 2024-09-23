@@ -30,20 +30,20 @@ where
     T: ConsumeMessageServiceTrait,
     K: ConsumeMessageServiceTrait,
 {
-    pub consume_message_concurrently_service: T,
-    pub consume_message_pop_concurrently_service: K,
+    pub consume_message_concurrently_service: ArcRefCellWrapper<T>,
+    pub consume_message_pop_concurrently_service: ArcRefCellWrapper<K>,
 }
 pub struct ConsumeMessageOrderlyServiceGeneral<T, K>
 where
     T: ConsumeMessageServiceTrait,
     K: ConsumeMessageServiceTrait,
 {
-    pub consume_message_orderly_service: T,
-    pub consume_message_pop_orderly_service: K,
+    pub consume_message_orderly_service: ArcRefCellWrapper<T>,
+    pub consume_message_pop_orderly_service: ArcRefCellWrapper<K>,
 }
 
 pub trait ConsumeMessageServiceTrait {
-    fn start(&mut self);
+    fn start(&mut self, this: ArcRefCellWrapper<Self>);
 
     fn shutdown(&mut self, await_terminate_millis: u64);
 
@@ -63,6 +63,7 @@ pub trait ConsumeMessageServiceTrait {
 
     async fn submit_consume_request(
         &self,
+        this: ArcRefCellWrapper<Self>,
         msgs: Vec<ArcRefCellWrapper<MessageClientExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,

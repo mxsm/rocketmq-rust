@@ -53,6 +53,12 @@ impl RocketMQRuntime {
         }
     }
 
+    pub fn shutdown_timeout(self, timeout: Duration) {
+        match self {
+            Self::Multi(runtime) => runtime.shutdown_timeout(timeout),
+        }
+    }
+
     pub fn schedule_at_fixed_rate<F>(
         &self,
         task: F,

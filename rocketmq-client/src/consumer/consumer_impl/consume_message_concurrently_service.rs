@@ -30,6 +30,7 @@ use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_common::WeakCellWrapper;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
+use rocketmq_runtime::RocketMQRuntime;
 use tracing::info;
 use tracing::warn;
 
@@ -45,14 +46,13 @@ use crate::consumer::listener::consume_return_type::ConsumeReturnType;
 use crate::consumer::listener::message_listener_concurrently::ArcBoxMessageListenerConcurrently;
 use crate::hook::consume_message_context::ConsumeMessageContext;
 
-#[derive(Clone)]
 pub struct ConsumeMessageConcurrentlyService {
     pub(crate) default_mqpush_consumer_impl: Option<WeakCellWrapper<DefaultMQPushConsumerImpl>>,
     pub(crate) client_config: ArcRefCellWrapper<ClientConfig>,
     pub(crate) consumer_config: ArcRefCellWrapper<ConsumerConfig>,
     pub(crate) consumer_group: Arc<String>,
     pub(crate) message_listener: ArcBoxMessageListenerConcurrently,
-    // pub(crate) consume_runtime: Arc<RocketMQRuntime>,
+    pub(crate) consume_runtime: RocketMQRuntime,
 }
 
 impl ConsumeMessageConcurrentlyService {
@@ -64,27 +64,46 @@ impl ConsumeMessageConcurrentlyService {
         default_mqpush_consumer_impl: Option<WeakCellWrapper<DefaultMQPushConsumerImpl>>,
     ) -> Self {
         let consume_thread = consumer_config.consume_thread_max;
+        let consumer_group_tag = format!("{}_{}", "ConsumeMessageThread_", consumer_group);
         Self {
             default_mqpush_consumer_impl,
             client_config,
             consumer_config,
             consumer_group: Arc::new(consumer_group),
             message_listener,
-            /*consume_runtime: Arc::new(RocketMQRuntime::new_multi(
+            consume_runtime: RocketMQRuntime::new_multi(
                 consume_thread as usize,
-                "ConsumeMessageThread_",
-            )),*/
+                consumer_group_tag.as_str(),
+            ),
         }
     }
 }
 
 impl ConsumeMessageConcurrentlyService {
     async fn clean_expire_msg(&mut self) {
-        println!("===========================")
+        if let Some(default_mqpush_consumer_impl) = self
+            .default_mqpush_consumer_impl
+            .as_ref()
+            .unwrap()
+            .upgrade()
+        {
+            let process_queue_table = default_mqpush_consumer_impl
+                .rebalance_impl
+                .rebalance_impl_inner
+                .process_queue_table
+                .read()
+                .await;
+            for (_, process_queue) in process_queue_table.iter() {
+                process_queue
+                    .clean_expired_msg(self.default_mqpush_consumer_impl.clone())
+                    .await;
+            }
+        }
     }
 
     async fn process_consume_result(
         &mut self,
+        this: ArcRefCellWrapper<Self>,
         status: ConsumeConcurrentlyStatus,
         context: &ConsumeConcurrentlyContext,
         consume_request: &mut ConsumeRequest,
@@ -141,6 +160,7 @@ impl ConsumeMessageConcurrentlyService {
                     consume_request.msgs.append(&mut msg_back_success);
                     self.submit_consume_request_later(
                         msg_back_failed,
+                        this,
                         consume_request.process_queue.clone(),
                         consume_request.message_queue.clone(),
                     );
@@ -171,13 +191,14 @@ impl ConsumeMessageConcurrentlyService {
     fn submit_consume_request_later(
         &self,
         msgs: Vec<ArcRefCellWrapper<MessageClientExt>>,
+        this: ArcRefCellWrapper<Self>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
     ) {
-        let this = self.clone();
-        tokio::spawn(async move {
+        self.consume_runtime.get_handle().spawn(async move {
             tokio::time::sleep(Duration::from_secs(5)).await;
-            this.submit_consume_request(msgs, process_queue, message_queue, true)
+            let this_ = this.clone();
+            this.submit_consume_request(this_, msgs, process_queue, message_queue, true)
                 .await;
         });
     }
@@ -211,9 +232,8 @@ impl ConsumeMessageConcurrentlyService {
 }
 
 impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
-    fn start(&mut self) {
-        let mut this = self.clone();
-        tokio::spawn(async move {
+    fn start(&mut self, mut this: ArcRefCellWrapper<Self>) {
+        self.consume_runtime.get_handle().spawn(async move {
             let timeout = this.consumer_config.consume_timeout;
             let mut interval = tokio::time::interval(Duration::from_secs(timeout * 60));
             interval.tick().await;
@@ -254,6 +274,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
 
     async fn submit_consume_request(
         &self,
+        this: ArcRefCellWrapper<Self>,
         mut msgs: Vec<ArcRefCellWrapper<MessageClientExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
@@ -270,13 +291,10 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
                 consumer_group: self.consumer_group.as_ref().clone(),
                 default_mqpush_consumer_impl: self.default_mqpush_consumer_impl.clone(),
             };
-            let consume_message_concurrently_service = self.clone();
 
-            tokio::spawn(async move {
-                consume_request
-                    .run(consume_message_concurrently_service)
-                    .await
-            });
+            self.consume_runtime
+                .get_handle()
+                .spawn(async move { consume_request.run(this).await });
         } else {
             loop {
                 let item = if msgs.len() > consume_batch_size as usize {
@@ -294,13 +312,8 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
                     consumer_group: self.consumer_group.as_ref().clone(),
                     default_mqpush_consumer_impl: self.default_mqpush_consumer_impl.clone(),
                 };
-                let consume_message_concurrently_service = self.clone();
-                /*                self.consume_runtime.get_handle().spawn(async move {
-                    consume_request
-                        .run(consume_message_concurrently_service)
-                        .await
-                });*/
-                tokio::spawn(async move {
+                let consume_message_concurrently_service = this.clone();
+                self.consume_runtime.get_handle().spawn(async move {
                     consume_request
                         .run(consume_message_concurrently_service)
                         .await
@@ -335,7 +348,9 @@ struct ConsumeRequest {
 impl ConsumeRequest {
     async fn run(
         &mut self,
-        mut consume_message_concurrently_service: ConsumeMessageConcurrentlyService,
+        mut consume_message_concurrently_service: ArcRefCellWrapper<
+            ConsumeMessageConcurrentlyService,
+        >,
     ) {
         if self.process_queue.is_dropped() {
             info!(
@@ -456,8 +471,9 @@ impl ConsumeRequest {
                 self.consumer_group, self.message_queue,
             );
         } else {
+            let this = consume_message_concurrently_service.clone();
             consume_message_concurrently_service
-                .process_consume_result(status.unwrap(), &context, self)
+                .process_consume_result(this, status.unwrap(), &context, self)
                 .await;
         }
     }

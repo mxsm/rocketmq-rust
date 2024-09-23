@@ -22,6 +22,7 @@ use rocketmq_client::consumer::mq_push_consumer::MQPushConsumer;
 use rocketmq_client::Result;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_rust::rocketmq;
+use tracing::info;
 
 pub const MESSAGE_COUNT: usize = 1;
 pub const CONSUMER_GROUP: &str = "please_rename_unique_group_name_4";
@@ -32,7 +33,7 @@ pub const TAG: &str = "*";
 #[rocketmq::main]
 pub async fn main() -> Result<()> {
     //init logger
-    //rocketmq_common::log::init_logger();
+    rocketmq_common::log::init_logger();
 
     // create a producer builder with default configuration
     let builder = DefaultMQPushConsumer::builder();
@@ -57,7 +58,7 @@ impl MessageListenerConcurrently for MyMessageListener {
         _context: &ConsumeConcurrentlyContext,
     ) -> Result<ConsumeConcurrentlyStatus> {
         for msg in msgs {
-            println!("Receive message: {:?}", msg);
+            info!("Receive message: {:?}", msg);
         }
         Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
     }

@@ -57,8 +57,8 @@ impl ConsumeMessagePopConcurrentlyService {
 }
 
 impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
-    fn start(&mut self) {
-        // nothing to do
+    fn start(&mut self, this: ArcRefCellWrapper<Self>) {
+        //todo!()
     }
 
     fn shutdown(&mut self, await_terminate_millis: u64) {
@@ -91,6 +91,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
 
     async fn submit_consume_request(
         &self,
+        this: ArcRefCellWrapper<Self>,
         msgs: Vec<ArcRefCellWrapper<MessageClientExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,

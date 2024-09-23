@@ -275,12 +275,20 @@ impl PullCallback for DefaultPullCallback {
                     // pullResult.getMsgFoundList().size());
                     let vec = pull_result_ext.pull_result.msg_found_list.clone();
                     let dispatch_to_consume = pull_request.process_queue.put_message(vec).await;
+                    let consume_message_concurrently_service_inner = self
+                        .push_consumer_impl
+                        .consume_message_concurrently_service
+                        .as_mut()
+                        .unwrap()
+                        .consume_message_concurrently_service
+                        .clone();
                     self.push_consumer_impl
                         .consume_message_concurrently_service
                         .as_mut()
                         .unwrap()
                         .consume_message_concurrently_service
                         .submit_consume_request(
+                            consume_message_concurrently_service_inner,
                             pull_result_ext.pull_result.msg_found_list,
                             pull_request.get_process_queue().clone(),
                             pull_request.get_message_queue().clone(),

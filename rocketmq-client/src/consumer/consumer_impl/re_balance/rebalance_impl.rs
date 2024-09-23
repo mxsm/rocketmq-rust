@@ -273,11 +273,6 @@ where
         if !all_mq_locked {
             self.client_instance.as_mut().unwrap().rebalance_later(500);
         }
-        println!(
-            "PullRequestList============================={}================{}",
-            topic,
-            pull_request_list.len()
-        );
         sub_rebalance_impl
             .dispatch_pull_request(pull_request_list, 500)
             .await;

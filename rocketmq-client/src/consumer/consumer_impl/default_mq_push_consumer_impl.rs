@@ -272,7 +272,7 @@ impl DefaultMQPushConsumerImpl {
                         self.consume_orderly = false;
                         self.consume_message_concurrently_service = Some(ArcRefCellWrapper::new(
                             ConsumeMessageConcurrentlyServiceGeneral {
-                                consume_message_concurrently_service:
+                                consume_message_concurrently_service: ArcRefCellWrapper::new(
                                     ConsumeMessageConcurrentlyService::new(
                                         self.client_config.clone(),
                                         self.consumer_config.clone(),
@@ -280,23 +280,28 @@ impl DefaultMQPushConsumerImpl {
                                         listener.clone().expect("listener is None"),
                                         self.default_mqpush_consumer_impl.clone(),
                                     ),
+                                ),
 
-                                consume_message_pop_concurrently_service:
+                                consume_message_pop_concurrently_service: ArcRefCellWrapper::new(
                                     ConsumeMessagePopConcurrentlyService::new(
                                         self.client_config.clone(),
                                         self.consumer_config.clone(),
                                         self.consumer_config.consumer_group.clone(),
                                         listener.expect("listener is None"),
                                     ),
+                                ),
                             },
                         ));
                     } else if message_listener.message_listener_orderly.is_some() {
                         self.consume_orderly = true;
                         self.consume_message_orderly_service = Some(ArcRefCellWrapper::new(
                             ConsumeMessageOrderlyServiceGeneral {
-                                consume_message_orderly_service: ConsumeMessageOrderlyService,
-                                consume_message_pop_orderly_service:
+                                consume_message_orderly_service: ArcRefCellWrapper::new(
+                                    ConsumeMessageOrderlyService,
+                                ),
+                                consume_message_pop_orderly_service: ArcRefCellWrapper::new(
                                     ConsumeMessagePopOrderlyService,
+                                ),
                             },
                         ));
                     }
@@ -305,23 +310,37 @@ impl DefaultMQPushConsumerImpl {
                 if let Some(consume_message_concurrently_service) =
                     self.consume_message_concurrently_service.as_mut()
                 {
+                    let this = consume_message_concurrently_service
+                        .consume_message_concurrently_service
+                        .clone();
                     consume_message_concurrently_service
                         .consume_message_concurrently_service
-                        .start();
+                        .start(this);
+
+                    let wrapper = consume_message_concurrently_service
+                        .consume_message_pop_concurrently_service
+                        .clone();
                     consume_message_concurrently_service
                         .consume_message_pop_concurrently_service
-                        .start();
+                        .start(wrapper);
                 }
 
                 if let Some(consume_message_orderly_service) =
                     self.consume_message_orderly_service.as_mut()
                 {
+                    let wrapper = consume_message_orderly_service
+                        .consume_message_orderly_service
+                        .clone();
                     consume_message_orderly_service
                         .consume_message_orderly_service
-                        .start();
+                        .start(wrapper);
+
+                    let wrapper = consume_message_orderly_service
+                        .consume_message_pop_orderly_service
+                        .clone();
                     consume_message_orderly_service
                         .consume_message_pop_orderly_service
-                        .start();
+                        .start(wrapper);
                 }
                 let consumer_impl = self.clone();
                 self.client_instance
