@@ -444,7 +444,8 @@ impl MQClientAPIImpl {
                     let send_result = self.process_send_response(broker_name, msg, &response, addr);
                     if let Ok(result) = send_result {
                         if context.is_some() {
-                            context.as_mut().unwrap().send_result = Some(result.clone());
+                            let inner = context.as_mut().unwrap();
+                            inner.send_result = Some(result.clone());
                             producer.execute_send_message_hook_after(context);
                         }
                     }
@@ -456,7 +457,8 @@ impl MQClientAPIImpl {
                 match send_result {
                     Ok(result) => {
                         if context.is_some() {
-                            context.as_mut().unwrap().send_result = Some(result.clone());
+                            let inner = context.as_mut().unwrap();
+                            inner.send_result = Some(result.clone());
                             producer.execute_send_message_hook_after(context);
                         }
                         let duration = (Instant::now() - begin_start_time).as_millis() as u64;
@@ -624,7 +626,8 @@ impl MQClientAPIImpl {
             ))
             .await;
         } else if context.is_some() {
-            context.as_mut().unwrap().exception = Some(Arc::new(Box::new(e)));
+            let inner = context.as_mut().unwrap();
+            inner.exception = Some(Arc::new(Box::new(e)));
             producer.execute_send_message_hook_after(context);
         }
     }
@@ -861,10 +864,6 @@ impl MQClientAPIImpl {
                     let _ = this
                         .pull_message_async(addr.as_str(), request, timeout_millis, pull_callback)
                         .await;
-                    println!(
-                        ">>>>>>>>>>>>>>>>>>pull_message_async cost: {:?}",
-                        instant.elapsed()
-                    );
                 });
                 Ok(None)
             }
@@ -901,10 +900,6 @@ impl MQClientAPIImpl {
             .await
         {
             Ok(response) => {
-                println!(
-                    "++++++++++++++++++++++++pull_message_async response: {}",
-                    response
-                );
                 let result = self.process_pull_response(response, addr).await;
 
                 match result {

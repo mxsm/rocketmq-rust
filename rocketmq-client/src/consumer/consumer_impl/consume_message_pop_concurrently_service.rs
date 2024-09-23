@@ -58,7 +58,7 @@ impl ConsumeMessagePopConcurrentlyService {
 
 impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
     fn start(&mut self, this: ArcRefCellWrapper<Self>) {
-        todo!()
+        //todo!()
     }
 
     fn shutdown(&mut self, await_terminate_millis: u64) {

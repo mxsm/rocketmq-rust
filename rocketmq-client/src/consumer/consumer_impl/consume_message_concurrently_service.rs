@@ -64,6 +64,7 @@ impl ConsumeMessageConcurrentlyService {
         default_mqpush_consumer_impl: Option<WeakCellWrapper<DefaultMQPushConsumerImpl>>,
     ) -> Self {
         let consume_thread = consumer_config.consume_thread_max;
+        let consumer_group_tag = format!("{}_{}", "ConsumeMessageThread_", consumer_group);
         Self {
             default_mqpush_consumer_impl,
             client_config,
@@ -72,7 +73,7 @@ impl ConsumeMessageConcurrentlyService {
             message_listener,
             consume_runtime: RocketMQRuntime::new_multi(
                 consume_thread as usize,
-                "ConsumeMessageThread_",
+                consumer_group_tag.as_str(),
             ),
         }
     }
@@ -80,7 +81,24 @@ impl ConsumeMessageConcurrentlyService {
 
 impl ConsumeMessageConcurrentlyService {
     async fn clean_expire_msg(&mut self) {
-        println!("===========================")
+        if let Some(default_mqpush_consumer_impl) = self
+            .default_mqpush_consumer_impl
+            .as_ref()
+            .unwrap()
+            .upgrade()
+        {
+            let process_queue_table = default_mqpush_consumer_impl
+                .rebalance_impl
+                .rebalance_impl_inner
+                .process_queue_table
+                .read()
+                .await;
+            for (_, process_queue) in process_queue_table.iter() {
+                process_queue
+                    .clean_expired_msg(self.default_mqpush_consumer_impl.clone())
+                    .await;
+            }
+        }
     }
 
     async fn process_consume_result(

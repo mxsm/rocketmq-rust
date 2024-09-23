@@ -21,7 +21,6 @@ use futures_util::StreamExt;
 use rocketmq_common::ArcRefCellWrapper;
 use tokio::sync::mpsc::Receiver;
 use tracing::error;
-use tracing::info;
 use tracing::warn;
 
 use crate::base::connection_net_event::ConnectionNetEvent;
@@ -80,11 +79,6 @@ async fn run_recv<PR: RequestProcessor>(
             Ok(msg) => match msg.get_type() {
                 // handle request
                 RemotingCommandType::REQUEST => {
-                    info!(
-                        ">>>>>>>>>>>>>>>>>>>receive request, code={}, address={}",
-                        msg.code(),
-                        client.channel.remote_address()
-                    );
                     let opaque = msg.opaque();
                     let process_result = processor
                         .process_request(

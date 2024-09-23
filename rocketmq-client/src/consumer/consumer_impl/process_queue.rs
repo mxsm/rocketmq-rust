@@ -26,12 +26,14 @@ use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::ArcRefCellWrapper;
+use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::WeakCellWrapper;
 use rocketmq_remoting::protocol::body::process_queue_info::ProcessQueueInfo;
 use tokio::sync::RwLock;
 
+use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
 use crate::consumer::consumer_impl::PULL_MAX_IDLE_TIME;
-use crate::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
 
 static REBALANCE_LOCK_MAX_LIVE_TIME: Lazy<u64> = Lazy::new(|| {
     std::env::var("rocketmq.client.rebalance.lockMaxLiveTime")
@@ -122,8 +124,67 @@ impl ProcessQueue {
             > *REBALANCE_LOCK_MAX_LIVE_TIME
     }
 
-    pub(crate) fn clean_expired_msg(&self, push_consumer: &DefaultMQPushConsumer) {
-        unimplemented!("clean_expired_msg")
+    pub(crate) async fn clean_expired_msg(
+        &self,
+        push_consumer: Option<WeakCellWrapper<DefaultMQPushConsumerImpl>>,
+    ) {
+        if push_consumer.is_none() {
+            return;
+        }
+        let push_consumer = push_consumer.unwrap().upgrade();
+        if push_consumer.is_none() {
+            return;
+        }
+        let mut push_consumer = push_consumer.unwrap();
+        if push_consumer.is_consume_orderly() {
+            return;
+        }
+        let loop_ = 16.min(self.msg_tree_map.read().await.len());
+        for _ in 0..loop_ {
+            let msg = {
+                let msg_tree_map = self.msg_tree_map.read().await;
+                if !msg_tree_map.is_empty() {
+                    let value = msg_tree_map.first_key_value().unwrap().1;
+                    let consume_start_time_stamp =
+                        MessageAccessor::get_consume_start_time_stamp(value.as_ref());
+                    if let Some(consume_start_time_stamp) = consume_start_time_stamp {
+                        if get_current_millis() - consume_start_time_stamp.parse::<u64>().unwrap()
+                            > push_consumer.consumer_config.consume_timeout * 1000 * 60
+                        {
+                            Some(value.clone())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            };
+            if msg.is_none() {
+                break;
+            }
+
+            let mut msg = msg.unwrap();
+            let msg_inner = &mut msg.as_mut().message_ext_inner;
+            msg_inner.set_topic(
+                push_consumer
+                    .client_config
+                    .with_namespace(msg_inner.topic())
+                    .as_str(),
+            );
+            let _ = push_consumer
+                .send_message_back_with_broker_name(msg_inner, 3, None, None)
+                .await;
+            let msg_tree_map = self.msg_tree_map.write().await;
+            if !msg_tree_map.is_empty()
+                && msg.message_ext_inner.queue_offset == *msg_tree_map.first_key_value().unwrap().0
+            {
+                drop(msg_tree_map);
+                self.remove_message(&[msg]).await;
+            }
+        }
     }
 
     pub(crate) async fn put_message(
