@@ -24,9 +24,11 @@ use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::MessageDecoder;
 use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::WeakCellWrapper;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
+use rocketmq_remoting::protocol::header::notify_consumer_ids_changed_request_header::NotifyConsumerIdsChangedRequestHeader;
 use rocketmq_remoting::protocol::header::reply_message_request_header::ReplyMessageRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
@@ -36,10 +38,19 @@ use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
+use crate::factory::mq_client_instance::MQClientInstance;
 use crate::producer::request_future_holder::REQUEST_FUTURE_HOLDER;
 
 #[derive(Clone)]
-pub struct ClientRemotingProcessor;
+pub struct ClientRemotingProcessor {
+    pub(crate) client_instance: WeakCellWrapper<MQClientInstance>,
+}
+
+impl ClientRemotingProcessor {
+    pub fn new(client_instance: WeakCellWrapper<MQClientInstance>) -> Self {
+        Self { client_instance }
+    }
+}
 
 impl RequestProcessor for ClientRemotingProcessor {
     async fn process_request(
@@ -52,6 +63,9 @@ impl RequestProcessor for ClientRemotingProcessor {
         info!("process_request: {:?}", request_code);
         match request_code {
             RequestCode::PushReplyMessageToClient => self.receive_reply_message(ctx, request).await,
+            RequestCode::NotifyConsumerIdsChanged => {
+                self.notify_consumer_ids_changed(channel, ctx, request)
+            }
             _ => {
                 info!("Unknown request code: {:?}", request_code);
                 Ok(None)
@@ -154,5 +168,32 @@ impl ClientRemotingProcessor {
                 correlation_id, reply_msg.born_host
             )
         }
+    }
+
+    fn notify_consumer_ids_changed(
+        &mut self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: RemotingCommand,
+    ) -> Result<Option<RemotingCommand>> {
+        let request_header = request
+            .decode_command_custom_header::<NotifyConsumerIdsChangedRequestHeader>()
+            .unwrap();
+        println!(
+            "receive broker's notification[{}], the consumer group: {} changed, rebalance \
+             immediately",
+            channel.remote_address(),
+            request_header.consumer_group
+        );
+        info!(
+            "receive broker's notification[{}], the consumer group: {} changed, rebalance \
+             immediately",
+            channel.remote_address(),
+            request_header.consumer_group
+        );
+        if let Some(client_instance) = self.client_instance.upgrade() {
+            client_instance.re_balance_immediately();
+        }
+        Ok(None)
     }
 }

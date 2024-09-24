@@ -19,10 +19,8 @@ use rocketmq_common::ArcRefCellWrapper;
 use tracing::info;
 use tracing::warn;
 
-use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
 use crate::consumer::consumer_impl::pop_request::PopRequest;
 use crate::consumer::consumer_impl::pull_request::PullRequest;
-use crate::consumer::mq_consumer_inner::MQConsumerInner;
 use crate::factory::mq_client_instance::MQClientInstance;
 
 #[derive(Clone)]
@@ -38,32 +36,23 @@ impl PullMessageService {
             pull_tx: None,
         }
     }
-    pub async fn start<C>(&mut self, instance: MQClientInstance<C>)
-    where
-        C: MQConsumerInner + Clone,
-    {
+    pub async fn start(&mut self, instance: ArcRefCellWrapper<MQClientInstance>) {
         let (pop_tx, mut pop_rx) = tokio::sync::mpsc::channel(1024 * 4);
         let (pull_tx, mut pull_rx) = tokio::sync::mpsc::channel(1024 * 4);
         self.pop_tx = Some(pop_tx);
         self.pull_tx = Some(pull_tx);
-        let instance_wrapper = ArcRefCellWrapper::new(instance);
-        let instance_wrapper_clone = instance_wrapper.clone();
+        //let instance_wrapper = ArcRefCellWrapper::new(instance);
+        let instance_wrapper_clone = instance.clone();
         tokio::spawn(async move {
             info!(
                 ">>>>>>>>>>>>>>>>>>>>>>>PullMessageService [PopRequest] \
                  started<<<<<<<<<<<<<<<<<<<<<<<<<<<<"
             );
             while let Some(request) = pop_rx.recv().await {
-                if let Some(mut consumer) = instance_wrapper
-                    .select_consumer(request.get_consumer_group())
-                    .await
+                if let Some(mut consumer) =
+                    instance.select_consumer(request.get_consumer_group()).await
                 {
-                    consumer
-                        .as_any_mut()
-                        .downcast_mut::<DefaultMQPushConsumerImpl>()
-                        .unwrap()
-                        .pop_message(request)
-                        .await;
+                    consumer.pop_message(request).await;
                 } else {
                     warn!(
                         "No matched consumer for the PopRequest {}, drop it",
@@ -82,12 +71,7 @@ impl PullMessageService {
                     .select_consumer(request.get_consumer_group())
                     .await
                 {
-                    consumer
-                        .as_any_mut()
-                        .downcast_mut::<DefaultMQPushConsumerImpl>()
-                        .unwrap()
-                        .pull_message(request)
-                        .await;
+                    consumer.pull_message(request).await;
                 } else {
                     warn!(
                         "No matched consumer for the PullRequest {},drop it",

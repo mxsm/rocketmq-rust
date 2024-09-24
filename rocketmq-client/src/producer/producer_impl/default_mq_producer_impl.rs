@@ -1152,7 +1152,8 @@ impl DefaultMQProducerImpl {
         match send_result {
             Ok(result) => {
                 if self.has_send_message_hook() {
-                    send_message_context.as_mut().unwrap().send_result = result.clone();
+                    let smc = send_message_context.as_mut().unwrap();
+                    smc.send_result = result.clone();
                     self.execute_send_message_hook_after(&send_message_context);
                 }
                 Ok(result)
@@ -1393,7 +1394,7 @@ impl DefaultMQProducerImpl {
             .as_mut()
             .unwrap()
             .mq_admin_impl
-            .fetch_publish_message_queues(topic, client_instance, &mut self.client_config)
+            .fetch_publish_message_queues(topic, client_instance.unwrap(), &mut self.client_config)
             .await
     }
 
@@ -2010,7 +2011,8 @@ impl DefaultMQProducerImpl {
                     ));
                 }
                 if start_factory {
-                    Box::pin(self.client_instance.as_mut().unwrap().start()).await?;
+                    let cloned = self.client_instance.as_mut().cloned().unwrap();
+                    Box::pin(self.client_instance.as_mut().unwrap().start(cloned)).await?;
                     //self.client_instance.as_mut().unwrap().start().await;
                 }
 

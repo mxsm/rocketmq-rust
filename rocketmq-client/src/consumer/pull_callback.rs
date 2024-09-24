@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
+use rocketmq_common::WeakCellWrapper;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use tracing::warn;
@@ -42,7 +43,7 @@ pub trait PullCallbackLocal: Sync {
 }
 
 pub(crate) struct DefaultPullCallback {
-    pub(crate) push_consumer_impl: DefaultMQPushConsumerImpl,
+    pub(crate) push_consumer_impl: WeakCellWrapper<DefaultMQPushConsumerImpl>,
     pub(crate) message_queue_inner: Option<MessageQueue>,
     pub(crate) subscription_data: Option<SubscriptionData>,
     pub(crate) pull_request: Option<PullRequest>,
@@ -236,11 +237,18 @@ impl DefaultPullCallback {
 
 impl PullCallback for DefaultPullCallback {
     async fn on_success(&mut self, mut pull_result_ext: PullResultExt) {
+        let push_consumer_impl = self.push_consumer_impl.upgrade();
+        if push_consumer_impl.is_none() {
+            warn!("push_consumer_impl is None");
+            return;
+        }
+        let mut push_consumer_impl = push_consumer_impl.unwrap();
+
         let message_queue_inner = self.message_queue_inner.take().unwrap();
         let subscription_data = self.subscription_data.take().unwrap();
         let mut pull_request = self.pull_request.take().unwrap();
 
-        self.push_consumer_impl
+        push_consumer_impl
             .pull_api_wrapper
             .as_mut()
             .unwrap()
@@ -257,7 +265,7 @@ impl PullCallback for DefaultPullCallback {
                 self.client_instance.as_mut().unwrap().*/
                 let mut first_msg_offset = i64::MAX;
                 if pull_result_ext.pull_result.msg_found_list.is_empty() {
-                    self.push_consumer_impl
+                    push_consumer_impl
                         .execute_pull_request_immediately(pull_request)
                         .await;
                 } else {
@@ -275,14 +283,13 @@ impl PullCallback for DefaultPullCallback {
                     // pullResult.getMsgFoundList().size());
                     let vec = pull_result_ext.pull_result.msg_found_list.clone();
                     let dispatch_to_consume = pull_request.process_queue.put_message(vec).await;
-                    let consume_message_concurrently_service_inner = self
-                        .push_consumer_impl
+                    let consume_message_concurrently_service_inner = push_consumer_impl
                         .consume_message_concurrently_service
                         .as_mut()
                         .unwrap()
                         .consume_message_concurrently_service
                         .clone();
-                    self.push_consumer_impl
+                    push_consumer_impl
                         .consume_message_concurrently_service
                         .as_mut()
                         .unwrap()
@@ -295,13 +302,11 @@ impl PullCallback for DefaultPullCallback {
                             dispatch_to_consume,
                         )
                         .await;
-                    if self.push_consumer_impl.consumer_config.pull_interval > 0 {
-                        self.push_consumer_impl.execute_pull_request_later(
-                            pull_request,
-                            self.push_consumer_impl.consumer_config.pull_interval,
-                        );
+                    let pull_interval = push_consumer_impl.consumer_config.pull_interval;
+                    if pull_interval > 0 {
+                        push_consumer_impl.execute_pull_request_later(pull_request, pull_interval);
                     } else {
-                        self.push_consumer_impl
+                        push_consumer_impl
                             .execute_pull_request_immediately(pull_request)
                             .await;
                     }
@@ -320,10 +325,8 @@ impl PullCallback for DefaultPullCallback {
             }
             PullStatus::NoNewMsg | PullStatus::NoMatchedMsg => {
                 pull_request.next_offset = pull_result_ext.pull_result.next_begin_offset as i64;
-                self.push_consumer_impl
-                    .correct_tags_offset(&pull_request)
-                    .await;
-                self.push_consumer_impl
+                push_consumer_impl.correct_tags_offset(&pull_request).await;
+                push_consumer_impl
                     .execute_pull_request_immediately(pull_request)
                     .await;
             }
@@ -336,7 +339,7 @@ impl PullCallback for DefaultPullCallback {
                 pull_request.next_offset = pull_result_ext.pull_result.next_begin_offset as i64;
                 pull_request.process_queue.set_dropped(true);
 
-                let offset_store = self.push_consumer_impl.offset_store.as_mut().unwrap();
+                let offset_store = push_consumer_impl.offset_store.as_mut().unwrap();
                 offset_store
                     .update_and_freeze_offset(
                         pull_request.get_message_queue(),
@@ -344,11 +347,11 @@ impl PullCallback for DefaultPullCallback {
                     )
                     .await;
                 offset_store.persist(pull_request.get_message_queue()).await;
-                self.push_consumer_impl
+                push_consumer_impl
                     .rebalance_impl
                     .remove_process_queue(pull_request.get_message_queue())
                     .await;
-                self.push_consumer_impl
+                push_consumer_impl
                     .rebalance_impl
                     .rebalance_impl_inner
                     .client_instance
@@ -360,6 +363,13 @@ impl PullCallback for DefaultPullCallback {
     }
 
     fn on_exception(&mut self, err: Box<dyn std::error::Error + Send>) {
+        let push_consumer_impl = self.push_consumer_impl.upgrade();
+        if push_consumer_impl.is_none() {
+            warn!("push_consumer_impl is None");
+            return;
+        }
+        let mut push_consumer_impl = push_consumer_impl.unwrap();
+
         let message_queue_inner = self.message_queue_inner.take().unwrap();
         let pull_request = self.pull_request.take().unwrap();
         let topic = message_queue_inner.get_topic().to_string();
@@ -370,26 +380,26 @@ impl PullCallback for DefaultPullCallback {
                         if ResponseCode::from(*code) == ResponseCode::SubscriptionNotLatest {
                             warn!(
                                 "the subscription is not latest, group={}",
-                                self.push_consumer_impl.consumer_config.consumer_group,
+                                push_consumer_impl.consumer_config.consumer_group,
                             );
                         } else {
                             warn!(
                                 "execute the pull request exception, group={}",
-                                self.push_consumer_impl.consumer_config.consumer_group
+                                push_consumer_impl.consumer_config.consumer_group
                             );
                         }
                     }
                     _ => {
                         warn!(
                             "execute the pull request exception, group={}",
-                            self.push_consumer_impl.consumer_config.consumer_group
+                            push_consumer_impl.consumer_config.consumer_group
                         );
                     }
                 }
             } else {
                 warn!(
                     "execute the pull request exception, group={}",
-                    self.push_consumer_impl.consumer_config.consumer_group
+                    push_consumer_impl.consumer_config.consumer_group
                 );
             }
         }
@@ -407,7 +417,7 @@ impl PullCallback for DefaultPullCallback {
                             pull_request,
                             self.push_consumer_impl.pull_time_delay_mills_when_exception,
                         );*/
-                        self.push_consumer_impl.pull_time_delay_mills_when_exception
+                        push_consumer_impl.pull_time_delay_mills_when_exception
                     }
                 }
                 _ => {
@@ -415,7 +425,7 @@ impl PullCallback for DefaultPullCallback {
                         pull_request,
                         self.push_consumer_impl.pull_time_delay_mills_when_exception,
                     );*/
-                    self.push_consumer_impl.pull_time_delay_mills_when_exception
+                    push_consumer_impl.pull_time_delay_mills_when_exception
                 }
             }
         } else {
@@ -423,10 +433,9 @@ impl PullCallback for DefaultPullCallback {
                 pull_request,
                 self.push_consumer_impl.pull_time_delay_mills_when_exception,
             );*/
-            self.push_consumer_impl.pull_time_delay_mills_when_exception
+            push_consumer_impl.pull_time_delay_mills_when_exception
         };
 
-        self.push_consumer_impl
-            .execute_pull_request_later(pull_request, time_delay);
+        push_consumer_impl.execute_pull_request_later(pull_request, time_delay);
     }
 }

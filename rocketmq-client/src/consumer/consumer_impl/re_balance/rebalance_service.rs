@@ -18,12 +18,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use once_cell::sync::Lazy;
+use rocketmq_common::ArcRefCellWrapper;
 use tokio::select;
 use tokio::sync::Notify;
 use tokio::time::Instant;
 use tracing::info;
 
-use crate::consumer::mq_consumer_inner::MQConsumerInner;
 use crate::factory::mq_client_instance::MQClientInstance;
 
 static WAIT_INTERVAL: Lazy<Duration> = Lazy::new(|| {
@@ -56,10 +56,7 @@ impl RebalanceService {
         }
     }
 
-    pub async fn start<C>(&mut self, mut instance: MQClientInstance<C>)
-    where
-        C: MQConsumerInner + Clone,
-    {
+    pub async fn start(&mut self, mut instance: ArcRefCellWrapper<MQClientInstance>) {
         let notify = self.notify.clone();
         tokio::spawn(async move {
             let mut last_rebalance_timestamp = Instant::now();
