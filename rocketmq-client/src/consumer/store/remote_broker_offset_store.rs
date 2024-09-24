@@ -97,6 +97,8 @@ impl RemoteBrokerOffsetStore {
             self.client_instance
                 .mut_from_ref()
                 .mq_client_api_impl
+                .as_mut()
+                .unwrap()
                 .query_consumer_offset(
                     find_broker_result.broker_addr.as_str(),
                     request_header,
@@ -294,6 +296,8 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
             if is_oneway {
                 self.client_instance
                     .mq_client_api_impl
+                    .as_mut()
+                    .unwrap()
                     .update_consumer_offset_oneway(
                         find_broker_result.broker_addr.as_str(),
                         request_header,
@@ -303,6 +307,8 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
             } else {
                 self.client_instance
                     .mq_client_api_impl
+                    .as_mut()
+                    .unwrap()
                     .update_consumer_offset(
                         find_broker_result.broker_addr.as_str(),
                         request_header,

@@ -40,7 +40,6 @@ use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_runtime::RocketMQRuntime;
 use tokio::runtime::Handle;
-use tokio::sync::broadcast::Receiver;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tracing::error;
@@ -49,10 +48,10 @@ use tracing::warn;
 
 use crate::admin::mq_admin_ext_inner::MQAdminExtInner;
 use crate::base::client_config::ClientConfig;
-use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
 use crate::consumer::consumer_impl::pull_message_service::PullMessageService;
 use crate::consumer::consumer_impl::re_balance::rebalance_service::RebalanceService;
 use crate::consumer::mq_consumer_inner::MQConsumerInner;
+use crate::consumer::mq_consumer_inner::MQConsumerInnerImpl;
 use crate::error::MQClientError::MQClientErr;
 use crate::implementation::client_remoting_processor::ClientRemotingProcessor;
 use crate::implementation::find_broker_result::FindBrokerResult;
@@ -64,10 +63,7 @@ use crate::producer::producer_impl::mq_producer_inner::MQProducerInner;
 use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
 use crate::Result;
 
-pub struct MQClientInstance<C = DefaultMQPushConsumerImpl>
-where
-    C: Clone,
-{
+pub struct MQClientInstance {
     pub(crate) client_config: Arc<ClientConfig>,
     pub(crate) client_id: String,
     boot_timestamp: u64,
@@ -80,13 +76,13 @@ where
      * The container of the consumer in the current client. The key is the name of
      * consumer_group.
      */
-    consumer_table: Arc<RwLock<HashMap<String, C>>>,
+    consumer_table: Arc<RwLock<HashMap<String, MQConsumerInnerImpl>>>,
     /**
      * The container of the adminExt in the current client. The key is the name of
      * adminExtGroup.
      */
     admin_ext_table: Arc<RwLock<HashMap<String, Box<dyn MQAdminExtInner>>>>,
-    pub(crate) mq_client_api_impl: ArcRefCellWrapper<MQClientAPIImpl>,
+    pub(crate) mq_client_api_impl: Option<ArcRefCellWrapper<MQClientAPIImpl>>,
     pub(crate) mq_admin_impl: ArcRefCellWrapper<MQAdminImpl>,
     pub(crate) topic_route_table: Arc<RwLock<HashMap<String /* Topic */, TopicRouteData>>>,
     topic_end_points_table:
@@ -103,20 +99,16 @@ where
     broker_version_table:
         Arc<RwLock<HashMap<String /* Broker Name */, HashMap<String /* address */, i32>>>>,
     send_heartbeat_times_total: Arc<AtomicI64>,
-    tx: Option<Receiver<ConnectionNetEvent>>,
 }
 
-impl<C> MQClientInstance<C>
-where
-    C: MQConsumerInner + Clone,
-{
+impl MQClientInstance {
     pub fn new(
         client_config: ClientConfig,
         instance_index: i32,
         client_id: String,
         rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
     ) -> Self {
-        let broker_addr_table = Arc::new(Default::default());
+        /* let broker_addr_table = Arc::new(Default::default());
         let (tx, _) = tokio::sync::broadcast::channel::<ConnectionNetEvent>(16);
         let rx = tx.subscribe();
         let mq_client_api_impl = ArcRefCellWrapper::new(MQClientAPIImpl::new(
@@ -145,7 +137,7 @@ where
             producer_table: Arc::new(RwLock::new(HashMap::new())),
             consumer_table: Arc::new(Default::default()),
             admin_ext_table: Arc::new(Default::default()),
-            mq_client_api_impl,
+            mq_client_api_impl:None,
             mq_admin_impl: ArcRefCellWrapper::new(MQAdminImpl::new()),
             topic_route_table: Arc::new(Default::default()),
             topic_end_points_table: Arc::new(Default::default()),
@@ -171,35 +163,97 @@ where
         };
         // let instance_ = instance.clone();
 
-        instance
+        instance*/
+        unimplemented!()
     }
 
-    pub(crate) fn set_connection_listener(mut instance: ArcRefCellWrapper<MQClientInstance>) {
+    pub fn new_arc(
+        client_config: ClientConfig,
+        instance_index: i32,
+        client_id: String,
+        rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
+    ) -> ArcRefCellWrapper<MQClientInstance> {
+        let broker_addr_table = Arc::new(Default::default());
+        let mut instance = ArcRefCellWrapper::new(MQClientInstance {
+            client_config: Arc::new(client_config.clone()),
+            client_id,
+            boot_timestamp: get_current_millis(),
+            producer_table: Arc::new(RwLock::new(HashMap::new())),
+            consumer_table: Arc::new(Default::default()),
+            admin_ext_table: Arc::new(Default::default()),
+            mq_client_api_impl: None,
+            mq_admin_impl: ArcRefCellWrapper::new(MQAdminImpl::new()),
+            topic_route_table: Arc::new(Default::default()),
+            topic_end_points_table: Arc::new(Default::default()),
+            lock_namesrv: Default::default(),
+            lock_heartbeat: Default::default(),
+            service_state: ServiceState::CreateJust,
+            pull_message_service: ArcRefCellWrapper::new(PullMessageService::new()),
+            rebalance_service: RebalanceService::new(),
+            default_producer: ArcRefCellWrapper::new(
+                DefaultMQProducer::builder()
+                    .producer_group(mix_all::CLIENT_INNER_PRODUCER_GROUP)
+                    .client_config(client_config.clone())
+                    .build(),
+            ),
+            instance_runtime: Arc::new(RocketMQRuntime::new_multi(
+                num_cpus::get(),
+                "mq-client-instance",
+            )),
+            broker_addr_table,
+            broker_version_table: Arc::new(Default::default()),
+            send_heartbeat_times_total: Arc::new(AtomicI64::new(0)),
+        });
+        let weak_instance = ArcRefCellWrapper::downgrade(&instance);
+        let (tx, mut rx) = tokio::sync::broadcast::channel::<ConnectionNetEvent>(16);
+
+        let mq_client_api_impl = ArcRefCellWrapper::new(MQClientAPIImpl::new(
+            Arc::new(TokioClientConfig::default()),
+            ClientRemotingProcessor::new(weak_instance.clone()),
+            rpc_hook,
+            client_config.clone(),
+            Some(tx),
+        ));
+        instance.mq_client_api_impl = Some(mq_client_api_impl.clone());
+        if let Some(namesrv_addr) = client_config.namesrv_addr.as_deref() {
+            let handle = Handle::current();
+
+            let namesrv_addr = namesrv_addr.to_string();
+            thread::spawn(move || {
+                handle.block_on(async move {
+                    mq_client_api_impl
+                        .update_name_server_address_list(namesrv_addr.as_str())
+                        .await;
+                })
+            });
+        }
         tokio::spawn(async move {
-            let mut rx = instance.tx.take().unwrap();
             while let Ok(value) = rx.recv().await {
-                match value {
-                    ConnectionNetEvent::CONNECTED(remote_address) => {
-                        info!("ConnectionNetEvent CONNECTED");
-                        let broker_addr_table = instance.broker_addr_table.read().await;
-                        for (broker_name, broker_addrs) in broker_addr_table.iter() {
-                            for (id, addr) in broker_addrs.iter() {
-                                if addr == remote_address.to_string().as_str()
-                                    && instance
-                                        .send_heartbeat_to_broker(*id, broker_name, addr)
-                                        .await
-                                {
-                                    instance.re_balance_immediately();
+                if let Some(instance_) = weak_instance.upgrade() {
+                    match value {
+                        ConnectionNetEvent::CONNECTED(remote_address) => {
+                            info!("ConnectionNetEvent CONNECTED");
+                            let broker_addr_table = instance_.broker_addr_table.read().await;
+                            for (broker_name, broker_addrs) in broker_addr_table.iter() {
+                                for (id, addr) in broker_addrs.iter() {
+                                    if addr == remote_address.to_string().as_str()
+                                        && instance_
+                                            .send_heartbeat_to_broker(*id, broker_name, addr)
+                                            .await
+                                    {
+                                        instance_.re_balance_immediately();
+                                    }
                                 }
                             }
                         }
+                        ConnectionNetEvent::DISCONNECTED => {}
+                        ConnectionNetEvent::EXCEPTION => {}
                     }
-                    ConnectionNetEvent::DISCONNECTED => {}
-                    ConnectionNetEvent::EXCEPTION => {}
                 }
             }
             warn!("ConnectionNetEvent recv error");
         });
+        instance
     }
 
     pub fn re_balance_immediately(&self) {
@@ -224,10 +278,14 @@ where
                 self.service_state = ServiceState::StartFailed;
                 // If not specified,looking address from name remoting_server
                 if self.client_config.namesrv_addr.is_none() {
-                    self.mq_client_api_impl.fetch_name_server_addr().await;
+                    self.mq_client_api_impl
+                        .as_mut()
+                        .unwrap()
+                        .fetch_name_server_addr()
+                        .await;
                 }
                 // Start request-response channel
-                self.mq_client_api_impl.start().await;
+                self.mq_client_api_impl.as_mut().unwrap().start().await;
                 // Start various schedule tasks
                 self.start_scheduled_task(this.clone());
                 // Start pull service
@@ -277,7 +335,7 @@ where
 
     fn start_scheduled_task(&mut self, this: ArcRefCellWrapper<Self>) {
         if self.client_config.namesrv_addr.is_none() {
-            let mut mq_client_api_impl = self.mq_client_api_impl.clone();
+            let mut mq_client_api_impl = self.mq_client_api_impl.as_ref().unwrap().clone();
             self.instance_runtime.get_handle().spawn(async move {
                 info!("ScheduledTask fetchNameServerAddr started");
                 tokio::time::sleep(Duration::from_secs(10)).await;
@@ -388,6 +446,8 @@ where
         if let Some(broker_addr) = broker_addr {
             match self
                 .mq_client_api_impl
+                .as_mut()
+                .unwrap()
                 .get_consumer_id_list_by_group(
                     broker_addr.as_str(),
                     group,
@@ -433,6 +493,8 @@ where
         let topic_route_data = if is_default && producer_config.is_some() {
             let mut result = self
                 .mq_client_api_impl
+                .as_mut()
+                .unwrap()
                 .get_default_topic_route_info_from_name_server(
                     self.client_config.mq_client_api_timeout,
                 )
@@ -451,6 +513,8 @@ where
             result
         } else {
             self.mq_client_api_impl
+                .as_mut()
+                .unwrap()
                 .get_topic_route_info_from_name_server(
                     topic,
                     self.client_config.mq_client_api_timeout,
@@ -602,7 +666,7 @@ where
     }
 
     pub fn get_mq_client_api_impl(&self) -> ArcRefCellWrapper<MQClientAPIImpl> {
-        self.mq_client_api_impl.clone()
+        self.mq_client_api_impl.as_ref().unwrap().clone()
     }
 
     pub async fn get_broker_name_from_message_queue(&self, message_queue: &MessageQueue) -> String {
@@ -698,6 +762,8 @@ where
     ) -> bool {
         if let Ok(version) = self
             .mq_client_api_impl
+            .as_ref()
+            .unwrap()
             .mut_from_ref()
             .send_heartbeat(
                 addr,
@@ -792,7 +858,7 @@ where
         heartbeat_data
     }
 
-    pub async fn register_consumer(&mut self, group: &str, consumer: C) -> bool {
+    pub async fn register_consumer(&mut self, group: &str, consumer: MQConsumerInnerImpl) -> bool {
         let mut consumer_table = self.consumer_table.write().await;
         if consumer_table.contains_key(group) {
             warn!("the consumer group[{}] exist already.", group);
@@ -819,6 +885,8 @@ where
                 if let Some(addr) = addr {
                     match self
                         .mq_client_api_impl
+                        .as_mut()
+                        .unwrap()
                         .check_client_in_broker(
                             addr.as_str(),
                             key,
@@ -943,7 +1011,7 @@ where
         0
     }
 
-    pub async fn select_consumer(&self, group: &str) -> Option<C> {
+    pub async fn select_consumer(&self, group: &str) -> Option<MQConsumerInnerImpl> {
         let consumer_table = self.consumer_table.read().await;
         consumer_table.get(group).cloned()
     }
@@ -965,6 +1033,8 @@ where
             for (id, addr) in broker_addrs.iter() {
                 if let Err(err) = self
                     .mq_client_api_impl
+                    .as_mut()
+                    .unwrap()
                     .unregister_client(
                         addr,
                         self.client_id.as_str(),

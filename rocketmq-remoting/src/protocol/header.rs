@@ -35,6 +35,7 @@ pub mod get_topic_stats_request_header;
 pub mod heartbeat_request_header;
 pub mod message_operation_header;
 pub mod namesrv;
+pub mod notify_consumer_ids_changed_request_header;
 pub mod pull_message_request_header;
 pub mod pull_message_response_header;
 pub mod query_consumer_offset_request_header;

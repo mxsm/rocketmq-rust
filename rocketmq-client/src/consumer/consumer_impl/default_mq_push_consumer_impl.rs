@@ -69,6 +69,7 @@ use crate::consumer::consumer_impl::re_balance::Rebalance;
 use crate::consumer::default_mq_push_consumer::ConsumerConfig;
 use crate::consumer::listener::message_listener::MessageListener;
 use crate::consumer::mq_consumer_inner::MQConsumerInner;
+use crate::consumer::mq_consumer_inner::MQConsumerInnerImpl;
 use crate::consumer::pull_callback::DefaultPullCallback;
 use crate::consumer::store::local_file_offset_store::LocalFileOffsetStore;
 use crate::consumer::store::offset_store::OffsetStore;
@@ -95,7 +96,6 @@ const ASYNC_TIMEOUT: u64 = 3000;
 const DO_NOT_UPDATE_TOPIC_SUBSCRIBE_INFO_WHEN_SUBSCRIPTION_CHANGED: bool = false;
 const _1MB: u64 = 1024 * 1024;
 
-#[derive(Clone)]
 pub struct DefaultMQPushConsumerImpl {
     pub(crate) global_lock: Arc<Mutex<()>>,
     pub(crate) pull_time_delay_mills_when_exception: u64,
@@ -106,7 +106,7 @@ pub struct DefaultMQPushConsumerImpl {
     consume_message_hook_list: Vec<Arc<Box<dyn ConsumeMessageHook + Send + Sync>>>,
     rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
     service_state: ArcRefCellWrapper<ServiceState>,
-    client_instance: Option<ArcRefCellWrapper<MQClientInstance<DefaultMQPushConsumerImpl>>>,
+    client_instance: Option<ArcRefCellWrapper<MQClientInstance>>,
     pub(crate) pull_api_wrapper: Option<ArcRefCellWrapper<PullAPIWrapper>>,
     pause: Arc<AtomicBool>,
     consume_orderly: bool,
@@ -342,11 +342,15 @@ impl DefaultMQPushConsumerImpl {
                         .consume_message_pop_orderly_service
                         .start(wrapper);
                 }
-                let consumer_impl = self.clone();
                 self.client_instance
                     .as_mut()
                     .unwrap()
-                    .register_consumer(self.consumer_config.consumer_group.as_str(), consumer_impl)
+                    .register_consumer(
+                        self.consumer_config.consumer_group.as_str(),
+                        MQConsumerInnerImpl {
+                            default_mqpush_consumer_impl: self.default_mqpush_consumer_impl.clone(),
+                        },
+                    )
                     .await;
                 let cloned = self.client_instance.as_mut().cloned().unwrap();
                 self.client_instance.as_mut().unwrap().start(cloned).await?;
@@ -1006,7 +1010,7 @@ impl DefaultMQPushConsumerImpl {
             class_filter,
         );
         let subscription_data = subscription_data.unwrap();
-        let this = self.clone();
+        let this = self.default_mqpush_consumer_impl.clone().unwrap();
         let result = self
             .pull_api_wrapper
             .as_mut()
@@ -1186,6 +1190,8 @@ impl DefaultMQPushConsumerImpl {
                 .as_mut()
                 .unwrap()
                 .mq_client_api_impl
+                .as_mut()
+                .unwrap()
                 .consumer_send_message_back(
                     broker_addr.as_str(),
                     broker_name.as_ref().unwrap().as_str(),
@@ -1258,8 +1264,8 @@ impl DefaultMQPushConsumerImpl {
 }
 
 impl MQConsumerInner for DefaultMQPushConsumerImpl {
-    fn group_name(&self) -> &str {
-        self.consumer_config.consumer_group()
+    fn group_name(&self) -> String {
+        self.consumer_config.consumer_group().to_string()
     }
 
     fn message_model(&self) -> MessageModel {

@@ -65,17 +65,14 @@ impl MQClientManager {
         let client_id = client_config.build_mq_client_id();
         let mut factory_table = self.factory_table.write().await;
         let instance = factory_table.entry(client_id.clone()).or_insert_with(|| {
-            let instance = MQClientInstance::new(
+            let instance = MQClientInstance::new_arc(
                 client_config.clone(),
                 self.factory_index_generator.fetch_add(1, Ordering::SeqCst),
                 client_id.clone(),
                 rpc_hook,
             );
             info!("Created new MQClientInstance for clientId: [{}]", client_id);
-            let new = ArcRefCellWrapper::new(instance);
-            MQClientInstance::set_connection_listener(new.clone());
-
-            new
+            instance
         });
         instance.clone()
     }
