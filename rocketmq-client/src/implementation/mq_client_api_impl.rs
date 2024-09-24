@@ -93,7 +93,7 @@ lazy_static! {
 }
 
 pub struct MQClientAPIImpl {
-    remoting_client: RocketmqDefaultClient<ClientRemotingProcessor>,
+    remoting_client: ArcRefCellWrapper<RocketmqDefaultClient<ClientRemotingProcessor>>,
     top_addressing: Box<dyn TopAddressing>,
     // client_remoting_processor: ClientRemotingProcessor,
     name_srv_addr: Option<String>,
@@ -121,7 +121,7 @@ impl MQClientAPIImpl {
         }
 
         MQClientAPIImpl {
-            remoting_client: default_client,
+            remoting_client: ArcRefCellWrapper::new(default_client),
             top_addressing: Box::new(DefaultTopAddressing::new(
                 mix_all::get_ws_addr(),
                 client_config.unit_name.clone(),
@@ -133,7 +133,8 @@ impl MQClientAPIImpl {
     }
 
     pub async fn start(&self) {
-        self.remoting_client.start().await;
+        let client = ArcRefCellWrapper::downgrade(&self.remoting_client);
+        self.remoting_client.start(client).await;
     }
 
     pub async fn fetch_name_server_addr(&mut self) -> Option<String> {

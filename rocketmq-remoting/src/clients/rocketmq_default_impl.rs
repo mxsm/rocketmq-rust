@@ -22,6 +22,7 @@ use std::time::Duration;
 
 use rand::Rng;
 use rocketmq_common::ArcRefCellWrapper;
+use rocketmq_common::WeakCellWrapper;
 use rocketmq_runtime::RocketMQRuntime;
 use tokio::sync::Mutex;
 use tokio::time;
@@ -46,7 +47,6 @@ const LOCK_TIMEOUT_MILLIS: u64 = 3000;
 
 pub type ArcSyncClient = Arc<Mutex<Client>>;
 
-#[derive(Clone)]
 pub struct RocketmqDefaultClient<PR = DefaultRemotingRequestProcessor> {
     tokio_client_config: Arc<TokioClientConfig>,
     //cache connection
@@ -239,22 +239,16 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
 
 #[allow(unused_variables)]
 impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingService for RocketmqDefaultClient<PR> {
-    async fn start(&self) {
-        let client = self.clone();
-        //invoke scan available name sever now
-        client.scan_available_name_srv().await;
-        /*let handle = task::spawn(async move {
-            loop {
-                time::sleep(Duration::from_millis(1)).await;
-                client.scan_available_name_srv().await;
-            }
-        });*/
-        self.client_runtime.get_handle().spawn(async move {
-            loop {
-                time::sleep(Duration::from_millis(1)).await;
-                client.scan_available_name_srv().await;
-            }
-        });
+    async fn start(&self, this: WeakCellWrapper<Self>) {
+        if let Some(client) = this.upgrade() {
+            client.scan_available_name_srv().await;
+            self.client_runtime.get_handle().spawn(async move {
+                loop {
+                    time::sleep(Duration::from_millis(1)).await;
+                    client.scan_available_name_srv().await;
+                }
+            });
+        }
     }
 
     fn shutdown(&mut self) {

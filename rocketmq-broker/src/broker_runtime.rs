@@ -895,6 +895,7 @@ impl BrokerRuntime {
             self.broker_config.broker_ip1, self.server_config.listen_port
         );
         let broker_id = self.broker_config.broker_identity.broker_id;
+        let weak = Arc::downgrade(&self.broker_out_api);
         self.broker_out_api
             .register_broker_all(
                 cluster_name,
@@ -910,6 +911,7 @@ impl BrokerRuntime {
                 false,
                 None,
                 Default::default(),
+                weak,
             )
             .await;
     }
@@ -1012,6 +1014,7 @@ impl BrokerRuntimeInner {
             self.broker_config.broker_ip1, self.server_config.listen_port
         );
         let broker_id = self.broker_config.broker_identity.broker_id;
+        let weak = Arc::downgrade(&self.broker_out_api);
         self.broker_out_api
             .register_broker_all(
                 cluster_name,
@@ -1027,6 +1030,7 @@ impl BrokerRuntimeInner {
                 false,
                 None,
                 Default::default(),
+                weak,
             )
             .await;
     }
