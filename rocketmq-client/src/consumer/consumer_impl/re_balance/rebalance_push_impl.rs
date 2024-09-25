@@ -246,6 +246,7 @@ impl Rebalance for RebalancePushImpl {
         }
     }
 
+    #[allow(deprecated)]
     async fn compute_pull_from_where_with_exception(&mut self, mq: &MessageQueue) -> Result<i64> {
         let consume_from_where = self.consumer_config.consume_from_where;
         let default_mqpush_consumer_impl = self
