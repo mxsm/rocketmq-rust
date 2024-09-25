@@ -22,16 +22,32 @@ use serde::Serialize;
 use serde::Serializer;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[allow(deprecated)]
 pub enum ConsumeFromWhere {
+    ///On the first startup, consume from the last position of the queue; on subsequent startups,
+    /// continue consuming from the last consumed position.
     #[default]
     ConsumeFromLastOffset,
+
+    #[deprecated]
     ConsumeFromLastOffsetAndFromMinWhenBootFirst,
+
+    #[deprecated]
     ConsumeFromMinOffset,
+
+    #[deprecated]
     ConsumeFromMaxOffset,
+
+    ///On the first startup, consume from the initial position of the queue; on subsequent
+    /// startups, continue consuming from the last consumed position.
     ConsumeFromFirstOffset,
+
+    ///: On the first startup, consume from the specified timestamp position; on subsequent
+    /// startups, continue consuming from the last consumed position.
     ConsumeFromTimestamp,
 }
 
+#[allow(deprecated)]
 impl From<i32> for ConsumeFromWhere {
     fn from(value: i32) -> Self {
         match value {
@@ -46,6 +62,7 @@ impl From<i32> for ConsumeFromWhere {
     }
 }
 
+#[allow(deprecated)]
 impl From<ConsumeFromWhere> for i32 {
     fn from(consume_from_where: ConsumeFromWhere) -> i32 {
         match consume_from_where {
@@ -59,6 +76,7 @@ impl From<ConsumeFromWhere> for i32 {
     }
 }
 
+#[allow(deprecated)]
 impl Serialize for ConsumeFromWhere {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -78,6 +96,7 @@ impl Serialize for ConsumeFromWhere {
     }
 }
 
+#[allow(deprecated)]
 impl<'de> Deserialize<'de> for ConsumeFromWhere {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
