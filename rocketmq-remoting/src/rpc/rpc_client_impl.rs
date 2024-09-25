@@ -17,6 +17,7 @@
 use std::any::Any;
 
 use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_common::ArcRefCellWrapper;
 
 use crate::clients::rocketmq_default_impl::RocketmqDefaultClient;
 use crate::clients::RemotingClient;
@@ -32,6 +33,7 @@ use crate::protocol::header::pull_message_response_header::PullMessageResponseHe
 use crate::protocol::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader;
 use crate::protocol::header::search_offset_response_header::SearchOffsetResponseHeader;
 use crate::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetResponseHeader;
+use crate::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
 use crate::rpc::client_metadata::ClientMetadata;
 use crate::rpc::rpc_client::RpcClient;
 use crate::rpc::rpc_client_hook::RpcClientHookFn;
@@ -40,15 +42,17 @@ use crate::rpc::rpc_request::RpcRequest;
 use crate::rpc::rpc_response::RpcResponse;
 use crate::Result;
 
-#[derive(Clone)]
 pub struct RpcClientImpl {
     client_metadata: ClientMetadata,
-    remoting_client: RocketmqDefaultClient,
+    remoting_client: ArcRefCellWrapper<RocketmqDefaultClient<DefaultRemotingRequestProcessor>>,
     client_hook_list: Vec<RpcClientHookFn>,
 }
 
 impl RpcClientImpl {
-    pub fn new(client_metadata: ClientMetadata, remoting_client: RocketmqDefaultClient) -> Self {
+    pub fn new(
+        client_metadata: ClientMetadata,
+        remoting_client: ArcRefCellWrapper<RocketmqDefaultClient<DefaultRemotingRequestProcessor>>,
+    ) -> Self {
         RpcClientImpl {
             client_metadata,
             remoting_client,

@@ -15,12 +15,14 @@
  * limitations under the License.
  */
 use std::sync::Arc;
+use std::sync::Weak;
 
 use dns_lookup::lookup_host;
 use rocketmq_common::common::broker::broker_config::BrokerIdentity;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::utils::crc32_utils;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
+use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
 use rocketmq_remoting::code::request_code::RequestCode;
@@ -46,9 +48,8 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 
-#[derive(Clone)]
 pub struct BrokerOuterAPI {
-    remoting_client: RocketmqDefaultClient,
+    remoting_client: ArcRefCellWrapper<RocketmqDefaultClient<DefaultRemotingRequestProcessor>>,
     name_server_address: Option<String>,
     rpc_client: RpcClientImpl,
     client_metadata: ClientMetadata,
@@ -56,8 +57,10 @@ pub struct BrokerOuterAPI {
 
 impl BrokerOuterAPI {
     pub fn new(tokio_client_config: Arc<TokioClientConfig>) -> Self {
-        let client =
-            RocketmqDefaultClient::new(tokio_client_config, DefaultRemotingRequestProcessor);
+        let client = ArcRefCellWrapper::new(RocketmqDefaultClient::new(
+            tokio_client_config,
+            DefaultRemotingRequestProcessor,
+        ));
         let client_metadata = ClientMetadata::new();
         Self {
             remoting_client: client.clone(),
@@ -71,8 +74,10 @@ impl BrokerOuterAPI {
         tokio_client_config: Arc<TokioClientConfig>,
         rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
     ) -> Self {
-        let mut client =
-            RocketmqDefaultClient::new(tokio_client_config, DefaultRemotingRequestProcessor);
+        let mut client = ArcRefCellWrapper::new(RocketmqDefaultClient::new(
+            tokio_client_config,
+            DefaultRemotingRequestProcessor,
+        ));
         let client_metadata = ClientMetadata::new();
         if let Some(rpc_hook) = rpc_hook {
             client.register_rpc_hook(rpc_hook);
@@ -108,7 +113,8 @@ impl BrokerOuterAPI {
 
 impl BrokerOuterAPI {
     pub async fn start(&self) {
-        self.remoting_client.start().await;
+        let wrapper = ArcRefCellWrapper::downgrade(&self.remoting_client);
+        self.remoting_client.start(wrapper).await;
     }
 
     pub async fn update_name_server_address_list(&self, addrs: String) {
@@ -143,6 +149,7 @@ impl BrokerOuterAPI {
         compressed: bool,
         heartbeat_timeout_millis: Option<i64>,
         _broker_identity: BrokerIdentity,
+        this: Weak<Self>,
     ) -> Vec<RegisterBrokerResult> {
         let name_server_address_list = self.remoting_client.get_available_name_srv_list();
         let mut register_broker_result_list = Vec::new();
@@ -173,11 +180,21 @@ impl BrokerOuterAPI {
                 let cloned_body = body.clone();
                 let cloned_header = request_header.clone();
                 let addr = namesrv_addr.clone();
-                let outer_api = self.clone();
+                let outer_api = this.clone();
                 let join_handle = tokio::spawn(async move {
-                    outer_api
-                        .register_broker(addr, oneway, timeout_mills, cloned_header, cloned_body)
-                        .await
+                    if let Some(outer_api) = outer_api.upgrade() {
+                        outer_api
+                            .register_broker(
+                                addr,
+                                oneway,
+                                timeout_mills,
+                                cloned_header,
+                                cloned_body,
+                            )
+                            .await
+                    } else {
+                        None
+                    }
                 });
                 /*let handle =
                 self.register_broker(addr, oneway, timeout_mills, cloned_header, cloned_body);*/
