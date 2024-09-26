@@ -140,7 +140,7 @@ pub struct RocketMQTokioMutex<T: ?Sized> {
     lock: tokio::sync::Mutex<T>,
 }
 
-impl<T> RocketMQTokioMutex<T> {
+impl<T: ?Sized> RocketMQTokioMutex<T> {
     /// Creates a new `RocketMQTokioMutex` instance containing the given data.
     ///
     /// # Arguments
