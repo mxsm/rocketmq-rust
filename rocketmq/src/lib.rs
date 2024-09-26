@@ -14,9 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+pub mod rocketmq_tokio_lock;
 
 /// Re-export rocketmq main.
 pub use rocketmq::main;
+pub use rocketmq_tokio_lock::RocketMQTokioMutex;
+pub use rocketmq_tokio_lock::RocketMQTokioRwLock;
 /// Re-export tokio module.
 pub use tokio as rocketmq;
 
