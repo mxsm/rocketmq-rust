@@ -352,7 +352,8 @@ mod tests {
         tokio::spawn(async move {
             let _guard = arc.lock().await;
             tx.send(()).unwrap();
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            // Hold the lock until the test completes
+            tokio::time::sleep(Duration::from_secs(1)).await;
         });
         rx.await.unwrap();
         let guard = mutex.try_lock().await;
