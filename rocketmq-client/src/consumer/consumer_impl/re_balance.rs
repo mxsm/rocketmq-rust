@@ -44,6 +44,7 @@ pub trait RebalanceLocal {
     ) -> bool;
 
     fn remove_unnecessary_pop_message_queue(&self, mq: MessageQueue, pq: ProcessQueue) -> bool;
+
     fn remove_unnecessary_pop_message_queue_pop(
         &self,
         _mq: MessageQueue,
@@ -53,22 +54,34 @@ pub trait RebalanceLocal {
     }
 
     fn consume_type(&self) -> ConsumeType;
+
     async fn remove_dirty_offset(&self, mq: &MessageQueue);
 
     async fn compute_pull_from_where_with_exception(&mut self, mq: &MessageQueue) -> Result<i64>;
+
     async fn compute_pull_from_where(&mut self, mq: &MessageQueue) -> i64;
 
     fn get_consume_init_mode(&self) -> i32;
+
     async fn dispatch_pull_request(&self, pull_request_list: Vec<PullRequest>, delay: u64);
+
     fn dispatch_pop_pull_request(&self, pull_request_list: Vec<PopRequest>, delay: u64);
+
     fn create_process_queue(&self) -> ProcessQueue;
+
     fn create_pop_process_queue(&self) -> PopProcessQueue;
+
     async fn remove_process_queue(&mut self, mq: &MessageQueue);
-    fn unlock(&self, mq: MessageQueue, oneway: bool);
+
+    async fn unlock(&mut self, mq: &MessageQueue, oneway: bool);
+
     fn lock_all(&self);
+
     fn unlock_all(&self, oneway: bool);
+
     async fn do_rebalance(&mut self, is_order: bool) -> bool;
 
     fn client_rebalance(&mut self, topic: &str) -> bool;
+
     fn destroy(&mut self);
 }

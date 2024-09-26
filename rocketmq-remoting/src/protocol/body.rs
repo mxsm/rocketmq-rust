@@ -32,3 +32,4 @@ pub mod pop_process_queue_info;
 pub mod process_queue_info;
 pub mod topic;
 pub mod topic_info_wrapper;
+pub mod unlock_batch_request_body;
