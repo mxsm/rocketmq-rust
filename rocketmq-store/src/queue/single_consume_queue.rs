@@ -50,6 +50,9 @@ use crate::queue::FileQueueLifeCycle;
 use crate::store::running_flags::RunningFlags;
 use crate::store_path_config_helper::get_store_path_consume_queue_ext;
 
+pub const CQ_STORE_UNIT_SIZE: i32 = 20;
+pub const MSG_TAG_OFFSET_INDEX: i32 = 12;
+
 ///
 /// ConsumeQueue's store unit. Format:
 ///
@@ -62,10 +65,6 @@ use crate::store_path_config_helper::get_store_path_consume_queue_ext;
 /// </pre>
 /// ConsumeQueue's store unit. Size: CommitLog Physical Offset(8) + Body Size(4) + Tag HashCode(8) =
 /// 20 Bytes
-
-pub const CQ_STORE_UNIT_SIZE: i32 = 20;
-pub const MSG_TAG_OFFSET_INDEX: i32 = 12;
-
 #[derive(Clone)]
 pub struct ConsumeQueue {
     message_store_config: Arc<MessageStoreConfig>,
