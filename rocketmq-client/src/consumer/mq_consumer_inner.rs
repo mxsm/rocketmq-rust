@@ -29,30 +29,61 @@ use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPush
 use crate::consumer::consumer_impl::pop_request::PopRequest;
 use crate::consumer::consumer_impl::pull_request::PullRequest;
 use crate::Result;
+
+/// The `MQConsumerInnerLocal` trait defines the core functionalities required for a local MQ
+/// consumer. It extends the `MQConsumerInnerAny` trait and requires implementations to be `Sync`
+/// and `'static`.
+
 #[trait_variant::make(MQConsumerInner: Send)]
 pub trait MQConsumerInnerLocal: MQConsumerInnerAny + Sync + 'static {
+    /// Returns the group name of the consumer.
     fn group_name(&self) -> String;
 
+    /// Returns the message model used by the consumer.
     fn message_model(&self) -> MessageModel;
 
+    /// Returns the type of consumption (e.g., push or pull).
     fn consume_type(&self) -> ConsumeType;
 
+    /// Returns the point from where the consumer should start consuming messages.
     fn consume_from_where(&self) -> ConsumeFromWhere;
 
+    /// Returns the set of subscriptions for the consumer.
     fn subscriptions(&self) -> HashSet<SubscriptionData>;
 
+    /// Performs the rebalancing of the consumer.
     fn do_rebalance(&self);
 
+    /// Attempts to perform rebalancing asynchronously and returns a `Result` indicating success or
+    /// failure.
     async fn try_rebalance(&self) -> Result<bool>;
 
+    /// Persists the consumer offset asynchronously.
     async fn persist_consumer_offset(&self);
 
+    /// Updates the subscription information for a given topic asynchronously.
+    ///
+    /// # Arguments
+    ///
+    /// * `topic` - A string slice that holds the name of the topic.
+    /// * `info` - A reference to a `HashSet` containing `MessageQueue` information.
     async fn update_topic_subscribe_info(&mut self, topic: &str, info: &HashSet<MessageQueue>);
 
+    /// Checks if the subscription information for a given topic needs to be updated asynchronously.
+    ///
+    /// # Arguments
+    ///
+    /// * `topic` - A string slice that holds the name of the topic.
+    ///
+    /// # Returns
+    ///
+    /// * `bool` - `true` if the subscription information needs to be updated, `false` otherwise.
     async fn is_subscribe_topic_need_update(&self, topic: &str) -> bool;
 
+    /// Returns whether the consumer is in unit mode.
     fn is_unit_mode(&self) -> bool;
 
+    /// Returns the running information of the consumer.
     fn consumer_running_info(&self) -> ConsumerRunningInfo;
 }
 
