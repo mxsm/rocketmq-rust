@@ -241,10 +241,10 @@ impl MQClientAPIImpl {
                         ))
                     }
                 }
-                return Err(MQClientError::MQClientErr(
+                 Err(MQClientError::MQClientErr(
                     code,
                     result.remark().cloned().unwrap_or_default(),
-                ));
+                ))
             }
             Err(err) => Err(MQClientError::RemotingError(err)),
         }

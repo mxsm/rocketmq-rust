@@ -58,7 +58,6 @@ const INVALID_POS: i32 = -1;
 /// BatchConsumeQueue's store unit. Size:
 /// CommitLog Physical Offset(8) + Body Size(4) + Tag HashCode(8) + Store time(8) +
 /// msgBaseOffset(8) + batchSize(2) + compactedOffset(4) + reserved(4)= 46 Bytes
-
 pub struct BatchConsumeQueue {
     message_store_config: Arc<MessageStoreConfig>,
     mapped_file_queue: MappedFileQueue,
