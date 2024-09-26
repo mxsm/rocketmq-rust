@@ -109,9 +109,13 @@ impl<T: ?Sized> RocketMQTokioRwLock<T> {
         &self,
         timeout: Duration,
     ) -> Option<tokio::sync::RwLockReadGuard<'_, T>> {
-        select! {
-            _ = tokio::time::sleep(timeout) => None,
-            guard = self.try_read() => guard,
+    pub async fn try_read_timeout(
+        &self,
+        timeout: Duration,
+    ) -> Option<tokio::sync::RwLockReadGuard<'_, T>> {
+        match tokio::time::timeout(timeout, self.lock.read()).await {
+            Ok(guard) => Some(guard),
+            Err(_) => None,
         }
     }
 
