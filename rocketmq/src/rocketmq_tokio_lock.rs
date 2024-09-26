@@ -375,8 +375,10 @@ mod tests {
         let (tx, rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
             let _guard = arc.lock().await;
+            let _guard = arc.lock().await;
             tx.send(()).unwrap();
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            // Hold the lock for longer than the timeout
+            tokio::time::sleep(Duration::from_secs(1)).await;
         });
         rx.await.unwrap();
         let guard = mutex.try_lock_timeout(Duration::from_millis(2)).await;
