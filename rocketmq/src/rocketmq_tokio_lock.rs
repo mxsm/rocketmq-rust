@@ -22,7 +22,7 @@ pub struct RocketMQTokioRwLock<T: ?Sized> {
     lock: tokio::sync::RwLock<T>,
 }
 
-impl<T> RocketMQTokioRwLock<T> {
+impl<T: ?Sized> RocketMQTokioRwLock<T> {
     /// Creates a new `RocketMQTokioRwLock` instance containing the given data.
     ///
     /// # Arguments
