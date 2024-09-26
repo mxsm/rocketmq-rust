@@ -196,9 +196,13 @@ impl<T: ?Sized> RocketMQTokioMutex<T> {
         &self,
         timeout: Duration,
     ) -> Option<tokio::sync::MutexGuard<'_, T>> {
-        select! {
-            _ = tokio::time::sleep(timeout) => None,
-            guard = self.try_lock() => guard,
+    pub async fn try_lock_timeout(
+        &self,
+        timeout: Duration,
+    ) -> Option<tokio::sync::MutexGuard<'_, T>> {
+        match tokio::time::timeout(timeout, self.lock.lock()).await {
+            Ok(guard) => Some(guard),
+            Err(_) => None,
         }
     }
 }
