@@ -16,8 +16,6 @@
  */
 use std::time::Duration;
 
-use tokio::select;
-
 pub struct RocketMQTokioRwLock<T: ?Sized> {
     lock: tokio::sync::RwLock<T>,
 }
@@ -32,7 +30,10 @@ impl<T: ?Sized> RocketMQTokioRwLock<T> {
     /// # Returns
     ///
     /// A new `RocketMQTokioRwLock` instance.
-    pub fn new(data: T) -> Self {
+    pub fn new(data: T) -> Self
+    where
+        T: Sized,
+    {
         Self {
             lock: tokio::sync::RwLock::new(data),
         }
@@ -47,7 +48,10 @@ impl<T: ?Sized> RocketMQTokioRwLock<T> {
     /// # Returns
     ///
     /// A new `RocketMQTokioRwLock` instance.
-    pub fn new_rw_lock(lock: tokio::sync::RwLock<T>) -> Self {
+    pub fn new_rw_lock(lock: tokio::sync::RwLock<T>) -> Self
+    where
+        T: Sized,
+    {
         Self { lock }
     }
 
@@ -109,10 +113,6 @@ impl<T: ?Sized> RocketMQTokioRwLock<T> {
         &self,
         timeout: Duration,
     ) -> Option<tokio::sync::RwLockReadGuard<'_, T>> {
-    pub async fn try_read_timeout(
-        &self,
-        timeout: Duration,
-    ) -> Option<tokio::sync::RwLockReadGuard<'_, T>> {
         match tokio::time::timeout(timeout, self.lock.read()).await {
             Ok(guard) => Some(guard),
             Err(_) => None,
@@ -129,10 +129,6 @@ impl<T: ?Sized> RocketMQTokioRwLock<T> {
     ///
     /// An `Option` containing a `RwLockWriteGuard` if the write lock was successfully acquired
     /// within the timeout, or `None` if the timeout expired.
-    pub async fn try_write_timeout(
-        &self,
-        timeout: Duration,
-    ) -> Option<tokio::sync::RwLockWriteGuard<'_, T>> {
     pub async fn try_write_timeout(
         &self,
         timeout: Duration,
@@ -158,7 +154,10 @@ impl<T: ?Sized> RocketMQTokioMutex<T> {
     /// # Returns
     ///
     /// A new `RocketMQTokioMutex` instance.
-    pub fn new(data: T) -> Self {
+    pub fn new(data: T) -> Self
+    where
+        T: Sized,
+    {
         Self {
             lock: tokio::sync::Mutex::new(data),
         }
@@ -196,10 +195,6 @@ impl<T: ?Sized> RocketMQTokioMutex<T> {
     ///
     /// An `Option` containing a `MutexGuard` if the lock was successfully acquired within the
     /// timeout, or `None` if the timeout expired.
-    pub async fn try_lock_timeout(
-        &self,
-        timeout: Duration,
-    ) -> Option<tokio::sync::MutexGuard<'_, T>> {
     pub async fn try_lock_timeout(
         &self,
         timeout: Duration,
@@ -374,7 +369,6 @@ mod tests {
         let arc = mutex.clone();
         let (tx, rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
-            let _guard = arc.lock().await;
             let _guard = arc.lock().await;
             tx.send(()).unwrap();
             // Hold the lock for longer than the timeout
