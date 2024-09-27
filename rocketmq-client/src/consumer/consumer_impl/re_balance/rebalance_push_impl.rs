@@ -17,6 +17,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Duration;
 
 use once_cell::sync::Lazy;
 use rocketmq_common::common::constant::consume_init_mode::ConsumeInitMode;
@@ -28,6 +29,7 @@ use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_common::WeakCellWrapper;
 use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
@@ -136,16 +138,30 @@ impl RebalancePushImpl {
         {
             let force_unlock = pq.is_dropped()
                 && (get_current_millis() > pq.get_last_lock_timestamp() + *UNLOCK_DELAY_TIME_MILLS);
-            if force_unlock {
+            let consume_lock = pq
+                .consume_lock
+                .try_write_timeout(Duration::from_millis(500))
+                .await;
+            if force_unlock || consume_lock.is_some() {
                 let offset_store = default_mqpush_consumer_impl.offset_store.as_mut().unwrap();
                 offset_store.persist(mq).await;
                 offset_store.remove_offset(mq).await;
+                pq.set_locked(true);
+                self.unlock(mq, true).await;
+                return true;
+            } else {
+                pq.inc_try_unlock_times();
+                warn!(
+                    "Failed to acquire consume_lock for {}, incrementing try_unlock_times.",
+                    mq
+                );
             }
         }
-
         false
     }
 }
+
+const UNLOCK_BATCH_MQ_TIMEOUT_MS: u64 = 1_000;
 
 impl Rebalance for RebalancePushImpl {
     async fn message_queue_changed(
@@ -234,7 +250,7 @@ impl Rebalance for RebalancePushImpl {
         ConsumeType::ConsumePassively
     }
 
-    async fn remove_dirty_offset(&self, mq: &MessageQueue) {
+    async fn remove_dirty_offset(&mut self, mq: &MessageQueue) {
         if let Some(mut default_mqpush_consumer_impl) = self
             .default_mqpush_consumer_impl
             .as_ref()
@@ -430,8 +446,47 @@ impl Rebalance for RebalancePushImpl {
         }
     }
 
-    fn unlock(&self, mq: MessageQueue, oneway: bool) {
-        todo!()
+    async fn unlock(&mut self, mq: &MessageQueue, oneway: bool) {
+        let client = match self.rebalance_impl_inner.client_instance.as_mut() {
+            Some(client) => client,
+            None => {
+                warn!("Client instance is not available.");
+                return;
+            }
+        };
+        let broker_name = client.get_broker_name_from_message_queue(mq).await;
+        let find_broker_result = client
+            .find_broker_address_in_subscribe(broker_name.as_str(), mix_all::MASTER_ID, true)
+            .await;
+        if let Some(find_broker_result) = find_broker_result {
+            let mut request_body = UnlockBatchRequestBody {
+                consumer_group: Some(self.rebalance_impl_inner.consumer_group.clone().unwrap()),
+                client_id: Some(client.client_id.clone()),
+                ..Default::default()
+            };
+            request_body.mq_set.insert(mq.clone());
+            let result = client
+                .mq_client_api_impl
+                .as_mut()
+                .unwrap()
+                .unlock_batch_mq(
+                    find_broker_result.broker_addr.as_str(),
+                    request_body,
+                    UNLOCK_BATCH_MQ_TIMEOUT_MS,
+                    oneway,
+                )
+                .await;
+            if let Err(e) = result {
+                warn!("unlockBatchMQ exception, {},{}", mq, e);
+            } else {
+                warn!(
+                    "unlock messageQueue. group:{}, clientId:{}, mq:{}",
+                    self.rebalance_impl_inner.consumer_group.as_ref().unwrap(),
+                    client.client_id,
+                    mq
+                )
+            }
+        }
     }
 
     fn lock_all(&self) {

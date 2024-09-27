@@ -39,6 +39,9 @@ regex = { version = "1.10.6", features = [] }
 parking_lot = { workspace = true }
 once_cell = { workspace = true }
 bytes = { workspace = true }
+
+
+futures = { workspace = true }
 [[example]]
 name = "simple-producer"
 path = "examples/producer/simple_producer.rs"

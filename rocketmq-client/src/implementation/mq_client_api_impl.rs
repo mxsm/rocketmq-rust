@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::collections::HashSet;
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 use std::time::Instant;
@@ -40,10 +41,14 @@ use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::body::check_client_request_body::CheckClientRequestBody;
 use rocketmq_remoting::protocol::body::get_consumer_listby_group_response_body::GetConsumerListByGroupResponseBody;
+use rocketmq_remoting::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
+use rocketmq_remoting::protocol::body::response::lock_batch_response_body::LockBatchResponseBody;
+use rocketmq_remoting::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
 use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_remoting::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
 use rocketmq_remoting::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
 use rocketmq_remoting::protocol::header::heartbeat_request_header::HeartbeatRequestHeader;
+use rocketmq_remoting::protocol::header::lock_batch_mq_request_header::LockBatchMqRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
@@ -51,6 +56,7 @@ use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessag
 use rocketmq_remoting::protocol::header::pull_message_response_header::PullMessageResponseHeader;
 use rocketmq_remoting::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
 use rocketmq_remoting::protocol::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader;
+use rocketmq_remoting::protocol::header::unlock_batch_mq_request_header::UnlockBatchMqRequestHeader;
 use rocketmq_remoting::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
 use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
 use rocketmq_remoting::protocol::heartbeat::heartbeat_data::HeartbeatData;
@@ -1027,6 +1033,90 @@ impl MQClientAPIImpl {
             .await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             Ok(())
+        } else {
+            Err(MQBrokerError(
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string()),
+                addr.to_string(),
+            ))
+        }
+    }
+
+    pub async fn unlock_batch_mq(
+        &mut self,
+        addr: &str,
+        request_body: UnlockBatchRequestBody,
+        timeout_millis: u64,
+        oneway: bool,
+    ) -> Result<()> {
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::UnlockBatchMq,
+            UnlockBatchMqRequestHeader::default(),
+        );
+        request.set_body_mut_ref(Some(request_body.encode()));
+        if oneway {
+            self.remoting_client
+                .invoke_oneway(addr.to_string(), request, timeout_millis)
+                .await;
+            Ok(())
+        } else {
+            let response = self
+                .remoting_client
+                .invoke_async(
+                    Some(mix_all::broker_vip_channel(
+                        self.client_config.vip_channel_enabled,
+                        addr,
+                    )),
+                    request,
+                    timeout_millis,
+                )
+                .await?;
+            if ResponseCode::from(response.code()) == ResponseCode::Success {
+                Ok(())
+            } else {
+                Err(MQBrokerError(
+                    response.code(),
+                    response.remark().map_or("".to_string(), |s| s.to_string()),
+                    addr.to_string(),
+                ))
+            }
+        }
+    }
+
+    pub async fn lock_batch_mq(
+        &mut self,
+        addr: &str,
+        request_body: LockBatchRequestBody,
+        timeout_millis: u64,
+    ) -> Result<HashSet<MessageQueue>> {
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::LockBatchMq,
+            LockBatchMqRequestHeader::default(),
+        );
+        request.set_body_mut_ref(Some(request_body.encode()));
+        let response = self
+            .remoting_client
+            .invoke_async(
+                Some(mix_all::broker_vip_channel(
+                    self.client_config.vip_channel_enabled,
+                    addr,
+                )),
+                request,
+                timeout_millis,
+            )
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.body() {
+                LockBatchResponseBody::decode(body.as_ref())
+                    .map(|body| body.lock_ok_mq_set)
+                    .map_err(|e| MQBrokerError(response.code(), e.to_string(), addr.to_string()))
+            } else {
+                Err(MQBrokerError(
+                    response.code(),
+                    "Response body is empty".to_string(),
+                    addr.to_string(),
+                ))
+            }
         } else {
             Err(MQBrokerError(
                 response.code(),

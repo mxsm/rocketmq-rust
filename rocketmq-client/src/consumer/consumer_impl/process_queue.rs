@@ -30,6 +30,7 @@ use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_common::WeakCellWrapper;
 use rocketmq_remoting::protocol::body::process_queue_info::ProcessQueueInfo;
+use rocketmq_rust::RocketMQTokioRwLock;
 use tokio::sync::RwLock;
 
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
@@ -56,7 +57,7 @@ pub(crate) struct ProcessQueue {
         Arc<RwLock<std::collections::BTreeMap<i64, ArcRefCellWrapper<MessageClientExt>>>>,
     pub(crate) msg_count: Arc<AtomicU64>,
     pub(crate) msg_size: Arc<AtomicU64>,
-    pub(crate) consume_lock: Arc<RwLock<()>>,
+    pub(crate) consume_lock: Arc<RocketMQTokioRwLock<()>>,
     pub(crate) consuming_msg_orderly_tree_map:
         Arc<RwLock<std::collections::BTreeMap<i64, ArcRefCellWrapper<MessageClientExt>>>>,
     pub(crate) try_unlock_times: Arc<AtomicI64>,
@@ -77,7 +78,7 @@ impl ProcessQueue {
             msg_tree_map: Arc::new(RwLock::new(std::collections::BTreeMap::new())),
             msg_count: Arc::new(AtomicU64::new(0)),
             msg_size: Arc::new(AtomicU64::new(0)),
-            consume_lock: Arc::new(RwLock::new(())),
+            consume_lock: Arc::new(RocketMQTokioRwLock::new(())),
             consuming_msg_orderly_tree_map: Arc::new(
                 RwLock::new(std::collections::BTreeMap::new()),
             ),
@@ -122,6 +123,10 @@ impl ProcessQueue {
     pub(crate) fn is_lock_expired(&self) -> bool {
         (get_current_millis() - self.last_lock_timestamp.load(Ordering::Acquire))
             > *REBALANCE_LOCK_MAX_LIVE_TIME
+    }
+
+    pub(crate) fn inc_try_unlock_times(&self) {
+        self.try_unlock_times.fetch_add(1, Ordering::AcqRel);
     }
 
     pub(crate) async fn clean_expired_msg(
@@ -306,6 +311,11 @@ impl ProcessQueue {
     pub(crate) fn set_last_pull_timestamp(&self, last_pull_timestamp: u64) {
         self.last_pull_timestamp
             .store(last_pull_timestamp, std::sync::atomic::Ordering::Release);
+    }
+
+    pub(crate) fn set_last_lock_timestamp(&self, last_lock_timestamp: u64) {
+        self.last_lock_timestamp
+            .store(last_lock_timestamp, std::sync::atomic::Ordering::Release);
     }
 
     pub fn msg_count(&self) -> u64 {
