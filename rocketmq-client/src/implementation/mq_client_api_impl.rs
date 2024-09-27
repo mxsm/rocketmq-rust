@@ -241,7 +241,7 @@ impl MQClientAPIImpl {
                         ))
                     }
                 }
-                 Err(MQClientError::MQClientErr(
+                Err(MQClientError::MQClientErr(
                     code,
                     result.remark().cloned().unwrap_or_default(),
                 ))
