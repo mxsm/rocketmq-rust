@@ -34,7 +34,7 @@ impl Display for LockBatchRequestBody {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "UnlockBatchRequestBody [consumer_group={}, client_id={}, only_this_broker={}, \
+            "LockBatchRequestBody [consumer_group={}, client_id={}, only_this_broker={}, \
              mq_set={:?}]",
             self.consumer_group.as_ref().unwrap_or(&"".to_string()),
             self.client_id.as_ref().unwrap_or(&"".to_string()),

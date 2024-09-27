@@ -151,11 +151,17 @@ impl RebalancePushImpl {
                 return true;
             } else {
                 pq.inc_try_unlock_times();
+                warn!(
+                    "Failed to acquire consume_lock for {}, incrementing try_unlock_times.",
+                    mq
+                );
             }
         }
         false
     }
 }
+
+const UNLOCK_BATCH_MQ_TIMEOUT_MS: u64 = 1_000;
 
 impl Rebalance for RebalancePushImpl {
     async fn message_queue_changed(
@@ -244,7 +250,7 @@ impl Rebalance for RebalancePushImpl {
         ConsumeType::ConsumePassively
     }
 
-    async fn remove_dirty_offset(&self, mq: &MessageQueue) {
+    async fn remove_dirty_offset(&mut self, mq: &MessageQueue) {
         if let Some(mut default_mqpush_consumer_impl) = self
             .default_mqpush_consumer_impl
             .as_ref()
@@ -441,7 +447,13 @@ impl Rebalance for RebalancePushImpl {
     }
 
     async fn unlock(&mut self, mq: &MessageQueue, oneway: bool) {
-        let client = self.rebalance_impl_inner.client_instance.as_mut().unwrap();
+        let client = match self.rebalance_impl_inner.client_instance.as_mut() {
+            Some(client) => client,
+            None => {
+                warn!("Client instance is not available.");
+                return;
+            }
+        };
         let broker_name = client.get_broker_name_from_message_queue(mq).await;
         let find_broker_result = client
             .find_broker_address_in_subscribe(broker_name.as_str(), mix_all::MASTER_ID, true)
@@ -460,7 +472,7 @@ impl Rebalance for RebalancePushImpl {
                 .unlock_batch_mq(
                     find_broker_result.broker_addr.as_str(),
                     request_body,
-                    1_000,
+                    UNLOCK_BATCH_MQ_TIMEOUT_MS,
                     oneway,
                 )
                 .await;

@@ -468,7 +468,77 @@ where
 
     pub async fn lock_all(&mut self) {
         let broker_mqs = self.build_process_queue_table_by_broker_name().await;
-        for (broker_name, mqs) in broker_mqs {
+
+        let map = broker_mqs
+            .into_iter()
+            .map(|(broker_name, mqs)| {
+                let mut client_instance = self.client_instance.clone();
+                let process_queue_table = self.process_queue_table.clone();
+                let consumer_group = self.consumer_group.clone().unwrap();
+                async move {
+                    if mqs.is_empty() {
+                        return;
+                    }
+                    let client = client_instance.as_mut().unwrap();
+                    let find_broker_result = client
+                        .find_broker_address_in_subscribe(
+                            broker_name.as_str(),
+                            mix_all::MASTER_ID,
+                            true,
+                        )
+                        .await;
+                    if let Some(find_broker_result) = find_broker_result {
+                        let request_body = LockBatchRequestBody {
+                            consumer_group: Some(consumer_group.to_owned()),
+                            client_id: Some(client.client_id.clone()),
+                            mq_set: mqs.clone(),
+                            ..Default::default()
+                        };
+                        let result = client
+                            .mq_client_api_impl
+                            .as_mut()
+                            .unwrap()
+                            .lock_batch_mq(
+                                find_broker_result.broker_addr.as_str(),
+                                request_body,
+                                1_000,
+                            )
+                            .await;
+                        match result {
+                            Ok(lock_okmqset) => {
+                                let process_queue_table = process_queue_table.read().await;
+                                for mq in &mqs {
+                                    if let Some(pq) = process_queue_table.get(mq) {
+                                        if lock_okmqset.contains(mq) {
+                                            if pq.is_locked() {
+                                                info!(
+                                                    "the message queue locked OK, Group: {:?} {}",
+                                                    consumer_group, mq
+                                                );
+                                            }
+                                            pq.set_locked(true);
+                                            pq.set_last_lock_timestamp(get_current_millis());
+                                        } else {
+                                            pq.set_locked(false);
+                                            warn!(
+                                                "the message queue locked Failed, Group: {:?} {}",
+                                                consumer_group, mq
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                error!("lockBatchMQ exception {}", e);
+                            }
+                        }
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+        futures::future::join_all(map).await;
+
+        /*        for (broker_name, mqs) in broker_mqs {
             if mqs.is_empty() {
                 continue;
             }
@@ -518,7 +588,7 @@ where
                     }
                 }
             }
-        }
+        }*/
     }
 
     async fn build_process_queue_table_by_broker_name(
@@ -533,7 +603,7 @@ where
             }
             let broker_name = client.get_broker_name_from_message_queue(mq).await;
             let entry = result.entry(broker_name).or_insert(HashSet::new());
-            entry.insert(mq.clone());
+            entry.insert(mq.to_owned());
         }
         result
     }

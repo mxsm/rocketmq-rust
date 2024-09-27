@@ -55,7 +55,7 @@ pub trait RebalanceLocal {
 
     fn consume_type(&self) -> ConsumeType;
 
-    async fn remove_dirty_offset(&self, mq: &MessageQueue);
+    async fn remove_dirty_offset(&mut self, mq: &MessageQueue);
 
     async fn compute_pull_from_where_with_exception(&mut self, mq: &MessageQueue) -> Result<i64>;
 

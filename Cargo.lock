@@ -1880,6 +1880,7 @@ name = "rocketmq-client"
 version = "0.3.0"
 dependencies = [
  "bytes",
+ "futures",
  "lazy_static",
  "num_cpus",
  "once_cell",

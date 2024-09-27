@@ -1106,9 +1106,17 @@ impl MQClientAPIImpl {
             )
             .await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
-            LockBatchResponseBody::decode(response.body().as_ref().unwrap().as_ref())
-                .map(|body| body.lock_ok_mq_set)
-                .map_err(|e| MQBrokerError(response.code(), e.to_string(), addr.to_string()))
+            if let Some(body) = response.body() {
+                LockBatchResponseBody::decode(body.as_ref())
+                    .map(|body| body.lock_ok_mq_set)
+                    .map_err(|e| MQBrokerError(response.code(), e.to_string(), addr.to_string()))
+            } else {
+                Err(MQBrokerError(
+                    response.code(),
+                    "Response body is empty".to_string(),
+                    addr.to_string(),
+                ))
+            }
         } else {
             Err(MQBrokerError(
                 response.code(),
