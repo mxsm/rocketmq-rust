@@ -313,6 +313,11 @@ impl ProcessQueue {
             .store(last_pull_timestamp, std::sync::atomic::Ordering::Release);
     }
 
+    pub(crate) fn set_last_lock_timestamp(&self, last_lock_timestamp: u64) {
+        self.last_lock_timestamp
+            .store(last_lock_timestamp, std::sync::atomic::Ordering::Release);
+    }
+
     pub fn msg_count(&self) -> u64 {
         self.msg_count.load(std::sync::atomic::Ordering::Acquire)
     }

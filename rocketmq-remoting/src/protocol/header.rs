@@ -33,6 +33,7 @@ pub mod get_min_offset_response_header;
 pub mod get_topic_config_request_header;
 pub mod get_topic_stats_request_header;
 pub mod heartbeat_request_header;
+pub mod lock_batch_mq_request_header;
 pub mod message_operation_header;
 pub mod namesrv;
 pub mod notify_consumer_ids_changed_request_header;

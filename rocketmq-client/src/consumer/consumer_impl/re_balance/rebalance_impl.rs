@@ -17,12 +17,15 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::ops::DerefMut;
 use std::sync::Arc;
 
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::ArcRefCellWrapper;
+use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_common::WeakCellWrapper;
+use rocketmq_remoting::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
@@ -173,45 +176,55 @@ where
         let mut changed = false;
         let mut remove_queue_map = HashMap::new();
         let process_queue_table_cloned = self.process_queue_table.clone();
-        let mut process_queue_table = process_queue_table_cloned.write().await;
-        // Drop process queues no longer belong to me
-        for (mq, pq) in process_queue_table.iter() {
-            if mq.get_topic() == topic {
-                if !mq_set.contains(mq) {
-                    pq.set_dropped(true);
-                    remove_queue_map.insert(mq.clone(), pq.clone());
-                } else if pq.is_pull_expired() {
-                    if let Some(sub_rebalance) = self.sub_rebalance_impl.as_mut().unwrap().upgrade()
-                    {
-                        if sub_rebalance.consume_type() == ConsumeType::ConsumePassively {
-                            pq.set_dropped(true);
-                            remove_queue_map.insert(mq.clone(), pq.clone());
-                            error!(
-                                "[BUG]doRebalance, {:?}, try remove unnecessary mq, {}, because \
-                                 pull is pause, so try to fixed it",
-                                self.consumer_group,
-                                mq.get_topic()
-                            );
+        {
+            let process_queue_table = process_queue_table_cloned.read().await;
+            // Drop process queues no longer belong to me
+            for (mq, pq) in process_queue_table.iter() {
+                if mq.get_topic() == topic {
+                    if !mq_set.contains(mq) {
+                        pq.set_dropped(true);
+                        remove_queue_map.insert(mq.clone(), pq.clone());
+                    } else if pq.is_pull_expired() {
+                        if let Some(sub_rebalance) =
+                            self.sub_rebalance_impl.as_mut().unwrap().upgrade()
+                        {
+                            if sub_rebalance.consume_type() == ConsumeType::ConsumePassively {
+                                pq.set_dropped(true);
+                                remove_queue_map.insert(mq.clone(), pq.clone());
+                                error!(
+                                    "[BUG]doRebalance, {:?}, try remove unnecessary mq, {}, \
+                                     because pull is pause, so try to fixed it",
+                                    self.consumer_group,
+                                    mq.get_topic()
+                                );
+                            }
                         }
                     }
                 }
             }
         }
 
-        // Remove message queues no longer belong to me
-        for (mq, pq) in remove_queue_map {
-            if let Some(mut sub_rebalance) = self.sub_rebalance_impl.as_mut().unwrap().upgrade() {
-                if sub_rebalance
-                    .remove_unnecessary_message_queue(&mq, &pq)
-                    .await
-                {
-                    process_queue_table.remove(&mq);
-                    changed = true;
-                    info!(
-                        "doRebalance, {:?}, remove unnecessary mq, {}",
-                        self.consumer_group,
-                        mq.get_topic()
-                    );
+        {
+            if !remove_queue_map.is_empty() {
+                let mut process_queue_table = process_queue_table_cloned.write().await;
+                // Remove message queues no longer belong to me
+                for (mq, pq) in remove_queue_map {
+                    if let Some(mut sub_rebalance) =
+                        self.sub_rebalance_impl.as_mut().unwrap().upgrade()
+                    {
+                        if sub_rebalance
+                            .remove_unnecessary_message_queue(&mq, &pq)
+                            .await
+                        {
+                            process_queue_table.remove(&mq);
+                            changed = true;
+                            info!(
+                                "doRebalance, {:?}, remove unnecessary mq, {}",
+                                self.consumer_group,
+                                mq.get_topic()
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -223,9 +236,10 @@ where
             return false;
         }
         let mut sub_rebalance_impl = sub_rebalance_impl.unwrap();
+        let mut process_queue_table = process_queue_table_cloned.write().await;
         for mq in mq_set {
             if !process_queue_table.contains_key(mq) {
-                if is_order && !self.lock(mq) {
+                if is_order && !self.lock(mq, process_queue_table.deref_mut()).await {
                     warn!(
                         "doRebalance, {:?}, add a new mq failed, {}, because lock failed",
                         self.consumer_group,
@@ -236,7 +250,7 @@ where
                 }
 
                 sub_rebalance_impl.remove_dirty_offset(mq).await;
-                let pq = Arc::new(ProcessQueue::new());
+                let pq = Arc::new(sub_rebalance_impl.create_process_queue());
                 pq.set_locked(true);
                 let next_offset = sub_rebalance_impl.compute_pull_from_where(mq).await;
                 if next_offset >= 0 {
@@ -404,7 +418,123 @@ where
         queue_set
     }
 
-    pub fn lock(&self, mq: &MessageQueue) -> bool {
-        unimplemented!()
+    pub async fn lock(
+        &mut self,
+        mq: &MessageQueue,
+        process_queue_table: &mut HashMap<MessageQueue, Arc<ProcessQueue>>,
+    ) -> bool {
+        let client = self.client_instance.as_mut().unwrap();
+        let broker_name = client.get_broker_name_from_message_queue(mq).await;
+        let find_broker_result = client
+            .find_broker_address_in_subscribe(broker_name.as_str(), mix_all::MASTER_ID, true)
+            .await;
+        if let Some(find_broker_result) = find_broker_result {
+            let mut request_body = LockBatchRequestBody {
+                consumer_group: Some(self.consumer_group.clone().unwrap()),
+                client_id: Some(client.client_id.clone()),
+                ..Default::default()
+            };
+            request_body.mq_set.insert(mq.clone());
+            let result = client
+                .mq_client_api_impl
+                .as_mut()
+                .unwrap()
+                .lock_batch_mq(find_broker_result.broker_addr.as_str(), request_body, 1_000)
+                .await;
+            match result {
+                Ok(locked_mq) => {
+                    for mq in &locked_mq {
+                        if let Some(pq) = process_queue_table.get(mq) {
+                            pq.set_locked(true);
+                            pq.set_last_pull_timestamp(get_current_millis());
+                        }
+                    }
+                    let lock_ok = locked_mq.contains(mq);
+                    info!(
+                        "message queue lock {}, {:?} {}",
+                        lock_ok, self.consumer_group, mq
+                    );
+                    lock_ok
+                }
+                Err(e) => {
+                    error!("lockBatchMQ exception {},{}", mq, e);
+                    false
+                }
+            }
+        } else {
+            false
+        }
+    }
+
+    pub async fn lock_all(&mut self) {
+        let broker_mqs = self.build_process_queue_table_by_broker_name().await;
+        for (broker_name, mqs) in broker_mqs {
+            if mqs.is_empty() {
+                continue;
+            }
+            let client = self.client_instance.as_mut().unwrap();
+            let find_broker_result = client
+                .find_broker_address_in_subscribe(broker_name.as_str(), mix_all::MASTER_ID, true)
+                .await;
+            if let Some(find_broker_result) = find_broker_result {
+                let request_body = LockBatchRequestBody {
+                    consumer_group: Some(self.consumer_group.clone().unwrap()),
+                    client_id: Some(client.client_id.clone()),
+                    mq_set: mqs.clone(),
+                    ..Default::default()
+                };
+                let result = client
+                    .mq_client_api_impl
+                    .as_mut()
+                    .unwrap()
+                    .lock_batch_mq(find_broker_result.broker_addr.as_str(), request_body, 1_000)
+                    .await;
+                match result {
+                    Ok(lock_okmqset) => {
+                        let process_queue_table = self.process_queue_table.read().await;
+                        for mq in &mqs {
+                            if let Some(pq) = process_queue_table.get(mq) {
+                                if lock_okmqset.contains(mq) {
+                                    if pq.is_locked() {
+                                        info!(
+                                            "the message queue locked OK, Group: {:?} {}",
+                                            self.consumer_group, mq
+                                        );
+                                    }
+                                    pq.set_locked(true);
+                                    pq.set_last_lock_timestamp(get_current_millis());
+                                } else {
+                                    pq.set_locked(false);
+                                    warn!(
+                                        "the message queue locked Failed, Group: {:?} {}",
+                                        self.consumer_group, mq
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("lockBatchMQ exception {}", e);
+                    }
+                }
+            }
+        }
+    }
+
+    async fn build_process_queue_table_by_broker_name(
+        &self,
+    ) -> HashMap<String /* brokerName */, HashSet<MessageQueue>> {
+        let mut result = HashMap::new();
+        let process_queue_table = self.process_queue_table.read().await;
+        let client = self.client_instance.as_ref().unwrap();
+        for (mq, pq) in process_queue_table.iter() {
+            if pq.is_dropped() {
+                continue;
+            }
+            let broker_name = client.get_broker_name_from_message_queue(mq).await;
+            let entry = result.entry(broker_name).or_insert(HashSet::new());
+            entry.insert(mq.clone());
+        }
+        result
     }
 }
