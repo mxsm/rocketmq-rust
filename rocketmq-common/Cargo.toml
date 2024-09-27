@@ -41,7 +41,7 @@ dirs.workspace = true
 
 byteorder = "1.5.0"
 
-flate2 = { version = "1.0.33", features = ["zlib"], default-features = false }
+flate2 = { version = "1.0.34", features = ["zlib"], default-features = false }
 lz4_flex = { version = "0.11", default-features = false }
 zstd = "0.13"
 
