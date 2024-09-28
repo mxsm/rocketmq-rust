@@ -65,52 +65,15 @@ cargo run --bin rocketmq-namesrv-rust
 
 The existing RocketMQ has the following functional modules:
 
-- **Name Server**
-- **Broker**
-- **Store (Local Storage)**
+- [**Name Server**](./rockemt-namesrv)
+- [**Broker**](./rocketmq-broker)
+- [**Store (Local Storage)**](./rocketmq-store)
 - **Controller (High Availability)**
-- **Client (SDK)**
+- [**Client (SDK)**](./rocketmq-client)
 - **Proxy**
 - **Tiered Store (Tiered Storage Module)**
 
 The specific functions of each module can be referred to in the [official RocketMQ documentation](https://github.com/apache/rocketmq/tree/develop/docs). The Rust implementation will be carried out sequentially in the following order.
-
-## Name Server
-
-Feature list:
-
-> Not support: :broken_heart: :x:
->
-> Base support: :heart: :white_check_mark:
->
-> Perfect support: :sparkling_heart: :white_check_mark:
-
-| Feature                                | request code | Support                              | remark |
-| -------------------------------------- | ------------ | ------------------------------------ | ------ |
-| Put KV Config                          | 100          | :sparkling_heart: :white_check_mark: |        |
-| Get KV Config                          | 101          | :sparkling_heart: :white_check_mark: |        |
-| Delete KV Config                       | 102          | :sparkling_heart: :white_check_mark: |        |
-| Get kv list by namespace               | 219          | :sparkling_heart: :white_check_mark: |        |
-| Query Data Version                     | 322          | :sparkling_heart: :white_check_mark: |        |
-| Register Broker                        | 103          | :sparkling_heart: :white_check_mark: |        |
-| Unregister Broker                      | 104          | :sparkling_heart: :white_check_mark: |        |
-| Broker Heartbeat                       | 904          | :sparkling_heart: :white_check_mark: |        |
-| Get broker member_group                | 901          | :sparkling_heart: :white_check_mark: |        |
-| Get broker cluster info                | 106          | :sparkling_heart: :white_check_mark: |        |
-| Wipe write perm of boker               | 205          | :sparkling_heart: :white_check_mark: |        |
-| Add write perm of brober               | 327          | :sparkling_heart: :white_check_mark: |        |
-| Get all topic list from name server    | 206          | :sparkling_heart: :white_check_mark: |        |
-| Delete topic in name server            | 216          | :sparkling_heart: :white_check_mark: |        |
-| Register topic in name server          | 217          | :sparkling_heart: :white_check_mark: |        |
-| Get topics by cluster                  | 224          | :sparkling_heart: :white_check_mark: |        |
-| Get system topic list from name server | 304          | :sparkling_heart: :white_check_mark: |        |
-| Get unit topic list                    | 311          | :sparkling_heart: :white_check_mark: |        |
-| Get has unit sub topic list            | 312          | :sparkling_heart: :white_check_mark: |        |
-| Get has unit sub ununit topic list     | 313          | :sparkling_heart: :white_check_mark: |        |
-| Update name server config              | 318          | :broken_heart: :x:                   |        |
-| Get name server config                 | 318          | :broken_heart: :x:                   |        |
-
-Other module implementations will be done subsequently, starting with the Rust implementation of the Name Server. The goal is to achieve functionality similar to the Java version.
 
 ## Contributing
 
@@ -122,10 +85,7 @@ Contributions to code, issue reporting, and suggestions are welcome. The develop
   <img src="https://contrib.rocks/image?repo=mxsm/rocketmq-rust&anon=1" />
 </a>
 
-
-|                   **Stargazers Over Time**                   |                  **Contributors Over Time**                  |
-| :----------------------------------------------------------: | :----------------------------------------------------------: |
-| [![Stargazers over time](https://api.star-history.com/svg?repos=mxsm/rocketmq-rust&type=Date)](https://api.star-history.com/svg?repos=mxsm/rocketmq-rust&type=Date) | [![GitHub Contributor Over Time](https://contributor-overtime-api.git-contributor.com/contributors-svg?chart=contributorOverTime&repo=mxsm/rocketmq-rust)](https://git-contributor.com?chart=contributorOverTime&repo=mxsm/rocketmq-rust) |
+[![Stargazers over time](https://api.star-history.com/svg?repos=mxsm/rocketmq-rust&type=Date)](https://api.star-history.com/svg?repos=mxsm/rocketmq-rust&type=Date)
 
 ## License
 
