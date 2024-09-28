@@ -297,7 +297,36 @@ where
     async fn rebalance_by_topic(&mut self, topic: &str, is_order: bool) -> bool {
         match self.message_model.unwrap() {
             MessageModel::Broadcasting => {
-                unimplemented!("Broadcasting")
+                let topic_sub_cloned = self.topic_subscribe_info_table.clone();
+                let topic_subscribe_info_table = topic_sub_cloned.read().await;
+                let mq_set = topic_subscribe_info_table.get(topic);
+                if let Some(mq_set) = mq_set {
+                    let changed = self
+                        .update_process_queue_table_in_rebalance(topic, mq_set, is_order)
+                        .await;
+                    if changed {
+                        let sub_rebalance_impl = self.sub_rebalance_impl.as_mut().unwrap();
+                        if let Some(mut sub_rebalance_impl) = sub_rebalance_impl.upgrade() {
+                            sub_rebalance_impl
+                                .message_queue_changed(topic, mq_set, mq_set)
+                                .await;
+                        }
+                    }
+                    mq_set.eq(&self.get_working_message_queue(topic).await)
+                } else {
+                    let sub_rebalance_impl = self.sub_rebalance_impl.as_mut().unwrap();
+                    if let Some(mut sub_rebalance_impl) = sub_rebalance_impl.upgrade() {
+                        sub_rebalance_impl
+                            .message_queue_changed(topic, &HashSet::new(), &HashSet::new())
+                            .await;
+                        warn!(
+                            "doRebalance, {}, but the topic[{}] not exist.",
+                            self.consumer_group.as_ref().unwrap(),
+                            topic
+                        );
+                    }
+                    true
+                }
             }
             MessageModel::Clustering => {
                 let topic_sub_cloned = self.topic_subscribe_info_table.clone();

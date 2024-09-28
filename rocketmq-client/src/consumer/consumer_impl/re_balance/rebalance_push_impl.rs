@@ -202,6 +202,8 @@ impl Rebalance for RebalancePushImpl {
                 self.consumer_config.pull_threshold_size_for_topic = new_val;
             }
         }
+
+        //notify broker
         let _ = self
             .rebalance_impl_inner
             .client_instance
