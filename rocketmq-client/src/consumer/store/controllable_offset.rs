@@ -32,6 +32,13 @@ impl ControllableOffset {
         }
     }
 
+    pub fn new_atomic(value: AtomicI64) -> Self {
+        Self {
+            value: Arc::new(value),
+            allow_to_update: Arc::new(AtomicBool::new(true)),
+        }
+    }
+
     pub fn update(&self, target: i64, increase_only: bool) {
         if self.allow_to_update.load(Ordering::SeqCst) {
             self.value
