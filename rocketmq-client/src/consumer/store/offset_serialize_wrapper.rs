@@ -14,10 +14,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::collections::HashMap;
+use std::sync::atomic::AtomicI64;
 
-mod controllable_offset;
-pub(crate) mod local_file_offset_store;
-mod offset_serialize_wrapper;
-pub(crate) mod offset_store;
-pub(crate) mod read_offset_type;
-pub(crate) mod remote_broker_offset_store;
+use rocketmq_common::common::message::message_queue::MessageQueue;
+use serde::Deserialize;
+use serde::Serialize;
+
+#[derive(Serialize, Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct OffsetSerializeWrapper {
+    pub offset_table: HashMap<MessageQueue, AtomicI64>,
+}
