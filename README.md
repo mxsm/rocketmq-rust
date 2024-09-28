@@ -61,15 +61,75 @@ Run the following command to start the name server
 cargo run --bin rocketmq-namesrv-rust
 ```
 
+### Run Borker
+
+**Run the following command to see usage：**
+
+- **windows platform**
+
+  ```shell
+  cargo run --bin rocketmq-broker-rust -- --help
+  
+  RocketMQ Broker Server(Rust)
+  
+  Usage: rocketmq-broker-rust.exe [OPTIONS]
+  
+  Options:
+    -c, --config-file <FILE>      Broker config properties file
+    -m, --print-important-config  Print important config item
+    -n, --namesrv-addr <IP>       Name server address list, eg: '192.168.0.1:9876;192.168.0.2:9876' [default: 127.0.0.1:9876]
+    -p, --print-config-item       Print all config item
+    -h, --help                    Print help
+    -V, --version                 Print version
+  ```
+
+  
+
+- **Linux platform**
+
+  ```shell
+  $ cargo run --bin rocketmq-broker-rust -- --help
+  
+  RocketMQ Broker Server(Rust)
+  
+  Usage: rocketmq-broker-rust [OPTIONS]
+  
+  Options:
+    -c, --config-file <FILE>      Broker config properties file
+    -m, --print-important-config  Print important config item
+    -n, --namesrv-addr <IP>       Name server address list, eg: '192.168.0.1:9876;192.168.0.2:9876' [default: 127.0.0.1:9876]
+    -p, --print-config-item       Print all config item
+    -h, --help                    Print help
+    -V, --version                 Print version
+  ```
+
+Run the following command to start the name server
+
+```shell
+cargo run --bin rocketmq-broker-rust
+```
+
+## Client how to send message
+
+First, start the RocketMQ NameServer and Broker services.
+
+- [**Send a single message**](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md#Send-a-single-message)
+
+- [**Send batch messages**](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md#Send-batch-messages)
+
+- [**Send RPC messages**](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md#Send-RPC-messages)
+
+[**For more examples, you can check here**](https://github.com/mxsm/rocketmq-rust/tree/main/rocketmq-client/examples)
+
 ## Modules
 
 The existing RocketMQ has the following functional modules:
 
-- [**Name Server**](./rockemt-namesrv)
-- [**Broker**](./rocketmq-broker)
-- [**Store (Local Storage)**](./rocketmq-store)
+- [**Name Server**](https://github.com/mxsm/rocketmq-rust/tree/main/rocketmq-namesrv)
+- [**Broker**](https://github.com/mxsm/rocketmq-rust/tree/main/rocketmq-broker)
+- [**Store (Local Storage)**](https://github.com/mxsm/rocketmq-rust/tree/main/rocketmq-store)
 - **Controller (High Availability)**
-- [**Client (SDK)**](./rocketmq-client)
+- [**Client (SDK)**](https://github.com/mxsm/rocketmq-rust/tree/main/rocketmq-client)
 - **Proxy**
 - **Tiered Store (Tiered Storage Module)**
 
