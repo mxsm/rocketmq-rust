@@ -41,13 +41,13 @@ use crate::Result;
 
 static LOCAL_OFFSET_STORE_DIR: Lazy<PathBuf> = Lazy::new(|| {
     #[cfg(target_os = "windows")]
-    let home = std::env::var("user.home")
+    let home = std::env::var("USERPROFILE")
         .map_or(PathBuf::from("C:\\tmp\\.rocketmq_offsets"), |home| {
             PathBuf::from(home).join(".rocketmq_offsets")
         });
 
     #[cfg(not(target_os = "windows"))]
-    let home = std::env::var("user.home").map_or(PathBuf::from("/tmp/.rocketmq_offsets"), |home| {
+    let home = std::env::var("HOME").map_or(PathBuf::from("/tmp/.rocketmq_offsets"), |home| {
         PathBuf::from(home).join(".rocketmq_offsets")
     });
 
@@ -83,9 +83,9 @@ impl LocalFileOffsetStore {
         } else {
             match OffsetSerializeWrapper::decode(content.as_bytes()) {
                 Ok(value) => Ok(Some(value)),
-                Err(_) => Err(MQClientError::MQClientErr(
+                Err(e) => Err(MQClientError::MQClientErr(
                     -1,
-                    format!("read local offset failed, content: {}", content),
+                    format!("Failed to deserialize local offset: {}", e),
                 )),
             }
         }
