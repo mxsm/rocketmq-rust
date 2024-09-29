@@ -281,6 +281,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
         dispatch_to_consume: bool,
     ) {
         let consume_batch_size = self.consumer_config.consume_message_batch_max_size;
+        println!(">>>>>>>>>>>>>>>>>>>>>>: {}", msgs.len());
         if msgs.len() <= consume_batch_size as usize {
             let mut consume_request = ConsumeRequest {
                 msgs: msgs.clone(),
@@ -302,7 +303,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
                 } else {
                     msgs.split_off(msgs.len())
                 };
-
+                println!(">>>>>>>>>>>>>>>>>>>>>>: {}-{}", item.len(), msgs.len());
                 let mut consume_request = ConsumeRequest {
                     msgs: item,
                     message_listener: self.message_listener.clone(),

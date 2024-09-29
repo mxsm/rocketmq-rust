@@ -30,7 +30,8 @@ pub const MESSAGE_COUNT: usize = 1;
 pub const CONSUMER_GROUP: &str = "please_rename_unique_group_name_1";
 pub const DEFAULT_NAMESRVADDR: &str = "127.0.0.1:9876";
 pub const TOPIC: &str = "TopicTest";
-pub const SUB_EXPRESSION: &str = "TagA || TagC || TagD";
+//pub const SUB_EXPRESSION: &str = "TagA || TagC || TagD";
+pub const SUB_EXPRESSION: &str = "*";
 
 #[rocketmq::main]
 pub async fn main() -> Result<()> {

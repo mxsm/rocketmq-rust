@@ -19,8 +19,13 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
 use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_remoting::protocol::RemotingDeserializable;
+use rocketmq_remoting::protocol::RemotingSerializable;
 use serde::Deserialize;
 use serde::Serialize;
+use tracing_subscriber::fmt::format;
+
+use crate::consumer::store::offset_serialize::OffsetSerialize;
 
 #[derive(Serialize, Deserialize, Debug, Default)]
 #[serde(rename_all = "camelCase")]
@@ -58,4 +63,31 @@ where
         .map(|(k, v)| (k, AtomicI64::new(v)))
         .collect();
     Ok(map_as_atomic)
+}
+
+/*impl Into<OffsetSerialize> for OffsetSerializeWrapper {
+    fn into(self) -> OffsetSerialize {
+        let offset_table = self
+            .offset_table
+            .into_iter()
+            .map(|(k, v)| (k.to_json(), v.load(Ordering::Relaxed)))
+            .collect();
+        OffsetSerialize { offset_table }
+    }
+}*/
+
+impl From<OffsetSerialize> for OffsetSerializeWrapper {
+    fn from(offset_serialize: OffsetSerialize) -> Self {
+        let offset_table = offset_serialize
+            .offset_table
+            .into_iter()
+            .map(|(k, v)| {
+                (
+                    MessageQueue::decode(k.as_bytes()).expect("Failed to decode message queue"),
+                    AtomicI64::new(v),
+                )
+            })
+            .collect();
+        Self { offset_table }
+    }
 }
