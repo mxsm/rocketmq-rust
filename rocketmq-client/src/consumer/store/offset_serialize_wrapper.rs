@@ -20,10 +20,8 @@ use std::sync::atomic::Ordering;
 
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_remoting::protocol::RemotingDeserializable;
-use rocketmq_remoting::protocol::RemotingSerializable;
 use serde::Deserialize;
 use serde::Serialize;
-use tracing_subscriber::fmt::format;
 
 use crate::consumer::store::offset_serialize::OffsetSerialize;
 
@@ -64,17 +62,6 @@ where
         .collect();
     Ok(map_as_atomic)
 }
-
-/*impl Into<OffsetSerialize> for OffsetSerializeWrapper {
-    fn into(self) -> OffsetSerialize {
-        let offset_table = self
-            .offset_table
-            .into_iter()
-            .map(|(k, v)| (k.to_json(), v.load(Ordering::Relaxed)))
-            .collect();
-        OffsetSerialize { offset_table }
-    }
-}*/
 
 impl From<OffsetSerialize> for OffsetSerializeWrapper {
     fn from(offset_serialize: OffsetSerialize) -> Self {
