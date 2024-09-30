@@ -39,6 +39,7 @@ use rocketmq_remoting::rpc::client_metadata::ClientMetadata;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_runtime::RocketMQRuntime;
+use rocketmq_rust::RocketMQTokioMutex;
 use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
@@ -88,7 +89,7 @@ pub struct MQClientInstance {
     topic_end_points_table:
         Arc<RwLock<HashMap<String /* Topic */, HashMap<MessageQueue, String /* brokerName */>>>>,
     lock_namesrv: Arc<Mutex<()>>,
-    lock_heartbeat: Arc<Mutex<()>>,
+    lock_heartbeat: Arc<RocketMQTokioMutex<()>>,
 
     service_state: ServiceState,
     pub(crate) pull_message_service: ArcRefCellWrapper<PullMessageService>,
@@ -186,7 +187,7 @@ impl MQClientInstance {
             topic_route_table: Arc::new(Default::default()),
             topic_end_points_table: Arc::new(Default::default()),
             lock_namesrv: Default::default(),
-            lock_heartbeat: Default::default(),
+            lock_heartbeat: Arc::new(RocketMQTokioMutex::new(())),
             service_state: ServiceState::CreateJust,
             pull_message_service: ArcRefCellWrapper::new(PullMessageService::new()),
             rebalance_service: RebalanceService::new(),
@@ -634,34 +635,36 @@ impl MQClientInstance {
         println!("cleanOfflineBroker")
     }
     pub async fn send_heartbeat_to_all_broker_with_lock(&mut self) -> bool {
-        match self.lock_heartbeat.try_lock() {
-            Ok(_) => {
-                if self.client_config.use_heartbeat_v2 {
-                    self.send_heartbeat_to_all_broker_v2(false).await
-                } else {
-                    self.send_heartbeat_to_all_broker().await
-                }
-            }
-            Err(_) => {
-                warn!("lock heartBeat, but failed. [{}]", self.client_id);
-                false
-            }
+        if let Some(lock) = self.lock_heartbeat.try_lock().await {
+            let result = if self.client_config.use_heartbeat_v2 {
+                self.send_heartbeat_to_all_broker_v2(false).await
+            } else {
+                self.send_heartbeat_to_all_broker().await
+            };
+            drop(lock);
+            result
+        } else {
+            warn!("lock heartBeat, but failed. [{}]", self.client_id);
+            false
         }
     }
 
     pub async fn send_heartbeat_to_all_broker_with_lock_v2(&mut self, is_rebalance: bool) -> bool {
-        match self.lock_heartbeat.try_lock() {
-            Ok(_) => {
-                if self.client_config.use_heartbeat_v2 {
-                    self.send_heartbeat_to_all_broker_v2(false).await
-                } else {
-                    self.send_heartbeat_to_all_broker().await
-                }
-            }
-            Err(_) => {
-                warn!("lock heartBeat, but failed. [{}]", self.client_id);
-                false
-            }
+        if let Some(lock) = self
+            .lock_heartbeat
+            .try_lock_timeout(Duration::from_secs(2))
+            .await
+        {
+            let result = if self.client_config.use_heartbeat_v2 {
+                self.send_heartbeat_to_all_broker_v2(is_rebalance).await
+            } else {
+                self.send_heartbeat_to_all_broker().await
+            };
+            drop(lock);
+            result
+        } else {
+            warn!("lock heartBeat, but failed. [{}]", self.client_id);
+            false
         }
     }
 
@@ -730,7 +733,7 @@ impl MQClientInstance {
     }
 
     pub async fn send_heartbeat_to_broker(&self, id: i64, broker_name: &str, addr: &str) -> bool {
-        if self.lock_heartbeat.try_lock().is_ok() {
+        if let Some(lock) = self.lock_heartbeat.try_lock().await {
             let heartbeat_data = self.prepare_heartbeat_data(false).await;
             let producer_empty = heartbeat_data.producer_data_set.is_empty();
             let consumer_empty = heartbeat_data.consumer_data_set.is_empty();
@@ -742,12 +745,14 @@ impl MQClientInstance {
                 return false;
             }
 
-            if self.client_config.use_heartbeat_v2 {
+            let result = if self.client_config.use_heartbeat_v2 {
                 unimplemented!("sendHeartbeatToBrokerV2")
             } else {
                 self.send_heartbeat_to_broker_inner(id, broker_name, addr, &heartbeat_data)
                     .await
-            }
+            };
+            drop(lock);
+            result
         } else {
             false
         }
