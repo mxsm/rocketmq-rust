@@ -652,7 +652,6 @@ impl MQClientInstance {
     pub async fn send_heartbeat_to_all_broker_with_lock_v2(&mut self, is_rebalance: bool) -> bool {
         match self.lock_heartbeat.try_lock() {
             Ok(_) => {
-                println!("sendHeartbeatToAllBrokerV2>>>>>>>>>>>>>>>>>>>>>>>>>");
                 if self.client_config.use_heartbeat_v2 {
                     self.send_heartbeat_to_all_broker_v2(false).await
                 } else {
