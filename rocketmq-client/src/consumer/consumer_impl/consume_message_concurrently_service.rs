@@ -275,7 +275,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
     async fn submit_consume_request(
         &self,
         this: ArcRefCellWrapper<Self>,
-        mut msgs: Vec<ArcRefCellWrapper<MessageClientExt>>,
+        msgs: Vec<ArcRefCellWrapper<MessageClientExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
         dispatch_to_consume: bool,
@@ -296,32 +296,25 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
                 .get_handle()
                 .spawn(async move { consume_request.run(this).await });
         } else {
-            loop {
-                let item = if msgs.len() > consume_batch_size as usize {
-                    msgs.split_off(consume_batch_size as usize)
-                } else {
-                    msgs.split_off(msgs.len())
-                };
-
-                let mut consume_request = ConsumeRequest {
-                    msgs: item,
-                    message_listener: self.message_listener.clone(),
-                    process_queue: process_queue.clone(),
-                    message_queue: message_queue.clone(),
-                    dispatch_to_consume,
-                    consumer_group: self.consumer_group.as_ref().clone(),
-                    default_mqpush_consumer_impl: self.default_mqpush_consumer_impl.clone(),
-                };
-                let consume_message_concurrently_service = this.clone();
-                self.consume_runtime.get_handle().spawn(async move {
-                    consume_request
-                        .run(consume_message_concurrently_service)
-                        .await
+            msgs.chunks(consume_batch_size as usize)
+                .map(|t| t.to_vec())
+                .for_each(|msgs| {
+                    let mut consume_request = ConsumeRequest {
+                        msgs,
+                        message_listener: self.message_listener.clone(),
+                        process_queue: process_queue.clone(),
+                        message_queue: message_queue.clone(),
+                        dispatch_to_consume,
+                        consumer_group: self.consumer_group.as_ref().clone(),
+                        default_mqpush_consumer_impl: self.default_mqpush_consumer_impl.clone(),
+                    };
+                    let consume_message_concurrently_service = this.clone();
+                    self.consume_runtime.get_handle().spawn(async move {
+                        consume_request
+                            .run(consume_message_concurrently_service)
+                            .await
+                    });
                 });
-                if msgs.is_empty() {
-                    break;
-                }
-            }
         }
     }
 

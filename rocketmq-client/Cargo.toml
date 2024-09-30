@@ -70,3 +70,7 @@ path = "examples/rpc/request_callback_producer.rs"
 [[example]]
 name = "consumer"
 path = "examples/quickstart/consumer.rs"
+
+[[example]]
+name = "broadcast-consumer"
+path = "examples/broadcast/push_consumer.rs"

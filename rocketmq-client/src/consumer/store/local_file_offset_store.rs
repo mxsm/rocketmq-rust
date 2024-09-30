@@ -32,6 +32,7 @@ use tracing::error;
 use tracing::info;
 
 use crate::consumer::store::controllable_offset::ControllableOffset;
+use crate::consumer::store::offset_serialize::OffsetSerialize;
 use crate::consumer::store::offset_serialize_wrapper::OffsetSerializeWrapper;
 use crate::consumer::store::offset_store::OffsetStoreTrait;
 use crate::consumer::store::read_offset_type::ReadOffsetType;
@@ -63,14 +64,17 @@ pub struct LocalFileOffsetStore {
 
 impl LocalFileOffsetStore {
     pub fn new(client_instance: ArcRefCellWrapper<MQClientInstance>, group_name: String) -> Self {
+        let store_path = LOCAL_OFFSET_STORE_DIR
+            .clone()
+            .join(client_instance.client_id.as_str())
+            .join(group_name.as_str())
+            .join("offsets.json")
+            .to_string_lossy()
+            .to_string();
         Self {
             client_instance,
             group_name,
-            store_path: LOCAL_OFFSET_STORE_DIR
-                .clone()
-                .join("offsets.json")
-                .to_string_lossy()
-                .to_string(),
+            store_path,
             offset_table: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -81,8 +85,8 @@ impl LocalFileOffsetStore {
         if content.is_empty() {
             self.read_local_offset_bak()
         } else {
-            match OffsetSerializeWrapper::decode(content.as_bytes()) {
-                Ok(value) => Ok(Some(value)),
+            match OffsetSerialize::decode(content.as_bytes()) {
+                Ok(value) => Ok(Some(value.into())),
                 Err(e) => Err(MQClientError::MQClientErr(
                     -1,
                     format!("Failed to deserialize local offset: {}", e),
@@ -96,8 +100,8 @@ impl LocalFileOffsetStore {
         if content.is_empty() {
             Ok(None)
         } else {
-            match OffsetSerializeWrapper::decode(content.as_bytes()) {
-                Ok(value) => Ok(Some(value)),
+            match OffsetSerialize::decode(content.as_bytes()) {
+                Ok(value) => Ok(Some(value.into())),
                 Err(_) => Err(MQClientError::MQClientErr(
                     -1,
                     format!("read local offset bak failed, content: {}", content),
@@ -183,6 +187,7 @@ impl OffsetStoreTrait for LocalFileOffsetStore {
                 return;
             }
         };
+
         let offset_table = self.offset_table.lock().await;
         for (mq, offset) in offset_table.iter() {
             if mqs.contains(mq) {
@@ -191,7 +196,8 @@ impl OffsetStoreTrait for LocalFileOffsetStore {
                     .insert(mq.clone(), AtomicI64::new(offset.get_offset()));
             }
         }
-        let content = offset_serialize_wrapper.to_json_pretty();
+
+        let content = OffsetSerialize::from(offset_serialize_wrapper).to_json_pretty();
         if !content.is_empty() {
             if let Err(e) = file_utils::string_to_file(&content, &self.store_path) {
                 error!(
@@ -215,7 +221,7 @@ impl OffsetStoreTrait for LocalFileOffsetStore {
             offset_serialize_wrapper
                 .offset_table
                 .insert(mq.clone(), AtomicI64::new(offset.get_offset()));
-            let content = offset_serialize_wrapper.to_json_pretty();
+            let content = OffsetSerialize::from(offset_serialize_wrapper).to_json_pretty();
             if !content.is_empty() {
                 if let Err(e) = file_utils::string_to_file(&content, &self.store_path) {
                     error!(
