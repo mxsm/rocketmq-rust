@@ -20,6 +20,15 @@ pub struct RocketMQTokioRwLock<T: ?Sized> {
     lock: tokio::sync::RwLock<T>,
 }
 
+impl<T: ?Sized> Default for RocketMQTokioRwLock<T>
+where
+    T: Default,
+{
+    fn default() -> Self {
+        Self::new(T::default())
+    }
+}
+
 impl<T: ?Sized> RocketMQTokioRwLock<T> {
     /// Creates a new `RocketMQTokioRwLock` instance containing the given data.
     ///
@@ -203,6 +212,15 @@ impl<T: ?Sized> RocketMQTokioMutex<T> {
             Ok(guard) => Some(guard),
             Err(_) => None,
         }
+    }
+}
+
+impl<T: ?Sized> Default for RocketMQTokioMutex<T>
+where
+    T: Default,
+{
+    fn default() -> Self {
+        Self::new(T::default())
     }
 }
 
