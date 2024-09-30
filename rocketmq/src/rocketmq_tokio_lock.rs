@@ -20,7 +20,7 @@ pub struct RocketMQTokioRwLock<T: ?Sized> {
     lock: tokio::sync::RwLock<T>,
 }
 
-impl<T: ?Sized> Default for RocketMQTokioRwLock<T>
+impl<T> Default for RocketMQTokioRwLock<T>
 where
     T: Default,
 {
@@ -215,7 +215,7 @@ impl<T: ?Sized> RocketMQTokioMutex<T> {
     }
 }
 
-impl<T: ?Sized> Default for RocketMQTokioMutex<T>
+impl<T> Default for RocketMQTokioMutex<T>
 where
     T: Default,
 {
