@@ -54,7 +54,7 @@ futures-sink = "0.3"
 futures-io = "0.3"
 
 num_cpus.workspace = true
-tempfile = "3.12.0"
+tempfile = "3.13.0"
 log = "0.4.22"
 
 memmap2 = "0.9.5"
@@ -62,7 +62,7 @@ trait-variant.workspace = true
 sysinfo = "0.31.4"
 once_cell = { workspace = true }
 [dev-dependencies]
-tempfile = "3.12.0"
+tempfile = "3.13.0"
 mockall = { workspace = true }
 criterion = { version = "0.5", features = ["html_reports"] }
 
