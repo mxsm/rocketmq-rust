@@ -74,3 +74,7 @@ path = "examples/quickstart/consumer.rs"
 [[example]]
 name = "broadcast-consumer"
 path = "examples/broadcast/push_consumer.rs"
+
+[[example]]
+name = "ordermessage-producer"
+path = "examples/ordermessage/ordermessage_producer.rs"
