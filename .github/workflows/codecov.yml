@@ -33,7 +33,7 @@ jobs:
       # uses: actions-rs/grcov@bb47b1ed7883a1502fa6875d562727ace2511248
       uses: actions-rs/grcov@v0.1
     - name: Upload coverage reports to Codecov
-      uses: codecov/codecov-action@v4.5.0
+      uses: codecov/codecov-action@v4.6.0
       env:
         CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
       with:
