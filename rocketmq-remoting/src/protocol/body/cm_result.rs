@@ -57,7 +57,7 @@ impl<'de> Deserialize<'de> for CMResult {
     {
         struct CMResultVisitor;
 
-        impl<'de> serde::de::Visitor<'de> for CMResultVisitor {
+        impl serde::de::Visitor<'_> for CMResultVisitor {
             type Value = CMResult;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {

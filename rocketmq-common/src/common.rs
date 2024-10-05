@@ -110,7 +110,7 @@ impl<'de> Deserialize<'de> for TopicFilterType {
     {
         struct TopicFilterTypeVisitor;
 
-        impl<'de> serde::de::Visitor<'de> for TopicFilterTypeVisitor {
+        impl serde::de::Visitor<'_> for TopicFilterTypeVisitor {
             type Value = TopicFilterType;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {

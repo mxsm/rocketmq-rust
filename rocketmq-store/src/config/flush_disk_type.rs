@@ -44,7 +44,7 @@ impl<'de> Deserialize<'de> for FlushDiskType {
     {
         struct FlushDiskTypeVisitor;
 
-        impl<'de> serde::de::Visitor<'de> for FlushDiskTypeVisitor {
+        impl serde::de::Visitor<'_> for FlushDiskTypeVisitor {
             type Value = FlushDiskType;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {

@@ -48,7 +48,7 @@ impl<'de> Deserialize<'de> for GroupRetryPolicyType {
     {
         struct GroupRetryPolicyTypeVisitor;
 
-        impl<'de> serde::de::Visitor<'de> for GroupRetryPolicyTypeVisitor {
+        impl serde::de::Visitor<'_> for GroupRetryPolicyTypeVisitor {
             type Value = GroupRetryPolicyType;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {

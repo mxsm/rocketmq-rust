@@ -57,7 +57,7 @@ impl<'de> Deserialize<'de> for StoreType {
     {
         struct StoreTypeVisitor;
 
-        impl<'de> serde::de::Visitor<'de> for StoreTypeVisitor {
+        impl serde::de::Visitor<'_> for StoreTypeVisitor {
             type Value = StoreType;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
