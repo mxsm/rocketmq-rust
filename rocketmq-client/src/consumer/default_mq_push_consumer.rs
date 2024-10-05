@@ -575,11 +575,19 @@ impl MQPushConsumer for DefaultMQPushConsumer {
         todo!()
     }
 
-    async fn register_message_listener_orderly<ML>(&mut self, message_listener: ML)
+    fn register_message_listener_orderly<ML>(&mut self, message_listener: ML)
     where
-        ML: MessageListenerOrderly + Send + Sync,
+        ML: MessageListenerOrderly + Send + Sync + 'static,
     {
-        todo!()
+        let message_listener = MessageListener {
+            message_listener_concurrently: None,
+            message_listener_orderly: Some((Some(Arc::new(Box::new(message_listener))), None)),
+        };
+        self.consumer_config.message_listener = Some(ArcRefCellWrapper::new(message_listener));
+        self.default_mqpush_consumer_impl
+            .as_mut()
+            .unwrap()
+            .register_message_listener(self.consumer_config.message_listener.clone());
     }
 
     fn subscribe(&mut self, topic: &str, sub_expression: &str) -> crate::Result<()> {

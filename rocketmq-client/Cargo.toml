@@ -78,3 +78,7 @@ path = "examples/broadcast/push_consumer.rs"
 [[example]]
 name = "ordermessage-producer"
 path = "examples/ordermessage/ordermessage_producer.rs"
+
+[[example]]
+name = "ordermessage-consumer"
+path = "examples/ordermessage/ordermessage_consumer.rs"

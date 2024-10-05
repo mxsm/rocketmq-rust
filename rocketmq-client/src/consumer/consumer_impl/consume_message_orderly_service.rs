@@ -14,27 +14,411 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::time::Duration;
+use std::time::Instant;
 
+use once_cell::sync::Lazy;
 use rocketmq_common::common::message::message_client_ext::MessageClientExt;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_common::common::message::message_single::Message;
+use rocketmq_common::common::message::MessageConst;
+use rocketmq_common::common::message::MessageTrait;
+use rocketmq_common::common::mix_all;
 use rocketmq_common::ArcRefCellWrapper;
+use rocketmq_common::MessageAccessor::MessageAccessor;
+use rocketmq_common::WeakCellWrapper;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
+use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
+use rocketmq_runtime::RocketMQRuntime;
+use rocketmq_rust::RocketMQTokioMutex;
+use tracing::warn;
 
+use crate::base::client_config::ClientConfig;
 use crate::consumer::consumer_impl::consume_message_service::ConsumeMessageServiceTrait;
+use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
 use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
 use crate::consumer::consumer_impl::process_queue::ProcessQueue;
+use crate::consumer::consumer_impl::process_queue::REBALANCE_LOCK_INTERVAL;
+use crate::consumer::default_mq_push_consumer::ConsumerConfig;
+use crate::consumer::listener::consume_orderly_context::ConsumeOrderlyContext;
+use crate::consumer::listener::consume_orderly_status::ConsumeOrderlyStatus;
+use crate::consumer::listener::consume_return_type::ConsumeReturnType;
+use crate::consumer::listener::message_listener_orderly::ArcBoxMessageListenerOrderly;
+use crate::consumer::message_queue_lock::MessageQueueLock;
+use crate::consumer::mq_consumer_inner::MQConsumerInnerLocal;
+use crate::hook::consume_message_context::ConsumeMessageContext;
+use crate::producer::mq_producer::MQProducer;
 
-pub struct ConsumeMessageOrderlyService;
+static MAX_TIME_CONSUME_CONTINUOUSLY: Lazy<u64> = Lazy::new(|| {
+    std::env::var("rocketmq.client.maxTimeConsumeContinuously")
+        .unwrap_or("60000".to_string())
+        .parse()
+        .unwrap_or(60000)
+});
 
-impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
-    fn start(&mut self, this: ArcRefCellWrapper<Self>) {
-        todo!()
+pub struct ConsumeMessageOrderlyService {
+    pub(crate) default_mqpush_consumer_impl: Option<WeakCellWrapper<DefaultMQPushConsumerImpl>>,
+    pub(crate) client_config: ArcRefCellWrapper<ClientConfig>,
+    pub(crate) consumer_config: ArcRefCellWrapper<ConsumerConfig>,
+    pub(crate) consumer_group: Arc<String>,
+    pub(crate) message_listener: ArcBoxMessageListenerOrderly,
+    pub(crate) consume_runtime: RocketMQRuntime,
+    pub(crate) stopped: AtomicBool,
+    pub(crate) global_lock: Arc<RocketMQTokioMutex<()>>,
+    pub(crate) message_queue_lock: MessageQueueLock,
+}
+
+impl ConsumeMessageOrderlyService {
+    pub fn new(
+        client_config: ArcRefCellWrapper<ClientConfig>,
+        consumer_config: ArcRefCellWrapper<ConsumerConfig>,
+        consumer_group: String,
+        message_listener: ArcBoxMessageListenerOrderly,
+        default_mqpush_consumer_impl: Option<WeakCellWrapper<DefaultMQPushConsumerImpl>>,
+    ) -> Self {
+        let consume_thread = consumer_config.consume_thread_max;
+        let consumer_group_tag = format!("{}_{}", "ConsumeMessageThread_", consumer_group);
+        Self {
+            default_mqpush_consumer_impl,
+            client_config,
+            consumer_config,
+            consumer_group: Arc::new(consumer_group),
+            message_listener,
+            consume_runtime: RocketMQRuntime::new_multi(
+                consume_thread as usize,
+                consumer_group_tag.as_str(),
+            ),
+            stopped: AtomicBool::new(false),
+            global_lock: Arc::new(Default::default()),
+            message_queue_lock: Default::default(),
+        }
     }
 
-    fn shutdown(&mut self, await_terminate_millis: u64) {
-        unimplemented!("shutdown")
+    pub async fn lock_mqperiodically(&mut self) {
+        let lock = self.global_lock.lock().await;
+        if self.stopped.load(std::sync::atomic::Ordering::Acquire) {
+            return;
+        }
+        if let Some(mut default_mqpush_consumer_impl) = self
+            .default_mqpush_consumer_impl
+            .as_ref()
+            .unwrap()
+            .upgrade()
+        {
+            default_mqpush_consumer_impl
+                .rebalance_impl
+                .rebalance_impl_inner
+                .lock_all()
+                .await;
+        }
+        drop(lock);
+    }
+
+    pub async fn unlock_all_mq(&mut self) {
+        let lock = self.global_lock.lock().await;
+        if let Some(mut default_mqpush_consumer_impl) = self
+            .default_mqpush_consumer_impl
+            .as_ref()
+            .unwrap()
+            .upgrade()
+        {
+            default_mqpush_consumer_impl
+                .rebalance_impl
+                .rebalance_impl_inner
+                .unlock_all(false)
+                .await;
+        }
+        drop(lock);
+    }
+
+    pub async fn try_lock_later_and_reconsume(
+        &mut self,
+        consume_message_orderly_service: WeakCellWrapper<Self>,
+        message_queue: &MessageQueue,
+        process_queue: Arc<ProcessQueue>,
+        delay_mills: u64,
+    ) {
+        let consume_message_orderly_service_cloned = consume_message_orderly_service.clone();
+        let message_queue = message_queue.clone();
+        self.consume_runtime.get_handle().spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_millis(delay_mills)).await;
+            if let Some(mut consume_message_orderly_service) =
+                consume_message_orderly_service.upgrade()
+            {
+                if consume_message_orderly_service
+                    .lock_one_mq(&message_queue)
+                    .await
+                {
+                    consume_message_orderly_service.submit_consume_request_later(
+                        process_queue,
+                        message_queue.clone(),
+                        10,
+                        consume_message_orderly_service_cloned,
+                    );
+                } else {
+                    consume_message_orderly_service.submit_consume_request_later(
+                        process_queue,
+                        message_queue.clone(),
+                        3_000,
+                        consume_message_orderly_service_cloned,
+                    );
+                }
+            }
+        });
+    }
+
+    pub async fn lock_one_mq(&self, message_queue: &MessageQueue) -> bool {
+        if self.stopped.load(std::sync::atomic::Ordering::Acquire) {
+            return false;
+        }
+        if let Some(mut default_mqpush_consumer_impl) = self
+            .default_mqpush_consumer_impl
+            .as_ref()
+            .unwrap()
+            .upgrade()
+        {
+            return default_mqpush_consumer_impl
+                .rebalance_impl
+                .rebalance_impl_inner
+                .lock(message_queue)
+                .await;
+        }
+        false
+    }
+
+    fn submit_consume_request_later(
+        &mut self,
+        process_queue: Arc<ProcessQueue>,
+        message_queue: MessageQueue,
+        suspend_time_millis: i64,
+        this: WeakCellWrapper<Self>,
+    ) {
+        let mut time_millis = suspend_time_millis;
+        if time_millis == -1 {
+            time_millis = if let Some(default_mqpush_consumer_impl) = self
+                .default_mqpush_consumer_impl
+                .as_ref()
+                .unwrap()
+                .upgrade()
+            {
+                default_mqpush_consumer_impl
+                    .consumer_config
+                    .suspend_current_queue_time_millis as i64
+            } else {
+                10
+            };
+        }
+
+        time_millis = time_millis.clamp(10, 30000);
+
+        let delay = Duration::from_millis(time_millis as u64);
+
+        tokio::spawn(async move {
+            tokio::time::sleep(delay).await;
+            // Call the submit_consume_request function here
+            // ConsumeMessageOrderlyService::submit_consume_request(None, process_queue_clone,
+            // message_queue_clone, true).await;
+            let this_ = this.clone();
+            if let Some(this) = this.upgrade() {
+                this.submit_consume_request(this_, vec![], process_queue, message_queue, true)
+                    .await;
+            }
+        });
+    }
+
+    #[inline]
+    fn get_max_reconsume_times(&self) -> i32 {
+        if self.consumer_config.max_reconsume_times == -1 {
+            i32::MAX
+        } else {
+            self.consumer_config.max_reconsume_times
+        }
+    }
+
+    pub async fn send_message_back(&mut self, msg: &MessageExt) -> bool {
+        let mut new_msg = Message::new(
+            mix_all::get_retry_topic(self.consumer_group.as_str()),
+            msg.get_body().unwrap(),
+        );
+        MessageAccessor::set_properties(&mut new_msg, msg.get_properties().clone());
+        let origin_msg_id =
+            MessageAccessor::get_origin_message_id(msg).unwrap_or(msg.msg_id.clone());
+        MessageAccessor::set_origin_message_id(&mut new_msg, origin_msg_id.as_str());
+        new_msg.set_flag(msg.get_flag());
+        MessageAccessor::put_property(
+            &mut new_msg,
+            MessageConst::PROPERTY_RETRY_TOPIC,
+            msg.get_topic(),
+        );
+        MessageAccessor::set_reconsume_time(
+            &mut new_msg,
+            (msg.reconsume_times() + 1).to_string().as_str(),
+        );
+        MessageAccessor::set_max_reconsume_times(
+            &mut new_msg,
+            self.get_max_reconsume_times().to_string().as_str(),
+        );
+        MessageAccessor::clear_property(&mut new_msg, MessageConst::PROPERTY_TRANSACTION_PREPARED);
+        new_msg.set_delay_time_level(3 + msg.reconsume_times());
+        if let Some(mut default_mqpush_consumer_impl) = self
+            .default_mqpush_consumer_impl
+            .as_ref()
+            .unwrap()
+            .upgrade()
+        {
+            let result = default_mqpush_consumer_impl
+                .client_instance
+                .as_mut()
+                .unwrap()
+                .default_producer
+                .send(new_msg)
+                .await;
+            result.is_ok()
+        } else {
+            false
+        }
+    }
+
+    async fn check_reconsume_times(
+        &mut self,
+        msgs: &mut [ArcRefCellWrapper<MessageClientExt>],
+    ) -> bool {
+        let mut suspend = false;
+        if !msgs.is_empty() {
+            for msg in msgs {
+                let reconsume_times = msg.message_ext_inner.reconsume_times;
+                if reconsume_times >= self.get_max_reconsume_times() {
+                    MessageAccessor::set_reconsume_time(
+                        &mut msg.message_ext_inner,
+                        reconsume_times.to_string().as_ref(),
+                    );
+                    if !self.send_message_back(&msg.message_ext_inner).await {
+                        suspend = true;
+                        msg.message_ext_inner.reconsume_times = reconsume_times + 1;
+                    }
+                } else {
+                    suspend = true;
+                    msg.message_ext_inner.reconsume_times = reconsume_times + 1;
+                }
+            }
+        }
+        suspend
+    }
+
+    #[allow(deprecated)]
+    async fn process_consume_result(
+        &mut self,
+        mut msgs: Vec<ArcRefCellWrapper<MessageClientExt>>,
+        this: WeakCellWrapper<Self>,
+        status: ConsumeOrderlyStatus,
+        context: &ConsumeOrderlyContext,
+        consume_request: &mut ConsumeRequest,
+    ) -> bool {
+        let (continue_consume, commit_offset) = if context.is_auto_commit() {
+            match status {
+                ConsumeOrderlyStatus::Success
+                | ConsumeOrderlyStatus::Rollback
+                | ConsumeOrderlyStatus::Commit => {
+                    (true, consume_request.process_queue.commit().await)
+                }
+                ConsumeOrderlyStatus::SuspendCurrentQueueAMoment => {
+                    if self.check_reconsume_times(&mut msgs).await {
+                        consume_request
+                            .process_queue
+                            .make_message_to_consume_again(&msgs)
+                            .await;
+                        self.submit_consume_request_later(
+                            consume_request.process_queue.clone(),
+                            consume_request.message_queue.clone(),
+                            context.get_suspend_current_queue_time_millis(),
+                            this,
+                        );
+                        (false, -1)
+                    } else {
+                        (true, consume_request.process_queue.commit().await)
+                    }
+                }
+            }
+        } else {
+            match status {
+                ConsumeOrderlyStatus::Success => (true, -1),
+                ConsumeOrderlyStatus::Rollback => {
+                    (true, consume_request.process_queue.commit().await)
+                }
+                ConsumeOrderlyStatus::Commit => {
+                    consume_request.process_queue.rollback().await;
+                    self.submit_consume_request_later(
+                        consume_request.process_queue.clone(),
+                        consume_request.message_queue.clone(),
+                        context.get_suspend_current_queue_time_millis(),
+                        this,
+                    );
+                    (false, -1)
+                }
+                ConsumeOrderlyStatus::SuspendCurrentQueueAMoment => {
+                    if self.check_reconsume_times(&mut msgs).await {
+                        consume_request
+                            .process_queue
+                            .make_message_to_consume_again(&msgs)
+                            .await;
+                        self.submit_consume_request_later(
+                            consume_request.process_queue.clone(),
+                            consume_request.message_queue.clone(),
+                            context.get_suspend_current_queue_time_millis(),
+                            this,
+                        );
+                        (false, -1)
+                    } else {
+                        (true, -1)
+                    }
+                }
+            }
+        };
+
+        if commit_offset >= 0 && consume_request.process_queue.is_dropped() {
+            if let Some(mut default_mqpush_consumer_impl) = self
+                .default_mqpush_consumer_impl
+                .as_ref()
+                .unwrap()
+                .upgrade()
+            {
+                default_mqpush_consumer_impl
+                    .offset_store
+                    .as_mut()
+                    .unwrap()
+                    .update_offset(&consume_request.message_queue, commit_offset, false)
+                    .await;
+            }
+        }
+        continue_consume
+    }
+}
+
+impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
+    fn start(&mut self, this: WeakCellWrapper<Self>) {
+        if MessageModel::Clustering == self.consumer_config.message_model {
+            self.consume_runtime.get_handle().spawn(async move {
+                tokio::time::sleep(tokio::time::Duration::from_millis(1_000)).await;
+                loop {
+                    if let Some(mut this) = this.upgrade() {
+                        this.lock_mqperiodically().await;
+                        tokio::time::sleep(tokio::time::Duration::from_millis(
+                            *REBALANCE_LOCK_INTERVAL,
+                        ))
+                        .await;
+                    }
+                }
+            });
+        }
+    }
+
+    async fn shutdown(&mut self, await_terminate_millis: u64) {
+        if MessageModel::Clustering == self.consumer_config.message_model {
+            self.unlock_all_mq().await;
+        }
     }
 
     fn update_core_pool_size(&self, core_pool_size: usize) {
@@ -63,13 +447,24 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
 
     async fn submit_consume_request(
         &self,
-        this: ArcRefCellWrapper<Self>,
+        this: WeakCellWrapper<Self>,
         msgs: Vec<ArcRefCellWrapper<MessageClientExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
         dispatch_to_consume: bool,
     ) {
-        todo!()
+        if !dispatch_to_consume {
+            return;
+        }
+        let mut consume_request = ConsumeRequest {
+            process_queue,
+            message_queue,
+            default_mqpush_consumer_impl: self.default_mqpush_consumer_impl.clone(),
+            consumer_group: self.consumer_group.clone(),
+        };
+        self.consume_runtime.get_handle().spawn(async move {
+            consume_request.run(this).await;
+        });
     }
 
     async fn submit_pop_consume_request(
@@ -79,5 +474,250 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
         message_queue: &MessageQueue,
     ) {
         todo!()
+    }
+}
+
+struct ConsumeRequest {
+    process_queue: Arc<ProcessQueue>,
+    message_queue: MessageQueue,
+    default_mqpush_consumer_impl: Option<WeakCellWrapper<DefaultMQPushConsumerImpl>>,
+    consumer_group: Arc<String>,
+}
+
+impl ConsumeRequest {
+    #[allow(deprecated)]
+    async fn run(
+        &mut self,
+        consume_message_orderly_service: WeakCellWrapper<ConsumeMessageOrderlyService>,
+    ) {
+        if self.process_queue.is_dropped() {
+            warn!(
+                "run, the message queue not be able to consume, because it's dropped. {}",
+                self.message_queue
+            );
+            return;
+        }
+        let consume_message_orderly_service_op = consume_message_orderly_service.upgrade();
+        if consume_message_orderly_service_op.is_none() {
+            warn!("run, consume_message_concurrently_service is none.");
+            return;
+        }
+        let mut consume_message_orderly_service_inner = consume_message_orderly_service_op.unwrap();
+        let lock = consume_message_orderly_service_inner
+            .message_queue_lock
+            .fetch_lock_object(&self.message_queue)
+            .await;
+        let locked = lock.lock().await;
+        let default_mqpush_consumer_impl_op = self
+            .default_mqpush_consumer_impl
+            .as_mut()
+            .unwrap()
+            .upgrade();
+        if default_mqpush_consumer_impl_op.is_none() {
+            warn!("run, default_mqpush_consumer_impl is none.");
+            return;
+        }
+        let mut default_mqpush_consumer_impl = default_mqpush_consumer_impl_op.unwrap();
+        if MessageModel::Broadcasting == default_mqpush_consumer_impl.message_model()
+            || self.process_queue.is_locked() && !self.process_queue.is_lock_expired()
+        {
+            let begin_time = Instant::now();
+            loop {
+                if self.process_queue.is_dropped() {
+                    warn!(
+                        "the message queue not be able to consume, because it's dropped. {}",
+                        self.message_queue
+                    );
+                    break;
+                }
+                if MessageModel::Clustering == default_mqpush_consumer_impl.message_model()
+                    && !self.process_queue.is_locked()
+                {
+                    warn!(
+                        "the message queue not be able to consume, because it's not locked. {}",
+                        self.message_queue
+                    );
+                    consume_message_orderly_service_inner
+                        .try_lock_later_and_reconsume(
+                            consume_message_orderly_service.clone(),
+                            &self.message_queue,
+                            self.process_queue.clone(),
+                            10,
+                        )
+                        .await;
+                    break;
+                }
+
+                if MessageModel::Clustering == default_mqpush_consumer_impl.message_model()
+                    && self.process_queue.is_lock_expired()
+                {
+                    warn!(
+                        "the message queue lock expired, so consume later {}",
+                        self.message_queue
+                    );
+                    consume_message_orderly_service_inner
+                        .try_lock_later_and_reconsume(
+                            consume_message_orderly_service.clone(),
+                            &self.message_queue,
+                            self.process_queue.clone(),
+                            10,
+                        )
+                        .await;
+                    break;
+                }
+                let interval = begin_time.elapsed().as_millis() as u64;
+                if interval > *MAX_TIME_CONSUME_CONTINUOUSLY {
+                    consume_message_orderly_service_inner
+                        .try_lock_later_and_reconsume(
+                            consume_message_orderly_service.clone(),
+                            &self.message_queue,
+                            self.process_queue.clone(),
+                            10,
+                        )
+                        .await;
+                    break;
+                }
+                let consume_batch_size = consume_message_orderly_service_inner
+                    .consumer_config
+                    .consume_message_batch_max_size;
+                let mut msgs = self.process_queue.take_messages(consume_batch_size).await;
+                default_mqpush_consumer_impl.reset_retry_and_namespace(
+                    &mut msgs,
+                    consume_message_orderly_service_inner
+                        .consumer_group
+                        .as_ref(),
+                );
+                if msgs.is_empty() {
+                    break;
+                }
+                let mut context = ConsumeOrderlyContext::new(self.message_queue.clone());
+                let mut consume_message_context = None;
+                let mut status = None;
+                if default_mqpush_consumer_impl.has_hook() {
+                    let queue = self.message_queue.clone();
+                    consume_message_context = Some(ConsumeMessageContext {
+                        consumer_group: self.consumer_group.as_ref().clone(),
+                        msg_list: &msgs,
+                        mq: Some(queue),
+                        success: false,
+                        status: "".to_string(),
+                        mq_trace_context: None,
+                        props: Default::default(),
+                        namespace: default_mqpush_consumer_impl
+                            .client_config
+                            .get_namespace()
+                            .unwrap_or("".to_string()),
+                        access_channel: Default::default(),
+                    });
+                    default_mqpush_consumer_impl.execute_hook_before(&mut consume_message_context);
+                }
+                let begin_timestamp = Instant::now();
+                let mut return_type = ConsumeReturnType::Success;
+                let mut has_exception = false;
+                let consume_lock = self.process_queue.consume_lock.write().await;
+                if self.process_queue.is_dropped() {
+                    warn!(
+                        "consumeMessage, the message queue not be able to consume, because it's \
+                         dropped. {}",
+                        self.message_queue
+                    );
+                    break;
+                }
+                let vec = msgs
+                    .iter()
+                    .map(|msg| &msg.message_ext_inner)
+                    .collect::<Vec<&MessageExt>>();
+
+                match consume_message_orderly_service_inner
+                    .message_listener
+                    .consume_message(&vec, &mut context)
+                {
+                    Ok(value) => {
+                        status = Some(value);
+                    }
+                    Err(_) => {
+                        has_exception = true;
+                    }
+                }
+                drop(consume_lock);
+                if status.is_none()
+                    || *status.as_ref().unwrap() == ConsumeOrderlyStatus::Rollback
+                    || *status.as_ref().unwrap() == ConsumeOrderlyStatus::SuspendCurrentQueueAMoment
+                {
+                    warn!(
+                        "consumeMessage Orderly return not OK, Group: {} Msgs: {} MQ: {}",
+                        self.consumer_group.as_ref(),
+                        msgs.len(),
+                        self.message_queue,
+                    );
+                }
+                let consume_rt = begin_timestamp.elapsed().as_millis() as u64;
+                if status.is_none() {
+                    if has_exception {
+                        return_type = ConsumeReturnType::Exception;
+                    } else {
+                        return_type = ConsumeReturnType::ReturnNull;
+                    }
+                } else if consume_rt
+                    >= default_mqpush_consumer_impl.consumer_config.consume_timeout * 60 * 1000
+                {
+                    return_type = ConsumeReturnType::TimeOut;
+                } else if *status.as_ref().unwrap()
+                    == ConsumeOrderlyStatus::SuspendCurrentQueueAMoment
+                {
+                    return_type = ConsumeReturnType::Failed;
+                } else if *status.as_ref().unwrap() == ConsumeOrderlyStatus::Success {
+                    return_type = ConsumeReturnType::Success;
+                }
+                if default_mqpush_consumer_impl.has_hook() {
+                    consume_message_context.as_mut().unwrap().props.insert(
+                        mix_all::CONSUME_CONTEXT_TYPE.to_string(),
+                        return_type.to_string(),
+                    );
+                }
+                if status.is_none() {
+                    status = Some(ConsumeOrderlyStatus::SuspendCurrentQueueAMoment);
+                }
+                if default_mqpush_consumer_impl.has_hook() {
+                    let status = *status.as_ref().unwrap();
+                    consume_message_context.as_mut().unwrap().success = status
+                        == ConsumeOrderlyStatus::Success
+                        || status == ConsumeOrderlyStatus::Commit;
+                    consume_message_context.as_mut().unwrap().status = status.to_string();
+                    default_mqpush_consumer_impl.execute_hook_after(&mut consume_message_context);
+                }
+                let continue_consume = consume_message_orderly_service_inner
+                    .process_consume_result(
+                        msgs,
+                        consume_message_orderly_service.clone(),
+                        status.unwrap(),
+                        &context,
+                        self,
+                    )
+                    .await;
+                if !continue_consume {
+                    break;
+                }
+            }
+        } else {
+            if self.process_queue.is_dropped() {
+                warn!(
+                    "the message queue not be able to consume, because it's dropped. {}",
+                    self.message_queue
+                );
+                return;
+            }
+            let consume_message_orderly_service_weak =
+                ArcRefCellWrapper::downgrade(&consume_message_orderly_service_inner);
+            consume_message_orderly_service_inner
+                .try_lock_later_and_reconsume(
+                    consume_message_orderly_service_weak,
+                    &self.message_queue,
+                    self.process_queue.clone(),
+                    100,
+                )
+                .await;
+        }
+        drop(locked);
     }
 }

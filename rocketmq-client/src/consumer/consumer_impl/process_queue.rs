@@ -19,6 +19,7 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Instant;
 
 use once_cell::sync::Lazy;
 use rocketmq_common::common::message::message_client_ext::MessageClientExt;
@@ -36,14 +37,14 @@ use tokio::sync::RwLock;
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
 use crate::consumer::consumer_impl::PULL_MAX_IDLE_TIME;
 
-static REBALANCE_LOCK_MAX_LIVE_TIME: Lazy<u64> = Lazy::new(|| {
+pub static REBALANCE_LOCK_MAX_LIVE_TIME: Lazy<u64> = Lazy::new(|| {
     std::env::var("rocketmq.client.rebalance.lockMaxLiveTime")
         .unwrap_or_else(|_| "30000".into())
         .parse()
         .unwrap_or(30000)
 });
 
-static REBALANCE_LOCK_INTERVAL: Lazy<u64> = Lazy::new(|| {
+pub static REBALANCE_LOCK_INTERVAL: Lazy<u64> = Lazy::new(|| {
     std::env::var("rocketmq.client.rebalance.lockInterval")
         .unwrap_or_else(|_| "20000".into())
         .parse()
@@ -280,28 +281,85 @@ impl ProcessQueue {
         result
     }
 
-    pub(crate) fn rollback(&self) {
-        unimplemented!("rollback")
+    pub(crate) async fn rollback(&self) {
+        let mut msg_tree_map = self.msg_tree_map.write().await;
+        let mut consuming_msg_orderly_tree_map = self.consuming_msg_orderly_tree_map.write().await;
+        consuming_msg_orderly_tree_map.iter().for_each(|(k, v)| {
+            msg_tree_map.insert(*k, v.clone());
+        });
+        consuming_msg_orderly_tree_map.clear();
     }
 
-    pub(crate) fn commit(&self) -> u64 {
-        unimplemented!("commit")
+    pub(crate) async fn commit(&self) -> i64 {
+        let mut consuming_msg_orderly_tree_map = self.consuming_msg_orderly_tree_map.write().await;
+        let key_value = consuming_msg_orderly_tree_map.last_key_value();
+        let offset = if let Some((key, _)) = key_value {
+            *key + 1
+        } else {
+            -1
+        };
+        self.msg_count.fetch_sub(
+            consuming_msg_orderly_tree_map.len() as u64,
+            Ordering::AcqRel,
+        );
+        if self.msg_count.load(Ordering::Acquire) == 0 {
+            self.msg_size.store(0, Ordering::Release);
+        } else {
+            for message in consuming_msg_orderly_tree_map.values() {
+                self.msg_size.fetch_sub(
+                    message.message_ext_inner.body().as_ref().unwrap().len() as u64,
+                    Ordering::AcqRel,
+                );
+            }
+        }
+        consuming_msg_orderly_tree_map.clear();
+        offset
     }
 
-    pub(crate) fn make_message_to_consume_again(&self, messages: Vec<MessageExt>) {
-        unimplemented!("make_message_to_consume_again")
+    pub(crate) async fn make_message_to_consume_again(
+        &self,
+        messages: &[ArcRefCellWrapper<MessageClientExt>],
+    ) {
+        let mut consuming_msg_orderly_tree_map = self.consuming_msg_orderly_tree_map.write().await;
+        let mut msg_tree_map = self.msg_tree_map.write().await;
+        for message in messages {
+            consuming_msg_orderly_tree_map.remove(&message.message_ext_inner.queue_offset);
+            msg_tree_map.insert(message.message_ext_inner.queue_offset, message.clone());
+        }
     }
 
-    pub(crate) fn take_messages(&self, batch_size: u32) -> Vec<MessageExt> {
-        unimplemented!("take_messages")
+    pub(crate) async fn take_messages(
+        &self,
+        batch_size: u32,
+    ) -> Vec<ArcRefCellWrapper<MessageClientExt>> {
+        let mut messages = Vec::with_capacity(batch_size as usize);
+        let now = Instant::now();
+        let mut msg_tree_map = self.msg_tree_map.write().await;
+        if !msg_tree_map.is_empty() {
+            for _ in 0..batch_size {
+                if let Some((_, message)) = msg_tree_map.pop_first() {
+                    messages.push(message);
+                } else {
+                    break;
+                }
+            }
+        }
+        messages
     }
 
-    pub(crate) fn contains_message(&self, message_ext: &MessageExt) -> bool {
-        unimplemented!("contains_message")
+    pub(crate) async fn contains_message(&self, message_ext: &MessageExt) -> bool {
+        let msg_tree_map = self.msg_tree_map.read().await;
+        msg_tree_map.contains_key(&message_ext.queue_offset)
     }
 
-    pub(crate) fn clear(&self) {
-        unimplemented!("clear")
+    pub(crate) async fn clear(&self) {
+        let lock = self.tree_map_lock.write().await;
+        self.msg_tree_map.write().await.clear();
+        self.consuming_msg_orderly_tree_map.write().await.clear();
+        self.msg_count.store(0, Ordering::Release);
+        self.msg_size.store(0, Ordering::Release);
+        self.queue_offset_max.store(0, Ordering::Release);
+        drop(lock);
     }
 
     pub(crate) fn fill_process_queue_info(&self, info: ProcessQueueInfo) {

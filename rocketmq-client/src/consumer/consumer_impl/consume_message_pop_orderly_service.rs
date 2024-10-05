@@ -20,6 +20,7 @@ use rocketmq_common::common::message::message_client_ext::MessageClientExt;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::ArcRefCellWrapper;
+use rocketmq_common::WeakCellWrapper;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 
 use crate::consumer::consumer_impl::consume_message_service::ConsumeMessageServiceTrait;
@@ -29,11 +30,9 @@ use crate::consumer::consumer_impl::process_queue::ProcessQueue;
 pub struct ConsumeMessagePopOrderlyService;
 
 impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
-    fn start(&mut self, this: ArcRefCellWrapper<Self>) {
-        todo!()
-    }
+    fn start(&mut self, this: WeakCellWrapper<Self>) {}
 
-    fn shutdown(&mut self, await_terminate_millis: u64) {
+    async fn shutdown(&mut self, await_terminate_millis: u64) {
         todo!()
     }
 
@@ -63,7 +62,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
 
     async fn submit_consume_request(
         &self,
-        this: ArcRefCellWrapper<Self>,
+        this: WeakCellWrapper<Self>,
         msgs: Vec<ArcRefCellWrapper<MessageClientExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,

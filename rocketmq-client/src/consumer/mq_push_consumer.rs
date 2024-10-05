@@ -75,9 +75,9 @@ pub trait MQPushConsumerLocal: MQConsumer {
             + Send
             + Sync;
 
-    async fn register_message_listener_orderly<ML>(&mut self, message_listener: ML)
+    fn register_message_listener_orderly<ML>(&mut self, message_listener: ML)
     where
-        ML: MessageListenerOrderly + Send + Sync;
+        ML: MessageListenerOrderly + Send + Sync + 'static;
 
     /// Subscribes to a topic with a subscription expression.
     ///
