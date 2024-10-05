@@ -20,6 +20,7 @@ pub mod default_mq_push_consumer;
 pub mod default_mq_push_consumer_builder;
 pub mod listener;
 pub mod message_queue_listener;
+pub(crate) mod message_queue_lock;
 pub mod message_selector;
 pub mod mq_consumer;
 pub(crate) mod mq_consumer_inner;

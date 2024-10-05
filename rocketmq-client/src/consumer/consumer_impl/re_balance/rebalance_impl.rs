@@ -17,7 +17,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::ops::DerefMut;
+use std::ops::Deref;
 use std::sync::Arc;
 
 use rocketmq_common::common::message::message_queue::MessageQueue;
@@ -26,6 +26,7 @@ use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_common::WeakCellWrapper;
 use rocketmq_remoting::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
+use rocketmq_remoting::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
@@ -239,7 +240,7 @@ where
         let mut process_queue_table = process_queue_table_cloned.write().await;
         for mq in mq_set {
             if !process_queue_table.contains_key(mq) {
-                if is_order && !self.lock(mq, process_queue_table.deref_mut()).await {
+                if is_order && !self.lock_with(mq, process_queue_table.deref()).await {
                     warn!(
                         "doRebalance, {:?}, add a new mq failed, {}, because lock failed",
                         self.consumer_group,
@@ -447,10 +448,17 @@ where
         queue_set
     }
 
-    pub async fn lock(
+    pub async fn lock(&mut self, mq: &MessageQueue) -> bool {
+        let process_queue_table_ = self.process_queue_table.clone();
+        let process_queue_table = process_queue_table_.read().await;
+        let table = process_queue_table.deref();
+        self.lock_with(mq, table).await
+    }
+
+    pub async fn lock_with(
         &mut self,
         mq: &MessageQueue,
-        process_queue_table: &mut HashMap<MessageQueue, Arc<ProcessQueue>>,
+        process_queue_table: &HashMap<MessageQueue, Arc<ProcessQueue>>,
     ) -> bool {
         let client = self.client_instance.as_mut().unwrap();
         let broker_name = client.get_broker_name_from_message_queue(mq).await;
@@ -618,6 +626,55 @@ where
                 }
             }
         }*/
+    }
+
+    pub async fn unlock_all(&mut self, oneway: bool) {
+        let broker_mqs = self.build_process_queue_table_by_broker_name().await;
+        for (broker_name, mqs) in broker_mqs {
+            if mqs.is_empty() {
+                continue;
+            }
+            let client = self.client_instance.as_mut().unwrap();
+            let find_broker_result = client
+                .find_broker_address_in_subscribe(broker_name.as_str(), mix_all::MASTER_ID, true)
+                .await;
+            if let Some(find_broker_result) = find_broker_result {
+                let request_body = UnlockBatchRequestBody {
+                    consumer_group: Some(self.consumer_group.clone().unwrap()),
+                    client_id: Some(client.client_id.clone()),
+                    mq_set: mqs.clone(),
+                    ..Default::default()
+                };
+                let result = client
+                    .mq_client_api_impl
+                    .as_mut()
+                    .unwrap()
+                    .unlock_batch_mq(
+                        find_broker_result.broker_addr.as_str(),
+                        request_body,
+                        1_000,
+                        oneway,
+                    )
+                    .await;
+                match result {
+                    Ok(_) => {
+                        let process_queue_table = self.process_queue_table.read().await;
+                        for mq in &mqs {
+                            if let Some(pq) = process_queue_table.get(mq) {
+                                pq.set_locked(false);
+                                info!(
+                                    "the message queue unlock OK, Group: {:?} {}",
+                                    self.consumer_group, mq
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("unlockBatchMQ exception {}", e);
+                    }
+                }
+            }
+        }
     }
 
     async fn build_process_queue_table_by_broker_name(

@@ -103,7 +103,7 @@ impl ConsumeMessageConcurrentlyService {
 
     async fn process_consume_result(
         &mut self,
-        this: ArcRefCellWrapper<Self>,
+        this: WeakCellWrapper<Self>,
         status: ConsumeConcurrentlyStatus,
         context: &ConsumeConcurrentlyContext,
         consume_request: &mut ConsumeRequest,
@@ -138,6 +138,7 @@ impl ConsumeMessageConcurrentlyService {
                     if !consume_request
                         .process_queue
                         .contains_message(&msg.message_ext_inner)
+                        .await
                     {
                         /*info!("Message is not found in its process queue; skip send-back-procedure, topic={}, "
                             + "brokerName={}, queueId={}, queueOffset={}", msg.get_topic(), msg.get_broker_name(),
@@ -191,15 +192,17 @@ impl ConsumeMessageConcurrentlyService {
     fn submit_consume_request_later(
         &self,
         msgs: Vec<ArcRefCellWrapper<MessageClientExt>>,
-        this: ArcRefCellWrapper<Self>,
+        this: WeakCellWrapper<Self>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
     ) {
         self.consume_runtime.get_handle().spawn(async move {
             tokio::time::sleep(Duration::from_secs(5)).await;
             let this_ = this.clone();
-            this.submit_consume_request(this_, msgs, process_queue, message_queue, true)
-                .await;
+            if let Some(this) = this.upgrade() {
+                this.submit_consume_request(this_, msgs, process_queue, message_queue, true)
+                    .await;
+            }
         });
     }
 
@@ -232,19 +235,21 @@ impl ConsumeMessageConcurrentlyService {
 }
 
 impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
-    fn start(&mut self, mut this: ArcRefCellWrapper<Self>) {
+    fn start(&mut self, this: WeakCellWrapper<Self>) {
         self.consume_runtime.get_handle().spawn(async move {
-            let timeout = this.consumer_config.consume_timeout;
-            let mut interval = tokio::time::interval(Duration::from_secs(timeout * 60));
-            interval.tick().await;
-            loop {
+            if let Some(mut this) = this.upgrade() {
+                let timeout = this.consumer_config.consume_timeout;
+                let mut interval = tokio::time::interval(Duration::from_secs(timeout * 60));
                 interval.tick().await;
-                this.clean_expire_msg().await;
+                loop {
+                    interval.tick().await;
+                    this.clean_expire_msg().await;
+                }
             }
         });
     }
 
-    fn shutdown(&mut self, await_terminate_millis: u64) {
+    async fn shutdown(&mut self, await_terminate_millis: u64) {
         // todo!()
     }
 
@@ -274,7 +279,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
 
     async fn submit_consume_request(
         &self,
-        this: ArcRefCellWrapper<Self>,
+        this: WeakCellWrapper<Self>,
         msgs: Vec<ArcRefCellWrapper<MessageClientExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
@@ -341,9 +346,7 @@ struct ConsumeRequest {
 impl ConsumeRequest {
     async fn run(
         &mut self,
-        mut consume_message_concurrently_service: ArcRefCellWrapper<
-            ConsumeMessageConcurrentlyService,
-        >,
+        consume_message_concurrently_service: WeakCellWrapper<ConsumeMessageConcurrentlyService>,
     ) {
         if self.process_queue.is_dropped() {
             info!(
@@ -465,9 +468,11 @@ impl ConsumeRequest {
             );
         } else {
             let this = consume_message_concurrently_service.clone();
-            consume_message_concurrently_service
-                .process_consume_result(this, status.unwrap(), &context, self)
-                .await;
+            if let Some(mut consume_message_concurrently_service) = this.upgrade() {
+                consume_message_concurrently_service
+                    .process_consume_result(this, status.unwrap(), &context, self)
+                    .await;
+            }
         }
     }
 }

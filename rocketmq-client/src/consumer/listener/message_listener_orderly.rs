@@ -25,8 +25,8 @@ use crate::Result;
 pub trait MessageListenerOrderly: Sync + Send {
     fn consume_message(
         &self,
-        msgs: Vec<MessageExt>,
-        context: ConsumeOrderlyContext,
+        msgs: &[&MessageExt],
+        context: &mut ConsumeOrderlyContext,
     ) -> Result<ConsumeOrderlyStatus>;
 }
 

@@ -908,7 +908,6 @@ impl MQClientAPIImpl {
         {
             Ok(response) => {
                 let result = self.process_pull_response(response, addr).await;
-
                 match result {
                     Ok(pull_result) => {
                         pull_callback.on_success(pull_result).await;
