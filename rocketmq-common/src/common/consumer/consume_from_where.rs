@@ -104,7 +104,7 @@ impl<'de> Deserialize<'de> for ConsumeFromWhere {
     {
         struct ConsumeFromWhereVisitor;
 
-        impl<'de> serde::de::Visitor<'de> for ConsumeFromWhereVisitor {
+        impl serde::de::Visitor<'_> for ConsumeFromWhereVisitor {
             type Value = ConsumeFromWhere;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {

@@ -44,7 +44,7 @@ impl<'de> Deserialize<'de> for BrokerRole {
     {
         struct BrokerRoleVisitor;
 
-        impl<'de> serde::de::Visitor<'de> for BrokerRoleVisitor {
+        impl serde::de::Visitor<'_> for BrokerRoleVisitor {
             type Value = BrokerRole;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {

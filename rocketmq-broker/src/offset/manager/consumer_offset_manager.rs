@@ -326,7 +326,7 @@ impl<'de> Deserialize<'de> for ConsumerOffsetWrapper {
             fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Field, D::Error> {
                 struct FieldVisitor;
 
-                impl<'de> Visitor<'de> for FieldVisitor {
+                impl Visitor<'_> for FieldVisitor {
                     type Value = Field;
 
                     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {

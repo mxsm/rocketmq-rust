@@ -51,7 +51,7 @@ impl<'de> Deserialize<'de> for LocalTransactionState {
     {
         struct StoreTypeVisitor;
 
-        impl<'de> serde::de::Visitor<'de> for StoreTypeVisitor {
+        impl serde::de::Visitor<'_> for StoreTypeVisitor {
             type Value = LocalTransactionState;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {

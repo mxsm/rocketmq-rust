@@ -62,7 +62,7 @@ impl<'de> Deserialize<'de> for ConsumeType {
     {
         struct ConsumeTypeVisitor;
 
-        impl<'de> serde::de::Visitor<'de> for ConsumeTypeVisitor {
+        impl serde::de::Visitor<'_> for ConsumeTypeVisitor {
             type Value = ConsumeType;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
