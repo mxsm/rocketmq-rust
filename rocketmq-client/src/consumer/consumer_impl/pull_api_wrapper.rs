@@ -142,7 +142,7 @@ impl PullAPIWrapper {
                 }
                 msg_vec = inner_msg_vec;
             }
-
+            // filter message
             let mut msg_list_filter_again =
                 if !subscription_data.tags_set.is_empty() && !subscription_data.class_filter_mode {
                     let mut msg_vec_again = Vec::with_capacity(msg_vec.len());
@@ -219,6 +219,29 @@ impl PullAPIWrapper {
         }
     }
 
+    /// Pulls messages from the broker asynchronously.
+    ///
+    /// # Arguments
+    ///
+    /// * `mq` - A reference to the `MessageQueue` from which to pull messages.
+    /// * `sub_expression` - The subscription expression.
+    /// * `expression_type` - The type of the subscription expression.
+    /// * `sub_version` - The version of the subscription.
+    /// * `offset` - The offset from which to start pulling messages.
+    /// * `max_nums` - The maximum number of messages to pull.
+    /// * `max_size_in_bytes` - The maximum size of messages to pull in bytes.
+    /// * `sys_flag` - The system flag for the pull request.
+    /// * `commit_offset` - The commit offset.
+    /// * `broker_suspend_max_time_millis` - The maximum time in milliseconds for which the broker
+    ///   can suspend the pull request.
+    /// * `timeout_millis` - The timeout for the pull request in milliseconds.
+    /// * `communication_mode` - The communication mode (e.g., sync, async).
+    /// * `pull_callback` - The callback to execute when the pull request completes.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing an `Option` with the `PullResultExt` if successful, or an
+    /// `MQClientError` if an error occurs.
     pub async fn pull_kernel_impl<PCB>(
         &mut self,
         mq: &MessageQueue,

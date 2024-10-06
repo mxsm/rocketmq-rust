@@ -62,6 +62,7 @@ pub struct ConsumerConfig {
     pub(crate) consume_from_where: ConsumeFromWhere,
     pub(crate) consume_timestamp: Option<String>,
     pub(crate) allocate_message_queue_strategy: Option<Arc<dyn AllocateMessageQueueStrategy>>,
+    //this field will be removed in a certain version after April 5, 2020
     pub(crate) subscription: ArcRefCellWrapper<HashMap<String, String>>,
     pub(crate) message_listener: Option<ArcRefCellWrapper<MessageListener>>,
     pub(crate) message_queue_listener: Option<Arc<Box<dyn MessageQueueListener>>>,
@@ -243,6 +244,10 @@ impl ConsumerConfig {
         self.allocate_message_queue_strategy = Some(allocate_message_queue_strategy);
     }
 
+    /**
+     * This method will be removed in a certain version after April 5, 2020, so please do not
+     * use this method.
+     */
     pub fn set_subscription(&mut self, subscription: ArcRefCellWrapper<HashMap<String, String>>) {
         self.subscription = subscription;
     }
@@ -414,7 +419,6 @@ impl Default for ConsumerConfig {
     }
 }
 
-#[derive(Clone)]
 pub struct DefaultMQPushConsumer {
     client_config: ClientConfig,
     consumer_config: ArcRefCellWrapper<ConsumerConfig>,

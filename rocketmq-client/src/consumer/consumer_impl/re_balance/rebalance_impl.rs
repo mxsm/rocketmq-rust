@@ -94,10 +94,7 @@ where
         let mut balanced = true;
         let sub_table = self.subscription_inner.read().await;
         if !sub_table.is_empty() {
-            let topics = sub_table
-                .keys()
-                .map(|item| item.to_string())
-                .collect::<HashSet<String>>();
+            let topics = sub_table.keys().cloned().collect::<HashSet<String>>();
             drop(sub_table);
             for topic in &topics {
                 //try_query_assignment unimplemented

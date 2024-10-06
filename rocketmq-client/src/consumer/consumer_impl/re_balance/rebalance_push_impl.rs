@@ -112,6 +112,7 @@ impl RebalancePushImpl {
         self.rebalance_impl_inner.client_instance = Some(client_instance);
     }
 
+    #[inline]
     pub async fn put_subscription_data(
         &mut self,
         topic: &str,
