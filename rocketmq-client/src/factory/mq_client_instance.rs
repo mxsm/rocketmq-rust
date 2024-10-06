@@ -282,12 +282,16 @@ impl MQClientInstance {
                 if self.client_config.namesrv_addr.is_none() {
                     self.mq_client_api_impl
                         .as_mut()
-                        .unwrap()
+                        .expect("mq_client_api_impl is None")
                         .fetch_name_server_addr()
                         .await;
                 }
                 // Start request-response channel
-                self.mq_client_api_impl.as_mut().unwrap().start().await;
+                self.mq_client_api_impl
+                    .as_mut()
+                    .expect("mq_client_api_impl is None")
+                    .start()
+                    .await;
                 // Start various schedule tasks
                 self.start_scheduled_task(this.clone());
                 // Start pull service
@@ -337,6 +341,7 @@ impl MQClientInstance {
 
     fn start_scheduled_task(&mut self, this: ArcRefCellWrapper<Self>) {
         if self.client_config.namesrv_addr.is_none() {
+            // Fetch name server address
             let mut mq_client_api_impl = self.mq_client_api_impl.as_ref().unwrap().clone();
             self.instance_runtime.get_handle().spawn(async move {
                 info!("ScheduledTask fetchNameServerAddr started");
@@ -352,6 +357,7 @@ impl MQClientInstance {
             });
         }
 
+        // Update topic route info from name server
         let mut client_instance = this.clone();
         let poll_name_server_interval = self.client_config.poll_name_server_interval;
         self.instance_runtime.get_handle().spawn(async move {
@@ -370,6 +376,7 @@ impl MQClientInstance {
             }
         });
 
+        // Clean offline broker and send heartbeat to all broker
         let mut client_instance = this.clone();
         let heartbeat_broker_interval = self.client_config.heartbeat_broker_interval;
         self.instance_runtime.get_handle().spawn(async move {
@@ -389,6 +396,7 @@ impl MQClientInstance {
             }
         });
 
+        // Persist all consumer offset
         let mut client_instance = this;
         let persist_consumer_offset_interval =
             self.client_config.persist_consumer_offset_interval as u64;

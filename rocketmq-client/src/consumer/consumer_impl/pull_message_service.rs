@@ -14,86 +14,79 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_common::ArcRefCellWrapper;
 use tracing::info;
 use tracing::warn;
 
+use crate::consumer::consumer_impl::message_request::MessageRequest;
 use crate::consumer::consumer_impl::pop_request::PopRequest;
 use crate::consumer::consumer_impl::pull_request::PullRequest;
 use crate::factory::mq_client_instance::MQClientInstance;
 
 #[derive(Clone)]
 pub struct PullMessageService {
-    pop_tx: Option<tokio::sync::mpsc::Sender<PopRequest>>,
-    pull_tx: Option<tokio::sync::mpsc::Sender<PullRequest>>,
+    tx: Option<tokio::sync::mpsc::Sender<Box<dyn MessageRequest + Send + 'static>>>,
 }
 
 impl PullMessageService {
     pub fn new() -> Self {
-        PullMessageService {
-            pop_tx: None,
-            pull_tx: None,
+        PullMessageService { tx: None }
+    }
+    pub async fn start(&mut self, mut instance: ArcRefCellWrapper<MQClientInstance>) {
+        let (tx, mut rx) =
+            tokio::sync::mpsc::channel::<Box<dyn MessageRequest + Send + 'static>>(1024 * 4);
+        self.tx = Some(tx);
+        tokio::spawn(async move {
+            info!(">>>>>>>>>>>>>>>>>>>>>>>PullMessageService  started<<<<<<<<<<<<<<<<<<<<<<<<<<<<");
+            while let Some(request) = rx.recv().await {
+                if request.get_message_request_mode() == MessageRequestMode::Pull {
+                    let pull_request =
+                        unsafe { *Box::from_raw(Box::into_raw(request) as *mut PullRequest) };
+                    PullMessageService::pull_message(pull_request, instance.as_mut()).await;
+                } else {
+                    let pop_request =
+                        unsafe { *Box::from_raw(Box::into_raw(request) as *mut PopRequest) };
+                    PullMessageService::pop_message(pop_request, instance.as_mut()).await;
+                }
+            }
+        });
+    }
+
+    async fn pull_message(request: PullRequest, instance: &mut MQClientInstance) {
+        if let Some(mut consumer) = instance.select_consumer(request.get_consumer_group()).await {
+            consumer.pull_message(request).await;
+        } else {
+            warn!(
+                "No matched consumer for the PullRequest {},drop it",
+                request
+            )
         }
     }
-    pub async fn start(&mut self, instance: ArcRefCellWrapper<MQClientInstance>) {
-        let (pop_tx, mut pop_rx) = tokio::sync::mpsc::channel(1024 * 4);
-        let (pull_tx, mut pull_rx) = tokio::sync::mpsc::channel(1024 * 4);
-        self.pop_tx = Some(pop_tx);
-        self.pull_tx = Some(pull_tx);
-        //let instance_wrapper = ArcRefCellWrapper::new(instance);
-        let instance_wrapper_clone = instance.clone();
-        tokio::spawn(async move {
-            info!(
-                ">>>>>>>>>>>>>>>>>>>>>>>PullMessageService [PopRequest] \
-                 started<<<<<<<<<<<<<<<<<<<<<<<<<<<<"
-            );
-            while let Some(request) = pop_rx.recv().await {
-                if let Some(mut consumer) =
-                    instance.select_consumer(request.get_consumer_group()).await
-                {
-                    consumer.pop_message(request).await;
-                } else {
-                    warn!(
-                        "No matched consumer for the PopRequest {}, drop it",
-                        request
-                    )
-                }
-            }
-        });
-        tokio::spawn(async move {
-            info!(
-                ">>>>>>>>>>>>>>>>>>>>>>>PullMessageService  [PullRequest] \
-                 started<<<<<<<<<<<<<<<<<<<<<<<<<<<<"
-            );
-            while let Some(request) = pull_rx.recv().await {
-                if let Some(mut consumer) = instance_wrapper_clone
-                    .select_consumer(request.get_consumer_group())
-                    .await
-                {
-                    consumer.pull_message(request).await;
-                } else {
-                    warn!(
-                        "No matched consumer for the PullRequest {},drop it",
-                        request
-                    )
-                }
-            }
-        });
+
+    async fn pop_message(request: PopRequest, instance: &mut MQClientInstance) {
+        if let Some(mut consumer) = instance.select_consumer(request.get_consumer_group()).await {
+            consumer.pop_message(request).await;
+        } else {
+            warn!(
+                "No matched consumer for the PopRequest {}, drop it",
+                request
+            )
+        }
     }
 
     pub fn execute_pull_request_later(&self, pull_request: PullRequest, time_delay: u64) {
         let this = self.clone();
         tokio::spawn(async move {
             tokio::time::sleep(tokio::time::Duration::from_millis(time_delay)).await;
-            if let Err(e) = this.pull_tx.as_ref().unwrap().send(pull_request).await {
+            if let Err(e) = this.tx.as_ref().unwrap().send(Box::new(pull_request)).await {
                 warn!("Failed to send pull request to pull_tx, error: {:?}", e);
             }
         });
     }
 
     pub async fn execute_pull_request_immediately(&self, pull_request: PullRequest) {
-        if let Err(e) = self.pull_tx.as_ref().unwrap().send(pull_request).await {
+        if let Err(e) = self.tx.as_ref().unwrap().send(Box::new(pull_request)).await {
             warn!("Failed to send pull request to pull_tx, error: {:?}", e);
         }
     }
@@ -102,14 +95,14 @@ impl PullMessageService {
         let this = self.clone();
         tokio::spawn(async move {
             tokio::time::sleep(tokio::time::Duration::from_millis(time_delay)).await;
-            if let Err(e) = this.pop_tx.as_ref().unwrap().send(pop_request).await {
+            if let Err(e) = this.tx.as_ref().unwrap().send(Box::new(pop_request)).await {
                 warn!("Failed to send pull request to pull_tx, error: {:?}", e);
             }
         });
     }
 
     pub async fn execute_pop_pull_request_immediately(&self, pop_request: PopRequest) {
-        if let Err(e) = self.pop_tx.as_ref().unwrap().send(pop_request).await {
+        if let Err(e) = self.tx.as_ref().unwrap().send(Box::new(pop_request)).await {
             warn!("Failed to send pull request to pull_tx, error: {:?}", e);
         }
     }

@@ -203,7 +203,9 @@ impl DefaultMQPushConsumerImpl {
                     self.consumer_config.unit_mode
                 );
                 *self.service_state = ServiceState::StartFailed;
+                // check all config
                 self.check_config()?;
+                //copy_subscription is can be removed
                 self.copy_subscription().await?;
                 if self.consumer_config.message_model() == MessageModel::Clustering {
                     self.client_config.change_instance_name_to_pid();
@@ -474,20 +476,6 @@ impl DefaultMQPushConsumerImpl {
             ));
         }
 
-        /*        if !util_all::parse_date(self.consumer_config.consume_timestamp.as_str(), DATE_FORMAT)
-            .is_ok()
-        {
-            return Err(MQClientError::MQClientException(
-                -1,
-                format!(
-                    "consumeTimestamp is invalid, the valid format is {}, but received {}{}",
-                    DATE_FORMAT,
-                    self.consumer_config.consume_timestamp,
-                    FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
-                ),
-            ));
-        }*/
-
         if self
             .consumer_config
             .allocate_message_queue_strategy
@@ -501,16 +489,6 @@ impl DefaultMQPushConsumerImpl {
                 ),
             ));
         }
-
-        /*        if self.consumer_config.subscription.is_empty() {
-            return Err(MQClientError::MQClientErr(
-                -1,
-                format!(
-                    "subscription is null{}",
-                    FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
-                ),
-            ));
-        }*/
 
         if self.consumer_config.message_listener.is_none() {
             return Err(MQClientError::MQClientErr(
@@ -528,14 +506,14 @@ impl DefaultMQPushConsumerImpl {
             .as_ref()
             .unwrap()
             .message_listener_orderly
-            .is_some()
+            .is_none()
             && self
                 .consumer_config
                 .message_listener
                 .as_ref()
                 .unwrap()
                 .message_listener_concurrently
-                .is_some()
+                .is_none()
         {
             return Err(MQClientError::MQClientErr(
                 -1,
@@ -701,7 +679,18 @@ impl DefaultMQPushConsumerImpl {
     async fn copy_subscription(&mut self) -> Result<()> {
         let sub = self.consumer_config.subscription();
         if !sub.is_empty() {
-            unimplemented!()
+            for (topic, sub_expression) in sub.as_ref() {
+                let subscription_data = FilterAPI::build_subscription_data(topic, sub_expression)
+                    .map_err(|e| {
+                    MQClientError::MQClientErr(
+                        -1,
+                        format!("buildSubscriptionData exception, {}", e),
+                    )
+                })?;
+                self.rebalance_impl
+                    .put_subscription_data(topic, subscription_data)
+                    .await;
+            }
         }
         if self.message_listener.is_none() {
             self.message_listener = self.consumer_config.message_listener.clone();
