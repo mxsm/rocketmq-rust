@@ -34,7 +34,7 @@ serde.workspace = true
 serde_json.workspace = true
 
 futures-core = "0.3.0"
-futures-sink = "0.3.0"
+futures-sink = "0.3.31"
 futures-io = { version = "0.3.0" }
 futures-util = { version = "0.3.0" }
 futures = "0.3.29"
