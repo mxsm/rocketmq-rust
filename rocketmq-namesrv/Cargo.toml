@@ -33,7 +33,7 @@ tracing-subscriber.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
-futures-core = "0.3.0"
+futures-core = "0.3.31"
 futures-sink = "0.3.0"
 futures-io = { version = "0.3.0" }
 futures-util = { version = "0.3.0" }
