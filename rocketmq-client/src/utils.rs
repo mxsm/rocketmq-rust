@@ -14,23 +14,4 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#![allow(dead_code)]
-#![allow(unused_variables)]
-extern crate core;
-
-use crate::error::MQClientError;
-
-mod admin;
-pub mod base;
-mod common;
-pub mod consumer;
-pub mod error;
-mod factory;
-mod hook;
-mod implementation;
-mod latency;
-pub mod producer;
-mod trace;
-pub mod utils;
-
-pub type Result<T> = std::result::Result<T, MQClientError>;
+pub mod message_util;
