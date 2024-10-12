@@ -27,7 +27,6 @@ use rocketmq_rust::rocketmq;
 use tracing::info;
 
 #[rocketmq::main]
-#[allow(clippy::needless_return)]
 async fn main() -> anyhow::Result<()> {
     rocketmq_common::log::init_logger();
     let args = Args::parse();

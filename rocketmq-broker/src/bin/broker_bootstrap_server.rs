@@ -28,7 +28,6 @@ use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use tracing::info;
 
 #[rocketmq::main]
-#[allow(clippy::needless_return)]
 async fn main() -> anyhow::Result<()> {
     // init logger
     rocketmq_common::log::init_logger();
