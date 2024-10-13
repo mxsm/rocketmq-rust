@@ -14,8 +14,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+pub mod count_down_latch;
 pub mod rocketmq_tokio_lock;
 
+pub use count_down_latch::CountDownLatch;
 /// Re-export rocketmq main.
 pub use rocketmq::main;
 pub use rocketmq_tokio_lock::RocketMQTokioMutex;
