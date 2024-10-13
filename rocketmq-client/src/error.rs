@@ -25,7 +25,7 @@ pub enum MQClientError {
     #[error("{0}")]
     RemotingTooMuchRequestError(String),
 
-    #[error("Client exception occurred: CODE:{0}, broker address:{1}, Message:{2}")]
+    #[error("Client exception occurred: CODE:{0}, broker address:{2}, Message:{1}")]
     MQBrokerError(i32, String, String),
 
     #[error("Client exception occurred: CODE:{0}, Message:{1}")]

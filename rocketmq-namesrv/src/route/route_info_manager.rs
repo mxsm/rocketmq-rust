@@ -648,15 +648,13 @@ impl RouteInfoManager {
         cluster_name: &str,
         broker_name: &str,
     ) -> Option<BrokerMemberGroup> {
+        let mut group_member =
+            BrokerMemberGroup::new(cluster_name.to_string(), broker_name.to_string());
         if let Some(broker_data) = self.broker_addr_table.get(broker_name) {
             let map = broker_data.broker_addrs().clone();
-            return Some(BrokerMemberGroup::new(
-                Some(cluster_name.to_string()),
-                Some(broker_name.to_string()),
-                Some(map),
-            ));
+            group_member.broker_addrs.extend(map);
         }
-        None
+        Some(group_member)
     }
 
     pub(crate) fn wipe_write_perm_of_broker_by_lock(&mut self, broker_name: &str) -> i32 {

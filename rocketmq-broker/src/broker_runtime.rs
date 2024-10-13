@@ -30,6 +30,7 @@ use rocketmq_common::common::statistics::state_getter::StateGetter;
 use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_common::UtilAll::compute_next_morning_time_millis;
+use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
@@ -114,6 +115,7 @@ pub(crate) struct BrokerRuntime {
     #[cfg(feature = "local_file_store")]
     pull_request_hold_service: Option<PullRequestHoldService<DefaultMessageStore>>,
     rebalance_lock_manager: Arc<RebalanceLockManager>,
+    broker_member_group: Arc<BrokerMemberGroup>,
 }
 
 impl Clone for BrokerRuntime {
@@ -147,6 +149,7 @@ impl Clone for BrokerRuntime {
             is_isolated: self.is_isolated.clone(),
             pull_request_hold_service: self.pull_request_hold_service.clone(),
             rebalance_lock_manager: self.rebalance_lock_manager.clone(),
+            broker_member_group: self.broker_member_group.clone(),
         }
     }
 }
@@ -190,6 +193,14 @@ impl BrokerRuntime {
         }));
         let broker_stats_manager = Arc::new(stats_manager);
         consumer_manager.set_broker_stats_manager(Some(Arc::downgrade(&broker_stats_manager)));
+        let mut broker_member_group = BrokerMemberGroup::new(
+            broker_config.broker_identity.broker_cluster_name.clone(),
+            broker_config.broker_identity.broker_name.clone(),
+        );
+        broker_member_group.broker_addrs.insert(
+            broker_config.broker_identity.broker_id,
+            broker_config.get_broker_addr(),
+        );
         Self {
             broker_config: broker_config.clone(),
             message_store_config,
@@ -222,6 +233,7 @@ impl BrokerRuntime {
             is_isolated: Arc::new(AtomicBool::new(false)),
             pull_request_hold_service: None,
             rebalance_lock_manager: Arc::new(Default::default()),
+            broker_member_group: Arc::new(broker_member_group),
         }
     }
 
@@ -471,6 +483,8 @@ impl BrokerRuntime {
             self.consumer_manager.clone(),
             self.broker_out_api.clone(),
             self.broker_stats_manager.clone(),
+            self.rebalance_lock_manager.clone(),
+            self.broker_member_group.clone(),
         );
 
         BrokerRequestProcessor {

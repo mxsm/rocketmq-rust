@@ -22,21 +22,17 @@ use serde::Serialize;
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct BrokerMemberGroup {
-    pub cluster: Option<String>,
-    pub broker_name: Option<String>,
-    pub broker_addrs: Option<HashMap<i64, String>>,
+    pub cluster: String,
+    pub broker_name: String,
+    pub broker_addrs: HashMap<u64 /* brokerId */, String /* broker address */>,
 }
 
 impl BrokerMemberGroup {
-    pub fn new(
-        cluster: Option<String>,
-        broker_name: Option<String>,
-        broker_addrs: Option<HashMap<i64, String>>,
-    ) -> Self {
+    pub fn new(cluster: String, broker_name: String) -> Self {
         Self {
             cluster,
             broker_name,
-            broker_addrs,
+            broker_addrs: HashMap::new(),
         }
     }
 }

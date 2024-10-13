@@ -18,7 +18,7 @@ use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 
 use crate::error::BrokerError::BrokerClientError;
-use crate::BrokerResult;
+use crate::Result;
 
 #[derive(Default, Clone)]
 pub struct Broker2Client;
@@ -29,7 +29,7 @@ impl Broker2Client {
         channel: &mut Channel,
         request: RemotingCommand,
         timeout_millis: u64,
-    ) -> BrokerResult<RemotingCommand> {
+    ) -> Result<RemotingCommand> {
         match channel.send_wait_response(request, timeout_millis).await {
             Ok(value) => Ok(value),
             Err(e) => Err(BrokerClientError(e)),

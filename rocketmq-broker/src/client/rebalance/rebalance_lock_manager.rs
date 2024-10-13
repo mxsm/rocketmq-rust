@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
 
@@ -34,7 +35,7 @@ lazy_static! {
     };
 }
 
-type MessageQueueLockTable = HashMap<String, HashMap<Arc<MessageQueue>, LockEntry>>;
+type MessageQueueLockTable = HashMap<String, HashMap<MessageQueue, LockEntry>>;
 
 #[derive(Clone, Default)]
 pub struct RebalanceLockManager {
@@ -60,26 +61,25 @@ impl RebalanceLockManager {
     pub fn try_lock_batch(
         &self,
         group: &str,
-        mqs: Vec<Arc<MessageQueue>>,
+        mqs: &HashSet<MessageQueue>,
         client_id: &str,
-    ) -> Vec<Arc<MessageQueue>> {
-        let mut lock_mqs = Vec::new();
-        let mut not_locked_mqs = Vec::new();
+    ) -> HashSet<MessageQueue> {
+        let mut lock_mqs = HashSet::with_capacity(mqs.len());
+        let mut not_locked_mqs = HashSet::with_capacity(mqs.len());
         for mq in mqs.iter() {
             if self.is_locked(group, mq, client_id) {
-                lock_mqs.push(mq.clone());
+                lock_mqs.insert(mq.clone());
             } else {
-                not_locked_mqs.push(mq.clone());
+                not_locked_mqs.insert(mq.clone());
             }
         }
         if !not_locked_mqs.is_empty() {
             let mut write_guard = self.mq_lock_table.write();
-            let mut group_value = write_guard.get_mut(group);
-            if group_value.is_none() {
-                group_value = Some(write_guard.entry(group.to_string()).or_default());
-            }
-            let group_value = group_value.unwrap();
-            for mq in not_locked_mqs.iter() {
+            let group_value = write_guard
+                .entry(group.to_string())
+                .or_insert(HashMap::with_capacity(32));
+
+            for mq in not_locked_mqs {
                 let lock_entry = group_value.entry(mq.clone()).or_insert_with(|| {
                     info!(
                         "RebalanceLockManager#tryLockBatch: lock a message which has not been \
@@ -96,7 +96,7 @@ impl RebalanceLockManager {
                         get_current_millis() as i64,
                         std::sync::atomic::Ordering::Relaxed,
                     );
-                    lock_mqs.push(mq.clone());
+                    lock_mqs.insert(mq);
                     continue;
                 }
                 let old_client_id = lock_entry.client_id.as_str().to_string();
@@ -106,12 +106,12 @@ impl RebalanceLockManager {
                         get_current_millis() as i64,
                         std::sync::atomic::Ordering::Relaxed,
                     );
-                    lock_mqs.push(mq.clone());
                     warn!(
                         "RebalanceLockManager#tryLockBatch: try to lock a expired message queue, \
                          group={} mq={:?}, old client id={}, new client id={}",
                         group, mq, old_client_id, client_id
                     );
+                    lock_mqs.insert(mq);
                     continue;
                 }
                 warn!(
@@ -124,7 +124,7 @@ impl RebalanceLockManager {
         lock_mqs
     }
 
-    pub fn unlock_batch(&self, group: &str, mqs: Vec<Arc<MessageQueue>>, client_id: &str) {
+    pub fn unlock_batch(&self, group: &str, mqs: &HashSet<MessageQueue>, client_id: &str) {
         let mut write_guard = self.mq_lock_table.write();
         let group_value = write_guard.get_mut(group);
         if group_value.is_none() {
@@ -163,7 +163,7 @@ impl RebalanceLockManager {
         }
     }
 
-    fn is_locked(&self, group: &str, mq: &Arc<MessageQueue>, client_id: &str) -> bool {
+    fn is_locked(&self, group: &str, mq: &MessageQueue, client_id: &str) -> bool {
         let lock_table = self.mq_lock_table.read();
         let group_value = lock_table.get(group);
         if group_value.is_none() {
@@ -231,59 +231,71 @@ mod rebalance_lock_manager_tests {
     #[test]
     fn lock_all_expired_returns_false_when_active_locks_exist() {
         let manager = RebalanceLockManager::default();
-        let mq = Arc::new(MessageQueue::default());
-        manager.try_lock_batch("test_group", vec![mq.clone()], "client_1");
+        let mq = MessageQueue::default();
+        let mut set = HashSet::new();
+        set.insert(mq.clone());
+        manager.try_lock_batch("test_group", &set, "client_1");
         assert!(!manager.is_lock_all_expired("test_group"));
     }
 
     #[test]
     fn try_lock_batch_locks_message_queues_for_new_group() {
         let manager = RebalanceLockManager::default();
-        let mq = Arc::new(MessageQueue::default());
-        let locked_mqs = manager.try_lock_batch("test_group", vec![mq.clone()], "client_1");
+        let mq = MessageQueue::default();
+        let mut set = HashSet::new();
+        set.insert(mq.clone());
+        let locked_mqs = manager.try_lock_batch("test_group", &set, "client_1");
         assert_eq!(locked_mqs.len(), 1);
     }
 
     #[test]
     fn try_lock_batch_does_not_lock_already_locked_message_queues() {
         let manager = RebalanceLockManager::default();
-        let mq = Arc::new(MessageQueue::default());
-        manager.try_lock_batch("test_group", vec![mq.clone()], "client_1");
-        let locked_mqs = manager.try_lock_batch("test_group", vec![mq.clone()], "client_2");
+        let mq = MessageQueue::default();
+        let mut set = HashSet::new();
+        set.insert(mq.clone());
+        manager.try_lock_batch("test_group", &set, "client_1");
+        let locked_mqs = manager.try_lock_batch("test_group", &set, "client_2");
         assert!(locked_mqs.is_empty());
     }
 
     #[test]
     fn unlock_batch_unlocks_message_queues_locked_by_client() {
         let manager = RebalanceLockManager::default();
-        let mq = Arc::new(MessageQueue::default());
-        manager.try_lock_batch("test_group", vec![mq.clone()], "client_1");
-        manager.unlock_batch("test_group", vec![mq.clone()], "client_1");
-        let locked_mqs = manager.try_lock_batch("test_group", vec![mq.clone()], "client_2");
+        let mq = MessageQueue::default();
+        let mut set = HashSet::new();
+        set.insert(mq.clone());
+        manager.try_lock_batch("test_group", &set, "client_1");
+        manager.unlock_batch("test_group", &set, "client_1");
+        let locked_mqs = manager.try_lock_batch("test_group", &set, "client_2");
         assert_eq!(locked_mqs.len(), 1);
     }
 
     #[test]
     fn unlock_batch_does_not_unlock_message_queues_locked_by_other_clients() {
         let manager = RebalanceLockManager::default();
-        let mq = Arc::new(MessageQueue::default());
-        manager.try_lock_batch("test_group", vec![mq.clone()], "client_1");
-        manager.unlock_batch("test_group", vec![mq.clone()], "client_2");
+        let mq = MessageQueue::default();
+        let mut set = HashSet::new();
+        set.insert(mq.clone());
+        manager.try_lock_batch("test_group", &set, "client_1");
+        manager.unlock_batch("test_group", &set, "client_2");
         assert!(!manager.is_lock_all_expired("test_group"));
     }
 
     #[test]
     fn is_locked_returns_true_for_locked_message_queue() {
         let manager = RebalanceLockManager::default();
-        let mq = Arc::new(MessageQueue::default());
-        manager.try_lock_batch("test_group", vec![mq.clone()], "client_1");
+        let mq = MessageQueue::default();
+        let mut set = HashSet::new();
+        set.insert(mq.clone());
+        manager.try_lock_batch("test_group", &set, "client_1");
         assert!(manager.is_locked("test_group", &mq, "client_1"));
     }
 
     #[test]
     fn is_locked_returns_false_for_unlocked_message_queue() {
         let manager = RebalanceLockManager::default();
-        let mq = Arc::new(MessageQueue::default());
+        let mq = MessageQueue::default();
         assert!(!manager.is_locked("test_group", &mq, "client_1"));
     }
 }

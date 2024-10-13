@@ -47,4 +47,4 @@ pub(crate) mod topic;
 pub(crate) mod util;
 
 type RemotingError = rocketmq_remoting::error::Error;
-type BrokerResult<T> = Result<T, BrokerError>;
+type Result<T> = std::result::Result<T, BrokerError>;
