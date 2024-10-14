@@ -16,13 +16,20 @@
  */
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::Arc;
+use std::time::Duration;
 
+use bytes::Bytes;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingDeserializable;
+use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_rust::CountDownLatch;
+use tokio::sync::Mutex;
+use tracing::warn;
 
 use crate::processor::admin_broker_processor::Inner;
 
@@ -61,17 +68,46 @@ impl BatchMqHandler {
             } else {
                 let mut mq_lock_map = HashMap::with_capacity(32);
                 for mq in self_lock_okmqset.iter() {
-                    if !mq_lock_map.contains_key(mq) {
-                        mq_lock_map.insert(mq.clone(), 0);
-                    }
-                    mq_lock_map.insert(mq.clone(), mq_lock_map.get(mq).unwrap() + 1);
+                    *mq_lock_map.entry(mq.clone()).or_insert(0) += 1;
                 }
                 let mut addr_map = HashMap::with_capacity(8);
                 addr_map.extend(self.inner.broker_member_group.broker_addrs.clone());
                 addr_map.remove(&self.inner.broker_config.broker_identity.broker_id);
 
-                for (mq, broker_addr) in addr_map {
+                let mut tasks = vec![];
 
+                let count_down_latch = CountDownLatch::new(addr_map.len() as u32);
+                let request_body = Bytes::from(request_body.encode());
+                let mq_lock_map_arc = Arc::new(Mutex::new(mq_lock_map.clone()));
+                for (_, broker_addr) in addr_map {
+                    let count_down_latch = count_down_latch.clone();
+                    let broker_outer_api = self.inner.broker_out_api.clone();
+                    let mq_lock_map = mq_lock_map_arc.clone();
+                    tasks.push(tokio::spawn(async move {
+                        let result = broker_outer_api
+                            .lock_batch_mq_async(broker_addr, request_body.clone(), 1000)
+                            .await;
+                        match result {
+                            Ok(lock_ok_mqs) => {
+                                let mut mq_lock_map = mq_lock_map.lock().await;
+                                for mq in lock_ok_mqs {
+                                    *mq_lock_map.entry(mq).or_insert(0) += 1;
+                                }
+                            }
+                            Err(e) => {
+                                warn!("lockBatchMQAsync failed: {:?}", e);
+                            }
+                        }
+                        count_down_latch.count_down().await;
+                    }));
+                }
+                count_down_latch.wait_timeout(Duration::from_secs(2)).await;
+
+                let mq_lock_map = mq_lock_map_arc.lock().await;
+                for (mq, count) in &*mq_lock_map {
+                    if *count >= quorum {
+                        lock_ok_mqset.insert(mq.clone());
+                    }
                 }
             }
         }
