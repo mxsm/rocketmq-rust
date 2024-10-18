@@ -23,6 +23,7 @@ use bytes::Bytes;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
+use rocketmq_remoting::protocol::body::response::lock_batch_response_body::LockBatchResponseBody;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
@@ -74,8 +75,6 @@ impl BatchMqHandler {
                 addr_map.extend(self.inner.broker_member_group.broker_addrs.clone());
                 addr_map.remove(&self.inner.broker_config.broker_identity.broker_id);
 
-                let mut tasks = vec![];
-
                 let count_down_latch = CountDownLatch::new(addr_map.len() as u32);
                 let request_body = Bytes::from(request_body.encode());
                 let mq_lock_map_arc = Arc::new(Mutex::new(mq_lock_map.clone()));
@@ -83,9 +82,10 @@ impl BatchMqHandler {
                     let count_down_latch = count_down_latch.clone();
                     let broker_outer_api = self.inner.broker_out_api.clone();
                     let mq_lock_map = mq_lock_map_arc.clone();
-                    tasks.push(tokio::spawn(async move {
+                    let request_body_cloned = request_body.clone();
+                    tokio::spawn(async move {
                         let result = broker_outer_api
-                            .lock_batch_mq_async(broker_addr, request_body.clone(), 1000)
+                            .lock_batch_mq_async(broker_addr, request_body_cloned, 1000)
                             .await;
                         match result {
                             Ok(lock_ok_mqs) => {
@@ -99,7 +99,7 @@ impl BatchMqHandler {
                             }
                         }
                         count_down_latch.count_down().await;
-                    }));
+                    });
                 }
                 count_down_latch.wait_timeout(Duration::from_secs(2)).await;
 
@@ -111,7 +111,10 @@ impl BatchMqHandler {
                 }
             }
         }
-        unimplemented!("lock_natch_mq")
+        let response_body = LockBatchResponseBody {
+            lock_ok_mq_set: lock_ok_mqset,
+        };
+        Some(RemotingCommand::create_response_command().set_body(Some(response_body.encode())))
     }
 
     pub async fn unlock_batch_mq(
@@ -119,7 +122,7 @@ impl BatchMqHandler {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
-        request: RemotingCommand,
+        _request: RemotingCommand,
     ) -> Option<RemotingCommand> {
         unimplemented!("unlockBatchMQ")
     }

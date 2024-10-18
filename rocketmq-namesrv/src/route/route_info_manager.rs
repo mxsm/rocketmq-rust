@@ -652,7 +652,9 @@ impl RouteInfoManager {
             BrokerMemberGroup::new(cluster_name.to_string(), broker_name.to_string());
         if let Some(broker_data) = self.broker_addr_table.get(broker_name) {
             let map = broker_data.broker_addrs().clone();
-            group_member.broker_addrs.extend(map);
+            for (key, value) in map {
+                group_member.broker_addrs.insert(key as u64, value);
+            }
         }
         Some(group_member)
     }

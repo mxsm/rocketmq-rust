@@ -31,7 +31,6 @@ use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::body::broker_body::register_broker_body::RegisterBrokerBody;
 use rocketmq_remoting::protocol::body::kv_table::KVTable;
-use rocketmq_remoting::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
 use rocketmq_remoting::protocol::body::response::lock_batch_response_body::LockBatchResponseBody;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
 use rocketmq_remoting::protocol::header::lock_batch_mq_request_header::LockBatchMqRequestHeader;
@@ -351,7 +350,7 @@ impl BrokerOuterAPI {
                     Ok(lock_batch_response_body.lock_ok_mq_set)
                 } else {
                     Err(BrokerError::MQBrokerError(
-                        response.code() as i32,
+                        response.code(),
                         response.remark().cloned().unwrap_or("".to_string()),
                         "".to_string(),
                     ))
