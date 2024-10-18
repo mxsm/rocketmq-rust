@@ -21,7 +21,7 @@ use rocketmq_common::common::message::message_queue::MessageQueue;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct LockBatchRequestBody {
     pub consumer_group: Option<String>,

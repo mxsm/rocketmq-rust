@@ -169,6 +169,7 @@ pub struct BrokerConfig {
     pub auto_delete_unused_stats: bool,
     pub forward_timeout: u64,
     pub store_reply_message_enable: bool,
+    pub lock_in_strict_mode: bool,
 }
 
 impl Default for BrokerConfig {
@@ -245,6 +246,7 @@ impl Default for BrokerConfig {
             enable_mixed_message_type: false,
             auto_delete_unused_stats: false,
             store_reply_message_enable: true,
+            lock_in_strict_mode: false,
         }
     }
 }

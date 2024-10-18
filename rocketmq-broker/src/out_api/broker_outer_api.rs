@@ -14,12 +14,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Weak;
 
 use dns_lookup::lookup_host;
 use rocketmq_common::common::broker::broker_config::BrokerIdentity;
 use rocketmq_common::common::config::TopicConfig;
+use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::utils::crc32_utils;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::ArcRefCellWrapper;
@@ -29,7 +31,9 @@ use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::body::broker_body::register_broker_body::RegisterBrokerBody;
 use rocketmq_remoting::protocol::body::kv_table::KVTable;
+use rocketmq_remoting::protocol::body::response::lock_batch_response_body::LockBatchResponseBody;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
+use rocketmq_remoting::protocol::header::lock_batch_mq_request_header::LockBatchMqRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::register_broker_header::RegisterBrokerRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::register_broker_header::RegisterBrokerResponseHeader;
 use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::RegisterTopicRequestHeader;
@@ -37,6 +41,7 @@ use rocketmq_remoting::protocol::namesrv::RegisterBrokerResult;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::route::route_data_view::QueueData;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::remoting::RemotingService;
 use rocketmq_remoting::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
@@ -47,6 +52,10 @@ use rocketmq_remoting::runtime::RPCHook;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
+
+use crate::error::BrokerError;
+use crate::error::BrokerError::BrokerClientError;
+use crate::Result;
 
 pub struct BrokerOuterAPI {
     remoting_client: ArcRefCellWrapper<RocketmqDefaultClient<DefaultRemotingRequestProcessor>>,
@@ -316,6 +325,39 @@ impl BrokerOuterAPI {
 
     pub fn rpc_client(&self) -> &RpcClientImpl {
         &self.rpc_client
+    }
+
+    pub async fn lock_batch_mq_async(
+        &self,
+        addr: String,
+        request_body: bytes::Bytes,
+        timeout_millis: u64,
+    ) -> Result<HashSet<MessageQueue>> {
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::LockBatchMq,
+            LockBatchMqRequestHeader::default(),
+        );
+        request.set_body_mut_ref(Some(request_body));
+        let result = self
+            .remoting_client
+            .invoke_async(Some(addr), request, timeout_millis)
+            .await;
+        match result {
+            Ok(response) => {
+                if ResponseCode::from(response.code()) == ResponseCode::Success {
+                    let lock_batch_response_body =
+                        LockBatchResponseBody::decode(response.get_body().unwrap()).unwrap();
+                    Ok(lock_batch_response_body.lock_ok_mq_set)
+                } else {
+                    Err(BrokerError::MQBrokerError(
+                        response.code(),
+                        response.remark().cloned().unwrap_or("".to_string()),
+                        "".to_string(),
+                    ))
+                }
+            }
+            Err(e) => Err(BrokerClientError(e)),
+        }
     }
 }
 

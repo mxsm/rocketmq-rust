@@ -21,6 +21,7 @@ use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
+use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
@@ -30,8 +31,10 @@ use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use tracing::warn;
 
 use crate::client::manager::consumer_manager::ConsumerManager;
+use crate::client::rebalance::rebalance_lock_manager::RebalanceLockManager;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
 use crate::out_api::broker_outer_api::BrokerOuterAPI;
+use crate::processor::admin_broker_processor::batch_mq_handler::BatchMqHandler;
 use crate::processor::admin_broker_processor::broker_config_request_handler::BrokerConfigRequestHandler;
 use crate::processor::admin_broker_processor::consumer_request_handler::ConsumerRequestHandler;
 use crate::processor::admin_broker_processor::offset_request_handler::OffsetRequestHandler;
@@ -41,6 +44,7 @@ use crate::schedule::schedule_message_service::ScheduleMessageService;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
 
+mod batch_mq_handler;
 mod broker_config_request_handler;
 mod consumer_request_handler;
 mod offset_request_handler;
@@ -52,6 +56,7 @@ pub struct AdminBrokerProcessor {
     broker_config_request_handler: BrokerConfigRequestHandler,
     consumer_request_handler: ConsumerRequestHandler,
     offset_request_handler: OffsetRequestHandler,
+    batch_mq_handler: BatchMqHandler,
 }
 
 impl AdminBrokerProcessor {
@@ -68,6 +73,8 @@ impl AdminBrokerProcessor {
         consume_manager: Arc<ConsumerManager>,
         broker_out_api: Arc<BrokerOuterAPI>,
         broker_stats_manager: Arc<BrokerStatsManager>,
+        rebalance_lock_manager: Arc<RebalanceLockManager>,
+        broker_member_group: Arc<BrokerMemberGroup>,
     ) -> Self {
         let inner = Inner {
             broker_config,
@@ -83,16 +90,20 @@ impl AdminBrokerProcessor {
             consume_manager,
             broker_out_api,
             broker_stats_manager,
+            rebalance_lock_manager,
+            broker_member_group,
         };
         let topic_request_handler = TopicRequestHandler::new(inner.clone());
         let broker_config_request_handler = BrokerConfigRequestHandler::new(inner.clone());
         let consumer_request_handler = ConsumerRequestHandler::new(inner.clone());
         let offset_request_handler = OffsetRequestHandler::new(inner.clone());
+        let batch_mq_handler = BatchMqHandler::new(inner.clone());
         AdminBrokerProcessor {
             topic_request_handler,
             broker_config_request_handler,
             consumer_request_handler,
             offset_request_handler,
+            batch_mq_handler,
         }
     }
 }
@@ -192,6 +203,12 @@ impl AdminBrokerProcessor {
                     .await
             }
 
+            RequestCode::LockBatchMq => {
+                self.batch_mq_handler
+                    .lock_natch_mq(channel, ctx, request_code, request)
+                    .await
+            }
+
             _ => Some(get_unknown_cmd_response(request_code)),
         }
     }
@@ -224,4 +241,6 @@ struct Inner {
     consume_manager: Arc<ConsumerManager>,
     broker_out_api: Arc<BrokerOuterAPI>,
     broker_stats_manager: Arc<BrokerStatsManager>,
+    rebalance_lock_manager: Arc<RebalanceLockManager>,
+    broker_member_group: Arc<BrokerMemberGroup>,
 }
