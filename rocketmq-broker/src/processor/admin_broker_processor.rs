@@ -209,6 +209,11 @@ impl AdminBrokerProcessor {
                     .await
             }
 
+            RequestCode::UnlockBatchMq => {
+                self.batch_mq_handler
+                    .unlock_batch_mq(channel, ctx, request_code, request)
+                    .await
+            }
             _ => Some(get_unknown_cmd_response(request_code)),
         }
     }

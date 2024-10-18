@@ -37,6 +37,7 @@ use rocketmq_remoting::protocol::header::lock_batch_mq_request_header::LockBatch
 use rocketmq_remoting::protocol::header::namesrv::register_broker_header::RegisterBrokerRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::register_broker_header::RegisterBrokerResponseHeader;
 use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::RegisterTopicRequestHeader;
+use rocketmq_remoting::protocol::header::unlock_batch_mq_request_header::UnlockBatchMqRequestHeader;
 use rocketmq_remoting::protocol::namesrv::RegisterBrokerResult;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::route::route_data_view::QueueData;
@@ -348,6 +349,37 @@ impl BrokerOuterAPI {
                     let lock_batch_response_body =
                         LockBatchResponseBody::decode(response.get_body().unwrap()).unwrap();
                     Ok(lock_batch_response_body.lock_ok_mq_set)
+                } else {
+                    Err(BrokerError::MQBrokerError(
+                        response.code(),
+                        response.remark().cloned().unwrap_or("".to_string()),
+                        "".to_string(),
+                    ))
+                }
+            }
+            Err(e) => Err(BrokerClientError(e)),
+        }
+    }
+
+    pub async fn unlock_batch_mq_async(
+        &self,
+        addr: String,
+        request_body: bytes::Bytes,
+        timeout_millis: u64,
+    ) -> Result<()> {
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::UnlockBatchMq,
+            UnlockBatchMqRequestHeader::default(),
+        );
+        request.set_body_mut_ref(Some(request_body));
+        let result = self
+            .remoting_client
+            .invoke_async(Some(addr), request, timeout_millis)
+            .await;
+        match result {
+            Ok(response) => {
+                if ResponseCode::from(response.code()) == ResponseCode::Success {
+                    Ok(())
                 } else {
                     Err(BrokerError::MQBrokerError(
                         response.code(),

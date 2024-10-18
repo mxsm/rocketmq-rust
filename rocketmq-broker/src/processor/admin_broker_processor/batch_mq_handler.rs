@@ -24,6 +24,7 @@ use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
 use rocketmq_remoting::protocol::body::response::lock_batch_response_body::LockBatchResponseBody;
+use rocketmq_remoting::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
@@ -122,8 +123,32 @@ impl BatchMqHandler {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
-        _request: RemotingCommand,
+        request: RemotingCommand,
     ) -> Option<RemotingCommand> {
-        unimplemented!("unlockBatchMQ")
+        let mut request_body = UnlockBatchRequestBody::decode(request.get_body().unwrap()).unwrap();
+        if request_body.only_this_broker || !self.inner.broker_config.lock_in_strict_mode {
+            self.inner.rebalance_lock_manager.unlock_batch(
+                request_body.consumer_group.as_ref().unwrap(),
+                &request_body.mq_set,
+                request_body.client_id.as_ref().unwrap(),
+            );
+        } else {
+            request_body.only_this_broker = true;
+            let request_body = Bytes::from(request_body.encode());
+            for broker_addr in self.inner.broker_member_group.broker_addrs.values() {
+                match self
+                    .inner
+                    .broker_out_api
+                    .unlock_batch_mq_async(broker_addr.clone(), request_body.clone(), 1000)
+                    .await
+                {
+                    Ok(_) => {}
+                    Err(e) => {
+                        warn!("unlockBatchMQ exception on {}, {}", broker_addr, e);
+                    }
+                }
+            }
+        }
+        Some(RemotingCommand::create_response_command())
     }
 }
