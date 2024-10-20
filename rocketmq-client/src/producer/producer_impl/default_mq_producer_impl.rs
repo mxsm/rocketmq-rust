@@ -1963,6 +1963,7 @@ impl DefaultMQProducerImpl {
         self.start_with_factory(true).await
     }
 
+    #[inline]
     pub async fn start_with_factory(&mut self, start_factory: bool) -> Result<()> {
         match self.service_state {
             ServiceState::CreateJust => {
@@ -1987,9 +1988,9 @@ impl DefaultMQProducerImpl {
                 let resolver = DefaultResolver {
                     client_instance: client_instance.clone(),
                 };
-                self.mq_fault_strategy.set_resolver(Box::new(resolver));
+                self.mq_fault_strategy.set_resolve(resolver);
                 self.mq_fault_strategy
-                    .set_service_detector(Box::new(service_detector));
+                    .set_service_detector(service_detector);
                 self.client_instance = Some(client_instance);
                 let self_clone = self.clone();
                 let register_ok = self
@@ -2016,7 +2017,7 @@ impl DefaultMQProducerImpl {
                     //self.client_instance.as_mut().unwrap().start().await;
                 }
 
-                self.init_topic_route();
+                self.init_topic_route().await;
                 self.mq_fault_strategy.start_detector();
                 self.service_state = ServiceState::Running;
             }
@@ -2070,7 +2071,27 @@ impl DefaultMQProducerImpl {
         Ok(())
     }
 
-    fn init_topic_route(&mut self) {}
+    async fn init_topic_route(&mut self) {
+        for topic in self.producer_config.topics() {
+            let new_topic = NamespaceUtil::without_namespace_with_namespace(
+                self.client_config
+                    .get_namespace()
+                    .unwrap_or("".to_string())
+                    .as_str(),
+                topic,
+            );
+            let topic_publish_info = self
+                .try_to_find_topic_publish_info(new_topic.as_str())
+                .await;
+            if topic_publish_info.is_none() || !topic_publish_info.unwrap().ok() {
+                warn!(
+                    "No route info of this topic: {} {}",
+                    new_topic,
+                    FAQUrl::suggest_todo(FAQUrl::NO_TOPIC_ROUTE_INFO)
+                );
+            }
+        }
+    }
 
     #[inline]
     pub fn set_send_latency_fault_enable(&mut self, send_latency_fault_enable: bool) {
@@ -2079,7 +2100,7 @@ impl DefaultMQProducerImpl {
     }
 }
 
-struct DefaultServiceDetector {
+pub(crate) struct DefaultServiceDetector {
     client_instance: ArcRefCellWrapper<MQClientInstance>,
     topic_publish_info_table: Arc<RwLock<HashMap<String /* topic */, TopicPublishInfo>>>,
 }
@@ -2090,12 +2111,14 @@ impl ServiceDetector for DefaultServiceDetector {
     }
 }
 
-struct DefaultResolver {
+pub(crate) struct DefaultResolver {
     client_instance: ArcRefCellWrapper<MQClientInstance>,
 }
 
 impl Resolver for DefaultResolver {
-    fn resolve(&self, name: &str) -> String {
-        todo!()
+    async fn resolve(&self, name: &str) -> Option<String> {
+        self.client_instance
+            .find_broker_address_in_publish(name)
+            .await
     }
 }

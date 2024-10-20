@@ -17,16 +17,17 @@
 use std::cell::RefCell;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 
-use parking_lot::Mutex;
 use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_common::ArcRefCellWrapper;
 
 use crate::base::client_config::ClientConfig;
 use crate::latency::latency_fault_tolerance::LatencyFaultTolerance;
 use crate::latency::latency_fault_tolerance_impl::LatencyFaultToleranceImpl;
 use crate::latency::resolver::Resolver;
 use crate::latency::service_detector::ServiceDetector;
+use crate::producer::producer_impl::default_mq_producer_impl::DefaultResolver;
+use crate::producer::producer_impl::default_mq_producer_impl::DefaultServiceDetector;
 use crate::producer::producer_impl::queue_filter::QueueFilter;
 use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
 
@@ -35,7 +36,8 @@ thread_local! {
 }
 
 pub struct MQFaultStrategy {
-    latency_fault_tolerance: Arc<Mutex<dyn LatencyFaultTolerance<String>>>,
+    latency_fault_tolerance:
+        ArcRefCellWrapper<LatencyFaultToleranceImpl<DefaultResolver, DefaultServiceDetector>>,
     send_latency_fault_enable: AtomicBool,
     start_detector_enable: AtomicBool,
     latency_max: &'static [u64],
@@ -48,7 +50,7 @@ impl MQFaultStrategy {
     pub fn new(client_config: &ClientConfig) -> Self {
         let mut tolerance_impl = LatencyFaultToleranceImpl::new();
         tolerance_impl.set_start_detector_enable(client_config.start_detector_enable);
-        let latency_fault_tolerance = Arc::new(Mutex::new(tolerance_impl));
+        let latency_fault_tolerance = ArcRefCellWrapper::new(tolerance_impl);
         Self {
             latency_fault_tolerance: latency_fault_tolerance.clone(),
             send_latency_fault_enable: AtomicBool::new(client_config.send_latency_enable),
@@ -64,16 +66,17 @@ impl MQFaultStrategy {
         }
     }
 
-    pub fn start_detector(&mut self) {}
-
-    pub fn set_resolver(&mut self, resolver: Box<dyn Resolver>) {
-        let mut tolerance = self.latency_fault_tolerance.lock();
-        tolerance.set_resolver(resolver);
+    pub fn start_detector(&mut self) {
+        LatencyFaultTolerance::start_detector(self.latency_fault_tolerance.clone());
     }
 
-    pub fn set_service_detector(&mut self, service_detector: Box<dyn ServiceDetector>) {
-        let mut tolerance = self.latency_fault_tolerance.lock();
-        tolerance.set_service_detector(service_detector);
+    pub fn set_resolve(&mut self, resolver: DefaultResolver) {
+        self.latency_fault_tolerance.set_resolver(resolver);
+    }
+
+    pub fn set_service_detector(&mut self, service_detector: DefaultServiceDetector) {
+        self.latency_fault_tolerance
+            .set_service_detector(service_detector);
     }
 
     pub fn is_start_detector_enable(&self) -> bool {
@@ -135,12 +138,14 @@ impl MQFaultStrategy {
             } else {
                 current_latency
             });
-            self.latency_fault_tolerance.lock().update_fault_item(
-                broker_name.to_string(),
-                current_latency,
-                duration,
-                reachable,
-            );
+            self.latency_fault_tolerance
+                .mut_from_ref()
+                .update_fault_item(
+                    broker_name.to_string(),
+                    current_latency,
+                    duration,
+                    reachable,
+                );
         }
     }
 
@@ -176,23 +181,26 @@ impl QueueFilter for BrokerFilter {
 }
 
 struct ReachableFilter {
-    latency_fault_tolerance: Arc<Mutex<dyn LatencyFaultTolerance<String>>>,
+    latency_fault_tolerance:
+        ArcRefCellWrapper<LatencyFaultToleranceImpl<DefaultResolver, DefaultServiceDetector>>,
 }
 
 impl QueueFilter for ReachableFilter {
     fn filter(&self, message_queue: &MessageQueue) -> bool {
-        let tolerance = self.latency_fault_tolerance.lock();
-        tolerance.is_reachable(&message_queue.get_broker_name().to_string())
+        self.latency_fault_tolerance
+            .is_reachable(&message_queue.get_broker_name().to_string())
     }
 }
 
 struct AvailableFilter {
-    latency_fault_tolerance: Arc<Mutex<dyn LatencyFaultTolerance<String>>>,
+    latency_fault_tolerance:
+        ArcRefCellWrapper<LatencyFaultToleranceImpl<DefaultResolver, DefaultServiceDetector>>,
 }
 
 impl QueueFilter for AvailableFilter {
     fn filter(&self, message_queue: &MessageQueue) -> bool {
-        let tolerance = self.latency_fault_tolerance.lock();
-        tolerance.is_available(&message_queue.get_broker_name().to_string())
+        self.latency_fault_tolerance
+            .is_available(&message_queue.get_broker_name().to_string());
+        unimplemented!("not implemented")
     }
 }

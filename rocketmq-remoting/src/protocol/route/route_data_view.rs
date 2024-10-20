@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use rand::seq::IteratorRandom;
@@ -33,6 +34,18 @@ pub struct BrokerData {
     zone_name: Option<String>,
     #[serde(rename = "enableActingMaster")]
     enable_acting_master: bool,
+}
+
+impl PartialOrd for BrokerData {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for BrokerData {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.broker_name.cmp(&other.broker_name)
+    }
 }
 
 impl BrokerData {

@@ -247,11 +247,12 @@ pub struct DefaultMQProducer {
 }
 
 impl DefaultMQProducer {
+    #[inline]
     pub fn builder() -> DefaultMQProducerBuilder {
         DefaultMQProducerBuilder::new()
     }
     pub fn new() -> Self {
-        unimplemented!()
+        Self::builder().build()
     }
 
     pub fn client_config(&self) -> &ClientConfig {
