@@ -14,10 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use crate::latency::resolver::Resolver;
-use crate::latency::service_detector::ServiceDetector;
+use std::any::Any;
 
-pub trait LatencyFaultTolerance<T>: Send + Sync + 'static {
+use rocketmq_common::ArcRefCellWrapper;
+
+#[allow(async_fn_in_trait)]
+pub trait LatencyFaultTolerance<T, R, S>: Send + Sync + 'static {
     /// Update brokers' states, to decide if they are good or not.
     ///
     /// # Arguments
@@ -27,7 +29,7 @@ pub trait LatencyFaultTolerance<T>: Send + Sync + 'static {
     /// * `not_available_duration` - Corresponding not available time, ms. The broker will be not
     ///   available until it
     /// * `reachable` - To decide if this broker is reachable or not.
-    fn update_fault_item(
+    async fn update_fault_item(
         &mut self,
         name: T,
         current_latency: u64,
@@ -44,7 +46,7 @@ pub trait LatencyFaultTolerance<T>: Send + Sync + 'static {
     /// # Returns
     ///
     /// * `true` if the broker is available, `false` otherwise.
-    fn is_available(&self, name: &T) -> bool;
+    async fn is_available(&self, name: &T) -> bool;
 
     /// To check if this broker is reachable.
     ///
@@ -55,30 +57,30 @@ pub trait LatencyFaultTolerance<T>: Send + Sync + 'static {
     /// # Returns
     ///
     /// * `true` if the broker is reachable, `false` otherwise.
-    fn is_reachable(&self, name: &T) -> bool;
+    async fn is_reachable(&self, name: &T) -> bool;
 
     /// Remove the broker in this fault item table.
     ///
     /// # Arguments
     ///
     /// * `name` - Broker's name.
-    fn remove(&mut self, name: &T);
+    async fn remove(&mut self, name: &T);
 
     /// The worst situation, no broker can be available. Then choose a random one.
     ///
     /// # Returns
     ///
     /// * A random broker will be returned.
-    fn pick_one_at_least(&self) -> T;
+    async fn pick_one_at_least(&self) -> Option<T>;
 
     /// Start a new thread, to detect the broker's reachable tag.
-    fn start_detector(&self);
+    fn start_detector(this: ArcRefCellWrapper<Self>);
 
     /// Shutdown threads that started by `LatencyFaultTolerance`.
     fn shutdown(&self);
 
     /// A function reserved, just detect by once, won't create a new thread.
-    fn detect_by_one_round(&self);
+    async fn detect_by_one_round(&self);
 
     /// Use it to set the detect timeout bound.
     ///
@@ -109,7 +111,11 @@ pub trait LatencyFaultTolerance<T>: Send + Sync + 'static {
     /// * `true` if the detector should be started, `false` otherwise.
     fn is_start_detector_enable(&self) -> bool;
 
-    fn set_resolver(&mut self, resolver: Box<dyn Resolver>);
+    fn set_resolver(&mut self, resolver: R);
 
-    fn set_service_detector(&mut self, service_detector: Box<dyn ServiceDetector>);
+    fn set_service_detector(&mut self, service_detector: S);
+
+    fn as_any(&self) -> &dyn Any;
+
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 }

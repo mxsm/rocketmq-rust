@@ -42,14 +42,13 @@ impl TopicRouteData {
         if old_data.is_none() {
             return true;
         }
-        /*let mut now = TopicRouteData::from_existing(self);
-        let mut old = TopicRouteData::from_existing(old_data.unwrap());*/
-        /*now.queue_datas.sort_by(|a, b| a.cmp(&b));
-        now.broker_datas.sort_by(|a, b| a.cmp(&b));
-        old.queue_datas.sort_by(|a, b| a.cmp(&b));
-        old.broker_datas.sort_by(|a, b| a.cmp(&b));*/
-        //now != old
-        false
+        let mut now = TopicRouteData::from_existing(self);
+        let mut old = TopicRouteData::from_existing(old_data.unwrap());
+        now.queue_datas.sort();
+        now.broker_datas.sort();
+        old.queue_datas.sort();
+        old.broker_datas.sort();
+        now != old
     }
 
     pub fn new() -> Self {
