@@ -457,7 +457,9 @@ impl MQClientAPIImpl {
                         }
                     }
                     let duration = (Instant::now() - begin_start_time).as_millis() as u64;
-                    producer.update_fault_item(broker_name, duration, false, true);
+                    producer
+                        .update_fault_item(broker_name, duration, false, true)
+                        .await;
                     return;
                 }
                 let send_result = self.process_send_response(broker_name, msg, &response, addr);
@@ -470,11 +472,15 @@ impl MQClientAPIImpl {
                         }
                         let duration = (Instant::now() - begin_start_time).as_millis() as u64;
                         send_callback.as_ref().unwrap()(Some(&result), None);
-                        producer.update_fault_item(broker_name, duration, false, true);
+                        producer
+                            .update_fault_item(broker_name, duration, false, true)
+                            .await;
                     }
                     Err(err) => {
                         let duration = (Instant::now() - begin_start_time).as_millis() as u64;
-                        producer.update_fault_item(broker_name, duration, true, true);
+                        producer
+                            .update_fault_item(broker_name, duration, true, true)
+                            .await;
                         Box::pin(self.on_exception_impl(
                             broker_name,
                             msg,

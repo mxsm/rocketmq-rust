@@ -24,8 +24,8 @@ use crate::latency::service_detector::ServiceDetector;
 
 pub struct LatencyFaultToleranceImpl<R, S> {
     fault_item_table: tokio::sync::Mutex<HashMap<String, FaultItem>>,
-    detect_timeout: i32,
-    detect_interval: i32,
+    detect_timeout: u32,
+    detect_interval: u32,
     which_item_worst: ThreadLocalIndex,
     start_detector_enable: AtomicBool,
     resolver: Option<R>,
@@ -83,16 +83,36 @@ where
         true
     }
 
-    fn is_reachable(&self, name: &String) -> bool {
-        todo!()
+    async fn is_reachable(&self, name: &String) -> bool {
+        let fault_item_table = self.fault_item_table.lock().await;
+        if let Some(fault_item) = fault_item_table.get(name) {
+            return fault_item.is_reachable();
+        }
+        true
     }
 
-    fn remove(&mut self, name: &String) {
-        todo!()
+    async fn remove(&mut self, name: &String) {
+        self.fault_item_table.lock().await.remove(name);
     }
 
-    fn pick_one_at_least(&self) -> String {
-        todo!()
+    async fn pick_one_at_least(&self) -> Option<String> {
+        let fault_item_table = self.fault_item_table.lock().await;
+        let mut tmp_list: Vec<_> = fault_item_table.values().collect();
+
+        if !tmp_list.is_empty() {
+            use rand::seq::SliceRandom;
+            let mut rng = rand::thread_rng();
+            tmp_list.shuffle(&mut rng);
+            for fault_item in tmp_list {
+                if fault_item
+                    .reachable_flag
+                    .load(std::sync::atomic::Ordering::Acquire)
+                {
+                    return Some(fault_item.name.clone());
+                }
+            }
+        }
+        None
     }
 
     fn start_detector(this: ArcRefCellWrapper<Self>) {
@@ -117,10 +137,10 @@ where
         let mut fault_item_table = self.fault_item_table.lock().await;
         let mut remove_set = HashSet::new();
         for (name, fault_item) in fault_item_table.iter() {
-            if get_current_millis()
-                - fault_item
+            if get_current_millis() as i64
+                - (fault_item
                     .check_stamp
-                    .load(std::sync::atomic::Ordering::Relaxed)
+                    .load(std::sync::atomic::Ordering::Relaxed) as i64)
                 < 0
             {
                 continue;
@@ -164,11 +184,11 @@ where
     }
 
     fn set_detect_timeout(&mut self, detect_timeout: u32) {
-        todo!()
+        self.detect_timeout = detect_timeout;
     }
 
     fn set_detect_interval(&mut self, detect_interval: u32) {
-        todo!()
+        self.detect_interval = detect_interval;
     }
 
     fn set_start_detector_enable(&mut self, start_detector_enable: bool) {
@@ -177,7 +197,8 @@ where
     }
 
     fn is_start_detector_enable(&self) -> bool {
-        todo!()
+        self.start_detector_enable
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 
     fn set_resolver(&mut self, resolver: R) {
@@ -206,8 +227,6 @@ use rocketmq_common::TimeUtils::get_current_millis;
 use tracing::info;
 
 use crate::common::thread_local_index::ThreadLocalIndex;
-use crate::producer::producer_impl::default_mq_producer_impl::DefaultResolver;
-use crate::producer::producer_impl::default_mq_producer_impl::DefaultServiceDetector;
 
 #[derive(Debug)]
 pub struct FaultItem {
@@ -241,7 +260,7 @@ impl FaultItem {
                 now + not_available_duration,
                 std::sync::atomic::Ordering::Relaxed,
             );
-            println!(
+            info!(
                 "{} will be isolated for {} ms.",
                 self.name, not_available_duration
             );

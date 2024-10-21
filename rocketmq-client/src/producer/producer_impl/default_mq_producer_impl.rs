@@ -741,7 +741,8 @@ impl DefaultMQProducerImpl {
                                     (end_timestamp - begin_timestamp_prev).as_millis() as u64,
                                     false,
                                     true,
-                                );
+                                )
+                                .await;
                                 return match communication_mode {
                                     CommunicationMode::Sync => {
                                         if let Some(ref result) = send_result {
@@ -770,7 +771,8 @@ impl DefaultMQProducerImpl {
                                         elapsed,
                                         false,
                                         true,
-                                    );
+                                    )
+                                    .await;
                                     warn!(
                                         "sendKernelImpl exception, resend at once, InvokeID: {}, \
                                          RT: {}ms, Broker: {:?},{}",
@@ -792,7 +794,8 @@ impl DefaultMQProducerImpl {
                                         elapsed,
                                         true,
                                         false,
-                                    );
+                                    )
+                                    .await;
                                     if self.producer_config.retry_response_codes().contains(&code) {
                                         exception = Some(err);
                                         continue;
@@ -813,14 +816,16 @@ impl DefaultMQProducerImpl {
                                             elapsed,
                                             true,
                                             false,
-                                        );
+                                        )
+                                        .await;
                                     } else {
                                         self.update_fault_item(
                                             mq.as_ref().unwrap().get_broker_name(),
                                             elapsed,
                                             true,
                                             true,
-                                        );
+                                        )
+                                        .await;
                                     }
                                     exception = Some(err);
                                     continue;
@@ -901,19 +906,17 @@ impl DefaultMQProducerImpl {
     }
 
     #[inline]
-    pub fn update_fault_item(
+    pub async fn update_fault_item(
         &self,
         broker_name: &str,
         current_latency: u64,
         isolation: bool,
         reachable: bool,
     ) {
-        self.mq_fault_strategy.mut_from_ref().update_fault_item(
-            broker_name,
-            current_latency,
-            isolation,
-            reachable,
-        );
+        self.mq_fault_strategy
+            .mut_from_ref()
+            .update_fault_item(broker_name, current_latency, isolation, reachable)
+            .await;
     }
 
     async fn send_kernel_impl<T>(

@@ -17,15 +17,15 @@
 use std::cell::RefCell;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::thread::scope;
 
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::ArcRefCellWrapper;
+use tokio::runtime::Handle;
 
 use crate::base::client_config::ClientConfig;
 use crate::latency::latency_fault_tolerance::LatencyFaultTolerance;
 use crate::latency::latency_fault_tolerance_impl::LatencyFaultToleranceImpl;
-use crate::latency::resolver::Resolver;
-use crate::latency::service_detector::ServiceDetector;
 use crate::producer::producer_impl::default_mq_producer_impl::DefaultResolver;
 use crate::producer::producer_impl::default_mq_producer_impl::DefaultServiceDetector;
 use crate::producer::producer_impl::queue_filter::QueueFilter;
@@ -125,7 +125,7 @@ impl MQFaultStrategy {
         self.not_available_duration
     }
 
-    pub fn update_fault_item(
+    pub async fn update_fault_item(
         &self,
         broker_name: &str,
         current_latency: u64,
@@ -145,7 +145,8 @@ impl MQFaultStrategy {
                     current_latency,
                     duration,
                     reachable,
-                );
+                )
+                .await;
         }
     }
 
@@ -187,8 +188,18 @@ struct ReachableFilter {
 
 impl QueueFilter for ReachableFilter {
     fn filter(&self, message_queue: &MessageQueue) -> bool {
-        self.latency_fault_tolerance
-            .is_reachable(&message_queue.get_broker_name().to_string())
+        let mut flag = false;
+        let handle = Handle::current();
+        scope(|s| {
+            s.spawn(|| {
+                flag = handle.block_on(async {
+                    self.latency_fault_tolerance
+                        .is_reachable(&message_queue.get_broker_name().to_string())
+                        .await
+                });
+            });
+        });
+        flag
     }
 }
 
@@ -199,8 +210,17 @@ struct AvailableFilter {
 
 impl QueueFilter for AvailableFilter {
     fn filter(&self, message_queue: &MessageQueue) -> bool {
-        self.latency_fault_tolerance
-            .is_available(&message_queue.get_broker_name().to_string());
-        unimplemented!("not implemented")
+        let mut flag = false;
+        let handle = Handle::current();
+        scope(|s| {
+            s.spawn(|| {
+                flag = handle.block_on(async {
+                    self.latency_fault_tolerance
+                        .is_available(&message_queue.get_broker_name().to_string())
+                        .await
+                });
+            });
+        });
+        flag
     }
 }

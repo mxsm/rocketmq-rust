@@ -57,21 +57,21 @@ pub trait LatencyFaultTolerance<T, R, S>: Send + Sync + 'static {
     /// # Returns
     ///
     /// * `true` if the broker is reachable, `false` otherwise.
-    fn is_reachable(&self, name: &T) -> bool;
+    async fn is_reachable(&self, name: &T) -> bool;
 
     /// Remove the broker in this fault item table.
     ///
     /// # Arguments
     ///
     /// * `name` - Broker's name.
-    fn remove(&mut self, name: &T);
+    async fn remove(&mut self, name: &T);
 
     /// The worst situation, no broker can be available. Then choose a random one.
     ///
     /// # Returns
     ///
     /// * A random broker will be returned.
-    fn pick_one_at_least(&self) -> T;
+    async fn pick_one_at_least(&self) -> Option<T>;
 
     /// Start a new thread, to detect the broker's reachable tag.
     fn start_detector(this: ArcRefCellWrapper<Self>);
