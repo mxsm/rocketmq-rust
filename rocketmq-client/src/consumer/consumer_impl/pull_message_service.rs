@@ -16,6 +16,7 @@
  */
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_common::ArcRefCellWrapper;
+use rocketmq_rust::Shutdown;
 use tracing::info;
 use tracing::warn;
 
@@ -27,19 +28,25 @@ use crate::factory::mq_client_instance::MQClientInstance;
 #[derive(Clone)]
 pub struct PullMessageService {
     tx: Option<tokio::sync::mpsc::Sender<Box<dyn MessageRequest + Send + 'static>>>,
+    tx_shutdown: Option<tokio::sync::broadcast::Sender<()>>,
 }
 
 impl PullMessageService {
     pub fn new() -> Self {
-        PullMessageService { tx: None }
+        PullMessageService {
+            tx: None,
+            tx_shutdown: None,
+        }
     }
     pub async fn start(&mut self, mut instance: ArcRefCellWrapper<MQClientInstance>) {
         let (tx, mut rx) =
             tokio::sync::mpsc::channel::<Box<dyn MessageRequest + Send + 'static>>(1024 * 4);
+        let (mut shutdown, tx_shutdown) = Shutdown::new(1);
         self.tx = Some(tx);
+        self.tx_shutdown = Some(tx_shutdown);
         tokio::spawn(async move {
             info!(">>>>>>>>>>>>>>>>>>>>>>>PullMessageService  started<<<<<<<<<<<<<<<<<<<<<<<<<<<<");
-            while let Some(request) = rx.recv().await {
+            /*while let Some(request) = rx.recv().await {
                 if request.get_message_request_mode() == MessageRequestMode::Pull {
                     let pull_request =
                         unsafe { *Box::from_raw(Box::into_raw(request) as *mut PullRequest) };
@@ -48,6 +55,32 @@ impl PullMessageService {
                     let pop_request =
                         unsafe { *Box::from_raw(Box::into_raw(request) as *mut PopRequest) };
                     PullMessageService::pop_message(pop_request, instance.as_mut()).await;
+                }
+            }*/
+            if shutdown.is_shutdown() {
+                info!("PullMessageService shutdown");
+                return;
+            }
+            loop {
+                tokio::select! {
+                    _ = shutdown.recv() => {
+                        info!("PullMessageService shutdown");
+                    }
+                    Some(request) = rx.recv() => {
+                        if request.get_message_request_mode() == MessageRequestMode::Pull {
+                            let pull_request =
+                                unsafe { *Box::from_raw(Box::into_raw(request) as *mut PullRequest) };
+                            PullMessageService::pull_message(pull_request, instance.as_mut()).await;
+                        } else {
+                            let pop_request =
+                                unsafe { *Box::from_raw(Box::into_raw(request) as *mut PopRequest) };
+                            PullMessageService::pop_message(pop_request, instance.as_mut()).await;
+                        }
+                    }
+                }
+                if shutdown.is_shutdown() {
+                    info!("PullMessageService shutdown");
+                    break;
                 }
             }
         });
@@ -104,6 +137,19 @@ impl PullMessageService {
     pub async fn execute_pop_pull_request_immediately(&self, pop_request: PopRequest) {
         if let Err(e) = self.tx.as_ref().unwrap().send(Box::new(pop_request)).await {
             warn!("Failed to send pull request to pull_tx, error: {:?}", e);
+        }
+    }
+
+    pub fn shutdown(&self) {
+        if let Some(tx_shutdown) = &self.tx_shutdown {
+            if let Err(e) = tx_shutdown.send(()) {
+                warn!("Failed to send shutdown signal to pull_tx, error: {:?}", e);
+            }
+        } else {
+            warn!(
+                "Attempted to shutdown but tx_shutdown is None. Ensure `start` is called before \
+                 `shutdown`."
+            );
         }
     }
 }

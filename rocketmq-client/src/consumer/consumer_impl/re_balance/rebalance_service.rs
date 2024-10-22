@@ -19,10 +19,12 @@ use std::time::Duration;
 
 use once_cell::sync::Lazy;
 use rocketmq_common::ArcRefCellWrapper;
+use rocketmq_rust::Shutdown;
 use tokio::select;
 use tokio::sync::Notify;
 use tokio::time::Instant;
 use tracing::info;
+use tracing::warn;
 
 use crate::factory::mq_client_instance::MQClientInstance;
 
@@ -47,17 +49,21 @@ static MIN_INTERVAL: Lazy<Duration> = Lazy::new(|| {
 #[derive(Clone)]
 pub struct RebalanceService {
     notify: Arc<Notify>,
+    tx_shutdown: Option<tokio::sync::broadcast::Sender<()>>,
 }
 
 impl RebalanceService {
     pub fn new() -> Self {
         RebalanceService {
             notify: Arc::new(Notify::new()),
+            tx_shutdown: None,
         }
     }
 
     pub async fn start(&mut self, mut instance: ArcRefCellWrapper<MQClientInstance>) {
         let notify = self.notify.clone();
+        let (mut shutdown, tx_shutdown) = Shutdown::new(1);
+        self.tx_shutdown = Some(tx_shutdown);
         tokio::spawn(async move {
             let mut last_rebalance_timestamp = Instant::now();
             let min_interval = *MIN_INTERVAL;
@@ -66,7 +72,11 @@ impl RebalanceService {
             loop {
                 select! {
                     _ = notify.notified() => {}
+                    _ = shutdown.recv() => {info!("RebalanceService shutdown");}
                     _ = tokio::time::sleep(real_wait_interval) => {}
+                }
+                if shutdown.is_shutdown() {
+                    return;
                 }
                 let interval = Instant::now() - last_rebalance_timestamp;
                 if interval < min_interval {
@@ -86,5 +96,18 @@ impl RebalanceService {
 
     pub fn wakeup(&self) {
         self.notify.notify_waiters();
+    }
+
+    pub fn shutdown(&self) {
+        if let Some(tx_shutdown) = &self.tx_shutdown {
+            if let Err(e) = tx_shutdown.send(()) {
+                warn!(
+                    "Failed to send shutdown signal to RebalanceService, error: {:?}",
+                    e
+                );
+            }
+        } else {
+            warn!("Shutdown called before start; no shutdown signal sent");
+        }
     }
 }
