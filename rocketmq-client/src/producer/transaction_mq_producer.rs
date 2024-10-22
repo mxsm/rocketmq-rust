@@ -14,19 +14,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod default_mq_produce_builder;
-pub mod default_mq_producer;
-pub mod local_transaction_state;
-pub mod message_queue_selector;
-pub mod mq_producer;
-pub mod produce_accumulator;
-pub mod producer_impl;
-pub mod request_callback;
-pub(crate) mod request_future_holder;
-pub(crate) mod request_response_future;
-pub mod send_callback;
-pub mod send_result;
-pub mod send_status;
-pub mod transaction_listener;
-pub mod transaction_mq_producer;
-pub mod transaction_send_result;
+use std::sync::Arc;
+
+use crate::producer::default_mq_producer::DefaultMQProducer;
+use crate::producer::transaction_listener::TransactionListener;
+
+#[derive(Clone)]
+pub struct TransactionProducerConfig {
+    pub transaction_check_listener: Option<Arc<Box<dyn TransactionListener>>>,
+    pub check_thread_pool_min_size: u32,
+    pub check_thread_pool_max_size: u32,
+    pub check_request_hold_max: u32,
+}
+
+pub struct TransactionMQProducer {
+    default_producer: DefaultMQProducer,
+}
