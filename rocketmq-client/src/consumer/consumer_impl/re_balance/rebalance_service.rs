@@ -99,8 +99,12 @@ impl RebalanceService {
     }
 
     pub fn shutdown(&self) {
-        if let Err(e) = self.tx_shutdown.as_ref().unwrap().send(()) {
-            warn!("Failed to send shutdown signal to pull_tx, error: {:?}", e);
+        if let Some(tx_shutdown) = &self.tx_shutdown {
+            if let Err(e) = tx_shutdown.send(()) {
+                warn!("Failed to send shutdown signal to RebalanceService, error: {:?}", e);
+            }
+        } else {
+            warn!("Shutdown called before start; no shutdown signal sent");
         }
     }
 }
