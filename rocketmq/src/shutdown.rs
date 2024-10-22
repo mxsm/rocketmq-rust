@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 use tokio::sync::broadcast;
+use tracing::warn;
 
 pub struct Shutdown<T> {
     /// `true` if the shutdown signal has been received
@@ -50,7 +51,10 @@ where
         }
 
         // Cannot receive a "lag error" as only one value is ever sent.
-        let _ = self.notify.recv().await;
+        let result = self.notify.recv().await;
+        if result.is_err() {
+            warn!("Failed to receive shutdown signal");
+        }
 
         // Remember that the signal has been received.
         self.is_shutdown = true;
