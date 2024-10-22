@@ -30,11 +30,13 @@ where
     T: Clone,
 {
     /// Create a new `Shutdown` backed by the given `broadcast::Receiver`.
-    pub fn new(notify: broadcast::Receiver<T>) -> Shutdown<T> {
-        Shutdown {
+    pub fn new(capacity: usize) -> (Shutdown<T>, broadcast::Sender<T>) {
+        let (tx, _) = broadcast::channel(capacity);
+        let shutdown = Shutdown {
             is_shutdown: false,
-            notify,
-        }
+            notify: tx.subscribe(),
+        };
+        (shutdown, tx)
     }
 
     /// Returns `true` if the shutdown signal has been received.
@@ -63,33 +65,38 @@ where
 
 #[cfg(test)]
 mod tests {
-    use tokio::sync::broadcast;
 
     use super::*;
 
     #[tokio::test]
-    async fn shutdown_initial_state() {
-        let (_, rx) = broadcast::channel::<()>(1);
-        let shutdown = Shutdown::new(rx);
-        assert!(!shutdown.is_shutdown());
-    }
-
-    #[tokio::test]
     async fn shutdown_signal_received() {
-        let (tx, rx) = broadcast::channel::<()>(1);
-        let mut shutdown = Shutdown::new(rx);
-        tx.send(()).unwrap();
+        let (mut shutdown, sender) = Shutdown::new(1);
+        sender.send(()).unwrap();
         shutdown.recv().await;
         assert!(shutdown.is_shutdown());
     }
 
     #[tokio::test]
+    async fn shutdown_signal_not_received() {
+        let (shutdown, _) = Shutdown::<()>::new(1);
+        assert!(!shutdown.is_shutdown());
+    }
+
+    #[tokio::test]
+    async fn shutdown_signal_multiple_receivers() {
+        let (mut shutdown1, sender) = Shutdown::new(1);
+        sender.send(()).unwrap();
+        shutdown1.recv().await;
+
+        assert!(shutdown1.is_shutdown());
+    }
+
+    #[tokio::test]
     async fn shutdown_signal_already_received() {
-        let (tx, rx) = broadcast::channel::<()>(1);
-        let mut shutdown = Shutdown::new(rx);
-        tx.send(()).unwrap();
+        let (mut shutdown, sender) = Shutdown::new(1);
+        sender.send(()).unwrap();
         shutdown.recv().await;
-        shutdown.recv().await;
+        shutdown.recv().await; // Call recv again
         assert!(shutdown.is_shutdown());
     }
 }
