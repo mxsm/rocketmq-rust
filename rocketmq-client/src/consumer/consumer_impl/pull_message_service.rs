@@ -146,7 +146,10 @@ impl PullMessageService {
                 warn!("Failed to send shutdown signal to pull_tx, error: {:?}", e);
             }
         } else {
-            warn!("Attempted to shutdown but tx_shutdown is None. Ensure `start` is called before `shutdown`.");
+            warn!(
+                "Attempted to shutdown but tx_shutdown is None. Ensure `start` is called before \
+                 `shutdown`."
+            );
         }
     }
 }
