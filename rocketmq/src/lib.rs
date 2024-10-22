@@ -16,12 +16,14 @@
  */
 pub mod count_down_latch;
 pub mod rocketmq_tokio_lock;
+mod shutdown;
 
 pub use count_down_latch::CountDownLatch;
 /// Re-export rocketmq main.
 pub use rocketmq::main;
 pub use rocketmq_tokio_lock::RocketMQTokioMutex;
 pub use rocketmq_tokio_lock::RocketMQTokioRwLock;
+pub use shutdown::Shutdown;
 /// Re-export tokio module.
 pub use tokio as rocketmq;
 
