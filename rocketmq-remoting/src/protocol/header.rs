@@ -20,6 +20,7 @@ pub mod client_request_header;
 pub mod consumer_send_msg_back_request_header;
 pub mod create_topic_request_header;
 pub mod delete_topic_request_header;
+pub mod end_transaction_request_header;
 pub mod get_all_topic_config_response_header;
 pub mod get_consume_stats_request_header;
 pub mod get_consumer_connection_list_request_header;
