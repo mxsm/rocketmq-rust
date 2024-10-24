@@ -55,7 +55,7 @@ trait-variant.workspace = true
 time = "0.3.36"
 dashmap = "6.1.0"
 hostname = "0.4"
-regex = "1.11.0"
+regex = "1.11.1"
 thiserror = { workspace = true }
 hex = "0.4.3"
 reqwest = { version = "0.12", features = ["blocking"] }
