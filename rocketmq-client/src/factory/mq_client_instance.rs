@@ -1055,6 +1055,10 @@ impl MQClientInstance {
         consumer_table.get(group).cloned()
     }
 
+    pub async fn select_producer(&self, group: &str) -> Option<Box<dyn MQProducerInner>> {
+        unimplemented!("selectProducer")
+    }
+
     pub async fn unregister_consumer(&mut self, group: impl Into<String>) {
         self.unregister_client(None, Some(group.into())).await;
     }

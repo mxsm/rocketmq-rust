@@ -516,6 +516,10 @@ impl RemotingCommand {
         self.body.as_ref()
     }
 
+    pub fn get_body_mut(&mut self) -> Option<&mut Bytes> {
+        self.body.as_mut()
+    }
+
     pub fn mark_serialize_type(header_length: i32, protocol_type: SerializeType) -> i32 {
         (protocol_type.get_code() as i32) << 24 | (header_length & 0x00FFFFFF)
     }
