@@ -75,7 +75,7 @@ pub struct MQClientInstance {
      * The container of the producer in the current client. The key is the name of
      * producerGroup.
      */
-    producer_table: Arc<RwLock<HashMap<String, MQProducerInnerImpl>>>,
+    producer_table: Arc<RwLock<HashMap<String, Box<dyn MQProducerInner>>>>,
     /**
      * The container of the consumer in the current client. The key is the name of
      * consumer_group.
@@ -328,7 +328,7 @@ impl MQClientInstance {
 
     pub async fn shutdown(&mut self) {}
 
-    pub async fn register_producer(&mut self, group: &str, producer: MQProducerInnerImpl) -> bool {
+    pub async fn register_producer(&mut self, group: &str, producer: impl MQProducerInner) -> bool {
         if group.is_empty() {
             return false;
         }
@@ -337,7 +337,7 @@ impl MQClientInstance {
             warn!("the producer group[{}] exist already.", group);
             return false;
         }
-        producer_table.insert(group.to_string(), producer);
+        producer_table.insert(group.to_string(), Box::new(producer));
         true
     }
 
@@ -1057,9 +1057,10 @@ impl MQClientInstance {
         consumer_table.get(group).cloned()
     }
 
-    pub async fn select_producer(&self, group: &str) -> Option<MQProducerInnerImpl> {
-        let producer_table = self.producer_table.read().await;
-        producer_table.get(group).cloned()
+    pub async fn select_producer(&self, group: &str) -> Option<Box<dyn MQProducerInner>> {
+        /*let producer_table = self.producer_table.read().await;
+        producer_table.get(group).cloned()*/
+        unimplemented!("select_producer")
     }
 
     pub async fn unregister_consumer(&mut self, group: impl Into<String>) {

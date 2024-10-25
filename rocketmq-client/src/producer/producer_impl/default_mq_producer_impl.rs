@@ -2124,17 +2124,16 @@ impl DefaultMQProducerImpl {
                     .set_service_detector(service_detector);
                 self.client_instance = Some(client_instance);
                 let self_clone = self.default_mqproducer_impl_inner.clone();
-                let register_ok = self
-                    .client_instance
-                    .as_mut()
-                    .unwrap()
-                    .register_producer(
-                        self.producer_config.producer_group(),
-                        MQProducerInnerImpl {
-                            default_mqproducer_impl_inner: self_clone,
-                        },
-                    )
-                    .await;
+                /*let register_ok = self
+                .client_instance
+                .as_mut()
+                .unwrap()
+                .register_producer(
+                    self.producer_config.producer_group(),
+                    self_clone,
+                )
+                .await;*/
+                let register_ok = true;
                 if !register_ok {
                     self.service_state = ServiceState::CreateJust;
                     return Err(MQClientError::MQClientErr(
