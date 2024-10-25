@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::net::Ipv4Addr;
 use std::net::Ipv6Addr;
 use std::net::SocketAddr;
@@ -30,10 +31,12 @@ use bytes::BytesMut;
 use crate::common::compression::compression_type::CompressionType;
 use crate::common::message::message_client_ext::MessageClientExt;
 use crate::common::message::message_ext::MessageExt;
+use crate::common::message::message_id::MessageId;
 use crate::common::message::message_single::Message;
 use crate::common::message::MessageTrait;
 use crate::common::message::MessageVersion;
 use crate::common::sys_flag::message_sys_flag::MessageSysFlag;
+use crate::utils::util_all;
 use crate::CRC32Utils::crc32;
 use crate::MessageAccessor::MessageAccessor;
 use crate::MessageUtils::build_message_id;
@@ -385,11 +388,11 @@ pub fn encode_message(message: &Message) -> Bytes {
     let properties_length = properties_bytes.len();
 
     let store_size = 4 // 1 TOTALSIZE
-          + 4 // 2 MAGICCOD
-          + 4 // 3 BODYCRC
-          + 4 // 4 FLAG
-          + 4 + body_len // 4 BODY
-          + 2 + properties_length;
+           + 4 // 2 MAGICCOD
+           + 4 // 3 BODYCRC
+           + 4 // 4 FLAG
+           + 4 + body_len // 4 BODY
+           + 2 + properties_length;
 
     let mut bytes = BytesMut::with_capacity(store_size);
 
@@ -518,6 +521,26 @@ pub fn decode_message(buffer: &mut Bytes) -> Message {
     }
 }
 
+pub fn decode_message_id(msg_id: &str) -> MessageId {
+    let bytes = util_all::string_to_bytes(msg_id).unwrap();
+    let mut buffer = Bytes::from(bytes);
+    let len = if msg_id.len() == 32 {
+        let mut ip = [0u8; 4];
+        buffer.copy_to_slice(&mut ip);
+        let port = buffer.get_i32();
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::from(ip)), port as u16)
+    } else {
+        let mut ip = [0u8; 16];
+        buffer.copy_to_slice(&mut ip);
+        let port = buffer.get_i32();
+        SocketAddr::new(IpAddr::V6(Ipv6Addr::from(ip)), port as u16)
+    };
+    MessageId {
+        address: len,
+        offset: buffer.get_i64(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use bytes::BufMut;
@@ -554,5 +577,13 @@ mod tests {
         let mut bytes = BytesMut::new();
         bytes.put_i32(4);
         assert_eq!(count_inner_msg_num(Some(bytes.freeze())), 1);
+    }
+
+    #[test]
+    fn decode_message_id_ipv4() {
+        let msg_id = "7F0000010007D8260BF075769D36C348";
+        let message_id = decode_message_id(msg_id);
+        assert_eq!(message_id.address, "127.0.0.1:55334".parse().unwrap());
+        assert_eq!(message_id.offset, 860316681131967304);
     }
 }

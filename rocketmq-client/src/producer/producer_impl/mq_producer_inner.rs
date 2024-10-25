@@ -18,8 +18,11 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use rocketmq_common::common::message::message_ext::MessageExt;
+use rocketmq_common::WeakCellWrapper;
 use rocketmq_remoting::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
 
+use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
+use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl;
 use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
 use crate::producer::transaction_listener::TransactionListener;
 
@@ -40,4 +43,68 @@ pub trait MQProducerInner: Send + Sync + 'static {
     fn update_topic_publish_info(&mut self, topic: String, info: Option<TopicPublishInfo>);
 
     fn is_unit_mode(&self) -> bool;
+}
+
+#[derive(Clone)]
+pub(crate) struct MQProducerInnerImpl {
+    pub(crate) default_mqproducer_impl_inner: Option<WeakCellWrapper<DefaultMQProducerImpl>>,
+}
+
+impl MQProducerInner for MQProducerInnerImpl {
+    fn get_publish_topic_list(&self) -> HashSet<String> {
+        if let Some(default_mqproducer_impl_inner) = &self.default_mqproducer_impl_inner {
+            if let Some(inner) = default_mqproducer_impl_inner.upgrade() {
+                return inner.get_publish_topic_list();
+            }
+        }
+        HashSet::new()
+    }
+
+    fn is_publish_topic_need_update(&self, topic: &str) -> bool {
+        if let Some(default_mqproducer_impl_inner) = &self.default_mqproducer_impl_inner {
+            if let Some(inner) = default_mqproducer_impl_inner.upgrade() {
+                return inner.is_publish_topic_need_update(topic);
+            }
+        }
+        false
+    }
+
+    fn get_check_listener(&self) -> Arc<Box<dyn TransactionListener>> {
+        if let Some(default_mqproducer_impl_inner) = &self.default_mqproducer_impl_inner {
+            if let Some(inner) = default_mqproducer_impl_inner.upgrade() {
+                return inner.get_check_listener();
+            }
+        }
+        unreachable!("default_mqproducer_impl_inner is None")
+    }
+
+    fn check_transaction_state(
+        &self,
+        addr: &str,
+        msg: &MessageExt,
+        check_request_header: &CheckTransactionStateRequestHeader,
+    ) {
+        if let Some(default_mqproducer_impl_inner) = &self.default_mqproducer_impl_inner {
+            if let Some(inner) = default_mqproducer_impl_inner.upgrade() {
+                inner.check_transaction_state(addr, msg, check_request_header);
+            }
+        }
+    }
+
+    fn update_topic_publish_info(&mut self, topic: String, info: Option<TopicPublishInfo>) {
+        if let Some(default_mqproducer_impl_inner) = &self.default_mqproducer_impl_inner {
+            if let Some(mut inner) = default_mqproducer_impl_inner.upgrade() {
+                inner.update_topic_publish_info(topic, info);
+            }
+        }
+    }
+
+    fn is_unit_mode(&self) -> bool {
+        if let Some(default_mqproducer_impl_inner) = &self.default_mqproducer_impl_inner {
+            if let Some(inner) = default_mqproducer_impl_inner.upgrade() {
+                return inner.is_unit_mode();
+            }
+        }
+        false
+    }
 }

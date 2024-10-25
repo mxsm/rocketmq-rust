@@ -42,6 +42,7 @@ use tracing::info;
 use tracing::warn;
 
 use crate::factory::mq_client_instance::MQClientInstance;
+use crate::producer::producer_impl::mq_producer_inner::MQProducerInner;
 use crate::producer::request_future_holder::REQUEST_FUTURE_HOLDER;
 
 #[derive(Clone)]

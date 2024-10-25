@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 use std::fmt;
+use std::fmt::Display;
 
 use serde::Deserialize;
 use serde::Deserializer;
@@ -74,5 +75,15 @@ impl<'de> Deserialize<'de> for LocalTransactionState {
             }
         }
         deserializer.deserialize_str(StoreTypeVisitor)
+    }
+}
+
+impl Display for LocalTransactionState {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            LocalTransactionState::CommitMessage => write!(f, "COMMIT_MESSAGE"),
+            LocalTransactionState::RollbackMessage => write!(f, "ROLLBACK_MESSAGE"),
+            LocalTransactionState::Unknown => write!(f, "UNKNOW"),
+        }
     }
 }

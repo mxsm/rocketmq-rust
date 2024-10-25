@@ -14,4 +14,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub struct EndTransactionContext {}
+use rocketmq_common::common::message::message_single::Message;
+
+use crate::producer::local_transaction_state::LocalTransactionState;
+
+pub struct EndTransactionContext<'a> {
+    pub producer_group: String,
+    pub broker_addr: String,
+    pub message: &'a Message,
+    pub msg_id: String,
+    pub transaction_id: String,
+    pub transaction_state: LocalTransactionState,
+    pub from_transaction_check: bool,
+}
