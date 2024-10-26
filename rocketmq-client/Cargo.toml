@@ -82,3 +82,7 @@ path = "examples/ordermessage/ordermessage_producer.rs"
 [[example]]
 name = "ordermessage-consumer"
 path = "examples/ordermessage/ordermessage_consumer.rs"
+
+[[example]]
+name = "transaction-producer"
+path = "examples/transaction/transaction_producer.rs"

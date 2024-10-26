@@ -42,7 +42,6 @@ use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::MessageDecoder;
 use rocketmq_common::TimeUtils::get_current_millis;
-use rocketmq_common::WeakCellWrapper;
 use rocketmq_remoting::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
 use rocketmq_remoting::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
@@ -107,7 +106,9 @@ pub struct DefaultMQProducerImpl {
     semaphore_async_send_size: Arc<Semaphore>,
     async_sender_runtime: Option<Arc<RocketMQRuntime>>,
     default_async_sender_runtime: Option<Arc<RocketMQRuntime>>,
-    default_mqproducer_impl_inner: Option<WeakCellWrapper<DefaultMQProducerImpl>>,
+    default_mqproducer_impl_inner: Option<ArcRefCellWrapper<DefaultMQProducerImpl>>,
+    transaction_listener: Option<Arc<Box<dyn TransactionListener>>>,
+    check_runtime: Option<Arc<RocketMQRuntime>>,
 }
 
 #[allow(unused_must_use)]
@@ -145,6 +146,8 @@ impl DefaultMQProducerImpl {
                 "async-sender",
             ))),
             default_mqproducer_impl_inner: None,
+            transaction_listener: None,
+            check_runtime: None,
         }
     }
 
@@ -311,7 +314,7 @@ impl DefaultMQProducerImpl {
         T: std::any::Any + Sync + Send,
     {
         let begin_start_time = Instant::now();
-        let mut clone_self = self.default_mqproducer_impl_inner.clone().unwrap();
+        let mut producer_impl = self.default_mqproducer_impl_inner.clone().unwrap();
         let msg_len = if msg.get_body().is_some() {
             msg.get_body().unwrap().len()
         } else {
@@ -326,23 +329,17 @@ impl DefaultMQProducerImpl {
                     Some(&RemotingTooMuchRequestError("call timeout".to_string())),
                 );
             }
-            if let Some(mut producer_impl) = clone_self.upgrade() {
-                producer_impl
-                    .send_select_impl(
-                        msg,
-                        selector,
-                        arg,
-                        CommunicationMode::Async,
-                        send_callback_clone,
-                        timeout - cost_time,
-                    )
-                    .await
-            } else {
-                Err(MQClientError::MQClientErr(
-                    -1,
-                    "producer_impl is None".to_string(),
-                ))
-            }
+
+            producer_impl
+                .send_select_impl(
+                    msg,
+                    selector,
+                    arg,
+                    CommunicationMode::Async,
+                    send_callback_clone,
+                    timeout - cost_time,
+                )
+                .await
         };
         self.execute_async_message_send(future, send_callback, timeout, begin_start_time, msg_len)
             .await
@@ -459,52 +456,47 @@ impl DefaultMQProducerImpl {
             1
         };
         let future = async move {
-            if let Some(mut producer_impl) = producer_impl.upgrade() {
-                if let Err(err) = producer_impl.make_sure_state_ok() {
-                    send_callback_inner.as_ref().unwrap()(None, Some(&err));
-                    return;
-                }
-                if msg.get_topic() != mq.get_topic() {
-                    send_callback_inner.as_ref().unwrap()(
-                        None,
-                        Some(&MQClientError::MQClientErr(
-                            -1,
-                            format!(
-                                "message topic [{}] is not equal with message queue topic [{}]",
-                                msg.get_topic(),
-                                mq.get_topic()
-                            ),
-                        )),
-                    );
-                    return;
-                }
+            if let Err(err) = producer_impl.make_sure_state_ok() {
+                send_callback_inner.as_ref().unwrap()(None, Some(&err));
+                return;
+            }
+            if msg.get_topic() != mq.get_topic() {
+                send_callback_inner.as_ref().unwrap()(
+                    None,
+                    Some(&MQClientError::MQClientErr(
+                        -1,
+                        format!(
+                            "message topic [{}] is not equal with message queue topic [{}]",
+                            msg.get_topic(),
+                            mq.get_topic()
+                        ),
+                    )),
+                );
+                return;
+            }
 
-                let cost_time = (Instant::now() - begin_start_time).as_millis() as u64;
-                if timeout <= cost_time {
-                    send_callback_inner.as_ref().unwrap()(
-                        None,
-                        Some(&RemotingTooMuchRequestError("call timeout".to_string())),
-                    );
+            let cost_time = (Instant::now() - begin_start_time).as_millis() as u64;
+            if timeout <= cost_time {
+                send_callback_inner.as_ref().unwrap()(
+                    None,
+                    Some(&RemotingTooMuchRequestError("call timeout".to_string())),
+                );
+            }
+            let result = producer_impl
+                .send_kernel_impl(
+                    &mut msg,
+                    &mq,
+                    CommunicationMode::Async,
+                    send_callback_inner.clone(),
+                    None,
+                    timeout,
+                )
+                .await;
+            match result {
+                Ok(_) => {}
+                Err(err) => {
+                    send_callback_inner.as_ref().unwrap()(None, Some(&err));
                 }
-                let result = producer_impl
-                    .send_kernel_impl(
-                        &mut msg,
-                        &mq,
-                        CommunicationMode::Async,
-                        send_callback_inner.clone(),
-                        None,
-                        timeout,
-                    )
-                    .await;
-                match result {
-                    Ok(_) => {}
-                    Err(err) => {
-                        send_callback_inner.as_ref().unwrap()(None, Some(&err));
-                    }
-                }
-            } else {
-                let error = MQClientErr(-1, "producer_impl is None".to_string());
-                send_callback_inner.as_ref().unwrap()(None, Some(&error));
             }
         };
 
@@ -521,7 +513,7 @@ impl DefaultMQProducerImpl {
     where
         T: MessageTrait + Clone + Send + Sync,
     {
-        let mut producer_impl = self.default_mqproducer_impl_inner.clone().unwrap();
+        let producer_impl = self.default_mqproducer_impl_inner.clone().unwrap();
         let begin_start_time = Instant::now();
         let send_callback_inner = send_callback.clone();
         let msg_len = if msg.get_body().is_some() {
@@ -539,25 +531,21 @@ impl DefaultMQProducerImpl {
                     )),
                 );
             }
-            if let Some(producer_impl) = producer_impl.upgrade() {
-                let result = producer_impl
-                    .clone()
-                    .send_default_impl(
-                        msg,
-                        CommunicationMode::Async,
-                        send_callback_inner.clone(),
-                        timeout,
-                    )
-                    .await;
-                match result {
-                    Ok(_) => {}
-                    Err(err) => {
-                        send_callback_inner.as_ref().unwrap()(None, Some(&err));
-                    }
+
+            let result = producer_impl
+                .clone()
+                .send_default_impl(
+                    msg,
+                    CommunicationMode::Async,
+                    send_callback_inner.clone(),
+                    timeout,
+                )
+                .await;
+            match result {
+                Ok(_) => {}
+                Err(err) => {
+                    send_callback_inner.as_ref().unwrap()(None, Some(&err));
                 }
-            } else {
-                let error = MQClientErr(-1, "producer_impl is None".to_string());
-                send_callback_inner.as_ref().unwrap()(None, Some(&error));
             }
         };
 
@@ -1847,15 +1835,13 @@ impl DefaultMQProducerImpl {
         }
     }
 
-    pub async fn send_message_in_transaction<TL, T>(
+    pub async fn send_message_in_transaction<T>(
         &mut self,
         mut msg: Message,
-        transaction_listener: TL,
         arg: T,
     ) -> Result<TransactionSendResult>
     where
         T: std::any::Any + Sync + Send,
-        TL: TransactionListener,
     {
         // ignore DelayTimeLevel parameter
         if msg.get_delay_time_level() != 0 {
@@ -1876,7 +1862,7 @@ impl DefaultMQProducerImpl {
         if let Err(e) = result {
             return Err(MQClientErr(
                 -1,
-                format!("send message in transaction error, {}", e.to_string()),
+                format!("send message in transaction error, {}", e),
             ));
         }
         let send_result = result.unwrap().expect("send result is none");
@@ -1893,7 +1879,10 @@ impl DefaultMQProducerImpl {
                 if let Some(transaction_id) = transaction_id {
                     msg.set_transaction_id(transaction_id.as_str());
                 }
-                transaction_listener.execute_local_transaction(&msg, &arg)
+                self.transaction_listener
+                    .as_ref()
+                    .unwrap()
+                    .execute_local_transaction(&msg, &arg)
             }
             SendStatus::FlushDiskTimeout
             | SendStatus::FlushSlaveTimeout
@@ -1985,7 +1974,7 @@ impl DefaultMQProducerImpl {
         &mut self,
         msg: &Message,
         msg_id: &String,
-        broker_addr: &String,
+        broker_addr: &str,
         local_transaction_state: LocalTransactionState,
         from_transaction_check: bool,
     ) {
@@ -2014,9 +2003,20 @@ impl DefaultMQProducerImpl {
 
     pub fn set_default_mqproducer_impl_inner(
         &mut self,
-        default_mqproducer_impl_inner: WeakCellWrapper<DefaultMQProducerImpl>,
+        default_mqproducer_impl_inner: ArcRefCellWrapper<DefaultMQProducerImpl>,
     ) {
         self.default_mqproducer_impl_inner = Some(default_mqproducer_impl_inner);
+    }
+
+    pub fn set_transaction_listener(
+        &mut self,
+        transaction_listener: Arc<Box<dyn TransactionListener>>,
+    ) {
+        self.transaction_listener = Some(transaction_listener);
+    }
+
+    pub fn set_check_runtime(&mut self, check_runtime: Arc<RocketMQRuntime>) {
+        self.check_runtime = Some(check_runtime);
     }
 }
 
@@ -2062,11 +2062,74 @@ impl MQProducerInner for DefaultMQProducerImpl {
 
     fn check_transaction_state(
         &self,
-        addr: &str,
-        msg: &MessageExt,
-        check_request_header: &CheckTransactionStateRequestHeader,
+        broker_addr: &str,
+        msg: MessageExt,
+        check_request_header: CheckTransactionStateRequestHeader,
     ) {
-        todo!()
+        let transaction_listener = self.transaction_listener.clone().unwrap();
+        let mut producer_impl_inner = self.default_mqproducer_impl_inner.clone().unwrap();
+        let broker_addr = broker_addr.to_string();
+        self.check_runtime
+            .as_ref()
+            .unwrap()
+            .get_handle()
+            .spawn(async move {
+                let mut unique_key =
+                    msg.get_property(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX);
+                if unique_key.is_none() {
+                    unique_key = Some(msg.msg_id.clone());
+                }
+                let transaction_state = transaction_listener.check_local_transaction(&msg);
+                let request_header = EndTransactionRequestHeader {
+                    topic: check_request_header.topic.clone().unwrap_or_default(),
+                    producer_group: producer_impl_inner
+                        .producer_config
+                        .producer_group()
+                        .to_string(),
+                    tran_state_table_offset: check_request_header.commit_log_offset as u64,
+                    commit_log_offset: check_request_header.commit_log_offset as u64,
+                    commit_or_rollback: match transaction_state {
+                        LocalTransactionState::CommitMessage => {
+                            MessageSysFlag::TRANSACTION_COMMIT_TYPE
+                        }
+                        LocalTransactionState::RollbackMessage => {
+                            MessageSysFlag::TRANSACTION_ROLLBACK_TYPE
+                        }
+                        LocalTransactionState::Unknown => MessageSysFlag::TRANSACTION_NOT_TYPE,
+                    },
+                    from_transaction_check: true,
+                    msg_id: unique_key.clone().unwrap_or_default(),
+                    transaction_id: check_request_header.transaction_id.clone(),
+                    rpc_request_header: RpcRequestHeader {
+                        broker_name: check_request_header
+                            .rpc_request_header
+                            .unwrap_or_default()
+                            .broker_name,
+                        ..Default::default()
+                    },
+                };
+                producer_impl_inner.do_execute_end_transaction_hook(
+                    &msg.message,
+                    unique_key.as_ref().unwrap(),
+                    broker_addr.as_str(),
+                    transaction_state,
+                    true,
+                );
+                let _ = producer_impl_inner
+                    .client_instance
+                    .as_mut()
+                    .unwrap()
+                    .mq_client_api_impl
+                    .as_mut()
+                    .unwrap()
+                    .end_transaction_oneway(
+                        broker_addr.as_str(),
+                        request_header,
+                        "".to_string(),
+                        3000,
+                    )
+                    .await;
+            });
     }
 
     fn update_topic_publish_info(&mut self, topic: String, info: Option<TopicPublishInfo>) {
@@ -2124,16 +2187,17 @@ impl DefaultMQProducerImpl {
                     .set_service_detector(service_detector);
                 self.client_instance = Some(client_instance);
                 let self_clone = self.default_mqproducer_impl_inner.clone();
-                /*let register_ok = self
-                .client_instance
-                .as_mut()
-                .unwrap()
-                .register_producer(
-                    self.producer_config.producer_group(),
-                    self_clone,
-                )
-                .await;*/
-                let register_ok = true;
+                let register_ok = self
+                    .client_instance
+                    .as_mut()
+                    .unwrap()
+                    .register_producer(
+                        self.producer_config.producer_group(),
+                        MQProducerInnerImpl {
+                            default_mqproducer_impl_inner: self_clone,
+                        },
+                    )
+                    .await;
                 if !register_ok {
                     self.service_state = ServiceState::CreateJust;
                     return Err(MQClientError::MQClientErr(

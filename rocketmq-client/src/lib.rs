@@ -16,6 +16,8 @@
  */
 #![allow(dead_code)]
 #![allow(unused_variables)]
+#![recursion_limit = "256"]
+
 extern crate core;
 
 use crate::error::MQClientError;

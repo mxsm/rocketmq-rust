@@ -22,7 +22,6 @@ use rocketmq_common::common::message::MessageTrait;
 
 use crate::producer::send_callback::SendMessageCallback;
 use crate::producer::send_result::SendResult;
-use crate::producer::transaction_listener::TransactionListener;
 use crate::producer::transaction_send_result::TransactionSendResult;
 use crate::Result;
 
@@ -429,15 +428,13 @@ pub trait MQProducerLocal {
     ///
     /// * `Result<TransactionSendResult>` - A result containing the transaction send result or an
     ///   error.
-    async fn send_message_in_transaction<T, TL>(
+    async fn send_message_in_transaction<T>(
         &mut self,
         msg: Message,
         arg: T,
-        transaction_listener: TL,
     ) -> Result<TransactionSendResult>
     where
-        T: std::any::Any + Sync + Send,
-        TL: TransactionListener + Send + Sync;
+        T: std::any::Any + Sync + Send;
 
     /// Sends a batch of messages.
     ///

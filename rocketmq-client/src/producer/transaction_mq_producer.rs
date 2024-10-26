@@ -20,30 +20,61 @@ use std::sync::Arc;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_single::Message;
 use rocketmq_common::common::message::MessageTrait;
+use rocketmq_runtime::RocketMQRuntime;
 
-use crate::base::client_config::ClientConfig;
 use crate::producer::default_mq_producer::DefaultMQProducer;
-use crate::producer::default_mq_producer::ProducerConfig;
 use crate::producer::mq_producer::MQProducer;
 use crate::producer::send_callback::SendMessageCallback;
 use crate::producer::send_result::SendResult;
 use crate::producer::transaction_listener::TransactionListener;
+use crate::producer::transaction_mq_produce_builder::TransactionMQProducerBuilder;
 use crate::producer::transaction_send_result::TransactionSendResult;
 use crate::Result;
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct TransactionProducerConfig {
     pub transaction_listener: Option<Arc<Box<dyn TransactionListener>>>,
     pub check_thread_pool_min_size: u32,
     pub check_thread_pool_max_size: u32,
     pub check_request_hold_max: u32,
-    pub producer_config: ProducerConfig,
-    pub client_config: ClientConfig,
 }
 
+#[derive(Default)]
 pub struct TransactionMQProducer {
     default_producer: DefaultMQProducer,
     transaction_producer_config: TransactionProducerConfig,
+}
+
+impl TransactionMQProducer {
+    pub fn builder() -> TransactionMQProducerBuilder {
+        TransactionMQProducerBuilder::default()
+    }
+
+    pub(crate) fn new(
+        transaction_producer_config: TransactionProducerConfig,
+        default_producer: DefaultMQProducer,
+    ) -> Self {
+        Self {
+            default_producer,
+            transaction_producer_config,
+        }
+    }
+
+    pub fn set_transaction_listener(&mut self, transaction_listener: impl TransactionListener) {
+        self.default_producer
+            .default_mqproducer_impl
+            .as_mut()
+            .unwrap()
+            .set_transaction_listener(Arc::new(Box::new(transaction_listener)));
+    }
+
+    pub fn set_check_runtime(&mut self, check_runtime: RocketMQRuntime) {
+        self.default_producer
+            .default_mqproducer_impl
+            .as_mut()
+            .unwrap()
+            .set_check_runtime(Arc::new(check_runtime));
+    }
 }
 
 impl MQProducer for TransactionMQProducer {
@@ -264,15 +295,13 @@ impl MQProducer for TransactionMQProducer {
             .await
     }
 
-    async fn send_message_in_transaction<T, TL>(
+    async fn send_message_in_transaction<T>(
         &mut self,
         mut msg: Message,
         arg: T,
-        transaction_listener: TL,
     ) -> Result<TransactionSendResult>
     where
         T: std::any::Any + Sync + Send,
-        TL: TransactionListener + Send + Sync,
     {
         msg.set_topic(
             self.default_producer
@@ -283,7 +312,7 @@ impl MQProducer for TransactionMQProducer {
             .default_mqproducer_impl
             .as_mut()
             .unwrap()
-            .send_message_in_transaction(msg, transaction_listener, arg)
+            .send_message_in_transaction(msg, arg)
             .await
     }
 

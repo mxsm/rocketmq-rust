@@ -42,7 +42,6 @@ use tracing::info;
 use tracing::warn;
 
 use crate::factory::mq_client_instance::MQClientInstance;
-use crate::producer::producer_impl::mq_producer_inner::MQProducerInner;
 use crate::producer::request_future_holder::REQUEST_FUTURE_HOLDER;
 
 #[derive(Clone)]
@@ -217,7 +216,7 @@ impl ClientRemotingProcessor {
         ctx: ConnectionHandlerContext,
         mut request: RemotingCommand,
     ) -> Result<Option<RemotingCommand>> {
-        let mut request_header = request
+        let request_header = request
             .decode_command_custom_header::<CheckTransactionStateRequestHeader>()
             .unwrap();
         let message_ext = MessageDecoder::decode(
@@ -255,8 +254,8 @@ impl ClientRemotingProcessor {
                         let addr = channel.remote_address().to_string();
                         producer.check_transaction_state(
                             addr.as_str(),
-                            &message_ext,
-                            &request_header,
+                            message_ext,
+                            request_header,
                         );
                     } else {
                         warn!("checkTransactionState, pick producer group failed");

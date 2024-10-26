@@ -45,7 +45,6 @@ use crate::producer::produce_accumulator::ProduceAccumulator;
 use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl;
 use crate::producer::send_callback::SendMessageCallback;
 use crate::producer::send_result::SendResult;
-use crate::producer::transaction_listener::TransactionListener;
 use crate::producer::transaction_send_result::TransactionSendResult;
 use crate::trace::async_trace_dispatcher::AsyncTraceDispatcher;
 use crate::trace::hook::end_transaction_trace_hook_impl::EndTransactionTraceHookImpl;
@@ -350,12 +349,11 @@ impl DefaultMQProducer {
 
     pub fn set_default_mqproducer_impl(&mut self, default_mqproducer_impl: DefaultMQProducerImpl) {
         let wrapper = ArcRefCellWrapper::new(default_mqproducer_impl);
-        let weak = ArcRefCellWrapper::downgrade(&wrapper);
-        self.default_mqproducer_impl = Some(wrapper);
+        self.default_mqproducer_impl = Some(wrapper.clone());
         self.default_mqproducer_impl
             .as_mut()
             .unwrap()
-            .set_default_mqproducer_impl_inner(weak);
+            .set_default_mqproducer_impl_inner(wrapper);
     }
 
     pub fn set_retry_response_codes(&mut self, retry_response_codes: HashSet<i32>) {
@@ -1004,15 +1002,13 @@ impl MQProducer for DefaultMQProducer {
             .await
     }
 
-    async fn send_message_in_transaction<T, TL>(
+    async fn send_message_in_transaction<T>(
         &mut self,
         msg: Message,
         arg: T,
-        transaction_listener: TL,
     ) -> Result<TransactionSendResult>
     where
         T: std::any::Any + Sync + Send,
-        TL: TransactionListener + Send + Sync,
     {
         unimplemented!("DefaultMQProducer not support send_message_in_transaction")
     }
