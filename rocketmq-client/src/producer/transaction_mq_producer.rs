@@ -37,6 +37,7 @@ pub struct TransactionProducerConfig {
     pub check_thread_pool_min_size: u32,
     pub check_thread_pool_max_size: u32,
     pub check_request_hold_max: u32,
+    pub check_runtime: Option<Arc<RocketMQRuntime>>,
 }
 
 #[derive(Default)]
@@ -79,11 +80,16 @@ impl TransactionMQProducer {
 
 impl MQProducer for TransactionMQProducer {
     async fn start(&mut self) -> crate::Result<()> {
-        unimplemented!("start")
+        self.default_producer
+            .default_mqproducer_impl
+            .as_mut()
+            .unwrap()
+            .init_transaction_env(self.transaction_producer_config.check_runtime.take());
+        self.default_producer.start().await
     }
 
     async fn shutdown(&mut self) {
-        unimplemented!("shutdown")
+        self.default_producer.shutdown().await
     }
 
     async fn fetch_publish_message_queues(
@@ -298,7 +304,7 @@ impl MQProducer for TransactionMQProducer {
     async fn send_message_in_transaction<T>(
         &mut self,
         mut msg: Message,
-        arg: T,
+        arg: Option<T>,
     ) -> Result<TransactionSendResult>
     where
         T: std::any::Any + Sync + Send,

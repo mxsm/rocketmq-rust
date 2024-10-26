@@ -23,7 +23,7 @@ pub trait TransactionListener: Send + Sync + 'static {
     fn execute_local_transaction(
         &self,
         msg: &Message,
-        arg: &dyn std::any::Any,
+        arg: Option<&dyn std::any::Any>,
     ) -> LocalTransactionState;
 
     fn check_local_transaction(&self, msg: &MessageExt) -> LocalTransactionState;

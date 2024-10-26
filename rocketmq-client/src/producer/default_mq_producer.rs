@@ -1005,7 +1005,7 @@ impl MQProducer for DefaultMQProducer {
     async fn send_message_in_transaction<T>(
         &mut self,
         msg: Message,
-        arg: T,
+        arg: Option<T>,
     ) -> Result<TransactionSendResult>
     where
         T: std::any::Any + Sync + Send,

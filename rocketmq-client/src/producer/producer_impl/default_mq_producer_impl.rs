@@ -1838,7 +1838,7 @@ impl DefaultMQProducerImpl {
     pub async fn send_message_in_transaction<T>(
         &mut self,
         mut msg: Message,
-        arg: T,
+        arg: Option<T>,
     ) -> Result<TransactionSendResult>
     where
         T: std::any::Any + Sync + Send,
@@ -1882,7 +1882,7 @@ impl DefaultMQProducerImpl {
                 self.transaction_listener
                     .as_ref()
                     .unwrap()
-                    .execute_local_transaction(&msg, &arg)
+                    .execute_local_transaction(&msg, arg.as_ref())
             }
             SendStatus::FlushDiskTimeout
             | SendStatus::FlushSlaveTimeout
@@ -1903,6 +1903,17 @@ impl DefaultMQProducerImpl {
             send_result: Some(send_result),
         };
         Ok(transaction_send_result)
+    }
+
+    pub fn init_transaction_env(&mut self, check_runtime: Option<Arc<RocketMQRuntime>>) {
+        if check_runtime.is_some() {
+            self.check_runtime = check_runtime;
+        } else {
+            self.check_runtime = Some(Arc::new(RocketMQRuntime::new_multi(
+                num_cpus::get(),
+                "thread-transaction-check-",
+            )));
+        }
     }
 
     pub async fn end_transaction(

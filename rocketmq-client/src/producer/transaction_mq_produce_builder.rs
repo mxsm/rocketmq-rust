@@ -237,11 +237,8 @@ impl TransactionMQProducerBuilder {
         self
     }
 
-    pub fn transaction_listener(
-        mut self,
-        transaction_listener: Arc<Box<dyn TransactionListener>>,
-    ) -> Self {
-        self.transaction_listener = Some(transaction_listener);
+    pub fn transaction_listener(mut self, transaction_listener: impl TransactionListener) -> Self {
+        self.transaction_listener = Some(Arc::new(Box::new(transaction_listener)));
         self
     }
 
@@ -331,6 +328,7 @@ impl TransactionMQProducerBuilder {
             check_thread_pool_min_size: 0,
             check_thread_pool_max_size: 0,
             check_request_hold_max: 0,
+            check_runtime: self.check_runtime,
         };
         TransactionMQProducer::new(transaction_producer_config, mq_producer)
     }

@@ -14,6 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::fmt::Display;
+
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -26,4 +28,14 @@ pub struct TransactionSendResult {
 
     #[serde(flatten)]
     pub send_result: Option<SendResult>,
+}
+
+impl Display for TransactionSendResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "TransactionSendResult {{ local_transaction_state: {:?}, send_result: {:?} }}",
+            self.local_transaction_state, self.send_result
+        )
+    }
 }

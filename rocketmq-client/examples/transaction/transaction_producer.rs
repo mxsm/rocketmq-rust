@@ -24,6 +24,7 @@ use rocketmq_client::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_client::producer::local_transaction_state::LocalTransactionState;
 use rocketmq_client::producer::mq_producer::MQProducer;
 use rocketmq_client::producer::transaction_listener::TransactionListener;
+use rocketmq_client::producer::transaction_mq_producer::TransactionMQProducer;
 use rocketmq_client::Result;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_single::Message;
@@ -42,19 +43,20 @@ pub async fn main() -> Result<()> {
     rocketmq_common::log::init_logger();
 
     // create a producer builder with default configuration
-    let builder = DefaultMQProducer::builder();
+    let builder = TransactionMQProducer::builder();
 
     let mut producer = builder
         .producer_group(PRODUCER_GROUP.to_string())
         .name_server_addr(DEFAULT_NAMESRVADDR.to_string())
+        .topics(vec![TOPIC.to_string()])
+        .transaction_listener(TransactionListenerImpl::default())
         .build();
 
     producer.start().await?;
 
     for _ in 0..10 {
         let message = Message::with_tags(TOPIC, TAG, "Hello RocketMQ".as_bytes());
-
-        let send_result = producer.send_with_timeout(message, 2000).await?;
+        let send_result = producer.send_message_in_transaction(message, None).await?;
         println!("send result: {}", send_result);
     }
     producer.shutdown().await;
@@ -83,13 +85,13 @@ impl TransactionListener for TransactionListenerImpl {
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         let status = value % 3;
         let mut guard = self.local_trans.lock();
-        guard.insert(msg.get_transaction_id().to_string(), status);
+        guard.insert(msg.tr().to_string(), status);
         LocalTransactionState::Unknown
     }
 
     fn check_local_transaction(&self, msg: &MessageExt) -> LocalTransactionState {
         let mut guard = self.local_trans.lock();
-        let status = guard.get(msg.transaction_id()).unwrap_or(&-1);
+        let status = guard.get(msg.get_transaction_id()).unwrap_or(&-1);
         match status {
             1 => LocalTransactionState::CommitMessage,
             2 => LocalTransactionState::RollbackMessage,
