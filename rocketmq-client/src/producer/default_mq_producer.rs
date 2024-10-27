@@ -503,7 +503,7 @@ impl DefaultMQProducer {
 
     pub async fn send_direct<M>(
         &mut self,
-        msg: M,
+        mut msg: M,
         mq: Option<MessageQueue>,
         send_callback: Option<SendMessageCallback>,
     ) -> Result<Option<SendResult>>
@@ -515,7 +515,7 @@ impl DefaultMQProducer {
                 self.default_mqproducer_impl
                     .as_mut()
                     .unwrap()
-                    .send(msg)
+                    .send(&mut msg)
                     .await
             } else {
                 self.default_mqproducer_impl
@@ -701,7 +701,7 @@ impl MQProducer for DefaultMQProducer {
             .default_mqproducer_impl
             .as_mut()
             .unwrap()
-            .send_with_timeout(msg, timeout)
+            .send_with_timeout(&mut msg, timeout)
             .await?;
         Ok(result.expect("SendResult should not be None"))
     }
@@ -1014,12 +1014,12 @@ impl MQProducer for DefaultMQProducer {
     }
 
     async fn send_batch(&mut self, msgs: Vec<Message>) -> Result<SendResult> {
-        let batch = self.batch(msgs)?;
+        let mut batch = self.batch(msgs)?;
         let result = self
             .default_mqproducer_impl
             .as_mut()
             .unwrap()
-            .send(batch)
+            .send(&mut batch)
             .await?;
         Ok(result.expect("SendResult should not be None"))
     }
@@ -1029,12 +1029,12 @@ impl MQProducer for DefaultMQProducer {
         msgs: Vec<Message>,
         timeout: u64,
     ) -> Result<SendResult> {
-        let batch = self.batch(msgs)?;
+        let mut batch = self.batch(msgs)?;
         let result = self
             .default_mqproducer_impl
             .as_mut()
             .unwrap()
-            .send_with_timeout(batch, timeout)
+            .send_with_timeout(&mut batch, timeout)
             .await?;
         Ok(result.expect("SendResult should not be None"))
     }

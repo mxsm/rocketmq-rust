@@ -153,7 +153,11 @@ impl DefaultMQProducerImpl {
     }
 
     #[inline]
-    pub async fn send_with_timeout<T>(&mut self, msg: T, timeout: u64) -> Result<Option<SendResult>>
+    pub async fn send_with_timeout<T>(
+        &mut self,
+        msg: &mut T,
+        timeout: u64,
+    ) -> Result<Option<SendResult>>
     where
         T: MessageTrait + Clone + Send + Sync,
     {
@@ -162,7 +166,7 @@ impl DefaultMQProducerImpl {
     }
 
     #[inline]
-    pub async fn send<T>(&mut self, msg: T) -> Result<Option<SendResult>>
+    pub async fn send<T>(&mut self, msg: &mut T) -> Result<Option<SendResult>>
     where
         T: MessageTrait + Clone + Send + Sync,
     {
@@ -205,12 +209,12 @@ impl DefaultMQProducerImpl {
     }
 
     #[inline]
-    pub async fn send_oneway<T>(&mut self, msg: T) -> Result<()>
+    pub async fn send_oneway<T>(&mut self, mut msg: T) -> Result<()>
     where
         T: MessageTrait + Clone + Send + Sync,
     {
         self.send_default_impl(
-            msg,
+            &mut msg,
             CommunicationMode::Oneway,
             None,
             self.producer_config.send_msg_timeout() as u64,
@@ -221,7 +225,7 @@ impl DefaultMQProducerImpl {
 
     pub async fn send_oneway_with_message_queue<T>(
         &mut self,
-        msg: T,
+        mut msg: T,
         mq: MessageQueue,
     ) -> Result<()>
     where
@@ -230,7 +234,7 @@ impl DefaultMQProducerImpl {
         self.make_sure_state_ok()?;
         Validators::check_message(Some(&msg), self.producer_config.as_ref())?;
         self.send_default_impl(
-            msg,
+            &mut msg,
             CommunicationMode::Oneway,
             None,
             self.producer_config.send_msg_timeout() as u64,
@@ -507,7 +511,7 @@ impl DefaultMQProducerImpl {
 
     pub async fn async_send_with_callback_timeout<T>(
         &mut self,
-        msg: T,
+        mut msg: T,
         send_callback: Option<SendMessageCallback>,
         timeout: u64,
     ) -> Result<()>
@@ -536,7 +540,7 @@ impl DefaultMQProducerImpl {
             let result = producer_impl
                 .clone()
                 .send_default_impl(
-                    msg,
+                    &mut msg,
                     CommunicationMode::Async,
                     send_callback_inner.clone(),
                     timeout,
@@ -672,7 +676,7 @@ impl DefaultMQProducerImpl {
 
     async fn send_default_impl<T>(
         &mut self,
-        mut msg: T,
+        msg: &mut T,
         communication_mode: CommunicationMode,
         send_callback: Option<SendMessageCallback>,
         timeout: u64,
@@ -737,7 +741,7 @@ impl DefaultMQProducerImpl {
                         //send message to broker
                         let result_inner = self
                             .send_kernel_impl(
-                                &mut msg,
+                                msg,
                                 mq.as_ref().unwrap(),
                                 communication_mode,
                                 send_callback.clone(),
@@ -1679,7 +1683,7 @@ impl DefaultMQProducerImpl {
             }
         };
         self.send_default_impl(
-            msg,
+            &mut msg,
             CommunicationMode::Async,
             Some(Arc::new(send_callback)),
             timeout - cost,
@@ -1735,7 +1739,7 @@ impl DefaultMQProducerImpl {
         let topic = msg.get_topic().to_string();
         let cost = begin_timestamp.elapsed().as_millis() as u64;
         self.send_default_impl(
-            msg,
+            &mut msg,
             CommunicationMode::Async,
             Some(Arc::new(send_callback)),
             timeout - cost,
@@ -1856,7 +1860,7 @@ impl DefaultMQProducerImpl {
             MessageConst::PROPERTY_PRODUCER_GROUP,
             self.producer_config.producer_group(),
         );
-        let result = self.send(msg.clone()).await;
+        let result = self.send(&mut msg).await;
         if let Err(e) = result {
             return Err(MQClientErr(
                 -1,
@@ -1880,7 +1884,7 @@ impl DefaultMQProducerImpl {
                 self.transaction_listener
                     .as_ref()
                     .unwrap()
-                    .execute_local_transaction(&msg, arg.as_ref().map(|x| &**x))
+                    .execute_local_transaction(&msg, arg.as_deref())
             }
             SendStatus::FlushDiskTimeout
             | SendStatus::FlushSlaveTimeout
@@ -2315,7 +2319,7 @@ pub(crate) struct DefaultServiceDetector {
 
 impl ServiceDetector for DefaultServiceDetector {
     fn detect(&self, endpoint: &str, timeout_millis: u64) -> bool {
-        todo!()
+        unimplemented!("detect")
     }
 }
 

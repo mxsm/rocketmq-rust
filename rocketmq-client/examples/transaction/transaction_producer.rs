@@ -61,6 +61,7 @@ pub async fn main() -> Result<()> {
             .await?;
         println!("send result: {}", send_result);
     }
+    let _ = tokio::signal::ctrl_c().await;
     producer.shutdown().await;
 
     Ok(())
