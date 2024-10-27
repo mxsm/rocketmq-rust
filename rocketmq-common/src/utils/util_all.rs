@@ -191,7 +191,7 @@ pub fn write_short(buffer: &mut [char], pos: usize, value: i16) {
     }
 }
 
-fn string_to_bytes(hex_string: impl Into<String>) -> Option<Vec<u8>> {
+pub fn string_to_bytes(hex_string: impl Into<String>) -> Option<Vec<u8>> {
     let hex_string = hex_string.into();
     if hex_string.is_empty() {
         return None;

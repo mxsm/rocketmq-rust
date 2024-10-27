@@ -21,6 +21,7 @@ use std::sync::Arc;
 use rocketmq_common::common::message::message_enum::MessageType;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::MessageTrait;
+use rocketmq_common::ArcRefCellWrapper;
 
 use crate::implementation::communication_mode::CommunicationMode;
 use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl;
@@ -38,7 +39,7 @@ pub struct SendMessageContext<'a> {
     pub exception: Option<Arc<Box<dyn Error + Send + Sync>>>,
     pub mq_trace_context: Option<Arc<Box<dyn std::any::Any + Send + Sync>>>,
     pub props: HashMap<String, String>,
-    pub producer: Option<DefaultMQProducerImpl>,
+    pub producer: Option<ArcRefCellWrapper<DefaultMQProducerImpl>>,
     pub msg_type: Option<MessageType>,
     pub namespace: Option<String>,
 }

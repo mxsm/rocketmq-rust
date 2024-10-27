@@ -28,4 +28,6 @@ pub mod send_callback;
 pub mod send_result;
 pub mod send_status;
 pub mod transaction_listener;
+pub mod transaction_mq_produce_builder;
+pub mod transaction_mq_producer;
 pub mod transaction_send_result;

@@ -46,6 +46,7 @@ use rocketmq_remoting::protocol::body::response::lock_batch_response_body::LockB
 use rocketmq_remoting::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
 use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_remoting::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
+use rocketmq_remoting::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
 use rocketmq_remoting::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
 use rocketmq_remoting::protocol::header::heartbeat_request_header::HeartbeatRequestHeader;
 use rocketmq_remoting::protocol::header::lock_batch_mq_request_header::LockBatchMqRequestHeader;
@@ -1129,5 +1130,22 @@ impl MQClientAPIImpl {
                 addr.to_string(),
             ))
         }
+    }
+
+    pub async fn end_transaction_oneway(
+        &mut self,
+        addr: &str,
+        request_header: EndTransactionRequestHeader,
+        remark: String,
+        timeout_millis: u64,
+    ) -> Result<()> {
+        let request =
+            RemotingCommand::create_request_command(RequestCode::EndTransaction, request_header)
+                .set_remark(Some(remark));
+
+        self.remoting_client
+            .invoke_oneway(addr.to_string(), request, timeout_millis)
+            .await;
+        Ok(())
     }
 }

@@ -428,11 +428,13 @@ pub trait MQProducerLocal {
     ///
     /// * `Result<TransactionSendResult>` - A result containing the transaction send result or an
     ///   error.
-    async fn send_message_in_transaction(
-        &self,
-        msg: &Message,
-        arg: &str,
-    ) -> Result<TransactionSendResult>;
+    async fn send_message_in_transaction<T>(
+        &mut self,
+        msg: Message,
+        arg: Option<T>,
+    ) -> Result<TransactionSendResult>
+    where
+        T: std::any::Any + Sync + Send;
 
     /// Sends a batch of messages.
     ///

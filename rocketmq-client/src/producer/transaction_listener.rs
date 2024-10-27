@@ -14,6 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::any::Any;
+
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_single::Message;
 
@@ -23,7 +25,7 @@ pub trait TransactionListener: Send + Sync + 'static {
     fn execute_local_transaction(
         &self,
         msg: &Message,
-        arg: &dyn std::any::Any,
+        arg: Option<&(dyn Any + Send + Sync)>,
     ) -> LocalTransactionState;
 
     fn check_local_transaction(&self, msg: &MessageExt) -> LocalTransactionState;

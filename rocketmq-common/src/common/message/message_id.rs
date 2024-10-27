@@ -17,8 +17,8 @@
 
 use std::net::SocketAddr;
 
-#[derive(Debug)]
-struct MessageId {
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+pub struct MessageId {
     pub address: SocketAddr,
     pub offset: i64,
 }

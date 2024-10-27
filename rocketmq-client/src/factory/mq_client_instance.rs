@@ -59,21 +59,21 @@ use crate::implementation::mq_admin_impl::MQAdminImpl;
 use crate::implementation::mq_client_api_impl::MQClientAPIImpl;
 use crate::producer::default_mq_producer::DefaultMQProducer;
 use crate::producer::default_mq_producer::ProducerConfig;
-use crate::producer::producer_impl::mq_producer_inner::MQProducerInner;
+use crate::producer::producer_impl::mq_producer_inner::MQProducerInnerImpl;
 use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
 use crate::Result;
 
 const LOCK_TIMEOUT_MILLIS: u64 = 3000;
 
 pub struct MQClientInstance {
-    pub(crate) client_config: Arc<ClientConfig>,
+    pub(crate) client_config: ArcRefCellWrapper<ClientConfig>,
     pub(crate) client_id: String,
     boot_timestamp: u64,
     /**
      * The container of the producer in the current client. The key is the name of
      * producerGroup.
      */
-    producer_table: Arc<RwLock<HashMap<String, Box<dyn MQProducerInner>>>>,
+    producer_table: Arc<RwLock<HashMap<String, MQProducerInnerImpl>>>,
     /**
      * The container of the consumer in the current client. The key is the name of
      * consumer_group.
@@ -177,7 +177,7 @@ impl MQClientInstance {
     ) -> ArcRefCellWrapper<MQClientInstance> {
         let broker_addr_table = Arc::new(Default::default());
         let mut instance = ArcRefCellWrapper::new(MQClientInstance {
-            client_config: Arc::new(client_config.clone()),
+            client_config: ArcRefCellWrapper::new(client_config.clone()),
             client_id,
             boot_timestamp: get_current_millis(),
             producer_table: Arc::new(RwLock::new(HashMap::new())),
@@ -326,7 +326,7 @@ impl MQClientInstance {
 
     pub async fn shutdown(&mut self) {}
 
-    pub async fn register_producer(&mut self, group: &str, producer: impl MQProducerInner) -> bool {
+    pub async fn register_producer(&mut self, group: &str, producer: MQProducerInnerImpl) -> bool {
         if group.is_empty() {
             return false;
         }
@@ -335,7 +335,7 @@ impl MQClientInstance {
             warn!("the producer group[{}] exist already.", group);
             return false;
         }
-        producer_table.insert(group.to_string(), Box::new(producer));
+        producer_table.insert(group.to_string(), producer);
         true
     }
 
@@ -1053,6 +1053,11 @@ impl MQClientInstance {
     pub async fn select_consumer(&self, group: &str) -> Option<MQConsumerInnerImpl> {
         let consumer_table = self.consumer_table.read().await;
         consumer_table.get(group).cloned()
+    }
+
+    pub async fn select_producer(&self, group: &str) -> Option<MQProducerInnerImpl> {
+        let producer_table = self.producer_table.read().await;
+        producer_table.get(group).cloned()
     }
 
     pub async fn unregister_consumer(&mut self, group: impl Into<String>) {

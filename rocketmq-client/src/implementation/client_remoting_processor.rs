@@ -20,6 +20,7 @@ use bytes::Bytes;
 use rocketmq_common::common::compression::compressor_factory::CompressorFactory;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::MessageConst;
+use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::MessageDecoder;
@@ -28,8 +29,10 @@ use rocketmq_common::WeakCellWrapper;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
+use rocketmq_remoting::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
 use rocketmq_remoting::protocol::header::notify_consumer_ids_changed_request_header::NotifyConsumerIdsChangedRequestHeader;
 use rocketmq_remoting::protocol::header::reply_message_request_header::ReplyMessageRequestHeader;
+use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
@@ -62,10 +65,26 @@ impl RequestProcessor for ClientRemotingProcessor {
         let request_code = RequestCode::from(request.code());
         info!("process_request: {:?}", request_code);
         match request_code {
+            RequestCode::CheckTransactionState => {
+                self.check_transaction_state(channel, ctx, request).await
+            }
+            RequestCode::ResetConsumerClientOffset => {
+                unimplemented!("ResetConsumerClientOffset")
+            }
+            RequestCode::GetConsumerStatusFromClient => {
+                unimplemented!("GetConsumerStatusFromClient")
+            }
+            RequestCode::GetConsumerRunningInfo => {
+                unimplemented!("GetConsumerRunningInfo")
+            }
+            RequestCode::ConsumeMessageDirectly => {
+                unimplemented!("ConsumeMessageDirectly")
+            }
             RequestCode::PushReplyMessageToClient => self.receive_reply_message(ctx, request).await,
             RequestCode::NotifyConsumerIdsChanged => {
                 self.notify_consumer_ids_changed(channel, ctx, request)
             }
+
             _ => {
                 info!("Unknown request code: {:?}", request_code);
                 Ok(None)
@@ -188,6 +207,66 @@ impl ClientRemotingProcessor {
         if let Some(client_instance) = self.client_instance.upgrade() {
             client_instance.re_balance_immediately();
         }
+        Ok(None)
+    }
+
+    async fn check_transaction_state(
+        &mut self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        mut request: RemotingCommand,
+    ) -> Result<Option<RemotingCommand>> {
+        let request_header = request
+            .decode_command_custom_header::<CheckTransactionStateRequestHeader>()
+            .unwrap();
+        let message_ext = MessageDecoder::decode(
+            request.get_body_mut().unwrap(),
+            true,
+            true,
+            false,
+            false,
+            false,
+        );
+        if let Some(mut message_ext) = message_ext {
+            if let Some(mut client_instance) = self.client_instance.upgrade() {
+                if let Some(ref namespace) = client_instance.client_config.get_namespace() {
+                    let topic = NamespaceUtil::without_namespace_with_namespace(
+                        message_ext.get_topic(),
+                        client_instance
+                            .client_config
+                            .get_namespace()
+                            .unwrap_or_default()
+                            .as_str(),
+                    );
+                    message_ext.set_topic(topic.as_str());
+                }
+                let transaction_id =
+                    message_ext.get_property(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX);
+                if let Some(transaction_id) = transaction_id {
+                    if !transaction_id.is_empty() {
+                        message_ext.set_transaction_id(transaction_id.as_str());
+                    }
+                }
+                let group = message_ext.get_property(MessageConst::PROPERTY_PRODUCER_GROUP);
+                if let Some(group) = group {
+                    let producer = client_instance.select_producer(&group).await;
+                    if let Some(producer) = producer {
+                        let addr = channel.remote_address().to_string();
+                        producer.check_transaction_state(
+                            addr.as_str(),
+                            message_ext,
+                            request_header,
+                        );
+                    } else {
+                        warn!("checkTransactionState, pick producer group failed");
+                    }
+                } else {
+                    warn!("checkTransactionState, pick producer group failed");
+                }
+            }
+        } else {
+            warn!("checkTransactionState, decode message failed");
+        };
         Ok(None)
     }
 }
