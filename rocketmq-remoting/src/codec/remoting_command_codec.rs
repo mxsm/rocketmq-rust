@@ -214,7 +214,7 @@ mod tests {
             .set_language(LanguageCode::JAVA)
             .set_opaque(1)
             .set_flag(1)
-            .set_body(Some(Bytes::from("body")))
+            .set_body(Bytes::from("body"))
             .set_command_custom_header(GetRouteInfoRequestHeader::new("1111", Some(true)))
             .set_remark(Some("remark".to_string()));
         assert!(encoder.encode(command, &mut dst).is_ok());
