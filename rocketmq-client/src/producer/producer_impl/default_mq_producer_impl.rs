@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::any::Any;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::future::Future;
@@ -1835,14 +1836,11 @@ impl DefaultMQProducerImpl {
         }
     }
 
-    pub async fn send_message_in_transaction<T>(
+    pub async fn send_message_in_transaction(
         &mut self,
         mut msg: Message,
-        arg: Option<T>,
-    ) -> Result<TransactionSendResult>
-    where
-        T: std::any::Any + Sync + Send,
-    {
+        arg: Option<Box<dyn Any + Send + Sync>>,
+    ) -> Result<TransactionSendResult> {
         // ignore DelayTimeLevel parameter
         if msg.get_delay_time_level() != 0 {
             MessageAccessor::clear_property(&mut msg, MessageConst::PROPERTY_DELAY_TIME_LEVEL);
@@ -1882,7 +1880,7 @@ impl DefaultMQProducerImpl {
                 self.transaction_listener
                     .as_ref()
                     .unwrap()
-                    .execute_local_transaction(&msg, arg.as_ref())
+                    .execute_local_transaction(&msg, arg.as_ref().map(|x| &**x))
             }
             SendStatus::FlushDiskTimeout
             | SendStatus::FlushSlaveTimeout
@@ -2283,7 +2281,7 @@ impl DefaultMQProducerImpl {
 
     async fn init_topic_route(&mut self) {
         for topic in self.producer_config.topics() {
-            let new_topic = NamespaceUtil::without_namespace_with_namespace(
+            let new_topic = NamespaceUtil::wrap_namespace(
                 self.client_config
                     .get_namespace()
                     .unwrap_or("".to_string())

@@ -48,7 +48,7 @@ pub struct TransactionMQProducer {
 
 impl TransactionMQProducer {
     pub fn builder() -> TransactionMQProducerBuilder {
-        TransactionMQProducerBuilder::default()
+        TransactionMQProducerBuilder::new()
     }
 
     pub(crate) fn new(
@@ -80,11 +80,20 @@ impl TransactionMQProducer {
 
 impl MQProducer for TransactionMQProducer {
     async fn start(&mut self) -> crate::Result<()> {
-        self.default_producer
+        let transaction_listener = self
+            .transaction_producer_config
+            .transaction_listener
+            .clone();
+        let default_mqproducer_impl = self
+            .default_producer
             .default_mqproducer_impl
             .as_mut()
-            .unwrap()
+            .unwrap();
+        default_mqproducer_impl
             .init_transaction_env(self.transaction_producer_config.check_runtime.take());
+        if let Some(transaction_listener) = transaction_listener {
+            default_mqproducer_impl.set_transaction_listener(transaction_listener);
+        }
         self.default_producer.start().await
     }
 
@@ -318,7 +327,10 @@ impl MQProducer for TransactionMQProducer {
             .default_mqproducer_impl
             .as_mut()
             .unwrap()
-            .send_message_in_transaction(msg, arg)
+            .send_message_in_transaction(
+                msg,
+                arg.map(|x| Box::new(x) as Box<dyn Any + Sync + Send>),
+            )
             .await
     }
 

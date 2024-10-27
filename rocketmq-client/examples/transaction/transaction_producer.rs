@@ -56,7 +56,9 @@ pub async fn main() -> Result<()> {
 
     for _ in 0..10 {
         let message = Message::with_tags(TOPIC, TAG, "Hello RocketMQ".as_bytes());
-        let send_result = producer.send_message_in_transaction(message, None).await?;
+        let send_result = producer
+            .send_message_in_transaction::<()>(message, None)
+            .await?;
         println!("send result: {}", send_result);
     }
     producer.shutdown().await;
@@ -79,13 +81,17 @@ impl Default for TransactionListenerImpl {
 }
 
 impl TransactionListener for TransactionListenerImpl {
-    fn execute_local_transaction(&self, msg: &Message, arg: &dyn Any) -> LocalTransactionState {
+    fn execute_local_transaction(
+        &self,
+        msg: &Message,
+        arg: Option<&(dyn Any + Send + Sync)>,
+    ) -> LocalTransactionState {
         let value = self
             .transaction_index
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         let status = value % 3;
         let mut guard = self.local_trans.lock();
-        guard.insert(msg.tr().to_string(), status);
+        guard.insert(msg.get_transaction_id().to_string(), status);
         LocalTransactionState::Unknown
     }
 
