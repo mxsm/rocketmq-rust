@@ -288,7 +288,7 @@ impl DefaultRequestProcessor {
                 .write()
                 .get_kv_list_by_namespace("ORDER_TOPIC_CONFIG")
             {
-                response_command = response_command.set_body(Bytes::from(value));
+                response_command = response_command.set_body(value);
             }
         }
         let register_broker_result = result.unwrap();
