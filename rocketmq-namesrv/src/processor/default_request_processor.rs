@@ -18,7 +18,6 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use bytes::Bytes;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
