@@ -19,7 +19,6 @@ use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 use std::time::Instant;
 
-use bytes::Bytes;
 use lazy_static::lazy_static;
 use rocketmq_common::common::message::message_batch::MessageBatch;
 use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
@@ -319,9 +318,9 @@ impl MQClientAPIImpl {
         // if compressed_body is not None, set request body to compressed_body
         if msg.get_compressed_body_mut().is_some() {
             let compressed_body = std::mem::take(msg.get_compressed_body_mut());
-            request.set_body_mut_ref(compressed_body);
+            request.set_body_mut_ref(compressed_body.unwrap());
         } else {
-            request.set_body_mut_ref(msg.get_body().cloned());
+            request.set_body_mut_ref(msg.get_body().cloned().unwrap());
         }
         match communication_mode {
             CommunicationMode::Sync => {
@@ -657,7 +656,7 @@ impl MQClientAPIImpl {
             HeartbeatRequestHeader::default(),
         )
         .set_language(self.client_config.language)
-        .set_body(Some(Bytes::from(heartbeat_data.encode())));
+        .set_body(heartbeat_data.encode());
         let response = self
             .remoting_client
             .invoke_async(Some(addr.to_string()), request, timeout_millis)
@@ -686,7 +685,7 @@ impl MQClientAPIImpl {
             consumer_group.to_string(),
             subscription_data.clone(),
         );
-        request.set_body_mut_ref(Some(body.encode()));
+        request.set_body_mut_ref(body.encode());
         let response = self
             .remoting_client
             .invoke_async(
@@ -1059,7 +1058,7 @@ impl MQClientAPIImpl {
             RequestCode::UnlockBatchMq,
             UnlockBatchMqRequestHeader::default(),
         );
-        request.set_body_mut_ref(Some(request_body.encode()));
+        request.set_body_mut_ref(request_body.encode());
         if oneway {
             self.remoting_client
                 .invoke_oneway(addr.to_string(), request, timeout_millis)
@@ -1099,7 +1098,7 @@ impl MQClientAPIImpl {
             RequestCode::LockBatchMq,
             LockBatchMqRequestHeader::default(),
         );
-        request.set_body_mut_ref(Some(request_body.encode()));
+        request.set_body_mut_ref(request_body.encode());
         let response = self
             .remoting_client
             .invoke_async(

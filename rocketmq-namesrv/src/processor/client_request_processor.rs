@@ -20,7 +20,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bytes::Bytes;
 use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_common::common::FAQUrl;
 use rocketmq_common::TimeUtils;
@@ -111,7 +110,7 @@ impl ClientRequestProcessor {
                 };*/
                 let content = topic_route_data.encode();
                 RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::Success)
-                    .set_body(Some(Bytes::from(content)))
+                    .set_body(content)
             }
         }
     }

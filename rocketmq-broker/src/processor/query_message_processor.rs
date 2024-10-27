@@ -99,7 +99,10 @@ where
 
         if query_message_result.buffer_total_size > 0 {
             let message_data = query_message_result.get_message_data();
-            return Some(response.set_body(message_data));
+            if let Some(body) = message_data {
+                response.set_body_mut_ref(body);
+            }
+            return Some(response);
         }
         Some(
             response
@@ -116,7 +119,7 @@ where
         _ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
-        let response = RemotingCommand::create_response_command();
+        let mut response = RemotingCommand::create_response_command();
         let request_header = request
             .decode_command_custom_header::<ViewMessageRequestHeader>()
             .unwrap();
@@ -126,7 +129,10 @@ where
             .await;
         if let Some(result) = select_mapped_buffer_result {
             let message_data = result.get_bytes();
-            return Some(response.set_body(message_data));
+            if let Some(body) = message_data {
+                response.set_body_mut_ref(body)
+            }
+            return Some(response);
         }
         Some(
             response

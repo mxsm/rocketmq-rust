@@ -17,7 +17,6 @@
 
 use std::collections::HashMap;
 
-use bytes::Bytes;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_remoting::code::request_code::RequestCode;
@@ -78,7 +77,7 @@ impl BrokerConfigRequestHandler {
             body.push_str(&format!("{}:{}\n", key, value));
         }
         if !body.is_empty() {
-            response.set_body_mut_ref(Some(Bytes::from(body)));
+            response.set_body_mut_ref(body);
         }
         Some(response)
     }
@@ -95,9 +94,7 @@ impl BrokerConfigRequestHandler {
         let key_value_table = KVTable {
             table: runtime_info,
         };
-        response.set_body_mut_ref(Some(Bytes::from(
-            serde_json::to_string(&key_value_table).unwrap(),
-        )));
+        response.set_body_mut_ref(serde_json::to_string(&key_value_table).unwrap());
         Some(response)
     }
 

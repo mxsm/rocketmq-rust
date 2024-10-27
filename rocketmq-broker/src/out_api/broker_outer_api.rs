@@ -117,7 +117,7 @@ impl BrokerOuterAPI {
         let topic_route_body = topic_route_data.encode();
 
         RemotingCommand::create_request_command(RequestCode::RegisterTopicInNamesrv, request_header)
-            .set_body(Some(topic_route_body))
+            .set_body(topic_route_body)
     }
 }
 
@@ -248,7 +248,7 @@ impl BrokerOuterAPI {
         );
         let request =
             RemotingCommand::create_request_command(RequestCode::RegisterBroker, request_header)
-                .set_body(Some(body.clone()));
+                .set_body(body.clone());
         if oneway {
             self.remoting_client
                 .invoke_oneway(namesrv_addr, request, timeout_mills)
@@ -338,7 +338,7 @@ impl BrokerOuterAPI {
             RequestCode::LockBatchMq,
             LockBatchMqRequestHeader::default(),
         );
-        request.set_body_mut_ref(Some(request_body));
+        request.set_body_mut_ref(request_body);
         let result = self
             .remoting_client
             .invoke_async(Some(addr), request, timeout_millis)
@@ -371,7 +371,7 @@ impl BrokerOuterAPI {
             RequestCode::UnlockBatchMq,
             UnlockBatchMqRequestHeader::default(),
         );
-        request.set_body_mut_ref(Some(request_body));
+        request.set_body_mut_ref(request_body);
         let result = self
             .remoting_client
             .invoke_async(Some(addr), request, timeout_millis)

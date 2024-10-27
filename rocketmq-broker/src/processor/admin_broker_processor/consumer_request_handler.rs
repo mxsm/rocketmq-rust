@@ -84,7 +84,7 @@ impl ConsumerRequestHandler {
                     body_data.get_connection_set().insert(connection);
                 }
                 let body = body_data.encode();
-                response.set_body_mut_ref(Some(body));
+                response.set_body_mut_ref(body);
                 Some(response)
             }
             None => Some(
@@ -214,7 +214,7 @@ impl ConsumerRequestHandler {
             consume_stats.set_consume_tps(new_consume_tps);
         }
         let body = consume_stats.encode();
-        response.set_body_mut_ref(Some(body));
+        response.set_body_mut_ref(body);
         Some(response)
     }
 
@@ -228,7 +228,7 @@ impl ConsumerRequestHandler {
         let mut response = RemotingCommand::create_response_command();
         let content = self.inner.consumer_offset_manager.encode();
         if !content.is_empty() {
-            response.set_body_mut_ref(Some(content));
+            response.set_body_mut_ref(content);
             Some(response)
         } else {
             Some(

@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::any::Any;
+
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -1250,11 +1250,11 @@ impl MQProducer for DefaultMQProducer {
             .await
     }
 
-    fn as_any(&self) -> &dyn Any {
+    fn as_any(&self) -> &dyn std::any::Any {
         self
     }
 
-    fn as_any_mut(&mut self) -> &mut dyn Any {
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }
 }

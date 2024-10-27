@@ -370,11 +370,13 @@ impl<MS: MessageStore> ReplyMessageProcessor<MS> {
             unit_mode: request_header.unit_mode,
             ..Default::default()
         };
-        let command = RemotingCommand::create_request_command(
+        let mut command = RemotingCommand::create_request_command(
             RequestCode::PushReplyMessageToClient,
             reply_message_request_header,
-        )
-        .set_body(msg.get_body().cloned());
+        );
+        if let Some(body) = msg.get_body().cloned() {
+            command.set_body_mut_ref(body);
+        }
         let sender_id = msg.get_property(MessageConst::PROPERTY_MESSAGE_REPLY_TO_CLIENT);
         let mut push_reply_result = PushReplyResult(false, "".to_string());
         if let Some(sender_id) = sender_id {

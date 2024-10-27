@@ -115,7 +115,7 @@ impl BatchMqHandler {
         let response_body = LockBatchResponseBody {
             lock_ok_mq_set: lock_ok_mqset,
         };
-        Some(RemotingCommand::create_response_command().set_body(Some(response_body.encode())))
+        Some(RemotingCommand::create_response_command().set_body(response_body.encode()))
     }
 
     pub async fn unlock_batch_mq(

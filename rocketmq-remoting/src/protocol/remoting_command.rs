@@ -314,17 +314,13 @@ impl RemotingCommand {
         self
     }
 
-    pub fn set_body(mut self, body: Option<impl Into<Bytes>>) -> Self {
-        if let Some(value) = body {
-            self.body = Some(value.into());
-        }
+    pub fn set_body(mut self, body: impl Into<Bytes>) -> Self {
+        self.body = Some(body.into());
         self
     }
 
-    pub fn set_body_mut_ref(&mut self, body: Option<impl Into<Bytes>>) {
-        if let Some(value) = body {
-            self.body = Some(value.into());
-        }
+    pub fn set_body_mut_ref(&mut self, body: impl Into<Bytes>) {
+        self.body = Some(body.into());
     }
 
     pub fn set_suspended(mut self, suspended: bool) -> Self {
@@ -479,9 +475,7 @@ impl RemotingCommand {
 
         if let Some(cmd) = cmd.as_mut() {
             if total_size - 4 > header_length {
-                cmd.set_body_mut_ref(Some(
-                    cmd_data.split_to(total_size - 4 - header_length).freeze(),
-                ));
+                cmd.set_body_mut_ref(cmd_data.split_to(total_size - 4 - header_length).freeze());
             }
         }
         Ok(cmd)
