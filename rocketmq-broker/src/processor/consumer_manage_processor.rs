@@ -17,7 +17,6 @@
 
 use std::sync::Arc;
 
-use bytes::Bytes;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
@@ -137,7 +136,7 @@ where
                     };
                     return Some(
                         response
-                            .set_body(Some(Bytes::from(body.encode())))
+                            .set_body(body.encode())
                             .set_code(ResponseCode::Success),
                     );
                 } else {

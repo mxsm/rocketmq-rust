@@ -18,7 +18,6 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use bytes::Bytes;
 use rocketmq_common::common::attribute::attribute_parser::AttributeParser;
 use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
 use rocketmq_common::common::config::TopicConfig;
@@ -398,7 +397,7 @@ impl TopicRequestHandler {
         };
         let content = topic_config_and_mapping_serialize_wrapper.to_json();
         if !content.is_empty() {
-            response.set_body_mut_ref(Some(Bytes::from(content)));
+            response.set_body_mut_ref(content);
         }
         Some(response)
     }
@@ -416,7 +415,7 @@ impl TopicRequestHandler {
             topic_list: topics.into_iter().map(|s| s.to_string()).collect(),
             broker_addr: None,
         };
-        response.set_body_mut_ref(Some(topic_list.encode()));
+        response.set_body_mut_ref(topic_list.encode());
         Some(response)
     }
 
@@ -477,7 +476,7 @@ impl TopicRequestHandler {
             map.insert(message_queue, topic_offset);
         }
         topic_stats_table.set_offset_table(map);
-        response.set_body_mut_ref(Some(topic_stats_table.encode()));
+        response.set_body_mut_ref(topic_stats_table.encode());
         Some(response)
     }
 
@@ -517,7 +516,7 @@ impl TopicRequestHandler {
         }
         let topic_config_and_queue_mapping =
             TopicConfigAndQueueMapping::new(topic_config.unwrap(), topic_queue_mapping_detail);
-        response.set_body_mut_ref(Some(topic_config_and_queue_mapping.encode()));
+        response.set_body_mut_ref(topic_config_and_queue_mapping.encode());
         Some(response)
     }
 
@@ -540,7 +539,7 @@ impl TopicRequestHandler {
             .which_group_by_topic(topic);
         groups.extend(group_in_offset.clone());
         let group_list = GroupList { group_list: groups };
-        response.set_body_mut_ref(Some(group_list.encode()));
+        response.set_body_mut_ref(group_list.encode());
         Some(response)
     }
 
@@ -567,7 +566,7 @@ impl TopicRequestHandler {
             topic_list: topics.into_iter().collect(),
             broker_addr: Some(broker_addr),
         };
-        response.set_body_mut_ref(Some(topic_list.encode()));
+        response.set_body_mut_ref(topic_list.encode());
         Some(response)
     }
 

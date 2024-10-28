@@ -199,7 +199,10 @@ impl PullMessageResultHandler for DefaultPullMessageResultHandler {
                         request_header.topic.as_str(),
                         request_header.queue_id.unwrap(),
                     );
-                    Some(response.set_body(body))
+                    if let Some(body) = body {
+                        response.set_body_mut_ref(body);
+                    }
+                    Some(response)
                 } else {
                     None
                 }

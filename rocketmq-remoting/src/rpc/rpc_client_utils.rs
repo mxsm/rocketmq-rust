@@ -35,7 +35,9 @@ impl RpcClientUtils {
     ) -> RemotingCommand {
         let result = RemotingCommand::create_request_command(rpc_request.code, rpc_request.header);
         if let Some(body) = rpc_request.body {
-            return result.set_body(Self::encode_body(&*body));
+            if let Some(body) = Self::encode_body(&*body) {
+                return result.set_body(body);
+            }
         }
         result
     }

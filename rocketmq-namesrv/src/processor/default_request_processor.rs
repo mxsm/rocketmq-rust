@@ -18,7 +18,6 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use bytes::Bytes;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
@@ -201,7 +200,7 @@ impl DefaultRequestProcessor {
             request_header.cluster_name.as_str(),
             request_header.broker_addr.as_str(),
         ) {
-            command = command.set_body(Some(Bytes::from(value.encode())));
+            command = command.set_body(value.encode());
         }
         drop(rim_write);
 
@@ -288,7 +287,7 @@ impl DefaultRequestProcessor {
                 .write()
                 .get_kv_list_by_namespace("ORDER_TOPIC_CONFIG")
             {
-                response_command = response_command.set_body(Some(Bytes::from(value)));
+                response_command = response_command.set_body(value);
             }
         }
         let register_broker_result = result.unwrap();
@@ -337,7 +336,7 @@ impl DefaultRequestProcessor {
         let response_body = GetBrokerMemberGroupResponseBody {
             broker_member_group,
         };
-        RemotingCommand::create_response_command().set_body(Some(response_body.encode()))
+        RemotingCommand::create_response_command().set_body(response_body.encode())
     }
 
     fn get_broker_cluster_info(&self, _request: RemotingCommand) -> RemotingCommand {
@@ -347,7 +346,7 @@ impl DefaultRequestProcessor {
             .get_all_cluster_info()
             .encode();
         RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::Success)
-            .set_body(Some(Bytes::from(vec)))
+            .set_body(vec)
     }
 
     fn wipe_write_perm_of_broker(&self, request: RemotingCommand) -> RemotingCommand {
@@ -379,8 +378,7 @@ impl DefaultRequestProcessor {
         if rd_lock.namesrv_config.enable_all_topic_list {
             let topics = rd_lock.get_all_topic_list();
             drop(rd_lock); //release lock
-            return RemotingCommand::create_response_command()
-                .set_body(Some(Bytes::from(topics.encode())));
+            return RemotingCommand::create_response_command().set_body(topics.encode());
         }
         RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::SystemError)
             .set_remark(Some(String::from("disable")))
@@ -420,7 +418,7 @@ impl DefaultRequestProcessor {
             .kvconfig_manager
             .write()
             .get_kv_list_by_namespace(request_header.namespace.as_str());
-        if value.is_some() {
+        if let Some(value) = value {
             return RemotingCommand::create_response_command().set_body(value);
         }
         RemotingCommand::create_response_command_with_code(ResponseCode::QueryNotFound).set_remark(
@@ -451,12 +449,12 @@ impl DefaultRequestProcessor {
             .route_info_manager
             .read()
             .get_topics_by_cluster(request_header.cluster.as_str());
-        RemotingCommand::create_response_command().set_body(Some(topics_by_cluster.encode()))
+        RemotingCommand::create_response_command().set_body(topics_by_cluster.encode())
     }
 
     fn get_system_topic_list_from_ns(&self, _request: RemotingCommand) -> RemotingCommand {
         let topic_list = self.route_info_manager.read().get_system_topic_list();
-        RemotingCommand::create_response_command().set_body(Some(topic_list.encode()))
+        RemotingCommand::create_response_command().set_body(topic_list.encode())
     }
 
     fn get_unit_topic_list(&self, _request: RemotingCommand) -> RemotingCommand {
@@ -467,7 +465,7 @@ impl DefaultRequestProcessor {
             .enable_topic_list
         {
             let topic_list = self.route_info_manager.read().get_unit_topics();
-            return RemotingCommand::create_response_command().set_body(Some(topic_list.encode()));
+            return RemotingCommand::create_response_command().set_body(topic_list.encode());
         }
         RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::SystemError)
             .set_remark(Some(String::from("disable")))
@@ -481,7 +479,7 @@ impl DefaultRequestProcessor {
             .enable_topic_list
         {
             let topic_list = self.route_info_manager.read().get_has_unit_sub_topic_list();
-            return RemotingCommand::create_response_command().set_body(Some(topic_list.encode()));
+            return RemotingCommand::create_response_command().set_body(topic_list.encode());
         }
         RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::SystemError)
             .set_remark(Some(String::from("disable")))
@@ -498,7 +496,7 @@ impl DefaultRequestProcessor {
                 .route_info_manager
                 .read()
                 .get_has_unit_sub_un_unit_topic_list();
-            return RemotingCommand::create_response_command().set_body(Some(topic_list.encode()));
+            return RemotingCommand::create_response_command().set_body(topic_list.encode());
         }
         RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::SystemError)
             .set_remark(Some(String::from("disable")))
