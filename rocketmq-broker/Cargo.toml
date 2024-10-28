@@ -24,6 +24,7 @@ rocketmq-store = { workspace = true }
 rocketmq-filter = { workspace = true }
 rocketmq-macros = { workspace = true }
 rocketmq-runtime = { workspace = true }
+rocketmq-client = { workspace = true }
 
 anyhow.workspace = true
 env_logger.workspace = true

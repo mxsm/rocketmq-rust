@@ -1869,6 +1869,7 @@ dependencies = [
  "num_cpus",
  "parking_lot",
  "rand",
+ "rocketmq-client",
  "rocketmq-common",
  "rocketmq-filter",
  "rocketmq-macros",
