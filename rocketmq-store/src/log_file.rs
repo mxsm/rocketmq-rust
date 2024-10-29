@@ -44,7 +44,7 @@ pub mod mapped_file;
 pub const MAX_PULL_MSG_SIZE: i32 = 128 * 1024 * 1024;
 
 #[trait_variant::make(MessageStore: Send)]
-pub trait RocketMQMessageStore: Clone + 'static {
+pub trait RocketMQMessageStore: Sync + 'static {
     /// Load previously stored messages.
     ///
     /// # Returns

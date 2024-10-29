@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::server::config::ServerConfig;
+use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
@@ -50,7 +51,6 @@ mod consumer_request_handler;
 mod offset_request_handler;
 mod topic_request_handler;
 
-#[derive(Clone)]
 pub struct AdminBrokerProcessor {
     topic_request_handler: TopicRequestHandler,
     broker_config_request_handler: BrokerConfigRequestHandler,
@@ -67,7 +67,7 @@ impl AdminBrokerProcessor {
         topic_config_manager: TopicConfigManager,
         consumer_offset_manager: ConsumerOffsetManager,
         topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
-        default_message_store: DefaultMessageStore,
+        default_message_store: ArcRefCellWrapper<DefaultMessageStore>,
         schedule_message_service: ScheduleMessageService,
         broker_stats: Option<Arc<BrokerStats<DefaultMessageStore>>>,
         consume_manager: Arc<ConsumerManager>,
@@ -239,7 +239,7 @@ struct Inner {
     topic_config_manager: TopicConfigManager,
     consumer_offset_manager: ConsumerOffsetManager,
     topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
-    default_message_store: DefaultMessageStore,
+    default_message_store: ArcRefCellWrapper<DefaultMessageStore>,
     pop_inflight_message_counter: Arc<PopInflightMessageCounter>,
     schedule_message_service: ScheduleMessageService,
     broker_stats: Option<Arc<BrokerStats<DefaultMessageStore>>>,

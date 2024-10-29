@@ -14,9 +14,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::ops::Deref;
 use std::sync::Arc;
 
 use rocketmq_common::common::message::message_ext::MessageExt;
+use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::hook::put_message_hook::PutMessageHook;
@@ -25,12 +27,15 @@ use rocketmq_store::log_file::MessageStore;
 use crate::util::hook_utils::HookUtils;
 
 pub struct CheckBeforePutMessageHook<MS> {
-    message_store: MS,
+    message_store: ArcRefCellWrapper<MS>,
     message_store_config: Arc<MessageStoreConfig>,
 }
 
 impl<MS: MessageStore> CheckBeforePutMessageHook<MS> {
-    pub fn new(message_store: MS, message_store_config: Arc<MessageStoreConfig>) -> Self {
+    pub fn new(
+        message_store: ArcRefCellWrapper<MS>,
+        message_store_config: Arc<MessageStoreConfig>,
+    ) -> Self {
         Self {
             message_store,
             message_store_config,
@@ -44,6 +49,10 @@ impl<MS: MessageStore> PutMessageHook for CheckBeforePutMessageHook<MS> {
     }
 
     fn execute_before_put_message(&self, msg: &MessageExt) -> Option<PutMessageResult> {
-        HookUtils::check_before_put_message(&self.message_store, &self.message_store_config, msg)
+        HookUtils::check_before_put_message(
+            self.message_store.deref(),
+            &self.message_store_config,
+            msg,
+        )
     }
 }

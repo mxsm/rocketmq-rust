@@ -68,7 +68,6 @@ use crate::subscription::manager::subscription_group_manager::SubscriptionGroupM
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
 
-#[derive(Clone)]
 pub struct PullMessageProcessor<MS> {
     pull_message_result_handler: ArcRefCellWrapper<Box<dyn PullMessageResultHandler>>,
     broker_config: Arc<BrokerConfig>,
@@ -79,7 +78,7 @@ pub struct PullMessageProcessor<MS> {
     consumer_filter_manager: Arc<ConsumerFilterManager>,
     consumer_offset_manager: Arc<ConsumerOffsetManager>,
     broadcast_offset_manager: Arc<BroadcastOffsetManager>,
-    message_store: Arc<MS>,
+    message_store: ArcRefCellWrapper<MS>,
     cold_data_cg_ctr_service: Arc<ColdDataCgCtrService>,
     broker_outer_api: Arc<BrokerOuterAPI>,
     // write message to consume client runtime
@@ -99,7 +98,7 @@ impl<MS> PullMessageProcessor<MS> {
         consumer_filter_manager: Arc<ConsumerFilterManager>,
         consumer_offset_manager: Arc<ConsumerOffsetManager>,
         broadcast_offset_manager: Arc<BroadcastOffsetManager>,
-        message_store: Arc<MS>,
+        message_store: ArcRefCellWrapper<MS>,
         broker_outer_api: Arc<BrokerOuterAPI>,
     ) -> Self {
         let cpus = num_cpus::get();
@@ -835,18 +834,18 @@ where
 
     pub fn execute_request_when_wakeup(
         &self,
+        mut pull_message_processor: ArcRefCellWrapper<PullMessageProcessor<MS>>,
         channel: Channel,
         ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) {
-        let mut self_inner = self.clone();
         let lock = Arc::clone(&self.write_message_lock);
         self.write_message_runtime.get_handle().spawn(async move {
             let broker_allow_flow_ctr_suspend = !(request.ext_fields().is_some()
                 && request.ext_fields().unwrap().contains_key(NO_SUSPEND_KEY));
             let opaque = request.opaque();
             let instant = Instant::now();
-            let response = self_inner
+            let response = pull_message_processor
                 .process_request_inner(
                     RequestCode::from(request.code()),
                     channel,

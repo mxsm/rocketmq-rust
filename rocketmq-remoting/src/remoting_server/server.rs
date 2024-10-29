@@ -83,10 +83,12 @@ impl<RP> ConnectionHandler<RP> {
     pub fn do_before_rpc_hooks(
         &self,
         channel: &Channel,
-        request: &mut RemotingCommand,
+        request: Option<&mut RemotingCommand>,
     ) -> Result<()> {
-        for hook in self.rpc_hooks.iter() {
-            hook.do_before_request(channel.remote_address(), request)?;
+        if let Some(request) = request {
+            for hook in self.rpc_hooks.iter() {
+                hook.do_before_request(channel.remote_address(), request)?;
+            }
         }
         Ok(())
     }
@@ -94,10 +96,12 @@ impl<RP> ConnectionHandler<RP> {
     pub fn do_after_rpc_hooks(
         &self,
         channel: &Channel,
-        response: &mut RemotingCommand,
+        response: Option<&mut RemotingCommand>,
     ) -> Result<()> {
-        for hook in self.rpc_hooks.iter() {
-            hook.do_before_request(channel.remote_address(), response)?;
+        if let Some(response) = response {
+            for hook in self.rpc_hooks.iter() {
+                hook.do_after_response(channel.remote_address(), response)?;
+            }
         }
         Ok(())
     }
@@ -139,7 +143,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
             let opaque = cmd.opaque();
             let oneway_rpc = cmd.is_oneway_rpc();
             //before handle request hooks
-            let exception = match self.do_before_rpc_hooks(&self.channel, &mut cmd) {
+            let exception = match self.do_before_rpc_hooks(&self.channel, Some(&mut cmd)) {
                 Ok(_) => None,
                 Err(error) => Some(error),
             };
@@ -163,11 +167,10 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                 }
             };
 
-            let exception =
-                match self.do_before_rpc_hooks(&self.channel, response.as_mut().unwrap()) {
-                    Ok(_) => None,
-                    Err(error) => Some(error),
-                };
+            let exception = match self.do_before_rpc_hooks(&self.channel, response.as_mut()) {
+                Ok(_) => None,
+                Err(error) => Some(error),
+            };
 
             match self.handle_error(oneway_rpc, opaque, exception).await {
                 HandleErrorResult::Continue => continue,

@@ -40,7 +40,6 @@ use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerCon
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::log_file::MessageStore;
-use rocketmq_store::message_store::default_message_store::DefaultMessageStore;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use rocketmq_store::stats::stats_type::StatsType;
 
@@ -51,23 +50,28 @@ use crate::processor::send_message_processor::Inner;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
+use crate::transaction::transactional_message_service::TransactionalMessageService;
 
-#[derive(Clone)]
-pub struct ReplyMessageProcessor<MS = DefaultMessageStore> {
-    inner: Inner<MS>,
+pub struct ReplyMessageProcessor<MS, TS> {
+    inner: Inner<MS, TS>,
     store_host: SocketAddr,
 }
 
-impl<MS: MessageStore> ReplyMessageProcessor<MS> {
+impl<MS, TS> ReplyMessageProcessor<MS, TS>
+where
+    MS: MessageStore,
+    TS: TransactionalMessageService,
+{
     pub fn new(
         topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
         subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
         topic_config_manager: TopicConfigManager,
         broker_config: Arc<BrokerConfig>,
-        message_store: &MS,
+        message_store: ArcRefCellWrapper<MS>,
         rebalance_lock_manager: Arc<RebalanceLockManager>,
         broker_stats_manager: Arc<BrokerStatsManager>,
         producer_manager: Option<Arc<ProducerManager>>,
+        transactional_message_service: ArcRefCellWrapper<TS>,
     ) -> Self {
         let store_host = format!("{}:{}", broker_config.broker_ip1, broker_config.listen_port)
             .parse::<SocketAddr>()
@@ -79,7 +83,8 @@ impl<MS: MessageStore> ReplyMessageProcessor<MS> {
                 send_message_hook_vec: ArcRefCellWrapper::new(Vec::new()),
                 topic_queue_mapping_manager,
                 subscription_group_manager,
-                message_store: message_store.clone(),
+                message_store,
+                transactional_message_service,
                 rebalance_lock_manager,
                 broker_stats_manager,
                 producer_manager,
@@ -89,7 +94,11 @@ impl<MS: MessageStore> ReplyMessageProcessor<MS> {
         }
     }
 }
-impl<MS: MessageStore> ReplyMessageProcessor<MS> {
+impl<MS, TS> ReplyMessageProcessor<MS, TS>
+where
+    MS: MessageStore,
+    TS: TransactionalMessageService,
+{
     pub async fn process_request(
         &mut self,
         channel: Channel,

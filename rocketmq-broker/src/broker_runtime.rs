@@ -78,6 +78,11 @@ use crate::subscription::manager::subscription_group_manager::SubscriptionGroupM
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
 use crate::topic::topic_queue_mapping_clean_service::TopicQueueMappingCleanService;
+use crate::transaction::queue::default_transactional_message_check_listener::DefaultTransactionalMessageCheckListener;
+use crate::transaction::queue::default_transactional_message_service::DefaultTransactionalMessageService;
+use crate::transaction::queue::transactional_message_bridge::TransactionalMessageBridge;
+use crate::transaction::transaction_metrics_flush_service::TransactionMetricsFlushService;
+use crate::transaction::transactional_message_check_service::TransactionalMessageCheckService;
 
 pub(crate) struct BrokerRuntime {
     broker_config: Arc<BrokerConfig>,
@@ -91,7 +96,7 @@ pub(crate) struct BrokerRuntime {
     consumer_filter_manager: Arc<ConsumerFilterManager>,
     consumer_order_info_manager: Arc<ConsumerOrderInfoManager>,
     #[cfg(feature = "local_file_store")]
-    message_store: Option<DefaultMessageStore>,
+    message_store: Option<ArcRefCellWrapper<DefaultMessageStore>>,
     #[cfg(feature = "local_file_store")]
     broker_stats: Option<Arc<BrokerStats<DefaultMessageStore>>>,
     //message_store: Option<Arc<Mutex<LocalFileMessageStore>>>,
@@ -113,9 +118,16 @@ pub(crate) struct BrokerRuntime {
     should_start_time: Arc<AtomicU64>,
     is_isolated: Arc<AtomicBool>,
     #[cfg(feature = "local_file_store")]
-    pull_request_hold_service: Option<PullRequestHoldService<DefaultMessageStore>>,
+    pull_request_hold_service:
+        Option<ArcRefCellWrapper<PullRequestHoldService<DefaultMessageStore>>>,
     rebalance_lock_manager: Arc<RebalanceLockManager>,
     broker_member_group: Arc<BrokerMemberGroup>,
+    #[cfg(feature = "local_file_store")]
+    transactional_message_service:
+        Option<ArcRefCellWrapper<DefaultTransactionalMessageService<DefaultMessageStore>>>,
+    transactional_message_check_listener: Option<Arc<DefaultTransactionalMessageCheckListener>>,
+    transactional_message_check_service: Option<Arc<TransactionalMessageCheckService>>,
+    transaction_metrics_flush_service: Option<Arc<TransactionMetricsFlushService>>,
 }
 
 impl Clone for BrokerRuntime {
@@ -150,6 +162,10 @@ impl Clone for BrokerRuntime {
             pull_request_hold_service: self.pull_request_hold_service.clone(),
             rebalance_lock_manager: self.rebalance_lock_manager.clone(),
             broker_member_group: self.broker_member_group.clone(),
+            transactional_message_service: self.transactional_message_service.clone(),
+            transactional_message_check_listener: self.transactional_message_check_listener.clone(),
+            transactional_message_check_service: None,
+            transaction_metrics_flush_service: None,
         }
     }
 }
@@ -234,6 +250,10 @@ impl BrokerRuntime {
             pull_request_hold_service: None,
             rebalance_lock_manager: Arc::new(Default::default()),
             broker_member_group: Arc::new(broker_member_group),
+            transactional_message_service: None,
+            transactional_message_check_listener: None,
+            transactional_message_check_service: None,
+            transaction_metrics_flush_service: None,
         }
     }
 
@@ -315,22 +335,24 @@ impl BrokerRuntime {
     async fn initialize_message_store(&mut self) -> bool {
         if self.message_store_config.store_type == StoreType::LocalFile {
             info!("Use local file as message store");
-            let mut message_store = DefaultMessageStore::new(
+            let mut message_store = ArcRefCellWrapper::new(DefaultMessageStore::new(
                 self.message_store_config.clone(),
                 self.broker_config.clone(),
                 self.topic_config_manager.topic_config_table(),
                 Some(self.broker_stats_manager.clone()),
                 false,
-            );
+            ));
+            let message_store_clone = message_store.clone();
+            message_store.set_message_store_arc(Some(message_store_clone));
             if self.message_store_config.is_timer_wheel_enable() {
                 let time_message_store = TimerMessageStore::new(Some(message_store.clone()));
                 message_store.set_timer_message_store(Arc::new(time_message_store));
             }
             self.consumer_offset_manager
-                .set_message_store(Some(Arc::new(message_store.clone())));
+                .set_message_store(Some(message_store.clone()));
             self.topic_config_manager
                 .set_message_store(Some(message_store.clone()));
-            self.broker_stats = Some(Arc::new(BrokerStats::new(Arc::new(message_store.clone()))));
+            self.broker_stats = Some(Arc::new(BrokerStats::new(message_store.clone())));
             self.message_store = Some(message_store);
         } else if self.message_store_config.store_type == StoreType::RocksDB {
             info!("Use RocksDB as message store");
@@ -391,13 +413,19 @@ impl BrokerRuntime {
         self.topic_queue_mapping_clean_service = Some(Arc::new(TopicQueueMappingCleanService));
     }
 
-    fn init_processor(&mut self) -> BrokerRequestProcessor<DefaultMessageStore> {
-        let send_message_processor = SendMessageProcessor::<DefaultMessageStore>::new(
+    fn init_processor(
+        &mut self,
+    ) -> BrokerRequestProcessor<
+        DefaultMessageStore,
+        DefaultTransactionalMessageService<DefaultMessageStore>,
+    > {
+        let send_message_processor = SendMessageProcessor::new(
             self.topic_queue_mapping_manager.clone(),
             self.subscription_group_manager.clone(),
             self.topic_config_manager.clone(),
             self.broker_config.clone(),
-            self.message_store.as_ref().unwrap(),
+            self.message_store.clone().unwrap(),
+            self.transactional_message_service.as_ref().unwrap().clone(),
             self.rebalance_lock_manager.clone(),
             self.broker_stats_manager.clone(),
         );
@@ -406,10 +434,11 @@ impl BrokerRuntime {
             self.subscription_group_manager.clone(),
             self.topic_config_manager.clone(),
             self.broker_config.clone(),
-            self.message_store.as_ref().unwrap(),
+            self.message_store.clone().unwrap(),
             self.rebalance_lock_manager.clone(),
             self.broker_stats_manager.clone(),
             Some(self.producer_manager.clone()),
+            self.transactional_message_service.as_ref().unwrap().clone(),
         );
         let mut pull_message_result_handler =
             ArcRefCellWrapper::new(Box::new(DefaultPullMessageResultHandler::new(
@@ -422,8 +451,8 @@ impl BrokerRuntime {
                 self.broker_config.clone(),
                 Arc::new(Default::default()),
             )) as Box<dyn PullMessageResultHandler>);
-        let message_store = Arc::new(self.message_store.as_ref().unwrap().clone());
-        let pull_message_processor = PullMessageProcessor::new(
+        let message_store = self.message_store.clone().unwrap();
+        let pull_message_processor = ArcRefCellWrapper::new(PullMessageProcessor::new(
             pull_message_result_handler.clone(),
             self.broker_config.clone(),
             self.subscription_group_manager.clone(),
@@ -435,7 +464,7 @@ impl BrokerRuntime {
             Arc::new(BroadcastOffsetManager::default()),
             message_store.clone(),
             self.broker_out_api.clone(),
-        );
+        ));
 
         let consumer_manage_processor = ConsumerManageProcessor::new(
             self.broker_config.clone(),
@@ -446,20 +475,18 @@ impl BrokerRuntime {
             Arc::new(self.topic_config_manager.clone()),
             self.message_store.clone().unwrap(),
         );
-        self.pull_request_hold_service = Some(PullRequestHoldService::new(
+        self.pull_request_hold_service = Some(ArcRefCellWrapper::new(PullRequestHoldService::new(
             message_store.clone(),
-            Arc::new(pull_message_processor.clone()),
+            pull_message_processor.clone(),
             self.broker_config.clone(),
-        ));
+        )));
 
         let pull_message_result_handler = pull_message_result_handler.as_mut().as_mut();
         pull_message_result_handler
             .as_any_mut()
             .downcast_mut::<DefaultPullMessageResultHandler>()
             .expect("downcast DefaultPullMessageResultHandler failed")
-            .set_pull_request_hold_service(Some(Arc::new(
-                self.pull_request_hold_service.clone().unwrap(),
-            )));
+            .set_pull_request_hold_service(self.pull_request_hold_service.clone());
 
         self.message_store
             .as_mut()
@@ -488,7 +515,7 @@ impl BrokerRuntime {
         );
 
         BrokerRequestProcessor {
-            send_message_processor,
+            send_message_processor: ArcRefCellWrapper::new(send_message_processor),
             pull_message_processor,
             peek_message_processor: Default::default(),
             pop_message_processor: Default::default(),
@@ -496,18 +523,18 @@ impl BrokerRuntime {
             change_invisible_time_processor: Default::default(),
             notification_processor: Default::default(),
             polling_info_processor: Default::default(),
-            reply_message_processor,
-            admin_broker_processor,
-            client_manage_processor: ClientManageProcessor::new(
+            reply_message_processor: ArcRefCellWrapper::new(reply_message_processor),
+            admin_broker_processor: ArcRefCellWrapper::new(admin_broker_processor),
+            client_manage_processor: ArcRefCellWrapper::new(ClientManageProcessor::new(
                 self.broker_config.clone(),
                 self.producer_manager.clone(),
                 self.consumer_manager.clone(),
                 self.topic_config_manager.clone(),
                 self.subscription_group_manager.clone(),
-            ),
-            consumer_manage_processor,
+            )),
+            consumer_manage_processor: ArcRefCellWrapper::new(consumer_manage_processor),
             query_assignment_processor: Default::default(),
-            query_message_processor,
+            query_message_processor: ArcRefCellWrapper::new(query_message_processor),
             end_transaction_processor: Default::default(),
         }
     }
@@ -641,7 +668,25 @@ impl BrokerRuntime {
         }
     }
 
-    fn initial_transaction(&mut self) {}
+    fn initial_transaction(&mut self) {
+        cfg_if::cfg_if! {
+            if #[cfg(feature = "local_file_store")] {
+                let bridge = TransactionalMessageBridge::new(
+                    self.message_store.as_ref().unwrap().clone(),
+                    self.broker_stats_manager.clone(),
+                    self.consumer_offset_manager.clone(),
+                    self.broker_config.clone(),
+                     self.topic_config_manager.clone()
+                );
+                let service = DefaultTransactionalMessageService::new(bridge);
+                self.transactional_message_service = Some(ArcRefCellWrapper::new(service));
+            }
+        }
+        self.transactional_message_check_listener =
+            Some(Arc::new(DefaultTransactionalMessageCheckListener));
+        self.transactional_message_check_service = Some(Arc::new(TransactionalMessageCheckService));
+        self.transaction_metrics_flush_service = Some(Arc::new(TransactionMetricsFlushService));
+    }
 
     fn initial_acl(&mut self) {}
 
@@ -670,7 +715,8 @@ impl BrokerRuntime {
         tokio::spawn(async move { fast_server.run(fast_request_processor).await });
 
         if let Some(pull_request_hold_service) = self.pull_request_hold_service.as_mut() {
-            pull_request_hold_service.start();
+            let this = pull_request_hold_service.clone();
+            pull_request_hold_service.start(this);
         }
     }
 

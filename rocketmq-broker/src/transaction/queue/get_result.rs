@@ -14,18 +14,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_client::consumer::pull_result::PullResult;
+use rocketmq_common::common::message::message_ext::MessageExt;
 
-#[derive(Default)]
-pub struct PopMessageProcessor {}
-
-impl PopMessageProcessor {
-    fn process_request(
-        &self,
-        _ctx: ConnectionHandlerContext,
-        _request: RemotingCommand,
-    ) -> RemotingCommand {
-        todo!()
-    }
+pub(crate) struct GetResult {
+    pub(crate) msg: MessageExt,
+    pub(crate) pull_result: PullResult,
 }

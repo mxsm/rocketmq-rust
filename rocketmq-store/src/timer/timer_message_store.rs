@@ -18,6 +18,7 @@ use std::sync::atomic::AtomicI64;
 
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::system_clock::SystemClock;
+use rocketmq_common::ArcRefCellWrapper;
 
 use crate::log_file::MessageStore;
 use crate::message_store::default_message_store::DefaultMessageStore;
@@ -46,7 +47,7 @@ pub const MAGIC_DELETE: i32 = 1 << 2;
 pub struct TimerMessageStore {
     pub curr_read_time_ms: AtomicI64,
     pub curr_queue_offset: AtomicI64,
-    pub default_message_store: Option<DefaultMessageStore>,
+    pub default_message_store: Option<ArcRefCellWrapper<DefaultMessageStore>>,
 }
 
 impl Clone for TimerMessageStore {
@@ -115,7 +116,7 @@ impl TimerMessageStore {
         0.0
     }
 
-    pub fn new(default_message_store: Option<DefaultMessageStore>) -> Self {
+    pub fn new(default_message_store: Option<ArcRefCellWrapper<DefaultMessageStore>>) -> Self {
         Self {
             curr_read_time_ms: AtomicI64::new(0),
             curr_queue_offset: AtomicI64::new(0),
@@ -133,7 +134,7 @@ impl TimerMessageStore {
 
     pub fn set_default_message_store(
         &mut self,
-        default_message_store: Option<DefaultMessageStore>,
+        default_message_store: Option<ArcRefCellWrapper<DefaultMessageStore>>,
     ) {
         self.default_message_store = default_message_store;
     }

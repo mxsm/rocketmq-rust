@@ -18,7 +18,7 @@
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 
-#[derive(Default, Clone)]
+#[derive(Default)]
 pub struct EndTransactionProcessor {}
 
 impl EndTransactionProcessor {

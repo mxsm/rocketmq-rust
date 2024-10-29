@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
@@ -38,6 +39,7 @@ use crate::processor::query_assignment_processor::QueryAssignmentProcessor;
 use crate::processor::query_message_processor::QueryMessageProcessor;
 use crate::processor::reply_message_processor::ReplyMessageProcessor;
 use crate::processor::send_message_processor::SendMessageProcessor;
+use crate::transaction::transactional_message_service::TransactionalMessageService;
 
 pub(crate) mod ack_message_processor;
 pub(crate) mod admin_broker_processor;
@@ -58,27 +60,24 @@ pub(crate) mod query_message_processor;
 pub(crate) mod reply_message_processor;
 pub(crate) mod send_message_processor;
 
-pub struct BrokerRequestProcessor<MS>
-where
-    MS: Clone,
-{
-    pub(crate) send_message_processor: SendMessageProcessor<MS>,
-    pub(crate) pull_message_processor: PullMessageProcessor<MS>,
-    pub(crate) peek_message_processor: PeekMessageProcessor,
-    pub(crate) pop_message_processor: PopMessageProcessor,
-    pub(crate) ack_message_processor: AckMessageProcessor,
-    pub(crate) change_invisible_time_processor: ChangeInvisibleTimeProcessor,
-    pub(crate) notification_processor: NotificationProcessor,
-    pub(crate) polling_info_processor: PollingInfoProcessor,
-    pub(crate) reply_message_processor: ReplyMessageProcessor,
-    pub(crate) query_message_processor: QueryMessageProcessor<MS>,
-    pub(crate) client_manage_processor: ClientManageProcessor<MS>,
-    pub(crate) consumer_manage_processor: ConsumerManageProcessor<MS>,
-    pub(crate) query_assignment_processor: QueryAssignmentProcessor,
-    pub(crate) end_transaction_processor: EndTransactionProcessor,
-    pub(crate) admin_broker_processor: AdminBrokerProcessor,
+pub struct BrokerRequestProcessor<MS, TS> {
+    pub(crate) send_message_processor: ArcRefCellWrapper<SendMessageProcessor<MS, TS>>,
+    pub(crate) pull_message_processor: ArcRefCellWrapper<PullMessageProcessor<MS>>,
+    pub(crate) peek_message_processor: ArcRefCellWrapper<PeekMessageProcessor>,
+    pub(crate) pop_message_processor: ArcRefCellWrapper<PopMessageProcessor>,
+    pub(crate) ack_message_processor: ArcRefCellWrapper<AckMessageProcessor>,
+    pub(crate) change_invisible_time_processor: ArcRefCellWrapper<ChangeInvisibleTimeProcessor>,
+    pub(crate) notification_processor: ArcRefCellWrapper<NotificationProcessor>,
+    pub(crate) polling_info_processor: ArcRefCellWrapper<PollingInfoProcessor>,
+    pub(crate) reply_message_processor: ArcRefCellWrapper<ReplyMessageProcessor<MS, TS>>,
+    pub(crate) query_message_processor: ArcRefCellWrapper<QueryMessageProcessor<MS>>,
+    pub(crate) client_manage_processor: ArcRefCellWrapper<ClientManageProcessor<MS>>,
+    pub(crate) consumer_manage_processor: ArcRefCellWrapper<ConsumerManageProcessor<MS>>,
+    pub(crate) query_assignment_processor: ArcRefCellWrapper<QueryAssignmentProcessor>,
+    pub(crate) end_transaction_processor: ArcRefCellWrapper<EndTransactionProcessor>,
+    pub(crate) admin_broker_processor: ArcRefCellWrapper<AdminBrokerProcessor>,
 }
-impl<MS: Clone> Clone for BrokerRequestProcessor<MS> {
+impl<MS, TS> Clone for BrokerRequestProcessor<MS, TS> {
     fn clone(&self) -> Self {
         Self {
             send_message_processor: self.send_message_processor.clone(),
@@ -100,7 +99,11 @@ impl<MS: Clone> Clone for BrokerRequestProcessor<MS> {
     }
 }
 
-impl<MS: MessageStore + Send + Sync + 'static> RequestProcessor for BrokerRequestProcessor<MS> {
+impl<MS, TS> RequestProcessor for BrokerRequestProcessor<MS, TS>
+where
+    MS: MessageStore + Send + Sync + 'static,
+    TS: TransactionalMessageService,
+{
     async fn process_request(
         &mut self,
         channel: Channel,

@@ -16,20 +16,21 @@
  */
 use std::collections::HashMap;
 
+use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_store::base::message_arriving_listener::MessageArrivingListener;
 use rocketmq_store::log_file::MessageStore;
 
 use crate::long_polling::long_polling_service::pull_request_hold_service::PullRequestHoldService;
 
 pub struct NotifyMessageArrivingListener<MS> {
-    pull_request_hold_service: PullRequestHoldService<MS>,
+    pull_request_hold_service: ArcRefCellWrapper<PullRequestHoldService<MS>>,
 }
 
 impl<MS> NotifyMessageArrivingListener<MS>
 where
     MS: MessageStore + Send + Sync,
 {
-    pub fn new(pull_request_hold_service: PullRequestHoldService<MS>) -> Self {
+    pub fn new(pull_request_hold_service: ArcRefCellWrapper<PullRequestHoldService<MS>>) -> Self {
         Self {
             pull_request_hold_service,
         }

@@ -18,6 +18,7 @@
 use std::sync::Arc;
 
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
@@ -41,18 +42,14 @@ use crate::subscription::manager::subscription_group_manager::SubscriptionGroupM
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
 
-#[derive(Clone)]
-pub struct ConsumerManageProcessor<MS>
-where
-    MS: Clone,
-{
+pub struct ConsumerManageProcessor<MS> {
     broker_config: Arc<BrokerConfig>,
     consumer_manager: Arc<ConsumerManager>,
     topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
     consumer_offset_manager: Arc<ConsumerOffsetManager>,
     subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
     topic_config_manager: Arc<TopicConfigManager>,
-    message_store: MS,
+    message_store: ArcRefCellWrapper<MS>,
 }
 
 impl<MS> ConsumerManageProcessor<MS>
@@ -66,7 +63,7 @@ where
         subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
         consumer_offset_manager: Arc<ConsumerOffsetManager>,
         topic_config_manager: Arc<TopicConfigManager>,
-        message_store: MS,
+        message_store: ArcRefCellWrapper<MS>,
     ) -> Self {
         Self {
             broker_config,
