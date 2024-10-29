@@ -77,26 +77,19 @@ use crate::mqtrace::send_message_hook::SendMessageHook;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
+use crate::transaction::transactional_message_service::TransactionalMessageService;
 
-pub struct SendMessageProcessor<MS>
-where
-    MS: Clone,
-{
-    inner: Inner<MS>,
+pub struct SendMessageProcessor<MS, TS> {
+    inner: ArcRefCellWrapper<Inner<MS, TS>>,
     store_host: SocketAddr,
 }
 
-impl<MS: Clone> Clone for SendMessageProcessor<MS> {
-    fn clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
-            store_host: self.store_host,
-        }
-    }
-}
-
 // RequestProcessor implementation
-impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
+impl<MS, TS> SendMessageProcessor<MS, TS>
+where
+    MS: MessageStore + Send,
+    TS: TransactionalMessageService,
+{
     pub fn has_send_message_hook(&self) -> bool {
         self.inner.send_message_hook_vec.is_empty()
     }
@@ -140,7 +133,7 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
                         .build_msg_context(&channel, &ctx, &mut request_header, &request);
                 self.inner
                     .execute_send_message_hook_before(&send_message_context);
-                SendMessageProcessor::<MS>::clear_reserved_properties(&mut request_header);
+                SendMessageProcessor::<MS, TS>::clear_reserved_properties(&mut request_header);
                 let inner = self.inner.clone();
                 let execute_send_message_hook_after =
                     |ctx: &mut SendMessageContext, cmd: &mut RemotingCommand| {
@@ -176,13 +169,18 @@ impl<MS: MessageStore + Send> SendMessageProcessor<MS> {
     }
 }
 
-impl<MS: MessageStore> SendMessageProcessor<MS> {
+impl<MS, TS> SendMessageProcessor<MS, TS>
+where
+    MS: MessageStore,
+    TS: TransactionalMessageService,
+{
     pub fn new(
         topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
         subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
         topic_config_manager: TopicConfigManager,
         broker_config: Arc<BrokerConfig>,
-        message_store: &MS,
+        message_store: ArcRefCellWrapper<MS>,
+        transactional_message_service: ArcRefCellWrapper<TS>,
         rebalance_lock_manager: Arc<RebalanceLockManager>,
         broker_stats_manager: Arc<BrokerStatsManager>,
     ) -> Self {
@@ -190,18 +188,19 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
             .parse::<SocketAddr>()
             .unwrap();
         Self {
-            inner: Inner {
+            inner: ArcRefCellWrapper::new(Inner {
                 broker_config,
                 topic_config_manager,
                 send_message_hook_vec: ArcRefCellWrapper::new(Vec::new()),
                 topic_queue_mapping_manager,
                 subscription_group_manager,
-                message_store: message_store.clone(),
+                message_store,
+                transactional_message_service,
                 rebalance_lock_manager,
                 broker_stats_manager,
                 producer_manager: None,
                 broker_to_client: Default::default(),
-            },
+            }),
             store_host,
         }
     }
@@ -544,7 +543,13 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
             MessageClientIDSetter::get_uniq_id(&message_ext.message_ext_inner.message);
         if self.inner.broker_config.async_send_enable {
             let put_message_handle = if send_transaction_prepare_message {
-                unimplemented!()
+                let mut transactional_message_service =
+                    self.inner.transactional_message_service.clone();
+                tokio::spawn(async move {
+                    transactional_message_service
+                        .async_prepare_message(message_ext)
+                        .await
+                })
             } else {
                 let mut message_store = self.inner.message_store.clone();
                 tokio::spawn(async move { message_store.put_message(message_ext).await })
@@ -568,7 +573,10 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
             //send_message_callback(&mut send_message_context, &mut response);
         } else {
             let put_message_result = if send_transaction_prepare_message {
-                unimplemented!()
+                self.inner
+                    .transactional_message_service
+                    .prepare_message(message_ext)
+                    .await
             } else {
                 self.inner.message_store.put_message(message_ext).await
             };
@@ -608,57 +616,57 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
     ) -> Option<RemotingCommand> {
         let mut send_ok = false;
         match put_message_result.put_message_status() {
-                  rocketmq_store::base::message_status_enum::PutMessageStatus::PutOk => {
-                      send_ok = true;
-                      response.set_code_ref(RemotingSysResponseCode::Success);
-                  },
-                  rocketmq_store::base::message_status_enum::PutMessageStatus::FlushDiskTimeout => {
-                      send_ok = true;
-                      response.set_code_ref(ResponseCode::FlushDiskTimeout);
-                  },
-                  rocketmq_store::base::message_status_enum::PutMessageStatus::FlushSlaveTimeout => {
-                      send_ok = true;
-                      response.set_code_ref(ResponseCode::FlushSlaveTimeout);
-                  },
-                  rocketmq_store::base::message_status_enum::PutMessageStatus::SlaveNotAvailable =>{
-                      send_ok = true;
-                      response.set_code_ref(ResponseCode::SlaveNotAvailable);
-                  },
-                  rocketmq_store::base::message_status_enum::PutMessageStatus::ServiceNotAvailable => {
-                      response.set_code_mut(ResponseCode::ServiceNotAvailable).set_remark_mut(Some("service not available now. It may be caused by one of the following reasons: the broker's disk is full %s, messages are put to the slave, message store has been shut down, etc.".to_string()));
-                  },
-                  rocketmq_store::base::message_status_enum::PutMessageStatus::CreateMappedFileFailed => {
-                     response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut(Some("create mapped file failed, remoting_server is busy or broken.".to_string()));
-                  },
-                  rocketmq_store::base::message_status_enum::PutMessageStatus::MessageIllegal |
-                  rocketmq_store::base::message_status_enum::PutMessageStatus::PropertiesSizeExceeded => {
-                     response.set_code_mut(ResponseCode::MessageIllegal).set_remark_mut(Some("the message is illegal, maybe msg body or properties length not matched. msg body length limit B, msg properties length limit 32KB.".to_string()));
-                  },
-                  rocketmq_store::base::message_status_enum::PutMessageStatus::OsPageCacheBusy =>{
-                      response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut(Some("[PC_SYNCHRONIZED]broker busy, start flow control for a while".to_string()));
-                  },
-                  rocketmq_store::base::message_status_enum::PutMessageStatus::UnknownError => {
-                     response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut(Some("UNKNOWN_ERROR".to_string()));
-                  },
-                  rocketmq_store::base::message_status_enum::PutMessageStatus::InSyncReplicasNotEnough => {
-                      response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut(Some("in-sync replicas not enough".to_string()));
-                  },
-                  rocketmq_store::base::message_status_enum::PutMessageStatus::LmqConsumeQueueNumExceeded => {
-                      response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut(Some("[LMQ_CONSUME_QUEUE_NUM_EXCEEDED]broker config enableLmq and enableMultiDispatch, lmq consumeQueue num exceed maxLmqConsumeQueueNum config num, default limit 2w.".to_string()));
-                  },
-                  rocketmq_store::base::message_status_enum::PutMessageStatus::WheelTimerFlowControl => {
-                      response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut(Some("timer message is under flow control, max num limit is %d or the current value is greater than %d and less than %d, trigger random flow control".to_string()));
-                  },
-                  rocketmq_store::base::message_status_enum::PutMessageStatus::WheelTimerMsgIllegal => {
-                      response.set_code_mut(ResponseCode::MessageIllegal).set_remark_mut(Some("timer message illegal, the delay time should not be bigger than the max delay %dms; or if set del msg, the delay time should be bigger than the current time".to_string()));
-                  },
-                  rocketmq_store::base::message_status_enum::PutMessageStatus::WheelTimerNotEnable => {
-                      response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut(Some("accurate timer message is not enabled, timerWheelEnable is %s".to_string()));
-                  },
-                  _ => {
-                      response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut(Some("UNKNOWN_ERROR DEFAULT".to_string()));
-                  }
-              }
+                   rocketmq_store::base::message_status_enum::PutMessageStatus::PutOk => {
+                       send_ok = true;
+                       response.set_code_ref(RemotingSysResponseCode::Success);
+                   },
+                   rocketmq_store::base::message_status_enum::PutMessageStatus::FlushDiskTimeout => {
+                       send_ok = true;
+                       response.set_code_ref(ResponseCode::FlushDiskTimeout);
+                   },
+                   rocketmq_store::base::message_status_enum::PutMessageStatus::FlushSlaveTimeout => {
+                       send_ok = true;
+                       response.set_code_ref(ResponseCode::FlushSlaveTimeout);
+                   },
+                   rocketmq_store::base::message_status_enum::PutMessageStatus::SlaveNotAvailable =>{
+                       send_ok = true;
+                       response.set_code_ref(ResponseCode::SlaveNotAvailable);
+                   },
+                   rocketmq_store::base::message_status_enum::PutMessageStatus::ServiceNotAvailable => {
+                       response.set_code_mut(ResponseCode::ServiceNotAvailable).set_remark_mut(Some("service not available now. It may be caused by one of the following reasons: the broker's disk is full %s, messages are put to the slave, message store has been shut down, etc.".to_string()));
+                   },
+                   rocketmq_store::base::message_status_enum::PutMessageStatus::CreateMappedFileFailed => {
+                      response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut(Some("create mapped file failed, remoting_server is busy or broken.".to_string()));
+                   },
+                   rocketmq_store::base::message_status_enum::PutMessageStatus::MessageIllegal |
+                   rocketmq_store::base::message_status_enum::PutMessageStatus::PropertiesSizeExceeded => {
+                      response.set_code_mut(ResponseCode::MessageIllegal).set_remark_mut(Some("the message is illegal, maybe msg body or properties length not matched. msg body length limit B, msg properties length limit 32KB.".to_string()));
+                   },
+                   rocketmq_store::base::message_status_enum::PutMessageStatus::OsPageCacheBusy =>{
+                       response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut(Some("[PC_SYNCHRONIZED]broker busy, start flow control for a while".to_string()));
+                   },
+                   rocketmq_store::base::message_status_enum::PutMessageStatus::UnknownError => {
+                      response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut(Some("UNKNOWN_ERROR".to_string()));
+                   },
+                   rocketmq_store::base::message_status_enum::PutMessageStatus::InSyncReplicasNotEnough => {
+                       response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut(Some("in-sync replicas not enough".to_string()));
+                   },
+                   rocketmq_store::base::message_status_enum::PutMessageStatus::LmqConsumeQueueNumExceeded => {
+                       response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut(Some("[LMQ_CONSUME_QUEUE_NUM_EXCEEDED]broker config enableLmq and enableMultiDispatch, lmq consumeQueue num exceed maxLmqConsumeQueueNum config num, default limit 2w.".to_string()));
+                   },
+                   rocketmq_store::base::message_status_enum::PutMessageStatus::WheelTimerFlowControl => {
+                       response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut(Some("timer message is under flow control, max num limit is %d or the current value is greater than %d and less than %d, trigger random flow control".to_string()));
+                   },
+                   rocketmq_store::base::message_status_enum::PutMessageStatus::WheelTimerMsgIllegal => {
+                       response.set_code_mut(ResponseCode::MessageIllegal).set_remark_mut(Some("timer message illegal, the delay time should not be bigger than the max delay %dms; or if set del msg, the delay time should be bigger than the current time".to_string()));
+                   },
+                   rocketmq_store::base::message_status_enum::PutMessageStatus::WheelTimerNotEnable => {
+                       response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut(Some("accurate timer message is not enabled, timerWheelEnable is %s".to_string()));
+                   },
+                   _ => {
+                       response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut(Some("UNKNOWN_ERROR DEFAULT".to_string()));
+                   }
+               }
 
         let binding = HashMap::new();
         let ext_fields = request.ext_fields().unwrap_or(&binding);
@@ -930,21 +938,21 @@ impl<MS: MessageStore> SendMessageProcessor<MS> {
 
 const DLQ_NUMS_PER_GROUP: u32 = 1;
 
-#[derive(Clone)]
-pub(crate) struct Inner<MS> {
+pub(crate) struct Inner<MS, TS> {
     pub(crate) topic_config_manager: TopicConfigManager,
     pub(crate) send_message_hook_vec: ArcRefCellWrapper<Vec<Box<dyn SendMessageHook>>>,
     pub(crate) topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
     pub(crate) subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
     pub(crate) broker_config: Arc<BrokerConfig>,
-    pub(crate) message_store: MS,
+    pub(crate) message_store: ArcRefCellWrapper<MS>,
+    pub(crate) transactional_message_service: ArcRefCellWrapper<TS>,
     pub(crate) rebalance_lock_manager: Arc<RebalanceLockManager>,
     pub(crate) broker_stats_manager: Arc<BrokerStatsManager>,
     pub(crate) producer_manager: Option<Arc<ProducerManager>>,
     pub(crate) broker_to_client: Broker2Client,
 }
 
-impl<MS> Inner<MS> {
+impl<MS, TS> Inner<MS, TS> {
     pub fn has_send_message_hook(&self) -> bool {
         self.send_message_hook_vec.is_empty()
     }

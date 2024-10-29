@@ -63,6 +63,7 @@ lazy_static.workspace = true
 num_cpus = { workspace = true }
 sysinfo = { workspace = true }
 thiserror = { workspace = true }
+trait-variant = { workspace = true }
 [dev-dependencies]
 mockall = "0.13.0"
 static_assertions = { version = "1" }

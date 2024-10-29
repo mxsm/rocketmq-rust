@@ -16,7 +16,7 @@
  */
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 
-#[derive(Default, Clone)]
+#[derive(Default)]
 pub struct ChangeInvisibleTimeProcessor {}
 
 impl ChangeInvisibleTimeProcessor {

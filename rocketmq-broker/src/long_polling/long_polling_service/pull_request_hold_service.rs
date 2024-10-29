@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_store::consume_queue::consume_queue_ext::CqExtUnit;
 use rocketmq_store::log_file::MessageStore;
@@ -33,11 +34,10 @@ use crate::processor::pull_message_processor::PullMessageProcessor;
 
 const TOPIC_QUEUE_ID_SEPARATOR: &str = "@";
 
-#[derive(Clone)]
 pub struct PullRequestHoldService<MS> {
     pull_request_table: Arc<parking_lot::RwLock<HashMap<String, ManyPullRequest>>>,
-    pull_message_processor: Arc<PullMessageProcessor<MS>>,
-    message_store: Arc<MS>,
+    pull_message_processor: ArcRefCellWrapper<PullMessageProcessor<MS>>,
+    message_store: ArcRefCellWrapper<MS>,
     broker_config: Arc<BrokerConfig>,
     shutdown: Arc<Notify>,
 }
@@ -47,8 +47,8 @@ where
     MS: MessageStore + Send + Sync,
 {
     pub fn new(
-        message_store: Arc<MS>,
-        pull_message_processor: Arc<PullMessageProcessor<MS>>,
+        message_store: ArcRefCellWrapper<MS>,
+        pull_message_processor: ArcRefCellWrapper<PullMessageProcessor<MS>>,
         broker_config: Arc<BrokerConfig>,
     ) -> Self {
         PullRequestHoldService {
@@ -66,26 +66,25 @@ impl<MS> PullRequestHoldService<MS>
 where
     MS: MessageStore + Send + Sync,
 {
-    pub fn start(&mut self) {
-        let self_clone = self.clone();
+    pub fn start(&mut self, this: ArcRefCellWrapper<Self>) {
         tokio::spawn(async move {
             loop {
-                let handle_future = if self_clone.broker_config.long_polling_enable {
+                let handle_future = if this.broker_config.long_polling_enable {
                     tokio::time::sleep(tokio::time::Duration::from_secs(5))
                 } else {
                     tokio::time::sleep(tokio::time::Duration::from_millis(
-                        self_clone.broker_config.short_polling_time_mills,
+                        this.broker_config.short_polling_time_mills,
                     ))
                 };
                 tokio::select! {
                     _ = handle_future => {}
-                    _ = self_clone.shutdown.notified() => {
+                    _ = this.shutdown.notified() => {
                         info!("PullRequestHoldService: shutdown..........");
                         break;
                     }
                 }
                 let instant = Instant::now();
-                self_clone.check_hold_request();
+                this.check_hold_request();
                 let elapsed = instant.elapsed().as_millis();
                 if elapsed > 5000 {
                     warn!(
@@ -176,7 +175,9 @@ where
                         }
 
                         if match_by_commit_log {
+                            let pull_message_this = self.pull_message_processor.clone();
                             self.pull_message_processor.execute_request_when_wakeup(
+                                pull_message_this,
                                 request.client_channel().clone(),
                                 request.connection_handler_context().clone(),
                                 request.request_command().clone(),
@@ -188,7 +189,9 @@ where
                     if get_current_millis()
                         >= (request.suspend_timestamp() + request.timeout_millis())
                     {
+                        let pull_message_this = self.pull_message_processor.clone();
                         self.pull_message_processor.execute_request_when_wakeup(
+                            pull_message_this,
                             request.client_channel().clone(),
                             request.connection_handler_context().clone(),
                             request.request_command().clone(),
@@ -217,7 +220,9 @@ where
                         request.client_channel(),
                         request.request_command()
                     );
+                    let pull_message_this = self.pull_message_processor.clone();
                     self.pull_message_processor.execute_request_when_wakeup(
+                        pull_message_this,
                         request.client_channel().clone(),
                         request.connection_handler_context().clone(),
                         request.request_command().clone(),

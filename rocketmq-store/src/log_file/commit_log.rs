@@ -38,6 +38,7 @@ use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::common::system_clock::SystemClock;
 use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
 use rocketmq_common::utils::time_utils;
+use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::CRC32Utils::crc32;
 use rocketmq_common::MessageDecoder::string_to_message_properties;
 use rocketmq_common::MessageDecoder::MESSAGE_MAGIC_CODE_POSITION;
@@ -797,7 +798,7 @@ impl CommitLog {
     pub async fn recover_normally(
         &mut self,
         max_phy_offset_of_consume_queue: i64,
-        mut message_store: DefaultMessageStore,
+        mut message_store: ArcRefCellWrapper<DefaultMessageStore>,
     ) {
         let check_crc_on_recover = self.message_store_config.check_crc_on_recover;
         let check_dup_info = self.message_store_config.duplication_enable;
@@ -896,7 +897,7 @@ impl CommitLog {
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
-                                   files"
+                                    files"
             );
             self.mapped_file_queue.set_flushed_where(0);
             self.mapped_file_queue.set_committed_where(0);
@@ -939,7 +940,7 @@ impl CommitLog {
     pub async fn recover_abnormally(
         &mut self,
         max_phy_offset_of_consume_queue: i64,
-        mut message_store: DefaultMessageStore,
+        mut message_store: ArcRefCellWrapper<DefaultMessageStore>,
     ) {
         let check_crc_on_recover = self.message_store_config.check_crc_on_recover;
         let check_dup_info = self.message_store_config.duplication_enable;
@@ -1076,7 +1077,7 @@ impl CommitLog {
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
-                                   files"
+                                    files"
             );
             self.mapped_file_queue.set_flushed_where(0);
             self.mapped_file_queue.set_committed_where(0);

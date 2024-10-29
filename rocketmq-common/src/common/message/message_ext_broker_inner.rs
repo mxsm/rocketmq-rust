@@ -142,6 +142,13 @@ impl MessageExtBrokerInner {
         JavaStringHasher::new().hash_str(tags) as i64
     }
 
+    pub fn tags_string_to_tags_code(tags: &str) -> i64 {
+        if tags.is_empty() {
+            return 0;
+        }
+        JavaStringHasher::new().hash_str(tags) as i64
+    }
+
     pub fn get_tags(&self) -> Option<String> {
         self.message_ext_inner.get_tags()
     }

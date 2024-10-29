@@ -24,6 +24,7 @@ use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all::MASTER_ID;
 use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
+use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::code::response_code::RemotingSysResponseCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
@@ -71,7 +72,8 @@ pub struct DefaultPullMessageResultHandler {
     broker_stats_manager: Arc<BrokerStatsManager>,
     broker_config: Arc<BrokerConfig>,
     consume_message_hook_list: Arc<Vec<Box<dyn ConsumeMessageHook>>>,
-    pull_request_hold_service: Option<Arc<PullRequestHoldService<DefaultMessageStore>>>,
+    pull_request_hold_service:
+        Option<ArcRefCellWrapper<PullRequestHoldService<DefaultMessageStore>>>,
 }
 
 impl DefaultPullMessageResultHandler {
@@ -100,7 +102,9 @@ impl DefaultPullMessageResultHandler {
 
     pub fn set_pull_request_hold_service(
         &mut self,
-        pull_request_hold_service: Option<Arc<PullRequestHoldService<DefaultMessageStore>>>,
+        pull_request_hold_service: Option<
+            ArcRefCellWrapper<PullRequestHoldService<DefaultMessageStore>>,
+        >,
     ) {
         self.pull_request_hold_service = pull_request_hold_service;
     }

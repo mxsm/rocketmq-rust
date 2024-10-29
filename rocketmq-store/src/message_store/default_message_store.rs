@@ -48,6 +48,7 @@ use rocketmq_common::{
         //thread::thread_service_tokio::ThreadService,
     },
     utils::queue_type_utils::QueueTypeUtils,
+    ArcRefCellWrapper,
     FileUtils::string_to_file,
     MessageDecoder,
     UtilAll::ensure_dir_ok,
@@ -130,40 +131,7 @@ pub struct DefaultMessageStore {
     compaction_store: Arc<CompactionStore>,
     timer_message_store: Arc<TimerMessageStore>,
     transient_store_pool: TransientStorePool,
-}
-
-impl Clone for DefaultMessageStore {
-    fn clone(&self) -> Self {
-        Self {
-            message_store_config: self.message_store_config.clone(),
-            broker_config: self.broker_config.clone(),
-            put_message_hook_list: self.put_message_hook_list.clone(),
-            topic_config_table: self.topic_config_table.clone(),
-            commit_log: self.commit_log.clone(),
-            compaction_service: self.compaction_service.clone(),
-            store_checkpoint: self.store_checkpoint.clone(),
-            master_flushed_offset: self.master_flushed_offset.clone(),
-            index_service: self.index_service.clone(),
-            allocate_mapped_file_service: self.allocate_mapped_file_service.clone(),
-            consume_queue_store: self.consume_queue_store.clone(),
-            dispatcher: self.dispatcher.clone(),
-            broker_init_max_offset: self.broker_init_max_offset.clone(),
-            state_machine_version: self.state_machine_version.clone(),
-            shutdown: self.shutdown.clone(),
-            running_flags: self.running_flags.clone(),
-            reput_message_service: self.reput_message_service.clone(),
-            clean_commit_log_service: self.clean_commit_log_service.clone(),
-            correct_logic_offset_service: self.correct_logic_offset_service.clone(),
-            clean_consume_queue_service: self.clean_consume_queue_service.clone(),
-            broker_stats_manager: self.broker_stats_manager.clone(),
-            message_arriving_listener: self.message_arriving_listener.clone(),
-            notify_message_arrive_in_batch: self.notify_message_arrive_in_batch,
-            store_stats_service: self.store_stats_service.clone(),
-            compaction_store: self.compaction_store.clone(),
-            timer_message_store: self.timer_message_store.clone(),
-            transient_store_pool: self.transient_store_pool.clone(),
-        }
-    }
+    message_store_arc: Option<ArcRefCellWrapper<DefaultMessageStore>>,
 }
 
 impl DefaultMessageStore {
@@ -252,6 +220,7 @@ impl DefaultMessageStore {
             compaction_store: Arc::new(CompactionStore),
             timer_message_store: Arc::new(TimerMessageStore::new_empty()),
             transient_store_pool,
+            message_store_arc: None,
         }
     }
 
@@ -276,6 +245,13 @@ impl DefaultMessageStore {
         self.message_store_config.transient_store_pool_enable
             && (self.broker_config.enable_controller_mode
                 || self.message_store_config().broker_role != BrokerRole::Slave)
+    }
+
+    pub fn set_message_store_arc(
+        &mut self,
+        message_store_arc: Option<ArcRefCellWrapper<DefaultMessageStore>>,
+    ) {
+        self.message_store_arc = message_store_arc;
     }
 }
 
@@ -366,13 +342,19 @@ impl DefaultMessageStore {
 
     pub async fn recover_normally(&mut self, max_phy_offset_of_consume_queue: i64) {
         self.commit_log
-            .recover_normally(max_phy_offset_of_consume_queue, self.clone())
+            .recover_normally(
+                max_phy_offset_of_consume_queue,
+                self.message_store_arc.clone().unwrap(),
+            )
             .await;
     }
 
     pub async fn recover_abnormally(&mut self, max_phy_offset_of_consume_queue: i64) {
         self.commit_log
-            .recover_abnormally(max_phy_offset_of_consume_queue, self.clone())
+            .recover_abnormally(
+                max_phy_offset_of_consume_queue,
+                self.message_store_arc.clone().unwrap(),
+            )
             .await;
     }
 
@@ -439,7 +421,7 @@ impl DefaultMessageStore {
             }
         });
 
-        let message_store = self.clone();
+        let message_store = self.message_store_arc.clone().unwrap();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
             interval.tick().await;
@@ -625,7 +607,7 @@ impl MessageStore for DefaultMessageStore {
             self.message_store_config.clone(),
             self.dispatcher.clone(),
             self.notify_message_arrive_in_batch,
-            self.clone(),
+            self.message_store_arc.clone().unwrap(),
         );
 
         self.commit_log.start();
@@ -1390,7 +1372,7 @@ impl ReputMessageService {
         message_store_config: Arc<MessageStoreConfig>,
         dispatcher: CommitLogDispatcherDefault,
         notify_message_arrive_in_batch: bool,
-        message_store: DefaultMessageStore,
+        message_store: ArcRefCellWrapper<DefaultMessageStore>,
     ) {
         let mut inner = ReputMessageServiceInner {
             reput_from_offset: self.reput_from_offset.clone().unwrap(),
@@ -1398,7 +1380,7 @@ impl ReputMessageService {
             message_store_config,
             dispatcher,
             notify_message_arrive_in_batch,
-            message_store: Arc::new(message_store),
+            message_store,
         };
         self.inner = Some(inner.clone());
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
@@ -1461,7 +1443,7 @@ struct ReputMessageServiceInner {
     message_store_config: Arc<MessageStoreConfig>,
     dispatcher: CommitLogDispatcherDefault,
     notify_message_arrive_in_batch: bool,
-    message_store: Arc<DefaultMessageStore>,
+    message_store: ArcRefCellWrapper<DefaultMessageStore>,
 }
 
 impl ReputMessageServiceInner {

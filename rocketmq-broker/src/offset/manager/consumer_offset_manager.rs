@@ -49,13 +49,13 @@ pub const TOPIC_GROUP_SEPARATOR: &str = "@";
 pub(crate) struct ConsumerOffsetManager {
     pub(crate) broker_config: Arc<BrokerConfig>,
     consumer_offset_wrapper: ConsumerOffsetWrapper,
-    message_store: Option<Arc<DefaultMessageStore>>,
+    message_store: Option<ArcRefCellWrapper<DefaultMessageStore>>,
 }
 
 impl ConsumerOffsetManager {
     pub fn new(
         broker_config: Arc<BrokerConfig>,
-        message_store: Option<Arc<DefaultMessageStore>>,
+        message_store: Option<ArcRefCellWrapper<DefaultMessageStore>>,
     ) -> Self {
         ConsumerOffsetManager {
             broker_config,
@@ -69,7 +69,10 @@ impl ConsumerOffsetManager {
             message_store,
         }
     }
-    pub fn set_message_store(&mut self, message_store: Option<Arc<DefaultMessageStore>>) {
+    pub fn set_message_store(
+        &mut self,
+        message_store: Option<ArcRefCellWrapper<DefaultMessageStore>>,
+    ) {
         self.message_store = message_store;
     }
 }

@@ -41,7 +41,6 @@ use crate::client::manager::producer_manager::ProducerManager;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
-#[derive(Clone)]
 pub struct ClientManageProcessor<MS> {
     consumer_group_heartbeat_table: Arc<
         parking_lot::RwLock<HashMap<String /* ConsumerGroup */, i32 /* HeartbeatFingerprint */>>,

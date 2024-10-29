@@ -47,7 +47,7 @@ pub(crate) struct TopicConfigManager {
     topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
     data_version: ArcRefCellWrapper<DataVersion>,
     broker_config: Arc<BrokerConfig>,
-    message_store: Option<DefaultMessageStore>,
+    message_store: Option<ArcRefCellWrapper<DefaultMessageStore>>,
     topic_config_table_lock: Arc<parking_lot::ReentrantMutex<()>>,
     broker_runtime_inner: Arc<BrokerRuntimeInner>,
 }
@@ -234,13 +234,13 @@ impl TopicConfigManager {
             self.data_version.mut_from_ref().next_version();
         }
         TopicConfigAndMappingSerializeWrapper {
-            topic_config_serialize_wrapper: rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper {
-                topic_config_table,
-                data_version: self.data_version.as_ref().clone(),
-            },
-            topic_queue_mapping_info_map,
-            ..TopicConfigAndMappingSerializeWrapper::default()
-        }
+             topic_config_serialize_wrapper: rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper {
+                 topic_config_table,
+                 data_version: self.data_version.as_ref().clone(),
+             },
+             topic_queue_mapping_info_map,
+             ..TopicConfigAndMappingSerializeWrapper::default()
+         }
     }
 
     pub fn is_order_topic(&self, topic: &str) -> bool {
@@ -480,7 +480,10 @@ impl TopicConfigManager {
         self.topic_config_table = topic_config_table;
     }
 
-    pub fn set_message_store(&mut self, message_store: Option<DefaultMessageStore>) {
+    pub fn set_message_store(
+        &mut self,
+        message_store: Option<ArcRefCellWrapper<DefaultMessageStore>>,
+    ) {
         self.message_store = message_store;
     }
 
