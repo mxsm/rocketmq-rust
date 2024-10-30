@@ -14,10 +14,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#![feature(sync_unsafe_cell)]
+
+mod arc_mut;
 pub mod count_down_latch;
 pub mod rocketmq_tokio_lock;
 mod shutdown;
 
+pub use arc_mut::ArcMut;
+pub use arc_mut::SyncUnsafeCellWrapper;
+pub use arc_mut::WeakArcMut;
 pub use count_down_latch::CountDownLatch;
 /// Re-export rocketmq main.
 pub use rocketmq::main;
