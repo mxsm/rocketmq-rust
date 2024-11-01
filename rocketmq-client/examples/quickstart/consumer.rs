@@ -58,7 +58,7 @@ impl MessageListenerConcurrently for MyMessageListener {
         _context: &ConsumeConcurrentlyContext,
     ) -> Result<ConsumeConcurrentlyStatus> {
         for msg in msgs {
-            info!("Receive message: {:?}", msg);
+            info!("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaReceive message: {:?}", msg);
         }
         Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
     }
