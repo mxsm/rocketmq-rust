@@ -206,6 +206,8 @@ impl MQClientInstance {
             broker_version_table: Arc::new(Default::default()),
             send_heartbeat_times_total: Arc::new(AtomicI64::new(0)),
         });
+        let instance_clone = instance.clone();
+        instance.mq_admin_impl.set_client(instance_clone);
         let weak_instance = ArcRefCellWrapper::downgrade(&instance);
         let (tx, mut rx) = tokio::sync::broadcast::channel::<ConnectionNetEvent>(16);
 
@@ -583,11 +585,11 @@ impl MQClientInstance {
 
                 // Update sub info
                 {
-                    let mut consumer_table = self.consumer_table.write().await;
+                    let consumer_table = self.consumer_table.read().await;
                     if !consumer_table.is_empty() {
                         let subscribe_info =
                             topic_route_data2topic_subscribe_info(topic, &topic_route_data);
-                        for (_, value) in consumer_table.iter_mut() {
+                        for (_, value) in consumer_table.iter() {
                             value
                                 .update_topic_subscribe_info(topic, &subscribe_info)
                                 .await;
