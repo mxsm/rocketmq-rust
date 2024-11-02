@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 use rocketmq_common::common::message::message_client_ext::MessageClientExt;
-use rocketmq_common::ArcRefCellWrapper;
+use rocketmq_rust::ArcMut;
 
 use crate::consumer::pull_status::PullStatus;
 
@@ -24,7 +24,7 @@ pub struct PullResult {
     pub next_begin_offset: u64,
     pub min_offset: u64,
     pub max_offset: u64,
-    pub msg_found_list: Vec<ArcRefCellWrapper<MessageClientExt>>,
+    pub msg_found_list: Vec<ArcMut<MessageClientExt>>,
 }
 
 impl PullResult {
@@ -33,7 +33,7 @@ impl PullResult {
         next_begin_offset: u64,
         min_offset: u64,
         max_offset: u64,
-        msg_found_list: Vec<ArcRefCellWrapper<MessageClientExt>>,
+        msg_found_list: Vec<ArcMut<MessageClientExt>>,
     ) -> Self {
         Self {
             pull_status,
@@ -60,11 +60,11 @@ impl PullResult {
         self.max_offset
     }
 
-    pub fn msg_found_list(&self) -> &Vec<ArcRefCellWrapper<MessageClientExt>> {
+    pub fn msg_found_list(&self) -> &Vec<ArcMut<MessageClientExt>> {
         &self.msg_found_list
     }
 
-    pub fn set_msg_found_list(&mut self, msg_found_list: Vec<ArcRefCellWrapper<MessageClientExt>>) {
+    pub fn set_msg_found_list(&mut self, msg_found_list: Vec<ArcMut<MessageClientExt>>) {
         self.msg_found_list = msg_found_list;
     }
 }

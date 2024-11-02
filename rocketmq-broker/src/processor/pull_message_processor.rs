@@ -22,7 +22,6 @@ use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
 use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
 use rocketmq_common::common::FAQUrl;
-use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::RemotingSysResponseCode;
@@ -44,6 +43,7 @@ use rocketmq_remoting::rpc::rpc_client_utils::RpcClientUtils;
 use rocketmq_remoting::rpc::rpc_request::RpcRequest;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_runtime::RocketMQRuntime;
+use rocketmq_rust::ArcMut;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::filter::MessageFilter;
@@ -69,7 +69,7 @@ use crate::topic::manager::topic_config_manager::TopicConfigManager;
 use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
 
 pub struct PullMessageProcessor<MS> {
-    pull_message_result_handler: ArcRefCellWrapper<Box<dyn PullMessageResultHandler>>,
+    pull_message_result_handler: ArcMut<Box<dyn PullMessageResultHandler>>,
     broker_config: Arc<BrokerConfig>,
     subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
     topic_config_manager: Arc<TopicConfigManager>,
@@ -78,7 +78,7 @@ pub struct PullMessageProcessor<MS> {
     consumer_filter_manager: Arc<ConsumerFilterManager>,
     consumer_offset_manager: Arc<ConsumerOffsetManager>,
     broadcast_offset_manager: Arc<BroadcastOffsetManager>,
-    message_store: ArcRefCellWrapper<MS>,
+    message_store: ArcMut<MS>,
     cold_data_cg_ctr_service: Arc<ColdDataCgCtrService>,
     broker_outer_api: Arc<BrokerOuterAPI>,
     // write message to consume client runtime
@@ -89,7 +89,7 @@ pub struct PullMessageProcessor<MS> {
 
 impl<MS> PullMessageProcessor<MS> {
     pub fn new(
-        pull_message_result_handler: ArcRefCellWrapper<Box<dyn PullMessageResultHandler>>,
+        pull_message_result_handler: ArcMut<Box<dyn PullMessageResultHandler>>,
         broker_config: Arc<BrokerConfig>,
         subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
         topic_config_manager: Arc<TopicConfigManager>,
@@ -98,7 +98,7 @@ impl<MS> PullMessageProcessor<MS> {
         consumer_filter_manager: Arc<ConsumerFilterManager>,
         consumer_offset_manager: Arc<ConsumerOffsetManager>,
         broadcast_offset_manager: Arc<BroadcastOffsetManager>,
-        message_store: ArcRefCellWrapper<MS>,
+        message_store: ArcMut<MS>,
         broker_outer_api: Arc<BrokerOuterAPI>,
     ) -> Self {
         let cpus = num_cpus::get();
@@ -834,7 +834,7 @@ where
 
     pub fn execute_request_when_wakeup(
         &self,
-        mut pull_message_processor: ArcRefCellWrapper<PullMessageProcessor<MS>>,
+        mut pull_message_processor: ArcMut<PullMessageProcessor<MS>>,
         channel: Channel,
         ctx: ConnectionHandlerContext,
         request: RemotingCommand,

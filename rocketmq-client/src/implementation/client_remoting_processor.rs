@@ -25,7 +25,6 @@ use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::MessageDecoder;
 use rocketmq_common::TimeUtils::get_current_millis;
-use rocketmq_common::WeakCellWrapper;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
@@ -37,6 +36,7 @@ use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_remoting::Result;
+use rocketmq_rust::WeakArcMut;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -46,11 +46,11 @@ use crate::producer::request_future_holder::REQUEST_FUTURE_HOLDER;
 
 #[derive(Clone)]
 pub struct ClientRemotingProcessor {
-    pub(crate) client_instance: WeakCellWrapper<MQClientInstance>,
+    pub(crate) client_instance: WeakArcMut<MQClientInstance>,
 }
 
 impl ClientRemotingProcessor {
-    pub fn new(client_instance: WeakCellWrapper<MQClientInstance>) -> Self {
+    pub fn new(client_instance: WeakArcMut<MQClientInstance>) -> Self {
         Self { client_instance }
     }
 }

@@ -14,13 +14,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_remoting::Result;
+use rocketmq_rust::ArcMut;
 use rocketmq_store::log_file::MessageStore;
 use tracing::info;
 
@@ -61,21 +61,21 @@ pub(crate) mod reply_message_processor;
 pub(crate) mod send_message_processor;
 
 pub struct BrokerRequestProcessor<MS, TS> {
-    pub(crate) send_message_processor: ArcRefCellWrapper<SendMessageProcessor<MS, TS>>,
-    pub(crate) pull_message_processor: ArcRefCellWrapper<PullMessageProcessor<MS>>,
-    pub(crate) peek_message_processor: ArcRefCellWrapper<PeekMessageProcessor>,
-    pub(crate) pop_message_processor: ArcRefCellWrapper<PopMessageProcessor>,
-    pub(crate) ack_message_processor: ArcRefCellWrapper<AckMessageProcessor>,
-    pub(crate) change_invisible_time_processor: ArcRefCellWrapper<ChangeInvisibleTimeProcessor>,
-    pub(crate) notification_processor: ArcRefCellWrapper<NotificationProcessor>,
-    pub(crate) polling_info_processor: ArcRefCellWrapper<PollingInfoProcessor>,
-    pub(crate) reply_message_processor: ArcRefCellWrapper<ReplyMessageProcessor<MS, TS>>,
-    pub(crate) query_message_processor: ArcRefCellWrapper<QueryMessageProcessor<MS>>,
-    pub(crate) client_manage_processor: ArcRefCellWrapper<ClientManageProcessor<MS>>,
-    pub(crate) consumer_manage_processor: ArcRefCellWrapper<ConsumerManageProcessor<MS>>,
-    pub(crate) query_assignment_processor: ArcRefCellWrapper<QueryAssignmentProcessor>,
-    pub(crate) end_transaction_processor: ArcRefCellWrapper<EndTransactionProcessor>,
-    pub(crate) admin_broker_processor: ArcRefCellWrapper<AdminBrokerProcessor>,
+    pub(crate) send_message_processor: ArcMut<SendMessageProcessor<MS, TS>>,
+    pub(crate) pull_message_processor: ArcMut<PullMessageProcessor<MS>>,
+    pub(crate) peek_message_processor: ArcMut<PeekMessageProcessor>,
+    pub(crate) pop_message_processor: ArcMut<PopMessageProcessor>,
+    pub(crate) ack_message_processor: ArcMut<AckMessageProcessor>,
+    pub(crate) change_invisible_time_processor: ArcMut<ChangeInvisibleTimeProcessor>,
+    pub(crate) notification_processor: ArcMut<NotificationProcessor>,
+    pub(crate) polling_info_processor: ArcMut<PollingInfoProcessor>,
+    pub(crate) reply_message_processor: ArcMut<ReplyMessageProcessor<MS, TS>>,
+    pub(crate) query_message_processor: ArcMut<QueryMessageProcessor<MS>>,
+    pub(crate) client_manage_processor: ArcMut<ClientManageProcessor<MS>>,
+    pub(crate) consumer_manage_processor: ArcMut<ConsumerManageProcessor<MS>>,
+    pub(crate) query_assignment_processor: ArcMut<QueryAssignmentProcessor>,
+    pub(crate) end_transaction_processor: ArcMut<EndTransactionProcessor>,
+    pub(crate) admin_broker_processor: ArcMut<AdminBrokerProcessor>,
 }
 impl<MS, TS> Clone for BrokerRequestProcessor<MS, TS> {
     fn clone(&self) -> Self {

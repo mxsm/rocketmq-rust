@@ -22,14 +22,14 @@ use std::sync::Arc;
 
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
-use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::TimeUtils::get_current_millis;
-use rocketmq_common::WeakCellWrapper;
 use rocketmq_remoting::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
 use rocketmq_remoting::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+use rocketmq_rust::ArcMut;
+use rocketmq_rust::WeakArcMut;
 use tokio::sync::RwLock;
 use tracing::error;
 use tracing::info;
@@ -53,8 +53,8 @@ pub(crate) struct RebalanceImpl<R> {
     pub(crate) consumer_group: Option<String>,
     pub(crate) message_model: Option<MessageModel>,
     pub(crate) allocate_message_queue_strategy: Option<Arc<dyn AllocateMessageQueueStrategy>>,
-    pub(crate) client_instance: Option<ArcRefCellWrapper<MQClientInstance>>,
-    pub(crate) sub_rebalance_impl: Option<WeakCellWrapper<R>>,
+    pub(crate) client_instance: Option<ArcMut<MQClientInstance>>,
+    pub(crate) sub_rebalance_impl: Option<WeakArcMut<R>>,
     pub(crate) topic_broker_rebalance: Arc<RwLock<HashMap<String, String>>>,
     pub(crate) topic_client_rebalance: Arc<RwLock<HashMap<String, String>>>,
 }
@@ -67,7 +67,7 @@ where
         consumer_group: Option<String>,
         message_model: Option<MessageModel>,
         allocate_message_queue_strategy: Option<Arc<dyn AllocateMessageQueueStrategy>>,
-        mqclient_instance: Option<ArcRefCellWrapper<MQClientInstance>>,
+        mqclient_instance: Option<ArcMut<MQClientInstance>>,
     ) -> Self {
         RebalanceImpl {
             process_queue_table: Arc::new(RwLock::new(HashMap::with_capacity(64))),

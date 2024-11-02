@@ -20,11 +20,11 @@ use std::sync::Arc;
 
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
-use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
 use rocketmq_remoting::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
 use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
 use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
+use rocketmq_rust::ArcMut;
 use tokio::sync::Mutex;
 use tracing::error;
 use tracing::info;
@@ -38,13 +38,13 @@ use crate::factory::mq_client_instance::MQClientInstance;
 use crate::Result;
 
 pub struct RemoteBrokerOffsetStore {
-    client_instance: ArcRefCellWrapper<MQClientInstance>,
+    client_instance: ArcMut<MQClientInstance>,
     group_name: String,
     offset_table: Arc<Mutex<HashMap<MessageQueue, ControllableOffset>>>,
 }
 
 impl RemoteBrokerOffsetStore {
-    pub fn new(client_instance: ArcRefCellWrapper<MQClientInstance>, group_name: String) -> Self {
+    pub fn new(client_instance: ArcMut<MQClientInstance>, group_name: String) -> Self {
         Self {
             client_instance,
             group_name,

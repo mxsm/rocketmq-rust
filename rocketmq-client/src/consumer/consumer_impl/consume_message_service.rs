@@ -19,21 +19,21 @@ use std::sync::Arc;
 use rocketmq_common::common::message::message_client_ext::MessageClientExt;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::ArcRefCellWrapper;
-use rocketmq_common::WeakCellWrapper;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
+use rocketmq_rust::ArcMut;
+use rocketmq_rust::WeakArcMut;
 
 use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
 use crate::consumer::consumer_impl::process_queue::ProcessQueue;
 
 pub struct ConsumeMessageServiceGeneral<T, K> {
-    consume_message_concurrently_service: Option<ArcRefCellWrapper<T>>,
-    consume_message_orderly_service: Option<ArcRefCellWrapper<K>>,
+    consume_message_concurrently_service: Option<ArcMut<T>>,
+    consume_message_orderly_service: Option<ArcMut<K>>,
 }
 impl<T, K> ConsumeMessageServiceGeneral<T, K> {
     pub fn new(
-        consume_message_concurrently_service: Option<ArcRefCellWrapper<T>>,
-        consume_message_orderly_service: Option<ArcRefCellWrapper<K>>,
+        consume_message_concurrently_service: Option<ArcMut<T>>,
+        consume_message_orderly_service: Option<ArcMut<K>>,
     ) -> Self {
         Self {
             consume_message_concurrently_service,
@@ -41,8 +41,8 @@ impl<T, K> ConsumeMessageServiceGeneral<T, K> {
         }
     }
 
-    pub fn get_consume_message_concurrently_service_weak(&self) -> WeakCellWrapper<T> {
-        ArcRefCellWrapper::downgrade(self.consume_message_concurrently_service.as_ref().unwrap())
+    pub fn get_consume_message_concurrently_service_weak(&self) -> WeakArcMut<T> {
+        ArcMut::downgrade(self.consume_message_concurrently_service.as_ref().unwrap())
     }
 }
 
@@ -56,13 +56,13 @@ where
             &mut self.consume_message_concurrently_service
         {
             let consume_message_concurrently_service_weak =
-                ArcRefCellWrapper::downgrade(consume_message_concurrently_service);
+                ArcMut::downgrade(consume_message_concurrently_service);
             consume_message_concurrently_service.start(consume_message_concurrently_service_weak);
         }
 
         if let Some(consume_message_orderly_service) = &mut self.consume_message_orderly_service {
             let consume_message_pop_concurrently_service_weak =
-                ArcRefCellWrapper::downgrade(consume_message_orderly_service);
+                ArcMut::downgrade(consume_message_orderly_service);
             consume_message_orderly_service.start(consume_message_pop_concurrently_service_weak);
         }
     }
@@ -97,7 +97,7 @@ where
 
     pub async fn submit_consume_request(
         &self,
-        msgs: Vec<ArcRefCellWrapper<MessageClientExt>>,
+        msgs: Vec<ArcMut<MessageClientExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
         dispatch_to_consume: bool,
@@ -107,7 +107,7 @@ where
         {
             consume_message_concurrently_service
                 .submit_consume_request(
-                    ArcRefCellWrapper::downgrade(consume_message_concurrently_service),
+                    ArcMut::downgrade(consume_message_concurrently_service),
                     msgs,
                     process_queue,
                     message_queue,
@@ -118,7 +118,7 @@ where
         {
             consume_message_orderly_service
                 .submit_consume_request(
-                    ArcRefCellWrapper::downgrade(consume_message_orderly_service),
+                    ArcMut::downgrade(consume_message_orderly_service),
                     msgs,
                     process_queue,
                     message_queue,
@@ -137,7 +137,7 @@ where
         unimplemented!("ConsumeMessageServiceGeneral not support submit_pop_consume_request")
     }
 
-    pub fn get_consume_message_concurrently_service(&self) -> ArcRefCellWrapper<T> {
+    pub fn get_consume_message_concurrently_service(&self) -> ArcMut<T> {
         self.consume_message_concurrently_service
             .as_ref()
             .unwrap()
@@ -146,14 +146,14 @@ where
 }
 
 pub struct ConsumeMessagePopServiceGeneral<T, K> {
-    consume_message_pop_concurrently_service: Option<ArcRefCellWrapper<T>>,
-    consume_message_pop_orderly_service: Option<ArcRefCellWrapper<K>>,
+    consume_message_pop_concurrently_service: Option<ArcMut<T>>,
+    consume_message_pop_orderly_service: Option<ArcMut<K>>,
 }
 
 impl<T, K> ConsumeMessagePopServiceGeneral<T, K> {
     pub fn new(
-        consume_message_pop_concurrently_service: Option<ArcRefCellWrapper<T>>,
-        consume_message_pop_orderly_service: Option<ArcRefCellWrapper<K>>,
+        consume_message_pop_concurrently_service: Option<ArcMut<T>>,
+        consume_message_pop_orderly_service: Option<ArcMut<K>>,
     ) -> Self {
         Self {
             consume_message_pop_concurrently_service,
@@ -172,7 +172,7 @@ where
             &mut self.consume_message_pop_concurrently_service
         {
             let consume_message_pop_concurrently_service_weak =
-                ArcRefCellWrapper::downgrade(consume_message_pop_concurrently_service);
+                ArcMut::downgrade(consume_message_pop_concurrently_service);
             consume_message_pop_concurrently_service
                 .start(consume_message_pop_concurrently_service_weak);
         }
@@ -181,7 +181,7 @@ where
             &mut self.consume_message_pop_orderly_service
         {
             let consume_message_pop_orderly_service_weak =
-                ArcRefCellWrapper::downgrade(consume_message_pop_orderly_service);
+                ArcMut::downgrade(consume_message_pop_orderly_service);
             consume_message_pop_orderly_service.start(consume_message_pop_orderly_service_weak);
         }
     }
@@ -216,7 +216,7 @@ where
 
     pub async fn submit_consume_request(
         &self,
-        msgs: Vec<ArcRefCellWrapper<MessageClientExt>>,
+        msgs: Vec<ArcMut<MessageClientExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
         dispatch_to_consume: bool,
@@ -235,7 +235,7 @@ where
 }
 
 pub trait ConsumeMessageServiceTrait {
-    fn start(&mut self, this: WeakCellWrapper<Self>);
+    fn start(&mut self, this: WeakArcMut<Self>);
 
     async fn shutdown(&mut self, await_terminate_millis: u64);
 
@@ -255,8 +255,8 @@ pub trait ConsumeMessageServiceTrait {
 
     async fn submit_consume_request(
         &self,
-        this: WeakCellWrapper<Self>,
-        msgs: Vec<ArcRefCellWrapper<MessageClientExt>>,
+        this: WeakArcMut<Self>,
+        msgs: Vec<ArcMut<MessageClientExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
         dispatch_to_consume: bool,

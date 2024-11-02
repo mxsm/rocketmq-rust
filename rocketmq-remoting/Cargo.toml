@@ -15,6 +15,7 @@ readme = "README.md"
 rocketmq-common = { workspace = true }
 rocketmq-macros = { workspace = true }
 rocketmq-runtime = { workspace = true }
+rocketmq-rust = { workspace = true }
 
 anyhow.workspace = true
 bytes.workspace = true

@@ -17,7 +17,7 @@
 use std::any::Any;
 
 use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::ArcRefCellWrapper;
+use rocketmq_rust::ArcMut;
 
 use crate::clients::rocketmq_default_impl::RocketmqDefaultClient;
 use crate::clients::RemotingClient;
@@ -44,14 +44,14 @@ use crate::Result;
 
 pub struct RpcClientImpl {
     client_metadata: ClientMetadata,
-    remoting_client: ArcRefCellWrapper<RocketmqDefaultClient<DefaultRemotingRequestProcessor>>,
+    remoting_client: ArcMut<RocketmqDefaultClient<DefaultRemotingRequestProcessor>>,
     client_hook_list: Vec<RpcClientHookFn>,
 }
 
 impl RpcClientImpl {
     pub fn new(
         client_metadata: ClientMetadata,
-        remoting_client: ArcRefCellWrapper<RocketmqDefaultClient<DefaultRemotingRequestProcessor>>,
+        remoting_client: ArcMut<RocketmqDefaultClient<DefaultRemotingRequestProcessor>>,
     ) -> Self {
         RpcClientImpl {
             client_metadata,

@@ -24,13 +24,13 @@ use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all;
-use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::TimeUtils::get_current_millis;
-use rocketmq_common::WeakCellWrapper;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_runtime::RocketMQRuntime;
+use rocketmq_rust::ArcMut;
+use rocketmq_rust::WeakArcMut;
 use tracing::info;
 use tracing::warn;
 
@@ -47,9 +47,9 @@ use crate::consumer::listener::message_listener_concurrently::ArcBoxMessageListe
 use crate::hook::consume_message_context::ConsumeMessageContext;
 
 pub struct ConsumeMessageConcurrentlyService {
-    pub(crate) default_mqpush_consumer_impl: Option<WeakCellWrapper<DefaultMQPushConsumerImpl>>,
-    pub(crate) client_config: ArcRefCellWrapper<ClientConfig>,
-    pub(crate) consumer_config: ArcRefCellWrapper<ConsumerConfig>,
+    pub(crate) default_mqpush_consumer_impl: Option<WeakArcMut<DefaultMQPushConsumerImpl>>,
+    pub(crate) client_config: ArcMut<ClientConfig>,
+    pub(crate) consumer_config: ArcMut<ConsumerConfig>,
     pub(crate) consumer_group: Arc<String>,
     pub(crate) message_listener: ArcBoxMessageListenerConcurrently,
     pub(crate) consume_runtime: RocketMQRuntime,
@@ -57,11 +57,11 @@ pub struct ConsumeMessageConcurrentlyService {
 
 impl ConsumeMessageConcurrentlyService {
     pub fn new(
-        client_config: ArcRefCellWrapper<ClientConfig>,
-        consumer_config: ArcRefCellWrapper<ConsumerConfig>,
+        client_config: ArcMut<ClientConfig>,
+        consumer_config: ArcMut<ConsumerConfig>,
         consumer_group: String,
         message_listener: ArcBoxMessageListenerConcurrently,
-        default_mqpush_consumer_impl: Option<WeakCellWrapper<DefaultMQPushConsumerImpl>>,
+        default_mqpush_consumer_impl: Option<WeakArcMut<DefaultMQPushConsumerImpl>>,
     ) -> Self {
         let consume_thread = consumer_config.consume_thread_max;
         let consumer_group_tag = format!("{}_{}", "ConsumeMessageThread_", consumer_group);
@@ -103,7 +103,7 @@ impl ConsumeMessageConcurrentlyService {
 
     async fn process_consume_result(
         &mut self,
-        this: WeakCellWrapper<Self>,
+        this: WeakArcMut<Self>,
         status: ConsumeConcurrentlyStatus,
         context: &ConsumeConcurrentlyContext,
         consume_request: &mut ConsumeRequest,
@@ -191,8 +191,8 @@ impl ConsumeMessageConcurrentlyService {
 
     fn submit_consume_request_later(
         &self,
-        msgs: Vec<ArcRefCellWrapper<MessageClientExt>>,
-        this: WeakCellWrapper<Self>,
+        msgs: Vec<ArcMut<MessageClientExt>>,
+        this: WeakArcMut<Self>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
     ) {
@@ -235,7 +235,7 @@ impl ConsumeMessageConcurrentlyService {
 }
 
 impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
-    fn start(&mut self, this: WeakCellWrapper<Self>) {
+    fn start(&mut self, this: WeakArcMut<Self>) {
         self.consume_runtime.get_handle().spawn(async move {
             if let Some(mut this) = this.upgrade() {
                 let timeout = this.consumer_config.consume_timeout;
@@ -279,8 +279,8 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
 
     async fn submit_consume_request(
         &self,
-        this: WeakCellWrapper<Self>,
-        msgs: Vec<ArcRefCellWrapper<MessageClientExt>>,
+        this: WeakArcMut<Self>,
+        msgs: Vec<ArcMut<MessageClientExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
         dispatch_to_consume: bool,
@@ -334,19 +334,19 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
 }
 
 struct ConsumeRequest {
-    msgs: Vec<ArcRefCellWrapper<MessageClientExt>>,
+    msgs: Vec<ArcMut<MessageClientExt>>,
     message_listener: ArcBoxMessageListenerConcurrently,
     process_queue: Arc<ProcessQueue>,
     message_queue: MessageQueue,
     dispatch_to_consume: bool,
     consumer_group: String,
-    default_mqpush_consumer_impl: Option<WeakCellWrapper<DefaultMQPushConsumerImpl>>,
+    default_mqpush_consumer_impl: Option<WeakArcMut<DefaultMQPushConsumerImpl>>,
 }
 
 impl ConsumeRequest {
     async fn run(
         &mut self,
-        consume_message_concurrently_service: WeakCellWrapper<ConsumeMessageConcurrentlyService>,
+        consume_message_concurrently_service: WeakArcMut<ConsumeMessageConcurrentlyService>,
     ) {
         if self.process_queue.is_dropped() {
             info!(

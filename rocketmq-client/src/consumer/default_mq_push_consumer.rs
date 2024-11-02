@@ -23,11 +23,11 @@ use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::utils::util_all;
-use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::runtime::RPCHook;
+use rocketmq_rust::ArcMut;
 use tokio::runtime::Handle;
 
 use crate::base::client_config::ClientConfig;
@@ -63,8 +63,8 @@ pub struct ConsumerConfig {
     pub(crate) consume_timestamp: Option<String>,
     pub(crate) allocate_message_queue_strategy: Option<Arc<dyn AllocateMessageQueueStrategy>>,
     //this field will be removed in a certain version after April 5, 2020
-    pub(crate) subscription: ArcRefCellWrapper<HashMap<String, String>>,
-    pub(crate) message_listener: Option<ArcRefCellWrapper<MessageListener>>,
+    pub(crate) subscription: ArcMut<HashMap<String, String>>,
+    pub(crate) message_listener: Option<ArcMut<MessageListener>>,
     pub(crate) message_queue_listener: Option<Arc<Box<dyn MessageQueueListener>>>,
     pub(crate) consume_thread_min: u32,
     pub(crate) consume_thread_max: u32,
@@ -113,11 +113,11 @@ impl ConsumerConfig {
         self.allocate_message_queue_strategy.clone()
     }
 
-    pub fn subscription(&self) -> &ArcRefCellWrapper<HashMap<String, String>> {
+    pub fn subscription(&self) -> &ArcMut<HashMap<String, String>> {
         &self.subscription
     }
 
-    /*    pub fn message_listener(&self) -> &Option<ArcRefCellWrapper<MessageListener>> {
+    /*    pub fn message_listener(&self) -> &Option<ArcMut<MessageListener>> {
         &self.message_listener
     }*/
 
@@ -248,13 +248,13 @@ impl ConsumerConfig {
      * This method will be removed in a certain version after April 5, 2020, so please do not
      * use this method.
      */
-    pub fn set_subscription(&mut self, subscription: ArcRefCellWrapper<HashMap<String, String>>) {
+    pub fn set_subscription(&mut self, subscription: ArcMut<HashMap<String, String>>) {
         self.subscription = subscription;
     }
 
     /*    pub fn set_message_listener(
         &mut self,
-        message_listener: Option<ArcRefCellWrapper<MessageListener>>,
+        message_listener: Option<ArcMut<MessageListener>>,
     ) {
         self.message_listener = message_listener;
     }*/
@@ -387,7 +387,7 @@ impl Default for ConsumerConfig {
                 (get_current_millis() - (1000 * 60 * 30)) as i64,
             )),
             allocate_message_queue_strategy: Some(Arc::new(AllocateMessageQueueAveragely)),
-            subscription: ArcRefCellWrapper::new(HashMap::new()),
+            subscription: ArcMut::new(HashMap::new()),
             message_listener: None,
             message_queue_listener: None,
 
@@ -421,8 +421,8 @@ impl Default for ConsumerConfig {
 
 pub struct DefaultMQPushConsumer {
     client_config: ClientConfig,
-    consumer_config: ArcRefCellWrapper<ConsumerConfig>,
-    pub(crate) default_mqpush_consumer_impl: Option<ArcRefCellWrapper<DefaultMQPushConsumerImpl>>,
+    consumer_config: ArcMut<ConsumerConfig>,
+    pub(crate) default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
 }
 
 impl MQConsumer for DefaultMQPushConsumer {
@@ -563,7 +563,7 @@ impl MQPushConsumer for DefaultMQPushConsumer {
             message_listener_concurrently: Some((Some(Arc::new(Box::new(message_listener))), None)),
             message_listener_orderly: None,
         };
-        self.consumer_config.message_listener = Some(ArcRefCellWrapper::new(message_listener));
+        self.consumer_config.message_listener = Some(ArcMut::new(message_listener));
         self.default_mqpush_consumer_impl
             .as_mut()
             .unwrap()
@@ -587,7 +587,7 @@ impl MQPushConsumer for DefaultMQPushConsumer {
             message_listener_concurrently: None,
             message_listener_orderly: Some((Some(Arc::new(Box::new(message_listener))), None)),
         };
-        self.consumer_config.message_listener = Some(ArcRefCellWrapper::new(message_listener));
+        self.consumer_config.message_listener = Some(ArcMut::new(message_listener));
         self.default_mqpush_consumer_impl
             .as_mut()
             .unwrap()
@@ -652,14 +652,13 @@ impl DefaultMQPushConsumer {
         client_config: ClientConfig,
         consumer_config: ConsumerConfig,
     ) -> DefaultMQPushConsumer {
-        let consumer_config = ArcRefCellWrapper::new(consumer_config);
-        let mut default_mqpush_consumer_impl =
-            ArcRefCellWrapper::new(DefaultMQPushConsumerImpl::new(
-                client_config.clone(),
-                consumer_config.clone(),
-                consumer_config.rpc_hook.clone(),
-            ));
-        let wrapper = ArcRefCellWrapper::downgrade(&default_mqpush_consumer_impl);
+        let consumer_config = ArcMut::new(consumer_config);
+        let mut default_mqpush_consumer_impl = ArcMut::new(DefaultMQPushConsumerImpl::new(
+            client_config.clone(),
+            consumer_config.clone(),
+            consumer_config.rpc_hook.clone(),
+        ));
+        let wrapper = ArcMut::downgrade(&default_mqpush_consumer_impl);
         default_mqpush_consumer_impl.set_default_mqpush_consumer_impl(wrapper);
         DefaultMQPushConsumer {
             client_config,

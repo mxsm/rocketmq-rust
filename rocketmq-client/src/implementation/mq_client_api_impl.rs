@@ -32,7 +32,6 @@ use rocketmq_common::common::namesrv::name_server_update_callback::NameServerUpd
 use rocketmq_common::common::namesrv::top_addressing::TopAddressing;
 use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
 use rocketmq_common::common::topic::TopicValidator;
-use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_remoting::base::connection_net_event::ConnectionNetEvent;
 use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
@@ -73,6 +72,7 @@ use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
 use rocketmq_remoting::rpc::topic_request_header::TopicRequestHeader;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_remoting::runtime::RPCHook;
+use rocketmq_rust::ArcMut;
 use tracing::error;
 use tracing::warn;
 
@@ -102,7 +102,7 @@ lazy_static! {
 }
 
 pub struct MQClientAPIImpl {
-    remoting_client: ArcRefCellWrapper<RocketmqDefaultClient<ClientRemotingProcessor>>,
+    remoting_client: ArcMut<RocketmqDefaultClient<ClientRemotingProcessor>>,
     top_addressing: Box<dyn TopAddressing>,
     // client_remoting_processor: ClientRemotingProcessor,
     name_srv_addr: Option<String>,
@@ -130,7 +130,7 @@ impl MQClientAPIImpl {
         }
 
         MQClientAPIImpl {
-            remoting_client: ArcRefCellWrapper::new(default_client),
+            remoting_client: ArcMut::new(default_client),
             top_addressing: Box::new(DefaultTopAddressing::new(
                 mix_all::get_ws_addr(),
                 client_config.unit_name.clone(),
@@ -142,7 +142,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn start(&self) {
-        let client = ArcRefCellWrapper::downgrade(&self.remoting_client);
+        let client = ArcMut::downgrade(&self.remoting_client);
         self.remoting_client.start(client).await;
     }
 
@@ -273,7 +273,7 @@ impl MQClientAPIImpl {
         communication_mode: CommunicationMode,
         send_callback: Option<SendMessageCallback>,
         topic_publish_info: Option<&TopicPublishInfo>,
-        instance: Option<ArcRefCellWrapper<MQClientInstance>>,
+        instance: Option<ArcMut<MQClientInstance>>,
         retry_times_when_send_failed: u32,
         context: &mut Option<SendMessageContext<'_>>,
         producer: &DefaultMQProducerImpl,
@@ -436,7 +436,7 @@ impl MQClientAPIImpl {
         request: RemotingCommand,
         send_callback: Option<SendMessageCallback>,
         topic_publish_info: Option<&TopicPublishInfo>,
-        instance: Option<ArcRefCellWrapper<MQClientInstance>>,
+        instance: Option<ArcMut<MQClientInstance>>,
         retry_times_when_send_failed: u32,
         times: &AtomicU32,
         context: &mut Option<SendMessageContext<'_>>,
@@ -592,7 +592,7 @@ impl MQClientAPIImpl {
         mut request: RemotingCommand,
         send_callback: Option<SendMessageCallback>,
         topic_publish_info: Option<&TopicPublishInfo>,
-        instance: Option<ArcRefCellWrapper<MQClientInstance>>,
+        instance: Option<ArcMut<MQClientInstance>>,
         times_total: u32,
         cur_times: &AtomicU32,
         e: MQClientError,
@@ -852,7 +852,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn pull_message<PCB>(
-        mut this: ArcRefCellWrapper<Self>,
+        mut this: ArcMut<Self>,
         addr: String,
         request_header: PullMessageRequestHeader,
         timeout_millis: u64,

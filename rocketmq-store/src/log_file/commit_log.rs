@@ -38,7 +38,6 @@ use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::common::system_clock::SystemClock;
 use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
 use rocketmq_common::utils::time_utils;
-use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::CRC32Utils::crc32;
 use rocketmq_common::MessageDecoder::string_to_message_properties;
 use rocketmq_common::MessageDecoder::MESSAGE_MAGIC_CODE_POSITION;
@@ -46,6 +45,7 @@ use rocketmq_common::MessageDecoder::MESSAGE_MAGIC_CODE_V2;
 use rocketmq_common::MessageDecoder::SYSFLAG_POSITION;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_common::UtilAll::time_millis_to_human_string;
+use rocketmq_rust::ArcMut;
 use tokio::time::Instant;
 use tracing::error;
 use tracing::info;
@@ -798,7 +798,7 @@ impl CommitLog {
     pub async fn recover_normally(
         &mut self,
         max_phy_offset_of_consume_queue: i64,
-        mut message_store: ArcRefCellWrapper<DefaultMessageStore>,
+        mut message_store: ArcMut<DefaultMessageStore>,
     ) {
         let check_crc_on_recover = self.message_store_config.check_crc_on_recover;
         let check_dup_info = self.message_store_config.duplication_enable;
@@ -940,7 +940,7 @@ impl CommitLog {
     pub async fn recover_abnormally(
         &mut self,
         max_phy_offset_of_consume_queue: i64,
-        mut message_store: ArcRefCellWrapper<DefaultMessageStore>,
+        mut message_store: ArcMut<DefaultMessageStore>,
     ) {
         let check_crc_on_recover = self.message_store_config.check_crc_on_recover;
         let check_dup_info = self.message_store_config.duplication_enable;

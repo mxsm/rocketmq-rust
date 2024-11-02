@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use once_cell::sync::Lazy;
-use rocketmq_common::ArcRefCellWrapper;
+use rocketmq_rust::ArcMut;
 use rocketmq_rust::Shutdown;
 use tokio::select;
 use tokio::sync::Notify;
@@ -60,7 +60,7 @@ impl RebalanceService {
         }
     }
 
-    pub async fn start(&mut self, mut instance: ArcRefCellWrapper<MQClientInstance>) {
+    pub async fn start(&mut self, mut instance: ArcMut<MQClientInstance>) {
         let notify = self.notify.clone();
         let (mut shutdown, tx_shutdown) = Shutdown::new(1);
         self.tx_shutdown = Some(tx_shutdown);

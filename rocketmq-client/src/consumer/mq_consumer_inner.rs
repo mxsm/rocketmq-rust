@@ -19,11 +19,11 @@ use std::collections::HashSet;
 
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::WeakCellWrapper;
 use rocketmq_remoting::protocol::body::consumer_running_info::ConsumerRunningInfo;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+use rocketmq_rust::WeakArcMut;
 
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
 use crate::consumer::consumer_impl::pop_request::PopRequest;
@@ -105,7 +105,7 @@ impl<T: MQConsumerInner> MQConsumerInnerAny for T {
 
 #[derive(Clone)]
 pub(crate) struct MQConsumerInnerImpl {
-    pub(crate) default_mqpush_consumer_impl: Option<WeakCellWrapper<DefaultMQPushConsumerImpl>>,
+    pub(crate) default_mqpush_consumer_impl: Option<WeakArcMut<DefaultMQPushConsumerImpl>>,
 }
 
 impl MQConsumerInnerImpl {

@@ -24,7 +24,6 @@ use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::utils::crc32_utils;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
-use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
 use rocketmq_remoting::code::request_code::RequestCode;
@@ -50,6 +49,7 @@ use rocketmq_remoting::rpc::client_metadata::ClientMetadata;
 use rocketmq_remoting::rpc::rpc_client_impl::RpcClientImpl;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_remoting::runtime::RPCHook;
+use rocketmq_rust::ArcMut;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -59,7 +59,7 @@ use crate::error::BrokerError::BrokerClientError;
 use crate::Result;
 
 pub struct BrokerOuterAPI {
-    remoting_client: ArcRefCellWrapper<RocketmqDefaultClient<DefaultRemotingRequestProcessor>>,
+    remoting_client: ArcMut<RocketmqDefaultClient<DefaultRemotingRequestProcessor>>,
     name_server_address: Option<String>,
     rpc_client: RpcClientImpl,
     client_metadata: ClientMetadata,
@@ -67,7 +67,7 @@ pub struct BrokerOuterAPI {
 
 impl BrokerOuterAPI {
     pub fn new(tokio_client_config: Arc<TokioClientConfig>) -> Self {
-        let client = ArcRefCellWrapper::new(RocketmqDefaultClient::new(
+        let client = ArcMut::new(RocketmqDefaultClient::new(
             tokio_client_config,
             DefaultRemotingRequestProcessor,
         ));
@@ -84,7 +84,7 @@ impl BrokerOuterAPI {
         tokio_client_config: Arc<TokioClientConfig>,
         rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
     ) -> Self {
-        let mut client = ArcRefCellWrapper::new(RocketmqDefaultClient::new(
+        let mut client = ArcMut::new(RocketmqDefaultClient::new(
             tokio_client_config,
             DefaultRemotingRequestProcessor,
         ));
@@ -123,7 +123,7 @@ impl BrokerOuterAPI {
 
 impl BrokerOuterAPI {
     pub async fn start(&self) {
-        let wrapper = ArcRefCellWrapper::downgrade(&self.remoting_client);
+        let wrapper = ArcMut::downgrade(&self.remoting_client);
         self.remoting_client.start(wrapper).await;
     }
 

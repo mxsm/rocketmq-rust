@@ -33,9 +33,9 @@ use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
-use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+use rocketmq_rust::ArcMut;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
@@ -51,7 +51,7 @@ use crate::transaction::queue::transactional_message_util::TransactionalMessageU
 
 pub struct TransactionalMessageBridge<MS> {
     pub(crate) op_queue_map: Arc<Mutex<HashMap<i32, MessageQueue>>>,
-    pub(crate) message_store: ArcRefCellWrapper<MS>,
+    pub(crate) message_store: ArcMut<MS>,
     pub(crate) store_host: SocketAddr,
     pub(crate) broker_stats_manager: Arc<BrokerStatsManager>,
     pub(crate) consumer_offset_manager: ConsumerOffsetManager,
@@ -64,7 +64,7 @@ where
     MS: MessageStore,
 {
     pub fn new(
-        message_store: ArcRefCellWrapper<MS>,
+        message_store: ArcMut<MS>,
         broker_stats_manager: Arc<BrokerStatsManager>,
         consumer_offset_manager: ConsumerOffsetManager,
         broker_config: Arc<BrokerConfig>,
@@ -208,7 +208,7 @@ where
                 msg_found_list: msg_found_list
                     .unwrap_or_default()
                     .into_iter()
-                    .map(ArcRefCellWrapper::new)
+                    .map(ArcMut::new)
                     .collect(),
             })
         } else {

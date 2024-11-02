@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
-use rocketmq_common::ArcRefCellWrapper;
+use rocketmq_rust::ArcMut;
 use rocketmq_rust::Shutdown;
 use tracing::info;
 use tracing::warn;
@@ -38,7 +38,7 @@ impl PullMessageService {
             tx_shutdown: None,
         }
     }
-    pub async fn start(&mut self, mut instance: ArcRefCellWrapper<MQClientInstance>) {
+    pub async fn start(&mut self, mut instance: ArcMut<MQClientInstance>) {
         let (tx, mut rx) =
             tokio::sync::mpsc::channel::<Box<dyn MessageRequest + Send + 'static>>(1024 * 4);
         let (mut shutdown, tx_shutdown) = Shutdown::new(1);

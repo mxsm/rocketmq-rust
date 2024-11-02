@@ -17,14 +17,14 @@
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
-use rocketmq_common::ArcRefCellWrapper;
+use rocketmq_rust::ArcMut;
 use tracing::error;
 use tracing::info;
 
 use crate::log_file::MessageStore;
 
 pub struct BrokerStats<MS: MessageStore> {
-    default_message_store: ArcRefCellWrapper<MS>,
+    default_message_store: ArcMut<MS>,
     msg_put_total_yesterday_morning: AtomicU64,
     msg_put_total_today_morning: AtomicU64,
     msg_get_total_yesterday_morning: AtomicU64,
@@ -32,7 +32,7 @@ pub struct BrokerStats<MS: MessageStore> {
 }
 
 impl<MS: MessageStore> BrokerStats<MS> {
-    pub fn new(default_message_store: ArcRefCellWrapper<MS>) -> Self {
+    pub fn new(default_message_store: ArcMut<MS>) -> Self {
         BrokerStats {
             default_message_store,
             msg_put_total_yesterday_morning: AtomicU64::new(0),

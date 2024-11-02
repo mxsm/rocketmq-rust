@@ -27,13 +27,13 @@ use rocketmq_common::common::message::message_single::Message;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all;
-use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::MessageAccessor::MessageAccessor;
-use rocketmq_common::WeakCellWrapper;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_runtime::RocketMQRuntime;
+use rocketmq_rust::ArcMut;
 use rocketmq_rust::RocketMQTokioMutex;
+use rocketmq_rust::WeakArcMut;
 use tracing::warn;
 
 use crate::base::client_config::ClientConfig;
@@ -60,9 +60,9 @@ static MAX_TIME_CONSUME_CONTINUOUSLY: Lazy<u64> = Lazy::new(|| {
 });
 
 pub struct ConsumeMessageOrderlyService {
-    pub(crate) default_mqpush_consumer_impl: Option<WeakCellWrapper<DefaultMQPushConsumerImpl>>,
-    pub(crate) client_config: ArcRefCellWrapper<ClientConfig>,
-    pub(crate) consumer_config: ArcRefCellWrapper<ConsumerConfig>,
+    pub(crate) default_mqpush_consumer_impl: Option<WeakArcMut<DefaultMQPushConsumerImpl>>,
+    pub(crate) client_config: ArcMut<ClientConfig>,
+    pub(crate) consumer_config: ArcMut<ConsumerConfig>,
     pub(crate) consumer_group: Arc<String>,
     pub(crate) message_listener: ArcBoxMessageListenerOrderly,
     pub(crate) consume_runtime: RocketMQRuntime,
@@ -73,11 +73,11 @@ pub struct ConsumeMessageOrderlyService {
 
 impl ConsumeMessageOrderlyService {
     pub fn new(
-        client_config: ArcRefCellWrapper<ClientConfig>,
-        consumer_config: ArcRefCellWrapper<ConsumerConfig>,
+        client_config: ArcMut<ClientConfig>,
+        consumer_config: ArcMut<ConsumerConfig>,
         consumer_group: String,
         message_listener: ArcBoxMessageListenerOrderly,
-        default_mqpush_consumer_impl: Option<WeakCellWrapper<DefaultMQPushConsumerImpl>>,
+        default_mqpush_consumer_impl: Option<WeakArcMut<DefaultMQPushConsumerImpl>>,
     ) -> Self {
         let consume_thread = consumer_config.consume_thread_max;
         let consumer_group_tag = format!("{}_{}", "ConsumeMessageThread_", consumer_group);
@@ -136,7 +136,7 @@ impl ConsumeMessageOrderlyService {
 
     pub async fn try_lock_later_and_reconsume(
         &mut self,
-        consume_message_orderly_service: WeakCellWrapper<Self>,
+        consume_message_orderly_service: WeakArcMut<Self>,
         message_queue: &MessageQueue,
         process_queue: Arc<ProcessQueue>,
         delay_mills: u64,
@@ -194,7 +194,7 @@ impl ConsumeMessageOrderlyService {
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
         suspend_time_millis: i64,
-        this: WeakCellWrapper<Self>,
+        this: WeakArcMut<Self>,
     ) {
         let mut time_millis = suspend_time_millis;
         if time_millis == -1 {
@@ -282,10 +282,7 @@ impl ConsumeMessageOrderlyService {
         }
     }
 
-    async fn check_reconsume_times(
-        &mut self,
-        msgs: &mut [ArcRefCellWrapper<MessageClientExt>],
-    ) -> bool {
+    async fn check_reconsume_times(&mut self, msgs: &mut [ArcMut<MessageClientExt>]) -> bool {
         let mut suspend = false;
         if !msgs.is_empty() {
             for msg in msgs {
@@ -311,8 +308,8 @@ impl ConsumeMessageOrderlyService {
     #[allow(deprecated)]
     async fn process_consume_result(
         &mut self,
-        mut msgs: Vec<ArcRefCellWrapper<MessageClientExt>>,
-        this: WeakCellWrapper<Self>,
+        mut msgs: Vec<ArcMut<MessageClientExt>>,
+        this: WeakArcMut<Self>,
         status: ConsumeOrderlyStatus,
         context: &ConsumeOrderlyContext,
         consume_request: &mut ConsumeRequest,
@@ -398,7 +395,7 @@ impl ConsumeMessageOrderlyService {
 }
 
 impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
-    fn start(&mut self, this: WeakCellWrapper<Self>) {
+    fn start(&mut self, this: WeakArcMut<Self>) {
         if MessageModel::Clustering == self.consumer_config.message_model {
             self.consume_runtime.get_handle().spawn(async move {
                 tokio::time::sleep(tokio::time::Duration::from_millis(1_000)).await;
@@ -447,8 +444,8 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
 
     async fn submit_consume_request(
         &self,
-        this: WeakCellWrapper<Self>,
-        msgs: Vec<ArcRefCellWrapper<MessageClientExt>>,
+        this: WeakArcMut<Self>,
+        msgs: Vec<ArcMut<MessageClientExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
         dispatch_to_consume: bool,
@@ -480,7 +477,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
 struct ConsumeRequest {
     process_queue: Arc<ProcessQueue>,
     message_queue: MessageQueue,
-    default_mqpush_consumer_impl: Option<WeakCellWrapper<DefaultMQPushConsumerImpl>>,
+    default_mqpush_consumer_impl: Option<WeakArcMut<DefaultMQPushConsumerImpl>>,
     consumer_group: Arc<String>,
 }
 
@@ -488,7 +485,7 @@ impl ConsumeRequest {
     #[allow(deprecated)]
     async fn run(
         &mut self,
-        consume_message_orderly_service: WeakCellWrapper<ConsumeMessageOrderlyService>,
+        consume_message_orderly_service: WeakArcMut<ConsumeMessageOrderlyService>,
     ) {
         if self.process_queue.is_dropped() {
             warn!(
@@ -708,7 +705,7 @@ impl ConsumeRequest {
                 return;
             }
             let consume_message_orderly_service_weak =
-                ArcRefCellWrapper::downgrade(&consume_message_orderly_service_inner);
+                ArcMut::downgrade(&consume_message_orderly_service_inner);
             consume_message_orderly_service_inner
                 .try_lock_later_and_reconsume(
                     consume_message_orderly_service_weak,

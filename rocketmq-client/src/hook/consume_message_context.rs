@@ -19,14 +19,14 @@ use std::sync::Arc;
 
 use rocketmq_common::common::message::message_client_ext::MessageClientExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::ArcRefCellWrapper;
+use rocketmq_rust::ArcMut;
 
 use crate::base::access_channel::AccessChannel;
 
 #[derive(Default)]
 pub struct ConsumeMessageContext<'a> {
     pub consumer_group: String,
-    pub msg_list: &'a [ArcRefCellWrapper<MessageClientExt>],
+    pub msg_list: &'a [ArcMut<MessageClientExt>],
     pub mq: Option<MessageQueue>,
     pub success: bool,
     pub status: String,

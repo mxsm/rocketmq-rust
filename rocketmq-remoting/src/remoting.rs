@@ -16,7 +16,7 @@
  */
 use std::sync::Arc;
 
-use rocketmq_common::WeakCellWrapper;
+use rocketmq_rust::WeakArcMut;
 
 use crate::base::response_future::ResponseFuture;
 use crate::protocol::remoting_command::RemotingCommand;
@@ -38,7 +38,7 @@ pub trait RemotingService: Send {
     /// This function should initialize and start the service, making it ready to handle incoming
     /// or outgoing remote procedure calls. The exact implementation details, such as opening
     /// network connections or preparing internal state, are left to the implementor.
-    async fn start(&self, this: WeakCellWrapper<Self>);
+    async fn start(&self, this: WeakArcMut<Self>);
 
     /// Shuts down the remoting service.
     ///

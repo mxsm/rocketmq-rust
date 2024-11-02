@@ -115,7 +115,7 @@ where
         None
     }
 
-    fn start_detector(this: ArcRefCellWrapper<Self>) {
+    fn start_detector(this: ArcMut<Self>) {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
@@ -222,8 +222,8 @@ use std::cmp::Ordering;
 use std::hash::Hash;
 use std::sync::atomic::AtomicBool;
 
-use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_rust::ArcMut;
 use tracing::info;
 
 use crate::common::thread_local_index::ThreadLocalIndex;

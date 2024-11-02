@@ -23,7 +23,6 @@ use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
-use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::MessageDecoder;
 use rocketmq_common::TimeUtils::get_current_millis;
@@ -37,6 +36,7 @@ use rocketmq_remoting::protocol::header::message_operation_header::TopicRequestH
 use rocketmq_remoting::protocol::header::reply_message_request_header::ReplyMessageRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::log_file::MessageStore;
@@ -67,11 +67,11 @@ where
         subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
         topic_config_manager: TopicConfigManager,
         broker_config: Arc<BrokerConfig>,
-        message_store: ArcRefCellWrapper<MS>,
+        message_store: ArcMut<MS>,
         rebalance_lock_manager: Arc<RebalanceLockManager>,
         broker_stats_manager: Arc<BrokerStatsManager>,
         producer_manager: Option<Arc<ProducerManager>>,
-        transactional_message_service: ArcRefCellWrapper<TS>,
+        transactional_message_service: ArcMut<TS>,
     ) -> Self {
         let store_host = format!("{}:{}", broker_config.broker_ip1, broker_config.listen_port)
             .parse::<SocketAddr>()
@@ -80,7 +80,7 @@ where
             inner: Inner {
                 broker_config,
                 topic_config_manager,
-                send_message_hook_vec: ArcRefCellWrapper::new(Vec::new()),
+                send_message_hook_vec: ArcMut::new(Vec::new()),
                 topic_queue_mapping_manager,
                 subscription_group_manager,
                 message_store,

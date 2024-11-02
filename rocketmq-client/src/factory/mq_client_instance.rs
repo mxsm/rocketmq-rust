@@ -28,7 +28,6 @@ use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
-use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::base::connection_net_event::ConnectionNetEvent;
 use rocketmq_remoting::protocol::heartbeat::consumer_data::ConsumerData;
@@ -39,6 +38,7 @@ use rocketmq_remoting::rpc::client_metadata::ClientMetadata;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_runtime::RocketMQRuntime;
+use rocketmq_rust::ArcMut;
 use rocketmq_rust::RocketMQTokioMutex;
 use tokio::runtime::Handle;
 use tokio::sync::RwLock;
@@ -66,7 +66,7 @@ use crate::Result;
 const LOCK_TIMEOUT_MILLIS: u64 = 3000;
 
 pub struct MQClientInstance {
-    pub(crate) client_config: ArcRefCellWrapper<ClientConfig>,
+    pub(crate) client_config: ArcMut<ClientConfig>,
     pub(crate) client_id: String,
     boot_timestamp: u64,
     /**
@@ -84,8 +84,8 @@ pub struct MQClientInstance {
      * adminExtGroup.
      */
     admin_ext_table: Arc<RwLock<HashMap<String, Box<dyn MQAdminExtInner>>>>,
-    pub(crate) mq_client_api_impl: Option<ArcRefCellWrapper<MQClientAPIImpl>>,
-    pub(crate) mq_admin_impl: ArcRefCellWrapper<MQAdminImpl>,
+    pub(crate) mq_client_api_impl: Option<ArcMut<MQClientAPIImpl>>,
+    pub(crate) mq_admin_impl: ArcMut<MQAdminImpl>,
     pub(crate) topic_route_table: Arc<RwLock<HashMap<String /* Topic */, TopicRouteData>>>,
     topic_end_points_table:
         Arc<RwLock<HashMap<String /* Topic */, HashMap<MessageQueue, String /* brokerName */>>>>,
@@ -93,9 +93,9 @@ pub struct MQClientInstance {
     lock_heartbeat: Arc<RocketMQTokioMutex<()>>,
 
     service_state: ServiceState,
-    pub(crate) pull_message_service: ArcRefCellWrapper<PullMessageService>,
+    pub(crate) pull_message_service: ArcMut<PullMessageService>,
     rebalance_service: RebalanceService,
-    pub(crate) default_producer: ArcRefCellWrapper<DefaultMQProducer>,
+    pub(crate) default_producer: ArcMut<DefaultMQProducer>,
     instance_runtime: Arc<RocketMQRuntime>,
     broker_addr_table: Arc<RwLock<HashMap<String, HashMap<i64, String>>>>,
     broker_version_table:
@@ -113,7 +113,7 @@ impl MQClientInstance {
         /* let broker_addr_table = Arc::new(Default::default());
         let (tx, _) = tokio::sync::broadcast::channel::<ConnectionNetEvent>(16);
         let rx = tx.subscribe();
-        let mq_client_api_impl = ArcRefCellWrapper::new(MQClientAPIImpl::new(
+        let mq_client_api_impl = ArcMut::new(MQClientAPIImpl::new(
             Arc::new(TokioClientConfig::default()),
             ClientRemotingProcessor::new(),
             rpc_hook,
@@ -140,15 +140,15 @@ impl MQClientInstance {
             consumer_table: Arc::new(Default::default()),
             admin_ext_table: Arc::new(Default::default()),
             mq_client_api_impl:None,
-            mq_admin_impl: ArcRefCellWrapper::new(MQAdminImpl::new()),
+            mq_admin_impl: ArcMut::new(MQAdminImpl::new()),
             topic_route_table: Arc::new(Default::default()),
             topic_end_points_table: Arc::new(Default::default()),
             lock_namesrv: Default::default(),
             lock_heartbeat: Default::default(),
             service_state: ServiceState::CreateJust,
-            pull_message_service: ArcRefCellWrapper::new(PullMessageService::new()),
+            pull_message_service: ArcMut::new(PullMessageService::new()),
             rebalance_service: RebalanceService::new(),
-            default_producer: ArcRefCellWrapper::new(
+            default_producer: ArcMut::new(
                 DefaultMQProducer::builder()
                     .producer_group(mix_all::CLIENT_INNER_PRODUCER_GROUP)
                     .client_config(client_config.clone())
@@ -174,25 +174,25 @@ impl MQClientInstance {
         instance_index: i32,
         client_id: String,
         rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
-    ) -> ArcRefCellWrapper<MQClientInstance> {
+    ) -> ArcMut<MQClientInstance> {
         let broker_addr_table = Arc::new(Default::default());
-        let mut instance = ArcRefCellWrapper::new(MQClientInstance {
-            client_config: ArcRefCellWrapper::new(client_config.clone()),
+        let mut instance = ArcMut::new(MQClientInstance {
+            client_config: ArcMut::new(client_config.clone()),
             client_id,
             boot_timestamp: get_current_millis(),
             producer_table: Arc::new(RwLock::new(HashMap::new())),
             consumer_table: Arc::new(Default::default()),
             admin_ext_table: Arc::new(Default::default()),
             mq_client_api_impl: None,
-            mq_admin_impl: ArcRefCellWrapper::new(MQAdminImpl::new()),
+            mq_admin_impl: ArcMut::new(MQAdminImpl::new()),
             topic_route_table: Arc::new(Default::default()),
             topic_end_points_table: Arc::new(Default::default()),
             lock_namesrv: Default::default(),
             lock_heartbeat: Default::default(),
             service_state: ServiceState::CreateJust,
-            pull_message_service: ArcRefCellWrapper::new(PullMessageService::new()),
+            pull_message_service: ArcMut::new(PullMessageService::new()),
             rebalance_service: RebalanceService::new(),
-            default_producer: ArcRefCellWrapper::new(
+            default_producer: ArcMut::new(
                 DefaultMQProducer::builder()
                     .producer_group(mix_all::CLIENT_INNER_PRODUCER_GROUP)
                     .client_config(client_config.clone())
@@ -208,10 +208,10 @@ impl MQClientInstance {
         });
         let instance_clone = instance.clone();
         instance.mq_admin_impl.set_client(instance_clone);
-        let weak_instance = ArcRefCellWrapper::downgrade(&instance);
+        let weak_instance = ArcMut::downgrade(&instance);
         let (tx, mut rx) = tokio::sync::broadcast::channel::<ConnectionNetEvent>(16);
 
-        let mq_client_api_impl = ArcRefCellWrapper::new(MQClientAPIImpl::new(
+        let mq_client_api_impl = ArcMut::new(MQClientAPIImpl::new(
             Arc::new(TokioClientConfig::default()),
             ClientRemotingProcessor::new(weak_instance.clone()),
             rpc_hook,
@@ -276,7 +276,7 @@ impl MQClientInstance {
         }
     }
 
-    pub async fn start(&mut self, this: ArcRefCellWrapper<Self>) -> Result<()> {
+    pub async fn start(&mut self, this: ArcMut<Self>) -> Result<()> {
         match self.service_state {
             ServiceState::CreateJust => {
                 self.service_state = ServiceState::StartFailed;
@@ -341,7 +341,7 @@ impl MQClientInstance {
         true
     }
 
-    fn start_scheduled_task(&mut self, this: ArcRefCellWrapper<Self>) {
+    fn start_scheduled_task(&mut self, this: ArcMut<Self>) {
         if self.client_config.namesrv_addr.is_none() {
             // Fetch name server address
             let mut mq_client_api_impl = self.mq_client_api_impl.as_ref().unwrap().clone();
@@ -706,7 +706,7 @@ impl MQClientInstance {
         }
     }
 
-    pub fn get_mq_client_api_impl(&self) -> ArcRefCellWrapper<MQClientAPIImpl> {
+    pub fn get_mq_client_api_impl(&self) -> ArcMut<MQClientAPIImpl> {
         self.mq_client_api_impl.as_ref().unwrap().clone()
     }
 

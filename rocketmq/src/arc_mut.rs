@@ -29,7 +29,7 @@ pub struct WeakArcMut<T: ?Sized> {
     inner: Weak<SyncUnsafeCell<T>>,
 }
 
-// Implementation of PartialEq for WeakCellWrapper<T>
+// Implementation of PartialEq for WeakArcMut<T>
 impl<T: PartialEq> PartialEq for WeakArcMut<T> {
     fn eq(&self, other: &Self) -> bool {
         // Upgrade the Weak references to Arc, then compare the inner values
@@ -41,10 +41,10 @@ impl<T: PartialEq> PartialEq for WeakArcMut<T> {
     }
 }
 
-// Implementation of Eq for WeakCellWrapper<T>
+// Implementation of Eq for WeakArcMut<T>
 impl<T: PartialEq> Eq for WeakArcMut<T> {}
 
-// Implementation of Hash for WeakCellWrapper<T>
+// Implementation of Hash for WeakArcMut<T>
 impl<T: Hash> Hash for WeakArcMut<T> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         if let Some(arc) = self.inner.upgrade() {
@@ -72,7 +72,7 @@ pub struct ArcMut<T: ?Sized> {
     inner: Arc<SyncUnsafeCell<T>>,
 }
 
-// Implementation of PartialEq for ArcRefCellWrapper<T>
+// Implementation of PartialEq for ArcMut<T>
 impl<T: PartialEq> PartialEq for ArcMut<T> {
     fn eq(&self, other: &Self) -> bool {
         // Compare the inner values by borrowing them unsafely
@@ -87,7 +87,7 @@ impl<T: Hash> Hash for ArcMut<T> {
     }
 }
 
-// Implementation of Eq for ArcRefCellWrapper<T>
+// Implementation of Eq for ArcMut<T>
 // Eq implies PartialEq, so we don't need to add any methods here
 impl<T: PartialEq> Eq for ArcMut<T> {}
 

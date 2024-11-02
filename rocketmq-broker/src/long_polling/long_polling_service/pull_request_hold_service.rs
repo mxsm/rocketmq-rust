@@ -19,8 +19,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_rust::ArcMut;
 use rocketmq_store::consume_queue::consume_queue_ext::CqExtUnit;
 use rocketmq_store::log_file::MessageStore;
 use tokio::sync::Notify;
@@ -36,8 +36,8 @@ const TOPIC_QUEUE_ID_SEPARATOR: &str = "@";
 
 pub struct PullRequestHoldService<MS> {
     pull_request_table: Arc<parking_lot::RwLock<HashMap<String, ManyPullRequest>>>,
-    pull_message_processor: ArcRefCellWrapper<PullMessageProcessor<MS>>,
-    message_store: ArcRefCellWrapper<MS>,
+    pull_message_processor: ArcMut<PullMessageProcessor<MS>>,
+    message_store: ArcMut<MS>,
     broker_config: Arc<BrokerConfig>,
     shutdown: Arc<Notify>,
 }
@@ -47,8 +47,8 @@ where
     MS: MessageStore + Send + Sync,
 {
     pub fn new(
-        message_store: ArcRefCellWrapper<MS>,
-        pull_message_processor: ArcRefCellWrapper<PullMessageProcessor<MS>>,
+        message_store: ArcMut<MS>,
+        pull_message_processor: ArcMut<PullMessageProcessor<MS>>,
         broker_config: Arc<BrokerConfig>,
     ) -> Self {
         PullRequestHoldService {
@@ -66,7 +66,7 @@ impl<MS> PullRequestHoldService<MS>
 where
     MS: MessageStore + Send + Sync,
 {
-    pub fn start(&mut self, this: ArcRefCellWrapper<Self>) {
+    pub fn start(&mut self, this: ArcMut<Self>) {
         tokio::spawn(async move {
             loop {
                 let handle_future = if this.broker_config.long_polling_enable {

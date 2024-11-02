@@ -16,7 +16,7 @@
  */
 use std::any::Any;
 
-use rocketmq_common::ArcRefCellWrapper;
+use rocketmq_rust::ArcMut;
 
 #[allow(async_fn_in_trait)]
 pub trait LatencyFaultTolerance<T, R, S>: Send + Sync + 'static {
@@ -74,7 +74,7 @@ pub trait LatencyFaultTolerance<T, R, S>: Send + Sync + 'static {
     async fn pick_one_at_least(&self) -> Option<T>;
 
     /// Start a new thread, to detect the broker's reachable tag.
-    fn start_detector(this: ArcRefCellWrapper<Self>);
+    fn start_detector(this: ArcMut<Self>);
 
     /// Shutdown threads that started by `LatencyFaultTolerance`.
     fn shutdown(&self);

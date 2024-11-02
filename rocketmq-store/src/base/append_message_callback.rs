@@ -25,7 +25,7 @@ use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBroker
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::utils::message_utils;
 use rocketmq_common::MessageUtils::build_batch_message_id;
-use rocketmq_common::SyncUnsafeCellWrapper;
+use rocketmq_rust::SyncUnsafeCellWrapper;
 
 use crate::base::message_result::AppendMessageResult;
 use crate::base::message_status_enum::AppendMessageStatus;

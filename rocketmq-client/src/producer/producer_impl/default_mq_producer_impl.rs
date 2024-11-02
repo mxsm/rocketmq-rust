@@ -39,7 +39,6 @@ use rocketmq_common::common::mix_all::DEFAULT_PRODUCER_GROUP;
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::common::FAQUrl;
 use rocketmq_common::utils::correlation_id_util::CorrelationIdUtil;
-use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::MessageDecoder;
 use rocketmq_common::TimeUtils::get_current_millis;
@@ -51,6 +50,7 @@ use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
 use rocketmq_remoting::rpc::topic_request_header::TopicRequestHeader;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_runtime::RocketMQRuntime;
+use rocketmq_rust::ArcMut;
 use tokio::runtime::Handle;
 use tokio::sync::RwLock;
 use tokio::sync::Semaphore;
@@ -96,18 +96,18 @@ pub struct DefaultMQProducerImpl {
     client_config: ClientConfig,
     producer_config: Arc<ProducerConfig>,
     topic_publish_info_table: Arc<RwLock<HashMap<String /* topic */, TopicPublishInfo>>>,
-    send_message_hook_list: ArcRefCellWrapper<Vec<Box<dyn SendMessageHook>>>,
+    send_message_hook_list: ArcMut<Vec<Box<dyn SendMessageHook>>>,
     end_transaction_hook_list: Arc<Vec<Box<dyn EndTransactionHook>>>,
     check_forbidden_hook_list: Vec<Arc<Box<dyn CheckForbiddenHook>>>,
     rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
     service_state: ServiceState,
-    client_instance: Option<ArcRefCellWrapper<MQClientInstance>>,
-    mq_fault_strategy: ArcRefCellWrapper<MQFaultStrategy>,
+    client_instance: Option<ArcMut<MQClientInstance>>,
+    mq_fault_strategy: ArcMut<MQFaultStrategy>,
     semaphore_async_send_num: Arc<Semaphore>,
     semaphore_async_send_size: Arc<Semaphore>,
     async_sender_runtime: Option<Arc<RocketMQRuntime>>,
     default_async_sender_runtime: Option<Arc<RocketMQRuntime>>,
-    default_mqproducer_impl_inner: Option<ArcRefCellWrapper<DefaultMQProducerImpl>>,
+    default_mqproducer_impl_inner: Option<ArcMut<DefaultMQProducerImpl>>,
     transaction_listener: Option<Arc<Box<dyn TransactionListener>>>,
     check_runtime: Option<Arc<RocketMQRuntime>>,
 }
@@ -132,13 +132,13 @@ impl DefaultMQProducerImpl {
             client_config: client_config.clone(),
             producer_config: Arc::new(producer_config),
             topic_publish_info_table,
-            send_message_hook_list: ArcRefCellWrapper::new(vec![]),
+            send_message_hook_list: ArcMut::new(vec![]),
             end_transaction_hook_list: Arc::new(vec![]),
             check_forbidden_hook_list: vec![],
             rpc_hook: None,
             service_state: ServiceState::CreateJust,
             client_instance: None,
-            mq_fault_strategy: ArcRefCellWrapper::new(MQFaultStrategy::new(&client_config)),
+            mq_fault_strategy: ArcMut::new(MQFaultStrategy::new(&client_config)),
             semaphore_async_send_num: Arc::new(semaphore_async_send_num),
             semaphore_async_send_size: Arc::new(semaphore_async_send_size),
             async_sender_runtime: None,
@@ -2016,7 +2016,7 @@ impl DefaultMQProducerImpl {
 
     pub fn set_default_mqproducer_impl_inner(
         &mut self,
-        default_mqproducer_impl_inner: ArcRefCellWrapper<DefaultMQProducerImpl>,
+        default_mqproducer_impl_inner: ArcMut<DefaultMQProducerImpl>,
     ) {
         self.default_mqproducer_impl_inner = Some(default_mqproducer_impl_inner);
     }
@@ -2313,7 +2313,7 @@ impl DefaultMQProducerImpl {
 }
 
 pub(crate) struct DefaultServiceDetector {
-    client_instance: ArcRefCellWrapper<MQClientInstance>,
+    client_instance: ArcMut<MQClientInstance>,
     topic_publish_info_table: Arc<RwLock<HashMap<String /* topic */, TopicPublishInfo>>>,
 }
 
@@ -2324,7 +2324,7 @@ impl ServiceDetector for DefaultServiceDetector {
 }
 
 pub(crate) struct DefaultResolver {
-    client_instance: ArcRefCellWrapper<MQClientInstance>,
+    client_instance: ArcMut<MQClientInstance>,
 }
 
 impl Resolver for DefaultResolver {

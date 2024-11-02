@@ -20,7 +20,7 @@ use std::sync::Arc;
 use rocketmq_common::common::attribute::cq_type::CQType;
 use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_common::ArcRefCellWrapper;
+use rocketmq_rust::ArcMut;
 
 use crate::base::dispatch_request::DispatchRequest;
 use crate::base::swappable::Swappable;
@@ -36,7 +36,7 @@ pub mod local_file_consume_queue_store;
 mod queue_offset_operator;
 pub mod single_consume_queue;
 
-pub type ArcConsumeQueue = ArcRefCellWrapper<Box<dyn ConsumeQueueTrait>>;
+pub type ArcConsumeQueue = ArcMut<Box<dyn ConsumeQueueTrait>>;
 pub type ConsumeQueueTable = parking_lot::Mutex<HashMap<String, HashMap<i32, ArcConsumeQueue>>>;
 
 /// Trait defining the lifecycle of a file-based queue, including operations for loading,

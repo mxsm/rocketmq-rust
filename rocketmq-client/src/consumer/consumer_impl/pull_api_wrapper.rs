@@ -28,12 +28,12 @@ use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
-use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
 use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
+use rocketmq_rust::ArcMut;
 
 use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
 use crate::consumer::pull_callback::PullCallback;
@@ -48,10 +48,10 @@ use crate::Result;
 
 #[derive(Clone)]
 pub struct PullAPIWrapper {
-    client_instance: ArcRefCellWrapper<MQClientInstance>,
+    client_instance: ArcMut<MQClientInstance>,
     consumer_group: String,
     unit_mode: bool,
-    pull_from_which_node_table: ArcRefCellWrapper<HashMap<MessageQueue, AtomicU64>>,
+    pull_from_which_node_table: ArcMut<HashMap<MessageQueue, AtomicU64>>,
     connect_broker_by_user: bool,
     default_broker_id: u64,
     filter_message_hook_list: Vec<Arc<Box<dyn FilterMessageHook + Send + Sync>>>,
@@ -59,7 +59,7 @@ pub struct PullAPIWrapper {
 
 impl PullAPIWrapper {
     pub fn new(
-        mq_client_factory: ArcRefCellWrapper<MQClientInstance>,
+        mq_client_factory: ArcMut<MQClientInstance>,
         consumer_group: String,
         unit_mode: bool,
     ) -> Self {
@@ -67,7 +67,7 @@ impl PullAPIWrapper {
             client_instance: mq_client_factory,
             consumer_group,
             unit_mode,
-            pull_from_which_node_table: ArcRefCellWrapper::new(HashMap::with_capacity(64)),
+            pull_from_which_node_table: ArcMut::new(HashMap::with_capacity(64)),
             connect_broker_by_user: false,
             default_broker_id: mix_all::MASTER_ID,
             filter_message_hook_list: Vec::new(),
@@ -196,7 +196,7 @@ impl PullAPIWrapper {
 
             pull_result_ext.pull_result.msg_found_list = msg_list_filter_again
                 .into_iter()
-                .map(ArcRefCellWrapper::new)
+                .map(ArcMut::new)
                 .collect::<Vec<_>>();
         }
     }
