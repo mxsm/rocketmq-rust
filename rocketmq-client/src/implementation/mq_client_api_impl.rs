@@ -47,6 +47,8 @@ use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequ
 use rocketmq_remoting::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
 use rocketmq_remoting::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
 use rocketmq_remoting::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
+use rocketmq_remoting::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader;
+use rocketmq_remoting::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader;
 use rocketmq_remoting::protocol::header::heartbeat_request_header::HeartbeatRequestHeader;
 use rocketmq_remoting::protocol::header::lock_batch_mq_request_header::LockBatchMqRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
@@ -68,6 +70,7 @@ use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::remoting::RemotingService;
 use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
+use rocketmq_remoting::rpc::topic_request_header::TopicRequestHeader;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_remoting::runtime::RPCHook;
 use tracing::error;
@@ -1146,5 +1149,51 @@ impl MQClientAPIImpl {
             .invoke_oneway(addr.to_string(), request, timeout_millis)
             .await;
         Ok(())
+    }
+
+    pub async fn get_max_offset(
+        &mut self,
+        addr: &str,
+        message_queue: &MessageQueue,
+        timeout_millis: u64,
+    ) -> Result<i64> {
+        let request_header = GetMaxOffsetRequestHeader {
+            topic: message_queue.get_topic().to_string(),
+            queue_id: message_queue.get_queue_id(),
+            committed: false,
+            topic_request_header: Some(TopicRequestHeader {
+                rpc_request_header: Some(RpcRequestHeader {
+                    broker_name: Some(message_queue.get_broker_name().to_string()),
+                    ..Default::default()
+                }),
+                lo: None,
+            }),
+        };
+
+        let request =
+            RemotingCommand::create_request_command(RequestCode::GetMaxOffset, request_header);
+
+        let response = self
+            .remoting_client
+            .invoke_async(
+                Some(mix_all::broker_vip_channel(
+                    self.client_config.vip_channel_enabled,
+                    addr,
+                )),
+                request,
+                timeout_millis,
+            )
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            let response_header = response
+                .decode_command_custom_header::<GetMaxOffsetResponseHeader>()
+                .expect("decode error");
+            return Ok(response_header.offset);
+        }
+        Err(MQBrokerError(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string()),
+            addr.to_string(),
+        ))
     }
 }

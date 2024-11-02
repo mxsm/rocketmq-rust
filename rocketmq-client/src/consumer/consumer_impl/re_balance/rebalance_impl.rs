@@ -327,9 +327,6 @@ where
                 }
             }
             MessageModel::Clustering => {
-                let topic_sub_cloned = self.topic_subscribe_info_table.clone();
-                let topic_subscribe_info_table_inner = topic_sub_cloned.read().await;
-                let mq_set = topic_subscribe_info_table_inner.get(topic);
                 //get consumer id list from broker
                 let cid_all = self
                     .client_instance
@@ -337,6 +334,9 @@ where
                     .unwrap()
                     .find_consumer_id_list(topic, self.consumer_group.as_ref().unwrap())
                     .await;
+                let topic_sub_cloned = self.topic_subscribe_info_table.clone();
+                let topic_subscribe_info_table_inner = topic_sub_cloned.read().await;
+                let mq_set = topic_subscribe_info_table_inner.get(topic);
                 if mq_set.is_none() && !topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
                     if let Some(mut sub_rebalance_impl) =
                         self.sub_rebalance_impl.as_ref().unwrap().upgrade()

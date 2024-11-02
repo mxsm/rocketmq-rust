@@ -1317,7 +1317,7 @@ impl MQConsumerInner for DefaultMQPushConsumerImpl {
         }
     }
 
-    async fn update_topic_subscribe_info(&mut self, topic: &str, info: &HashSet<MessageQueue>) {
+    async fn update_topic_subscribe_info(&self, topic: &str, info: &HashSet<MessageQueue>) {
         let sub_table = self.rebalance_impl.get_subscription_inner();
         let sub_table_inner = sub_table.read().await;
         if sub_table_inner.contains_key(topic) {

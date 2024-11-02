@@ -21,18 +21,25 @@ use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use crate::base::client_config::ClientConfig;
 use crate::error::MQClientError::MQClientErr;
 use crate::factory::mq_client_instance;
+use crate::factory::mq_client_instance::MQClientInstance;
 use crate::implementation::mq_client_api_impl::MQClientAPIImpl;
 use crate::Result;
 
 pub struct MQAdminImpl {
     timeout_millis: u64,
+    client: Option<ArcRefCellWrapper<MQClientInstance>>,
 }
 
 impl MQAdminImpl {
     pub fn new() -> Self {
         MQAdminImpl {
             timeout_millis: 60000,
+            client: None,
         }
+    }
+
+    pub fn set_client(&mut self, client: ArcRefCellWrapper<MQClientInstance>) {
+        self.client = Some(client);
     }
 }
 
@@ -93,6 +100,30 @@ impl MQAdminImpl {
     }
 
     pub async fn max_offset(&mut self, mq: &MessageQueue) -> Result<i64> {
+        let client = self.client.as_mut().expect("client is None");
+        let broker_name = client.get_broker_name_from_message_queue(mq).await;
+        let mut broker_addr = client
+            .find_broker_address_in_publish(broker_name.as_str())
+            .await;
+        if broker_addr.is_none() {
+            client
+                .update_topic_route_info_from_name_server_topic(mq.get_topic())
+                .await;
+            let broker_name = client.get_broker_name_from_message_queue(mq).await;
+            broker_addr = client
+                .find_broker_address_in_publish(broker_name.as_str())
+                .await;
+        }
+        if let Some(ref broker_addr) = broker_addr {
+            let offset = client
+                .mq_client_api_impl
+                .as_mut()
+                .expect("mq_client_api_impl is None")
+                .get_max_offset(broker_addr, mq, self.timeout_millis)
+                .await?;
+            return Ok(offset);
+        }
+
         unimplemented!("max_offset")
     }
     pub async fn search_offset(&mut self, mq: &MessageQueue, timestamp: u64) -> Result<i64> {
