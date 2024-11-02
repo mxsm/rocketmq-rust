@@ -52,7 +52,14 @@ impl AllocateMessageQueueStrategy for AllocateMessageQueueAveragely {
         } else {
             index * average_size + mod_val
         };
-        let range = average_size.min(mq_all.len() - start_index);
+        //let range = average_size.min(mq_all.len() - start_index);
+        //fix the bug " subtract with overflow" caused by (mq_all.len() - start_index )
+        let mut range: usize = 0;
+        if mq_all.len() > start_index {
+            range = average_size.min(mq_all.len() - start_index);
+        }
+        //in case of  mq_all.len() < start_index ,  means the customers is much more than queue
+        // so let range ==0 ,the for loop not work, and then no queue alloced to this customerID
         for i in 0..range {
             result.push(mq_all[start_index + i].clone());
         }
