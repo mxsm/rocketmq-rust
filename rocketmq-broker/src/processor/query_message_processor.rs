@@ -17,7 +17,6 @@
 use std::sync::Arc;
 
 use rocketmq_common::common::mix_all::UNIQUE_MSG_QUERY_FLAG;
-use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
@@ -26,20 +25,18 @@ use rocketmq_remoting::protocol::header::query_message_response_header::QueryMes
 use rocketmq_remoting::protocol::header::view_message_request_header::ViewMessageRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_rust::ArcMut;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::log_file::MessageStore;
 
 #[derive(Default)]
 pub struct QueryMessageProcessor<MS> {
     message_store_config: Arc<MessageStoreConfig>,
-    message_store: ArcRefCellWrapper<MS>,
+    message_store: ArcMut<MS>,
 }
 
 impl<MS> QueryMessageProcessor<MS> {
-    pub fn new(
-        message_store_config: Arc<MessageStoreConfig>,
-        message_store: ArcRefCellWrapper<MS>,
-    ) -> Self {
+    pub fn new(message_store_config: Arc<MessageStoreConfig>, message_store: ArcMut<MS>) -> Self {
         Self {
             message_store_config,
             message_store,

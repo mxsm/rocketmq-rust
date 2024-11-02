@@ -20,8 +20,8 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use lazy_static::lazy_static;
-use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_remoting::runtime::RPCHook;
+use rocketmq_rust::ArcMut;
 use tokio::sync::RwLock;
 use tracing::info;
 
@@ -29,10 +29,8 @@ use crate::base::client_config::ClientConfig;
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::producer::produce_accumulator::ProduceAccumulator;
 
-type ClientInstanceHashMap =
-    HashMap<String /* clientId */, ArcRefCellWrapper<MQClientInstance>>;
-type AccumulatorHashMap =
-    HashMap<String /* clientId */, ArcRefCellWrapper<ProduceAccumulator>>;
+type ClientInstanceHashMap = HashMap<String /* clientId */, ArcMut<MQClientInstance>>;
+type AccumulatorHashMap = HashMap<String /* clientId */, ArcMut<ProduceAccumulator>>;
 
 #[derive(Default)]
 pub struct MQClientManager {
@@ -61,7 +59,7 @@ impl MQClientManager {
         &self,
         client_config: ClientConfig,
         rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
-    ) -> ArcRefCellWrapper<MQClientInstance> {
+    ) -> ArcMut<MQClientInstance> {
         let client_id = client_config.build_mq_client_id();
         let mut factory_table = self.factory_table.write().await;
         let instance = factory_table.entry(client_id.clone()).or_insert_with(|| {
@@ -80,7 +78,7 @@ impl MQClientManager {
     pub async fn get_or_create_produce_accumulator(
         &self,
         client_config: ClientConfig,
-    ) -> ArcRefCellWrapper<ProduceAccumulator> {
+    ) -> ArcMut<ProduceAccumulator> {
         let client_id = client_config.build_mq_client_id();
         let mut accumulator_table = self.accumulator_table.write().await;
         let accumulator = accumulator_table
@@ -91,7 +89,7 @@ impl MQClientManager {
                     "Created new ProduceAccumulator for clientId: [{}]",
                     client_id
                 );
-                ArcRefCellWrapper::new(accumulator)
+                ArcMut::new(accumulator)
             });
         accumulator.clone()
     }

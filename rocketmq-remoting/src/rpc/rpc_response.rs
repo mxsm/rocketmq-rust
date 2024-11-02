@@ -16,7 +16,7 @@
  */
 use std::any::Any;
 
-use rocketmq_common::ArcRefCellWrapper;
+use rocketmq_rust::ArcMut;
 
 use crate::error::Error;
 use crate::protocol::command_custom_header::CommandCustomHeader;
@@ -24,7 +24,7 @@ use crate::protocol::command_custom_header::CommandCustomHeader;
 #[derive(Default)]
 pub struct RpcResponse {
     pub code: i32,
-    pub header: Option<ArcRefCellWrapper<Box<dyn CommandCustomHeader + Send + Sync + 'static>>>,
+    pub header: Option<ArcMut<Box<dyn CommandCustomHeader + Send + Sync + 'static>>>,
     pub body: Option<Box<dyn Any>>,
     pub exception: Option<Error>,
 }
@@ -79,7 +79,7 @@ impl RpcResponse {
     ) -> Self {
         Self {
             code,
-            header: Some(ArcRefCellWrapper::new(header)),
+            header: Some(ArcMut::new(header)),
             body,
             exception: None,
         }

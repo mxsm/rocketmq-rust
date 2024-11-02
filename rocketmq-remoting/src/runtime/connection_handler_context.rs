@@ -15,14 +15,14 @@
  * limitations under the License.
  */
 use futures_util::SinkExt;
-use rocketmq_common::WeakCellWrapper;
+use rocketmq_rust::WeakArcMut;
 use tracing::error;
 
 use crate::connection::Connection;
 use crate::net::channel::Channel;
 use crate::protocol::remoting_command::RemotingCommand;
 
-pub type ConnectionHandlerContext = WeakCellWrapper<ConnectionHandlerContextWrapper>;
+pub type ConnectionHandlerContext = WeakArcMut<ConnectionHandlerContextWrapper>;
 
 #[derive(Hash, Eq, PartialEq)]
 pub struct ConnectionHandlerContextWrapper {

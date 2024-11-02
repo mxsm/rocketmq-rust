@@ -18,13 +18,13 @@ use std::sync::Arc;
 
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::server::config::ServerConfig;
-use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_rust::ArcMut;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::message_store::default_message_store::DefaultMessageStore;
 use rocketmq_store::stats::broker_stats::BrokerStats;
@@ -67,7 +67,7 @@ impl AdminBrokerProcessor {
         topic_config_manager: TopicConfigManager,
         consumer_offset_manager: ConsumerOffsetManager,
         topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
-        default_message_store: ArcRefCellWrapper<DefaultMessageStore>,
+        default_message_store: ArcMut<DefaultMessageStore>,
         schedule_message_service: ScheduleMessageService,
         broker_stats: Option<Arc<BrokerStats<DefaultMessageStore>>>,
         consume_manager: Arc<ConsumerManager>,
@@ -239,7 +239,7 @@ struct Inner {
     topic_config_manager: TopicConfigManager,
     consumer_offset_manager: ConsumerOffsetManager,
     topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
-    default_message_store: ArcRefCellWrapper<DefaultMessageStore>,
+    default_message_store: ArcMut<DefaultMessageStore>,
     pop_inflight_message_counter: Arc<PopInflightMessageCounter>,
     schedule_message_service: ScheduleMessageService,
     broker_stats: Option<Arc<BrokerStats<DefaultMessageStore>>>,

@@ -20,6 +20,7 @@ data_store = ["local_file_store"]
 [dependencies]
 rocketmq-common = { workspace = true }
 rocketmq-runtime = { workspace = true }
+rocketmq-rust = { workspace = true }
 
 #tools
 dirs.workspace = true

@@ -31,9 +31,9 @@ use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::MESSAGE_COMPRESS_LEVEL;
 use rocketmq_common::common::mix_all::MESSAGE_COMPRESS_TYPE;
 use rocketmq_common::common::topic::TopicValidator;
-use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::runtime::RPCHook;
+use rocketmq_rust::ArcMut;
 use tracing::error;
 
 use crate::base::client_config::ClientConfig;
@@ -89,7 +89,7 @@ pub struct ProducerConfig {
     /// Switch flag instance for automatic batch message
     auto_batch: bool,
     /// Instance for batching message automatically
-    produce_accumulator: Option<ArcRefCellWrapper<ProduceAccumulator>>,
+    produce_accumulator: Option<ArcMut<ProduceAccumulator>>,
     /// Indicate whether to block message when asynchronous sending traffic is too heavy.
     enable_backpressure_for_async_mode: bool,
     /// on BackpressureForAsyncMode, limit maximum number of on-going sending async messages
@@ -158,7 +158,7 @@ impl ProducerConfig {
         self.auto_batch
     }
 
-    pub fn produce_accumulator(&self) -> &Option<ArcRefCellWrapper<ProduceAccumulator>> {
+    pub fn produce_accumulator(&self) -> &Option<ArcMut<ProduceAccumulator>> {
         &self.produce_accumulator
     }
 
@@ -243,7 +243,7 @@ impl Default for ProducerConfig {
 pub struct DefaultMQProducer {
     client_config: ClientConfig,
     producer_config: ProducerConfig,
-    pub(crate) default_mqproducer_impl: Option<ArcRefCellWrapper<DefaultMQProducerImpl>>,
+    pub(crate) default_mqproducer_impl: Option<ArcMut<DefaultMQProducerImpl>>,
 }
 
 impl DefaultMQProducer {
@@ -311,7 +311,7 @@ impl DefaultMQProducer {
         self.producer_config.auto_batch
     }
 
-    pub fn produce_accumulator(&self) -> &Option<ArcRefCellWrapper<ProduceAccumulator>> {
+    pub fn produce_accumulator(&self) -> &Option<ArcMut<ProduceAccumulator>> {
         &self.producer_config.produce_accumulator
     }
 
@@ -348,7 +348,7 @@ impl DefaultMQProducer {
     }
 
     pub fn set_default_mqproducer_impl(&mut self, default_mqproducer_impl: DefaultMQProducerImpl) {
-        let wrapper = ArcRefCellWrapper::new(default_mqproducer_impl);
+        let wrapper = ArcMut::new(default_mqproducer_impl);
         self.default_mqproducer_impl = Some(wrapper.clone());
         self.default_mqproducer_impl
             .as_mut()
@@ -422,8 +422,7 @@ impl DefaultMQProducer {
 
     pub fn set_produce_accumulator(&mut self, produce_accumulator: Option<ProduceAccumulator>) {
         if let Some(produce_accumulator) = produce_accumulator {
-            self.producer_config.produce_accumulator =
-                Some(ArcRefCellWrapper::new(produce_accumulator));
+            self.producer_config.produce_accumulator = Some(ArcMut::new(produce_accumulator));
         }
     }
 

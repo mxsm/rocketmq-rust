@@ -27,7 +27,6 @@ use rocketmq_common::common::mix_all;
 use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::common::TopicSysFlag;
-use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::TimeUtils;
 use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
@@ -45,6 +44,7 @@ use rocketmq_remoting::protocol::route::route_data_view::QueueData;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
 use rocketmq_remoting::protocol::DataVersion;
+use rocketmq_rust::ArcMut;
 use tokio::sync::broadcast;
 use tracing::debug;
 use tracing::info;
@@ -74,14 +74,14 @@ pub struct RouteInfoManager {
     pub(crate) filter_server_table: FilterServerTable,
     pub(crate) topic_queue_mapping_info_table: TopicQueueMappingInfoTable,
     pub(crate) namesrv_config: Arc<NamesrvConfig>,
-    pub(crate) remoting_client: ArcRefCellWrapper<RocketmqDefaultClient>,
+    pub(crate) remoting_client: ArcMut<RocketmqDefaultClient>,
 }
 
 #[allow(private_interfaces)]
 impl RouteInfoManager {
     pub fn new(
         namesrv_config: Arc<NamesrvConfig>,
-        remoting_client: ArcRefCellWrapper<RocketmqDefaultClient>,
+        remoting_client: ArcMut<RocketmqDefaultClient>,
     ) -> Self {
         RouteInfoManager {
             topic_queue_table: HashMap::new(),

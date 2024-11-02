@@ -18,7 +18,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::ArcRefCellWrapper;
+use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::hook::put_message_hook::PutMessageHook;
@@ -27,15 +27,12 @@ use rocketmq_store::log_file::MessageStore;
 use crate::util::hook_utils::HookUtils;
 
 pub struct CheckBeforePutMessageHook<MS> {
-    message_store: ArcRefCellWrapper<MS>,
+    message_store: ArcMut<MS>,
     message_store_config: Arc<MessageStoreConfig>,
 }
 
 impl<MS: MessageStore> CheckBeforePutMessageHook<MS> {
-    pub fn new(
-        message_store: ArcRefCellWrapper<MS>,
-        message_store_config: Arc<MessageStoreConfig>,
-    ) -> Self {
+    pub fn new(message_store: ArcMut<MS>, message_store_config: Arc<MessageStoreConfig>) -> Self {
         Self {
             message_store,
             message_store_config,

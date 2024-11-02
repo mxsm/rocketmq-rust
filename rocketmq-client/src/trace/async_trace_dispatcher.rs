@@ -17,8 +17,8 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_remoting::runtime::RPCHook;
+use rocketmq_rust::ArcMut;
 
 use crate::base::access_channel::AccessChannel;
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
@@ -66,12 +66,8 @@ impl TraceDispatcher for AsyncTraceDispatcher {
 }
 
 impl AsyncTraceDispatcher {
-    pub fn set_host_producer(&mut self, host_producer: ArcRefCellWrapper<DefaultMQProducerImpl>) {}
-    pub fn set_host_consumer(
-        &mut self,
-        host_producer: ArcRefCellWrapper<DefaultMQPushConsumerImpl>,
-    ) {
-    }
+    pub fn set_host_producer(&mut self, host_producer: ArcMut<DefaultMQProducerImpl>) {}
+    pub fn set_host_consumer(&mut self, host_producer: ArcMut<DefaultMQPushConsumerImpl>) {}
 
     pub fn set_namespace_v2(&mut self, namespace_v2: Option<String>) {}
 }

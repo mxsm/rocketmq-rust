@@ -18,7 +18,7 @@ use std::collections::HashMap;
 
 use futures_util::SinkExt;
 use futures_util::StreamExt;
-use rocketmq_common::ArcRefCellWrapper;
+use rocketmq_rust::ArcMut;
 use tokio::sync::mpsc::Receiver;
 use tracing::error;
 use tracing::warn;
@@ -47,14 +47,14 @@ pub struct Client {
     /// `Connection` allows the handler to operate at the "frame" level and keep
     /// the byte level protocol parsing details encapsulated in `Connection`.
     //connection: Connection,
-    inner: ArcRefCellWrapper<ClientInner>,
+    inner: ArcMut<ClientInner>,
     tx: tokio::sync::mpsc::Sender<SendMessage>,
 }
 
 struct ClientInner {
-    response_table: ArcRefCellWrapper<HashMap<i32, ResponseFuture>>,
+    response_table: ArcMut<HashMap<i32, ResponseFuture>>,
     channel: Channel,
-    ctx: ArcRefCellWrapper<ConnectionHandlerContextWrapper>,
+    ctx: ArcMut<ConnectionHandlerContextWrapper>,
     tx: tokio::sync::mpsc::Sender<SendMessage>,
 }
 
@@ -64,16 +64,13 @@ type SendMessage = (
     Option<u64>,
 );
 
-async fn run_send(mut client: ArcRefCellWrapper<ClientInner>, mut rx: Receiver<SendMessage>) {
+async fn run_send(mut client: ArcMut<ClientInner>, mut rx: Receiver<SendMessage>) {
     while let Some((request, tx, timeout)) = rx.recv().await {
         let _ = client.send(request, tx, timeout).await;
     }
 }
 
-async fn run_recv<PR: RequestProcessor>(
-    mut client: ArcRefCellWrapper<ClientInner>,
-    mut processor: PR,
-) {
+async fn run_recv<PR: RequestProcessor>(mut client: ArcMut<ClientInner>, mut processor: PR) {
     while let Some(response) = client.ctx.channel.connection.reader.next().await {
         match response {
             Ok(msg) => match msg.get_type() {
@@ -83,7 +80,7 @@ async fn run_recv<PR: RequestProcessor>(
                     let process_result = processor
                         .process_request(
                             client.channel.clone(),
-                            ArcRefCellWrapper::downgrade(&client.ctx),
+                            ArcMut::downgrade(&client.ctx),
                             msg,
                         )
                         .await;
@@ -139,10 +136,7 @@ impl ClientInner {
         addr: T,
         processor: PR,
         tx: Option<&tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
-    ) -> Result<(
-        tokio::sync::mpsc::Sender<SendMessage>,
-        ArcRefCellWrapper<ClientInner>,
-    )>
+    ) -> Result<(tokio::sync::mpsc::Sender<SendMessage>, ArcMut<ClientInner>)>
     where
         T: tokio::net::ToSocketAddrs,
         PR: RequestProcessor + 'static,
@@ -155,7 +149,7 @@ impl ClientInner {
         let local_addr = stream.local_addr()?;
         let remote_address = stream.peer_addr()?;
         let connection = Connection::new(stream);
-        let response_table = ArcRefCellWrapper::new(HashMap::with_capacity(128));
+        let response_table = ArcMut::new(HashMap::with_capacity(128));
         let channel = Channel::new(
             local_addr,
             remote_address,
@@ -165,7 +159,7 @@ impl ClientInner {
 
         let (tx_, rx) = tokio::sync::mpsc::channel(1024);
         let client = ClientInner {
-            ctx: ArcRefCellWrapper::new(ConnectionHandlerContextWrapper::new(
+            ctx: ArcMut::new(ConnectionHandlerContextWrapper::new(
                 //connection,
                 channel.clone(),
             )),
@@ -173,7 +167,7 @@ impl ClientInner {
             channel,
             tx: tx_.clone(),
         };
-        let client = ArcRefCellWrapper::new(client);
+        let client = ArcMut::new(client);
 
         tokio::spawn(run_recv(client.clone(), processor));
         tokio::spawn(run_send(client.clone(), rx));

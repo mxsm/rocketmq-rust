@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use futures::SinkExt;
 use rocketmq_common::common::server::config::ServerConfig;
-use rocketmq_common::ArcRefCellWrapper;
+use rocketmq_rust::ArcMut;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::broadcast;
@@ -57,13 +57,13 @@ type Rx = mpsc::UnboundedReceiver<RemotingCommand>;
 
 pub struct ConnectionHandler<RP> {
     request_processor: RP,
-    connection_handler_context: ArcRefCellWrapper<ConnectionHandlerContextWrapper>,
+    connection_handler_context: ArcMut<ConnectionHandlerContextWrapper>,
     channel: Channel,
     shutdown: Shutdown,
     _shutdown_complete: mpsc::Sender<()>,
     conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
     rpc_hooks: Arc<Vec<Box<dyn RPCHook>>>,
-    response_table: ArcRefCellWrapper<HashMap<i32, ResponseFuture>>,
+    response_table: ArcMut<HashMap<i32, ResponseFuture>>,
 }
 
 impl<RP> Drop for ConnectionHandler<RP> {
@@ -156,7 +156,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
 
             let mut response = {
                 let channel = self.channel.clone();
-                let ctx = ArcRefCellWrapper::downgrade(&self.connection_handler_context);
+                let ctx = ArcMut::downgrade(&self.connection_handler_context);
                 tokio::select! {
                     result = self.request_processor.process_request(channel,ctx,cmd) =>  match result{
                         Ok(value) => value,
@@ -309,7 +309,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
             info!("Accepted connection, client ip:{}", remote_addr);
             socket.set_nodelay(true).expect("set nodelay failed");
 
-            let response_table = ArcRefCellWrapper::new(HashMap::with_capacity(128));
+            let response_table = ArcMut::new(HashMap::with_capacity(128));
             let channel = Channel::new(
                 socket.local_addr()?,
                 remote_addr,
@@ -320,12 +320,10 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
             let mut handler = ConnectionHandler {
                 request_processor: self.request_processor.clone(),
                 //connection: Connection::new(socket, remote_addr),
-                connection_handler_context: ArcRefCellWrapper::new(
-                    ConnectionHandlerContextWrapper {
-                        // connection: Connection::new(socket),
-                        channel: channel.clone(),
-                    },
-                ),
+                connection_handler_context: ArcMut::new(ConnectionHandlerContextWrapper {
+                    // connection: Connection::new(socket),
+                    channel: channel.clone(),
+                }),
                 channel,
                 shutdown: Shutdown::new(self.notify_shutdown.subscribe()),
                 _shutdown_complete: self.shutdown_complete_tx.clone(),

@@ -18,9 +18,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
-use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::runtime::RPCHook;
+use rocketmq_rust::ArcMut;
 
 use crate::base::client_config::ClientConfig;
 use crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
@@ -38,7 +38,7 @@ pub struct DefaultMQPushConsumerBuilder {
     consume_from_where: Option<ConsumeFromWhere>,
     consume_timestamp: Option<String>,
     allocate_message_queue_strategy: Option<Arc<dyn AllocateMessageQueueStrategy>>,
-    subscription: Option<ArcRefCellWrapper<HashMap<String, String>>>,
+    subscription: Option<ArcMut<HashMap<String, String>>>,
 
     message_queue_listener: Option<Arc<Box<dyn MessageQueueListener>>>,
 

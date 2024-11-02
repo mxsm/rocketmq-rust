@@ -35,10 +35,8 @@ use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::DEFAULT_CONSUMER_GROUP;
 use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
 use rocketmq_common::common::FAQUrl;
-use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::TimeUtils::get_current_millis;
-use rocketmq_common::WeakCellWrapper;
 use rocketmq_remoting::protocol::body::consumer_running_info::ConsumerRunningInfo;
 use rocketmq_remoting::protocol::filter::filter_api::FilterAPI;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
@@ -46,6 +44,8 @@ use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::runtime::RPCHook;
+use rocketmq_rust::ArcMut;
+use rocketmq_rust::WeakArcMut;
 use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 use tracing::error;
@@ -98,21 +98,21 @@ const _1MB: u64 = 1024 * 1024;
 pub struct DefaultMQPushConsumerImpl {
     pub(crate) global_lock: Arc<Mutex<()>>,
     pub(crate) pull_time_delay_mills_when_exception: u64,
-    pub(crate) client_config: ArcRefCellWrapper<ClientConfig>,
-    pub(crate) consumer_config: ArcRefCellWrapper<ConsumerConfig>,
-    pub(crate) rebalance_impl: ArcRefCellWrapper<RebalancePushImpl>,
+    pub(crate) client_config: ArcMut<ClientConfig>,
+    pub(crate) consumer_config: ArcMut<ConsumerConfig>,
+    pub(crate) rebalance_impl: ArcMut<RebalancePushImpl>,
     filter_message_hook_list: Vec<Arc<Box<dyn FilterMessageHook + Send + Sync>>>,
     consume_message_hook_list: Vec<Arc<Box<dyn ConsumeMessageHook + Send + Sync>>>,
     rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
-    service_state: ArcRefCellWrapper<ServiceState>,
-    pub(crate) client_instance: Option<ArcRefCellWrapper<MQClientInstance>>,
-    pub(crate) pull_api_wrapper: Option<ArcRefCellWrapper<PullAPIWrapper>>,
+    service_state: ArcMut<ServiceState>,
+    pub(crate) client_instance: Option<ArcMut<MQClientInstance>>,
+    pub(crate) pull_api_wrapper: Option<ArcMut<PullAPIWrapper>>,
     pause: Arc<AtomicBool>,
     consume_orderly: bool,
-    message_listener: Option<ArcRefCellWrapper<MessageListener>>,
-    pub(crate) offset_store: Option<ArcRefCellWrapper<OffsetStore>>,
+    message_listener: Option<ArcMut<MessageListener>>,
+    pub(crate) offset_store: Option<ArcMut<OffsetStore>>,
     pub(crate) consume_message_service: Option<
-        ArcRefCellWrapper<
+        ArcMut<
             ConsumeMessageServiceGeneral<
                 ConsumeMessageConcurrentlyService,
                 ConsumeMessageOrderlyService,
@@ -120,7 +120,7 @@ pub struct DefaultMQPushConsumerImpl {
         >,
     >,
     consume_message_pop_service: Option<
-        ArcRefCellWrapper<
+        ArcMut<
             ConsumeMessagePopServiceGeneral<
                 ConsumeMessagePopConcurrentlyService,
                 ConsumeMessagePopOrderlyService,
@@ -130,28 +130,25 @@ pub struct DefaultMQPushConsumerImpl {
     queue_flow_control_times: u64,
     queue_max_span_flow_control_times: u64,
     pop_delay_level: Arc<[i32; 16]>,
-    default_mqpush_consumer_impl: Option<WeakCellWrapper<DefaultMQPushConsumerImpl>>,
+    default_mqpush_consumer_impl: Option<WeakArcMut<DefaultMQPushConsumerImpl>>,
 }
 
 impl DefaultMQPushConsumerImpl {
     pub fn new(
         client_config: ClientConfig,
-        consumer_config: ArcRefCellWrapper<ConsumerConfig>,
+        consumer_config: ArcMut<ConsumerConfig>,
         rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
     ) -> Self {
         let mut this = Self {
             global_lock: Arc::new(Default::default()),
             pull_time_delay_mills_when_exception: 3_000,
-            client_config: ArcRefCellWrapper::new(client_config.clone()),
+            client_config: ArcMut::new(client_config.clone()),
             consumer_config: consumer_config.clone(),
-            rebalance_impl: ArcRefCellWrapper::new(RebalancePushImpl::new(
-                client_config,
-                consumer_config,
-            )),
+            rebalance_impl: ArcMut::new(RebalancePushImpl::new(client_config, consumer_config)),
             filter_message_hook_list: vec![],
             consume_message_hook_list: vec![],
             rpc_hook,
-            service_state: ArcRefCellWrapper::new(ServiceState::CreateJust),
+            service_state: ArcMut::new(ServiceState::CreateJust),
             client_instance: None,
             pull_api_wrapper: None,
             pause: Arc::new(AtomicBool::new(false)),
@@ -167,14 +164,14 @@ impl DefaultMQPushConsumerImpl {
             ]),
             default_mqpush_consumer_impl: None,
         };
-        let wrapper = ArcRefCellWrapper::downgrade(&this.rebalance_impl);
+        let wrapper = ArcMut::downgrade(&this.rebalance_impl);
         this.rebalance_impl.set_rebalance_impl(wrapper);
         this
     }
 
     pub fn set_default_mqpush_consumer_impl(
         &mut self,
-        default_mqpush_consumer_impl: WeakCellWrapper<DefaultMQPushConsumerImpl>,
+        default_mqpush_consumer_impl: WeakArcMut<DefaultMQPushConsumerImpl>,
     ) {
         self.rebalance_impl
             .set_default_mqpush_consumer_impl(default_mqpush_consumer_impl.clone());
@@ -232,7 +229,7 @@ impl DefaultMQPushConsumerImpl {
                 self.rebalance_impl
                     .set_mq_client_factory(client_instance.clone());
                 if self.pull_api_wrapper.is_none() {
-                    self.pull_api_wrapper = Some(ArcRefCellWrapper::new(PullAPIWrapper::new(
+                    self.pull_api_wrapper = Some(ArcMut::new(PullAPIWrapper::new(
                         client_instance.clone(),
                         self.consumer_config.consumer_group.clone(),
                         self.consumer_config.unit_mode,
@@ -244,20 +241,20 @@ impl DefaultMQPushConsumerImpl {
                 }
                 match self.consumer_config.message_model {
                     MessageModel::Broadcasting => {
-                        self.offset_store = Some(ArcRefCellWrapper::new(
-                            OffsetStore::new_with_local(LocalFileOffsetStore::new(
+                        self.offset_store = Some(ArcMut::new(OffsetStore::new_with_local(
+                            LocalFileOffsetStore::new(
                                 client_instance.clone(),
                                 self.consumer_config.consumer_group.clone(),
-                            )),
-                        ));
+                            ),
+                        )));
                     }
                     MessageModel::Clustering => {
-                        self.offset_store = Some(ArcRefCellWrapper::new(
-                            OffsetStore::new_with_remote(RemoteBrokerOffsetStore::new(
+                        self.offset_store = Some(ArcMut::new(OffsetStore::new_with_remote(
+                            RemoteBrokerOffsetStore::new(
                                 client_instance.clone(),
                                 self.consumer_config.consumer_group.clone(),
-                            )),
-                        ));
+                            ),
+                        )));
                     }
                 }
                 self.offset_store.as_mut().unwrap().load().await?;
@@ -270,7 +267,7 @@ impl DefaultMQPushConsumerImpl {
                             .unwrap();
                         self.consume_orderly = false;
                         let consume_message_concurrently_service =
-                            ArcRefCellWrapper::new(ConsumeMessageConcurrentlyService::new(
+                            ArcMut::new(ConsumeMessageConcurrentlyService::new(
                                 self.client_config.clone(),
                                 self.consumer_config.clone(),
                                 self.consumer_config.consumer_group.clone(),
@@ -278,30 +275,29 @@ impl DefaultMQPushConsumerImpl {
                                 self.default_mqpush_consumer_impl.clone(),
                             ));
                         self.consume_message_service =
-                            Some(ArcRefCellWrapper::new(ConsumeMessageServiceGeneral::new(
+                            Some(ArcMut::new(ConsumeMessageServiceGeneral::new(
                                 Some(consume_message_concurrently_service),
                                 None,
                             )));
                         let consume_message_pop_concurrently_service =
-                            ArcRefCellWrapper::new(ConsumeMessagePopConcurrentlyService::new(
+                            ArcMut::new(ConsumeMessagePopConcurrentlyService::new(
                                 self.client_config.clone(),
                                 self.consumer_config.clone(),
                                 self.consumer_config.consumer_group.clone(),
                                 listener.expect("listener is None"),
                             ));
 
-                        self.consume_message_pop_service = Some(ArcRefCellWrapper::new(
-                            ConsumeMessagePopServiceGeneral::new(
+                        self.consume_message_pop_service =
+                            Some(ArcMut::new(ConsumeMessagePopServiceGeneral::new(
                                 Some(consume_message_pop_concurrently_service),
                                 None,
-                            ),
-                        ));
+                            )));
                     } else if message_listener.message_listener_orderly.is_some() {
                         let (listener, _) =
                             message_listener.message_listener_orderly.clone().unwrap();
                         self.consume_orderly = true;
                         let consume_message_orderly_service =
-                            ArcRefCellWrapper::new(ConsumeMessageOrderlyService::new(
+                            ArcMut::new(ConsumeMessageOrderlyService::new(
                                 self.client_config.clone(),
                                 self.consumer_config.clone(),
                                 self.consumer_config.consumer_group.clone(),
@@ -309,19 +305,18 @@ impl DefaultMQPushConsumerImpl {
                                 self.default_mqpush_consumer_impl.clone(),
                             ));
                         self.consume_message_service =
-                            Some(ArcRefCellWrapper::new(ConsumeMessageServiceGeneral::new(
+                            Some(ArcMut::new(ConsumeMessageServiceGeneral::new(
                                 None,
                                 Some(consume_message_orderly_service),
                             )));
 
                         let consume_message_pop_orderly_service =
-                            ArcRefCellWrapper::new(ConsumeMessagePopOrderlyService);
-                        self.consume_message_pop_service = Some(ArcRefCellWrapper::new(
-                            ConsumeMessagePopServiceGeneral::new(
+                            ArcMut::new(ConsumeMessagePopOrderlyService);
+                        self.consume_message_pop_service =
+                            Some(ArcMut::new(ConsumeMessagePopServiceGeneral::new(
                                 None,
                                 Some(consume_message_pop_orderly_service),
-                            ),
-                        ));
+                            )));
                     }
                 }
 
@@ -723,10 +718,7 @@ impl DefaultMQPushConsumerImpl {
         unimplemented!("registerConsumeMessageHook");
     }
 
-    pub fn register_message_listener(
-        &mut self,
-        message_listener: Option<ArcRefCellWrapper<MessageListener>>,
-    ) {
+    pub fn register_message_listener(&mut self, message_listener: Option<ArcMut<MessageListener>>) {
         self.message_listener = message_listener;
     }
 
@@ -1060,10 +1052,7 @@ impl DefaultMQPushConsumerImpl {
         }
     }
 
-    pub fn try_reset_pop_retry_topic(
-        msgs: &mut [ArcRefCellWrapper<MessageClientExt>],
-        consumer_group: &str,
-    ) {
+    pub fn try_reset_pop_retry_topic(msgs: &mut [ArcMut<MessageClientExt>], consumer_group: &str) {
         let pop_retry_prefix = format!(
             "{}{}_{}",
             mix_all::RETRY_GROUP_TOPIC_PREFIX,
@@ -1083,7 +1072,7 @@ impl DefaultMQPushConsumerImpl {
 
     pub fn reset_retry_and_namespace(
         &mut self,
-        msgs: &mut [ArcRefCellWrapper<MessageClientExt>],
+        msgs: &mut [ArcMut<MessageClientExt>],
         consumer_group: &str,
     ) {
         let group_topic = mix_all::get_retry_topic(consumer_group);

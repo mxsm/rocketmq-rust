@@ -48,11 +48,11 @@ use rocketmq_common::{
         //thread::thread_service_tokio::ThreadService,
     },
     utils::queue_type_utils::QueueTypeUtils,
-    ArcRefCellWrapper,
     FileUtils::string_to_file,
     MessageDecoder,
     UtilAll::ensure_dir_ok,
 };
+use rocketmq_rust::ArcMut;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::Sender;
 use tracing::error;
@@ -131,7 +131,7 @@ pub struct DefaultMessageStore {
     compaction_store: Arc<CompactionStore>,
     timer_message_store: Arc<TimerMessageStore>,
     transient_store_pool: TransientStorePool,
-    message_store_arc: Option<ArcRefCellWrapper<DefaultMessageStore>>,
+    message_store_arc: Option<ArcMut<DefaultMessageStore>>,
 }
 
 impl DefaultMessageStore {
@@ -249,7 +249,7 @@ impl DefaultMessageStore {
 
     pub fn set_message_store_arc(
         &mut self,
-        message_store_arc: Option<ArcRefCellWrapper<DefaultMessageStore>>,
+        message_store_arc: Option<ArcMut<DefaultMessageStore>>,
     ) {
         self.message_store_arc = message_store_arc;
     }
@@ -1372,7 +1372,7 @@ impl ReputMessageService {
         message_store_config: Arc<MessageStoreConfig>,
         dispatcher: CommitLogDispatcherDefault,
         notify_message_arrive_in_batch: bool,
-        message_store: ArcRefCellWrapper<DefaultMessageStore>,
+        message_store: ArcMut<DefaultMessageStore>,
     ) {
         let mut inner = ReputMessageServiceInner {
             reput_from_offset: self.reput_from_offset.clone().unwrap(),
@@ -1443,7 +1443,7 @@ struct ReputMessageServiceInner {
     message_store_config: Arc<MessageStoreConfig>,
     dispatcher: CommitLogDispatcherDefault,
     notify_message_arrive_in_batch: bool,
-    message_store: ArcRefCellWrapper<DefaultMessageStore>,
+    message_store: ArcMut<DefaultMessageStore>,
 }
 
 impl ReputMessageServiceInner {

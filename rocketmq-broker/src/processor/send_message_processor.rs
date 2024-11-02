@@ -43,7 +43,6 @@ use rocketmq_common::common::TopicSysFlag::build_sys_flag;
 use rocketmq_common::utils::message_utils;
 use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
 use rocketmq_common::utils::util_all;
-use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::CleanupPolicyUtils;
 use rocketmq_common::MessageDecoder;
 use rocketmq_common::MessageDecoder::message_properties_to_string;
@@ -62,6 +61,7 @@ use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::log_file::MessageStore;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
@@ -80,7 +80,7 @@ use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager
 use crate::transaction::transactional_message_service::TransactionalMessageService;
 
 pub struct SendMessageProcessor<MS, TS> {
-    inner: ArcRefCellWrapper<Inner<MS, TS>>,
+    inner: ArcMut<Inner<MS, TS>>,
     store_host: SocketAddr,
 }
 
@@ -179,8 +179,8 @@ where
         subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
         topic_config_manager: TopicConfigManager,
         broker_config: Arc<BrokerConfig>,
-        message_store: ArcRefCellWrapper<MS>,
-        transactional_message_service: ArcRefCellWrapper<TS>,
+        message_store: ArcMut<MS>,
+        transactional_message_service: ArcMut<TS>,
         rebalance_lock_manager: Arc<RebalanceLockManager>,
         broker_stats_manager: Arc<BrokerStatsManager>,
     ) -> Self {
@@ -188,10 +188,10 @@ where
             .parse::<SocketAddr>()
             .unwrap();
         Self {
-            inner: ArcRefCellWrapper::new(Inner {
+            inner: ArcMut::new(Inner {
                 broker_config,
                 topic_config_manager,
-                send_message_hook_vec: ArcRefCellWrapper::new(Vec::new()),
+                send_message_hook_vec: ArcMut::new(Vec::new()),
                 topic_queue_mapping_manager,
                 subscription_group_manager,
                 message_store,
@@ -940,12 +940,12 @@ const DLQ_NUMS_PER_GROUP: u32 = 1;
 
 pub(crate) struct Inner<MS, TS> {
     pub(crate) topic_config_manager: TopicConfigManager,
-    pub(crate) send_message_hook_vec: ArcRefCellWrapper<Vec<Box<dyn SendMessageHook>>>,
+    pub(crate) send_message_hook_vec: ArcMut<Vec<Box<dyn SendMessageHook>>>,
     pub(crate) topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
     pub(crate) subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
     pub(crate) broker_config: Arc<BrokerConfig>,
-    pub(crate) message_store: ArcRefCellWrapper<MS>,
-    pub(crate) transactional_message_service: ArcRefCellWrapper<TS>,
+    pub(crate) message_store: ArcMut<MS>,
+    pub(crate) transactional_message_service: ArcMut<TS>,
     pub(crate) rebalance_lock_manager: Arc<RebalanceLockManager>,
     pub(crate) broker_stats_manager: Arc<BrokerStatsManager>,
     pub(crate) producer_manager: Option<Arc<ProducerManager>>,

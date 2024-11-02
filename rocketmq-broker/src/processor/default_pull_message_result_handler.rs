@@ -24,7 +24,6 @@ use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all::MASTER_ID;
 use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
-use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::code::response_code::RemotingSysResponseCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
@@ -39,6 +38,7 @@ use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_context::Topi
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_remoting::protocol::topic::OffsetMovedEvent;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_rust::ArcMut;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::config::broker_role::BrokerRole;
@@ -72,8 +72,7 @@ pub struct DefaultPullMessageResultHandler {
     broker_stats_manager: Arc<BrokerStatsManager>,
     broker_config: Arc<BrokerConfig>,
     consume_message_hook_list: Arc<Vec<Box<dyn ConsumeMessageHook>>>,
-    pull_request_hold_service:
-        Option<ArcRefCellWrapper<PullRequestHoldService<DefaultMessageStore>>>,
+    pull_request_hold_service: Option<ArcMut<PullRequestHoldService<DefaultMessageStore>>>,
 }
 
 impl DefaultPullMessageResultHandler {
@@ -102,9 +101,7 @@ impl DefaultPullMessageResultHandler {
 
     pub fn set_pull_request_hold_service(
         &mut self,
-        pull_request_hold_service: Option<
-            ArcRefCellWrapper<PullRequestHoldService<DefaultMessageStore>>,
-        >,
+        pull_request_hold_service: Option<ArcMut<PullRequestHoldService<DefaultMessageStore>>>,
     ) {
         self.pull_request_hold_service = pull_request_hold_service;
     }

@@ -19,9 +19,9 @@ use std::sync::Arc;
 
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
-use rocketmq_common::WeakCellWrapper;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+use rocketmq_rust::WeakArcMut;
 use tracing::warn;
 
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
@@ -42,7 +42,7 @@ pub trait PullCallbackLocal: Sync {
 }
 
 pub(crate) struct DefaultPullCallback {
-    pub(crate) push_consumer_impl: WeakCellWrapper<DefaultMQPushConsumerImpl>,
+    pub(crate) push_consumer_impl: WeakArcMut<DefaultMQPushConsumerImpl>,
     pub(crate) message_queue_inner: Option<MessageQueue>,
     pub(crate) subscription_data: Option<SubscriptionData>,
     pub(crate) pull_request: Option<PullRequest>,

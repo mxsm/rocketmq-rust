@@ -21,9 +21,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rand::Rng;
-use rocketmq_common::ArcRefCellWrapper;
-use rocketmq_common::WeakCellWrapper;
 use rocketmq_runtime::RocketMQRuntime;
+use rocketmq_rust::ArcMut;
+use rocketmq_rust::WeakArcMut;
 use tokio::sync::Mutex;
 use tokio::time;
 use tracing::debug;
@@ -51,9 +51,9 @@ pub struct RocketmqDefaultClient<PR = DefaultRemotingRequestProcessor> {
     tokio_client_config: Arc<TokioClientConfig>,
     //cache connection
     connection_tables: Arc<Mutex<HashMap<String /* ip:port */, Client>>>,
-    namesrv_addr_list: ArcRefCellWrapper<Vec<String>>,
-    namesrv_addr_choosed: ArcRefCellWrapper<Option<String>>,
-    available_namesrv_addr_set: ArcRefCellWrapper<HashSet<String>>,
+    namesrv_addr_list: ArcMut<Vec<String>>,
+    namesrv_addr_choosed: ArcMut<Option<String>>,
+    available_namesrv_addr_set: ArcMut<HashSet<String>>,
     namesrv_index: Arc<AtomicI32>,
     client_runtime: Arc<RocketMQRuntime>,
     processor: PR,
@@ -72,9 +72,9 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         Self {
             tokio_client_config,
             connection_tables: Arc::new(Mutex::new(Default::default())),
-            namesrv_addr_list: ArcRefCellWrapper::new(Default::default()),
-            namesrv_addr_choosed: ArcRefCellWrapper::new(Default::default()),
-            available_namesrv_addr_set: ArcRefCellWrapper::new(Default::default()),
+            namesrv_addr_list: ArcMut::new(Default::default()),
+            namesrv_addr_choosed: ArcMut::new(Default::default()),
+            available_namesrv_addr_set: ArcMut::new(Default::default()),
             namesrv_index: Arc::new(AtomicI32::new(init_value_index())),
             client_runtime: Arc::new(RocketMQRuntime::new_multi(10, "client-thread")),
             processor,
@@ -239,7 +239,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
 
 #[allow(unused_variables)]
 impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingService for RocketmqDefaultClient<PR> {
-    async fn start(&self, this: WeakCellWrapper<Self>) {
+    async fn start(&self, this: WeakArcMut<Self>) {
         if let Some(client) = this.upgrade() {
             client.scan_available_name_srv().await;
             self.client_runtime.get_handle().spawn(async move {

@@ -25,14 +25,14 @@ use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::utils::util_all;
-use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::TimeUtils::get_current_millis;
-use rocketmq_common::WeakCellWrapper;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+use rocketmq_rust::ArcMut;
+use rocketmq_rust::WeakArcMut;
 use tokio::sync::RwLock;
 use tracing::info;
 use tracing::warn;
@@ -61,16 +61,13 @@ static UNLOCK_DELAY_TIME_MILLS: Lazy<u64> = Lazy::new(|| {
 
 pub struct RebalancePushImpl {
     pub(crate) client_config: ClientConfig,
-    pub(crate) consumer_config: ArcRefCellWrapper<ConsumerConfig>,
+    pub(crate) consumer_config: ArcMut<ConsumerConfig>,
     pub(crate) rebalance_impl_inner: RebalanceImpl<RebalancePushImpl>,
-    pub(crate) default_mqpush_consumer_impl: Option<WeakCellWrapper<DefaultMQPushConsumerImpl>>,
+    pub(crate) default_mqpush_consumer_impl: Option<WeakArcMut<DefaultMQPushConsumerImpl>>,
 }
 
 impl RebalancePushImpl {
-    pub fn new(
-        client_config: ClientConfig,
-        consumer_config: ArcRefCellWrapper<ConsumerConfig>,
-    ) -> Self {
+    pub fn new(client_config: ClientConfig, consumer_config: ArcMut<ConsumerConfig>) -> Self {
         RebalancePushImpl {
             client_config,
             consumer_config,
@@ -87,7 +84,7 @@ impl RebalancePushImpl {
 
     pub fn set_default_mqpush_consumer_impl(
         &mut self,
-        default_mqpush_consumer_impl: WeakCellWrapper<DefaultMQPushConsumerImpl>,
+        default_mqpush_consumer_impl: WeakArcMut<DefaultMQPushConsumerImpl>,
     ) {
         self.default_mqpush_consumer_impl = Some(default_mqpush_consumer_impl);
     }
@@ -108,7 +105,7 @@ impl RebalancePushImpl {
             Some(allocate_message_queue_strategy);
     }
 
-    pub fn set_mq_client_factory(&mut self, client_instance: ArcRefCellWrapper<MQClientInstance>) {
+    pub fn set_mq_client_factory(&mut self, client_instance: ArcMut<MQClientInstance>) {
         self.rebalance_impl_inner.client_instance = Some(client_instance);
     }
 
@@ -122,7 +119,7 @@ impl RebalancePushImpl {
         subscription_inner.insert(topic.to_string(), subscription_data);
     }
 
-    pub fn set_rebalance_impl(&mut self, rebalance_impl: WeakCellWrapper<RebalancePushImpl>) {
+    pub fn set_rebalance_impl(&mut self, rebalance_impl: WeakArcMut<RebalancePushImpl>) {
         self.rebalance_impl_inner.sub_rebalance_impl = Some(rebalance_impl);
     }
 

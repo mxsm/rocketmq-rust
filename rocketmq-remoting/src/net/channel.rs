@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::SinkExt;
-use rocketmq_common::ArcRefCellWrapper;
+use rocketmq_rust::ArcMut;
 use tokio::sync::mpsc::Receiver;
 use tokio::time::timeout;
 use tracing::error;
@@ -44,8 +44,8 @@ pub struct Channel {
     remote_address: SocketAddr,
     channel_id: String,
     tx: tokio::sync::mpsc::Sender<ChannelMessage>,
-    pub(crate) connection: ArcRefCellWrapper<Connection>,
-    pub(crate) response_table: ArcRefCellWrapper<HashMap<i32, ResponseFuture>>,
+    pub(crate) connection: ArcMut<Connection>,
+    pub(crate) response_table: ArcMut<HashMap<i32, ResponseFuture>>,
 }
 
 type ChannelMessage = (
@@ -55,9 +55,9 @@ type ChannelMessage = (
 );
 
 pub(crate) async fn run_send(
-    mut connection: ArcRefCellWrapper<Connection>,
+    mut connection: ArcMut<Connection>,
     mut rx: Receiver<ChannelMessage>,
-    mut response_table: ArcRefCellWrapper<HashMap<i32, ResponseFuture>>,
+    mut response_table: ArcMut<HashMap<i32, ResponseFuture>>,
 ) {
     while let Some((request, tx, timeout_millis)) = rx.recv().await {
         let opaque = request.opaque();
@@ -134,12 +134,12 @@ impl Channel {
         local_address: SocketAddr,
         remote_address: SocketAddr,
         connection: Connection,
-        response_table: ArcRefCellWrapper<HashMap<i32, ResponseFuture>>,
+        response_table: ArcMut<HashMap<i32, ResponseFuture>>,
     ) -> Self {
         let channel_id = Uuid::new_v4().to_string();
         let (tx, rx) = tokio::sync::mpsc::channel(1024);
-        //let response_table = ArcRefCellWrapper::new(HashMap::with_capacity(32));
-        let connection = ArcRefCellWrapper::new(connection);
+        //let response_table = ArcMut::new(HashMap::with_capacity(32));
+        let connection = ArcMut::new(connection);
         tokio::spawn(run_send(connection.clone(), rx, response_table.clone()));
         Self {
             local_address,
@@ -173,7 +173,7 @@ impl Channel {
         self.channel_id.as_str()
     }
 
-    pub fn connection(&self) -> ArcRefCellWrapper<Connection> {
+    pub fn connection(&self) -> ArcMut<Connection> {
         self.connection.clone()
     }
     pub fn connection_ref(&self) -> &Connection {

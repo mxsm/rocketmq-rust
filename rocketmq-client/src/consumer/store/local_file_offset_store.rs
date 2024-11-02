@@ -24,9 +24,9 @@ use std::sync::Arc;
 use once_cell::sync::Lazy;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::utils::file_utils;
-use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
+use rocketmq_rust::ArcMut;
 use tokio::sync::Mutex;
 use tracing::error;
 use tracing::info;
@@ -56,14 +56,14 @@ static LOCAL_OFFSET_STORE_DIR: Lazy<PathBuf> = Lazy::new(|| {
 });
 
 pub struct LocalFileOffsetStore {
-    client_instance: ArcRefCellWrapper<MQClientInstance>,
+    client_instance: ArcMut<MQClientInstance>,
     group_name: String,
     store_path: String,
     offset_table: Arc<Mutex<HashMap<MessageQueue, ControllableOffset>>>,
 }
 
 impl LocalFileOffsetStore {
-    pub fn new(client_instance: ArcRefCellWrapper<MQClientInstance>, group_name: String) -> Self {
+    pub fn new(client_instance: ArcMut<MQClientInstance>, group_name: String) -> Self {
         let store_path = LOCAL_OFFSET_STORE_DIR
             .clone()
             .join(client_instance.client_id.as_str())

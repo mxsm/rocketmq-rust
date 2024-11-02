@@ -19,9 +19,9 @@ use std::sync::Arc;
 use rocketmq_common::common::message::message_client_ext::MessageClientExt;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::ArcRefCellWrapper;
-use rocketmq_common::WeakCellWrapper;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
+use rocketmq_rust::ArcMut;
+use rocketmq_rust::WeakArcMut;
 
 use crate::base::client_config::ClientConfig;
 use crate::consumer::consumer_impl::consume_message_service::ConsumeMessageServiceTrait;
@@ -32,17 +32,17 @@ use crate::consumer::default_mq_push_consumer::ConsumerConfig;
 use crate::consumer::listener::message_listener_concurrently::ArcBoxMessageListenerConcurrently;
 
 pub struct ConsumeMessagePopConcurrentlyService {
-    pub(crate) default_mqpush_consumer_impl: Option<WeakCellWrapper<DefaultMQPushConsumerImpl>>,
-    pub(crate) client_config: ArcRefCellWrapper<ClientConfig>,
-    pub(crate) consumer_config: ArcRefCellWrapper<ConsumerConfig>,
+    pub(crate) default_mqpush_consumer_impl: Option<WeakArcMut<DefaultMQPushConsumerImpl>>,
+    pub(crate) client_config: ArcMut<ClientConfig>,
+    pub(crate) consumer_config: ArcMut<ConsumerConfig>,
     pub(crate) consumer_group: Arc<String>,
     pub(crate) message_listener: ArcBoxMessageListenerConcurrently,
 }
 
 impl ConsumeMessagePopConcurrentlyService {
     pub fn new(
-        client_config: ArcRefCellWrapper<ClientConfig>,
-        consumer_config: ArcRefCellWrapper<ConsumerConfig>,
+        client_config: ArcMut<ClientConfig>,
+        consumer_config: ArcMut<ConsumerConfig>,
         consumer_group: String,
         message_listener: ArcBoxMessageListenerConcurrently,
     ) -> Self {
@@ -57,7 +57,7 @@ impl ConsumeMessagePopConcurrentlyService {
 }
 
 impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
-    fn start(&mut self, this: WeakCellWrapper<Self>) {
+    fn start(&mut self, this: WeakArcMut<Self>) {
         //todo!()
     }
 
@@ -91,8 +91,8 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
 
     async fn submit_consume_request(
         &self,
-        this: WeakCellWrapper<Self>,
-        msgs: Vec<ArcRefCellWrapper<MessageClientExt>>,
+        this: WeakArcMut<Self>,
+        msgs: Vec<ArcMut<MessageClientExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
         dispatch_to_consume: bool,

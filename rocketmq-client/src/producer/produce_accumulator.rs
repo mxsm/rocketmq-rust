@@ -27,8 +27,8 @@ use std::thread::Builder;
 
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::MessageTrait;
-use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_rust::ArcMut;
 use tokio::sync::Mutex;
 
 use crate::producer::default_mq_producer::DefaultMQProducer;
@@ -46,8 +46,8 @@ pub struct ProduceAccumulator {
     currently_hold_size: AtomicU64,
     instance_name: String,
     currently_hold_size_lock: Arc<parking_lot::Mutex<()>>,
-    sync_send_batchs: Arc<Mutex<HashMap<AggregateKey, ArcRefCellWrapper<MessageAccumulation>>>>,
-    async_send_batchs: Arc<Mutex<HashMap<AggregateKey, ArcRefCellWrapper<MessageAccumulation>>>>,
+    sync_send_batchs: Arc<Mutex<HashMap<AggregateKey, ArcMut<MessageAccumulation>>>>,
+    async_send_batchs: Arc<Mutex<HashMap<AggregateKey, ArcMut<MessageAccumulation>>>>,
 }
 
 impl ProduceAccumulator {
@@ -122,7 +122,7 @@ impl ProduceAccumulator {
         &mut self,
         aggregate_key: AggregateKey,
         default_mq_producer: &DefaultMQProducer,
-    ) -> ArcRefCellWrapper<MessageAccumulation> {
+    ) -> ArcMut<MessageAccumulation> {
         unimplemented!("getOrCreateAsyncSendBatch")
     }
 }
@@ -190,7 +190,7 @@ impl Hash for AggregateKey {
 }
 
 struct MessageAccumulation {
-    default_mq_producer: ArcRefCellWrapper<DefaultMQProducer>,
+    default_mq_producer: ArcMut<DefaultMQProducer>,
     messages: Vec<Box<dyn MessageTrait + Send + Sync + 'static>>,
     send_callbacks: Vec<SendMessageCallback>,
     keys: HashSet<String>,
@@ -205,7 +205,7 @@ struct MessageAccumulation {
 impl MessageAccumulation {
     pub fn new(
         aggregate_key: AggregateKey,
-        default_mq_producer: ArcRefCellWrapper<DefaultMQProducer>,
+        default_mq_producer: ArcMut<DefaultMQProducer>,
     ) -> Self {
         Self {
             default_mq_producer,

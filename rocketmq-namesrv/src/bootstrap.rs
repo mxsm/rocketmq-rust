@@ -20,12 +20,12 @@ use std::time::Duration;
 
 use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_common::common::server::config::ServerConfig;
-use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
 use rocketmq_remoting::remoting_server::server::RocketMQServer;
 use rocketmq_remoting::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_runtime::RocketMQRuntime;
+use rocketmq_rust::ArcMut;
 use tokio::select;
 use tokio::sync::broadcast;
 
@@ -50,7 +50,7 @@ struct NameServerRuntime {
     route_info_manager: Arc<parking_lot::RwLock<RouteInfoManager>>,
     kvconfig_manager: Arc<parking_lot::RwLock<KVConfigManager>>,
     name_server_runtime: Option<RocketMQRuntime>,
-    remoting_client: ArcRefCellWrapper<RocketmqDefaultClient>,
+    remoting_client: ArcMut<RocketmqDefaultClient>,
 }
 
 impl NameServerBootstrap {
@@ -143,7 +143,7 @@ impl Builder {
         let name_server_config = Arc::new(self.name_server_config.unwrap());
         let runtime = RocketMQRuntime::new_multi(10, "namesrv-thread");
         let tokio_client_config = Arc::new(TokioClientConfig::default());
-        let remoting_client = ArcRefCellWrapper::new(RocketmqDefaultClient::new(
+        let remoting_client = ArcMut::new(RocketmqDefaultClient::new(
             tokio_client_config.clone(),
             DefaultRemotingRequestProcessor,
         ));

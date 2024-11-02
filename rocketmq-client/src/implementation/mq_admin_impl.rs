@@ -15,8 +15,8 @@
  * limitations under the License.
  */
 use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
+use rocketmq_rust::ArcMut;
 
 use crate::base::client_config::ClientConfig;
 use crate::error::MQClientError::MQClientErr;
@@ -27,7 +27,7 @@ use crate::Result;
 
 pub struct MQAdminImpl {
     timeout_millis: u64,
-    client: Option<ArcRefCellWrapper<MQClientInstance>>,
+    client: Option<ArcMut<MQClientInstance>>,
 }
 
 impl MQAdminImpl {
@@ -38,7 +38,7 @@ impl MQAdminImpl {
         }
     }
 
-    pub fn set_client(&mut self, client: ArcRefCellWrapper<MQClientInstance>) {
+    pub fn set_client(&mut self, client: ArcMut<MQClientInstance>) {
         self.client = Some(client);
     }
 }
@@ -72,7 +72,7 @@ impl MQAdminImpl {
     pub async fn fetch_publish_message_queues(
         &mut self,
         topic: &str,
-        mq_client_api_impl: ArcRefCellWrapper<MQClientAPIImpl>,
+        mq_client_api_impl: ArcMut<MQClientAPIImpl>,
         client_config: &mut ClientConfig,
     ) -> Result<Vec<MessageQueue>> {
         let topic_route_data = mq_client_api_impl

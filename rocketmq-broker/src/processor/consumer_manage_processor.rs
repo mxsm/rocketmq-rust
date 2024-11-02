@@ -18,7 +18,6 @@
 use std::sync::Arc;
 
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
@@ -32,6 +31,7 @@ use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_rust::ArcMut;
 use rocketmq_store::log_file::MessageStore;
 use tracing::info;
 use tracing::warn;
@@ -49,7 +49,7 @@ pub struct ConsumerManageProcessor<MS> {
     consumer_offset_manager: Arc<ConsumerOffsetManager>,
     subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
     topic_config_manager: Arc<TopicConfigManager>,
-    message_store: ArcRefCellWrapper<MS>,
+    message_store: ArcMut<MS>,
 }
 
 impl<MS> ConsumerManageProcessor<MS>
@@ -63,7 +63,7 @@ where
         subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
         consumer_offset_manager: Arc<ConsumerOffsetManager>,
         topic_config_manager: Arc<TopicConfigManager>,
-        message_store: ArcRefCellWrapper<MS>,
+        message_store: ArcMut<MS>,
     ) -> Self {
         Self {
             broker_config,

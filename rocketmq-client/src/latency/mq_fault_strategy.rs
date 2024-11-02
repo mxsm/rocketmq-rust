@@ -20,7 +20,7 @@ use std::sync::atomic::Ordering;
 use std::thread::scope;
 
 use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::ArcRefCellWrapper;
+use rocketmq_rust::ArcMut;
 use tokio::runtime::Handle;
 
 use crate::base::client_config::ClientConfig;
@@ -37,7 +37,7 @@ thread_local! {
 
 pub struct MQFaultStrategy {
     latency_fault_tolerance:
-        ArcRefCellWrapper<LatencyFaultToleranceImpl<DefaultResolver, DefaultServiceDetector>>,
+        ArcMut<LatencyFaultToleranceImpl<DefaultResolver, DefaultServiceDetector>>,
     send_latency_fault_enable: AtomicBool,
     start_detector_enable: AtomicBool,
     latency_max: &'static [u64],
@@ -50,7 +50,7 @@ impl MQFaultStrategy {
     pub fn new(client_config: &ClientConfig) -> Self {
         let mut tolerance_impl = LatencyFaultToleranceImpl::new();
         tolerance_impl.set_start_detector_enable(client_config.start_detector_enable);
-        let latency_fault_tolerance = ArcRefCellWrapper::new(tolerance_impl);
+        let latency_fault_tolerance = ArcMut::new(tolerance_impl);
         Self {
             latency_fault_tolerance: latency_fault_tolerance.clone(),
             send_latency_fault_enable: AtomicBool::new(client_config.send_latency_enable),
@@ -183,7 +183,7 @@ impl QueueFilter for BrokerFilter {
 
 struct ReachableFilter {
     latency_fault_tolerance:
-        ArcRefCellWrapper<LatencyFaultToleranceImpl<DefaultResolver, DefaultServiceDetector>>,
+        ArcMut<LatencyFaultToleranceImpl<DefaultResolver, DefaultServiceDetector>>,
 }
 
 impl QueueFilter for ReachableFilter {
@@ -205,7 +205,7 @@ impl QueueFilter for ReachableFilter {
 
 struct AvailableFilter {
     latency_fault_tolerance:
-        ArcRefCellWrapper<LatencyFaultToleranceImpl<DefaultResolver, DefaultServiceDetector>>,
+        ArcMut<LatencyFaultToleranceImpl<DefaultResolver, DefaultServiceDetector>>,
 }
 
 impl QueueFilter for AvailableFilter {

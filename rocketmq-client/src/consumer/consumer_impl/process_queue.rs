@@ -26,12 +26,12 @@ use rocketmq_common::common::message::message_client_ext::MessageClientExt;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
-use rocketmq_common::ArcRefCellWrapper;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::TimeUtils::get_current_millis;
-use rocketmq_common::WeakCellWrapper;
 use rocketmq_remoting::protocol::body::process_queue_info::ProcessQueueInfo;
+use rocketmq_rust::ArcMut;
 use rocketmq_rust::RocketMQTokioRwLock;
+use rocketmq_rust::WeakArcMut;
 use tokio::sync::RwLock;
 
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
@@ -54,13 +54,12 @@ pub static REBALANCE_LOCK_INTERVAL: Lazy<u64> = Lazy::new(|| {
 #[derive(Clone)]
 pub(crate) struct ProcessQueue {
     pub(crate) tree_map_lock: Arc<RwLock<()>>,
-    pub(crate) msg_tree_map:
-        Arc<RwLock<std::collections::BTreeMap<i64, ArcRefCellWrapper<MessageClientExt>>>>,
+    pub(crate) msg_tree_map: Arc<RwLock<std::collections::BTreeMap<i64, ArcMut<MessageClientExt>>>>,
     pub(crate) msg_count: Arc<AtomicU64>,
     pub(crate) msg_size: Arc<AtomicU64>,
     pub(crate) consume_lock: Arc<RocketMQTokioRwLock<()>>,
     pub(crate) consuming_msg_orderly_tree_map:
-        Arc<RwLock<std::collections::BTreeMap<i64, ArcRefCellWrapper<MessageClientExt>>>>,
+        Arc<RwLock<std::collections::BTreeMap<i64, ArcMut<MessageClientExt>>>>,
     pub(crate) try_unlock_times: Arc<AtomicI64>,
     pub(crate) queue_offset_max: Arc<AtomicU64>,
     pub(crate) dropped: Arc<AtomicBool>,
@@ -132,7 +131,7 @@ impl ProcessQueue {
 
     pub(crate) async fn clean_expired_msg(
         &self,
-        push_consumer: Option<WeakCellWrapper<DefaultMQPushConsumerImpl>>,
+        push_consumer: Option<WeakArcMut<DefaultMQPushConsumerImpl>>,
     ) {
         if push_consumer.is_none() {
             return;
@@ -193,10 +192,7 @@ impl ProcessQueue {
         }
     }
 
-    pub(crate) async fn put_message(
-        &self,
-        messages: Vec<ArcRefCellWrapper<MessageClientExt>>,
-    ) -> bool {
+    pub(crate) async fn put_message(&self, messages: Vec<ArcMut<MessageClientExt>>) -> bool {
         let mut dispatch_to_consume = false;
         let mut msg_tree_map = self.msg_tree_map.write().await;
         let mut valid_msg_cnt = 0;
@@ -250,10 +246,7 @@ impl ProcessQueue {
         (last.0 - first.0) as u64
     }
 
-    pub(crate) async fn remove_message(
-        &self,
-        messages: &[ArcRefCellWrapper<MessageClientExt>],
-    ) -> i64 {
+    pub(crate) async fn remove_message(&self, messages: &[ArcMut<MessageClientExt>]) -> i64 {
         let mut result = -1;
         let mut msg_tree_map = self.msg_tree_map.write().await;
         if msg_tree_map.is_empty() {
@@ -318,7 +311,7 @@ impl ProcessQueue {
 
     pub(crate) async fn make_message_to_consume_again(
         &self,
-        messages: &[ArcRefCellWrapper<MessageClientExt>],
+        messages: &[ArcMut<MessageClientExt>],
     ) {
         let mut consuming_msg_orderly_tree_map = self.consuming_msg_orderly_tree_map.write().await;
         let mut msg_tree_map = self.msg_tree_map.write().await;
@@ -328,10 +321,7 @@ impl ProcessQueue {
         }
     }
 
-    pub(crate) async fn take_messages(
-        &self,
-        batch_size: u32,
-    ) -> Vec<ArcRefCellWrapper<MessageClientExt>> {
+    pub(crate) async fn take_messages(&self, batch_size: u32) -> Vec<ArcMut<MessageClientExt>> {
         let mut messages = Vec::with_capacity(batch_size as usize);
         let now = Instant::now();
         let mut msg_tree_map = self.msg_tree_map.write().await;
