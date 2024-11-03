@@ -288,7 +288,7 @@ where
         message_ext
             .message_ext_inner
             .message
-            .put_property(MessageConst::PROPERTY_CLUSTER, cluster_name.as_str());
+            .put_property(MessageConst::PROPERTY_CLUSTER.to_owned(), cluster_name);
 
         let mut batch_message = MessageExtBatch {
             message_ext_broker_inner: message_ext,
@@ -328,8 +328,8 @@ where
                 .message_ext_inner
                 .message
                 .put_property(
-                    MessageConst::PROPERTY_INNER_NUM,
-                    inner_num.to_string().as_str(),
+                    MessageConst::PROPERTY_INNER_NUM.to_owned(),
+                    inner_num.to_string(),
                 );
             batch_message.message_ext_broker_inner.properties_string = message_properties_to_string(
                 batch_message

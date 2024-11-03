@@ -174,18 +174,18 @@ impl PullAPIWrapper {
                     if let Some(transaction_id) =
                         msg.get_property(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX)
                     {
-                        msg.set_transaction_id(transaction_id.as_str());
+                        msg.set_transaction_id(transaction_id);
                     }
                 }
                 MessageAccessor::put_property(
                     msg,
-                    MessageConst::PROPERTY_MIN_OFFSET,
-                    pull_result_ext.pull_result.min_offset.to_string().as_str(),
+                    MessageConst::PROPERTY_MIN_OFFSET.to_owned(),
+                    pull_result_ext.pull_result.min_offset.to_string(),
                 );
                 MessageAccessor::put_property(
                     msg,
-                    MessageConst::PROPERTY_MAX_OFFSET,
-                    pull_result_ext.pull_result.max_offset.to_string().as_str(),
+                    MessageConst::PROPERTY_MAX_OFFSET.to_owned(),
+                    pull_result_ext.pull_result.max_offset.to_string(),
                 );
                 msg.message_ext_inner.broker_name = message_queue.get_broker_name().to_string();
                 msg.message_ext_inner.queue_id = message_queue.get_queue_id();

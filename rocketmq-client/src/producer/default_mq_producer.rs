@@ -478,11 +478,11 @@ impl DefaultMQProducer {
                 for message in msg_batch.messages.as_mut().unwrap() {
                     Validators::check_message(Some(message), &self.producer_config)?;
                     MessageClientIDSetter::set_uniq_id(message);
-                    message.set_topic(self.with_namespace(message.get_topic()).as_str());
+                    message.set_topic(self.with_namespace(message.get_topic()));
                 }
                 MessageClientIDSetter::set_uniq_id(&mut msg_batch.final_message);
                 msg_batch.set_body(msg_batch.encode());
-                msg_batch.set_topic(self.with_namespace(msg_batch.get_topic()).as_str());
+                msg_batch.set_topic(self.with_namespace(msg_batch.get_topic()));
                 Ok(msg_batch)
             }
             Err(err) => {
@@ -683,7 +683,7 @@ impl MQProducer for DefaultMQProducer {
     where
         M: MessageTrait + Clone + Send + Sync,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
+        msg.set_topic(self.with_namespace(msg.get_topic()));
 
         let result =
             if self.get_auto_batch() && msg.as_any().downcast_ref::<MessageBatch>().is_none() {
@@ -710,7 +710,7 @@ impl MQProducer for DefaultMQProducer {
         M: MessageTrait + Clone + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
+        msg.set_topic(self.with_namespace(msg.get_topic()));
         let send_callback_inner = Arc::new(send_callback);
         let result =
             if self.get_auto_batch() && msg.as_any().downcast_ref::<MessageBatch>().is_none() {
@@ -735,7 +735,7 @@ impl MQProducer for DefaultMQProducer {
     where
         F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
     {
-        msg.set_topic(self.with_namespace(msg.topic.as_str()).as_str());
+        msg.set_topic(self.with_namespace(msg.topic.as_str()));
         self.default_mqproducer_impl
             .as_mut()
             .unwrap()
@@ -748,7 +748,7 @@ impl MQProducer for DefaultMQProducer {
     where
         M: MessageTrait + Clone + Send + Sync,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
+        msg.set_topic(self.with_namespace(msg.get_topic()));
         self.default_mqproducer_impl
             .as_mut()
             .unwrap()
@@ -761,7 +761,7 @@ impl MQProducer for DefaultMQProducer {
     where
         M: MessageTrait + Clone + Send + Sync,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
+        msg.set_topic(self.with_namespace(msg.get_topic()));
         let mq = self.client_config.queue_with_namespace(mq);
         let result =
             if self.get_auto_batch() && msg.as_any().downcast_ref::<MessageBatch>().is_none() {
@@ -781,7 +781,7 @@ impl MQProducer for DefaultMQProducer {
     where
         M: MessageTrait + Clone + Send + Sync,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
+        msg.set_topic(self.with_namespace(msg.get_topic()));
         let mq = self.client_config.queue_with_namespace(mq);
         let result = self
             .default_mqproducer_impl
@@ -802,7 +802,7 @@ impl MQProducer for DefaultMQProducer {
         M: MessageTrait + Clone + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
+        msg.set_topic(self.with_namespace(msg.get_topic()));
         let mq = self.client_config.queue_with_namespace(mq);
 
         if self.get_auto_batch() && msg.as_any().downcast_ref::<MessageBatch>().is_none() {
@@ -827,7 +827,7 @@ impl MQProducer for DefaultMQProducer {
         M: MessageTrait + Clone + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
+        msg.set_topic(self.with_namespace(msg.get_topic()));
         self.default_mqproducer_impl
             .as_mut()
             .unwrap()
@@ -844,7 +844,7 @@ impl MQProducer for DefaultMQProducer {
     where
         M: MessageTrait + Clone + Send + Sync,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
+        msg.set_topic(self.with_namespace(msg.get_topic()));
         let mq = self.client_config.queue_with_namespace(mq);
         self.default_mqproducer_impl
             .as_mut()
@@ -867,7 +867,7 @@ impl MQProducer for DefaultMQProducer {
             + 'static,
         T: std::any::Any + Send + Sync,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
+        msg.set_topic(self.with_namespace(msg.get_topic()));
         let mq = self
             .default_mqproducer_impl
             .as_mut()
@@ -905,7 +905,7 @@ impl MQProducer for DefaultMQProducer {
             + 'static,
         T: std::any::Any + Sync + Send,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
+        msg.set_topic(self.with_namespace(msg.get_topic()));
         self.default_mqproducer_impl
             .as_mut()
             .unwrap()
@@ -928,7 +928,7 @@ impl MQProducer for DefaultMQProducer {
             + 'static,
         T: std::any::Any + Sync + Send,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
+        msg.set_topic(self.with_namespace(msg.get_topic()));
         let mq = self
             .default_mqproducer_impl
             .as_mut()
@@ -965,7 +965,7 @@ impl MQProducer for DefaultMQProducer {
             + 'static,
         T: std::any::Any + Sync + Send,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
+        msg.set_topic(self.with_namespace(msg.get_topic()));
         self.default_mqproducer_impl
             .as_mut()
             .unwrap()
@@ -993,7 +993,7 @@ impl MQProducer for DefaultMQProducer {
             + 'static,
         T: std::any::Any + Sync + Send,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
+        msg.set_topic(self.with_namespace(msg.get_topic()));
         self.default_mqproducer_impl
             .as_mut()
             .unwrap()
@@ -1139,7 +1139,7 @@ impl MQProducer for DefaultMQProducer {
     where
         M: MessageTrait + Clone + Send + Sync,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
+        msg.set_topic(self.with_namespace(msg.get_topic()));
         self.default_mqproducer_impl
             .as_mut()
             .unwrap()
@@ -1157,7 +1157,7 @@ impl MQProducer for DefaultMQProducer {
         F: Fn(Option<&dyn MessageTrait>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
         M: MessageTrait + Clone + Send + Sync,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
+        msg.set_topic(self.with_namespace(msg.get_topic()));
         self.default_mqproducer_impl
             .as_mut()
             .unwrap()
@@ -1180,7 +1180,7 @@ impl MQProducer for DefaultMQProducer {
         T: std::any::Any + Sync + Send,
         M: MessageTrait + Clone + Send + Sync,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
+        msg.set_topic(self.with_namespace(msg.get_topic()));
         self.default_mqproducer_impl
             .as_mut()
             .unwrap()
@@ -1205,7 +1205,7 @@ impl MQProducer for DefaultMQProducer {
         T: std::any::Any + Sync + Send,
         M: MessageTrait + Clone + Send + Sync,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
+        msg.set_topic(self.with_namespace(msg.get_topic()));
         self.default_mqproducer_impl
             .as_mut()
             .unwrap()
@@ -1222,7 +1222,7 @@ impl MQProducer for DefaultMQProducer {
     where
         M: MessageTrait + Clone + Send + Sync,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
+        msg.set_topic(self.with_namespace(msg.get_topic()));
         self.default_mqproducer_impl
             .as_mut()
             .unwrap()
@@ -1241,7 +1241,7 @@ impl MQProducer for DefaultMQProducer {
         F: Fn(Option<&dyn MessageTrait>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
         M: MessageTrait + Clone + Send + Sync,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()).as_str());
+        msg.set_topic(self.with_namespace(msg.get_topic()));
         self.default_mqproducer_impl
             .as_mut()
             .unwrap()

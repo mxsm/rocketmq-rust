@@ -318,11 +318,7 @@ impl MQProducer for TransactionMQProducer {
     where
         T: std::any::Any + Sync + Send,
     {
-        msg.set_topic(
-            self.default_producer
-                .with_namespace(msg.get_topic())
-                .as_str(),
-        );
+        msg.set_topic(self.default_producer.with_namespace(msg.get_topic()));
         self.default_producer
             .default_mqproducer_impl
             .as_mut()

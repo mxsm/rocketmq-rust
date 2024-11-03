@@ -34,19 +34,19 @@ impl MessageUtil {
         if let Some(cluster) = cluster {
             reply_message.set_body(Bytes::copy_from_slice(body));
             let reply_topic = mix_all::get_retry_topic(&cluster);
-            reply_message.set_topic(&reply_topic);
+            reply_message.set_topic(reply_topic);
             MessageAccessor::put_property(
                 &mut reply_message,
-                MessageConst::PROPERTY_MESSAGE_TYPE,
-                mix_all::REPLY_MESSAGE_FLAG,
+                MessageConst::PROPERTY_MESSAGE_TYPE.to_owned(),
+                mix_all::REPLY_MESSAGE_FLAG.to_owned(),
             );
             if let Some(reply_to) =
                 request_message.get_property(MessageConst::PROPERTY_MESSAGE_REPLY_TO_CLIENT)
             {
                 MessageAccessor::put_property(
                     &mut reply_message,
-                    MessageConst::PROPERTY_MESSAGE_REPLY_TO_CLIENT,
-                    reply_to.as_str(),
+                    MessageConst::PROPERTY_MESSAGE_REPLY_TO_CLIENT.to_owned(),
+                    reply_to,
                 );
             }
             if let Some(correlation_id) =
@@ -54,15 +54,15 @@ impl MessageUtil {
             {
                 MessageAccessor::put_property(
                     &mut reply_message,
-                    MessageConst::PROPERTY_CORRELATION_ID,
-                    correlation_id.as_str(),
+                    MessageConst::PROPERTY_CORRELATION_ID.to_owned(),
+                    correlation_id,
                 );
             }
             if let Some(ttl) = request_message.get_property(MessageConst::PROPERTY_MESSAGE_TTL) {
                 MessageAccessor::put_property(
                     &mut reply_message,
-                    MessageConst::PROPERTY_MESSAGE_TTL,
-                    ttl.as_str(),
+                    MessageConst::PROPERTY_MESSAGE_TTL.to_owned(),
+                    ttl,
                 );
             }
             Ok(reply_message)
@@ -98,7 +98,7 @@ mod tests {
     fn create_test_message(properties: HashMap<&str, &str>) -> Message {
         let mut message = Message::default();
         for (key, value) in properties {
-            MessageAccessor::put_property(&mut message, key, value);
+            MessageAccessor::put_property(&mut message, key.to_owned(), value.to_owned());
         }
         message
     }

@@ -408,7 +408,7 @@ impl DefaultMQProducerImpl {
                         .unwrap_or("".to_string())
                         .as_str(),
                 );
-                user_message.set_topic(user_topic.as_str());
+                user_message.set_topic(user_topic);
                 let message_queue = selector(&message_queue_list, &msg, &arg);
                 let cost_time = begin_start_time.elapsed().as_millis() as u64;
                 if timeout < cost_time {
@@ -726,10 +726,10 @@ impl DefaultMQProducerImpl {
                             //Reset topic with namespace during resend.
                             let namespace =
                                 self.client_config.get_namespace().unwrap_or("".to_string());
-                            msg.set_topic(
-                                NamespaceUtil::wrap_namespace(namespace.as_str(), topic.as_str())
-                                    .as_str(),
-                            );
+                            msg.set_topic(NamespaceUtil::wrap_namespace(
+                                namespace.as_str(),
+                                topic.as_str(),
+                            ));
                         }
                         let cost_time =
                             (begin_timestamp_prev - begin_timestamp_first).as_millis() as u64;
@@ -996,7 +996,7 @@ impl DefaultMQProducerImpl {
         }
         let mut topic_with_namespace = false;
         if self.client_config.get_namespace().is_some() {
-            msg.set_instance_id(self.client_config.get_namespace().unwrap().as_str());
+            msg.set_instance_id(self.client_config.get_namespace().unwrap());
             topic_with_namespace = true;
         }
         let mut sys_flag = 0i32;
@@ -1113,16 +1113,13 @@ impl DefaultMQProducerImpl {
         let send_result = match communication_mode {
             CommunicationMode::Async => {
                 if topic_with_namespace {
-                    msg.set_topic(
-                        NamespaceUtil::without_namespace_with_namespace(
-                            msg.get_topic(),
-                            self.client_config
-                                .get_namespace()
-                                .unwrap_or(String::from(""))
-                                .as_str(),
-                        )
-                        .as_str(),
-                    );
+                    msg.set_topic(NamespaceUtil::without_namespace_with_namespace(
+                        msg.get_topic(),
+                        self.client_config
+                            .get_namespace()
+                            .unwrap_or(String::from(""))
+                            .as_str(),
+                    ));
                 }
                 let cost_time_sync = (Instant::now() - begin_start_time).as_millis() as u64;
                 self.client_instance
@@ -1362,7 +1359,7 @@ impl DefaultMQProducerImpl {
                         .unwrap_or("".to_string())
                         .as_str(),
                 );
-                user_message.set_topic(user_topic.as_str());
+                user_message.set_topic(user_topic);
                 let message_queue = selector(&message_queue_list, msg, arg);
                 let cost_time = begin_start_time.elapsed().as_millis() as u64;
                 if timeout < cost_time {
@@ -1799,18 +1796,18 @@ impl DefaultMQProducerImpl {
         let request_client_id = self.client_instance.as_mut().unwrap().client_id.clone();
         MessageAccessor::put_property(
             msg,
-            MessageConst::PROPERTY_CORRELATION_ID,
-            correlation_id.as_str(),
+            MessageConst::PROPERTY_CORRELATION_ID.to_owned(),
+            correlation_id,
         );
         MessageAccessor::put_property(
             msg,
-            MessageConst::PROPERTY_MESSAGE_REPLY_TO_CLIENT,
-            request_client_id.as_str(),
+            MessageConst::PROPERTY_MESSAGE_REPLY_TO_CLIENT.to_owned(),
+            request_client_id,
         );
         MessageAccessor::put_property(
             msg,
-            MessageConst::PROPERTY_MESSAGE_TTL,
-            timeout.to_string().as_str(),
+            MessageConst::PROPERTY_MESSAGE_TTL.to_owned(),
+            timeout.to_string(),
         );
         let guard = self
             .client_instance
@@ -1852,13 +1849,13 @@ impl DefaultMQProducerImpl {
         Validators::check_message(Some(&msg), self.producer_config.as_ref())?;
         MessageAccessor::put_property(
             &mut msg,
-            MessageConst::PROPERTY_TRANSACTION_PREPARED,
-            "true",
+            MessageConst::PROPERTY_TRANSACTION_PREPARED.to_owned(),
+            "true".to_owned(),
         );
         MessageAccessor::put_property(
             &mut msg,
-            MessageConst::PROPERTY_PRODUCER_GROUP,
-            self.producer_config.producer_group(),
+            MessageConst::PROPERTY_PRODUCER_GROUP.to_owned(),
+            self.producer_config.producer_group().to_owned(),
         );
         let result = self.send(&mut msg).await;
         if let Err(e) = result {
@@ -1872,14 +1869,14 @@ impl DefaultMQProducerImpl {
             SendStatus::SendOk => {
                 if let Some(ref transaction_id) = send_result.transaction_id {
                     msg.put_user_property(
-                        MessageConst::PROPERTY_TRANSACTION_ID,
-                        transaction_id.as_str(),
+                        MessageConst::PROPERTY_TRANSACTION_ID.to_owned(),
+                        transaction_id.to_owned(),
                     );
                 }
                 let transaction_id =
                     msg.get_property(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX);
                 if let Some(transaction_id) = transaction_id {
-                    msg.set_transaction_id(transaction_id.as_str());
+                    msg.set_transaction_id(transaction_id);
                 }
                 self.transaction_listener
                     .as_ref()

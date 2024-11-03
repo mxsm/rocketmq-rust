@@ -134,10 +134,8 @@ impl fmt::Display for MessageBatch {
 
 #[allow(unused_variables)]
 impl MessageTrait for MessageBatch {
-    fn put_property(&mut self, key: &str, value: &str) {
-        self.final_message
-            .properties
-            .insert(key.to_string(), value.to_string());
+    fn put_property(&mut self, key: String, value: String) {
+        self.final_message.properties.insert(key, value);
     }
 
     fn clear_property(&mut self, name: &str) {
@@ -152,8 +150,8 @@ impl MessageTrait for MessageBatch {
         &self.final_message.topic
     }
 
-    fn set_topic(&mut self, topic: &str) {
-        self.final_message.topic = topic.to_string();
+    fn set_topic(&mut self, topic: String) {
+        self.final_message.topic = topic;
     }
 
     fn get_flag(&self) -> i32 {
@@ -184,8 +182,8 @@ impl MessageTrait for MessageBatch {
         self.final_message.transaction_id.as_deref().unwrap()
     }
 
-    fn set_transaction_id(&mut self, transaction_id: &str) {
-        self.final_message.transaction_id = Some(transaction_id.to_string());
+    fn set_transaction_id(&mut self, transaction_id: String) {
+        self.final_message.transaction_id = Some(transaction_id);
     }
 
     fn get_compressed_body_mut(&mut self) -> &mut Option<Bytes> {

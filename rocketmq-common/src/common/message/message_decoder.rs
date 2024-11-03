@@ -462,7 +462,7 @@ pub fn decode_message_client(mut message_ext: MessageExt, vec_: &mut Vec<Message
                 ..MessageExt::default()
             },
         };
-        message_client_ext.set_topic(message_ext.get_topic());
+        message_client_ext.set_topic(message_ext.get_topic().to_owned());
         message_client_ext.message_ext_inner.queue_offset = message_ext.queue_offset;
         message_client_ext.message_ext_inner.queue_id = message_ext.queue_id;
         message_client_ext.set_flag(message_ext.get_flag());

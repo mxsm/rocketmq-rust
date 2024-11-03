@@ -212,7 +212,7 @@ impl ConsumeMessageConcurrentlyService {
         context: &ConsumeConcurrentlyContext,
     ) -> bool {
         let delay_level = context.delay_level_when_next_consume;
-        msg.set_topic(self.client_config.with_namespace(msg.get_topic()).as_str());
+        msg.set_topic(self.client_config.with_namespace(msg.get_topic()));
         match self
             .default_mqpush_consumer_impl
             .as_ref()
@@ -389,7 +389,7 @@ impl ConsumeRequest {
             for msg in self.msgs.iter_mut() {
                 MessageAccessor::set_consume_start_time_stamp(
                     &mut msg.message_ext_inner,
-                    get_current_millis().to_string().as_str(),
+                    get_current_millis().to_string(),
                 );
             }
             if default_mqpush_consumer_impl.has_hook() {

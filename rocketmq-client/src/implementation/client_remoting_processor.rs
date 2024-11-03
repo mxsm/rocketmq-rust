@@ -157,8 +157,8 @@ impl ClientRemotingProcessor {
         );
         MessageAccessor::put_property(
             &mut msg.message,
-            MessageConst::PROPERTY_REPLY_MESSAGE_ARRIVE_TIME,
-            receive_time.to_string().as_str(),
+            MessageConst::PROPERTY_REPLY_MESSAGE_ARRIVE_TIME.to_owned(),
+            receive_time.to_string(),
         );
         msg.born_timestamp = request_header.born_timestamp;
         msg.reconsume_times = request_header.reconsume_times.unwrap_or(0);
@@ -238,13 +238,13 @@ impl ClientRemotingProcessor {
                             .unwrap_or_default()
                             .as_str(),
                     );
-                    message_ext.set_topic(topic.as_str());
+                    message_ext.set_topic(topic);
                 }
                 let transaction_id =
                     message_ext.get_property(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX);
                 if let Some(transaction_id) = transaction_id {
                     if !transaction_id.is_empty() {
-                        message_ext.set_transaction_id(transaction_id.as_str());
+                        message_ext.set_transaction_id(transaction_id);
                     }
                 }
                 let group = message_ext.get_property(MessageConst::PROPERTY_PRODUCER_GROUP);
