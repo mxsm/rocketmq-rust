@@ -122,8 +122,8 @@ impl MessageClientIDSetter {
         {
             let uniq_id = Self::create_uniq_id();
             message.put_property(
-                MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
-                uniq_id.as_str(),
+                MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX.to_owned(),
+                uniq_id,
             );
         }
     }

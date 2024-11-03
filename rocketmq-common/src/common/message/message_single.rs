@@ -254,8 +254,8 @@ impl Display for Message {
 
 #[allow(unused_variables)]
 impl MessageTrait for Message {
-    fn put_property(&mut self, key: &str, value: &str) {
-        self.properties.insert(key.to_string(), value.to_string());
+    fn put_property(&mut self, key: String, value: String) {
+        self.properties.insert(key, value);
     }
 
     fn clear_property(&mut self, name: &str) {
@@ -270,8 +270,8 @@ impl MessageTrait for Message {
         &self.topic
     }
 
-    fn set_topic(&mut self, topic: &str) {
-        self.topic = topic.to_string();
+    fn set_topic(&mut self, topic: String) {
+        self.topic = topic;
     }
 
     #[inline]
@@ -306,8 +306,8 @@ impl MessageTrait for Message {
         self.transaction_id.as_deref().unwrap()
     }
 
-    fn set_transaction_id(&mut self, transaction_id: &str) {
-        self.transaction_id = Some(transaction_id.to_string());
+    fn set_transaction_id(&mut self, transaction_id: String) {
+        self.transaction_id = Some(transaction_id);
     }
 
     fn get_compressed_body_mut(&mut self) -> &mut Option<Bytes> {

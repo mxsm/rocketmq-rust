@@ -246,20 +246,17 @@ impl ConsumeMessageOrderlyService {
         MessageAccessor::set_properties(&mut new_msg, msg.get_properties().clone());
         let origin_msg_id =
             MessageAccessor::get_origin_message_id(msg).unwrap_or(msg.msg_id.clone());
-        MessageAccessor::set_origin_message_id(&mut new_msg, origin_msg_id.as_str());
+        MessageAccessor::set_origin_message_id(&mut new_msg, origin_msg_id);
         new_msg.set_flag(msg.get_flag());
         MessageAccessor::put_property(
             &mut new_msg,
-            MessageConst::PROPERTY_RETRY_TOPIC,
-            msg.get_topic(),
+            MessageConst::PROPERTY_RETRY_TOPIC.to_owned(),
+            msg.get_topic().to_owned(),
         );
-        MessageAccessor::set_reconsume_time(
-            &mut new_msg,
-            (msg.reconsume_times() + 1).to_string().as_str(),
-        );
+        MessageAccessor::set_reconsume_time(&mut new_msg, (msg.reconsume_times() + 1).to_string());
         MessageAccessor::set_max_reconsume_times(
             &mut new_msg,
-            self.get_max_reconsume_times().to_string().as_str(),
+            self.get_max_reconsume_times().to_string(),
         );
         MessageAccessor::clear_property(&mut new_msg, MessageConst::PROPERTY_TRANSACTION_PREPARED);
         new_msg.set_delay_time_level(3 + msg.reconsume_times());
@@ -290,7 +287,7 @@ impl ConsumeMessageOrderlyService {
                 if reconsume_times >= self.get_max_reconsume_times() {
                     MessageAccessor::set_reconsume_time(
                         &mut msg.message_ext_inner,
-                        reconsume_times.to_string().as_ref(),
+                        reconsume_times.to_string(),
                     );
                     if !self.send_message_back(&msg.message_ext_inner).await {
                         suspend = true;

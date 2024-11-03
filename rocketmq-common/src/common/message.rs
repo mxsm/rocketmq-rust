@@ -48,8 +48,8 @@ pub trait MessageTrait: Any + Display + Debug {
     /// # Arguments
     ///
     /// * `keys` - The keys to set, converted into a `String`.
-    fn set_keys(&mut self, keys: &str) {
-        self.put_property(MessageConst::PROPERTY_KEYS, keys);
+    fn set_keys(&mut self, keys: String) {
+        self.put_property(MessageConst::PROPERTY_KEYS.to_owned(), keys);
     }
 
     /// Adds a property to the message.
@@ -58,7 +58,7 @@ pub trait MessageTrait: Any + Display + Debug {
     ///
     /// * `key` - The property key, converted into a `String`.
     /// * `value` - The property value, converted into a `String`.
-    fn put_property(&mut self, key: &str, value: &str);
+    fn put_property(&mut self, key: String, value: String);
 
     /// Clears a specific property from the message.
     ///
@@ -73,10 +73,10 @@ pub trait MessageTrait: Any + Display + Debug {
     ///
     /// * `name` - The name of the user property, converted into a `String`.
     /// * `value` - The value of the user property, converted into a `String`.
-    fn put_user_property(&mut self, name: &str, value: &str) {
-        let name = name.trim();
-        let value = value.trim();
-        if STRING_HASH_SET.contains(name) {
+    fn put_user_property(&mut self, name: String, value: String) {
+        let name = name.trim().to_owned();
+        let value = value.trim().to_owned();
+        if STRING_HASH_SET.contains(name.as_str()) {
             panic!(
                 "The Property<{}> is used by system, input another please",
                 name
@@ -124,7 +124,7 @@ pub trait MessageTrait: Any + Display + Debug {
     /// # Arguments
     ///
     /// * `topic` - The topic to set, converted into a `String`.
-    fn set_topic(&mut self, topic: &str);
+    fn set_topic(&mut self, topic: String);
 
     /// Retrieves the tags associated with the message.
     ///
@@ -140,8 +140,8 @@ pub trait MessageTrait: Any + Display + Debug {
     /// # Arguments
     ///
     /// * `tags` - The tags to set, converted into a `String`.
-    fn set_tags(&mut self, tags: &str) {
-        self.put_property(MessageConst::PROPERTY_TAGS, tags);
+    fn set_tags(&mut self, tags: String) {
+        self.put_property(MessageConst::PROPERTY_TAGS.to_owned(), tags);
     }
 
     /// Retrieves the keys associated with the message.
@@ -160,7 +160,7 @@ pub trait MessageTrait: Any + Display + Debug {
     /// * `key_collection` - A vector of keys to set.
     fn set_keys_from_collection(&mut self, key_collection: Vec<String>) {
         let keys = key_collection.join(MessageConst::KEY_SEPARATOR);
-        self.set_keys(keys.as_str());
+        self.set_keys(keys);
     }
 
     /// Retrieves the delay time level of the message.
@@ -182,8 +182,8 @@ pub trait MessageTrait: Any + Display + Debug {
     /// * `level` - The delay time level to set.
     fn set_delay_time_level(&mut self, level: i32) {
         self.put_property(
-            MessageConst::PROPERTY_DELAY_TIME_LEVEL,
-            level.to_string().as_str(),
+            MessageConst::PROPERTY_DELAY_TIME_LEVEL.to_owned(),
+            level.to_string(),
         );
     }
 
@@ -206,8 +206,8 @@ pub trait MessageTrait: Any + Display + Debug {
     /// * `wait_store_msg_ok` - A boolean indicating whether to wait for store acknowledgment.
     fn set_wait_store_msg_ok(&mut self, wait_store_msg_ok: bool) {
         self.put_property(
-            MessageConst::PROPERTY_WAIT_STORE_MSG_OK,
-            wait_store_msg_ok.to_string().as_str(),
+            MessageConst::PROPERTY_WAIT_STORE_MSG_OK.to_owned(),
+            wait_store_msg_ok.to_string(),
         );
     }
 
@@ -216,8 +216,8 @@ pub trait MessageTrait: Any + Display + Debug {
     /// # Arguments
     ///
     /// * `instance_id` - The instance ID to set.
-    fn set_instance_id(&mut self, instance_id: &str) {
-        self.put_property(MessageConst::PROPERTY_INSTANCE_ID, instance_id);
+    fn set_instance_id(&mut self, instance_id: String) {
+        self.put_property(MessageConst::PROPERTY_INSTANCE_ID.to_owned(), instance_id);
     }
 
     /// Retrieves the flag associated with the message.
@@ -276,8 +276,8 @@ pub trait MessageTrait: Any + Display + Debug {
     /// # Arguments
     ///
     /// * `buyer_id` - The buyer ID to set.
-    fn set_buyer_id(&mut self, buyer_id: &str) {
-        self.put_property(MessageConst::PROPERTY_BUYER_ID, buyer_id);
+    fn set_buyer_id(&mut self, buyer_id: String) {
+        self.put_property(MessageConst::PROPERTY_BUYER_ID.to_owned(), buyer_id);
     }
 
     /// Retrieves the transaction ID associated with the message.
@@ -292,7 +292,7 @@ pub trait MessageTrait: Any + Display + Debug {
     /// # Arguments
     ///
     /// * `transaction_id` - The transaction ID to set.
-    fn set_transaction_id(&mut self, transaction_id: &str);
+    fn set_transaction_id(&mut self, transaction_id: String);
 
     /// Sets the delay time for the message in seconds.
     ///
@@ -301,8 +301,8 @@ pub trait MessageTrait: Any + Display + Debug {
     /// * `sec` - The delay time in seconds.
     fn set_delay_time_sec(&mut self, sec: u64) {
         self.put_property(
-            MessageConst::PROPERTY_TIMER_DELAY_SEC,
-            sec.to_string().as_str(),
+            MessageConst::PROPERTY_TIMER_DELAY_SEC.to_owned(),
+            sec.to_string(),
         );
     }
 
@@ -325,8 +325,8 @@ pub trait MessageTrait: Any + Display + Debug {
     /// * `time_ms` - The delay time in milliseconds.
     fn set_delay_time_ms(&mut self, time_ms: u64) {
         self.put_property(
-            MessageConst::PROPERTY_TIMER_DELAY_MS,
-            time_ms.to_string().as_str(),
+            MessageConst::PROPERTY_TIMER_DELAY_MS.to_owned(),
+            time_ms.to_string(),
         );
     }
 
@@ -349,8 +349,8 @@ pub trait MessageTrait: Any + Display + Debug {
     /// * `time_ms` - The delivery time in milliseconds.
     fn set_deliver_time_ms(&mut self, time_ms: u64) {
         self.put_property(
-            MessageConst::PROPERTY_TIMER_DELIVER_MS,
-            time_ms.to_string().as_str(),
+            MessageConst::PROPERTY_TIMER_DELIVER_MS.to_owned(),
+            time_ms.to_string(),
         );
     }
 

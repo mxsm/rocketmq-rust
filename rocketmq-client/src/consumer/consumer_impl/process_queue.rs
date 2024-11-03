@@ -176,8 +176,7 @@ impl ProcessQueue {
             msg_inner.set_topic(
                 push_consumer
                     .client_config
-                    .with_namespace(msg_inner.topic())
-                    .as_str(),
+                    .with_namespace(msg_inner.topic()),
             );
             let _ = push_consumer
                 .send_message_back_with_broker_name(msg_inner, 3, None, None)

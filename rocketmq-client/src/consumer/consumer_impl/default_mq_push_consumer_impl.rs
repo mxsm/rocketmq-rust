@@ -1064,7 +1064,7 @@ impl DefaultMQPushConsumerImpl {
                 let normal_topic = KeyBuilder::parse_normal_topic(msg.get_topic(), consumer_group);
 
                 if !normal_topic.is_empty() {
-                    msg.set_topic(&normal_topic);
+                    msg.set_topic(normal_topic);
                 }
             }
         }
@@ -1080,19 +1080,16 @@ impl DefaultMQPushConsumerImpl {
         for msg in msgs.iter_mut() {
             if let Some(retry_topic) = msg.get_property(MessageConst::PROPERTY_RETRY_TOPIC) {
                 if group_topic == msg.get_topic() {
-                    msg.set_topic(retry_topic.as_str());
+                    msg.set_topic(retry_topic);
                 }
             }
 
             if !namespace.is_empty() {
                 let topic = msg.get_topic().to_string();
-                msg.set_topic(
-                    NamespaceUtil::without_namespace_with_namespace(
-                        topic.as_str(),
-                        namespace.as_str(),
-                    )
-                    .as_str(),
-                );
+                msg.set_topic(NamespaceUtil::without_namespace_with_namespace(
+                    topic.as_str(),
+                    namespace.as_str(),
+                ));
             }
         }
     }
@@ -1178,16 +1175,13 @@ impl DefaultMQPushConsumerImpl {
                 self.send_message_back_as_normal_message(msg).await?;
             }
         }
-        msg.set_topic(
-            NamespaceUtil::without_namespace_with_namespace(
-                msg.get_topic(),
-                self.client_config
-                    .get_namespace()
-                    .unwrap_or("".to_string())
-                    .as_str(),
-            )
-            .as_str(),
-        );
+        msg.set_topic(NamespaceUtil::without_namespace_with_namespace(
+            msg.get_topic(),
+            self.client_config
+                .get_namespace()
+                .unwrap_or("".to_string())
+                .as_str(),
+        ));
         Ok(())
     }
 
@@ -1197,21 +1191,18 @@ impl DefaultMQPushConsumerImpl {
         let mut new_msg = Message::new_body(topic.as_str(), body);
         let origin_msg_id =
             MessageAccessor::get_origin_message_id(&new_msg).unwrap_or(msg.msg_id.clone());
-        MessageAccessor::set_origin_message_id(&mut new_msg, origin_msg_id.as_str());
+        MessageAccessor::set_origin_message_id(&mut new_msg, origin_msg_id);
         new_msg.set_flag(msg.get_flag());
         MessageAccessor::set_properties(&mut new_msg, msg.get_properties().clone());
         MessageAccessor::put_property(
             &mut new_msg,
-            MessageConst::PROPERTY_RETRY_TOPIC,
-            msg.get_topic(),
+            MessageConst::PROPERTY_RETRY_TOPIC.to_owned(),
+            msg.get_topic().to_owned(),
         );
-        MessageAccessor::set_reconsume_time(
-            &mut new_msg,
-            (msg.reconsume_times + 1).to_string().as_str(),
-        );
+        MessageAccessor::set_reconsume_time(&mut new_msg, (msg.reconsume_times + 1).to_string());
         MessageAccessor::set_max_reconsume_times(
             &mut new_msg,
-            self.get_max_reconsume_times().to_string().as_str(),
+            self.get_max_reconsume_times().to_string(),
         );
         MessageAccessor::clear_property(&mut new_msg, MessageConst::PROPERTY_TRANSACTION_PREPARED);
         new_msg.set_delay_time_level(3 + msg.reconsume_times);

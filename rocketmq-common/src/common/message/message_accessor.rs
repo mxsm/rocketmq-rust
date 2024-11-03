@@ -42,7 +42,7 @@ impl MessageAccessor {
     /// * `name` - The name of the property.
     /// * `value` - The value of the property.
     #[inline]
-    pub fn put_property<T: MessageTrait>(msg: &mut T, name: &str, value: &str) {
+    pub fn put_property<T: MessageTrait>(msg: &mut T, name: String, value: String) {
         msg.put_property(name, value);
     }
 
@@ -64,8 +64,8 @@ impl MessageAccessor {
     /// * `msg` - A mutable reference to a message implementing the `MessageTrait`.
     /// * `unit` - The transfer flag value.
     #[inline]
-    pub fn set_transfer_flag<T: MessageTrait>(msg: &mut T, unit: &str) {
-        msg.put_property(MessageConst::PROPERTY_TRANSFER_FLAG, unit);
+    pub fn set_transfer_flag<T: MessageTrait>(msg: &mut T, unit: String) {
+        msg.put_property(MessageConst::PROPERTY_TRANSFER_FLAG.to_owned(), unit);
     }
 
     /// Gets the transfer flag of a message.
@@ -89,8 +89,8 @@ impl MessageAccessor {
     /// * `msg` - A mutable reference to a message implementing the `MessageTrait`.
     /// * `unit` - The correction flag value.
     #[inline]
-    pub fn set_correction_flag<T: MessageTrait>(msg: &mut T, unit: &str) {
-        msg.put_property(MessageConst::PROPERTY_CORRECTION_FLAG, unit);
+    pub fn set_correction_flag<T: MessageTrait>(msg: &mut T, unit: String) {
+        msg.put_property(MessageConst::PROPERTY_CORRECTION_FLAG.to_owned(), unit);
     }
 
     /// Gets the correction flag of a message.
@@ -114,8 +114,11 @@ impl MessageAccessor {
     /// * `msg` - A mutable reference to a message implementing the `MessageTrait`.
     /// * `origin_message_id` - The origin message ID value.
     #[inline]
-    pub fn set_origin_message_id<T: MessageTrait>(msg: &mut T, origin_message_id: &str) {
-        msg.put_property(MessageConst::PROPERTY_ORIGIN_MESSAGE_ID, origin_message_id);
+    pub fn set_origin_message_id<T: MessageTrait>(msg: &mut T, origin_message_id: String) {
+        msg.put_property(
+            MessageConst::PROPERTY_ORIGIN_MESSAGE_ID.to_owned(),
+            origin_message_id,
+        );
     }
 
     /// Gets the origin message ID of a message.
@@ -139,8 +142,8 @@ impl MessageAccessor {
     /// * `msg` - A mutable reference to a message implementing the `MessageTrait`.
     /// * `flag` - The MQ2 flag value.
     #[inline]
-    pub fn set_mq2_flag<T: MessageTrait>(msg: &mut T, flag: &str) {
-        msg.put_property(MessageConst::PROPERTY_MQ2_FLAG, flag);
+    pub fn set_mq2_flag<T: MessageTrait>(msg: &mut T, flag: String) {
+        msg.put_property(MessageConst::PROPERTY_MQ2_FLAG.to_owned(), flag);
     }
 
     /// Gets the MQ2 flag of a message.
@@ -164,8 +167,11 @@ impl MessageAccessor {
     /// * `msg` - A mutable reference to a message implementing the `MessageTrait`.
     /// * `reconsume_times` - The reconsume time value.
     #[inline]
-    pub fn set_reconsume_time<T: MessageTrait>(msg: &mut T, reconsume_times: &str) {
-        msg.put_property(MessageConst::PROPERTY_RECONSUME_TIME, reconsume_times);
+    pub fn set_reconsume_time<T: MessageTrait>(msg: &mut T, reconsume_times: String) {
+        msg.put_property(
+            MessageConst::PROPERTY_RECONSUME_TIME.to_owned(),
+            reconsume_times,
+        );
     }
 
     /// Gets the reconsume time of a message.
@@ -189,9 +195,9 @@ impl MessageAccessor {
     /// * `msg` - A mutable reference to a message implementing the `MessageTrait`.
     /// * `max_reconsume_times` - The maximum reconsume times value.
     #[inline]
-    pub fn set_max_reconsume_times<T: MessageTrait>(msg: &mut T, max_reconsume_times: &str) {
+    pub fn set_max_reconsume_times<T: MessageTrait>(msg: &mut T, max_reconsume_times: String) {
         msg.put_property(
-            MessageConst::PROPERTY_MAX_RECONSUME_TIMES,
+            MessageConst::PROPERTY_MAX_RECONSUME_TIMES.to_owned(),
             max_reconsume_times,
         );
     }
@@ -219,10 +225,10 @@ impl MessageAccessor {
     #[inline]
     pub fn set_consume_start_time_stamp<T: MessageTrait>(
         msg: &mut T,
-        property_consume_start_time_stamp: &str,
+        property_consume_start_time_stamp: String,
     ) {
         msg.put_property(
-            MessageConst::PROPERTY_CONSUME_START_TIMESTAMP,
+            MessageConst::PROPERTY_CONSUME_START_TIMESTAMP.to_owned(),
             property_consume_start_time_stamp,
         );
     }

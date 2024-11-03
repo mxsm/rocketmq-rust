@@ -264,22 +264,22 @@ where
         if let Some(uniq_id) = uniq_id {
             MessageAccessor::put_property(
                 message,
-                TransactionalMessageUtil::TRANSACTION_ID,
-                uniq_id.as_str(),
+                TransactionalMessageUtil::TRANSACTION_ID.to_owned(),
+                uniq_id,
             );
         }
         let topic = message.get_topic().to_string();
-        MessageAccessor::put_property(message, MessageConst::PROPERTY_REAL_TOPIC, topic.as_str());
+        MessageAccessor::put_property(message, MessageConst::PROPERTY_REAL_TOPIC.to_owned(), topic);
         MessageAccessor::put_property(
             message,
-            MessageConst::PROPERTY_REAL_QUEUE_ID,
-            message.message_ext_inner.queue_id.to_string().as_str(),
+            MessageConst::PROPERTY_REAL_QUEUE_ID.to_owned(),
+            message.message_ext_inner.queue_id.to_string(),
         );
         message.message_ext_inner.sys_flag = MessageSysFlag::reset_transaction_value(
             message.message_ext_inner.sys_flag,
             MessageSysFlag::TRANSACTION_NOT_TYPE,
         );
-        message.set_topic(TransactionalMessageUtil::build_half_topic());
+        message.set_topic(TransactionalMessageUtil::build_half_topic().to_owned());
         message.message_ext_inner.queue_id = 0;
         let properties_to_string =
             message_decoder::message_properties_to_string(message.get_properties());
@@ -293,14 +293,14 @@ where
         if let Some(queue_offset_from_prepare) = queue_offset_from_prepare {
             MessageAccessor::put_property(
                 &mut message_inner,
-                MessageConst::PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET,
-                queue_offset_from_prepare.as_str(),
+                MessageConst::PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET.to_owned(),
+                queue_offset_from_prepare,
             );
         } else {
             MessageAccessor::put_property(
                 &mut message_inner,
-                MessageConst::PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET,
-                msg_ext.queue_offset.to_string().as_str(),
+                MessageConst::PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET.to_owned(),
+                msg_ext.queue_offset.to_string(),
             );
         }
         let properties_to_string =

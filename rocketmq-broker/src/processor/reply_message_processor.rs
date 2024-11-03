@@ -177,7 +177,7 @@ where
         }
 
         let mut msg_inner = MessageExtBrokerInner::default();
-        msg_inner.set_topic(request_header.topic());
+        msg_inner.set_topic(request_header.topic().to_owned());
         msg_inner.message_ext_inner.queue_id = queue_id_int;
         if let Some(body) = request.body() {
             msg_inner.set_body(body.clone());

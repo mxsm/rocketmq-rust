@@ -184,7 +184,7 @@ impl fmt::Display for MessageExtBrokerInner {
 }
 
 impl MessageTrait for MessageExtBrokerInner {
-    fn put_property(&mut self, key: &str, value: &str) {
+    fn put_property(&mut self, key: String, value: String) {
         self.message_ext_inner.put_property(key, value);
     }
 
@@ -200,7 +200,7 @@ impl MessageTrait for MessageExtBrokerInner {
         self.message_ext_inner.get_topic()
     }
 
-    fn set_topic(&mut self, topic: &str) {
+    fn set_topic(&mut self, topic: String) {
         self.message_ext_inner.set_topic(topic);
     }
 
@@ -232,7 +232,7 @@ impl MessageTrait for MessageExtBrokerInner {
         self.message_ext_inner.get_transaction_id()
     }
 
-    fn set_transaction_id(&mut self, transaction_id: &str) {
+    fn set_transaction_id(&mut self, transaction_id: String) {
         self.message_ext_inner.set_transaction_id(transaction_id);
     }
 
