@@ -54,3 +54,45 @@ impl<'de> Deserialize<'de> for AccessChannel {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json;
+
+    use super::*;
+
+    #[test]
+    fn serialize_access_channel_local() {
+        let channel = AccessChannel::Local;
+        let serialized = serde_json::to_string(&channel).unwrap();
+        assert_eq!(serialized, r#"{"AccessChannel":"LOCAL"}"#);
+    }
+
+    #[test]
+    fn serialize_access_channel_cloud() {
+        let channel = AccessChannel::Cloud;
+        let serialized = serde_json::to_string(&channel).unwrap();
+        assert_eq!(serialized, r#"{"AccessChannel":"CLOUD"}"#);
+    }
+
+    #[test]
+    fn deserialize_access_channel_local() {
+        let json = r#""LOCAL""#;
+        let deserialized: AccessChannel = serde_json::from_str(json).unwrap();
+        assert_eq!(deserialized, AccessChannel::Local);
+    }
+
+    #[test]
+    fn deserialize_access_channel_cloud() {
+        let json = r#""CLOUD""#;
+        let deserialized: AccessChannel = serde_json::from_str(json).unwrap();
+        assert_eq!(deserialized, AccessChannel::Cloud);
+    }
+
+    #[test]
+    fn deserialize_access_channel_unknown_variant() {
+        let json = r#""UNKNOWN""#;
+        let result: Result<AccessChannel, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+    }
+}
