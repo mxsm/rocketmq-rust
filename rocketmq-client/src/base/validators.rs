@@ -188,3 +188,98 @@ impl Validators {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use rocketmq_common::common::config::TopicConfig;
+
+    use super::*;
+
+    #[test]
+    fn check_group_blank_group() {
+        let result = Validators::check_group("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn check_group_long_group() {
+        let long_group = "a".repeat(256);
+        let result = Validators::check_group(&long_group);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn check_group_illegal_characters() {
+        let result = Validators::check_group("illegal@group");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn check_group_valid_group() {
+        let result = Validators::check_group("valid_group");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn check_topic_blank_topic() {
+        let result = Validators::check_topic("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn check_topic_long_topic() {
+        let long_topic = "a".repeat(128);
+        let result = Validators::check_topic(&long_topic);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn check_topic_illegal_characters() {
+        let result = Validators::check_topic("illegal@topic");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn check_topic_valid_topic() {
+        let result = Validators::check_topic("valid_topic");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn check_topic_config_invalid_permission() {
+        let topic_config = TopicConfig {
+            perm: 999,
+            ..Default::default()
+        };
+        let result = Validators::check_topic_config(&topic_config);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn check_topic_config_valid_permission() {
+        let topic_config = TopicConfig {
+            perm: 6,
+            ..Default::default()
+        };
+        let result = Validators::check_topic_config(&topic_config);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn check_broker_config_invalid_permission() {
+        let mut broker_config = HashMap::new();
+        broker_config.insert("brokerPermission".to_string(), "999".to_string());
+        let result = Validators::check_broker_config(&broker_config);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn check_broker_config_valid_permission() {
+        let mut broker_config = HashMap::new();
+        broker_config.insert("brokerPermission".to_string(), "6".to_string());
+        let result = Validators::check_broker_config(&broker_config);
+        assert!(result.is_ok());
+    }
+}
