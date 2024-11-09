@@ -17,6 +17,7 @@
 #![feature(sync_unsafe_cell)]
 
 mod arc_mut;
+mod blocking_queue;
 pub mod count_down_latch;
 pub mod rocketmq_tokio_lock;
 mod shutdown;
@@ -24,6 +25,7 @@ mod shutdown;
 pub use arc_mut::ArcMut;
 pub use arc_mut::SyncUnsafeCellWrapper;
 pub use arc_mut::WeakArcMut;
+pub use blocking_queue::BlockingQueue as RocketMQBlockingQueue;
 pub use count_down_latch::CountDownLatch;
 /// Re-export rocketmq main.
 pub use rocketmq::main;
