@@ -14,12 +14,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_remoting::code::response_code::ResponseCode;
 
 #[derive(Debug, Clone)]
 pub(crate) struct OperationResult {
-    pub(crate) prepare_message: MessageExt,
+    pub(crate) prepare_message: Option<MessageExt>,
     pub(crate) response_remark: Option<String>,
     pub(crate) response_code: ResponseCode,
+}
+
+impl Default for OperationResult {
+    fn default() -> Self {
+        Self {
+            prepare_message: None,
+            response_remark: None,
+            response_code: ResponseCode::Success,
+        }
+    }
 }

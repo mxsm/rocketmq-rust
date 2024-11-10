@@ -14,4 +14,41 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub struct TransactionalOpBatchService;
+use std::sync::Arc;
+
+use log::info;
+use rocketmq_common::TimeUtils::get_current_millis;
+use tokio::sync::Notify;
+
+#[derive(Default, Clone)]
+pub struct TransactionalOpBatchService {
+    notify: Arc<Notify>,
+}
+
+impl TransactionalOpBatchService {
+    pub fn new() -> Self {
+        TransactionalOpBatchService {
+            notify: Arc::new(Notify::new()),
+        }
+    }
+
+    pub fn wakeup(&self) {
+        self.notify.notify_waiters();
+    }
+
+    pub fn run(&self, transaction_op_batch_interval: u64) {
+        let this = self.clone();
+        tokio::spawn(async move {
+            info!("TransactionalOpBatchService started");
+            let wakeup_timestamp = get_current_millis() + transaction_op_batch_interval;
+            loop {
+                let mut interval = (wakeup_timestamp as i64) - get_current_millis() as i64;
+                if interval <= 0 {
+                    interval = 0;
+                    this.wakeup();
+                }
+                tokio::time::sleep(tokio::time::Duration::from_millis(interval as u64)).await;
+            }
+        });
+    }
+}

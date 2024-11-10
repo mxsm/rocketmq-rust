@@ -74,7 +74,7 @@ pub struct BrokerRequestProcessor<MS, TS> {
     pub(crate) client_manage_processor: ArcMut<ClientManageProcessor<MS>>,
     pub(crate) consumer_manage_processor: ArcMut<ConsumerManageProcessor<MS>>,
     pub(crate) query_assignment_processor: ArcMut<QueryAssignmentProcessor>,
-    pub(crate) end_transaction_processor: ArcMut<EndTransactionProcessor>,
+    pub(crate) end_transaction_processor: ArcMut<EndTransactionProcessor<TS, MS>>,
     pub(crate) admin_broker_processor: ArcMut<AdminBrokerProcessor>,
 }
 impl<MS, TS> Clone for BrokerRequestProcessor<MS, TS> {
@@ -150,6 +150,12 @@ where
 
             RequestCode::QueryMessage | RequestCode::ViewMessageById => {
                 self.query_message_processor
+                    .process_request(channel, ctx, request_code, request)
+                    .await
+            }
+
+            RequestCode::EndTransaction => {
+                self.end_transaction_processor
                     .process_request(channel, ctx, request_code, request)
                     .await
             }

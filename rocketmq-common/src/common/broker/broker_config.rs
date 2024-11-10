@@ -170,6 +170,8 @@ pub struct BrokerConfig {
     pub forward_timeout: u64,
     pub store_reply_message_enable: bool,
     pub lock_in_strict_mode: bool,
+    pub transaction_timeout: u64,
+    pub transaction_op_msg_max_size: i32,
 }
 
 impl Default for BrokerConfig {
@@ -247,6 +249,8 @@ impl Default for BrokerConfig {
             auto_delete_unused_stats: false,
             store_reply_message_enable: true,
             lock_in_strict_mode: false,
+            transaction_timeout: 6_000,
+            transaction_op_msg_max_size: 4096,
         }
     }
 }
