@@ -126,6 +126,35 @@ impl<T> BlockingQueue<T> {
     pub async fn poll(&self, timeout: std::time::Duration) -> Option<T> {
         time::timeout(timeout, self.take()).await.ok()
     }
+
+    /// Attempts to remove and return an item from the queue without waiting.
+    ///
+    /// This method acquires a lock on the queue and attempts to remove an item.
+    /// If the queue is empty, it will notify waiting tasks.
+    ///
+    /// # Returns
+    ///
+    /// `Some(item)` if an item was removed from the queue, `None` if the queue was empty.
+    pub async fn try_poll(&self) -> Option<T> {
+        let mut queue = self.queue.lock().await;
+        let item = queue.pop_front();
+        if item.is_none() {
+            self.notify.notify_one(); // Notify only after successful pop
+        }
+        item
+    }
+
+    /// Checks if the queue is empty.
+    ///
+    /// This method acquires a lock on the queue and checks if it contains any items.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the queue is empty, `false` otherwise.
+    pub async fn is_empty(&self) -> bool {
+        let queue = self.queue.lock().await;
+        queue.is_empty()
+    }
 }
 
 #[cfg(test)]

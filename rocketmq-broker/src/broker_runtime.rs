@@ -67,6 +67,7 @@ use crate::processor::admin_broker_processor::AdminBrokerProcessor;
 use crate::processor::client_manage_processor::ClientManageProcessor;
 use crate::processor::consumer_manage_processor::ConsumerManageProcessor;
 use crate::processor::default_pull_message_result_handler::DefaultPullMessageResultHandler;
+use crate::processor::end_transaction_processor::EndTransactionProcessor;
 use crate::processor::pull_message_processor::PullMessageProcessor;
 use crate::processor::pull_message_result_handler::PullMessageResultHandler;
 use crate::processor::query_message_processor::QueryMessageProcessor;
@@ -534,7 +535,12 @@ impl BrokerRuntime {
             consumer_manage_processor: ArcMut::new(consumer_manage_processor),
             query_assignment_processor: Default::default(),
             query_message_processor: ArcMut::new(query_message_processor),
-            end_transaction_processor: Default::default(),
+            end_transaction_processor: ArcMut::new(EndTransactionProcessor::new(
+                self.message_store_config.clone(),
+                self.broker_config.clone(),
+                self.transactional_message_service.as_ref().unwrap().clone(),
+                self.message_store.as_ref().unwrap().clone(),
+            )),
         }
     }
 

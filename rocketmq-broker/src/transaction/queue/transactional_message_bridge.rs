@@ -26,19 +26,24 @@ use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::message::message_client_ext::MessageClientExt;
+use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
 use rocketmq_common::common::message::message_decoder;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_common::common::message::message_single::Message;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::MessageAccessor::MessageAccessor;
+use rocketmq_common::MessageDecoder;
+use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
+use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::log_file::MessageStore;
 use rocketmq_store::log_file::MAX_PULL_MSG_SIZE;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
@@ -327,4 +332,68 @@ where
         MessageAccessor::set_properties(&mut inner, msg_ext.get_properties().clone());
         inner
     }
+
+    fn make_op_message_inner(
+        &self,
+        message: &Message,
+        message_queue: &MessageQueue,
+    ) -> MessageExtBrokerInner {
+        let mut msg_inner = MessageExtBrokerInner::default();
+        msg_inner.set_topic(message.get_topic().to_owned());
+        msg_inner.set_body(message.get_body().expect("message body is empty").clone());
+        msg_inner.message_ext_inner.queue_id = message_queue.get_queue_id();
+        msg_inner.set_tags(message.get_tags().unwrap_or_default());
+        msg_inner.tags_code = MessageExtBrokerInner::tags_string_to_tags_code(
+            message.get_tags().unwrap_or_default().as_str(),
+        );
+        msg_inner.message_ext_inner.sys_flag = 0;
+        MessageAccessor::set_properties(&mut msg_inner, message.get_properties().clone());
+        msg_inner.properties_string =
+            MessageDecoder::message_properties_to_string(msg_inner.get_properties());
+
+        msg_inner.message_ext_inner.born_timestamp = get_current_millis() as i64;
+        msg_inner.message_ext_inner.born_host = self.store_host;
+        msg_inner.message_ext_inner.store_host = self.store_host;
+        msg_inner.set_wait_store_msg_ok(false);
+        MessageClientIDSetter::set_uniq_id(&mut msg_inner);
+        msg_inner
+    }
+
+    pub fn look_message_by_offset(&self, offset: i64) -> Option<MessageExt> {
+        self.message_store.look_message_by_offset(offset)
+    }
+
+    pub async fn write_op(&self, queue_id: i32, message: Message) -> bool {
+        let mut op_queue_map = self.op_queue_map.lock().await;
+        let op_queue = op_queue_map.entry(queue_id).or_insert_with(|| {
+            get_op_queue_by_half(queue_id, self.broker_config.broker_name.clone())
+        });
+        let inner = self.make_op_message_inner(&message, op_queue);
+        let result = self.put_message_return_result(inner).await;
+        result.put_message_status() == PutMessageStatus::PutOk
+    }
+
+    pub async fn put_message_return_result(
+        &self,
+        message_inner: MessageExtBrokerInner,
+    ) -> PutMessageResult {
+        let result = self
+            .message_store
+            .mut_from_ref()
+            .put_message(message_inner)
+            .await;
+        if result.put_message_status() == PutMessageStatus::PutOk {
+            //nothing to do
+        }
+        result
+    }
+}
+
+#[inline]
+fn get_op_queue_by_half(queue_id: i32, broker_name: String) -> MessageQueue {
+    MessageQueue::from_parts(
+        TransactionalMessageUtil::build_op_topic(),
+        broker_name,
+        queue_id,
+    )
 }
