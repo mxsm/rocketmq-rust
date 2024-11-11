@@ -312,10 +312,6 @@ impl BrokerConfig {
             self.broker_identity.is_broker_container.to_string(),
         );
         properties.insert(
-            "isInBrokerContainer".to_string(),
-            self.broker_identity.is_in_broker_container.to_string(),
-        );
-        properties.insert(
             "defaultTopicQueueNums".to_string(),
             self.topic_queue_config.default_topic_queue_nums.to_string(),
         );
