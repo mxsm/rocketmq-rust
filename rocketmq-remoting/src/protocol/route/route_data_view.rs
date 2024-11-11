@@ -18,6 +18,7 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use rand::seq::IteratorRandom;
 use rocketmq_common::common::mix_all;
 use serde::Deserialize;
@@ -133,7 +134,7 @@ impl BrokerData {
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct QueueData {
     #[serde(rename = "brokerName")]
-    pub broker_name: String,
+    pub broker_name: CheetahString,
     #[serde(rename = "readQueueNums")]
     pub read_queue_nums: u32,
     #[serde(rename = "writeQueueNums")]
@@ -145,7 +146,7 @@ pub struct QueueData {
 
 impl QueueData {
     pub fn new(
-        broker_name: String,
+        broker_name: CheetahString,
         read_queue_nums: u32,
         write_queue_nums: u32,
         perm: u32,

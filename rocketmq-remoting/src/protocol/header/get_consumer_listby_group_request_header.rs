@@ -16,6 +16,7 @@
  */
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -26,7 +27,7 @@ use crate::rpc::rpc_request_header::RpcRequestHeader;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetConsumerListByGroupRequestHeader {
-    pub consumer_group: String,
+    pub consumer_group: CheetahString,
     #[serde(flatten)]
     pub rpc: Option<RpcRequestHeader>,
 }
@@ -36,10 +37,10 @@ impl GetConsumerListByGroupRequestHeader {
 }
 
 impl CommandCustomHeader for GetConsumerListByGroupRequestHeader {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         let mut map = HashMap::new();
         map.insert(
-            Self::CONSUMER_GROUP.to_string(),
+            CheetahString::from_static_str(Self::CONSUMER_GROUP),
             self.consumer_group.clone(),
         );
         if let Some(ref rpc) = self.rpc {
@@ -53,9 +54,12 @@ impl CommandCustomHeader for GetConsumerListByGroupRequestHeader {
 impl FromMap for GetConsumerListByGroupRequestHeader {
     type Target = Self;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(GetConsumerListByGroupRequestHeader {
-            consumer_group: map.get(Self::CONSUMER_GROUP).cloned().unwrap_or_default(),
+            consumer_group: map
+                .get(&CheetahString::from_static_str(Self::CONSUMER_GROUP))
+                .cloned()
+                .unwrap_or_default(),
             rpc: <RpcRequestHeader as FromMap>::from(map),
         })
     }

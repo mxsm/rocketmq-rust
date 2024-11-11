@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 
 use anyhow::Error;
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -29,7 +30,7 @@ use crate::protocol::command_custom_header::FromMap;
 pub struct RegisterBrokerRequestHeader {
     /// The name of the broker.
     #[serde(rename = "brokerName")]
-    pub broker_name: String,
+    pub broker_name: CheetahString,
 
     /// The address of the broker.
     #[serde(rename = "brokerAddr")]
@@ -37,7 +38,7 @@ pub struct RegisterBrokerRequestHeader {
 
     /// The name of the cluster to which the broker belongs.
     #[serde(rename = "clusterName")]
-    pub cluster_name: String,
+    pub cluster_name: CheetahString,
 
     /// The address of the highly available (HA) remoting_server associated with the broker.
     #[serde(rename = "haServerAddr")]
@@ -93,9 +94,9 @@ impl RegisterBrokerRequestHeader {
     ///
     /// A new `RegisterBrokerRequestHeader` instance.
     pub fn new(
-        broker_name: String,
+        broker_name: CheetahString,
         broker_addr: String,
-        cluster_name: String,
+        cluster_name: CheetahString,
         ha_server_addr: String,
         broker_id: i64,
         heartbeat_timeout_millis: Option<i64>,

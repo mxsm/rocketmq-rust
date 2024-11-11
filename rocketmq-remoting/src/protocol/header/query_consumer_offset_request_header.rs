@@ -16,6 +16,7 @@
  */
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -27,8 +28,8 @@ use crate::protocol::header::namesrv::topic_operation_header::TopicRequestHeader
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueryConsumerOffsetRequestHeader {
-    pub consumer_group: String,
-    pub topic: String,
+    pub consumer_group: CheetahString,
+    pub topic: CheetahString,
     pub queue_id: i32,
     pub set_zero_if_not_found: Option<bool>,
     #[serde(flatten)]
@@ -43,16 +44,25 @@ impl QueryConsumerOffsetRequestHeader {
 }
 
 impl CommandCustomHeader for QueryConsumerOffsetRequestHeader {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         let mut map = HashMap::new();
         map.insert(
-            Self::CONSUMER_GROUP.to_string(),
+            CheetahString::from_static_str(Self::CONSUMER_GROUP),
             self.consumer_group.clone(),
         );
-        map.insert(Self::TOPIC.to_string(), self.topic.clone());
-        map.insert(Self::QUEUE_ID.to_string(), self.queue_id.to_string());
+        map.insert(
+            CheetahString::from_static_str(Self::TOPIC),
+            self.topic.clone(),
+        );
+        map.insert(
+            CheetahString::from_static_str(Self::QUEUE_ID),
+            CheetahString::from_string(self.queue_id.to_string()),
+        );
         if let Some(value) = self.set_zero_if_not_found {
-            map.insert(Self::SET_ZERO_IF_NOT_FOUND.to_string(), value.to_string());
+            map.insert(
+                CheetahString::from_static_str(Self::SET_ZERO_IF_NOT_FOUND),
+                CheetahString::from_string(value.to_string()),
+            );
         }
         if let Some(ref value) = self.topic_request_header {
             if let Some(val) = value.to_map() {
@@ -66,15 +76,21 @@ impl CommandCustomHeader for QueryConsumerOffsetRequestHeader {
 impl FromMap for QueryConsumerOffsetRequestHeader {
     type Target = Self;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(QueryConsumerOffsetRequestHeader {
-            consumer_group: map.get(Self::CONSUMER_GROUP).cloned().unwrap_or_default(),
-            topic: map.get(Self::TOPIC).cloned().unwrap_or_default(),
+            consumer_group: map
+                .get(&CheetahString::from_static_str(Self::CONSUMER_GROUP))
+                .cloned()
+                .unwrap_or_default(),
+            topic: map
+                .get(&CheetahString::from_static_str(Self::TOPIC))
+                .cloned()
+                .unwrap_or_default(),
             queue_id: map
-                .get(Self::QUEUE_ID)
+                .get(&CheetahString::from_static_str(Self::QUEUE_ID))
                 .map_or(0, |value| value.parse::<i32>().unwrap()),
             set_zero_if_not_found: map
-                .get(Self::SET_ZERO_IF_NOT_FOUND)
+                .get(&CheetahString::from_static_str(Self::SET_ZERO_IF_NOT_FOUND))
                 .and_then(|value| value.parse::<bool>().ok()),
             topic_request_header: <TopicRequestHeader as FromMap>::from(map),
         })

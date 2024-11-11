@@ -63,6 +63,7 @@ url = "2.5.2"
 form_urlencoded = "1.2.1"
 
 uuid = { workspace = true }
+cheetah-string = { workspace = true }
 
 [dev-dependencies]
 mockall = "0.13.0"

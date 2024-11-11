@@ -21,6 +21,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::mix_all;
@@ -648,8 +649,10 @@ impl RouteInfoManager {
         cluster_name: &str,
         broker_name: &str,
     ) -> Option<BrokerMemberGroup> {
-        let mut group_member =
-            BrokerMemberGroup::new(cluster_name.to_string(), broker_name.to_string());
+        let mut group_member = BrokerMemberGroup::new(
+            CheetahString::from_slice(cluster_name),
+            CheetahString::from_slice(broker_name),
+        );
         if let Some(broker_data) = self.broker_addr_table.get(broker_name) {
             let map = broker_data.broker_addrs().clone();
             for (key, value) in map {

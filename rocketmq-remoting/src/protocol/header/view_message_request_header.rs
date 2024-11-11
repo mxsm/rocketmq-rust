@@ -14,12 +14,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use cheetah_string::CheetahString;
 use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodec, Default)]
 pub struct ViewMessageRequestHeader {
-    pub topic: String,
+    pub topic: CheetahString,
     pub offset: i64,
 }

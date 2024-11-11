@@ -16,6 +16,7 @@
  */
 use anyhow::anyhow;
 use anyhow::Error;
+use cheetah_string::CheetahString;
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use serde::Deserialize;
 use serde::Serialize;
@@ -27,14 +28,14 @@ use crate::rpc::rpc_request_header::RpcRequestHeader;
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct EndTransactionRequestHeader {
-    pub topic: String,
-    pub producer_group: String,
+    pub topic: CheetahString,
+    pub producer_group: CheetahString,
     pub tran_state_table_offset: u64,
     pub commit_log_offset: u64,
     pub commit_or_rollback: i32,
     pub from_transaction_check: bool,
-    pub msg_id: String,
-    pub transaction_id: Option<String>,
+    pub msg_id: CheetahString,
+    pub transaction_id: Option<CheetahString>,
     #[serde(flatten)]
     pub rpc_request_header: RpcRequestHeader,
 }
@@ -51,32 +52,43 @@ impl EndTransactionRequestHeader {
 }
 
 impl CommandCustomHeader for EndTransactionRequestHeader {
-    fn to_map(&self) -> Option<std::collections::HashMap<String, String>> {
+    fn to_map(&self) -> Option<std::collections::HashMap<CheetahString, CheetahString>> {
         let mut map = std::collections::HashMap::new();
-        map.insert(Self::TOPIC.to_string(), self.topic.clone());
         map.insert(
-            Self::PRODUCER_GROUP.to_string(),
+            CheetahString::from_static_str(Self::TOPIC),
+            self.topic.clone(),
+        );
+        map.insert(
+            CheetahString::from_static_str(Self::PRODUCER_GROUP),
             self.producer_group.clone(),
         );
         map.insert(
-            Self::TRAN_STATE_TABLE_OFFSET.to_string(),
-            self.tran_state_table_offset.to_string(),
+            CheetahString::from_static_str(Self::TRAN_STATE_TABLE_OFFSET),
+            CheetahString::from_string(self.tran_state_table_offset.to_string()),
+        );
+
+        map.insert(
+            CheetahString::from_static_str(Self::COMMIT_LOG_OFFSET),
+            CheetahString::from_string(self.commit_log_offset.to_string()),
         );
         map.insert(
-            Self::COMMIT_LOG_OFFSET.to_string(),
-            self.commit_log_offset.to_string(),
+            CheetahString::from_static_str(Self::COMMIT_OR_ROLLBACK),
+            CheetahString::from_string(self.commit_or_rollback.to_string()),
         );
         map.insert(
-            Self::COMMIT_OR_ROLLBACK.to_string(),
-            self.commit_or_rollback.to_string(),
+            CheetahString::from_static_str(Self::FROM_TRANSACTION_CHECK),
+            CheetahString::from_string(self.from_transaction_check.to_string()),
         );
+
         map.insert(
-            Self::FROM_TRANSACTION_CHECK.to_string(),
-            self.from_transaction_check.to_string(),
+            CheetahString::from_static_str(Self::MSG_ID),
+            self.msg_id.clone(),
         );
-        map.insert(Self::MSG_ID.to_string(), self.msg_id.clone());
         if let Some(value) = self.transaction_id.as_ref() {
-            map.insert(Self::TRANSACTION_ID.to_string(), value.clone());
+            map.insert(
+                CheetahString::from_static_str(Self::TRANSACTION_ID),
+                value.clone(),
+            );
         }
         if let Some(value) = self.rpc_request_header.to_map() {
             map.extend(value);
@@ -101,38 +113,54 @@ impl CommandCustomHeader for EndTransactionRequestHeader {
 impl FromMap for EndTransactionRequestHeader {
     type Target = Self;
 
-    fn from(map: &std::collections::HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &std::collections::HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(EndTransactionRequestHeader {
             topic: map
-                .get(EndTransactionRequestHeader::TOPIC)
+                .get(&CheetahString::from_static_str(
+                    EndTransactionRequestHeader::TOPIC,
+                ))
                 .cloned()
                 .unwrap_or_default(),
             producer_group: map
-                .get(EndTransactionRequestHeader::PRODUCER_GROUP)
+                .get(&CheetahString::from_static_str(
+                    EndTransactionRequestHeader::PRODUCER_GROUP,
+                ))
                 .cloned()
                 .unwrap_or_default(),
             tran_state_table_offset: map
-                .get(EndTransactionRequestHeader::TRAN_STATE_TABLE_OFFSET)
+                .get(&CheetahString::from_static_str(
+                    EndTransactionRequestHeader::TRAN_STATE_TABLE_OFFSET,
+                ))
                 .and_then(|s| s.parse::<u64>().ok())
                 .unwrap_or_default(),
             commit_log_offset: map
-                .get(EndTransactionRequestHeader::COMMIT_LOG_OFFSET)
+                .get(&CheetahString::from_static_str(
+                    EndTransactionRequestHeader::COMMIT_LOG_OFFSET,
+                ))
                 .and_then(|s| s.parse::<u64>().ok())
                 .unwrap_or_default(),
             commit_or_rollback: map
-                .get(EndTransactionRequestHeader::COMMIT_OR_ROLLBACK)
+                .get(&CheetahString::from_static_str(
+                    EndTransactionRequestHeader::COMMIT_OR_ROLLBACK,
+                ))
                 .and_then(|s| s.parse::<i32>().ok())
                 .unwrap_or_default(),
             from_transaction_check: map
-                .get(EndTransactionRequestHeader::FROM_TRANSACTION_CHECK)
+                .get(&CheetahString::from_static_str(
+                    EndTransactionRequestHeader::FROM_TRANSACTION_CHECK,
+                ))
                 .and_then(|s| s.parse::<bool>().ok())
                 .unwrap_or_default(),
             msg_id: map
-                .get(EndTransactionRequestHeader::MSG_ID)
+                .get(&CheetahString::from_static_str(
+                    EndTransactionRequestHeader::MSG_ID,
+                ))
                 .cloned()
                 .unwrap_or_default(),
             transaction_id: map
-                .get(EndTransactionRequestHeader::TRANSACTION_ID)
+                .get(&CheetahString::from_static_str(
+                    EndTransactionRequestHeader::TRANSACTION_ID,
+                ))
                 .cloned(),
             rpc_request_header: <RpcRequestHeader as FromMap>::from(map).unwrap_or_default(),
         })

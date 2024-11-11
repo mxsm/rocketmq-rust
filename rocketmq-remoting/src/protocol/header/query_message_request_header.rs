@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -24,9 +25,9 @@ use crate::rpc::topic_request_header::TopicRequestHeader;
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct QueryMessageRequestHeader {
-    pub topic: String,
+    pub topic: CheetahString,
 
-    pub key: String,
+    pub key: CheetahString,
 
     pub max_num: i32,
 
@@ -53,18 +54,24 @@ impl QueryMessageRequestHeader {
 }*/
 
 impl CommandCustomHeader for QueryMessageRequestHeader {
-    fn to_map(&self) -> Option<std::collections::HashMap<String, String>> {
+    fn to_map(&self) -> Option<std::collections::HashMap<CheetahString, CheetahString>> {
         let mut map = std::collections::HashMap::new();
-        map.insert(Self::TOPIC.to_string(), self.topic.clone());
-        map.insert(Self::KEY.to_string(), self.key.clone());
-        map.insert(Self::MAX_NUM.to_string(), self.max_num.to_string());
         map.insert(
-            Self::BEGIN_TIMESTAMP.to_string(),
-            self.begin_timestamp.to_string(),
+            CheetahString::from_static_str(Self::TOPIC),
+            self.topic.clone(),
+        );
+        map.insert(CheetahString::from_static_str(Self::KEY), self.key.clone());
+        map.insert(
+            CheetahString::from_static_str(Self::MAX_NUM),
+            CheetahString::from_string(self.max_num.to_string()),
         );
         map.insert(
-            Self::END_TIMESTAMP.to_string(),
-            self.end_timestamp.to_string(),
+            CheetahString::from_static_str(Self::BEGIN_TIMESTAMP),
+            CheetahString::from_string(self.begin_timestamp.to_string()),
+        );
+        map.insert(
+            CheetahString::from_static_str(Self::END_TIMESTAMP),
+            CheetahString::from_string(self.end_timestamp.to_string()),
         );
         if let Some(value) = self.topic_request_header.as_ref() {
             if let Some(val) = value.to_map() {
@@ -78,13 +85,24 @@ impl CommandCustomHeader for QueryMessageRequestHeader {
 impl FromMap for QueryMessageRequestHeader {
     type Target = Self;
 
-    fn from(map: &std::collections::HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &std::collections::HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(QueryMessageRequestHeader {
-            topic: map.get(Self::TOPIC)?.clone(),
-            key: map.get(Self::KEY)?.clone(),
-            max_num: map.get(Self::MAX_NUM)?.parse().ok()?,
-            begin_timestamp: map.get(Self::BEGIN_TIMESTAMP)?.parse().ok()?,
-            end_timestamp: map.get(Self::END_TIMESTAMP)?.parse().ok()?,
+            topic: map
+                .get(&CheetahString::from_static_str(Self::TOPIC))?
+                .clone(),
+            key: map.get(&CheetahString::from_static_str(Self::KEY))?.clone(),
+            max_num: map
+                .get(&CheetahString::from_static_str(Self::MAX_NUM))?
+                .parse()
+                .ok()?,
+            begin_timestamp: map
+                .get(&CheetahString::from_static_str(Self::BEGIN_TIMESTAMP))?
+                .parse()
+                .ok()?,
+            end_timestamp: map
+                .get(&CheetahString::from_static_str(Self::END_TIMESTAMP))?
+                .parse()
+                .ok()?,
             topic_request_header: <TopicRequestHeader as FromMap>::from(map),
         })
     }

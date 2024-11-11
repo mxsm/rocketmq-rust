@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -67,7 +68,7 @@ impl FromMap for DeleteTopicFromNamesrvRequestHeader {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RegisterTopicRequestHeader {
-    pub topic: String,
+    pub topic: CheetahString,
     #[serde(flatten)]
     pub topic_request: Option<TopicRequestHeader>,
 }
@@ -75,7 +76,7 @@ pub struct RegisterTopicRequestHeader {
 impl RegisterTopicRequestHeader {
     const TOPIC: &'static str = "topic";
 
-    pub fn new(topic: impl Into<String>) -> Self {
+    pub fn new(topic: impl Into<CheetahString>) -> Self {
         Self {
             topic: topic.into(),
             topic_request: None,
@@ -84,8 +85,11 @@ impl RegisterTopicRequestHeader {
 }
 
 impl CommandCustomHeader for RegisterTopicRequestHeader {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
-        let mut map = HashMap::from([(Self::TOPIC.to_string(), self.topic.clone())]);
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
+        let mut map = HashMap::from([(
+            CheetahString::from_static_str(Self::TOPIC),
+            self.topic.clone(),
+        )]);
         if let Some(ref request) = self.topic_request {
             if let Some(val) = request.to_map() {
                 map.extend(val);
@@ -97,9 +101,12 @@ impl CommandCustomHeader for RegisterTopicRequestHeader {
 impl FromMap for RegisterTopicRequestHeader {
     type Target = Self;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(RegisterTopicRequestHeader {
-            topic: map.get(Self::TOPIC).cloned().unwrap_or_default(),
+            topic: map
+                .get(&CheetahString::from_static_str(Self::TOPIC))
+                .cloned()
+                .unwrap_or_default(),
             topic_request: <TopicRequestHeader as FromMap>::from(map),
         })
     }
@@ -150,10 +157,13 @@ impl TopicRequestHeader {
 }
 
 impl CommandCustomHeader for TopicRequestHeader {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         let mut map = HashMap::new();
         if let Some(lo) = self.lo {
-            map.insert(Self::LO.to_string(), lo.to_string());
+            map.insert(
+                CheetahString::from_static_str(Self::LO),
+                CheetahString::from_string(lo.to_string()),
+            );
         }
         if let Some(ref rpc) = self.rpc {
             if let Some(rpc_map) = rpc.to_map() {
@@ -167,9 +177,11 @@ impl CommandCustomHeader for TopicRequestHeader {
 impl FromMap for TopicRequestHeader {
     type Target = Self;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(TopicRequestHeader {
-            lo: map.get(Self::LO).and_then(|s| s.parse::<bool>().ok()),
+            lo: map
+                .get(&CheetahString::from_static_str(Self::LO))
+                .and_then(|s| s.parse::<bool>().ok()),
             rpc: <RpcRequestHeader as FromMap>::from(map),
         })
     }

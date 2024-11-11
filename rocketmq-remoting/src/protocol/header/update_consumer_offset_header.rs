@@ -16,6 +16,7 @@
  */
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
@@ -31,8 +32,8 @@ pub struct UpdateConsumerOffsetResponseHeader {}
 #[derive(Debug, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateConsumerOffsetRequestHeader {
-    pub consumer_group: String,
-    pub topic: String,
+    pub consumer_group: CheetahString,
+    pub topic: CheetahString,
     pub queue_id: Option<i32>,
     pub commit_offset: Option<i64>,
     #[serde(flatten)]
@@ -46,18 +47,28 @@ impl UpdateConsumerOffsetRequestHeader {
 }
 
 impl CommandCustomHeader for UpdateConsumerOffsetRequestHeader {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         let mut map = HashMap::new();
+
         map.insert(
-            Self::CONSUMER_GROUP.to_string(),
+            CheetahString::from_static_str(Self::CONSUMER_GROUP),
             self.consumer_group.clone(),
         );
-        map.insert(Self::TOPIC.to_string(), self.topic.clone());
+        map.insert(
+            CheetahString::from_static_str(Self::TOPIC),
+            self.topic.clone(),
+        );
         if let Some(queue_id) = self.queue_id {
-            map.insert(Self::QUEUE_ID.to_string(), queue_id.to_string());
+            map.insert(
+                CheetahString::from_static_str(Self::QUEUE_ID),
+                CheetahString::from_string(queue_id.to_string()),
+            );
         }
         if let Some(commit_offset) = self.commit_offset {
-            map.insert(Self::COMMIT_OFFSET.to_string(), commit_offset.to_string());
+            map.insert(
+                CheetahString::from_static_str(Self::COMMIT_OFFSET),
+                CheetahString::from_string(commit_offset.to_string()),
+            );
         }
         if let Some(ref value) = self.topic_request_header {
             if let Some(val) = value.to_map() {
@@ -71,7 +82,7 @@ impl CommandCustomHeader for UpdateConsumerOffsetRequestHeader {
 impl FromMap for UpdateConsumerOffsetRequestHeader {
     type Target = Self;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(UpdateConsumerOffsetRequestHeader {
             consumer_group: map
                 .get(UpdateConsumerOffsetRequestHeader::CONSUMER_GROUP)

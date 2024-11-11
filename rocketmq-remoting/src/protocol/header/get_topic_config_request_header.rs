@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -25,7 +25,7 @@ use crate::rpc::topic_request_header::TopicRequestHeader;
 #[derive(Serialize, Deserialize, Debug)]
 pub struct GetTopicConfigRequestHeader {
     #[serde(rename = "topic")]
-    pub topic: String,
+    pub topic: CheetahString,
 
     #[serde(flatten)]
     pub topic_request_header: Option<TopicRequestHeader>,
@@ -34,18 +34,21 @@ pub struct GetTopicConfigRequestHeader {
 impl GetTopicConfigRequestHeader {
     pub const TOPIC: &'static str = "topic";
 
-    pub fn get_topic(&self) -> &String {
+    pub fn get_topic(&self) -> &CheetahString {
         &self.topic
     }
-    pub fn set_topic(&mut self, topic: String) {
+    pub fn set_topic(&mut self, topic: CheetahString) {
         self.topic = topic;
     }
 }
 
 impl CommandCustomHeader for GetTopicConfigRequestHeader {
-    fn to_map(&self) -> Option<std::collections::HashMap<String, String>> {
+    fn to_map(&self) -> Option<std::collections::HashMap<CheetahString, CheetahString>> {
         let mut map = std::collections::HashMap::new();
-        map.insert(Self::TOPIC.to_string(), self.topic.clone());
+        map.insert(
+            CheetahString::from_static_str(Self::TOPIC),
+            self.topic.clone(),
+        );
         if let Some(value) = self.topic_request_header.as_ref() {
             if let Some(value) = value.to_map() {
                 map.extend(value);
@@ -58,9 +61,12 @@ impl CommandCustomHeader for GetTopicConfigRequestHeader {
 impl FromMap for GetTopicConfigRequestHeader {
     type Target = Self;
 
-    fn from(map: &std::collections::HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &std::collections::HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(GetTopicConfigRequestHeader {
-            topic: map.get(Self::TOPIC).cloned().unwrap_or_default(),
+            topic: map
+                .get(&CheetahString::from_static_str(Self::TOPIC))
+                .cloned()
+                .unwrap_or_default(),
             topic_request_header: <TopicRequestHeader as FromMap>::from(map),
         })
     }

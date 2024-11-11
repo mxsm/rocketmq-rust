@@ -16,6 +16,7 @@
  */
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -51,19 +52,24 @@ impl TopicRequestHeader {
 impl FromMap for TopicRequestHeader {
     type Target = Self;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(TopicRequestHeader {
-            lo: map.get(Self::LO).and_then(|v| v.parse().ok()),
+            lo: map
+                .get(&CheetahString::from_static_str(Self::LO))
+                .and_then(|v| v.parse().ok()),
             rpc_request_header: <RpcRequestHeader as FromMap>::from(map),
         })
     }
 }
 
 impl CommandCustomHeader for TopicRequestHeader {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         let mut map = HashMap::new();
         if let Some(ref lo) = self.lo {
-            map.insert(Self::LO.to_string(), lo.to_string());
+            map.insert(
+                CheetahString::from_static_str(Self::LO),
+                CheetahString::from_string(lo.to_string()),
+            );
         }
         if let Some(value) = self.rpc_request_header.as_ref() {
             if let Some(rpc_map) = value.to_map() {

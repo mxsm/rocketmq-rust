@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -25,10 +26,10 @@ use crate::rpc::rpc_request_header::RpcRequestHeader;
 #[serde(rename_all = "camelCase")]
 pub struct ConsumerSendMsgBackRequestHeader {
     pub offset: i64,
-    pub group: String,
+    pub group: CheetahString,
     pub delay_level: i32,
-    pub origin_msg_id: Option<String>,
-    pub origin_topic: Option<String>,
+    pub origin_msg_id: Option<CheetahString>,
+    pub origin_topic: Option<CheetahString>,
     pub unit_mode: bool,
     pub max_reconsume_times: Option<i32>,
     #[serde(flatten)]

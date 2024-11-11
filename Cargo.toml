@@ -78,5 +78,7 @@ uuid = { version = "1.11.0", features = ["v4", # Lets you generate random UUIDs
     "fast-rng", # Use a faster (but still sufficiently random) RNG
     "macro-diagnostics", ] }
 
-    
+
 futures = "0.3"
+
+cheetah-string = { version = "0.1.0", features = ["serde", "bytes"] }

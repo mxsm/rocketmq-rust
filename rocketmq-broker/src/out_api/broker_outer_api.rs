@@ -18,6 +18,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Weak;
 
+use cheetah_string::CheetahString;
 use dns_lookup::lookup_host;
 use rocketmq_common::common::broker::broker_config::BrokerIdentity;
 use rocketmq_common::common::config::TopicConfig;
@@ -100,7 +101,7 @@ impl BrokerOuterAPI {
         }
     }
 
-    fn create_request(broker_name: String, topic_config: TopicConfig) -> RemotingCommand {
+    fn create_request(broker_name: CheetahString, topic_config: TopicConfig) -> RemotingCommand {
         let request_header =
             RegisterTopicRequestHeader::new(topic_config.topic_name.as_ref().unwrap());
         let queue_data = QueueData::new(
@@ -146,9 +147,9 @@ impl BrokerOuterAPI {
 
     pub async fn register_broker_all(
         &self,
-        cluster_name: String,
+        cluster_name: CheetahString,
         broker_addr: String,
-        broker_name: String,
+        broker_name: CheetahString,
         broker_id: u64,
         ha_server_addr: String,
         topic_config_wrapper: TopicConfigAndMappingSerializeWrapper,
@@ -297,7 +298,7 @@ impl BrokerOuterAPI {
     /// This method is used to replace incremental broker registration feature.
     pub async fn register_single_topic_all(
         &self,
-        broker_name: String,
+        broker_name: CheetahString,
         topic_config: TopicConfig,
         timeout_mills: u64,
     ) {

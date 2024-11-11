@@ -17,6 +17,7 @@
 use std::collections::HashMap;
 
 use anyhow::Error;
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -140,7 +141,7 @@ impl CommandCustomHeader for BrokerHeartbeatRequestHeader {
         todo!()
     }
 
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         todo!()
     }
 }

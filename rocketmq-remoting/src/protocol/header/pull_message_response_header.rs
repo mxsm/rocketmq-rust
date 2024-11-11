@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 
 use bytes::BytesMut;
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -49,31 +50,55 @@ impl PullMessageResponseHeader {
 }
 
 impl CommandCustomHeader for PullMessageResponseHeader {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         let mut map = HashMap::new();
         if let Some(value) = self.suggest_which_broker_id {
-            map.insert(Self::SUGGEST_WHICH_BROKER_ID.to_string(), value.to_string());
+            map.insert(
+                CheetahString::from_static_str(Self::SUGGEST_WHICH_BROKER_ID),
+                CheetahString::from_string(value.to_string()),
+            );
         }
         if let Some(value) = self.next_begin_offset {
-            map.insert(Self::NEXT_BEGIN_OFFSET.to_string(), value.to_string());
+            map.insert(
+                CheetahString::from_static_str(Self::NEXT_BEGIN_OFFSET),
+                CheetahString::from_string(value.to_string()),
+            );
         }
         if let Some(value) = self.min_offset {
-            map.insert(Self::MIN_OFFSET.to_string(), value.to_string());
+            map.insert(
+                CheetahString::from_static_str(Self::MIN_OFFSET),
+                CheetahString::from_string(value.to_string()),
+            );
         }
         if let Some(value) = self.max_offset {
-            map.insert(Self::MAX_OFFSET.to_string(), value.to_string());
+            map.insert(
+                CheetahString::from_static_str(Self::MAX_OFFSET),
+                CheetahString::from_string(value.to_string()),
+            );
         }
         if let Some(value) = self.offset_delta {
-            map.insert(Self::OFFSET_DELTA.to_string(), value.to_string());
+            map.insert(
+                CheetahString::from_static_str(Self::OFFSET_DELTA),
+                CheetahString::from_string(value.to_string()),
+            );
         }
         if let Some(value) = self.topic_sys_flag {
-            map.insert(Self::TOPIC_SYS_FLAG.to_string(), value.to_string());
+            map.insert(
+                CheetahString::from_static_str(Self::TOPIC_SYS_FLAG),
+                CheetahString::from_string(value.to_string()),
+            );
         }
         if let Some(value) = self.group_sys_flag {
-            map.insert(Self::GROUP_SYS_FLAG.to_string(), value.to_string());
+            map.insert(
+                CheetahString::from_static_str(Self::GROUP_SYS_FLAG),
+                CheetahString::from_string(value.to_string()),
+            );
         }
         if let Some(value) = self.forbidden_type {
-            map.insert(Self::FORBIDDEN_TYPE.to_string(), value.to_string());
+            map.insert(
+                CheetahString::from_static_str(Self::FORBIDDEN_TYPE),
+                CheetahString::from_string(value.to_string()),
+            );
         }
         Some(map)
     }
@@ -144,15 +169,31 @@ impl CommandCustomHeader for PullMessageResponseHeader {
 impl FromMap for PullMessageResponseHeader {
     type Target = Self;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
-        let suggest_which_broker_id = map.get(PullMessageResponseHeader::SUGGEST_WHICH_BROKER_ID);
-        let next_begin_offset = map.get(PullMessageResponseHeader::NEXT_BEGIN_OFFSET);
-        let min_offset = map.get(PullMessageResponseHeader::MIN_OFFSET);
-        let max_offset = map.get(PullMessageResponseHeader::MAX_OFFSET);
-        let offset_delta = map.get(PullMessageResponseHeader::OFFSET_DELTA);
-        let topic_sys_flag = map.get(PullMessageResponseHeader::TOPIC_SYS_FLAG);
-        let group_sys_flag = map.get(PullMessageResponseHeader::GROUP_SYS_FLAG);
-        let forbidden_type = map.get(PullMessageResponseHeader::FORBIDDEN_TYPE);
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
+        let suggest_which_broker_id = map.get(&CheetahString::from_static_str(
+            PullMessageResponseHeader::SUGGEST_WHICH_BROKER_ID,
+        ));
+        let next_begin_offset = map.get(&CheetahString::from_static_str(
+            PullMessageResponseHeader::NEXT_BEGIN_OFFSET,
+        ));
+        let min_offset = map.get(&CheetahString::from_static_str(
+            PullMessageResponseHeader::MIN_OFFSET,
+        ));
+        let max_offset = map.get(&CheetahString::from_static_str(
+            PullMessageResponseHeader::MAX_OFFSET,
+        ));
+        let offset_delta = map.get(&CheetahString::from_static_str(
+            PullMessageResponseHeader::OFFSET_DELTA,
+        ));
+        let topic_sys_flag = map.get(&CheetahString::from_static_str(
+            PullMessageResponseHeader::TOPIC_SYS_FLAG,
+        ));
+        let group_sys_flag = map.get(&CheetahString::from_static_str(
+            PullMessageResponseHeader::GROUP_SYS_FLAG,
+        ));
+        let forbidden_type = map.get(&CheetahString::from_static_str(
+            PullMessageResponseHeader::FORBIDDEN_TYPE,
+        ));
 
         Some(PullMessageResponseHeader {
             suggest_which_broker_id: suggest_which_broker_id.map(|v| v.parse().unwrap()),

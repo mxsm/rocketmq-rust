@@ -16,6 +16,7 @@
  */
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -31,7 +32,7 @@ pub struct UnlockBatchMqRequestHeader {
 }
 
 impl CommandCustomHeader for UnlockBatchMqRequestHeader {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         let mut map = HashMap::new();
         if let Some(value) = self.rpc_request_header.as_ref() {
             if let Some(value) = value.to_map() {
@@ -45,7 +46,7 @@ impl CommandCustomHeader for UnlockBatchMqRequestHeader {
 impl FromMap for UnlockBatchMqRequestHeader {
     type Target = Self;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         let rpc_request_header = <RpcRequestHeader as FromMap>::from(map);
         Some(UnlockBatchMqRequestHeader { rpc_request_header })
     }

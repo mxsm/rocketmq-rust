@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -27,9 +28,9 @@ use crate::rpc::rpc_request_header::RpcRequestHeader;
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct UnregisterClientRequestHeader {
     #[serde(rename = "clientID")]
-    pub client_id: String,
-    pub producer_group: Option<String>,
-    pub consumer_group: Option<String>,
+    pub client_id: CheetahString,
+    pub producer_group: Option<CheetahString>,
+    pub consumer_group: Option<CheetahString>,
     #[serde(flatten)]
     pub rpc_request_header: Option<RpcRequestHeader>,
 }
@@ -43,17 +44,23 @@ impl UnregisterClientRequestHeader {
 impl FromMap for UnregisterClientRequestHeader {
     type Target = Self;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(UnregisterClientRequestHeader {
             client_id: map
-                .get(UnregisterClientRequestHeader::CLIENT_ID)
-                .map(|s| s.to_string())
+                .get(&CheetahString::from_static_str(
+                    UnregisterClientRequestHeader::CLIENT_ID,
+                ))
+                .cloned()
                 .unwrap_or_default(),
             producer_group: map
-                .get(UnregisterClientRequestHeader::PRODUCER_GROUP)
+                .get(&CheetahString::from_static_str(
+                    UnregisterClientRequestHeader::PRODUCER_GROUP,
+                ))
                 .cloned(),
             consumer_group: map
-                .get(UnregisterClientRequestHeader::CONSUMER_GROUP)
+                .get(&CheetahString::from_static_str(
+                    UnregisterClientRequestHeader::CONSUMER_GROUP,
+                ))
                 .cloned(),
             rpc_request_header: <RpcRequestHeader as FromMap>::from(map),
         })
@@ -61,21 +68,21 @@ impl FromMap for UnregisterClientRequestHeader {
 }
 
 impl CommandCustomHeader for UnregisterClientRequestHeader {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         let mut map = HashMap::new();
         map.insert(
-            UnregisterClientRequestHeader::CLIENT_ID.to_string(),
+            CheetahString::from_static_str(UnregisterClientRequestHeader::CLIENT_ID),
             self.client_id.clone(),
         );
         if let Some(producer_group) = &self.producer_group {
             map.insert(
-                UnregisterClientRequestHeader::PRODUCER_GROUP.to_string(),
+                CheetahString::from_static_str(UnregisterClientRequestHeader::PRODUCER_GROUP),
                 producer_group.clone(),
             );
         }
         if let Some(consumer_group) = &self.consumer_group {
             map.insert(
-                UnregisterClientRequestHeader::CONSUMER_GROUP.to_string(),
+                CheetahString::from_static_str(UnregisterClientRequestHeader::CONSUMER_GROUP),
                 consumer_group.clone(),
             );
         }

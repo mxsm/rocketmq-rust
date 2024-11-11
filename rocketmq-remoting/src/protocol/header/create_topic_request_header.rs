@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -24,10 +25,10 @@ use crate::rpc::topic_request_header::TopicRequestHeader;
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CreateTopicRequestHeader {
     #[serde(rename = "topic")]
-    pub topic: String,
+    pub topic: CheetahString,
 
     #[serde(rename = "defaultTopic")]
-    pub default_topic: String,
+    pub default_topic: CheetahString,
 
     #[serde(rename = "readQueueNums")]
     pub read_queue_nums: i32,
@@ -39,7 +40,7 @@ pub struct CreateTopicRequestHeader {
     pub perm: i32,
 
     #[serde(rename = "topicFilterType")]
-    pub topic_filter_type: String,
+    pub topic_filter_type: CheetahString,
 
     #[serde(rename = "topicSysFlag")]
     pub topic_sys_flag: Option<i32>,
@@ -48,7 +49,7 @@ pub struct CreateTopicRequestHeader {
     pub order: bool,
 
     #[serde(rename = "attributes")]
-    pub attributes: Option<String>,
+    pub attributes: Option<CheetahString>,
 
     #[serde(rename = "force")]
     pub force: Option<bool>,
@@ -73,30 +74,53 @@ impl CreateTopicRequestHeader {
 impl CommandCustomHeader for CreateTopicRequestHeader {
     fn to_map(&self) -> Option<std::collections::HashMap<String, String>> {
         let mut map = std::collections::HashMap::new();
-        map.insert(Self::TOPIC.to_string(), self.topic.clone());
-        map.insert(Self::DEFAULT_TOPIC.to_string(), self.default_topic.clone());
         map.insert(
-            Self::READ_QUEUE_NUMS.to_string(),
-            self.read_queue_nums.to_string(),
+            CheetahString::from_static_str(Self::TOPIC),
+            self.topic.clone(),
         );
         map.insert(
-            Self::WRITE_QUEUE_NUMS.to_string(),
-            self.write_queue_nums.to_string(),
+            CheetahString::from_static_str(Self::DEFAULT_TOPIC),
+            self.default_topic.clone(),
         );
-        map.insert(Self::PERM.to_string(), self.perm.to_string());
         map.insert(
-            Self::TOPIC_FILTER_TYPE.to_string(),
+            CheetahString::from_static_str(Self::READ_QUEUE_NUMS),
+            CheetahString::from_string(self.read_queue_nums.to_string()),
+        );
+        map.insert(
+            CheetahString::from_static_str(Self::WRITE_QUEUE_NUMS),
+            CheetahString::from_string(self.write_queue_nums.to_string()),
+        );
+        map.insert(
+            CheetahString::from_static_str(Self::PERM),
+            CheetahString::from_string(self.perm.to_string()),
+        );
+        map.insert(
+            CheetahString::from_static_str(Self::TOPIC_FILTER_TYPE),
             self.topic_filter_type.clone(),
         );
+
         if let Some(ref topic_sys_flag) = self.topic_sys_flag {
-            map.insert(Self::TOPIC_SYS_FLAG.to_string(), topic_sys_flag.to_string());
+            map.insert(
+                CheetahString::from_static_str(Self::TOPIC_SYS_FLAG),
+                CheetahString::from_string(topic_sys_flag.to_string()),
+            );
         }
-        map.insert(Self::ORDER.to_string(), self.order.to_string());
+        map.insert(
+            CheetahString::from_static_str(Self::ORDER),
+            CheetahString::from_string(self.order.to_string()),
+        );
+
         if let Some(ref attributes) = self.attributes {
-            map.insert(Self::ATTRIBUTES.to_string(), attributes.clone());
+            map.insert(
+                CheetahString::from_static_str(Self::ATTRIBUTES),
+                attributes.clone(),
+            );
         }
         if let Some(ref force) = self.force {
-            map.insert(Self::FORCE.to_string(), force.to_string());
+            map.insert(
+                CheetahString::from_static_str(Self::FORCE),
+                CheetahString::from_string(force.to_string()),
+            );
         }
         if let Some(value) = self.topic_request_header.as_ref() {
             if let Some(value) = value.to_map() {
@@ -110,7 +134,7 @@ impl CommandCustomHeader for CreateTopicRequestHeader {
 impl FromMap for CreateTopicRequestHeader {
     type Target = Self;
 
-    fn from(map: &std::collections::HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &std::collections::HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(CreateTopicRequestHeader {
             topic: map.get(Self::TOPIC).cloned().unwrap_or_default(),
             default_topic: map.get(Self::DEFAULT_TOPIC).cloned().unwrap_or_default(),

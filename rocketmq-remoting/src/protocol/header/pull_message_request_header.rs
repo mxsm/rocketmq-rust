@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 
 use bytes::BytesMut;
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -30,20 +31,20 @@ use crate::rpc::rpc_request_header::RpcRequestHeader;
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PullMessageRequestHeader {
-    pub consumer_group: String,
-    pub topic: String,
+    pub consumer_group: CheetahString,
+    pub topic: CheetahString,
     pub queue_id: Option<i32>,
     pub queue_offset: i64,
     pub max_msg_nums: i32,
     pub sys_flag: i32,
     pub commit_offset: i64,
     pub suspend_timeout_millis: u64,
-    pub subscription: Option<String>,
+    pub subscription: Option<CheetahString>,
     pub sub_version: i64,
-    pub expression_type: Option<String>,
+    pub expression_type: Option<CheetahString>,
     pub max_msg_bytes: Option<i32>,
     pub request_source: Option<i32>,
-    pub proxy_forward_client_id: Option<String>,
+    pub proxy_forward_client_id: Option<CheetahString>,
     #[serde(flatten)]
     pub topic_request: Option<TopicRequestHeader>,
 }
@@ -66,7 +67,7 @@ impl PullMessageRequestHeader {
 }
 
 impl CommandCustomHeader for PullMessageRequestHeader {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         let mut map = HashMap::new();
 
         map.insert(

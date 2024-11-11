@@ -16,6 +16,7 @@
  */
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -31,7 +32,7 @@ pub struct HeartbeatRequestHeader {
 }
 
 impl CommandCustomHeader for HeartbeatRequestHeader {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         let mut map = HashMap::new();
         if let Some(value) = self.rpc_request.as_ref() {
             if let Some(value) = value.to_map() {
@@ -45,7 +46,7 @@ impl CommandCustomHeader for HeartbeatRequestHeader {
 impl FromMap for HeartbeatRequestHeader {
     type Target = Self;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(HeartbeatRequestHeader {
             rpc_request: <RpcRequestHeader as FromMap>::from(map),
         })

@@ -16,6 +16,7 @@
  */
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -99,13 +100,13 @@ impl FromMap for WipeWritePermOfBrokerResponseHeader {
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AddWritePermOfBrokerRequestHeader {
-    pub broker_name: String,
+    pub broker_name: CheetahString,
 }
 
 impl AddWritePermOfBrokerRequestHeader {
     const BROKER_NAME: &'static str = "brokerName";
 
-    pub fn new(broker_name: impl Into<String>) -> Self {
+    pub fn new(broker_name: impl Into<CheetahString>) -> Self {
         Self {
             broker_name: broker_name.into(),
         }
@@ -113,9 +114,9 @@ impl AddWritePermOfBrokerRequestHeader {
 }
 
 impl CommandCustomHeader for AddWritePermOfBrokerRequestHeader {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         Some(HashMap::from([(
-            Self::BROKER_NAME.to_string(),
+            CheetahString::from_static_str(Self::BROKER_NAME),
             self.broker_name.clone(),
         )]))
     }
@@ -124,10 +125,12 @@ impl CommandCustomHeader for AddWritePermOfBrokerRequestHeader {
 impl FromMap for AddWritePermOfBrokerRequestHeader {
     type Target = Self;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(AddWritePermOfBrokerRequestHeader {
             broker_name: map
-                .get(AddWritePermOfBrokerRequestHeader::BROKER_NAME)
+                .get(&CheetahString::from_static_str(
+                    AddWritePermOfBrokerRequestHeader::BROKER_NAME,
+                ))
                 .cloned()
                 .unwrap_or_default(),
         })
