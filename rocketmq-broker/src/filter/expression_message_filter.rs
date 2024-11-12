@@ -17,6 +17,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_store::consume_queue::consume_queue_ext::CqExtUnit;
@@ -87,7 +88,7 @@ impl MessageFilter for ExpressionMessageFilter {
     fn is_matched_by_commit_log(
         &self,
         msg_buffer: Option<&[u8]>,
-        properties: Option<&HashMap<String, String>>,
+        properties: Option<&HashMap<CheetahString, CheetahString>>,
     ) -> bool {
         if self.subscription_data.is_none() {
             return true;

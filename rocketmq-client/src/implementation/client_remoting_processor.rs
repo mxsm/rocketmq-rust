@@ -17,6 +17,7 @@
 use std::net::SocketAddr;
 
 use bytes::Bytes;
+use cheetah_string::CheetahString;
 use rocketmq_common::common::compression::compressor_factory::CompressorFactory;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::MessageConst;
@@ -106,7 +107,7 @@ impl ClientRemotingProcessor {
             .unwrap();
 
         let mut msg = MessageExt::default();
-        msg.message.topic = request_header.topic.clone().to_string();
+        msg.message.topic = request_header.topic.clone();
         msg.queue_id = request_header.queue_id;
         msg.store_timestamp = request_header.store_timestamp;
         if !request_header.born_host.is_empty() {
@@ -157,8 +158,8 @@ impl ClientRemotingProcessor {
         );
         MessageAccessor::put_property(
             &mut msg.message,
-            MessageConst::PROPERTY_REPLY_MESSAGE_ARRIVE_TIME.to_owned(),
-            receive_time.to_string(),
+            CheetahString::from_static_str(MessageConst::PROPERTY_REPLY_MESSAGE_ARRIVE_TIME),
+            CheetahString::from_string(receive_time.to_string()),
         );
         msg.born_timestamp = request_header.born_timestamp;
         msg.reconsume_times = request_header.reconsume_times.unwrap_or(0);
@@ -170,8 +171,10 @@ impl ClientRemotingProcessor {
     async fn process_reply_message(reply_msg: MessageExt) {
         let correlation_id = reply_msg
             .message
-            .get_property(MessageConst::PROPERTY_CORRELATION_ID)
-            .unwrap_or("".to_string());
+            .get_property(&CheetahString::from_static_str(
+                MessageConst::PROPERTY_CORRELATION_ID,
+            ))
+            .unwrap_or_default();
         if let Some(request_response_future) = REQUEST_FUTURE_HOLDER
             .get_request(correlation_id.as_str())
             .await
@@ -238,16 +241,19 @@ impl ClientRemotingProcessor {
                             .unwrap_or_default()
                             .as_str(),
                     );
-                    message_ext.set_topic(topic);
+                    message_ext.set_topic(CheetahString::from_string(topic));
                 }
-                let transaction_id =
-                    message_ext.get_property(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX);
+                let transaction_id = message_ext.get_property(&CheetahString::from_static_str(
+                    MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
+                ));
                 if let Some(transaction_id) = transaction_id {
                     if !transaction_id.is_empty() {
                         message_ext.set_transaction_id(transaction_id);
                     }
                 }
-                let group = message_ext.get_property(MessageConst::PROPERTY_PRODUCER_GROUP);
+                let group = message_ext.get_property(&CheetahString::from_static_str(
+                    MessageConst::PROPERTY_PRODUCER_GROUP,
+                ));
                 if let Some(group) = group {
                     let producer = client_instance.select_producer(&group).await;
                     if let Some(producer) = producer {

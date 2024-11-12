@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_rust::ArcMut;
@@ -139,7 +140,7 @@ where
         tags_code: Option<i64>,
         msg_store_time: i64,
         filter_bit_map: Option<Vec<u8>>,
-        properties: Option<&HashMap<String, String>>,
+        properties: Option<&HashMap<CheetahString, CheetahString>>,
     ) {
         let key = build_key(topic, queue_id);
         let mut table = self.pull_request_table.write();

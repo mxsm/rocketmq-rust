@@ -17,6 +17,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::compression::compression_type::CompressionType;
 use rocketmq_common::common::compression::compressor::Compressor;
 use rocketmq_remoting::runtime::RPCHook;
@@ -252,7 +253,7 @@ impl TransactionMQProducerBuilder {
             mq_producer.set_retry_response_codes(retry_response_codes);
         }
         if let Some(producer_group) = self.producer_group {
-            mq_producer.set_producer_group(producer_group);
+            mq_producer.set_producer_group(CheetahString::from_string(producer_group));
         }
         if let Some(topics) = self.topics {
             mq_producer.set_topics(topics);

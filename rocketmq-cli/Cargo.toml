@@ -18,6 +18,7 @@ rocketmq-store = { workspace = true }
 clap = { version = "4.5.20", features = ["derive"] }
 tabled = "0.16.0"
 bytes = { workspace = true }
+cheetah-string = { workspace = true }
 [[bin]]
 name = "rocketmq-cli-rust"
 path = "src/bin/rocketmq_cli.rs"

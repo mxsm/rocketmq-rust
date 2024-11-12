@@ -21,6 +21,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 
+use cheetah_string::CheetahString;
 use once_cell::sync::Lazy;
 use rocketmq_common::common::message::message_client_ext::MessageClientExt;
 use rocketmq_common::common::message::message_ext::MessageExt;
@@ -173,11 +174,11 @@ impl ProcessQueue {
 
             let mut msg = msg.unwrap();
             let msg_inner = &mut msg.as_mut().message_ext_inner;
-            msg_inner.set_topic(
+            msg_inner.set_topic(CheetahString::from_string(
                 push_consumer
                     .client_config
                     .with_namespace(msg_inner.topic()),
-            );
+            ));
             let _ = push_consumer
                 .send_message_back_with_broker_name(msg_inner, 3, None, None)
                 .await;
@@ -198,7 +199,9 @@ impl ProcessQueue {
 
         let acc_total = if !messages.is_empty() {
             let message_ext = messages.last().unwrap();
-            if let Some(property) = message_ext.get_property(MessageConst::PROPERTY_MAX_OFFSET) {
+            if let Some(property) = message_ext.get_property(&CheetahString::from_static_str(
+                MessageConst::PROPERTY_MAX_OFFSET,
+            )) {
                 property.parse::<i64>().unwrap() - message_ext.message_ext_inner.queue_offset
             } else {
                 0

@@ -409,7 +409,7 @@ impl DefaultMQProducerImpl {
                         .unwrap_or("".to_string())
                         .as_str(),
                 );
-                user_message.set_topic(user_topic);
+                user_message.set_topic(CheetahString::from_string(user_topic));
                 let message_queue = selector(&message_queue_list, &msg, &arg);
                 let cost_time = begin_start_time.elapsed().as_millis() as u64;
                 if timeout < cost_time {
@@ -727,9 +727,8 @@ impl DefaultMQProducerImpl {
                             //Reset topic with namespace during resend.
                             let namespace =
                                 self.client_config.get_namespace().unwrap_or("".to_string());
-                            msg.set_topic(NamespaceUtil::wrap_namespace(
-                                namespace.as_str(),
-                                topic.as_str(),
+                            msg.set_topic(CheetahString::from_string(
+                                NamespaceUtil::wrap_namespace(namespace.as_str(), topic.as_str()),
                             ));
                         }
                         let cost_time =
@@ -997,7 +996,9 @@ impl DefaultMQProducerImpl {
         }
         let mut topic_with_namespace = false;
         if self.client_config.get_namespace().is_some() {
-            msg.set_instance_id(self.client_config.get_namespace().unwrap());
+            msg.set_instance_id(CheetahString::from_string(
+                self.client_config.get_namespace().unwrap(),
+            ));
             topic_with_namespace = true;
         }
         let mut sys_flag = 0i32;
@@ -1007,7 +1008,9 @@ impl DefaultMQProducerImpl {
             sys_flag |= self.producer_config.compress_type().get_compression_flag();
             msg_body_compressed = true;
         }
-        let tran_msg = msg.get_property(MessageConst::PROPERTY_TRANSACTION_PREPARED);
+        let tran_msg = msg.get_property(&CheetahString::from_static_str(
+            MessageConst::PROPERTY_TRANSACTION_PREPARED,
+        ));
         if let Some(value) = tran_msg {
             let value_ = value.parse().unwrap_or(false);
             if value_ {
@@ -1033,12 +1036,18 @@ impl DefaultMQProducerImpl {
             let namespace = self.client_config.get_namespace();
             let producer_group = self.producer_config.producer_group().to_string();
             let born_host = self.client_config.client_ip.clone();
-            let is_trans = msg.get_property(MessageConst::PROPERTY_TRANSACTION_PREPARED);
+            let is_trans = msg.get_property(&CheetahString::from_static_str(
+                MessageConst::PROPERTY_TRANSACTION_PREPARED,
+            ));
             let msg_type_flag = msg
-                .get_property(MessageConst::PROPERTY_STARTDE_LIVER_TIME)
+                .get_property(&CheetahString::from_static_str(
+                    MessageConst::PROPERTY_STARTDE_LIVER_TIME,
+                ))
                 .is_some()
                 || msg
-                    .get_property(MessageConst::PROPERTY_DELAY_TIME_LEVEL)
+                    .get_property(&CheetahString::from_static_str(
+                        MessageConst::PROPERTY_DELAY_TIME_LEVEL,
+                    ))
                     .is_some();
             let mut send_message_context = SendMessageContext {
                 producer: self.default_mqproducer_impl_inner.clone(),
@@ -1082,8 +1091,8 @@ impl DefaultMQProducerImpl {
             sys_flag,
             born_timestamp: get_current_millis() as i64,
             flag: msg.get_flag(),
-            properties: Some(CheetahString::from_string(
-                MessageDecoder::message_properties_to_string(msg.get_properties()),
+            properties: Some(MessageDecoder::message_properties_to_string(
+                msg.get_properties(),
             )),
             reconsume_times: Some(0),
             unit_mode: Some(self.is_unit_mode()),
@@ -1118,12 +1127,14 @@ impl DefaultMQProducerImpl {
         let send_result = match communication_mode {
             CommunicationMode::Async => {
                 if topic_with_namespace {
-                    msg.set_topic(NamespaceUtil::without_namespace_with_namespace(
-                        msg.get_topic(),
-                        self.client_config
-                            .get_namespace()
-                            .unwrap_or(String::from(""))
-                            .as_str(),
+                    msg.set_topic(CheetahString::from_string(
+                        NamespaceUtil::without_namespace_with_namespace(
+                            msg.get_topic(),
+                            self.client_config
+                                .get_namespace()
+                                .unwrap_or(String::from(""))
+                                .as_str(),
+                        ),
                     ));
                 }
                 let cost_time_sync = (Instant::now() - begin_start_time).as_millis() as u64;
@@ -1364,7 +1375,7 @@ impl DefaultMQProducerImpl {
                         .unwrap_or("".to_string())
                         .as_str(),
                 );
-                user_message.set_topic(user_topic);
+                user_message.set_topic(CheetahString::from_string(user_topic));
                 let message_queue = selector(&message_queue_list, msg, arg);
                 let cost_time = begin_start_time.elapsed().as_millis() as u64;
                 if timeout < cost_time {
@@ -1439,7 +1450,9 @@ impl DefaultMQProducerImpl {
         let begin_timestamp = Instant::now();
         self.prepare_send_request(&mut msg, timeout).await;
         let correlation_id = msg
-            .get_property(MessageConst::PROPERTY_CORRELATION_ID)
+            .get_property(&CheetahString::from_static_str(
+                MessageConst::PROPERTY_CORRELATION_ID,
+            ))
             .unwrap();
         let request_response_future = Arc::new(RequestResponseFuture::new(
             correlation_id.clone(),
@@ -1447,7 +1460,7 @@ impl DefaultMQProducerImpl {
             None,
         ));
         REQUEST_FUTURE_HOLDER
-            .put_request(correlation_id.clone(), request_response_future.clone())
+            .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
         let cost = begin_timestamp.elapsed().as_millis() as u64;
         let request_response_future_inner = request_response_future.clone();
@@ -1504,7 +1517,9 @@ impl DefaultMQProducerImpl {
         let begin_timestamp = Instant::now();
         self.prepare_send_request(&mut msg, timeout).await;
         let correlation_id = msg
-            .get_property(MessageConst::PROPERTY_CORRELATION_ID)
+            .get_property(&CheetahString::from_static_str(
+                MessageConst::PROPERTY_CORRELATION_ID,
+            ))
             .unwrap();
         let request_response_future = Arc::new(RequestResponseFuture::new(
             correlation_id.clone(),
@@ -1512,7 +1527,7 @@ impl DefaultMQProducerImpl {
             Some(request_callback.clone()),
         ));
         REQUEST_FUTURE_HOLDER
-            .put_request(correlation_id.clone(), request_response_future.clone())
+            .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
         let cost = begin_timestamp.elapsed().as_millis() as u64;
         let send_callback = move |result: Option<&SendResult>,
@@ -1553,7 +1568,9 @@ impl DefaultMQProducerImpl {
         let begin_timestamp = Instant::now();
         self.prepare_send_request(&mut msg, timeout).await;
         let correlation_id = msg
-            .get_property(MessageConst::PROPERTY_CORRELATION_ID)
+            .get_property(&CheetahString::from_static_str(
+                MessageConst::PROPERTY_CORRELATION_ID,
+            ))
             .unwrap();
         let request_response_future = Arc::new(RequestResponseFuture::new(
             correlation_id.clone(),
@@ -1561,7 +1578,7 @@ impl DefaultMQProducerImpl {
             None,
         ));
         REQUEST_FUTURE_HOLDER
-            .put_request(correlation_id.clone(), request_response_future.clone())
+            .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
         let cost = begin_timestamp.elapsed().as_millis() as u64;
         let request_response_future_inner = request_response_future.clone();
@@ -1612,7 +1629,9 @@ impl DefaultMQProducerImpl {
         let begin_timestamp = Instant::now();
         self.prepare_send_request(&mut msg, timeout).await;
         let correlation_id = msg
-            .get_property(MessageConst::PROPERTY_CORRELATION_ID)
+            .get_property(&CheetahString::from_static_str(
+                MessageConst::PROPERTY_CORRELATION_ID,
+            ))
             .unwrap();
         let request_response_future = Arc::new(RequestResponseFuture::new(
             correlation_id.clone(),
@@ -1620,7 +1639,7 @@ impl DefaultMQProducerImpl {
             Some(request_callback.clone()),
         ));
         REQUEST_FUTURE_HOLDER
-            .put_request(correlation_id.clone(), request_response_future.clone())
+            .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
         let cost = begin_timestamp.elapsed().as_millis() as u64;
         let send_callback = move |result: Option<&SendResult>,
@@ -1660,7 +1679,9 @@ impl DefaultMQProducerImpl {
         let begin_timestamp = Instant::now();
         self.prepare_send_request(&mut msg, timeout).await;
         let correlation_id = msg
-            .get_property(MessageConst::PROPERTY_CORRELATION_ID)
+            .get_property(&CheetahString::from_static_str(
+                MessageConst::PROPERTY_CORRELATION_ID,
+            ))
             .unwrap();
         let request_response_future = Arc::new(RequestResponseFuture::new(
             correlation_id.clone(),
@@ -1668,7 +1689,7 @@ impl DefaultMQProducerImpl {
             Some(request_callback.clone()),
         ));
         REQUEST_FUTURE_HOLDER
-            .put_request(correlation_id.clone(), request_response_future.clone())
+            .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
         let cost = begin_timestamp.elapsed().as_millis() as u64;
         let send_callback = move |result: Option<&SendResult>,
@@ -1714,7 +1735,9 @@ impl DefaultMQProducerImpl {
         let begin_timestamp = Instant::now();
         self.prepare_send_request(&mut msg, timeout).await;
         let correlation_id = msg
-            .get_property(MessageConst::PROPERTY_CORRELATION_ID)
+            .get_property(&CheetahString::from_static_str(
+                MessageConst::PROPERTY_CORRELATION_ID,
+            ))
             .unwrap();
         let request_response_future = Arc::new(RequestResponseFuture::new(
             correlation_id.clone(),
@@ -1722,7 +1745,7 @@ impl DefaultMQProducerImpl {
             None,
         ));
         REQUEST_FUTURE_HOLDER
-            .put_request(correlation_id.clone(), request_response_future.clone())
+            .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
         let request_response_future_inner = request_response_future.clone();
         let send_callback = move |result: Option<&SendResult>,
@@ -1801,18 +1824,18 @@ impl DefaultMQProducerImpl {
         let request_client_id = self.client_instance.as_mut().unwrap().client_id.clone();
         MessageAccessor::put_property(
             msg,
-            MessageConst::PROPERTY_CORRELATION_ID.to_owned(),
-            correlation_id,
+            CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID),
+            CheetahString::from_string(correlation_id),
         );
         MessageAccessor::put_property(
             msg,
-            MessageConst::PROPERTY_MESSAGE_REPLY_TO_CLIENT.to_owned(),
-            request_client_id,
+            CheetahString::from_static_str(MessageConst::PROPERTY_MESSAGE_REPLY_TO_CLIENT),
+            CheetahString::from_string(request_client_id),
         );
         MessageAccessor::put_property(
             msg,
-            MessageConst::PROPERTY_MESSAGE_TTL.to_owned(),
-            timeout.to_string(),
+            CheetahString::from_static_str(MessageConst::PROPERTY_MESSAGE_TTL),
+            CheetahString::from_string(timeout.to_string()),
         );
         let guard = self
             .client_instance
@@ -1821,7 +1844,7 @@ impl DefaultMQProducerImpl {
             .topic_route_table
             .read()
             .await;
-        let has_route_data = guard.contains_key(msg.get_topic());
+        let has_route_data = guard.contains_key(msg.get_topic().as_str());
         drop(guard);
         if !has_route_data {
             let begin_timestamp = Instant::now();
@@ -1854,13 +1877,13 @@ impl DefaultMQProducerImpl {
         Validators::check_message(Some(&msg), self.producer_config.as_ref())?;
         MessageAccessor::put_property(
             &mut msg,
-            MessageConst::PROPERTY_TRANSACTION_PREPARED.to_owned(),
-            "true".to_owned(),
+            CheetahString::from_static_str(MessageConst::PROPERTY_TRANSACTION_PREPARED),
+            CheetahString::from_string("true".to_owned()),
         );
         MessageAccessor::put_property(
             &mut msg,
-            MessageConst::PROPERTY_PRODUCER_GROUP.to_owned(),
-            self.producer_config.producer_group().to_owned(),
+            CheetahString::from_static_str(MessageConst::PROPERTY_PRODUCER_GROUP),
+            CheetahString::from_string(self.producer_config.producer_group().to_owned()),
         );
         let result = self.send(&mut msg).await;
         if let Err(e) = result {
@@ -1874,12 +1897,13 @@ impl DefaultMQProducerImpl {
             SendStatus::SendOk => {
                 if let Some(ref transaction_id) = send_result.transaction_id {
                     msg.put_user_property(
-                        MessageConst::PROPERTY_TRANSACTION_ID.to_owned(),
-                        transaction_id.to_owned(),
+                        CheetahString::from_static_str(MessageConst::PROPERTY_TRANSACTION_ID),
+                        CheetahString::from_string(transaction_id.to_owned()),
                     );
                 }
-                let transaction_id =
-                    msg.get_property(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX);
+                let transaction_id = msg.get_property(&CheetahString::from_static_str(
+                    MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
+                ));
                 if let Some(transaction_id) = transaction_id {
                     msg.set_transaction_id(transaction_id);
                 }
@@ -1960,7 +1984,7 @@ impl DefaultMQProducerImpl {
                 LocalTransactionState::Unknown => MessageSysFlag::TRANSACTION_NOT_TYPE,
             },
             from_transaction_check: false,
-            msg_id: CheetahString::from_string(send_result.msg_id.clone().unwrap_or_default()),
+            msg_id: send_result.msg_id.clone().unwrap_or_default(),
             transaction_id: transaction_id.map(CheetahString::from_string),
             rpc_request_header: RpcRequestHeader {
                 broker_name: Some(CheetahString::from_string(dest_broker_name)),
@@ -1990,7 +2014,7 @@ impl DefaultMQProducerImpl {
     pub fn do_execute_end_transaction_hook(
         &mut self,
         msg: &Message,
-        msg_id: &String,
+        msg_id: &str,
         broker_addr: &str,
         local_transaction_state: LocalTransactionState,
         from_transaction_check: bool,
@@ -2091,8 +2115,9 @@ impl MQProducerInner for DefaultMQProducerImpl {
             .unwrap()
             .get_handle()
             .spawn(async move {
-                let mut unique_key =
-                    msg.get_property(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX);
+                let mut unique_key = msg.get_property(&CheetahString::from_static_str(
+                    MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
+                ));
                 if unique_key.is_none() {
                     unique_key = Some(msg.msg_id.clone());
                 }
@@ -2117,7 +2142,7 @@ impl MQProducerInner for DefaultMQProducerImpl {
                         LocalTransactionState::Unknown => MessageSysFlag::TRANSACTION_NOT_TYPE,
                     },
                     from_transaction_check: true,
-                    msg_id: CheetahString::from_string(unique_key.clone().unwrap_or_default()),
+                    msg_id: unique_key.clone().unwrap_or_default(),
                     transaction_id: check_request_header.transaction_id.clone(),
                     rpc_request_header: RpcRequestHeader {
                         broker_name: check_request_header
@@ -2129,7 +2154,7 @@ impl MQProducerInner for DefaultMQProducerImpl {
                 };
                 producer_impl_inner.do_execute_end_transaction_hook(
                     &msg.message,
-                    unique_key.as_ref().unwrap(),
+                    unique_key.as_ref().unwrap().as_str(),
                     broker_addr.as_str(),
                     transaction_state,
                     true,

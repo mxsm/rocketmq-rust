@@ -297,8 +297,8 @@ impl TopicRequestHeaderTrait for SendMessageRequestHeaderV2 {
         self.b = topic;
     }
 
-    fn topic(&self) -> &str {
-        self.b.as_str()
+    fn topic(&self) -> &CheetahString {
+        &self.b
     }
 
     fn broker_name(&self) -> Option<&str> {

@@ -16,6 +16,7 @@
  */
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_arriving_listener::MessageArrivingListener;
 use rocketmq_store::log_file::MessageStore;
@@ -50,7 +51,7 @@ where
         tags_code: Option<i64>,
         msg_store_time: i64,
         filter_bit_map: Option<Vec<u8>>,
-        properties: Option<&HashMap<String, String>>,
+        properties: Option<&HashMap<CheetahString, CheetahString>>,
     ) {
         self.pull_request_hold_service.notify_message_arriving_ext(
             topic,

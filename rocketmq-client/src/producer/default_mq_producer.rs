@@ -18,6 +18,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::compression::compression_type::CompressionType;
 use rocketmq_common::common::compression::compressor::Compressor;
 use rocketmq_common::common::compression::compressor_factory::CompressorFactory;
@@ -62,7 +63,7 @@ pub struct ProducerConfig {
     /// For non-transactional messages, it does not matter as long as it's unique per process.
     ///
     /// See [core concepts](https://rocketmq.apache.org/docs/introduction/02concepts) for more discussion.
-    producer_group: String,
+    producer_group: CheetahString,
     /// Topics that need to be initialized for transaction producer
     topics: Vec<String>,
     create_topic_key: String,
@@ -210,7 +211,7 @@ impl Default for ProducerConfig {
         );
         Self {
             retry_response_codes,
-            producer_group: "".to_string(),
+            producer_group: CheetahString::empty(),
             topics: vec![],
             create_topic_key: TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC.to_string(),
             default_topic_queue_nums: 4,
@@ -361,7 +362,7 @@ impl DefaultMQProducer {
     }
 
     #[inline]
-    pub fn set_producer_group(&mut self, producer_group: String) {
+    pub fn set_producer_group(&mut self, producer_group: CheetahString) {
         self.producer_config.producer_group = producer_group;
     }
 
@@ -617,8 +618,8 @@ impl DefaultMQProducer {
 
 impl DefaultMQProducer {
     #[inline]
-    pub fn with_namespace(&mut self, resource: &str) -> String {
-        self.client_config.with_namespace(resource)
+    pub fn with_namespace(&mut self, resource: &str) -> CheetahString {
+        CheetahString::from_string(self.client_config.with_namespace(resource))
     }
 }
 

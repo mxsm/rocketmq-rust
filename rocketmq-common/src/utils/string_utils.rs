@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use cheetah_string::CheetahString;
 
 pub struct StringUtils;
 
@@ -25,6 +26,11 @@ impl StringUtils {
 
     #[inline]
     pub fn is_not_empty_string(s: Option<&String>) -> bool {
+        s.map_or(false, |s| !s.is_empty())
+    }
+
+    #[inline]
+    pub fn is_not_empty_ch_string(s: Option<&CheetahString>) -> bool {
         s.map_or(false, |s| !s.is_empty())
     }
 }

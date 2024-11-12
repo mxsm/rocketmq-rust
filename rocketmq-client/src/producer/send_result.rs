@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use serde::Deserialize;
 use serde::Serialize;
@@ -24,7 +24,7 @@ use crate::producer::send_status::SendStatus;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendResult {
     pub send_status: SendStatus,
-    pub msg_id: Option<String>,
+    pub msg_id: Option<CheetahString>,
     pub message_queue: Option<MessageQueue>,
     pub queue_offset: u64,
     pub transaction_id: Option<String>,
@@ -53,7 +53,7 @@ impl Default for SendResult {
 impl SendResult {
     pub fn new(
         send_status: SendStatus,
-        msg_id: Option<String>,
+        msg_id: Option<CheetahString>,
         offset_msg_id: Option<String>,
         message_queue: Option<MessageQueue>,
         queue_offset: u64,
@@ -73,7 +73,7 @@ impl SendResult {
 
     pub fn new_with_additional_fields(
         send_status: SendStatus,
-        msg_id: Option<String>,
+        msg_id: Option<CheetahString>,
         message_queue: Option<MessageQueue>,
         queue_offset: u64,
         transaction_id: Option<String>,
@@ -105,7 +105,7 @@ impl SendResult {
         self.region_id = Some(region_id);
     }
 
-    pub fn set_msg_id(&mut self, msg_id: String) {
+    pub fn set_msg_id(&mut self, msg_id: CheetahString) {
         self.msg_id = Some(msg_id);
     }
 

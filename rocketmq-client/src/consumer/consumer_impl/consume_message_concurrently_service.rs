@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_client_ext::MessageClientExt;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
@@ -212,7 +213,9 @@ impl ConsumeMessageConcurrentlyService {
         context: &ConsumeConcurrentlyContext,
     ) -> bool {
         let delay_level = context.delay_level_when_next_consume;
-        msg.set_topic(self.client_config.with_namespace(msg.get_topic()));
+        msg.set_topic(CheetahString::from_string(
+            self.client_config.with_namespace(msg.get_topic().as_str()),
+        ));
         match self
             .default_mqpush_consumer_impl
             .as_ref()
@@ -389,7 +392,7 @@ impl ConsumeRequest {
             for msg in self.msgs.iter_mut() {
                 MessageAccessor::set_consume_start_time_stamp(
                     &mut msg.message_ext_inner,
-                    get_current_millis().to_string(),
+                    CheetahString::from_string(get_current_millis().to_string()),
                 );
             }
             if default_mqpush_consumer_impl.has_hook() {

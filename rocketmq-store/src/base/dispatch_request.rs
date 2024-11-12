@@ -19,6 +19,8 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::fmt::Formatter;
 
+use cheetah_string::CheetahString;
+
 #[derive(Debug)]
 pub struct DispatchRequest {
     pub topic: String,
@@ -28,12 +30,12 @@ pub struct DispatchRequest {
     pub tags_code: i64,
     pub store_timestamp: i64,
     pub consume_queue_offset: i64,
-    pub keys: String,
+    pub keys: CheetahString,
     pub success: bool,
-    pub uniq_key: Option<String>,
+    pub uniq_key: Option<CheetahString>,
     pub sys_flag: i32,
     pub prepared_transaction_offset: i64,
-    pub properties_map: Option<HashMap<String, String>>,
+    pub properties_map: Option<HashMap<CheetahString, CheetahString>>,
     pub bit_map: Option<Vec<u8>>,
     pub buffer_size: i32,
     pub msg_base_offset: i64,
@@ -52,7 +54,7 @@ impl Default for DispatchRequest {
             tags_code: 0,
             store_timestamp: 0,
             consume_queue_offset: 0,
-            keys: "".to_string(),
+            keys: CheetahString::empty(),
             success: false,
             uniq_key: None,
             sys_flag: 0,

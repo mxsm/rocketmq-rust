@@ -27,6 +27,7 @@ use std::net::SocketAddr;
 use bytes::Buf;
 use bytes::BufMut;
 use bytes::Bytes;
+use cheetah_string::CheetahString;
 
 use crate::common::hasher::string_hasher::JavaStringHasher;
 use crate::common::message::message_ext::MessageExt;
@@ -39,42 +40,60 @@ use crate::MessageUtils;
 
 #[derive(Clone, Debug, Default)]
 pub struct Message {
-    pub topic: String,
+    pub topic: CheetahString,
     pub flag: i32,
-    pub properties: HashMap<String, String>,
+    pub properties: HashMap<CheetahString, CheetahString>,
     // original bytes
     pub body: Option<bytes::Bytes>,
     // compressed bytes, maybe none, if no need to compress
     pub compressed_body: Option<bytes::Bytes>,
-    pub transaction_id: Option<String>,
+    pub transaction_id: Option<CheetahString>,
 }
 
 impl Message {
-    pub fn new(topic: impl Into<String>, body: &[u8]) -> Self {
-        Self::with_details(topic, String::new(), String::new(), 0, body, true)
+    pub fn new(topic: impl Into<CheetahString>, body: &[u8]) -> Self {
+        Self::with_details(
+            topic,
+            CheetahString::new(),
+            CheetahString::new(),
+            0,
+            body,
+            true,
+        )
     }
 
-    pub fn new_body(topic: impl Into<String>, body: Option<Bytes>) -> Self {
-        Self::with_details_body(topic, String::new(), String::new(), 0, body, true)
+    pub fn new_body(topic: impl Into<CheetahString>, body: Option<Bytes>) -> Self {
+        Self::with_details_body(
+            topic,
+            CheetahString::new(),
+            CheetahString::new(),
+            0,
+            body,
+            true,
+        )
     }
 
-    pub fn with_tags(topic: impl Into<String>, tags: impl Into<String>, body: &[u8]) -> Self {
+    pub fn with_tags(
+        topic: impl Into<CheetahString>,
+        tags: impl Into<CheetahString>,
+        body: &[u8],
+    ) -> Self {
         Self::with_details(topic, tags, String::new(), 0, body, true)
     }
 
     pub fn with_keys(
-        topic: impl Into<String>,
-        tags: impl Into<String>,
-        keys: impl Into<String>,
+        topic: impl Into<CheetahString>,
+        tags: impl Into<CheetahString>,
+        keys: impl Into<CheetahString>,
         body: &[u8],
     ) -> Self {
         Self::with_details(topic, tags, keys, 0, body, true)
     }
 
     pub fn with_details(
-        topic: impl Into<String>,
-        tags: impl Into<String>,
-        keys: impl Into<String>,
+        topic: impl Into<CheetahString>,
+        tags: impl Into<CheetahString>,
+        keys: impl Into<CheetahString>,
         flag: i32,
         body: &[u8],
         wait_store_msg_ok: bool,
@@ -102,9 +121,9 @@ impl Message {
     }
 
     pub fn with_details_body(
-        topic: impl Into<String>,
-        tags: impl Into<String>,
-        keys: impl Into<String>,
+        topic: impl Into<CheetahString>,
+        tags: impl Into<CheetahString>,
+        keys: impl Into<CheetahString>,
         flag: i32,
         body: Option<Bytes>,
         wait_store_msg_ok: bool,
@@ -131,26 +150,30 @@ impl Message {
         message
     }
 
-    pub fn set_tags(&mut self, tags: String) {
-        self.properties
-            .insert(MessageConst::PROPERTY_TAGS.to_string(), tags);
+    pub fn set_tags(&mut self, tags: CheetahString) {
+        self.properties.insert(
+            CheetahString::from_static_str(MessageConst::PROPERTY_TAGS),
+            tags,
+        );
     }
 
-    pub fn set_keys(&mut self, keys: String) {
-        self.properties
-            .insert(MessageConst::PROPERTY_KEYS.to_string(), keys);
+    pub fn set_keys(&mut self, keys: CheetahString) {
+        self.properties.insert(
+            CheetahString::from_static_str(MessageConst::PROPERTY_KEYS),
+            keys,
+        );
     }
 
-    pub fn clear_property(&mut self, name: impl Into<String>) {
+    pub fn clear_property(&mut self, name: impl Into<CheetahString>) {
         self.properties.remove(name.into().as_str());
     }
 
-    pub fn set_properties(&mut self, properties: HashMap<String, String>) {
+    pub fn set_properties(&mut self, properties: HashMap<CheetahString, CheetahString>) {
         self.properties = properties;
     }
 
-    pub fn get_property(&self, key: impl Into<String>) -> Option<String> {
-        self.properties.get(key.into().as_str()).cloned()
+    pub fn get_property(&self, key: &CheetahString) -> Option<CheetahString> {
+        self.properties.get(key).cloned()
     }
 
     pub fn body(&self) -> Option<bytes::Bytes> {
@@ -165,7 +188,7 @@ impl Message {
         &self.topic
     }
 
-    pub fn properties(&self) -> &HashMap<String, String> {
+    pub fn properties(&self) -> &HashMap<CheetahString, CheetahString> {
         &self.properties
     }
 
@@ -173,12 +196,14 @@ impl Message {
         self.transaction_id.as_deref()
     }
 
-    pub fn get_tags(&self) -> Option<String> {
-        self.get_property(MessageConst::PROPERTY_TAGS)
+    pub fn get_tags(&self) -> Option<CheetahString> {
+        self.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_TAGS))
     }
 
     pub fn is_wait_store_msg_ok(&self) -> bool {
-        match self.get_property(MessageConst::PROPERTY_WAIT_STORE_MSG_OK) {
+        match self.get_property(&CheetahString::from_static_str(
+            MessageConst::PROPERTY_WAIT_STORE_MSG_OK,
+        )) {
             None => true,
             Some(value) => value.parse().unwrap_or(true),
         }
@@ -193,12 +218,12 @@ impl Message {
 
     pub fn set_delay_time_level(&mut self, level: i32) {
         self.properties.insert(
-            MessageConst::PROPERTY_DELAY_TIME_LEVEL.to_string(),
-            level.to_string(),
+            CheetahString::from_static_str(MessageConst::PROPERTY_DELAY_TIME_LEVEL),
+            CheetahString::from(level.to_string()),
         );
     }
 
-    pub fn get_user_property(&self, name: impl Into<String>) -> Option<String> {
+    pub fn get_user_property(&self, name: impl Into<CheetahString>) -> Option<CheetahString> {
         self.properties.get(name.into().as_str()).cloned()
     }
 
@@ -206,9 +231,9 @@ impl Message {
         self
     }
 
-    pub fn set_instance_id(&mut self, instance_id: impl Into<String>) {
+    pub fn set_instance_id(&mut self, instance_id: impl Into<CheetahString>) {
         self.properties.insert(
-            MessageConst::PROPERTY_INSTANCE_ID.to_string(),
+            CheetahString::from_static_str(MessageConst::PROPERTY_INSTANCE_ID),
             instance_id.into(),
         );
     }
@@ -254,7 +279,7 @@ impl Display for Message {
 
 #[allow(unused_variables)]
 impl MessageTrait for Message {
-    fn put_property(&mut self, key: String, value: String) {
+    fn put_property(&mut self, key: CheetahString, value: CheetahString) {
         self.properties.insert(key, value);
     }
 
@@ -262,15 +287,15 @@ impl MessageTrait for Message {
         self.properties.remove(name);
     }
 
-    fn get_property(&self, name: &str) -> Option<String> {
+    fn get_property(&self, name: &CheetahString) -> Option<CheetahString> {
         self.properties.get(name).cloned()
     }
 
-    fn get_topic(&self) -> &str {
+    fn get_topic(&self) -> &CheetahString {
         &self.topic
     }
 
-    fn set_topic(&mut self, topic: String) {
+    fn set_topic(&mut self, topic: CheetahString) {
         self.topic = topic;
     }
 
@@ -294,11 +319,11 @@ impl MessageTrait for Message {
         self.body = Some(body);
     }
 
-    fn get_properties(&self) -> &HashMap<String, String> {
+    fn get_properties(&self) -> &HashMap<CheetahString, CheetahString> {
         &self.properties
     }
 
-    fn set_properties(&mut self, properties: HashMap<String, String>) {
+    fn set_properties(&mut self, properties: HashMap<CheetahString, CheetahString>) {
         self.properties = properties;
     }
 
@@ -306,7 +331,7 @@ impl MessageTrait for Message {
         self.transaction_id.as_deref().unwrap()
     }
 
-    fn set_transaction_id(&mut self, transaction_id: String) {
+    fn set_transaction_id(&mut self, transaction_id: CheetahString) {
         self.transaction_id = Some(transaction_id);
     }
 
@@ -339,7 +364,7 @@ pub fn parse_topic_filter_type(sys_flag: i32) -> TopicFilterType {
     }
 }
 
-pub fn tags_string2tags_code(tags: Option<&String>) -> i64 {
+pub fn tags_string2tags_code(tags: Option<&CheetahString>) -> i64 {
     if tags.is_none() {
         return 0;
     }

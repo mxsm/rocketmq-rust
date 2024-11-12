@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use cheetah_string::CheetahString;
 use once_cell::sync::Lazy;
 use rocketmq_common::common::message::message_client_ext::MessageClientExt;
 use rocketmq_common::common::message::message_ext::MessageExt;
@@ -250,13 +251,16 @@ impl ConsumeMessageOrderlyService {
         new_msg.set_flag(msg.get_flag());
         MessageAccessor::put_property(
             &mut new_msg,
-            MessageConst::PROPERTY_RETRY_TOPIC.to_owned(),
+            CheetahString::from_static_str(MessageConst::PROPERTY_RETRY_TOPIC),
             msg.get_topic().to_owned(),
         );
-        MessageAccessor::set_reconsume_time(&mut new_msg, (msg.reconsume_times() + 1).to_string());
+        MessageAccessor::set_reconsume_time(
+            &mut new_msg,
+            CheetahString::from_string((msg.reconsume_times() + 1).to_string()),
+        );
         MessageAccessor::set_max_reconsume_times(
             &mut new_msg,
-            self.get_max_reconsume_times().to_string(),
+            CheetahString::from_string(self.get_max_reconsume_times().to_string()),
         );
         MessageAccessor::clear_property(&mut new_msg, MessageConst::PROPERTY_TRANSACTION_PREPARED);
         new_msg.set_delay_time_level(3 + msg.reconsume_times());
@@ -287,7 +291,7 @@ impl ConsumeMessageOrderlyService {
                 if reconsume_times >= self.get_max_reconsume_times() {
                     MessageAccessor::set_reconsume_time(
                         &mut msg.message_ext_inner,
-                        reconsume_times.to_string(),
+                        CheetahString::from_string(reconsume_times.to_string()),
                     );
                     if !self.send_message_back(&msg.message_ext_inner).await {
                         suspend = true;

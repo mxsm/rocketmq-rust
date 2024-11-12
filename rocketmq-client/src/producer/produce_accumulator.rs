@@ -25,6 +25,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread::Builder;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::TimeUtils::get_current_millis;
@@ -129,16 +130,16 @@ impl ProduceAccumulator {
 
 #[derive(Clone, Debug, Default)]
 pub struct AggregateKey {
-    pub topic: String,
+    pub topic: CheetahString,
     pub mq: Option<MessageQueue>,
     pub wait_store_msg_ok: bool,
-    pub tag: Option<String>,
+    pub tag: Option<CheetahString>,
 }
 
 impl AggregateKey {
     pub fn new_from_message<M: MessageTrait>(message: &M) -> Self {
         Self {
-            topic: message.get_topic().to_string(),
+            topic: message.get_topic().clone(),
             mq: None,
             wait_store_msg_ok: message.is_wait_store_msg_ok(),
             tag: message.get_tags(),
@@ -147,7 +148,7 @@ impl AggregateKey {
 
     pub fn new_from_message_queue<M: MessageTrait>(message: &M, mq: Option<MessageQueue>) -> Self {
         Self {
-            topic: message.get_topic().to_string(),
+            topic: message.get_topic().clone(),
             mq,
             wait_store_msg_ok: message.is_wait_store_msg_ok(),
             tag: message.get_tags(),
@@ -155,10 +156,10 @@ impl AggregateKey {
     }
 
     pub fn new(
-        topic: String,
+        topic: CheetahString,
         mq: Option<MessageQueue>,
         wait_store_msg_ok: bool,
-        tag: Option<String>,
+        tag: Option<CheetahString>,
     ) -> Self {
         Self {
             topic,

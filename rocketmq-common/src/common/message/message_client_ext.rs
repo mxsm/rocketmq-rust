@@ -20,6 +20,7 @@ use std::fmt::Display;
 use std::fmt::Formatter;
 
 use bytes::Bytes;
+use cheetah_string::CheetahString;
 
 use crate::common::message::message_client_id_setter::MessageClientIDSetter;
 use crate::common::message::message_ext::MessageExt;
@@ -35,16 +36,16 @@ impl MessageClientExt {
         self.message_ext_inner.msg_id()
     }
 
-    pub fn set_offset_msg_id(&mut self, offset_msg_id: impl Into<String>) {
+    pub fn set_offset_msg_id(&mut self, offset_msg_id: impl Into<CheetahString>) {
         self.message_ext_inner.set_msg_id(offset_msg_id.into());
     }
 
-    pub fn get_msg_id(&self) -> String {
+    pub fn get_msg_id(&self) -> CheetahString {
         let uniq_id = MessageClientIDSetter::get_uniq_id(&self.message_ext_inner);
         if let Some(uniq_id) = uniq_id {
             uniq_id
         } else {
-            self.message_ext_inner.msg_id().to_string()
+            self.message_ext_inner.msg_id().clone()
         }
     }
 }
@@ -60,7 +61,7 @@ impl Display for MessageClientExt {
 }
 
 impl MessageTrait for MessageClientExt {
-    fn put_property(&mut self, key: String, value: String) {
+    fn put_property(&mut self, key: CheetahString, value: CheetahString) {
         self.message_ext_inner.put_property(key, value);
     }
 
@@ -68,15 +69,15 @@ impl MessageTrait for MessageClientExt {
         self.message_ext_inner.clear_property(name);
     }
 
-    fn get_property(&self, name: &str) -> Option<String> {
+    fn get_property(&self, name: &CheetahString) -> Option<CheetahString> {
         self.message_ext_inner.get_property(name)
     }
 
-    fn get_topic(&self) -> &str {
+    fn get_topic(&self) -> &CheetahString {
         self.message_ext_inner.get_topic()
     }
 
-    fn set_topic(&mut self, topic: String) {
+    fn set_topic(&mut self, topic: CheetahString) {
         self.message_ext_inner.set_topic(topic);
     }
 
@@ -96,11 +97,11 @@ impl MessageTrait for MessageClientExt {
         self.message_ext_inner.set_body(body);
     }
 
-    fn get_properties(&self) -> &HashMap<String, String> {
+    fn get_properties(&self) -> &HashMap<CheetahString, CheetahString> {
         self.message_ext_inner.get_properties()
     }
 
-    fn set_properties(&mut self, properties: HashMap<String, String>) {
+    fn set_properties(&mut self, properties: HashMap<CheetahString, CheetahString>) {
         self.message_ext_inner.set_properties(properties);
     }
 
@@ -108,7 +109,7 @@ impl MessageTrait for MessageClientExt {
         self.message_ext_inner.get_transaction_id()
     }
 
-    fn set_transaction_id(&mut self, transaction_id: String) {
+    fn set_transaction_id(&mut self, transaction_id: CheetahString) {
         self.message_ext_inner.set_transaction_id(transaction_id);
     }
 

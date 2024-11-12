@@ -27,7 +27,7 @@ pub trait TopicRequestHeaderTrait: Sync + Send {
 
     fn set_topic(&mut self, topic: CheetahString);
 
-    fn topic(&self) -> &str;
+    fn topic(&self) -> &CheetahString;
 
     fn broker_name(&self) -> Option<&str>;
 

@@ -283,7 +283,9 @@ impl MQClientAPIImpl {
         T: MessageTrait,
     {
         let begin_start_time = Instant::now();
-        let msg_type = msg.get_property(MessageConst::PROPERTY_MESSAGE_TYPE);
+        let msg_type = msg.get_property(&CheetahString::from_static_str(
+            MessageConst::PROPERTY_MESSAGE_TYPE,
+        ));
         let is_reply = msg_type.is_some() && msg_type.unwrap() == mix_all::REPLY_MESSAGE_FLAG;
         let mut request = if is_reply {
             if *sendSmartMsg {
@@ -555,7 +557,7 @@ impl MQClientAPIImpl {
                 sb.push_str(if sb.is_empty() { "" } else { "," });
                 sb.push_str(MessageClientIDSetter::get_uniq_id(msg).unwrap().as_str());
             }
-            uniq_msg_id = Some(sb);
+            uniq_msg_id = Some(CheetahString::from_string(sb));
         }
 
         let region_id = response

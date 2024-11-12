@@ -188,11 +188,7 @@ where
             &mut msg_inner,
             MessageDecoder::string_to_message_properties(request_header.properties.as_ref()),
         );
-        msg_inner.properties_string = request_header
-            .properties
-            .clone()
-            .unwrap_or_default()
-            .to_string();
+        msg_inner.properties_string = request_header.properties.clone().unwrap_or_default();
         msg_inner.message_ext_inner.born_timestamp = request_header.born_timestamp;
         msg_inner.message_ext_inner.born_host = channel.remote_address();
         msg_inner.message_ext_inner.store_host = self.store_host;
@@ -391,7 +387,9 @@ where
         if let Some(body) = msg.get_body().cloned() {
             command.set_body_mut_ref(body);
         }
-        let sender_id = msg.get_property(MessageConst::PROPERTY_MESSAGE_REPLY_TO_CLIENT);
+        let sender_id = msg.get_property(&CheetahString::from_static_str(
+            MessageConst::PROPERTY_MESSAGE_REPLY_TO_CLIENT,
+        ));
         let mut push_reply_result = PushReplyResult(false, "".to_string());
         if let Some(sender_id) = sender_id {
             let channel = self
