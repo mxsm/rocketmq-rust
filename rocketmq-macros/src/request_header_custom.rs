@@ -43,7 +43,7 @@ pub(super) fn request_header_codec_inner(
     };
 
     //build CommandCustomHeader impl
-    let (static_fields, (to_maps, from_map)): (Vec<_>, (Vec<_>,Vec<_>)) = fields
+    let (static_fields, (to_maps, from_map)): (Vec<_>, (Vec<_>, Vec<_>)) = fields
          .iter()
          .map(|field| {
              let field_name = field.ident.as_ref().unwrap();
@@ -57,55 +57,89 @@ pub(super) fn request_header_codec_inner(
              );
              (
                  quote! {
-                     const #static_name: &'static str = #camel_case_name;
-                 },
+                      const #static_name: &'static str = #camel_case_name;
+                  },
                  (
                      if let Some(value) = has_option {
                          let type_name = get_type_name(value);
                          if type_name == "CheetahString" {
                              quote! {
-                                 if let Some(ref value) = self.#field_name {
-                                    map.insert (cheetah_string::CheetahString::from_static_str(Self::#static_name),cheetah_string::CheetahString::from_string(value.to_string()));
-                                  }
-                             }
-                         }else {
+                                  if let Some(ref value) = self.#field_name {
+                                     map.insert (
+                                          cheetah_string::CheetahString::from_static_str(Self::#static_name),
+                                          value.clone()
+                                     );
+                                   }
+                              }
+                         } else if type_name == "String" {
                              quote! {
-                                 if let Some(value) = self.#field_name {
-                                    map.insert (cheetah_string::CheetahString::from_static_str(Self::#static_name),cheetah_string::CheetahString::from_string(value.to_string()));
-                                  }
-                             }
+                                  if let Some(ref value) = self.#field_name {
+                                     map.insert (
+                                          cheetah_string::CheetahString::from_static_str(Self::#static_name),
+                                          cheetah_string::CheetahString::from_string(value.clone())
+                                     );
+                                   }
+                              }
+                         } else {
+                             quote! {
+                                  if let Some(value) = self.#field_name {
+                                     map.insert (
+                                         cheetah_string::CheetahString::from_static_str(Self::#static_name),
+                                         cheetah_string::CheetahString::from_string(value.to_string())
+                                     );
+                                   }
+                              }
                          }
                      } else {
-                         quote! {
-                             map.insert (cheetah_string::CheetahString::from_static_str(Self::#static_name), cheetah_string::CheetahString::from_string(self.#field_name.to_string()));
+                         let type_name = get_type_name(&field.ty);
+                         if type_name == "CheetahString" {
+                             quote! {
+                                     map.insert (
+                                          cheetah_string::CheetahString::from_static_str(Self::#static_name),
+                                          self.#field_name.clone()
+                                     );
+                              }
+                         } else if type_name == "String" {
+                             quote! {
+                                     map.insert (
+                                          cheetah_string::CheetahString::from_static_str(Self::#static_name),
+                                          cheetah_string::CheetahString::from_string(self.#field_name.clone())
+                                     );
+                              }
+                         } else {
+                             quote! {
+                                  map.insert (
+                                     cheetah_string::CheetahString::from_static_str(Self::#static_name),
+                                     cheetah_string::CheetahString::from_string(self.#field_name.to_string())
+                                 );
+                              }
                          }
                      },
                      // build FromMap impl
                      if let Some(value) = has_option {
                          let type_name = get_type_name(value);
-                         if type_name == "CheetahString" {
+                         if type_name == "CheetahString" || type_name == "String" {
                              quote! {
-                                 #field_name: map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).cloned(),
-                             }
-                         }else {
+                                  #field_name: map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).cloned(),
+                              }
+                         } else {
                              quote! {
-                                 #field_name:map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).and_then(|s| s.parse::<#value>().ok()),
-                             }
+                                  #field_name:map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).and_then(|s| s.parse::<#value>().ok()),
+                              }
                          }
-
                      } else {
                          let types = &field.ty;
                          let type_name = get_type_name(types);
-                         if type_name == "CheetahString" {
-                             quote!{
-                                 #field_name: map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).cloned().unwrap_or_default(),
-                             }
-                         }else {
+                         if type_name == "CheetahString" || type_name == "String" {
                              quote! {
-                               #field_name:map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).and_then(|s| s.parse::<#types>().ok()).unwrap_or_default(),
-                             }
+                                  #field_name: map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).cloned().unwrap_or_default(),
+                              }
+                         } else {
+                             quote! {
+                                #field_name:map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).and_then(|s| s.parse::<#types>().ok()).unwrap_or_default(),
+                              }
                          }
-                         }
+                     }
                  )
              )
          })
