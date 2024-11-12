@@ -117,11 +117,11 @@ mod query_message_request_header_tests {
     #[test]
     fn creating_from_map_with_all_fields_populates_struct_correctly() {
         let mut map = HashMap::new();
-        map.insert("topic".to_string(), "test_topic".to_string());
-        map.insert("key".to_string(), "test_key".to_string());
-        map.insert("maxNum".to_string(), "10".to_string());
-        map.insert("beginTimestamp".to_string(), "1000".to_string());
-        map.insert("endTimestamp".to_string(), "2000".to_string());
+        map.insert("topic".into(), "test_topic".into());
+        map.insert("key".into(), "test_key".into());
+        map.insert("maxNum".into(), "10".into());
+        map.insert("beginTimestamp".into(), "1000".into());
+        map.insert("endTimestamp".into(), "2000".into());
 
         let header = <QueryMessageRequestHeader as FromMap>::from(&map).unwrap();
 
@@ -135,11 +135,11 @@ mod query_message_request_header_tests {
     #[test]
     fn creating_from_map_missing_optional_fields_still_succeeds() {
         let mut map = HashMap::new();
-        map.insert("topic".to_string(), "test_topic".to_string());
-        map.insert("key".to_string(), "test_key".to_string());
-        map.insert("maxNum".to_string(), "10".to_string());
-        map.insert("beginTimestamp".to_string(), "1000".to_string());
-        map.insert("endTimestamp".to_string(), "2000".to_string());
+        map.insert("topic".into(), "test_topic".into());
+        map.insert("key".into(), "test_key".into());
+        map.insert("maxNum".into(), "10".into());
+        map.insert("beginTimestamp".into(), "1000".into());
+        map.insert("endTimestamp".into(), "2000".into());
 
         let header = <QueryMessageRequestHeader as FromMap>::from(&map).unwrap();
 
@@ -151,9 +151,9 @@ mod query_message_request_header_tests {
     #[test]
     fn creating_from_map_with_invalid_number_fields_returns_none() {
         let mut map = HashMap::new();
-        map.insert("topic".to_string(), "test_topic".to_string());
-        map.insert("key".to_string(), "test_key".to_string());
-        map.insert("maxNum".to_string(), "invalid".to_string());
+        map.insert("topic".into(), "test_topic".into());
+        map.insert("key".into(), "test_key".into());
+        map.insert("maxNum".into(), "invalid".into());
 
         let header = <QueryMessageRequestHeader as FromMap>::from(&map);
 
@@ -163,8 +163,8 @@ mod query_message_request_header_tests {
     #[test]
     fn to_map_includes_all_fields() {
         let header = QueryMessageRequestHeader {
-            topic: "test_topic".to_string(),
-            key: "test_key".to_string(),
+            topic: "test_topic".into(),
+            key: "test_key".into(),
             max_num: 10,
             begin_timestamp: 1000,
             end_timestamp: 2000,
@@ -184,8 +184,8 @@ mod query_message_request_header_tests {
     fn to_map_with_topic_request_header_includes_nested_fields() {
         let topic_request_header = TopicRequestHeader::default();
         let header = QueryMessageRequestHeader {
-            topic: "test_topic".to_string(),
-            key: "test_key".to_string(),
+            topic: "test_topic".into(),
+            key: "test_key".into(),
             max_num: 10,
             begin_timestamp: 1000,
             end_timestamp: 2000,

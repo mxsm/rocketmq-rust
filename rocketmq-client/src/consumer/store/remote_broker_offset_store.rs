@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
 use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
@@ -80,8 +81,8 @@ impl RemoteBrokerOffsetStore {
         }
         if let Some(find_broker_result) = find_broker_result {
             let request_header = QueryConsumerOffsetRequestHeader {
-                consumer_group: self.group_name.clone(),
-                topic: mq.get_topic().to_string(),
+                consumer_group: CheetahString::from_string(self.group_name.clone()),
+                topic: CheetahString::from_string(mq.get_topic().to_string()),
                 queue_id: mq.get_queue_id(),
                 set_zero_if_not_found: None,
                 topic_request_header: Some(TopicRequestHeader {
@@ -89,7 +90,9 @@ impl RemoteBrokerOffsetStore {
                     rpc: Some(RpcRequestHeader {
                         namespace: None,
                         namespaced: None,
-                        broker_name: Some(mq.get_broker_name().to_string()),
+                        broker_name: Some(CheetahString::from_string(
+                            mq.get_broker_name().to_string(),
+                        )),
                         oneway: None,
                     }),
                 }),
@@ -279,8 +282,8 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
 
         if let Some(find_broker_result) = find_broker_result {
             let request_header = UpdateConsumerOffsetRequestHeader {
-                consumer_group: self.group_name.clone(),
-                topic: mq.get_topic().to_string(),
+                consumer_group: CheetahString::from_string(self.group_name.clone()),
+                topic: CheetahString::from_string(mq.get_topic().to_string()),
                 queue_id: Some(mq.get_queue_id()),
                 commit_offset: Some(offset),
                 topic_request_header: Some(TopicRequestHeader {
@@ -288,7 +291,9 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
                     rpc: Some(RpcRequestHeader {
                         namespace: None,
                         namespaced: None,
-                        broker_name: Some(mq.get_broker_name().to_string()),
+                        broker_name: Some(CheetahString::from_string(
+                            mq.get_broker_name().to_string(),
+                        )),
                         oneway: None,
                     }),
                 }),

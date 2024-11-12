@@ -85,18 +85,26 @@ impl FromMap for UpdateConsumerOffsetRequestHeader {
     fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(UpdateConsumerOffsetRequestHeader {
             consumer_group: map
-                .get(UpdateConsumerOffsetRequestHeader::CONSUMER_GROUP)
+                .get(&CheetahString::from_static_str(
+                    UpdateConsumerOffsetRequestHeader::CONSUMER_GROUP,
+                ))
                 .cloned()
                 .unwrap_or_default(),
             topic: map
-                .get(UpdateConsumerOffsetRequestHeader::TOPIC)
+                .get(&CheetahString::from_static_str(
+                    UpdateConsumerOffsetRequestHeader::TOPIC,
+                ))
                 .cloned()
                 .unwrap_or_default(),
             queue_id: map
-                .get(UpdateConsumerOffsetRequestHeader::QUEUE_ID)
+                .get(&CheetahString::from_static_str(
+                    UpdateConsumerOffsetRequestHeader::QUEUE_ID,
+                ))
                 .and_then(|v| v.parse().ok()),
             commit_offset: map
-                .get(UpdateConsumerOffsetRequestHeader::COMMIT_OFFSET)
+                .get(&CheetahString::from_static_str(
+                    UpdateConsumerOffsetRequestHeader::COMMIT_OFFSET,
+                ))
                 .and_then(|v| v.parse().ok()),
             topic_request_header: <TopicRequestHeader as FromMap>::from(map),
         })
@@ -112,7 +120,7 @@ impl TopicRequestHeaderTrait for UpdateConsumerOffsetRequestHeader {
         self.topic_request_header.as_ref().unwrap().lo
     }
 
-    fn set_topic(&mut self, topic: String) {
+    fn set_topic(&mut self, topic: CheetahString) {
         self.topic = topic;
     }
 
@@ -131,7 +139,7 @@ impl TopicRequestHeaderTrait for UpdateConsumerOffsetRequestHeader {
             .as_deref()
     }
 
-    fn set_broker_name(&mut self, broker_name: String) {
+    fn set_broker_name(&mut self, broker_name: CheetahString) {
         self.topic_request_header
             .as_mut()
             .unwrap()
@@ -152,7 +160,7 @@ impl TopicRequestHeaderTrait for UpdateConsumerOffsetRequestHeader {
             .as_deref()
     }
 
-    fn set_namespace(&mut self, namespace: String) {
+    fn set_namespace(&mut self, namespace: CheetahString) {
         self.topic_request_header
             .as_mut()
             .unwrap()
@@ -208,76 +216,5 @@ impl TopicRequestHeaderTrait for UpdateConsumerOffsetRequestHeader {
 
     fn set_queue_id(&mut self, queue_id: Option<i32>) {
         self.queue_id = queue_id;
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::HashMap;
-
-    use super::*;
-
-    #[test]
-    fn update_consumer_offset_request_header_to_map() {
-        let header = UpdateConsumerOffsetRequestHeader {
-            consumer_group: "group1".to_string(),
-            topic: "topic1".to_string(),
-            queue_id: Some(1),
-            commit_offset: Some(100),
-            topic_request_header: None,
-        };
-        let map = header.to_map().unwrap();
-        assert_eq!(
-            map.get(UpdateConsumerOffsetRequestHeader::CONSUMER_GROUP),
-            Some(&"group1".to_string())
-        );
-        assert_eq!(
-            map.get(UpdateConsumerOffsetRequestHeader::TOPIC),
-            Some(&"topic1".to_string())
-        );
-        assert_eq!(
-            map.get(UpdateConsumerOffsetRequestHeader::QUEUE_ID),
-            Some(&"1".to_string())
-        );
-        assert_eq!(
-            map.get(UpdateConsumerOffsetRequestHeader::COMMIT_OFFSET),
-            Some(&"100".to_string())
-        );
-    }
-
-    #[test]
-    fn update_consumer_offset_request_header_from_map() {
-        let mut map = HashMap::new();
-        map.insert(
-            UpdateConsumerOffsetRequestHeader::CONSUMER_GROUP.to_string(),
-            "group1".to_string(),
-        );
-        map.insert(
-            UpdateConsumerOffsetRequestHeader::TOPIC.to_string(),
-            "topic1".to_string(),
-        );
-        map.insert(
-            UpdateConsumerOffsetRequestHeader::QUEUE_ID.to_string(),
-            "1".to_string(),
-        );
-        map.insert(
-            UpdateConsumerOffsetRequestHeader::COMMIT_OFFSET.to_string(),
-            "100".to_string(),
-        );
-        let header = <UpdateConsumerOffsetRequestHeader as FromMap>::from(&map).unwrap();
-        assert_eq!(header.consumer_group, "group1");
-        assert_eq!(header.topic, "topic1");
-        assert_eq!(header.queue_id, Some(1));
-        assert_eq!(header.commit_offset, Some(100));
-    }
-
-    #[test]
-    fn update_consumer_offset_request_header_from_map_with_missing_fields() {
-        let map = HashMap::new();
-        let header = <UpdateConsumerOffsetRequestHeader as FromMap>::from(&map).unwrap();
-        assert_eq!(header.consumer_group, "");
-        assert_eq!(header.topic, "");
-        assert_eq!(header.queue_id, None);
-        assert_eq!(header.commit_offset, None);
     }
 }

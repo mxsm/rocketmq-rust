@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use rand::Rng;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
 use rocketmq_common::common::message::message_decoder;
@@ -315,26 +316,28 @@ impl PullAPIWrapper {
             }
 
             let request_header = PullMessageRequestHeader {
-                consumer_group: self.consumer_group.clone(),
-                topic: mq.get_topic().to_string(),
+                consumer_group: CheetahString::from_string(self.consumer_group.clone()),
+                topic: CheetahString::from_string(mq.get_topic().to_string()),
                 queue_id: Some(mq.get_queue_id()),
                 queue_offset: offset,
                 max_msg_nums: max_nums,
                 sys_flag: sys_flag_inner,
                 commit_offset,
                 suspend_timeout_millis: broker_suspend_max_time_millis,
-                subscription: Some(sub_expression.to_string()),
+                subscription: Some(CheetahString::from_string(sub_expression.to_string())),
                 sub_version,
                 max_msg_bytes: Some(max_size_in_bytes),
                 request_source: None,
                 proxy_forward_client_id: None,
-                expression_type: Some(expression_type.to_string()),
+                expression_type: Some(CheetahString::from_string(expression_type.to_string())),
                 topic_request: Some(TopicRequestHeader {
                     lo: None,
                     rpc: Some(RpcRequestHeader {
                         namespace: None,
                         namespaced: None,
-                        broker_name: Some(mq.get_broker_name().to_string()),
+                        broker_name: Some(CheetahString::from_string(
+                            mq.get_broker_name().to_string(),
+                        )),
                         oneway: None,
                     }),
                 }),

@@ -74,14 +74,14 @@ mod tests {
     #[test]
     fn get_consumer_list_by_group_request_header_to_map() {
         let header = GetConsumerListByGroupRequestHeader {
-            consumer_group: "test_group".to_string(),
+            consumer_group: "test_group".into(),
             rpc: None,
         };
 
         let map = header.to_map().unwrap();
         assert_eq!(
             map.get(GetConsumerListByGroupRequestHeader::CONSUMER_GROUP),
-            Some(&"test_group".to_string())
+            Some(&"test_group".into())
         );
     }
 
@@ -89,8 +89,8 @@ mod tests {
     fn get_consumer_list_by_group_request_header_from_map() {
         let mut map = HashMap::new();
         map.insert(
-            GetConsumerListByGroupRequestHeader::CONSUMER_GROUP.to_string(),
-            "test_group".to_string(),
+            GetConsumerListByGroupRequestHeader::CONSUMER_GROUP.into(),
+            "test_group".into(),
         );
 
         let header = <GetConsumerListByGroupRequestHeader as FromMap>::from(&map).unwrap();

@@ -42,6 +42,7 @@ bytes = { workspace = true }
 
 
 futures = { workspace = true }
+cheetah-string = { workspace = true }
 [[example]]
 name = "simple-producer"
 path = "examples/producer/simple_producer.rs"

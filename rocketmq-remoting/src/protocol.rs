@@ -23,6 +23,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::error::Error;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::utils::time_utils;
@@ -475,7 +476,7 @@ pub trait FastCodesHeader {
     ///
     /// # Arguments
     /// * `fields` - A reference to a `HashMap` containing the header fields as key-value pairs.
-    fn decode_fast(&mut self, fields: &HashMap<String, String>);
+    fn decode_fast(&mut self, fields: &HashMap<CheetahString, CheetahString>);
 }
 
 #[cfg(test)]

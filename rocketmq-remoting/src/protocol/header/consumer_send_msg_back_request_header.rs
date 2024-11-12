@@ -47,20 +47,41 @@ impl ConsumerSendMsgBackRequestHeader {
 }
 
 impl CommandCustomHeader for ConsumerSendMsgBackRequestHeader {
-    fn to_map(&self) -> Option<std::collections::HashMap<String, String>> {
+    fn to_map(&self) -> Option<std::collections::HashMap<CheetahString, CheetahString>> {
         let mut map = std::collections::HashMap::new();
-        map.insert(Self::OFFSET.to_string(), self.offset.to_string());
-        map.insert(Self::GROUP.to_string(), self.group.clone());
-        map.insert(Self::DELAY_LEVEL.to_string(), self.delay_level.to_string());
+        map.insert(
+            CheetahString::from_static_str(Self::OFFSET),
+            CheetahString::from_string(self.offset.to_string()),
+        );
+        map.insert(
+            CheetahString::from_static_str(Self::GROUP),
+            self.group.clone(),
+        );
+        map.insert(
+            CheetahString::from_static_str(Self::DELAY_LEVEL),
+            CheetahString::from_string(self.delay_level.to_string()),
+        );
         if let Some(value) = &self.origin_msg_id {
-            map.insert(Self::ORIGIN_MSG_ID.to_string(), value.clone());
+            map.insert(
+                CheetahString::from_static_str(Self::ORIGIN_MSG_ID),
+                value.clone(),
+            );
         }
         if let Some(value) = &self.origin_topic {
-            map.insert(Self::ORIGIN_TOPIC.to_string(), value.clone());
+            map.insert(
+                CheetahString::from_static_str(Self::ORIGIN_TOPIC),
+                value.clone(),
+            );
         }
-        map.insert(Self::UNIT_MODE.to_string(), self.unit_mode.to_string());
+        map.insert(
+            CheetahString::from_static_str(Self::UNIT_MODE),
+            CheetahString::from_string(self.unit_mode.to_string()),
+        );
         if let Some(value) = self.max_reconsume_times {
-            map.insert(Self::MAX_RECONSUME_TIMES.to_string(), value.to_string());
+            map.insert(
+                CheetahString::from_static_str(Self::MAX_RECONSUME_TIMES),
+                CheetahString::from_string(value.to_string()),
+            );
         }
         if let Some(ref rpc) = self.rpc_request_header {
             if let Some(rpc_map) = rpc.to_map() {
@@ -74,15 +95,33 @@ impl CommandCustomHeader for ConsumerSendMsgBackRequestHeader {
 impl FromMap for ConsumerSendMsgBackRequestHeader {
     type Target = Self;
 
-    fn from(map: &std::collections::HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &std::collections::HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(ConsumerSendMsgBackRequestHeader {
-            offset: map.get(Self::OFFSET)?.parse().ok()?,
-            group: map.get(Self::GROUP)?.clone(),
-            delay_level: map.get(Self::DELAY_LEVEL)?.parse().ok()?,
-            origin_msg_id: map.get(Self::ORIGIN_MSG_ID).cloned(),
-            origin_topic: map.get(Self::ORIGIN_TOPIC).cloned(),
-            unit_mode: map.get(Self::UNIT_MODE)?.parse().ok()?,
-            max_reconsume_times: map.get(Self::MAX_RECONSUME_TIMES)?.parse().ok(),
+            offset: map
+                .get(&CheetahString::from_static_str(Self::OFFSET))?
+                .parse()
+                .ok()?,
+            group: map
+                .get(&CheetahString::from_static_str(Self::GROUP))?
+                .clone(),
+            delay_level: map
+                .get(&CheetahString::from_static_str(Self::DELAY_LEVEL))?
+                .parse()
+                .ok()?,
+            origin_msg_id: map
+                .get(&CheetahString::from_static_str(Self::ORIGIN_MSG_ID))
+                .cloned(),
+            origin_topic: map
+                .get(&CheetahString::from_static_str(Self::ORIGIN_TOPIC))
+                .cloned(),
+            unit_mode: map
+                .get(&CheetahString::from_static_str(Self::UNIT_MODE))?
+                .parse()
+                .ok()?,
+            max_reconsume_times: map
+                .get(&CheetahString::from_static_str(Self::MAX_RECONSUME_TIMES))?
+                .parse()
+                .ok(),
             rpc_request_header: <RpcRequestHeader as FromMap>::from(map),
         })
     }

@@ -92,7 +92,7 @@ impl TopicRequestHeaderTrait for GetMinOffsetRequestHeader {
         self.topic_request_header.as_ref().unwrap().lo
     }
 
-    fn set_topic(&mut self, topic: String) {
+    fn set_topic(&mut self, topic: CheetahString) {
         self.topic = topic;
     }
 
@@ -111,7 +111,7 @@ impl TopicRequestHeaderTrait for GetMinOffsetRequestHeader {
             .as_deref()
     }
 
-    fn set_broker_name(&mut self, broker_name: String) {
+    fn set_broker_name(&mut self, broker_name: CheetahString) {
         self.topic_request_header
             .as_mut()
             .unwrap()
@@ -132,7 +132,7 @@ impl TopicRequestHeaderTrait for GetMinOffsetRequestHeader {
             .as_deref()
     }
 
-    fn set_namespace(&mut self, namespace: String) {
+    fn set_namespace(&mut self, namespace: CheetahString) {
         self.topic_request_header
             .as_mut()
             .unwrap()

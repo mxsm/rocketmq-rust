@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::Error;
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -13,16 +14,16 @@ pub struct NotifyMinBrokerIdChangeRequestHeader {
     pub min_broker_id: Option<i64>,
 
     #[serde(rename = "brokerName")]
-    pub broker_name: Option<String>,
+    pub broker_name: Option<CheetahString>,
 
     #[serde(rename = "minBrokerAddr")]
-    pub min_broker_addr: Option<String>,
+    pub min_broker_addr: Option<CheetahString>,
 
     #[serde(rename = "offlineBrokerAddr")]
-    pub offline_broker_addr: Option<String>,
+    pub offline_broker_addr: Option<CheetahString>,
 
     #[serde(rename = "haBrokerAddr")]
-    pub ha_broker_addr: Option<String>,
+    pub ha_broker_addr: Option<CheetahString>,
 }
 
 impl NotifyMinBrokerIdChangeRequestHeader {
@@ -34,10 +35,10 @@ impl NotifyMinBrokerIdChangeRequestHeader {
 
     pub fn new(
         min_broker_id: Option<i64>,
-        broker_name: Option<String>,
-        min_broker_addr: Option<String>,
-        offline_broker_addr: Option<String>,
-        ha_broker_addr: Option<String>,
+        broker_name: Option<CheetahString>,
+        min_broker_addr: Option<CheetahString>,
+        offline_broker_addr: Option<CheetahString>,
+        ha_broker_addr: Option<CheetahString>,
     ) -> Self {
         NotifyMinBrokerIdChangeRequestHeader {
             min_broker_id,
@@ -52,23 +53,33 @@ impl NotifyMinBrokerIdChangeRequestHeader {
 impl FromMap for NotifyMinBrokerIdChangeRequestHeader {
     type Target = Self;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(NotifyMinBrokerIdChangeRequestHeader {
             min_broker_id: map
-                .get(NotifyMinBrokerIdChangeRequestHeader::MIN_BROKER_ID)
+                .get(&CheetahString::from_static_str(
+                    NotifyMinBrokerIdChangeRequestHeader::MIN_BROKER_ID,
+                ))
                 .and_then(|s| s.parse::<i64>().ok()),
             broker_name: map
-                .get(NotifyMinBrokerIdChangeRequestHeader::BROKER_NAME)
-                .map(|s| s.to_string()),
+                .get(&CheetahString::from_static_str(
+                    NotifyMinBrokerIdChangeRequestHeader::BROKER_NAME,
+                ))
+                .cloned(),
             min_broker_addr: map
-                .get(NotifyMinBrokerIdChangeRequestHeader::MIN_BROKER_ADDR)
-                .map(|s| s.to_string()),
+                .get(&CheetahString::from_static_str(
+                    NotifyMinBrokerIdChangeRequestHeader::MIN_BROKER_ADDR,
+                ))
+                .cloned(),
             offline_broker_addr: map
-                .get(NotifyMinBrokerIdChangeRequestHeader::OFFLINE_BROKER_ADDR)
-                .map(|s| s.to_string()),
+                .get(&CheetahString::from_static_str(
+                    NotifyMinBrokerIdChangeRequestHeader::OFFLINE_BROKER_ADDR,
+                ))
+                .cloned(),
             ha_broker_addr: map
-                .get(NotifyMinBrokerIdChangeRequestHeader::HA_BROKER_ADDR)
-                .map(|s| s.to_string()),
+                .get(&CheetahString::from_static_str(
+                    NotifyMinBrokerIdChangeRequestHeader::HA_BROKER_ADDR,
+                ))
+                .cloned(),
         })
     }
 }
@@ -78,45 +89,53 @@ impl CommandCustomHeader for NotifyMinBrokerIdChangeRequestHeader {
         todo!()
     }
 
-    fn to_map(&self) -> Option<HashMap<String, String>> {
-        let mut map = HashMap::<String, String>::new();
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
+        let mut map = HashMap::<CheetahString, CheetahString>::new();
         if let Some(min_broker_id) = self.min_broker_id {
             map.insert(
-                NotifyMinBrokerIdChangeRequestHeader::MIN_BROKER_ID.to_string(),
-                min_broker_id.to_string(),
+                CheetahString::from_static_str(NotifyMinBrokerIdChangeRequestHeader::MIN_BROKER_ID),
+                CheetahString::from_string(min_broker_id.to_string()),
             );
         }
         if let Some(ref broker_name) = self.broker_name {
             map.insert(
-                NotifyMinBrokerIdChangeRequestHeader::BROKER_NAME.to_string(),
+                CheetahString::from_static_str(NotifyMinBrokerIdChangeRequestHeader::BROKER_NAME),
                 broker_name.clone(),
             );
         }
         if let Some(ref min_broker_addr) = self.min_broker_addr {
             map.insert(
-                NotifyMinBrokerIdChangeRequestHeader::MIN_BROKER_ADDR.to_string(),
+                CheetahString::from_static_str(
+                    NotifyMinBrokerIdChangeRequestHeader::MIN_BROKER_ADDR,
+                ),
                 min_broker_addr.clone(),
             );
         }
 
         if let Some(ref ha_broker_addr) = self.ha_broker_addr {
             map.insert(
-                NotifyMinBrokerIdChangeRequestHeader::HA_BROKER_ADDR.to_string(),
+                CheetahString::from_static_str(
+                    NotifyMinBrokerIdChangeRequestHeader::HA_BROKER_ADDR,
+                ),
                 ha_broker_addr.clone(),
             );
         }
 
         if let Some(ref offline_broker_addr) = self.offline_broker_addr {
             map.insert(
-                NotifyMinBrokerIdChangeRequestHeader::OFFLINE_BROKER_ADDR.to_string(),
+                CheetahString::from_static_str(
+                    NotifyMinBrokerIdChangeRequestHeader::OFFLINE_BROKER_ADDR,
+                ),
                 offline_broker_addr.clone(),
             );
         }
 
         if let Some(ref ha_broker_addr) = self.ha_broker_addr {
             map.insert(
-                NotifyMinBrokerIdChangeRequestHeader::HA_BROKER_ADDR.to_string(),
-                ha_broker_addr.to_string(),
+                CheetahString::from_static_str(
+                    NotifyMinBrokerIdChangeRequestHeader::HA_BROKER_ADDR,
+                ),
+                ha_broker_addr.clone(),
             );
         }
 

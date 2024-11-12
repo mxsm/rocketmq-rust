@@ -331,7 +331,8 @@ where
                         .topic_queue_mapping_info
                         .bname
                         .as_ref()
-                        .unwrap_or(&"".to_string())
+                        .cloned()
+                        .unwrap_or_default()
                 ),
             ));
         }
@@ -354,8 +355,7 @@ where
                     break;
                 }
             } else {
-                request_header
-                    .set_broker_name(mapping_item.bname.clone().unwrap_or("".to_string()));
+                request_header.set_broker_name(mapping_item.bname.clone().unwrap_or_default());
                 request_header.queue_id = mapping_item.queue_id;
                 request_header.set_lo(Some(false));
                 request_header.set_zero_if_not_found = Some(true);

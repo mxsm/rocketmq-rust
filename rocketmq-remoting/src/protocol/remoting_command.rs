@@ -208,7 +208,7 @@ impl RemotingCommand {
 
     pub fn create_response_command_with_code_remark(
         code: impl Into<i32>,
-        remark: impl Into<CheetahString>,
+        remark: impl Into<String>,
     ) -> Self {
         Self::default()
             .set_code(code)
@@ -298,13 +298,18 @@ impl RemotingCommand {
         self
     }
 
-    pub fn set_remark(mut self, remark: Option<CheetahString>) -> Self {
+    pub fn set_remark(mut self, remark: Option<String>) -> Self {
+        self.remark = remark.map(CheetahString::from);
+        self
+    }
+
+    pub fn set_remark_cheetah_string(mut self, remark: Option<CheetahString>) -> Self {
         self.remark = remark;
         self
     }
 
-    pub fn set_remark_mut(&mut self, remark: Option<CheetahString>) {
-        self.remark = remark;
+    pub fn set_remark_mut(&mut self, remark: Option<impl Into<CheetahString>>) {
+        self.remark = remark.map(|item| item.into());
     }
 
     pub fn set_ext_fields(mut self, ext_fields: HashMap<CheetahString, CheetahString>) -> Self {
@@ -630,8 +635,8 @@ impl RemotingCommand {
         self
     }
 
-    pub fn with_remark(&mut self, remark: Option<CheetahString>) -> &mut Self {
-        self.remark = remark;
+    pub fn with_remark(&mut self, remark: Option<impl Into<CheetahString>>) -> &mut Self {
+        self.remark = remark.map(|item| item.into());
         self
     }
 

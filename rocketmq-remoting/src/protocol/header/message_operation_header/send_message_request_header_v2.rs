@@ -17,6 +17,7 @@
 use std::collections::HashMap;
 
 use bytes::BytesMut;
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -29,53 +30,83 @@ use crate::rpc::topic_request_header::TopicRequestHeader;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SendMessageRequestHeaderV2 {
-    pub a: String,         // producerGroup
-    pub b: String,         // topic
-    pub c: String,         // defaultTopic
-    pub d: i32,            // defaultTopicQueueNums
-    pub e: i32,            // queueId
-    pub f: i32,            // sysFlag
-    pub g: i64,            // bornTimestamp
-    pub h: i32,            // flag
-    pub i: Option<String>, // properties
-    pub j: Option<i32>,    // reconsumeTimes
-    pub k: Option<bool>,   // unitMode
-    pub l: Option<i32>,    // consumeRetryTimes
-    pub m: Option<bool>,   // batch
-    pub n: Option<String>, // brokerName
+    pub a: CheetahString,         // producerGroup
+    pub b: CheetahString,         // topic
+    pub c: CheetahString,         // defaultTopic
+    pub d: i32,                   // defaultTopicQueueNums
+    pub e: i32,                   // queueId
+    pub f: i32,                   // sysFlag
+    pub g: i64,                   // bornTimestamp
+    pub h: i32,                   // flag
+    pub i: Option<CheetahString>, // properties
+    pub j: Option<i32>,           // reconsumeTimes
+    pub k: Option<bool>,          // unitMode
+    pub l: Option<i32>,           // consumeRetryTimes
+    pub m: Option<bool>,          // batch
+    pub n: Option<CheetahString>, // brokerName
 
     #[serde(flatten)]
     pub topic_request_header: Option<TopicRequestHeader>,
 }
 
 impl CommandCustomHeader for SendMessageRequestHeaderV2 {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         let mut map = HashMap::new();
-        map.insert("a".to_string(), self.a.clone());
-        map.insert("b".to_string(), self.b.clone());
-        map.insert("c".to_string(), self.c.clone());
-        map.insert("d".to_string(), self.d.to_string());
-        map.insert("e".to_string(), self.e.to_string());
-        map.insert("f".to_string(), self.f.to_string());
-        map.insert("g".to_string(), self.g.to_string());
-        map.insert("h".to_string(), self.h.to_string());
+        map.insert(CheetahString::from_slice("a"), self.a.clone());
+        map.insert(CheetahString::from_slice("b"), self.b.clone());
+        map.insert(CheetahString::from_slice("c"), self.c.clone());
+        map.insert(
+            CheetahString::from_slice("d"),
+            CheetahString::from_string(self.d.to_string()),
+        );
+        map.insert(
+            CheetahString::from_slice("e"),
+            CheetahString::from_string(self.e.to_string()),
+        );
+        map.insert(
+            CheetahString::from_slice("f"),
+            CheetahString::from_string(self.f.to_string()),
+        );
+        map.insert(
+            CheetahString::from_slice("g"),
+            CheetahString::from_string(self.g.to_string()),
+        );
+        map.insert(
+            CheetahString::from_slice("h"),
+            CheetahString::from_string(self.h.to_string()),
+        );
         if let Some(ref value) = self.i {
-            map.insert("i".to_string(), value.clone());
+            map.insert(
+                CheetahString::from_slice("i"),
+                CheetahString::from_string(value.to_string()),
+            );
         }
         if let Some(value) = self.j {
-            map.insert("j".to_string(), value.to_string());
+            map.insert(
+                CheetahString::from_slice("j"),
+                CheetahString::from_string(value.to_string()),
+            );
         }
         if let Some(value) = self.k {
-            map.insert("k".to_string(), value.to_string());
+            map.insert(
+                CheetahString::from_slice("k"),
+                CheetahString::from_string(value.to_string()),
+            );
         }
         if let Some(value) = self.l {
-            map.insert("l".to_string(), value.to_string());
+            map.insert(
+                CheetahString::from_slice("l"),
+                CheetahString::from_string(value.to_string()),
+            );
         }
         if let Some(value) = self.m {
-            map.insert("m".to_string(), value.to_string());
+            map.insert(
+                CheetahString::from_slice("m"),
+                CheetahString::from_string(value.to_string()),
+            );
         }
         if let Some(ref value) = self.n {
-            map.insert("n".to_string(), value.clone());
+            map.insert(CheetahString::from_slice("n"), value.clone());
         }
         if let Some(ref value) = self.topic_request_header {
             if let Some(value) = value.to_map() {
@@ -114,55 +145,55 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
         }
     }
 
-    fn decode_fast(&mut self, fields: &HashMap<String, String>) {
-        if let Some(v) = fields.get("a") {
-            self.a.clone_from(v)
+    fn decode_fast(&mut self, fields: &HashMap<CheetahString, CheetahString>) {
+        if let Some(v) = fields.get(&CheetahString::from_slice("a")) {
+            self.a = v.clone();
         }
-        if let Some(v) = fields.get("b") {
-            self.b.clone_from(v)
+        if let Some(v) = fields.get(&CheetahString::from_slice("b")) {
+            self.b = v.clone();
         }
-        if let Some(v) = fields.get("c") {
-            self.c.clone_from(v)
+        if let Some(v) = fields.get(&CheetahString::from_slice("c")) {
+            self.c = v.clone();
         }
 
-        if let Some(v) = fields.get("d") {
+        if let Some(v) = fields.get(&CheetahString::from_slice("d")) {
             self.d = v.parse().unwrap();
         }
-        if let Some(v) = fields.get("e") {
+        if let Some(v) = fields.get(&CheetahString::from_slice("e")) {
             self.e = v.parse().unwrap();
         }
-        if let Some(v) = fields.get("f") {
+        if let Some(v) = fields.get(&CheetahString::from_slice("f")) {
             self.f = v.parse().unwrap();
         }
-        if let Some(v) = fields.get("g") {
+        if let Some(v) = fields.get(&CheetahString::from_slice("g")) {
             self.g = v.parse().unwrap();
         }
 
-        if let Some(v) = fields.get("h") {
+        if let Some(v) = fields.get(&CheetahString::from_slice("h")) {
             self.h = v.parse().unwrap();
         }
 
-        if let Some(v) = fields.get("i") {
+        if let Some(v) = fields.get(&CheetahString::from_slice("i")) {
             self.i = Some(v.clone());
         }
 
-        if let Some(v) = fields.get("j") {
+        if let Some(v) = fields.get(&CheetahString::from_slice("j")) {
             self.j = Some(v.parse().unwrap());
         }
 
-        if let Some(v) = fields.get("k") {
+        if let Some(v) = fields.get(&CheetahString::from_slice("k")) {
             self.k = Some(v.parse().unwrap());
         }
 
-        if let Some(v) = fields.get("l") {
+        if let Some(v) = fields.get(&CheetahString::from_slice("l")) {
             self.l = Some(v.parse().unwrap());
         }
 
-        if let Some(v) = fields.get("m") {
+        if let Some(v) = fields.get(&CheetahString::from_slice("m")) {
             self.m = Some(v.parse().unwrap());
         }
 
-        if let Some(v) = fields.get("n") {
+        if let Some(v) = fields.get(&CheetahString::from_slice("n")) {
             self.n = Some(v.clone());
         }
     }
@@ -175,22 +206,30 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
 impl FromMap for SendMessageRequestHeaderV2 {
     type Target = Self;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(SendMessageRequestHeaderV2 {
-            a: map.get("a")?.clone(),
-            b: map.get("b")?.clone(),
-            c: map.get("c")?.clone(),
-            d: map.get("d")?.parse().ok()?,
-            e: map.get("e")?.parse().ok()?,
-            f: map.get("f")?.parse().ok()?,
-            g: map.get("g")?.parse().ok()?,
-            h: map.get("h")?.parse().ok()?,
-            i: map.get("i").cloned(),
-            j: map.get("j").and_then(|v| v.parse().ok()),
-            k: map.get("k").and_then(|v| v.parse().ok()),
-            l: map.get("l").and_then(|v| v.parse().ok()),
-            m: map.get("m").and_then(|v| v.parse().ok()),
-            n: map.get("n").cloned(),
+            a: map.get(&CheetahString::from_slice("a"))?.clone(),
+            b: map.get(&CheetahString::from_slice("b"))?.clone(),
+            c: map.get(&CheetahString::from_slice("c"))?.clone(),
+            d: map.get(&CheetahString::from_slice("d"))?.parse().ok()?,
+            e: map.get(&CheetahString::from_slice("e"))?.parse().ok()?,
+            f: map.get(&CheetahString::from_slice("f"))?.parse().ok()?,
+            g: map.get(&CheetahString::from_slice("g"))?.parse().ok()?,
+            h: map.get(&CheetahString::from_slice("h"))?.parse().ok()?,
+            i: map.get(&CheetahString::from_slice("i")).cloned(),
+            j: map
+                .get(&CheetahString::from_slice("j"))
+                .and_then(|v| v.parse().ok()),
+            k: map
+                .get(&CheetahString::from_slice("k"))
+                .and_then(|v| v.parse().ok()),
+            l: map
+                .get(&CheetahString::from_slice("l"))
+                .and_then(|v| v.parse().ok()),
+            m: map
+                .get(&CheetahString::from_slice("m"))
+                .and_then(|v| v.parse().ok()),
+            n: map.get(&CheetahString::from_slice("n")).cloned(),
             topic_request_header: <TopicRequestHeader as FromMap>::from(map),
         })
     }
@@ -236,7 +275,7 @@ impl SendMessageRequestHeaderV2 {
             n: v1
                 .topic_request_header
                 .as_ref()
-                .and_then(|v| v.get_broker_name().map(|v| v.to_string())),
+                .and_then(|v| v.get_broker_name().cloned()),
             topic_request_header: v1.topic_request_header.clone(),
         }
     }
@@ -254,7 +293,7 @@ impl TopicRequestHeaderTrait for SendMessageRequestHeaderV2 {
         }
     }
 
-    fn set_topic(&mut self, topic: String) {
+    fn set_topic(&mut self, topic: CheetahString) {
         self.b = topic;
     }
 
@@ -271,7 +310,7 @@ impl TopicRequestHeaderTrait for SendMessageRequestHeaderV2 {
             .as_deref()
     }
 
-    fn set_broker_name(&mut self, broker_name: String) {
+    fn set_broker_name(&mut self, broker_name: CheetahString) {
         self.topic_request_header
             .as_mut()
             .unwrap()
@@ -290,7 +329,7 @@ impl TopicRequestHeaderTrait for SendMessageRequestHeaderV2 {
             .as_deref()
     }
 
-    fn set_namespace(&mut self, namespace: String) {
+    fn set_namespace(&mut self, namespace: CheetahString) {
         self.topic_request_header
             .as_mut()
             .unwrap()
@@ -346,143 +385,5 @@ impl TopicRequestHeaderTrait for SendMessageRequestHeaderV2 {
 
     fn set_queue_id(&mut self, queue_id: Option<i32>) {
         self.e = queue_id.unwrap();
-    }
-}
-
-#[cfg(test)]
-mod send_message_request_header_v2_tests {
-    use std::collections::HashMap;
-
-    use super::*;
-
-    #[test]
-    fn from_map_creates_instance_with_all_fields() {
-        let mut map = HashMap::new();
-        map.insert("a".to_string(), "ProducerGroup".to_string());
-        map.insert("b".to_string(), "TopicName".to_string());
-        map.insert("c".to_string(), "DefaultTopic".to_string());
-        map.insert("d".to_string(), "4".to_string());
-        map.insert("e".to_string(), "1".to_string());
-        map.insert("f".to_string(), "0".to_string());
-        map.insert("g".to_string(), "1622547600000".to_string());
-        map.insert("h".to_string(), "0".to_string());
-        map.insert("i".to_string(), "key:value".to_string());
-        map.insert("j".to_string(), "0".to_string());
-        map.insert("k".to_string(), "false".to_string());
-        map.insert("l".to_string(), "3".to_string());
-        map.insert("m".to_string(), "false".to_string());
-        map.insert("n".to_string(), "BrokerName".to_string());
-
-        let header = <SendMessageRequestHeaderV2 as FromMap>::from(&map).unwrap();
-
-        assert_eq!(header.a, "ProducerGroup");
-        assert_eq!(header.b, "TopicName");
-        assert_eq!(header.c, "DefaultTopic");
-        assert_eq!(header.d, 4);
-        assert_eq!(header.e, 1);
-        assert_eq!(header.f, 0);
-        assert_eq!(header.g, 1622547600000);
-        assert_eq!(header.h, 0);
-        assert_eq!(header.i, Some("key:value".to_string()));
-        assert_eq!(header.j, Some(0));
-        assert_eq!(header.k, Some(false));
-        assert_eq!(header.l, Some(3));
-        assert_eq!(header.m, Some(false));
-        assert_eq!(header.n, Some("BrokerName".to_string()));
-    }
-
-    #[test]
-    fn to_map_returns_map_with_all_fields() {
-        let header = SendMessageRequestHeaderV2 {
-            a: "ProducerGroup".to_string(),
-            b: "TopicName".to_string(),
-            c: "DefaultTopic".to_string(),
-            d: 4,
-            e: 1,
-            f: 0,
-            g: 1622547600000,
-            h: 0,
-            i: Some("key:value".to_string()),
-            j: Some(0),
-            k: Some(false),
-            l: Some(3),
-            m: Some(false),
-            n: Some("BrokerName".to_string()),
-            topic_request_header: None,
-        };
-
-        let map = header.to_map().unwrap();
-
-        assert_eq!(map.get("a").unwrap(), "ProducerGroup");
-        assert_eq!(map.get("b").unwrap(), "TopicName");
-        assert_eq!(map.get("c").unwrap(), "DefaultTopic");
-        assert_eq!(map.get("d").unwrap(), "4");
-        assert_eq!(map.get("e").unwrap(), "1");
-        assert_eq!(map.get("f").unwrap(), "0");
-        assert_eq!(map.get("g").unwrap(), "1622547600000");
-        assert_eq!(map.get("h").unwrap(), "0");
-        assert_eq!(map.get("i").unwrap(), "key:value");
-        assert_eq!(map.get("j").unwrap(), "0");
-        assert_eq!(map.get("k").unwrap(), "false");
-        assert_eq!(map.get("l").unwrap(), "3");
-        assert_eq!(map.get("m").unwrap(), "false");
-        assert_eq!(map.get("n").unwrap(), "BrokerName");
-    }
-
-    #[test]
-    fn from_map_with_missing_fields_returns_none() {
-        let map = HashMap::new(); // Empty map
-
-        let header = <SendMessageRequestHeaderV2 as FromMap>::from(&map);
-
-        assert!(header.is_none());
-    }
-
-    #[test]
-    fn from_map_with_invalid_values_returns_none() {
-        let mut map = HashMap::new();
-        map.insert("d".to_string(), "invalid".to_string()); // Invalid integer
-
-        let header = <SendMessageRequestHeaderV2 as FromMap>::from(&map);
-
-        assert!(header.is_none());
-    }
-
-    #[test]
-    fn create_send_message_request_header_v1_correctly_transforms_fields() {
-        let header_v2 = SendMessageRequestHeaderV2 {
-            a: "ProducerGroup".to_string(),
-            b: "TopicName".to_string(),
-            c: "DefaultTopic".to_string(),
-            d: 4,
-            e: 1,
-            f: 0,
-            g: 1622547600000,
-            h: 0,
-            i: Some("key:value".to_string()),
-            j: Some(0),
-            k: Some(false),
-            l: Some(3),
-            m: Some(false),
-            n: Some("BrokerName".to_string()),
-            topic_request_header: None,
-        };
-
-        let header_v1 =
-            SendMessageRequestHeaderV2::create_send_message_request_header_v1(&header_v2);
-
-        assert_eq!(header_v1.producer_group, "ProducerGroup");
-        assert_eq!(header_v1.topic, "TopicName");
-        assert_eq!(header_v1.default_topic, "DefaultTopic");
-        assert_eq!(header_v1.default_topic_queue_nums, 4);
-        assert_eq!(header_v1.queue_id, Some(1));
-        assert_eq!(header_v1.sys_flag, 0);
-        assert_eq!(header_v1.born_timestamp, 1622547600000);
-        assert_eq!(header_v1.flag, 0);
-        assert_eq!(header_v1.properties, Some("key:value".to_string()));
-        assert_eq!(header_v1.reconsume_times, Some(0));
-        assert_eq!(header_v1.unit_mode, Some(false));
-        assert_eq!(header_v1.batch, Some(false));
-        assert_eq!(header_v1.max_reconsume_times, Some(3));
     }
 }

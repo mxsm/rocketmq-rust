@@ -112,7 +112,7 @@ where
             let from_transaction_check = request_header.from_transaction_check;
             let commit_or_rollback = request_header.commit_or_rollback;
             let params = (
-                request_header.producer_group.clone(),
+                request_header.producer_group.to_string(),
                 request_header.tran_state_table_offset as i64,
                 request_header.commit_log_offset as i64,
             );
@@ -160,7 +160,7 @@ where
         } else if MessageSysFlag::TRANSACTION_ROLLBACK_TYPE == request_header.commit_or_rollback {
             let from_transaction_check = request_header.from_transaction_check;
             let params = (
-                request_header.producer_group.clone(),
+                request_header.producer_group.to_string(),
                 request_header.tran_state_table_offset as i64,
                 request_header.commit_log_offset as i64,
             );

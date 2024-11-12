@@ -17,6 +17,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
@@ -181,12 +182,7 @@ impl<MS> PullMessageProcessor<MS> {
         let mut sys_flag = request_header.sys_flag;
         let topic_request = request_header.topic_request.as_mut().unwrap();
         topic_request.lo = Some(false);
-        topic_request
-            .rpc
-            .as_mut()
-            .unwrap()
-            .broker_name
-            .clone_from(bname);
+        topic_request.rpc.as_mut().unwrap().broker_name = bname.clone();
         sys_flag = PullSysFlag::clear_suspend_flag(sys_flag as u32) as i32;
         sys_flag = PullSysFlag::clear_commit_offset_flag(sys_flag as u32) as i32;
         request_header.sys_flag = sys_flag;
@@ -515,7 +511,10 @@ where
                     .subscription
                     .as_ref()
                     .map_or_else(|| "", |value| value.as_str()),
-                request_header.expression_type.clone(),
+                request_header
+                    .expression_type
+                    .clone()
+                    .map(|value| value.to_string()),
             );
             if subscription_data.is_err() {
                 return Some(
@@ -817,7 +816,7 @@ where
                     None => {
                         return -1;
                     }
-                    Some(value) => Some(value.client_id().clone()),
+                    Some(value) => Some(CheetahString::from_string(value.client_id().clone())),
                 }
             };
             return self.broadcast_offset_manager.query_init_offset(

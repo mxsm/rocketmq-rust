@@ -27,6 +27,7 @@ use bytes::Buf;
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
+use cheetah_string::CheetahString;
 
 use crate::common::compression::compression_type::CompressionType;
 use crate::common::message::message_client_ext::MessageClientExt;
@@ -57,7 +58,7 @@ pub const QUEUE_OFFSET_POSITION: usize = 4 + 4 + 4 + 4 + 4;
 pub const SYSFLAG_POSITION: usize = 4 + 4 + 4 + 4 + 4 + 8 + 8;
 pub const BORN_TIMESTAMP_POSITION: usize = 4 + 4 + 4 + 4 + 4 + 8 + 8 + 4 + 8;
 
-pub fn string_to_message_properties(properties: Option<&String>) -> HashMap<String, String> {
+pub fn string_to_message_properties(properties: Option<&CheetahString>) -> HashMap<String, String> {
     let mut map = HashMap::new();
     if let Some(properties) = properties {
         let mut index = 0;
@@ -332,11 +333,14 @@ pub fn decode(
         byte_buffer.copy_to_slice(&mut properties);
         if !is_set_properties_string {
             let properties_string = String::from_utf8_lossy(properties.as_slice()).to_string();
-            let message_properties = string_to_message_properties(Some(&properties_string));
+            let message_properties =
+                string_to_message_properties(Some(&CheetahString::from_string(properties_string)));
             msg_ext.message.properties = message_properties;
         } else {
             let properties_string = String::from_utf8_lossy(properties.as_slice()).to_string();
-            let mut message_properties = string_to_message_properties(Some(&properties_string));
+            let mut message_properties = string_to_message_properties(Some(
+                &CheetahString::from_string(properties_string.clone()),
+            ));
             message_properties.insert("propertiesString".to_string(), properties_string);
             msg_ext.message.properties = message_properties;
         }
@@ -388,11 +392,11 @@ pub fn encode_message(message: &Message) -> Bytes {
     let properties_length = properties_bytes.len();
 
     let store_size = 4 // 1 TOTALSIZE
-           + 4 // 2 MAGICCOD
-           + 4 // 3 BODYCRC
-           + 4 // 4 FLAG
-           + 4 + body_len // 4 BODY
-           + 2 + properties_length;
+            + 4 // 2 MAGICCOD
+            + 4 // 3 BODYCRC
+            + 4 // 4 FLAG
+            + 4 + body_len // 4 BODY
+            + 2 + properties_length;
 
     let mut bytes = BytesMut::with_capacity(store_size);
 

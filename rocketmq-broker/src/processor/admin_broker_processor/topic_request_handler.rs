@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::attribute::attribute_parser::AttributeParser;
 use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
 use rocketmq_common::common::config::TopicConfig;
@@ -109,7 +110,7 @@ impl TopicRequestHandler {
             request_header
                 .attributes
                 .clone()
-                .unwrap_or("".to_string())
+                .unwrap_or(CheetahString::empty())
                 .as_str(),
         ) {
             Ok(value) => value,

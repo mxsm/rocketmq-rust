@@ -116,7 +116,7 @@ impl TopicRequestHeaderTrait for GetMaxOffsetRequestHeader {
         self.topic_request_header.as_ref().unwrap().lo
     }
 
-    fn set_topic(&mut self, topic: String) {
+    fn set_topic(&mut self, topic: CheetahString) {
         self.topic = topic;
     }
 
@@ -156,7 +156,7 @@ impl TopicRequestHeaderTrait for GetMaxOffsetRequestHeader {
             .as_deref()
     }
 
-    fn set_namespace(&mut self, namespace: String) {
+    fn set_namespace(&mut self, namespace: CheetahString) {
         self.topic_request_header
             .as_mut()
             .unwrap()

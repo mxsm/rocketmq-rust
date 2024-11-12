@@ -17,6 +17,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use log::warn;
 use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
@@ -187,7 +188,11 @@ where
             &mut msg_inner,
             MessageDecoder::string_to_message_properties(request_header.properties.as_ref()),
         );
-        msg_inner.properties_string = request_header.properties.clone().unwrap_or("".to_string());
+        msg_inner.properties_string = request_header
+            .properties
+            .clone()
+            .unwrap_or_default()
+            .to_string();
         msg_inner.message_ext_inner.born_timestamp = request_header.born_timestamp;
         msg_inner.message_ext_inner.born_host = channel.remote_address();
         msg_inner.message_ext_inner.store_host = self.store_host;
@@ -308,7 +313,7 @@ where
                     .logics_offset,
             );
             if self.inner.has_send_message_hook() {
-                let msg_id = response_header.msg_id().to_string();
+                let msg_id = response_header.msg_id().clone();
                 let queue_id = Some(response_header.queue_id());
                 let queue_offset = Some(response_header.queue_offset());
                 send_message_context.msg_id = msg_id;
@@ -348,7 +353,7 @@ where
             response.set_remark_mut(Some(push_reply_result.1.clone()));
         } else {
             response.set_code_mut(ResponseCode::Success);
-            response.set_remark_mut(None);
+            //response.set_remark_mut(None);
             response_header.set_msg_id("0");
             response_header.set_queue_id(queue_id_int);
             response_header.set_queue_offset(0);
@@ -363,8 +368,8 @@ where
         msg: &M,
     ) -> PushReplyResult {
         let reply_message_request_header = ReplyMessageRequestHeader {
-            born_host: channel.remote_address().to_string(),
-            store_host: self.store_host.to_string(),
+            born_host: CheetahString::from_string(channel.remote_address().to_string()),
+            store_host: CheetahString::from_string(self.store_host.to_string()),
             store_timestamp: get_current_millis() as i64,
             producer_group: request_header.producer_group.clone(),
             topic: request_header.topic.clone(),

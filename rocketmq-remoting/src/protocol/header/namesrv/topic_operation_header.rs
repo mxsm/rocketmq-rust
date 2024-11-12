@@ -28,15 +28,18 @@ use crate::rpc::rpc_request_header::RpcRequestHeader;
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct DeleteTopicFromNamesrvRequestHeader {
-    pub topic: String,
-    pub cluster_name: Option<String>,
+    pub topic: CheetahString,
+    pub cluster_name: Option<CheetahString>,
 }
 
 impl DeleteTopicFromNamesrvRequestHeader {
     const CLUSTER_NAME: &'static str = "clusterName";
     const TOPIC: &'static str = "topic";
 
-    pub fn new(topic: impl Into<String>, cluster_name: Option<impl Into<String>>) -> Self {
+    pub fn new(
+        topic: impl Into<CheetahString>,
+        cluster_name: Option<impl Into<CheetahString>>,
+    ) -> Self {
         Self {
             topic: topic.into(),
             cluster_name: cluster_name.map(|s| s.into()),
@@ -45,10 +48,16 @@ impl DeleteTopicFromNamesrvRequestHeader {
 }
 
 impl CommandCustomHeader for DeleteTopicFromNamesrvRequestHeader {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
-        let mut map = HashMap::from([(Self::TOPIC.to_string(), self.topic.clone())]);
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
+        let mut map = HashMap::from([(
+            CheetahString::from_static_str(Self::TOPIC),
+            self.topic.clone(),
+        )]);
         if let Some(ref cluster_name) = self.cluster_name {
-            map.insert(Self::CLUSTER_NAME.to_string(), cluster_name.clone());
+            map.insert(
+                CheetahString::from_static_str(Self::CLUSTER_NAME),
+                cluster_name.clone(),
+            );
         }
         Some(map)
     }
@@ -57,10 +66,15 @@ impl CommandCustomHeader for DeleteTopicFromNamesrvRequestHeader {
 impl FromMap for DeleteTopicFromNamesrvRequestHeader {
     type Target = Self;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(DeleteTopicFromNamesrvRequestHeader {
-            topic: map.get(Self::TOPIC).cloned().unwrap_or_default(),
-            cluster_name: map.get(Self::CLUSTER_NAME).map(|s| s.into()),
+            topic: map
+                .get(&CheetahString::from_static_str(Self::TOPIC))
+                .cloned()
+                .unwrap_or_default(),
+            cluster_name: map
+                .get(&CheetahString::from_static_str(Self::CLUSTER_NAME))
+                .cloned(),
         })
     }
 }
@@ -114,13 +128,13 @@ impl FromMap for RegisterTopicRequestHeader {
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct GetTopicsByClusterRequestHeader {
-    pub cluster: String,
+    pub cluster: CheetahString,
 }
 
 impl GetTopicsByClusterRequestHeader {
     const CLUSTER: &'static str = "cluster";
 
-    pub fn new(cluster: impl Into<String>) -> Self {
+    pub fn new(cluster: impl Into<CheetahString>) -> Self {
         Self {
             cluster: cluster.into(),
         }
@@ -128,8 +142,11 @@ impl GetTopicsByClusterRequestHeader {
 }
 
 impl CommandCustomHeader for GetTopicsByClusterRequestHeader {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
-        let map = HashMap::from([(Self::CLUSTER.to_string(), self.cluster.clone())]);
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
+        let map = HashMap::from([(
+            CheetahString::from_static_str(Self::CLUSTER),
+            self.cluster.clone(),
+        )]);
         Some(map)
     }
 }
@@ -137,9 +154,12 @@ impl CommandCustomHeader for GetTopicsByClusterRequestHeader {
 impl FromMap for GetTopicsByClusterRequestHeader {
     type Target = Self;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(GetTopicsByClusterRequestHeader {
-            cluster: map.get(Self::CLUSTER).cloned().unwrap_or_default(),
+            cluster: map
+                .get(&CheetahString::from_static_str(Self::CLUSTER))
+                .cloned()
+                .unwrap_or_default(),
         })
     }
 }

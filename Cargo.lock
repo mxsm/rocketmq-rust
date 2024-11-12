@@ -255,8 +255,7 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 [[package]]
 name = "cheetah-string"
 version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2111e92f58d2a74354918ce0470dadc20f23165a65e14ccb45199bc4de7c4dc0"
+source = "git+https://github.com/mxsm/cheetah-string.git#f1e7e924887a69fdb669426538b37b58b98696a5"
 dependencies = [
  "bytes",
  "serde",
@@ -1917,6 +1916,7 @@ name = "rocketmq-client"
 version = "0.3.0"
 dependencies = [
  "bytes",
+ "cheetah-string",
  "futures",
  "lazy_static",
  "num_cpus",
@@ -2090,6 +2090,7 @@ version = "0.3.0"
 dependencies = [
  "anyhow",
  "bytes",
+ "cheetah-string",
  "criterion",
  "dirs",
  "futures",

@@ -103,7 +103,7 @@ impl BrokerOuterAPI {
 
     fn create_request(broker_name: CheetahString, topic_config: TopicConfig) -> RemotingCommand {
         let request_header =
-            RegisterTopicRequestHeader::new(topic_config.topic_name.as_ref().unwrap());
+            RegisterTopicRequestHeader::new(topic_config.topic_name.as_ref().cloned().unwrap());
         let queue_data = QueueData::new(
             broker_name.clone(),
             topic_config.read_queue_nums,
@@ -148,10 +148,10 @@ impl BrokerOuterAPI {
     pub async fn register_broker_all(
         &self,
         cluster_name: CheetahString,
-        broker_addr: String,
+        broker_addr: CheetahString,
         broker_name: CheetahString,
         broker_id: u64,
-        ha_server_addr: String,
+        ha_server_addr: CheetahString,
         topic_config_wrapper: TopicConfigAndMappingSerializeWrapper,
         filter_server_list: Vec<String>,
         oneway: bool,
@@ -273,9 +273,16 @@ impl BrokerOuterAPI {
                         response.decode_command_custom_header::<RegisterBrokerResponseHeader>();
                     let mut result = RegisterBrokerResult::default();
                     if let Some(header) = register_broker_result {
-                        result.ha_server_addr =
-                            header.ha_server_addr.clone().unwrap_or("".to_string());
-                        result.master_addr = header.master_addr.clone().unwrap_or("".to_string());
+                        result.ha_server_addr = header
+                            .ha_server_addr
+                            .clone()
+                            .unwrap_or(CheetahString::empty())
+                            .to_string();
+                        result.master_addr = header
+                            .master_addr
+                            .clone()
+                            .unwrap_or(CheetahString::empty())
+                            .to_string();
                     }
                     if let Some(body) = response.body() {
                         result.kv_table = SerdeJsonUtils::decode::<KVTable>(body.as_ref()).unwrap();
@@ -353,7 +360,11 @@ impl BrokerOuterAPI {
                 } else {
                     Err(BrokerError::MQBrokerError(
                         response.code(),
-                        response.remark().cloned().unwrap_or("".to_string()),
+                        response
+                            .remark()
+                            .cloned()
+                            .unwrap_or(CheetahString::empty())
+                            .to_json(),
                         "".to_string(),
                     ))
                 }
@@ -384,7 +395,11 @@ impl BrokerOuterAPI {
                 } else {
                     Err(BrokerError::MQBrokerError(
                         response.code(),
-                        response.remark().cloned().unwrap_or("".to_string()),
+                        response
+                            .remark()
+                            .cloned()
+                            .unwrap_or(CheetahString::empty())
+                            .to_string(),
                         "".to_string(),
                     ))
                 }

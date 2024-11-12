@@ -72,7 +72,7 @@ impl CreateTopicRequestHeader {
 }
 
 impl CommandCustomHeader for CreateTopicRequestHeader {
-    fn to_map(&self) -> Option<std::collections::HashMap<String, String>> {
+    fn to_map(&self) -> Option<std::collections::HashMap<CheetahString, CheetahString>> {
         let mut map = std::collections::HashMap::new();
         map.insert(
             CheetahString::from_static_str(Self::TOPIC),
@@ -136,31 +136,43 @@ impl FromMap for CreateTopicRequestHeader {
 
     fn from(map: &std::collections::HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(CreateTopicRequestHeader {
-            topic: map.get(Self::TOPIC).cloned().unwrap_or_default(),
-            default_topic: map.get(Self::DEFAULT_TOPIC).cloned().unwrap_or_default(),
+            topic: map
+                .get(&CheetahString::from_static_str(Self::TOPIC))
+                .cloned()
+                .unwrap_or_default(),
+            default_topic: map
+                .get(&CheetahString::from_static_str(Self::DEFAULT_TOPIC))
+                .cloned()
+                .unwrap_or_default(),
             read_queue_nums: map
-                .get(Self::READ_QUEUE_NUMS)
+                .get(&CheetahString::from_static_str(Self::READ_QUEUE_NUMS))
                 .and_then(|v| v.parse().ok())
                 .unwrap_or_default(),
             write_queue_nums: map
-                .get(Self::WRITE_QUEUE_NUMS)
+                .get(&CheetahString::from_static_str(Self::WRITE_QUEUE_NUMS))
                 .and_then(|v| v.parse().ok())
                 .unwrap_or_default(),
             perm: map
-                .get(Self::PERM)
+                .get(&CheetahString::from_static_str(Self::PERM))
                 .and_then(|v| v.parse().ok())
                 .unwrap_or_default(),
             topic_filter_type: map
-                .get(Self::TOPIC_FILTER_TYPE)
+                .get(&CheetahString::from_static_str(Self::TOPIC_FILTER_TYPE))
                 .cloned()
                 .unwrap_or_default(),
-            topic_sys_flag: map.get(Self::TOPIC_SYS_FLAG).and_then(|v| v.parse().ok()),
+            topic_sys_flag: map
+                .get(&CheetahString::from_static_str(Self::TOPIC_SYS_FLAG))
+                .and_then(|v| v.parse().ok()),
             order: map
-                .get(Self::ORDER)
+                .get(&CheetahString::from_static_str(Self::ORDER))
                 .and_then(|v| v.parse().ok())
                 .unwrap_or_default(),
-            attributes: map.get(Self::ATTRIBUTES).cloned(),
-            force: map.get(Self::FORCE).and_then(|v| v.parse().ok()),
+            attributes: map
+                .get(&CheetahString::from_static_str(Self::ATTRIBUTES))
+                .cloned(),
+            force: map
+                .get(&CheetahString::from_static_str(Self::FORCE))
+                .and_then(|v| v.parse().ok()),
             topic_request_header: <TopicRequestHeader as FromMap>::from(map),
         })
     }

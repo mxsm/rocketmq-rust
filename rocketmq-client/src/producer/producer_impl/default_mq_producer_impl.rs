@@ -23,6 +23,7 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
+use cheetah_string::CheetahString;
 use rand::random;
 use rocketmq_common::common::base::service_state::ServiceState;
 use rocketmq_common::common::message::message_batch::MessageBatch;
@@ -1069,23 +1070,27 @@ impl DefaultMQProducerImpl {
 
         //build send message request header
         let mut request_header = SendMessageRequestHeader {
-            producer_group: self.producer_config.producer_group().to_string(),
-            topic: msg.get_topic().to_string(),
-            default_topic: self.producer_config.create_topic_key().to_string(),
+            producer_group: CheetahString::from_string(
+                self.producer_config.producer_group().to_string(),
+            ),
+            topic: CheetahString::from_string(msg.get_topic().to_string()),
+            default_topic: CheetahString::from_string(
+                self.producer_config.create_topic_key().to_string(),
+            ),
             default_topic_queue_nums: self.producer_config.default_topic_queue_nums() as i32,
             queue_id: Some(mq.get_queue_id()),
             sys_flag,
             born_timestamp: get_current_millis() as i64,
             flag: msg.get_flag(),
-            properties: Some(MessageDecoder::message_properties_to_string(
-                msg.get_properties(),
+            properties: Some(CheetahString::from_string(
+                MessageDecoder::message_properties_to_string(msg.get_properties()),
             )),
             reconsume_times: Some(0),
             unit_mode: Some(self.is_unit_mode()),
             batch: Some(batch),
             topic_request_header: Some(TopicRequestHeader {
                 rpc_request_header: Some(RpcRequestHeader {
-                    broker_name: Some(broker_name.clone()),
+                    broker_name: Some(CheetahString::from_string(broker_name.clone())),
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -1943,8 +1948,10 @@ impl DefaultMQProducerImpl {
             .find_broker_address_in_publish(dest_broker_name.as_str())
             .await;
         let request_header = EndTransactionRequestHeader {
-            topic: msg.get_topic().to_string(),
-            producer_group: self.producer_config.producer_group().to_string(),
+            topic: CheetahString::from_string(msg.get_topic().to_string()),
+            producer_group: CheetahString::from_string(
+                self.producer_config.producer_group().to_string(),
+            ),
             tran_state_table_offset: send_result.queue_offset,
             commit_log_offset: id.offset as u64,
             commit_or_rollback: match local_transaction_state {
@@ -1953,10 +1960,10 @@ impl DefaultMQProducerImpl {
                 LocalTransactionState::Unknown => MessageSysFlag::TRANSACTION_NOT_TYPE,
             },
             from_transaction_check: false,
-            msg_id: send_result.msg_id.clone().unwrap_or_default(),
-            transaction_id,
+            msg_id: CheetahString::from_string(send_result.msg_id.clone().unwrap_or_default()),
+            transaction_id: transaction_id.map(CheetahString::from_string),
             rpc_request_header: RpcRequestHeader {
-                broker_name: Some(dest_broker_name),
+                broker_name: Some(CheetahString::from_string(dest_broker_name)),
                 ..Default::default()
             },
         };
@@ -2092,10 +2099,12 @@ impl MQProducerInner for DefaultMQProducerImpl {
                 let transaction_state = transaction_listener.check_local_transaction(&msg);
                 let request_header = EndTransactionRequestHeader {
                     topic: check_request_header.topic.clone().unwrap_or_default(),
-                    producer_group: producer_impl_inner
-                        .producer_config
-                        .producer_group()
-                        .to_string(),
+                    producer_group: CheetahString::from_string(
+                        producer_impl_inner
+                            .producer_config
+                            .producer_group()
+                            .to_string(),
+                    ),
                     tran_state_table_offset: check_request_header.commit_log_offset as u64,
                     commit_log_offset: check_request_header.commit_log_offset as u64,
                     commit_or_rollback: match transaction_state {
@@ -2108,7 +2117,7 @@ impl MQProducerInner for DefaultMQProducerImpl {
                         LocalTransactionState::Unknown => MessageSysFlag::TRANSACTION_NOT_TYPE,
                     },
                     from_transaction_check: true,
-                    msg_id: unique_key.clone().unwrap_or_default(),
+                    msg_id: CheetahString::from_string(unique_key.clone().unwrap_or_default()),
                     transaction_id: check_request_header.transaction_id.clone(),
                     rpc_request_header: RpcRequestHeader {
                         broker_name: check_request_header
