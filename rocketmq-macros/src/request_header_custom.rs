@@ -44,81 +44,79 @@ pub(super) fn request_header_codec_inner(
 
     //build CommandCustomHeader impl
     let (static_fields, (to_maps, from_map)): (Vec<_>, (Vec<_>,Vec<_>)) = fields
-        .iter()
-        .map(|field| {
-            let field_name = field.ident.as_ref().unwrap();
-            //Determining whether it is an Option type or a direct data type
-            //This will lead to different ways of processing in the future.
-            let has_option = is_option_type(&field.ty);
-            let camel_case_name = snake_to_camel_case(&format!("{}", field_name));
-            let static_name = Ident::new(
-                &format!("{}", field_name).to_ascii_uppercase(),
-                field_name.span(),
-            );
-
-            (
-                quote! {
-                    const #static_name: &'static str = #camel_case_name;
-                },
-                (
-                    if let Some(value) = has_option {
-                        let type_name = get_type_name(value);
-                        if type_name == "String" {
-                            quote! {
-                            if let Some(ref value) = self.#field_name {
-                               map.insert (Self::#static_name.to_string(),value.to_string());
+         .iter()
+         .map(|field| {
+             let field_name = field.ident.as_ref().unwrap();
+             //Determining whether it is an Option type or a direct data type
+             //This will lead to different ways of processing in the future.
+             let has_option = is_option_type(&field.ty);
+             let camel_case_name = snake_to_camel_case(&format!("{}", field_name));
+             let static_name = Ident::new(
+                 &format!("{}", field_name).to_ascii_uppercase(),
+                 field_name.span(),
+             );
+             (
+                 quote! {
+                     const #static_name: &'static str = #camel_case_name;
+                 },
+                 (
+                     if let Some(value) = has_option {
+                         let type_name = get_type_name(value);
+                         if type_name == "CheetahString" {
+                             quote! {
+                                 if let Some(ref value) = self.#field_name {
+                                    map.insert (cheetah_string::CheetahString::from_static_str(Self::#static_name),cheetah_string::CheetahString::from_string(value.to_string()));
+                                  }
                              }
-                        }
-                        }else {
-                            quote! {
-                            if let Some(value) = self.#field_name {
-                               map.insert (Self::#static_name.to_string(),value.to_string());
+                         }else {
+                             quote! {
+                                 if let Some(value) = self.#field_name {
+                                    map.insert (cheetah_string::CheetahString::from_static_str(Self::#static_name),cheetah_string::CheetahString::from_string(value.to_string()));
+                                  }
                              }
-                        }
-                        }
+                         }
+                     } else {
+                         quote! {
+                             map.insert (cheetah_string::CheetahString::from_static_str(Self::#static_name), cheetah_string::CheetahString::from_string(self.#field_name.to_string()));
+                         }
+                     },
+                     // build FromMap impl
+                     if let Some(value) = has_option {
+                         let type_name = get_type_name(value);
+                         if type_name == "CheetahString" {
+                             quote! {
+                                 #field_name: map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).cloned(),
+                             }
+                         }else {
+                             quote! {
+                                 #field_name:map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).and_then(|s| s.parse::<#value>().ok()),
+                             }
+                         }
 
-                    } else {
-                        quote! {
-                            map.insert (Self::#static_name.to_string(),self.#field_name.to_string());
-                        }
-                    },
-                    // build FromMap impl
-                    if let Some(value) = has_option {
-                        let type_name = get_type_name(value);
-                        if type_name == "String" {
-                            quote! {
-                                #field_name: map.get(Self::#static_name).cloned(),
-                            }
-                        }else {
-                            quote! {
-                                #field_name:map.get(Self::#static_name).and_then(|s| s.parse::<#value>().ok()),
-                            }
-                        }
-
-                    } else {
-                        let types = &field.ty;
-                        let type_name = get_type_name(types);
-                        if type_name == "String" {
-                            quote!{
-                                #field_name: map.get(Self::#static_name).cloned().unwrap_or_default(),
-                            }
-                        }else {
-                            quote! {
-                              #field_name:map.get(Self::#static_name).and_then(|s| s.parse::<#types>().ok()).unwrap_or_default(),
-                            }
-                        }
-                        }
-                )
-            )
-        })
-        .unzip();
+                     } else {
+                         let types = &field.ty;
+                         let type_name = get_type_name(types);
+                         if type_name == "CheetahString" {
+                             quote!{
+                                 #field_name: map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).cloned().unwrap_or_default(),
+                             }
+                         }else {
+                             quote! {
+                               #field_name:map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).and_then(|s| s.parse::<#types>().ok()).unwrap_or_default(),
+                             }
+                         }
+                         }
+                 )
+             )
+         })
+         .unzip();
     let expanded: TokenStream2 = quote! {
         impl #struct_name {
             #(#static_fields)*
         }
 
         impl crate::protocol::command_custom_header::CommandCustomHeader for #struct_name {
-            fn to_map(&self) -> Option<std::collections::HashMap<String, String>> {
+            fn to_map(&self) -> Option<std::collections::HashMap<cheetah_string::CheetahString, cheetah_string::CheetahString>> {
                 let mut map = std::collections::HashMap::new();
                 #(#to_maps)*
                 Some(map)
@@ -128,7 +126,7 @@ pub(super) fn request_header_codec_inner(
         impl crate::protocol::command_custom_header::FromMap for #struct_name {
             type Target = Self;
 
-            fn from(map: &std::collections::HashMap<String, String>) -> Option<Self::Target> {
+            fn from(map: &std::collections::HashMap<cheetah_string::CheetahString, cheetah_string::CheetahString>) -> Option<Self::Target> {
                 Some(#struct_name {
                     #(#from_map)*
                 })

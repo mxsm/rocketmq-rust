@@ -21,6 +21,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::mix_all;
@@ -532,7 +533,7 @@ impl RouteInfoManager {
 
     fn create_and_update_queue_data(&mut self, broker_name: &str, topic_config: TopicConfig) {
         let queue_data = QueueData::new(
-            broker_name.to_string(),
+            CheetahString::from_slice(broker_name),
             topic_config.write_queue_nums,
             topic_config.read_queue_nums,
             topic_config.perm,
@@ -587,9 +588,12 @@ impl RouteInfoManager {
         let request_header = NotifyMinBrokerIdChangeRequestHeader::new(
             Some(min_broker_id),
             None,
-            broker_addr_map.get(&min_broker_id).cloned(),
-            offline_broker_addr.clone(),
-            ha_broker_addr,
+            broker_addr_map
+                .get(&min_broker_id)
+                .cloned()
+                .map(CheetahString::from_string),
+            offline_broker_addr.clone().map(CheetahString::from_string),
+            ha_broker_addr.map(CheetahString::from_string),
         );
 
         if let Some(broker_addrs_notify) =
@@ -648,8 +652,10 @@ impl RouteInfoManager {
         cluster_name: &str,
         broker_name: &str,
     ) -> Option<BrokerMemberGroup> {
-        let mut group_member =
-            BrokerMemberGroup::new(cluster_name.to_string(), broker_name.to_string());
+        let mut group_member = BrokerMemberGroup::new(
+            CheetahString::from_slice(cluster_name),
+            CheetahString::from_slice(broker_name),
+        );
         if let Some(broker_data) = self.broker_addr_table.get(broker_name) {
             let map = broker_data.broker_addrs().clone();
             for (key, value) in map {
@@ -885,10 +891,14 @@ impl RouteInfoManager {
     ) -> bool {
         un_register_request
             .cluster_name
-            .clone_from(&broker_addr_info.cluster_name);
+            .clone_from(&CheetahString::from_slice(
+                broker_addr_info.cluster_name.as_str(),
+            ));
         un_register_request
             .broker_addr
-            .clone_from(&broker_addr_info.broker_addr);
+            .clone_from(&CheetahString::from_slice(
+                broker_addr_info.broker_addr.as_str(),
+            ));
 
         for (_broker_addr, broker_data) in self.broker_addr_table.iter() {
             if broker_addr_info.cluster_name != broker_data.cluster() {
@@ -896,7 +906,8 @@ impl RouteInfoManager {
             }
             for (broker_id, ip) in broker_data.broker_addrs().iter() {
                 if &broker_addr_info.broker_addr == ip {
-                    un_register_request.broker_name = broker_data.broker_name().to_string();
+                    un_register_request.broker_name =
+                        CheetahString::from_string(broker_data.broker_name().to_string());
                     un_register_request.broker_id = *broker_id as u64;
                     return true;
                 }
@@ -931,7 +942,7 @@ impl RouteInfoManager {
             let mut remove_broker_name = false;
             let mut is_min_broker_id_changed = false;
 
-            if let Some(broker_data) = self.broker_addr_table.get_mut(broker_name) {
+            if let Some(broker_data) = self.broker_addr_table.get_mut(broker_name.as_str()) {
                 if !broker_data.broker_addrs().is_empty()
                     && un_register_request.broker_id as i64
                         == broker_data
@@ -960,14 +971,14 @@ impl RouteInfoManager {
                 };
 
                 if broker_data.broker_addrs_mut().is_empty() {
-                    self.broker_addr_table.remove(broker_name);
+                    self.broker_addr_table.remove(broker_name.as_str());
                     remove_broker_name = true;
                 } else if is_min_broker_id_changed {
                     need_notify_broker_map.insert(
-                        broker_name.clone(),
+                        broker_name.to_string(),
                         BrokerStatusChangeInfo {
                             broker_addrs: broker_data.broker_addrs().clone(),
-                            offline_broker_addr: broker_addr.clone(),
+                            offline_broker_addr: broker_addr.to_string(),
                             ha_broker_addr: String::from(""),
                         },
                     );
@@ -975,16 +986,16 @@ impl RouteInfoManager {
             }
 
             if remove_broker_name {
-                let name_set = self.cluster_addr_table.get_mut(cluster_name);
+                let name_set = self.cluster_addr_table.get_mut(cluster_name.as_str());
                 if let Some(name_set_inner) = name_set {
-                    name_set_inner.remove(broker_name);
+                    name_set_inner.remove(broker_name.as_str());
                     if name_set_inner.is_empty() {
-                        self.cluster_addr_table.remove(cluster_name);
+                        self.cluster_addr_table.remove(cluster_name.as_str());
                     }
                 }
-                remove_broker.insert(broker_name.clone());
+                remove_broker.insert(broker_name.to_string());
             } else {
-                reduced_broker.insert(broker_name.clone());
+                reduced_broker.insert(broker_name.to_string());
             }
         }
         self.clean_topic_by_un_register_requests(remove_broker, reduced_broker);

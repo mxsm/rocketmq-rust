@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -25,9 +25,9 @@ use crate::rpc::topic_request_header::TopicRequestHeader;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GetConsumeStatsRequestHeader {
     #[serde(rename = "consumerGroup")]
-    pub consumer_group: String,
+    pub consumer_group: CheetahString,
     #[serde(rename = "topic")]
-    pub topic: String,
+    pub topic: CheetahString,
     #[serde(flatten)]
     pub topic_request_header: Option<TopicRequestHeader>,
 }
@@ -36,29 +36,33 @@ impl GetConsumeStatsRequestHeader {
     pub const CONSUMER_GROUP: &'static str = "consumerGroup";
     pub const TOPIC: &'static str = "topic";
 
-    pub fn get_consumer_group(&self) -> &String {
+    pub fn get_consumer_group(&self) -> &CheetahString {
         &self.consumer_group
     }
-    pub fn set_consumer_group(&mut self, consumer_group: String) {
+    pub fn set_consumer_group(&mut self, consumer_group: CheetahString) {
         self.consumer_group = consumer_group;
     }
 
-    pub fn get_topic(&self) -> &String {
+    pub fn get_topic(&self) -> &CheetahString {
         &self.topic
     }
-    pub fn set_topic(&mut self, topic: String) {
+    pub fn set_topic(&mut self, topic: CheetahString) {
         self.topic = topic;
     }
 }
 
 impl CommandCustomHeader for GetConsumeStatsRequestHeader {
-    fn to_map(&self) -> Option<std::collections::HashMap<String, String>> {
+    fn to_map(&self) -> Option<std::collections::HashMap<CheetahString, CheetahString>> {
         let mut map = std::collections::HashMap::new();
+
         map.insert(
-            Self::CONSUMER_GROUP.to_string(),
+            CheetahString::from_static_str(Self::CONSUMER_GROUP),
             self.consumer_group.clone(),
         );
-        map.insert(Self::TOPIC.to_string(), self.topic.clone());
+        map.insert(
+            CheetahString::from_static_str(Self::TOPIC),
+            self.topic.clone(),
+        );
         if let Some(value) = self.topic_request_header.as_ref() {
             if let Some(value) = value.to_map() {
                 map.extend(value);
@@ -71,10 +75,16 @@ impl CommandCustomHeader for GetConsumeStatsRequestHeader {
 impl FromMap for GetConsumeStatsRequestHeader {
     type Target = Self;
 
-    fn from(map: &std::collections::HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &std::collections::HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(GetConsumeStatsRequestHeader {
-            consumer_group: map.get(Self::CONSUMER_GROUP).cloned().unwrap_or_default(),
-            topic: map.get(Self::TOPIC).cloned().unwrap_or_default(),
+            consumer_group: map
+                .get(&CheetahString::from_static_str(Self::CONSUMER_GROUP))
+                .cloned()
+                .unwrap_or_default(),
+            topic: map
+                .get(&CheetahString::from_static_str(Self::TOPIC))
+                .cloned()
+                .unwrap_or_default(),
             topic_request_header: <TopicRequestHeader as FromMap>::from(map),
         })
     }

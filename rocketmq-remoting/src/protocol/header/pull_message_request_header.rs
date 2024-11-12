@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 
 use bytes::BytesMut;
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -30,20 +31,20 @@ use crate::rpc::rpc_request_header::RpcRequestHeader;
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PullMessageRequestHeader {
-    pub consumer_group: String,
-    pub topic: String,
+    pub consumer_group: CheetahString,
+    pub topic: CheetahString,
     pub queue_id: Option<i32>,
     pub queue_offset: i64,
     pub max_msg_nums: i32,
     pub sys_flag: i32,
     pub commit_offset: i64,
     pub suspend_timeout_millis: u64,
-    pub subscription: Option<String>,
+    pub subscription: Option<CheetahString>,
     pub sub_version: i64,
-    pub expression_type: Option<String>,
+    pub expression_type: Option<CheetahString>,
     pub max_msg_bytes: Option<i32>,
     pub request_source: Option<i32>,
-    pub proxy_forward_client_id: Option<String>,
+    pub proxy_forward_client_id: Option<CheetahString>,
     #[serde(flatten)]
     pub topic_request: Option<TopicRequestHeader>,
 }
@@ -66,54 +67,81 @@ impl PullMessageRequestHeader {
 }
 
 impl CommandCustomHeader for PullMessageRequestHeader {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         let mut map = HashMap::new();
 
         map.insert(
-            Self::CONSUMER_GROUP.to_string(),
+            CheetahString::from_static_str(Self::CONSUMER_GROUP),
             self.consumer_group.clone(),
         );
-        map.insert(Self::TOPIC.to_string(), self.topic.clone());
+        map.insert(
+            CheetahString::from_static_str(Self::TOPIC),
+            self.topic.clone(),
+        );
         if let Some(value) = self.queue_id {
-            map.insert(Self::QUEUE_ID.to_string(), value.to_string());
+            map.insert(
+                CheetahString::from_static_str(Self::QUEUE_ID),
+                CheetahString::from_string(value.to_string()),
+            );
         }
 
         map.insert(
-            Self::QUEUE_OFFSET.to_string(),
-            self.queue_offset.to_string(),
+            CheetahString::from_static_str(Self::QUEUE_OFFSET),
+            CheetahString::from_string(self.queue_offset.to_string()),
         );
         map.insert(
-            Self::MAX_MSG_NUMS.to_string(),
-            self.max_msg_nums.to_string(),
-        );
-        map.insert(Self::SYS_FLAG.to_string(), self.sys_flag.to_string());
-        map.insert(
-            Self::COMMIT_OFFSET.to_string(),
-            self.commit_offset.to_string(),
+            CheetahString::from_static_str(Self::MAX_MSG_NUMS),
+            CheetahString::from_string(self.max_msg_nums.to_string()),
         );
         map.insert(
-            Self::SUSPEND_TIMEOUT_MILLIS.to_string(),
-            self.suspend_timeout_millis.to_string(),
+            CheetahString::from_static_str(Self::SYS_FLAG),
+            CheetahString::from_string(self.sys_flag.to_string()),
+        );
+        map.insert(
+            CheetahString::from_static_str(Self::COMMIT_OFFSET),
+            CheetahString::from_string(self.commit_offset.to_string()),
+        );
+        map.insert(
+            CheetahString::from_static_str(Self::SUSPEND_TIMEOUT_MILLIS),
+            CheetahString::from_string(self.suspend_timeout_millis.to_string()),
         );
 
         if let Some(ref value) = self.subscription {
-            map.insert(Self::SUBSCRIPTION.to_string(), value.clone());
+            map.insert(
+                CheetahString::from_static_str(Self::SUBSCRIPTION),
+                value.clone(),
+            );
         }
 
-        map.insert(Self::SUB_VERSION.to_string(), self.sub_version.to_string());
+        map.insert(
+            CheetahString::from_static_str(Self::SUB_VERSION),
+            CheetahString::from_string(self.sub_version.to_string()),
+        );
 
         if let Some(ref value) = self.expression_type {
-            map.insert(Self::EXPRESSION_TYPE.to_string(), value.clone());
+            map.insert(
+                CheetahString::from_static_str(Self::EXPRESSION_TYPE),
+                value.clone(),
+            );
         }
 
         if let Some(value) = self.max_msg_bytes {
-            map.insert(Self::MAX_MSG_BYTES.to_string(), value.to_string());
+            map.insert(
+                CheetahString::from_static_str(Self::MAX_MSG_BYTES),
+                CheetahString::from_string(value.to_string()),
+            );
         }
         if let Some(value) = self.request_source {
-            map.insert(Self::REQUEST_SOURCE.to_string(), value.to_string());
+            map.insert(
+                CheetahString::from_static_str(Self::REQUEST_SOURCE),
+                CheetahString::from_string(value.to_string()),
+            );
         }
         if let Some(ref value) = self.proxy_forward_client_id {
-            map.insert(Self::PROXY_FORWARD_CLIENT_ID.to_string(), value.clone());
+            map.insert(
+                CheetahString::from_static_str(Self::PROXY_FORWARD_CLIENT_ID),
+                value.clone(),
+            );
         }
 
         if let Some(ref rpc) = self.topic_request {
@@ -183,61 +211,61 @@ impl CommandCustomHeader for PullMessageRequestHeader {
         }
     }
 
-    fn decode_fast(&mut self, fields: &HashMap<String, String>) {
-        if let Some(str) = fields.get("consumerGroup") {
-            self.consumer_group.clone_from(str);
+    fn decode_fast(&mut self, fields: &HashMap<CheetahString, CheetahString>) {
+        if let Some(str) = fields.get(&CheetahString::from_slice("consumerGroup")) {
+            self.consumer_group = CheetahString::from_slice(str);
         }
 
-        if let Some(str) = fields.get("topic") {
-            self.topic.clone_from(str);
+        if let Some(str) = fields.get(&CheetahString::from_slice("topic")) {
+            self.topic = CheetahString::from_slice(str);
         }
 
-        if let Some(str) = fields.get("queueId") {
+        if let Some(str) = fields.get(&CheetahString::from_slice("queueId")) {
             self.queue_id = str.parse::<i32>().ok();
         }
 
-        if let Some(str) = fields.get("queueOffset") {
+        if let Some(str) = fields.get(&CheetahString::from_slice("queueOffset")) {
             self.queue_offset = str.parse::<i64>().unwrap();
         }
 
-        if let Some(str) = fields.get("maxMsgNums") {
+        if let Some(str) = fields.get(&CheetahString::from_slice("maxMsgNums")) {
             self.max_msg_nums = str.parse::<i32>().unwrap();
         }
 
-        if let Some(str) = fields.get("sysFlag") {
+        if let Some(str) = fields.get(&CheetahString::from_slice("sysFlag")) {
             self.sys_flag = str.parse::<i32>().unwrap();
         }
 
-        if let Some(str) = fields.get("commitOffset") {
+        if let Some(str) = fields.get(&CheetahString::from_slice("commitOffset")) {
             self.commit_offset = str.parse::<i64>().unwrap();
         }
 
-        if let Some(str) = fields.get("suspendTimeoutMillis") {
+        if let Some(str) = fields.get(&CheetahString::from_slice("suspendTimeoutMillis")) {
             self.suspend_timeout_millis = str.parse::<u64>().unwrap();
         }
 
-        if let Some(str) = fields.get("subscription") {
-            self.subscription = Some(str.clone());
+        if let Some(str) = fields.get(&CheetahString::from_slice("subscription")) {
+            self.subscription = Some(CheetahString::from_slice(str));
         }
 
-        if let Some(str) = fields.get("subVersion") {
+        if let Some(str) = fields.get(&CheetahString::from_slice("subVersion")) {
             self.sub_version = str.parse::<i64>().unwrap();
         }
 
-        if let Some(str) = fields.get("expressionType") {
-            self.expression_type = Some(str.clone());
+        if let Some(str) = fields.get(&CheetahString::from_slice("expressionType")) {
+            self.expression_type = Some(CheetahString::from_slice(str));
         }
 
-        if let Some(str) = fields.get("maxMsgBytes") {
+        if let Some(str) = fields.get(&CheetahString::from_slice("maxMsgBytes")) {
             self.max_msg_bytes = Some(str.parse::<i32>().unwrap());
         }
 
-        if let Some(str) = fields.get("requestSource") {
+        if let Some(str) = fields.get(&CheetahString::from_slice("requestSource")) {
             self.request_source = Some(str.parse::<i32>().unwrap());
         }
 
-        if let Some(str) = fields.get("proxyFrowardClientId") {
-            self.proxy_forward_client_id = Some(str.clone());
+        if let Some(str) = fields.get(&CheetahString::from_slice("proxyForwardClientId")) {
+            self.proxy_forward_client_id = Some(CheetahString::from_slice(str));
         }
 
         self.topic_request = Some(TopicRequestHeader {
@@ -245,21 +273,21 @@ impl CommandCustomHeader for PullMessageRequestHeader {
             ..TopicRequestHeader::default()
         });
 
-        if let Some(str) = fields.get("lo") {
+        if let Some(str) = fields.get(&CheetahString::from_slice("lo")) {
             self.topic_request.as_mut().unwrap().lo = Some(str.parse::<bool>().unwrap());
         }
 
-        if let Some(str) = fields.get("ns") {
+        if let Some(str) = fields.get(&CheetahString::from_slice("ns")) {
             self.topic_request
                 .as_mut()
                 .unwrap()
                 .rpc
                 .as_mut()
                 .unwrap()
-                .namespace = Some(str.clone());
+                .namespace = Some(CheetahString::from_slice(str));
         }
 
-        if let Some(str) = fields.get("nsd") {
+        if let Some(str) = fields.get(&CheetahString::from_slice("nsd")) {
             self.topic_request
                 .as_mut()
                 .unwrap()
@@ -269,17 +297,17 @@ impl CommandCustomHeader for PullMessageRequestHeader {
                 .namespaced = Some(str.parse::<bool>().unwrap());
         }
 
-        if let Some(str) = fields.get("bname") {
+        if let Some(str) = fields.get(&CheetahString::from_slice("bname")) {
             self.topic_request
                 .as_mut()
                 .unwrap()
                 .rpc
                 .as_mut()
                 .unwrap()
-                .broker_name = Some(str.clone());
+                .broker_name = Some(CheetahString::from_slice(str));
         }
 
-        if let Some(str) = fields.get("oway") {
+        if let Some(str) = fields.get(&CheetahString::from_slice("oway")) {
             self.topic_request
                 .as_mut()
                 .unwrap()
@@ -298,40 +326,56 @@ impl CommandCustomHeader for PullMessageRequestHeader {
 impl FromMap for PullMessageRequestHeader {
     type Target = Self;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(Self {
-            consumer_group: map.get(Self::CONSUMER_GROUP).cloned().unwrap_or_default(),
-            topic: map.get(Self::TOPIC).cloned().unwrap_or_default(),
+            consumer_group: map
+                .get(&CheetahString::from_static_str(Self::CONSUMER_GROUP))
+                .cloned()
+                .unwrap_or_default(),
+            topic: map
+                .get(&CheetahString::from_static_str(Self::TOPIC))
+                .cloned()
+                .unwrap_or_default(),
             queue_id: map
-                .get(Self::QUEUE_ID)
+                .get(&CheetahString::from_static_str(Self::QUEUE_ID))
                 .and_then(|value| value.parse::<i32>().ok()),
             queue_offset: map
-                .get(Self::QUEUE_OFFSET)
+                .get(&CheetahString::from_static_str(Self::QUEUE_OFFSET))
                 .map_or(0, |value| value.parse().unwrap_or_default()),
             max_msg_nums: map
-                .get(Self::MAX_MSG_NUMS)
+                .get(&CheetahString::from_static_str(Self::MAX_MSG_NUMS))
                 .map_or(0, |value| value.parse().unwrap_or_default()),
             sys_flag: map
-                .get(Self::SYS_FLAG)
+                .get(&CheetahString::from_static_str(Self::SYS_FLAG))
                 .map_or(0, |value| value.parse().unwrap_or_default()),
             commit_offset: map
-                .get(Self::COMMIT_OFFSET)
+                .get(&CheetahString::from_static_str(Self::COMMIT_OFFSET))
                 .map_or(0, |value| value.parse().unwrap_or_default()),
             suspend_timeout_millis: map
-                .get(Self::SUSPEND_TIMEOUT_MILLIS)
+                .get(&CheetahString::from_static_str(
+                    Self::SUSPEND_TIMEOUT_MILLIS,
+                ))
                 .map_or(0, |value| value.parse().unwrap_or_default()),
-            subscription: map.get(Self::SUBSCRIPTION).cloned(),
+            subscription: map
+                .get(&CheetahString::from_static_str(Self::SUBSCRIPTION))
+                .cloned(),
             sub_version: map
-                .get(Self::SUB_VERSION)
+                .get(&CheetahString::from_static_str(Self::SUB_VERSION))
                 .map_or(0, |value| value.parse().unwrap_or_default()),
-            expression_type: map.get(Self::EXPRESSION_TYPE).cloned(),
+            expression_type: map
+                .get(&CheetahString::from_static_str(Self::EXPRESSION_TYPE))
+                .cloned(),
             max_msg_bytes: map
-                .get(Self::MAX_MSG_BYTES)
+                .get(&CheetahString::from_static_str(Self::MAX_MSG_BYTES))
                 .and_then(|value| value.parse::<i32>().ok()),
             request_source: map
-                .get(Self::REQUEST_SOURCE)
+                .get(&CheetahString::from_static_str(Self::REQUEST_SOURCE))
                 .and_then(|value| value.parse::<i32>().ok()),
-            proxy_forward_client_id: map.get(Self::PROXY_FORWARD_CLIENT_ID).cloned(),
+            proxy_forward_client_id: map
+                .get(&CheetahString::from_static_str(
+                    Self::PROXY_FORWARD_CLIENT_ID,
+                ))
+                .cloned(),
             topic_request: <TopicRequestHeader as FromMap>::from(map),
         })
     }
@@ -346,7 +390,7 @@ impl TopicRequestHeaderTrait for PullMessageRequestHeader {
         self.topic_request.as_ref().unwrap().lo
     }
 
-    fn set_topic(&mut self, topic: String) {
+    fn set_topic(&mut self, topic: CheetahString) {
         self.topic = topic;
     }
 
@@ -365,7 +409,7 @@ impl TopicRequestHeaderTrait for PullMessageRequestHeader {
             .as_deref()
     }
 
-    fn set_broker_name(&mut self, broker_name: String) {
+    fn set_broker_name(&mut self, broker_name: CheetahString) {
         self.topic_request
             .as_mut()
             .unwrap()
@@ -386,7 +430,7 @@ impl TopicRequestHeaderTrait for PullMessageRequestHeader {
             .as_deref()
     }
 
-    fn set_namespace(&mut self, namespace: String) {
+    fn set_namespace(&mut self, namespace: CheetahString) {
         self.topic_request
             .as_mut()
             .unwrap()

@@ -21,6 +21,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::config_manager::ConfigManager;
@@ -955,10 +956,10 @@ impl BrokerRuntime {
             .broker_cluster_name
             .clone();
         let broker_name = self.broker_config.broker_identity.broker_name.clone();
-        let broker_addr = format!(
+        let broker_addr = CheetahString::from_string(format!(
             "{}:{}",
             self.broker_config.broker_ip1, self.server_config.listen_port
-        );
+        ));
         let broker_id = self.broker_config.broker_identity.broker_id;
         let weak = Arc::downgrade(&self.broker_out_api);
         self.broker_out_api
@@ -1074,10 +1075,10 @@ impl BrokerRuntimeInner {
             .broker_cluster_name
             .clone();
         let broker_name = self.broker_config.broker_identity.broker_name.clone();
-        let broker_addr = format!(
+        let broker_addr = CheetahString::from_string(format!(
             "{}:{}",
             self.broker_config.broker_ip1, self.server_config.listen_port
-        );
+        ));
         let broker_id = self.broker_config.broker_identity.broker_id;
         let weak = Arc::downgrade(&self.broker_out_api);
         self.broker_out_api

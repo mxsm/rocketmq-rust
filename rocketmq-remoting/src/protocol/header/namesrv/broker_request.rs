@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -26,9 +27,9 @@ use crate::protocol::command_custom_header::FromMap;
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct UnRegisterBrokerRequestHeader {
-    pub broker_name: String,
-    pub broker_addr: String,
-    pub cluster_name: String,
+    pub broker_name: CheetahString,
+    pub broker_addr: CheetahString,
+    pub cluster_name: CheetahString,
     pub broker_id: u64,
 }
 
@@ -39,9 +40,9 @@ impl UnRegisterBrokerRequestHeader {
     const CLUSTER_NAME: &'static str = "clusterName";
 
     pub fn new(
-        broker_name: impl Into<String>,
-        broker_addr: impl Into<String>,
-        cluster_name: impl Into<String>,
+        broker_name: impl Into<CheetahString>,
+        broker_addr: impl Into<CheetahString>,
+        cluster_name: impl Into<CheetahString>,
         broker_id: u64,
     ) -> Self {
         Self {
@@ -54,12 +55,24 @@ impl UnRegisterBrokerRequestHeader {
 }
 
 impl CommandCustomHeader for UnRegisterBrokerRequestHeader {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         Some(HashMap::from([
-            (Self::BROKER_NAME.to_string(), self.broker_name.clone()),
-            (Self::BROKER_ADDR.to_string(), self.broker_addr.clone()),
-            (Self::CLUSTER_NAME.to_string(), self.cluster_name.clone()),
-            (Self::BROKER_ID.to_string(), self.broker_id.to_string()),
+            (
+                CheetahString::from_static_str(Self::BROKER_NAME),
+                self.broker_name.clone(),
+            ),
+            (
+                CheetahString::from_static_str(Self::BROKER_ADDR),
+                self.broker_addr.clone(),
+            ),
+            (
+                CheetahString::from_static_str(Self::CLUSTER_NAME),
+                self.cluster_name.clone(),
+            ),
+            (
+                CheetahString::from_static_str(Self::BROKER_ID),
+                CheetahString::from_string(self.broker_id.to_string()),
+            ),
         ]))
     }
 }
@@ -67,13 +80,22 @@ impl CommandCustomHeader for UnRegisterBrokerRequestHeader {
 impl FromMap for UnRegisterBrokerRequestHeader {
     type Target = Self;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(UnRegisterBrokerRequestHeader {
-            broker_name: map.get(Self::BROKER_NAME).cloned().unwrap_or_default(),
-            broker_addr: map.get(Self::BROKER_ADDR).cloned().unwrap_or_default(),
-            cluster_name: map.get(Self::CLUSTER_NAME).cloned().unwrap_or_default(),
+            broker_name: map
+                .get(&CheetahString::from_static_str(Self::BROKER_NAME))
+                .cloned()
+                .unwrap_or_default(),
+            broker_addr: map
+                .get(&CheetahString::from_static_str(Self::BROKER_ADDR))
+                .cloned()
+                .unwrap_or_default(),
+            cluster_name: map
+                .get(&CheetahString::from_static_str(Self::CLUSTER_NAME))
+                .cloned()
+                .unwrap_or_default(),
             broker_id: map
-                .get(Self::BROKER_ID)
+                .get(&CheetahString::from_static_str(Self::BROKER_ID))
                 .and_then(|s| s.parse::<u64>().ok())
                 .unwrap(),
         })
@@ -83,9 +105,9 @@ impl FromMap for UnRegisterBrokerRequestHeader {
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct BrokerHeartbeatRequestHeader {
-    pub cluster_name: String,
-    pub broker_addr: String,
-    pub broker_name: String,
+    pub cluster_name: CheetahString,
+    pub broker_addr: CheetahString,
+    pub broker_name: CheetahString,
     pub broker_id: Option<i64>,
     pub epoch: Option<i32>,
     pub max_offset: Option<i64>,
@@ -106,9 +128,9 @@ impl BrokerHeartbeatRequestHeader {
     const MAX_OFFSET: &'static str = "maxOffset";
 
     pub fn new(
-        cluster_name: impl Into<String>,
-        broker_addr: impl Into<String>,
-        broker_name: impl Into<String>,
+        cluster_name: impl Into<CheetahString>,
+        broker_addr: impl Into<CheetahString>,
+        broker_name: impl Into<CheetahString>,
         broker_id: Option<i64>,
         epoch: Option<i32>,
         max_offset: Option<i64>,
@@ -131,34 +153,55 @@ impl BrokerHeartbeatRequestHeader {
 }
 
 impl CommandCustomHeader for BrokerHeartbeatRequestHeader {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         let mut map = HashMap::from([
-            (Self::CLUSTER_NAME.to_string(), self.cluster_name.clone()),
-            (Self::BROKER_ADDR.to_string(), self.broker_addr.clone()),
-            (Self::BROKER_NAME.to_string(), self.broker_name.clone()),
+            (
+                CheetahString::from_static_str(Self::CLUSTER_NAME),
+                self.cluster_name.clone(),
+            ),
+            (
+                CheetahString::from_static_str(Self::BROKER_ADDR),
+                self.broker_addr.clone(),
+            ),
+            (
+                CheetahString::from_static_str(Self::BROKER_NAME),
+                self.broker_name.clone(),
+            ),
         ]);
         if let Some(broker_id) = self.broker_id {
-            map.insert(Self::BROKER_ID.to_string(), broker_id.to_string());
+            map.insert(
+                CheetahString::from_static_str(Self::BROKER_ID),
+                CheetahString::from_string(broker_id.to_string()),
+            );
         }
         if let Some(epoch) = self.epoch {
-            map.insert(Self::EPOCH.to_string(), epoch.to_string());
+            map.insert(
+                CheetahString::from_static_str(Self::EPOCH),
+                CheetahString::from_string(epoch.to_string()),
+            );
         }
         if let Some(max_offset) = self.max_offset {
-            map.insert(Self::MAX_OFFSET.to_string(), max_offset.to_string());
+            map.insert(
+                CheetahString::from_static_str(Self::MAX_OFFSET),
+                CheetahString::from_string(max_offset.to_string()),
+            );
         }
         if let Some(confirm_offset) = self.confirm_offset {
-            map.insert(Self::CONFIRM_OFFSET.to_string(), confirm_offset.to_string());
+            map.insert(
+                CheetahString::from_static_str(Self::CONFIRM_OFFSET),
+                CheetahString::from_string(confirm_offset.to_string()),
+            );
         }
         if let Some(heartbeat_timeout_mills) = self.heartbeat_timeout_mills {
             map.insert(
-                Self::HEARTBEAT_TIMEOUT_MILLS.to_string(),
-                heartbeat_timeout_mills.to_string(),
+                CheetahString::from_static_str(Self::HEARTBEAT_TIMEOUT_MILLS),
+                CheetahString::from_string(heartbeat_timeout_mills.to_string()),
             );
         }
         if let Some(election_priority) = self.election_priority {
             map.insert(
-                Self::ELECTION_PRIORITY.to_string(),
-                election_priority.to_string(),
+                CheetahString::from_static_str(Self::ELECTION_PRIORITY),
+                CheetahString::from_string(election_priority.to_string()),
             );
         }
         Some(map)
@@ -168,24 +211,39 @@ impl CommandCustomHeader for BrokerHeartbeatRequestHeader {
 impl FromMap for BrokerHeartbeatRequestHeader {
     type Target = Self;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(BrokerHeartbeatRequestHeader {
-            cluster_name: map.get(Self::CLUSTER_NAME).cloned().unwrap_or_default(),
-            broker_addr: map.get(Self::BROKER_ADDR).cloned().unwrap_or_default(),
-            broker_name: map.get(Self::BROKER_NAME).cloned().unwrap_or_default(),
-            broker_id: map.get(Self::BROKER_ID).and_then(|s| s.parse::<i64>().ok()),
-            epoch: map.get(Self::EPOCH).and_then(|s| s.parse::<i32>().ok()),
+            cluster_name: map
+                .get(&CheetahString::from_static_str(Self::CLUSTER_NAME))
+                .cloned()
+                .unwrap_or_default(),
+            broker_addr: map
+                .get(&CheetahString::from_static_str(Self::BROKER_ADDR))
+                .cloned()
+                .unwrap_or_default(),
+            broker_name: map
+                .get(&CheetahString::from_static_str(Self::BROKER_NAME))
+                .cloned()
+                .unwrap_or_default(),
+            broker_id: map
+                .get(&CheetahString::from_static_str(Self::BROKER_ID))
+                .and_then(|s| s.parse::<i64>().ok()),
+            epoch: map
+                .get(&CheetahString::from_static_str(Self::EPOCH))
+                .and_then(|s| s.parse::<i32>().ok()),
             max_offset: map
-                .get(Self::MAX_OFFSET)
+                .get(&CheetahString::from_static_str(Self::MAX_OFFSET))
                 .and_then(|s| s.parse::<i64>().ok()),
             confirm_offset: map
-                .get(Self::CONFIRM_OFFSET)
+                .get(&CheetahString::from_static_str(Self::CONFIRM_OFFSET))
                 .and_then(|s| s.parse::<i64>().ok()),
             heartbeat_timeout_mills: map
-                .get(Self::HEARTBEAT_TIMEOUT_MILLS)
+                .get(&CheetahString::from_static_str(
+                    Self::HEARTBEAT_TIMEOUT_MILLS,
+                ))
                 .and_then(|s| s.parse::<i64>().ok()),
             election_priority: map
-                .get(Self::ELECTION_PRIORITY)
+                .get(&CheetahString::from_static_str(Self::ELECTION_PRIORITY))
                 .and_then(|s| s.parse::<i32>().ok()),
         })
     }
@@ -194,15 +252,18 @@ impl FromMap for BrokerHeartbeatRequestHeader {
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct GetBrokerMemberGroupRequestHeader {
-    pub cluster_name: String,
-    pub broker_name: String,
+    pub cluster_name: CheetahString,
+    pub broker_name: CheetahString,
 }
 
 impl GetBrokerMemberGroupRequestHeader {
     const BROKER_NAME: &'static str = "brokerName";
     const CLUSTER_NAME: &'static str = "clusterName";
 
-    pub fn new(cluster_name: impl Into<String>, broker_name: impl Into<String>) -> Self {
+    pub fn new(
+        cluster_name: impl Into<CheetahString>,
+        broker_name: impl Into<CheetahString>,
+    ) -> Self {
         Self {
             cluster_name: cluster_name.into(),
 
@@ -212,10 +273,16 @@ impl GetBrokerMemberGroupRequestHeader {
 }
 
 impl CommandCustomHeader for GetBrokerMemberGroupRequestHeader {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         Some(HashMap::from([
-            (Self::CLUSTER_NAME.to_string(), self.cluster_name.clone()),
-            (Self::BROKER_NAME.to_string(), self.broker_name.clone()),
+            (
+                CheetahString::from_static_str(Self::CLUSTER_NAME),
+                self.cluster_name.clone(),
+            ),
+            (
+                CheetahString::from_static_str(Self::BROKER_NAME),
+                self.broker_name.clone(),
+            ),
         ]))
     }
 }
@@ -223,11 +290,17 @@ impl CommandCustomHeader for GetBrokerMemberGroupRequestHeader {
 impl FromMap for GetBrokerMemberGroupRequestHeader {
     type Target = Self;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(GetBrokerMemberGroupRequestHeader {
-            cluster_name: map.get(Self::CLUSTER_NAME).cloned().unwrap_or_default(),
+            cluster_name: map
+                .get(&CheetahString::from_static_str(Self::CLUSTER_NAME))
+                .cloned()
+                .unwrap_or_default(),
 
-            broker_name: map.get(Self::BROKER_NAME).cloned().unwrap_or_default(),
+            broker_name: map
+                .get(&CheetahString::from_static_str(Self::BROKER_NAME))
+                .cloned()
+                .unwrap_or_default(),
         })
     }
 }

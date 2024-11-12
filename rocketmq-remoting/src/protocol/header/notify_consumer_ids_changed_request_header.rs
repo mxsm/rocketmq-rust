@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -25,7 +25,7 @@ use crate::rpc::rpc_request_header::RpcRequestHeader;
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct NotifyConsumerIdsChangedRequestHeader {
-    pub consumer_group: String,
+    pub consumer_group: CheetahString,
 
     #[serde(flatten)]
     pub rpc_request_header: Option<RpcRequestHeader>,
@@ -36,10 +36,10 @@ impl NotifyConsumerIdsChangedRequestHeader {
 }
 
 impl CommandCustomHeader for NotifyConsumerIdsChangedRequestHeader {
-    fn to_map(&self) -> Option<std::collections::HashMap<String, String>> {
+    fn to_map(&self) -> Option<std::collections::HashMap<CheetahString, CheetahString>> {
         let mut map = std::collections::HashMap::new();
         map.insert(
-            Self::CONSUMER_GROUP.to_string(),
+            CheetahString::from_static_str(Self::CONSUMER_GROUP),
             self.consumer_group.clone(),
         );
         if let Some(value) = self.rpc_request_header.as_ref() {
@@ -54,11 +54,11 @@ impl CommandCustomHeader for NotifyConsumerIdsChangedRequestHeader {
 impl FromMap for NotifyConsumerIdsChangedRequestHeader {
     type Target = Self;
 
-    fn from(map: &std::collections::HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &std::collections::HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         let consumer_group = map
-            .get(Self::CONSUMER_GROUP)
-            .unwrap_or(&String::new())
-            .to_string();
+            .get(&CheetahString::from_static_str(Self::CONSUMER_GROUP))
+            .cloned()
+            .unwrap_or_default();
         let rpc_request_header = <RpcRequestHeader as FromMap>::from(map);
         Some(NotifyConsumerIdsChangedRequestHeader {
             consumer_group,

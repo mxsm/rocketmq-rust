@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use cheetah_string::CheetahString;
 
 pub mod send_message_request_header;
 pub mod send_message_request_header_v2;
@@ -24,17 +25,17 @@ pub trait TopicRequestHeaderTrait: Sync + Send {
 
     fn lo(&self) -> Option<bool>;
 
-    fn set_topic(&mut self, topic: String);
+    fn set_topic(&mut self, topic: CheetahString);
 
     fn topic(&self) -> &str;
 
     fn broker_name(&self) -> Option<&str>;
 
-    fn set_broker_name(&mut self, broker_name: String);
+    fn set_broker_name(&mut self, broker_name: CheetahString);
 
     fn namespace(&self) -> Option<&str>;
 
-    fn set_namespace(&mut self, namespace: String);
+    fn set_namespace(&mut self, namespace: CheetahString);
 
     fn namespaced(&self) -> Option<bool>;
 

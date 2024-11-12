@@ -253,6 +253,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
+name = "cheetah-string"
+version = "0.1.2"
+source = "git+https://github.com/mxsm/cheetah-string.git#f1e7e924887a69fdb669426538b37b58b98696a5"
+dependencies = [
+ "bytes",
+ "serde",
+]
+
+[[package]]
 name = "chrono"
 version = "0.4.38"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1851,6 +1860,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "cfg-if",
+ "cheetah-string",
  "clap",
  "config",
  "criterion",
@@ -1906,6 +1916,7 @@ name = "rocketmq-client"
 version = "0.3.0"
 dependencies = [
  "bytes",
+ "cheetah-string",
  "futures",
  "lazy_static",
  "num_cpus",
@@ -1935,6 +1946,7 @@ dependencies = [
  "anyhow",
  "byteorder",
  "bytes",
+ "cheetah-string",
  "chrono",
  "config",
  "crc32fast",
@@ -1999,6 +2011,7 @@ version = "0.3.0"
 dependencies = [
  "anyhow",
  "bytes",
+ "cheetah-string",
  "clap",
  "config",
  "env_logger",
@@ -2007,7 +2020,6 @@ dependencies = [
  "futures-io",
  "futures-sink",
  "futures-util",
- "log",
  "parking_lot",
  "rocketmq-common",
  "rocketmq-remoting",
@@ -2028,13 +2040,13 @@ version = "0.3.0"
 dependencies = [
  "anyhow",
  "bytes",
+ "cheetah-string",
  "futures",
  "futures-core",
  "futures-io",
  "futures-sink",
  "futures-util",
  "lazy_static",
- "log",
  "num_cpus",
  "parking_lot",
  "rand",
@@ -2078,6 +2090,7 @@ version = "0.3.0"
 dependencies = [
  "anyhow",
  "bytes",
+ "cheetah-string",
  "criterion",
  "dirs",
  "futures",

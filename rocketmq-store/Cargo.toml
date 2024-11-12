@@ -62,6 +62,7 @@ memmap2 = "0.9.5"
 trait-variant.workspace = true
 sysinfo = "0.32.0"
 once_cell = { workspace = true }
+cheetah-string = { workspace = true }
 [dev-dependencies]
 tempfile = "3.14.0"
 mockall = { workspace = true }

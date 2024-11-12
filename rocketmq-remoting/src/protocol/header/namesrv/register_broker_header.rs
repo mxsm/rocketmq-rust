@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 
 use anyhow::Error;
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -29,19 +30,19 @@ use crate::protocol::command_custom_header::FromMap;
 pub struct RegisterBrokerRequestHeader {
     /// The name of the broker.
     #[serde(rename = "brokerName")]
-    pub broker_name: String,
+    pub broker_name: CheetahString,
 
     /// The address of the broker.
     #[serde(rename = "brokerAddr")]
-    pub broker_addr: String,
+    pub broker_addr: CheetahString,
 
     /// The name of the cluster to which the broker belongs.
     #[serde(rename = "clusterName")]
-    pub cluster_name: String,
+    pub cluster_name: CheetahString,
 
     /// The address of the highly available (HA) remoting_server associated with the broker.
     #[serde(rename = "haServerAddr")]
-    pub ha_server_addr: String,
+    pub ha_server_addr: CheetahString,
 
     /// The unique identifier for the broker.
     #[serde(rename = "brokerId")]
@@ -93,10 +94,10 @@ impl RegisterBrokerRequestHeader {
     ///
     /// A new `RegisterBrokerRequestHeader` instance.
     pub fn new(
-        broker_name: String,
-        broker_addr: String,
-        cluster_name: String,
-        ha_server_addr: String,
+        broker_name: CheetahString,
+        broker_addr: CheetahString,
+        cluster_name: CheetahString,
+        ha_server_addr: CheetahString,
         broker_id: i64,
         heartbeat_timeout_millis: Option<i64>,
         enable_acting_master: Option<bool>,
@@ -120,40 +121,58 @@ impl RegisterBrokerRequestHeader {
 impl FromMap for RegisterBrokerRequestHeader {
     type Target = Self;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(RegisterBrokerRequestHeader {
             broker_name: map
-                .get(RegisterBrokerRequestHeader::BROKER_NAME)
-                .map(|s| s.to_string())
+                .get(&CheetahString::from_static_str(
+                    RegisterBrokerRequestHeader::BROKER_NAME,
+                ))
+                .cloned()
                 .unwrap_or_default(),
             broker_addr: map
-                .get(RegisterBrokerRequestHeader::BROKER_ADDR)
-                .map(|s| s.to_string())
+                .get(&CheetahString::from_static_str(
+                    RegisterBrokerRequestHeader::BROKER_ADDR,
+                ))
+                .cloned()
                 .unwrap_or_default(),
             cluster_name: map
-                .get(RegisterBrokerRequestHeader::CLUSTER_NAME)
-                .map(|s| s.to_string())
+                .get(&CheetahString::from_static_str(
+                    RegisterBrokerRequestHeader::CLUSTER_NAME,
+                ))
+                .cloned()
                 .unwrap_or_default(),
             ha_server_addr: map
-                .get(RegisterBrokerRequestHeader::HA_SERVER_ADDR)
-                .map(|s| s.to_string())
+                .get(&CheetahString::from_static_str(
+                    RegisterBrokerRequestHeader::HA_SERVER_ADDR,
+                ))
+                .cloned()
                 .unwrap_or_default(),
             broker_id: map
-                .get(RegisterBrokerRequestHeader::BROKER_ID)
+                .get(&CheetahString::from_static_str(
+                    RegisterBrokerRequestHeader::BROKER_ID,
+                ))
                 .and_then(|s| s.parse::<i64>().ok())
                 .unwrap_or(0),
             heartbeat_timeout_millis: map
-                .get(RegisterBrokerRequestHeader::HEARTBEAT_TIMEOUT_MILLIS)
+                .get(&CheetahString::from_static_str(
+                    RegisterBrokerRequestHeader::HEARTBEAT_TIMEOUT_MILLIS,
+                ))
                 .and_then(|s| s.parse::<i64>().ok()),
             enable_acting_master: map
-                .get(RegisterBrokerRequestHeader::ENABLE_ACTING_MASTER)
+                .get(&CheetahString::from_static_str(
+                    RegisterBrokerRequestHeader::ENABLE_ACTING_MASTER,
+                ))
                 .and_then(|s| s.parse::<bool>().ok()),
             compressed: map
-                .get(RegisterBrokerRequestHeader::COMPRESSED)
+                .get(&CheetahString::from_static_str(
+                    RegisterBrokerRequestHeader::COMPRESSED,
+                ))
                 .and_then(|s| s.parse::<bool>().ok())
                 .unwrap_or(false),
             body_crc32: map
-                .get(RegisterBrokerRequestHeader::BODY_CRC32)
+                .get(&CheetahString::from_static_str(
+                    RegisterBrokerRequestHeader::BODY_CRC32,
+                ))
                 .and_then(|s| s.parse::<u32>().ok())
                 .unwrap_or(0),
         })
@@ -165,51 +184,53 @@ impl CommandCustomHeader for RegisterBrokerRequestHeader {
         Ok(())
     }
 
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         let mut map = HashMap::new();
 
         map.insert(
-            RegisterBrokerRequestHeader::BROKER_NAME.to_string(),
+            CheetahString::from_static_str(RegisterBrokerRequestHeader::BROKER_NAME),
             self.broker_name.clone(),
         );
         map.insert(
-            RegisterBrokerRequestHeader::BROKER_ADDR.to_string(),
+            CheetahString::from_static_str(RegisterBrokerRequestHeader::BROKER_ADDR),
             self.broker_addr.clone(),
         );
         map.insert(
-            RegisterBrokerRequestHeader::CLUSTER_NAME.to_string(),
+            CheetahString::from_static_str(RegisterBrokerRequestHeader::CLUSTER_NAME),
             self.cluster_name.clone(),
         );
         map.insert(
-            RegisterBrokerRequestHeader::HA_SERVER_ADDR.to_string(),
+            CheetahString::from_static_str(RegisterBrokerRequestHeader::HA_SERVER_ADDR),
             self.ha_server_addr.clone(),
         );
         map.insert(
-            RegisterBrokerRequestHeader::BROKER_ID.to_string(),
-            self.broker_id.to_string(),
+            CheetahString::from_static_str(RegisterBrokerRequestHeader::BROKER_ID),
+            CheetahString::from_string(self.broker_id.to_string()),
         );
 
         if let Some(heartbeat_timeout) = self.heartbeat_timeout_millis {
             map.insert(
-                RegisterBrokerRequestHeader::HEARTBEAT_TIMEOUT_MILLIS.to_string(),
-                heartbeat_timeout.to_string(),
+                CheetahString::from_static_str(
+                    RegisterBrokerRequestHeader::HEARTBEAT_TIMEOUT_MILLIS,
+                ),
+                CheetahString::from_string(heartbeat_timeout.to_string()),
             );
         }
 
         if let Some(enable_acting_master) = self.enable_acting_master {
             map.insert(
-                RegisterBrokerRequestHeader::ENABLE_ACTING_MASTER.to_string(),
-                enable_acting_master.to_string(),
+                CheetahString::from_static_str(RegisterBrokerRequestHeader::ENABLE_ACTING_MASTER),
+                CheetahString::from_string(enable_acting_master.to_string()),
             );
         }
 
         map.insert(
-            RegisterBrokerRequestHeader::COMPRESSED.to_string(),
-            self.compressed.to_string(),
+            CheetahString::from_static_str(RegisterBrokerRequestHeader::COMPRESSED),
+            CheetahString::from_string(self.compressed.to_string()),
         );
         map.insert(
-            RegisterBrokerRequestHeader::BODY_CRC32.to_string(),
-            self.body_crc32.to_string(),
+            CheetahString::from_static_str(RegisterBrokerRequestHeader::BODY_CRC32),
+            CheetahString::from_string(self.body_crc32.to_string()),
         );
 
         Some(map)
@@ -219,15 +240,15 @@ impl CommandCustomHeader for RegisterBrokerRequestHeader {
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct RegisterBrokerResponseHeader {
-    pub ha_server_addr: Option<String>,
-    pub master_addr: Option<String>,
+    pub ha_server_addr: Option<CheetahString>,
+    pub master_addr: Option<CheetahString>,
 }
 
 impl RegisterBrokerResponseHeader {
     const HA_SERVER_ADDR: &'static str = "haServerAddr";
     const MASTER_ADDR: &'static str = "masterAddr";
 
-    pub fn new(ha_server_addr: Option<String>, master_addr: Option<String>) -> Self {
+    pub fn new(ha_server_addr: Option<CheetahString>, master_addr: Option<CheetahString>) -> Self {
         RegisterBrokerResponseHeader {
             ha_server_addr,
             master_addr,
@@ -240,18 +261,18 @@ impl CommandCustomHeader for RegisterBrokerResponseHeader {
         Ok(())
     }
 
-    fn to_map(&self) -> Option<HashMap<String, String>> {
-        let mut map = HashMap::<String, String>::new();
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
+        let mut map = HashMap::<CheetahString, CheetahString>::new();
 
         if let Some(ref ha_server_addr) = self.ha_server_addr {
             map.insert(
-                RegisterBrokerResponseHeader::HA_SERVER_ADDR.to_string(),
+                CheetahString::from_static_str(RegisterBrokerResponseHeader::HA_SERVER_ADDR),
                 ha_server_addr.clone(),
             );
         }
         if let Some(ref master_addr) = self.master_addr {
             map.insert(
-                RegisterBrokerResponseHeader::MASTER_ADDR.to_string(),
+                CheetahString::from_static_str(RegisterBrokerResponseHeader::MASTER_ADDR),
                 master_addr.clone(),
             );
         }
@@ -263,18 +284,18 @@ impl CommandCustomHeader for RegisterBrokerResponseHeader {
 impl FromMap for RegisterBrokerResponseHeader {
     type Target = Self;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(RegisterBrokerResponseHeader {
-            ha_server_addr: Some(
-                map.get(RegisterBrokerResponseHeader::HA_SERVER_ADDR)
-                    .map(|s| s.to_string())
-                    .unwrap_or_default(),
-            ),
-            master_addr: Some(
-                map.get(RegisterBrokerResponseHeader::MASTER_ADDR)
-                    .map(|s| s.to_string())
-                    .unwrap_or_default(),
-            ),
+            ha_server_addr: map
+                .get(&CheetahString::from_static_str(
+                    RegisterBrokerResponseHeader::HA_SERVER_ADDR,
+                ))
+                .cloned(),
+            master_addr: map
+                .get(&CheetahString::from_static_str(
+                    RegisterBrokerResponseHeader::MASTER_ADDR,
+                ))
+                .cloned(),
         })
     }
 }

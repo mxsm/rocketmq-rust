@@ -16,6 +16,7 @@
  */
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -25,9 +26,9 @@ use crate::protocol::command_custom_header::FromMap;
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct QueryDataVersionRequestHeader {
-    pub broker_name: String,
-    pub broker_addr: String,
-    pub cluster_name: String,
+    pub broker_name: CheetahString,
+    pub broker_addr: CheetahString,
+    pub cluster_name: CheetahString,
     pub broker_id: u64,
 }
 
@@ -38,9 +39,9 @@ impl QueryDataVersionRequestHeader {
     const CLUSTER_NAME: &'static str = "clusterName";
 
     pub fn new(
-        broker_name: impl Into<String>,
-        broker_addr: impl Into<String>,
-        cluster_name: impl Into<String>,
+        broker_name: impl Into<CheetahString>,
+        broker_addr: impl Into<CheetahString>,
+        cluster_name: impl Into<CheetahString>,
         broker_id: u64,
     ) -> Self {
         Self {
@@ -53,12 +54,24 @@ impl QueryDataVersionRequestHeader {
 }
 
 impl CommandCustomHeader for QueryDataVersionRequestHeader {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         Some(HashMap::from([
-            (Self::BROKER_NAME.to_string(), self.broker_name.clone()),
-            (Self::BROKER_ADDR.to_string(), self.broker_addr.clone()),
-            (Self::CLUSTER_NAME.to_string(), self.cluster_name.clone()),
-            (Self::BROKER_ID.to_string(), self.broker_id.to_string()),
+            (
+                CheetahString::from_static_str(Self::BROKER_NAME),
+                self.broker_name.clone(),
+            ),
+            (
+                CheetahString::from_static_str(Self::BROKER_ADDR),
+                self.broker_addr.clone(),
+            ),
+            (
+                CheetahString::from_static_str(Self::CLUSTER_NAME),
+                self.cluster_name.clone(),
+            ),
+            (
+                CheetahString::from_static_str(Self::BROKER_ID),
+                CheetahString::from_string(self.broker_id.to_string()),
+            ),
         ]))
     }
 }
@@ -66,22 +79,30 @@ impl CommandCustomHeader for QueryDataVersionRequestHeader {
 impl FromMap for QueryDataVersionRequestHeader {
     type Target = Self;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(QueryDataVersionRequestHeader {
             broker_name: map
-                .get(QueryDataVersionRequestHeader::BROKER_NAME)
+                .get(&CheetahString::from_static_str(
+                    QueryDataVersionRequestHeader::BROKER_NAME,
+                ))
                 .cloned()
                 .unwrap_or_default(),
             broker_addr: map
-                .get(QueryDataVersionRequestHeader::BROKER_ADDR)
+                .get(&CheetahString::from_static_str(
+                    QueryDataVersionRequestHeader::BROKER_ADDR,
+                ))
                 .cloned()
                 .unwrap_or_default(),
             cluster_name: map
-                .get(QueryDataVersionRequestHeader::CLUSTER_NAME)
+                .get(&CheetahString::from_static_str(
+                    QueryDataVersionRequestHeader::CLUSTER_NAME,
+                ))
                 .cloned()
                 .unwrap_or_default(),
             broker_id: map
-                .get(QueryDataVersionRequestHeader::BROKER_ID)
+                .get(&CheetahString::from_static_str(
+                    QueryDataVersionRequestHeader::BROKER_ID,
+                ))
                 .and_then(|s| s.parse::<u64>().ok())
                 .unwrap(),
         })
@@ -102,10 +123,10 @@ impl QueryDataVersionResponseHeader {
 }
 
 impl CommandCustomHeader for QueryDataVersionResponseHeader {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         Some(HashMap::from([(
-            Self::CHANGED.to_string(),
-            self.changed.to_string(),
+            CheetahString::from_static_str(Self::CHANGED),
+            CheetahString::from_string(self.changed.to_string()),
         )]))
     }
 }
@@ -113,10 +134,12 @@ impl CommandCustomHeader for QueryDataVersionResponseHeader {
 impl FromMap for QueryDataVersionResponseHeader {
     type Target = Self;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(QueryDataVersionResponseHeader {
             changed: map
-                .get(QueryDataVersionResponseHeader::CHANGED)
+                .get(&CheetahString::from_static_str(
+                    QueryDataVersionResponseHeader::CHANGED,
+                ))
                 .and_then(|s| s.parse::<bool>().ok())
                 .unwrap_or(false),
         })

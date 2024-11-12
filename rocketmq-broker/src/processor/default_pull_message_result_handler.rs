@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use bytes::BytesMut;
+use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all::MASTER_ID;
@@ -252,12 +253,12 @@ impl PullMessageResultHandler for DefaultPullMessageResultHandler {
                         .read_custom_header_mut::<PullMessageResponseHeader>()
                         .unwrap();
                     let mut mq = MessageQueue::new();
-                    mq.set_topic(request_header.topic.clone());
+                    mq.set_topic(request_header.topic.to_string());
                     mq.set_broker_name(self.broker_config.broker_name.clone());
                     mq.set_queue_id(request_header.queue_id.unwrap());
 
                     let offset_moved_event = OffsetMovedEvent {
-                        consumer_group: request_header.consumer_group.clone(),
+                        consumer_group: request_header.consumer_group.to_string(),
                         message_queue: mq,
                         offset_request: request_header.queue_offset,
                         offset_new: get_message_result.next_begin_offset(),
@@ -352,7 +353,9 @@ impl DefaultPullMessageResultHandler {
             context.account_auth_type = auth_type;
             context.account_owner_parent = owner_parent;
             context.account_owner_self = owner_self;
-            context.namespace = NamespaceUtil::get_namespace_from_resource(&request_header.topic);
+            context.namespace = CheetahString::from_string(
+                NamespaceUtil::get_namespace_from_resource(&request_header.topic),
+            );
 
             match response_code {
                 ResponseCode::Success => {
@@ -579,7 +582,7 @@ impl DefaultPullMessageResultHandler {
                 if let Some(ref client_channel_info) =
                     consumer_group_info.find_channel_by_channel(channel)
                 {
-                    client_channel_info.client_id().clone()
+                    CheetahString::from_string(client_channel_info.client_id().clone())
                 } else {
                     return;
                 }

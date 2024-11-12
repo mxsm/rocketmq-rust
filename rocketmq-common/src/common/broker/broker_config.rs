@@ -18,6 +18,7 @@
 use std::any::Any;
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use lazy_static::lazy_static;
 use serde::Deserialize;
 use serde::Serialize;
@@ -46,8 +47,8 @@ lazy_static! {
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct BrokerIdentity {
-    pub broker_name: String,
-    pub broker_cluster_name: String,
+    pub broker_name: CheetahString,
+    pub broker_cluster_name: CheetahString,
     pub broker_id: u64,
     pub is_broker_container: bool,
     pub is_in_broker_container: bool,
@@ -61,8 +62,8 @@ impl BrokerIdentity {
         let is_broker_container = false;
 
         BrokerIdentity {
-            broker_name,
-            broker_cluster_name,
+            broker_name: CheetahString::from_string(broker_name),
+            broker_cluster_name: CheetahString::from_string(broker_cluster_name),
             broker_id,
             is_broker_container,
             is_in_broker_container: false,
@@ -77,8 +78,8 @@ impl BrokerIdentity {
 
     fn new_with_params(broker_cluster_name: String, broker_name: String, broker_id: u64) -> Self {
         BrokerIdentity {
-            broker_name,
-            broker_cluster_name,
+            broker_name: CheetahString::from_string(broker_name),
+            broker_cluster_name: CheetahString::from_string(broker_cluster_name),
             broker_id,
             is_broker_container: false,
             is_in_broker_container: false,
@@ -92,8 +93,8 @@ impl BrokerIdentity {
         is_in_broker_container: bool,
     ) -> Self {
         BrokerIdentity {
-            broker_name,
-            broker_cluster_name,
+            broker_name: CheetahString::from_string(broker_name),
+            broker_cluster_name: CheetahString::from_string(broker_cluster_name),
             broker_id,
             is_broker_container: true,
             is_in_broker_container,
@@ -301,7 +302,7 @@ impl BrokerConfig {
         properties.insert("brokerName".to_string(), self.broker_name.clone());
         properties.insert(
             "brokerClusterName".to_string(),
-            self.broker_identity.broker_cluster_name.clone(),
+            self.broker_identity.broker_cluster_name.to_string(),
         );
         properties.insert(
             "brokerId".to_string(),

@@ -17,20 +17,21 @@
 use std::collections::HashMap;
 
 use anyhow::Error;
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::FromMap;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct BrokerHeartbeatRequestHeader {
     #[serde(rename = "clusterName")]
-    pub cluster_name: String,
+    pub cluster_name: CheetahString,
     #[serde(rename = "brokerAddr")]
-    pub broker_addr: String,
+    pub broker_addr: CheetahString,
     #[serde(rename = "brokerName")]
-    pub broker_name: String,
+    pub broker_name: CheetahString,
     #[serde(rename = "brokerId")]
     pub broker_id: Option<i64>,
     pub epoch: Option<i32>,
@@ -42,22 +43,6 @@ pub struct BrokerHeartbeatRequestHeader {
     pub heartbeat_timeout_mills: Option<i64>,
     #[serde(rename = "electionPriority")]
     pub election_priority: Option<i32>,
-}
-
-impl Default for BrokerHeartbeatRequestHeader {
-    fn default() -> Self {
-        BrokerHeartbeatRequestHeader {
-            cluster_name: "".to_string(),
-            broker_addr: "".to_string(),
-            broker_name: "".to_string(),
-            broker_id: None,
-            epoch: None,
-            max_offset: None,
-            confirm_offset: None,
-            heartbeat_timeout_mills: None,
-            election_priority: None,
-        }
-    }
 }
 
 impl BrokerHeartbeatRequestHeader {
@@ -72,9 +57,9 @@ impl BrokerHeartbeatRequestHeader {
     const MAX_OFFSET: &'static str = "maxOffset";
 
     pub fn new(
-        cluster_name: String,
-        broker_addr: String,
-        broker_name: String,
+        cluster_name: CheetahString,
+        broker_addr: CheetahString,
+        broker_name: CheetahString,
         broker_id: Option<i64>,
         epoch: Option<i32>,
         max_offset: Option<i64>,
@@ -99,37 +84,55 @@ impl BrokerHeartbeatRequestHeader {
 impl FromMap for BrokerHeartbeatRequestHeader {
     type Target = BrokerHeartbeatRequestHeader;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(BrokerHeartbeatRequestHeader {
             cluster_name: map
-                .get(BrokerHeartbeatRequestHeader::CLUSTER_NAME)
-                .map(|s| s.to_string())
+                .get(&CheetahString::from_static_str(
+                    BrokerHeartbeatRequestHeader::CLUSTER_NAME,
+                ))
+                .cloned()
                 .unwrap_or_default(),
             broker_addr: map
-                .get(BrokerHeartbeatRequestHeader::BROKER_ADDR)
-                .map(|s| s.to_string())
+                .get(&CheetahString::from_static_str(
+                    BrokerHeartbeatRequestHeader::BROKER_ADDR,
+                ))
+                .cloned()
                 .unwrap_or_default(),
             broker_name: map
-                .get(BrokerHeartbeatRequestHeader::BROKER_NAME)
-                .map(|s| s.to_string())
+                .get(&CheetahString::from_static_str(
+                    BrokerHeartbeatRequestHeader::BROKER_NAME,
+                ))
+                .cloned()
                 .unwrap_or_default(),
             broker_id: map
-                .get(BrokerHeartbeatRequestHeader::BROKER_ID)
+                .get(&CheetahString::from_static_str(
+                    BrokerHeartbeatRequestHeader::BROKER_ID,
+                ))
                 .and_then(|s| s.parse::<i64>().ok()),
             epoch: map
-                .get(BrokerHeartbeatRequestHeader::EPOCH)
+                .get(&CheetahString::from_static_str(
+                    BrokerHeartbeatRequestHeader::EPOCH,
+                ))
                 .and_then(|s| s.parse::<i32>().ok()),
             max_offset: map
-                .get(BrokerHeartbeatRequestHeader::MAX_OFFSET)
+                .get(&CheetahString::from_static_str(
+                    BrokerHeartbeatRequestHeader::MAX_OFFSET,
+                ))
                 .and_then(|s| s.parse::<i64>().ok()),
             confirm_offset: map
-                .get(BrokerHeartbeatRequestHeader::CONFIRM_OFFSET)
+                .get(&CheetahString::from_static_str(
+                    BrokerHeartbeatRequestHeader::CONFIRM_OFFSET,
+                ))
                 .and_then(|s| s.parse::<i64>().ok()),
             heartbeat_timeout_mills: map
-                .get(BrokerHeartbeatRequestHeader::HEARTBEAT_TIMEOUT_MILLIS)
+                .get(&CheetahString::from_static_str(
+                    BrokerHeartbeatRequestHeader::HEARTBEAT_TIMEOUT_MILLIS,
+                ))
                 .and_then(|s| s.parse::<i64>().ok()),
             election_priority: map
-                .get(BrokerHeartbeatRequestHeader::ELECTION_PRIORITY)
+                .get(&CheetahString::from_static_str(
+                    BrokerHeartbeatRequestHeader::ELECTION_PRIORITY,
+                ))
                 .and_then(|s| s.parse::<i32>().ok()),
         })
     }
@@ -140,7 +143,7 @@ impl CommandCustomHeader for BrokerHeartbeatRequestHeader {
         todo!()
     }
 
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         todo!()
     }
 }

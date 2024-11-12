@@ -1,3 +1,4 @@
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -6,7 +7,7 @@ pub struct LogicQueueMappingItem {
     pub gen: i32, // Immutable
     #[serde(rename = "queueId")]
     pub queue_id: i32, // Immutable
-    pub bname: Option<String>, // Immutable
+    pub bname: Option<CheetahString>, // Immutable
     #[serde(rename = "logicOffset")]
     pub logic_offset: i64, /* Start of the logic offset, Important, can be changed by command
                    * only once */

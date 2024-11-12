@@ -16,6 +16,7 @@
  */
 use std::any::Any;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_rust::ArcMut;
 
@@ -446,7 +447,9 @@ impl RpcClient for RpcClientImpl {
         timeout_millis: u64,
     ) -> Result<RpcResponse> {
         if let Some(broker_name) = self.client_metadata.get_broker_name_from_message_queue(&mq) {
-            request.header.set_broker_name(broker_name);
+            request
+                .header
+                .set_broker_name(CheetahString::from_string(broker_name));
         }
         self.invoke(request, timeout_millis).await
     }

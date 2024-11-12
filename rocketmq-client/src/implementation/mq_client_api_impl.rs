@@ -19,6 +19,7 @@ use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 use std::time::Instant;
 
+use cheetah_string::CheetahString;
 use lazy_static::lazy_static;
 use rocketmq_common::common::message::message_batch::MessageBatch;
 use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
@@ -208,7 +209,7 @@ impl MQClientAPIImpl {
         allow_topic_not_exist: bool,
     ) -> Result<Option<TopicRouteData>> {
         let request_header = GetRouteInfoRequestHeader {
-            topic: topic.to_string(),
+            topic: CheetahString::from_slice(topic),
             accept_standard_json_only: None,
             topic_request_header: None,
         };
@@ -246,13 +247,13 @@ impl MQClientAPIImpl {
                     _ => {
                         return Err(MQClientError::MQClientErr(
                             code,
-                            result.remark().cloned().unwrap_or_default(),
+                            result.remark().cloned().unwrap_or_default().to_string(),
                         ))
                     }
                 }
                 Err(MQClientError::MQClientErr(
                     code,
-                    result.remark().cloned().unwrap_or_default(),
+                    result.remark().cloned().unwrap_or_default().to_string(),
                 ))
             }
             Err(err) => Err(MQClientError::RemotingError(err)),
@@ -716,7 +717,7 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
     ) -> Result<Vec<String>> {
         let request_header = GetConsumerListByGroupRequestHeader {
-            consumer_group: consumer_group.to_string(),
+            consumer_group: CheetahString::from_slice(consumer_group),
             rpc: None,
         };
         let request = RemotingCommand::create_request_command(
@@ -981,16 +982,16 @@ impl MQClientAPIImpl {
     ) -> Result<()> {
         let header = ConsumerSendMsgBackRequestHeader {
             offset: msg.commit_log_offset,
-            group: consumer_group.to_string(),
+            group: CheetahString::from_slice(consumer_group),
             delay_level,
-            origin_msg_id: Some(msg.msg_id.clone()),
-            origin_topic: Some(msg.get_topic().to_string()),
+            origin_msg_id: Some(CheetahString::from_slice(msg.msg_id.as_str())),
+            origin_topic: Some(CheetahString::from_slice(msg.get_topic())),
             unit_mode: false,
             max_reconsume_times: Some(max_consume_retry_times),
             rpc_request_header: Some(RpcRequestHeader {
                 namespace: None,
                 namespaced: None,
-                broker_name: Some(broker_name.to_string()),
+                broker_name: Some(CheetahString::from_slice(broker_name)),
                 oneway: None,
             }),
         };
@@ -1028,9 +1029,9 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
     ) -> Result<()> {
         let request_header = UnregisterClientRequestHeader {
-            client_id: client_id.to_string(),
-            producer_group,
-            consumer_group,
+            client_id: CheetahString::from_slice(client_id),
+            producer_group: producer_group.map(CheetahString::from_string),
+            consumer_group: consumer_group.map(CheetahString::from_string),
             rpc_request_header: None,
         };
         let request =
@@ -1158,12 +1159,12 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
     ) -> Result<i64> {
         let request_header = GetMaxOffsetRequestHeader {
-            topic: message_queue.get_topic().to_string(),
+            topic: CheetahString::from_slice(message_queue.get_topic()),
             queue_id: message_queue.get_queue_id(),
             committed: false,
             topic_request_header: Some(TopicRequestHeader {
                 rpc_request_header: Some(RpcRequestHeader {
-                    broker_name: Some(message_queue.get_broker_name().to_string()),
+                    broker_name: Some(CheetahString::from_slice(message_queue.get_broker_name())),
                     ..Default::default()
                 }),
                 lo: None,

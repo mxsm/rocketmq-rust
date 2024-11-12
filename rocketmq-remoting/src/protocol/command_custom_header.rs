@@ -17,6 +17,8 @@
 use std::any::Any;
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
+
 use crate::rocketmq_serializable::RocketMQSerializable;
 
 pub trait CommandCustomHeader: AsAny {
@@ -35,7 +37,7 @@ pub trait CommandCustomHeader: AsAny {
     /// representing the implementing type's fields.  
     /// If the conversion is successful, a non-empty map is returned.  
     /// If the conversion fails, `None` is returned.  
-    fn to_map(&self) -> Option<HashMap<String, String>>;
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>>;
 
     /// Writes the provided `key` to the `out` buffer if the `value` is not empty.
     ///
@@ -68,7 +70,7 @@ pub trait CommandCustomHeader: AsAny {
     /// # Arguments
     ///
     /// * `_fields` - A reference to a `HashMap` that contains the fields to be decoded.
-    fn decode_fast(&mut self, _fields: &HashMap<String, String>) {}
+    fn decode_fast(&mut self, _fields: &HashMap<CheetahString, CheetahString>) {}
 
     /// Indicates whether the implementing type supports fast codec.
     ///
@@ -102,5 +104,5 @@ pub trait FromMap {
     /// Converts the implementing type from a map.
     ///
     /// Returns an instance of `Self::Target` that is created from the provided map.
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target>;
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target>;
 }

@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -26,7 +27,7 @@ use crate::rpc::topic_request_header::TopicRequestHeader;
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct GetRouteInfoRequestHeader {
-    pub topic: String,
+    pub topic: CheetahString,
 
     #[serde(rename = "acceptStandardJsonOnly")]
     pub accept_standard_json_only: Option<bool>,
@@ -39,7 +40,7 @@ impl GetRouteInfoRequestHeader {
     const ACCEPT_STANDARD_JSON_ONLY: &'static str = "acceptStandardJsonOnly";
     const TOPIC: &'static str = "topic";
 
-    pub fn new(topic: impl Into<String>, accept_standard_json_only: Option<bool>) -> Self {
+    pub fn new(topic: impl Into<CheetahString>, accept_standard_json_only: Option<bool>) -> Self {
         GetRouteInfoRequestHeader {
             topic: topic.into(),
             accept_standard_json_only,
@@ -51,14 +52,18 @@ impl GetRouteInfoRequestHeader {
 impl FromMap for GetRouteInfoRequestHeader {
     type Target = GetRouteInfoRequestHeader;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(GetRouteInfoRequestHeader {
             topic: map
-                .get(GetRouteInfoRequestHeader::TOPIC)
+                .get(&CheetahString::from_static_str(
+                    GetRouteInfoRequestHeader::TOPIC,
+                ))
                 .cloned()
                 .unwrap_or_default(),
             accept_standard_json_only: map
-                .get(GetRouteInfoRequestHeader::ACCEPT_STANDARD_JSON_ONLY)
+                .get(&CheetahString::from_static_str(
+                    GetRouteInfoRequestHeader::ACCEPT_STANDARD_JSON_ONLY,
+                ))
                 .and_then(|s| s.parse::<bool>().ok()),
             topic_request_header: <TopicRequestHeader as FromMap>::from(map),
         })
@@ -66,20 +71,23 @@ impl FromMap for GetRouteInfoRequestHeader {
 }
 
 impl CommandCustomHeader for GetRouteInfoRequestHeader {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         let mut map = HashMap::with_capacity(2);
-        map.insert(String::from("topic"), String::from(&self.topic));
+        map.insert(
+            CheetahString::from_static_str(Self::TOPIC),
+            self.topic.clone(),
+        );
         match self.accept_standard_json_only {
             None => {
                 map.insert(
-                    String::from("acceptStandardJsonOnly"),
-                    String::from("false"),
+                    CheetahString::from_slice("acceptStandardJsonOnly"),
+                    CheetahString::from_slice("false"),
                 );
             }
             Some(val) => {
                 map.insert(
-                    String::from("acceptStandardJsonOnly"),
-                    String::from(if val { "true" } else { "false" }),
+                    CheetahString::from_slice("acceptStandardJsonOnly"),
+                    CheetahString::from_slice(if val { "true" } else { "false" }),
                 );
             }
         }
@@ -96,6 +104,8 @@ impl CommandCustomHeader for GetRouteInfoRequestHeader {
 mod tests {
     use std::collections::HashMap;
 
+    use cheetah_string::CheetahString;
+
     use super::GetRouteInfoRequestHeader;
     use crate::protocol::command_custom_header::CommandCustomHeader;
 
@@ -107,14 +117,14 @@ mod tests {
             topic_request_header: None,
         };
 
-        let result: Option<HashMap<String, String>> = request_header.to_map();
+        let result: Option<HashMap<CheetahString, CheetahString>> = request_header.to_map();
         assert_eq!(
             result,
             Some(HashMap::from([
-                (String::from("topic"), String::from("test")),
+                (CheetahString::from("topic"), CheetahString::from("test")),
                 (
-                    String::from("acceptStandardJsonOnly"),
-                    String::from("false")
+                    CheetahString::from("acceptStandardJsonOnly"),
+                    CheetahString::from("false")
                 )
             ]))
         );

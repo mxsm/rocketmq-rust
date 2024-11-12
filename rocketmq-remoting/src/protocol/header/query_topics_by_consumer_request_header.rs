@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -24,7 +25,7 @@ use crate::rpc::rpc_request_header::RpcRequestHeader;
 #[derive(Serialize, Deserialize, Debug)]
 pub struct QueryTopicsByConsumerRequestHeader {
     #[serde(rename = "group")]
-    pub group: String,
+    pub group: CheetahString,
 
     #[serde(flatten)]
     pub rpc_request_header: Option<RpcRequestHeader>,
@@ -33,18 +34,21 @@ pub struct QueryTopicsByConsumerRequestHeader {
 impl QueryTopicsByConsumerRequestHeader {
     pub const GROUP: &'static str = "group";
 
-    pub fn get_group(&self) -> &String {
+    pub fn get_group(&self) -> &CheetahString {
         &self.group
     }
-    pub fn set_group(&mut self, group: String) {
+    pub fn set_group(&mut self, group: CheetahString) {
         self.group = group;
     }
 }
 
 impl CommandCustomHeader for QueryTopicsByConsumerRequestHeader {
-    fn to_map(&self) -> Option<std::collections::HashMap<String, String>> {
+    fn to_map(&self) -> Option<std::collections::HashMap<CheetahString, CheetahString>> {
         let mut map = std::collections::HashMap::new();
-        map.insert(Self::GROUP.to_string(), self.group.clone());
+        map.insert(
+            CheetahString::from_static_str(Self::GROUP),
+            self.group.clone(),
+        );
         if let Some(value) = self.rpc_request_header.as_ref() {
             if let Some(value) = value.to_map() {
                 map.extend(value);
@@ -57,9 +61,12 @@ impl CommandCustomHeader for QueryTopicsByConsumerRequestHeader {
 impl FromMap for QueryTopicsByConsumerRequestHeader {
     type Target = Self;
 
-    fn from(map: &std::collections::HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &std::collections::HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(QueryTopicsByConsumerRequestHeader {
-            group: map.get(Self::GROUP).cloned().unwrap_or_default(),
+            group: map
+                .get(&CheetahString::from_static_str(Self::GROUP))
+                .cloned()
+                .unwrap_or_default(),
             rpc_request_header: <RpcRequestHeader as FromMap>::from(map),
         })
     }

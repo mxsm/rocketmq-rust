@@ -16,6 +16,7 @@
  */
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -25,13 +26,13 @@ use crate::protocol::command_custom_header::FromMap;
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct WipeWritePermOfBrokerRequestHeader {
-    pub broker_name: String,
+    pub broker_name: CheetahString,
 }
 
 impl WipeWritePermOfBrokerRequestHeader {
     const BROKER_NAME: &'static str = "brokerName";
 
-    pub fn new(broker_name: impl Into<String>) -> Self {
+    pub fn new(broker_name: impl Into<CheetahString>) -> Self {
         Self {
             broker_name: broker_name.into(),
         }
@@ -39,9 +40,9 @@ impl WipeWritePermOfBrokerRequestHeader {
 }
 
 impl CommandCustomHeader for WipeWritePermOfBrokerRequestHeader {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         Some(HashMap::from([(
-            Self::BROKER_NAME.to_string(),
+            CheetahString::from_static_str(Self::BROKER_NAME),
             self.broker_name.clone(),
         )]))
     }
@@ -50,10 +51,12 @@ impl CommandCustomHeader for WipeWritePermOfBrokerRequestHeader {
 impl FromMap for WipeWritePermOfBrokerRequestHeader {
     type Target = Self;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(WipeWritePermOfBrokerRequestHeader {
             broker_name: map
-                .get(WipeWritePermOfBrokerRequestHeader::BROKER_NAME)
+                .get(&CheetahString::from_static_str(
+                    WipeWritePermOfBrokerRequestHeader::BROKER_NAME,
+                ))
                 .cloned()
                 .unwrap_or_default(),
         })
@@ -75,10 +78,10 @@ impl WipeWritePermOfBrokerResponseHeader {
 }
 
 impl CommandCustomHeader for WipeWritePermOfBrokerResponseHeader {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         Some(HashMap::from([(
-            Self::WIPE_TOPIC_COUNT.to_string(),
-            self.wipe_topic_count.to_string(),
+            CheetahString::from_static_str(Self::WIPE_TOPIC_COUNT),
+            CheetahString::from_string(self.wipe_topic_count.to_string()),
         )]))
     }
 }
@@ -86,10 +89,12 @@ impl CommandCustomHeader for WipeWritePermOfBrokerResponseHeader {
 impl FromMap for WipeWritePermOfBrokerResponseHeader {
     type Target = Self;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(WipeWritePermOfBrokerResponseHeader {
             wipe_topic_count: map
-                .get(WipeWritePermOfBrokerResponseHeader::WIPE_TOPIC_COUNT)
+                .get(&CheetahString::from_static_str(
+                    WipeWritePermOfBrokerResponseHeader::WIPE_TOPIC_COUNT,
+                ))
                 .and_then(|s| s.parse::<i32>().ok())
                 .unwrap_or(0),
         })
@@ -99,13 +104,13 @@ impl FromMap for WipeWritePermOfBrokerResponseHeader {
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AddWritePermOfBrokerRequestHeader {
-    pub broker_name: String,
+    pub broker_name: CheetahString,
 }
 
 impl AddWritePermOfBrokerRequestHeader {
     const BROKER_NAME: &'static str = "brokerName";
 
-    pub fn new(broker_name: impl Into<String>) -> Self {
+    pub fn new(broker_name: impl Into<CheetahString>) -> Self {
         Self {
             broker_name: broker_name.into(),
         }
@@ -113,9 +118,9 @@ impl AddWritePermOfBrokerRequestHeader {
 }
 
 impl CommandCustomHeader for AddWritePermOfBrokerRequestHeader {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         Some(HashMap::from([(
-            Self::BROKER_NAME.to_string(),
+            CheetahString::from_static_str(Self::BROKER_NAME),
             self.broker_name.clone(),
         )]))
     }
@@ -124,10 +129,12 @@ impl CommandCustomHeader for AddWritePermOfBrokerRequestHeader {
 impl FromMap for AddWritePermOfBrokerRequestHeader {
     type Target = Self;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(AddWritePermOfBrokerRequestHeader {
             broker_name: map
-                .get(AddWritePermOfBrokerRequestHeader::BROKER_NAME)
+                .get(&CheetahString::from_static_str(
+                    AddWritePermOfBrokerRequestHeader::BROKER_NAME,
+                ))
                 .cloned()
                 .unwrap_or_default(),
         })
@@ -149,10 +156,10 @@ impl AddWritePermOfBrokerResponseHeader {
 }
 
 impl CommandCustomHeader for AddWritePermOfBrokerResponseHeader {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         Some(HashMap::from([(
-            Self::ADD_TOPIC_COUNT.to_string(),
-            self.add_topic_count.to_string(),
+            CheetahString::from_static_str(Self::ADD_TOPIC_COUNT),
+            CheetahString::from_string(self.add_topic_count.to_string()),
         )]))
     }
 }
@@ -160,10 +167,12 @@ impl CommandCustomHeader for AddWritePermOfBrokerResponseHeader {
 impl FromMap for AddWritePermOfBrokerResponseHeader {
     type Target = Self;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(AddWritePermOfBrokerResponseHeader {
             add_topic_count: map
-                .get(AddWritePermOfBrokerResponseHeader::ADD_TOPIC_COUNT)
+                .get(&CheetahString::from_static_str(
+                    AddWritePermOfBrokerResponseHeader::ADD_TOPIC_COUNT,
+                ))
                 .and_then(|s| s.parse::<i32>().ok())
                 .unwrap_or(0),
         })

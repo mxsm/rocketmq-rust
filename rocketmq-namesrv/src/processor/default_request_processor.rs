@@ -18,6 +18,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
@@ -129,7 +130,7 @@ impl DefaultRequestProcessor {
             return RemotingCommand::create_response_command_with_code(
                 RemotingSysResponseCode::SystemError,
             )
-            .set_remark(Some(String::from("namespace or key is empty")));
+            .set_remark(Some("namespace or key is empty".to_string()));
         }
         self.kvconfig_manager.write().put_kv_config(
             request_header.namespace.as_str(),
@@ -150,8 +151,9 @@ impl DefaultRequestProcessor {
         );
 
         if value.is_some() {
-            return RemotingCommand::create_response_command()
-                .set_command_custom_header(GetKVConfigResponseHeader::new(value));
+            return RemotingCommand::create_response_command().set_command_custom_header(
+                GetKVConfigResponseHeader::new(value.map(CheetahString::from_string)),
+            );
         }
         RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::SystemError)
             .set_remark(Some(format!(
@@ -191,8 +193,8 @@ impl DefaultRequestProcessor {
             );
         let mut rim_write = self.route_info_manager.write();
         rim_write.update_broker_info_update_timestamp(
-            &request_header.cluster_name,
-            &request_header.broker_addr,
+            request_header.cluster_name.as_str(),
+            request_header.broker_addr.as_str(),
         );
         let mut command = RemotingCommand::create_response_command()
             .set_command_custom_header(QueryDataVersionResponseHeader::new(changed));
@@ -256,11 +258,11 @@ impl DefaultRequestProcessor {
             topic_config_wrapper = extract_register_topic_config_from_request(&request);
         }
         let result = self.route_info_manager.write().register_broker(
-            request_header.cluster_name.clone(),
-            request_header.broker_addr.clone(),
-            request_header.broker_name.clone(),
+            request_header.cluster_name.clone().to_string(),
+            request_header.broker_addr.clone().to_string(),
+            request_header.broker_name.clone().to_string(),
             request_header.broker_id,
-            request_header.ha_server_addr.clone(),
+            request_header.ha_server_addr.clone().to_string(),
             match request.ext_fields() {
                 Some(map) => map.get(mix_all::ZONE_NAME).map(|value| value.to_string()),
                 None => None,
@@ -294,8 +296,12 @@ impl DefaultRequestProcessor {
         response_command
             .set_code(RemotingSysResponseCode::Success)
             .set_command_custom_header(RegisterBrokerResponseHeader::new(
-                Some(register_broker_result.ha_server_addr),
-                Some(register_broker_result.master_addr),
+                Some(CheetahString::from_string(
+                    register_broker_result.ha_server_addr,
+                )),
+                Some(CheetahString::from_string(
+                    register_broker_result.master_addr,
+                )),
             ))
     }
 

@@ -25,6 +25,7 @@ use std::sync::Arc;
 use bytes::Buf;
 use bytes::Bytes;
 use bytes::BytesMut;
+use cheetah_string::CheetahString;
 use rocketmq_common::common::attribute::cq_type::CQType;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config::TopicConfig;
@@ -897,7 +898,7 @@ impl CommitLog {
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
-                                    files"
+                                     files"
             );
             self.mapped_file_queue.set_flushed_where(0);
             self.mapped_file_queue.set_committed_where(0);
@@ -1077,7 +1078,7 @@ impl CommitLog {
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
-                                    files"
+                                     files"
             );
             self.mapped_file_queue.set_flushed_where(0);
             self.mapped_file_queue.set_committed_where(0);
@@ -1234,7 +1235,9 @@ pub fn check_message_and_return_size(
     let (tags_code, keys, uniq_key, properties_map) = if properties_length > 0 {
         let properties = bytes.copy_to_bytes(properties_length as usize);
         let properties_content = String::from_utf8_lossy(topic_bytes.as_ref()).to_string();
-        let properties_map = string_to_message_properties(Some(&properties_content));
+        //need to optimize
+        let properties_map =
+            string_to_message_properties(Some(&CheetahString::from_string(properties_content)));
         let keys = properties_map.get(MessageConst::PROPERTY_KEYS).cloned();
         let uniq_key = properties_map
             .get(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX)

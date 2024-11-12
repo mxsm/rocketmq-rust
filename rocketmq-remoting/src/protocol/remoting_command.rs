@@ -28,6 +28,7 @@ use bytes::Buf;
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
+use cheetah_string::CheetahString;
 use lazy_static::lazy_static;
 use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
@@ -101,10 +102,10 @@ pub struct RemotingCommand {
     /// The second bit indicates whether it is a one-way request.
     /// Non-zero indicates a one-way request.
     flag: i32,
-    remark: Option<String>,
+    remark: Option<CheetahString>,
 
     #[serde(rename = "extFields")]
-    ext_fields: Option<HashMap<String, String>>,
+    ext_fields: Option<HashMap<CheetahString, CheetahString>>,
 
     #[serde(skip)]
     body: Option<Bytes>,
@@ -145,7 +146,7 @@ impl fmt::Display for RemotingCommand {
             self.version,
             self.opaque,
             self.flag,
-            self.remark.as_ref().unwrap_or(&"".to_string()),
+            self.remark.as_ref().unwrap_or(&CheetahString::default()),
             self.ext_fields,
             self.serialize_type
         )
@@ -298,15 +299,20 @@ impl RemotingCommand {
     }
 
     pub fn set_remark(mut self, remark: Option<String>) -> Self {
+        self.remark = remark.map(CheetahString::from);
+        self
+    }
+
+    pub fn set_remark_cheetah_string(mut self, remark: Option<CheetahString>) -> Self {
         self.remark = remark;
         self
     }
 
-    pub fn set_remark_mut(&mut self, remark: Option<String>) {
-        self.remark = remark;
+    pub fn set_remark_mut(&mut self, remark: Option<impl Into<CheetahString>>) {
+        self.remark = remark.map(|item| item.into());
     }
 
-    pub fn set_ext_fields(mut self, ext_fields: HashMap<String, String>) -> Self {
+    pub fn set_ext_fields(mut self, ext_fields: HashMap<CheetahString, CheetahString>) -> Self {
         self.ext_fields = Some(ext_fields);
         self
     }
@@ -536,11 +542,11 @@ impl RemotingCommand {
         self.flag
     }
 
-    pub fn remark(&self) -> Option<&String> {
+    pub fn remark(&self) -> Option<&CheetahString> {
         self.remark.as_ref()
     }
 
-    pub fn ext_fields(&self) -> Option<&HashMap<String, String>> {
+    pub fn ext_fields(&self) -> Option<&HashMap<CheetahString, CheetahString>> {
         self.ext_fields.as_ref()
     }
 
@@ -613,7 +619,11 @@ impl RemotingCommand {
         self
     }
 
-    pub fn add_ext_field(&mut self, key: impl Into<String>, value: impl Into<String>) -> &mut Self {
+    pub fn add_ext_field(
+        &mut self,
+        key: impl Into<CheetahString>,
+        value: impl Into<CheetahString>,
+    ) -> &mut Self {
         if let Some(ref mut ext) = self.ext_fields {
             ext.insert(key.into(), value.into());
         }
@@ -625,12 +635,12 @@ impl RemotingCommand {
         self
     }
 
-    pub fn with_remark(&mut self, remark: Option<String>) -> &mut Self {
-        self.remark = remark;
+    pub fn with_remark(&mut self, remark: Option<impl Into<CheetahString>>) -> &mut Self {
+        self.remark = remark.map(|item| item.into());
         self
     }
 
-    pub fn get_ext_fields(&self) -> Option<&HashMap<String, String>> {
+    pub fn get_ext_fields(&self) -> Option<&HashMap<CheetahString, CheetahString>> {
         self.ext_fields.as_ref()
     }
 

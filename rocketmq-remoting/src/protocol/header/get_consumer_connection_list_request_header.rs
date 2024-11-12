@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -24,7 +24,7 @@ use crate::rpc::rpc_request_header::RpcRequestHeader;
 #[derive(Serialize, Deserialize, Debug)]
 pub struct GetConsumerConnectionListRequestHeader {
     #[serde(rename = "consumerGroup")]
-    pub consumer_group: String,
+    pub consumer_group: CheetahString,
 
     #[serde(flatten)]
     pub rpc_request_header: Option<RpcRequestHeader>,
@@ -33,10 +33,10 @@ pub struct GetConsumerConnectionListRequestHeader {
 impl GetConsumerConnectionListRequestHeader {
     pub const CONSUMER_GROUP: &'static str = "consumerGroup";
 
-    pub fn get_consumer_group(&self) -> &String {
+    pub fn get_consumer_group(&self) -> &CheetahString {
         &self.consumer_group
     }
-    pub fn set_consumer_group(&mut self, consumer_group: String) {
+    pub fn set_consumer_group(&mut self, consumer_group: CheetahString) {
         self.consumer_group = consumer_group;
     }
 }
@@ -44,9 +44,12 @@ impl GetConsumerConnectionListRequestHeader {
 impl FromMap for GetConsumerConnectionListRequestHeader {
     type Target = Self;
 
-    fn from(map: &std::collections::HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &std::collections::HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(GetConsumerConnectionListRequestHeader {
-            consumer_group: map.get(Self::CONSUMER_GROUP).cloned().unwrap_or_default(),
+            consumer_group: map
+                .get(&CheetahString::from_static_str(Self::CONSUMER_GROUP))
+                .cloned()
+                .unwrap_or_default(),
             rpc_request_header: <RpcRequestHeader as FromMap>::from(map),
         })
     }

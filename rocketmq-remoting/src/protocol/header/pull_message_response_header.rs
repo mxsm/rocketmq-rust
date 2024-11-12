@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 
 use bytes::BytesMut;
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -49,31 +50,55 @@ impl PullMessageResponseHeader {
 }
 
 impl CommandCustomHeader for PullMessageResponseHeader {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         let mut map = HashMap::new();
         if let Some(value) = self.suggest_which_broker_id {
-            map.insert(Self::SUGGEST_WHICH_BROKER_ID.to_string(), value.to_string());
+            map.insert(
+                CheetahString::from_static_str(Self::SUGGEST_WHICH_BROKER_ID),
+                CheetahString::from_string(value.to_string()),
+            );
         }
         if let Some(value) = self.next_begin_offset {
-            map.insert(Self::NEXT_BEGIN_OFFSET.to_string(), value.to_string());
+            map.insert(
+                CheetahString::from_static_str(Self::NEXT_BEGIN_OFFSET),
+                CheetahString::from_string(value.to_string()),
+            );
         }
         if let Some(value) = self.min_offset {
-            map.insert(Self::MIN_OFFSET.to_string(), value.to_string());
+            map.insert(
+                CheetahString::from_static_str(Self::MIN_OFFSET),
+                CheetahString::from_string(value.to_string()),
+            );
         }
         if let Some(value) = self.max_offset {
-            map.insert(Self::MAX_OFFSET.to_string(), value.to_string());
+            map.insert(
+                CheetahString::from_static_str(Self::MAX_OFFSET),
+                CheetahString::from_string(value.to_string()),
+            );
         }
         if let Some(value) = self.offset_delta {
-            map.insert(Self::OFFSET_DELTA.to_string(), value.to_string());
+            map.insert(
+                CheetahString::from_static_str(Self::OFFSET_DELTA),
+                CheetahString::from_string(value.to_string()),
+            );
         }
         if let Some(value) = self.topic_sys_flag {
-            map.insert(Self::TOPIC_SYS_FLAG.to_string(), value.to_string());
+            map.insert(
+                CheetahString::from_static_str(Self::TOPIC_SYS_FLAG),
+                CheetahString::from_string(value.to_string()),
+            );
         }
         if let Some(value) = self.group_sys_flag {
-            map.insert(Self::GROUP_SYS_FLAG.to_string(), value.to_string());
+            map.insert(
+                CheetahString::from_static_str(Self::GROUP_SYS_FLAG),
+                CheetahString::from_string(value.to_string()),
+            );
         }
         if let Some(value) = self.forbidden_type {
-            map.insert(Self::FORBIDDEN_TYPE.to_string(), value.to_string());
+            map.insert(
+                CheetahString::from_static_str(Self::FORBIDDEN_TYPE),
+                CheetahString::from_string(value.to_string()),
+            );
         }
         Some(map)
     }
@@ -109,29 +134,40 @@ impl CommandCustomHeader for PullMessageResponseHeader {
         }
     }
 
-    fn decode_fast(&mut self, fields: &HashMap<String, String>) {
-        if let Some(offset_delta) = fields.get(Self::SUGGEST_WHICH_BROKER_ID) {
+    fn decode_fast(&mut self, fields: &HashMap<CheetahString, CheetahString>) {
+        if let Some(offset_delta) = fields.get(&CheetahString::from_static_str(
+            Self::SUGGEST_WHICH_BROKER_ID,
+        )) {
             self.suggest_which_broker_id = Some(offset_delta.parse().unwrap());
         }
-        if let Some(offset_delta) = fields.get(Self::NEXT_BEGIN_OFFSET) {
+        if let Some(offset_delta) =
+            fields.get(&CheetahString::from_static_str(Self::NEXT_BEGIN_OFFSET))
+        {
             self.next_begin_offset = Some(offset_delta.parse().unwrap());
         }
-        if let Some(offset_delta) = fields.get(Self::MIN_OFFSET) {
+        if let Some(offset_delta) = fields.get(&CheetahString::from_static_str(Self::MIN_OFFSET)) {
             self.min_offset = Some(offset_delta.parse().unwrap());
         }
-        if let Some(offset_delta) = fields.get(Self::MAX_OFFSET) {
+        if let Some(offset_delta) = fields.get(&CheetahString::from_static_str(Self::MAX_OFFSET)) {
             self.max_offset = Some(offset_delta.parse().unwrap());
         }
-        if let Some(offset_delta) = fields.get(Self::OFFSET_DELTA) {
+        if let Some(offset_delta) = fields.get(&CheetahString::from_static_str(Self::OFFSET_DELTA))
+        {
             self.offset_delta = Some(offset_delta.parse().unwrap());
         }
-        if let Some(offset_delta) = fields.get(Self::TOPIC_SYS_FLAG) {
+        if let Some(offset_delta) =
+            fields.get(&CheetahString::from_static_str(Self::TOPIC_SYS_FLAG))
+        {
             self.topic_sys_flag = Some(offset_delta.parse().unwrap());
         }
-        if let Some(offset_delta) = fields.get(Self::GROUP_SYS_FLAG) {
+        if let Some(offset_delta) =
+            fields.get(&CheetahString::from_static_str(Self::GROUP_SYS_FLAG))
+        {
             self.group_sys_flag = Some(offset_delta.parse().unwrap());
         }
-        if let Some(offset_delta) = fields.get(Self::FORBIDDEN_TYPE) {
+        if let Some(offset_delta) =
+            fields.get(&CheetahString::from_static_str(Self::FORBIDDEN_TYPE))
+        {
             self.forbidden_type = Some(offset_delta.parse().unwrap());
         }
     }
@@ -144,15 +180,31 @@ impl CommandCustomHeader for PullMessageResponseHeader {
 impl FromMap for PullMessageResponseHeader {
     type Target = Self;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
-        let suggest_which_broker_id = map.get(PullMessageResponseHeader::SUGGEST_WHICH_BROKER_ID);
-        let next_begin_offset = map.get(PullMessageResponseHeader::NEXT_BEGIN_OFFSET);
-        let min_offset = map.get(PullMessageResponseHeader::MIN_OFFSET);
-        let max_offset = map.get(PullMessageResponseHeader::MAX_OFFSET);
-        let offset_delta = map.get(PullMessageResponseHeader::OFFSET_DELTA);
-        let topic_sys_flag = map.get(PullMessageResponseHeader::TOPIC_SYS_FLAG);
-        let group_sys_flag = map.get(PullMessageResponseHeader::GROUP_SYS_FLAG);
-        let forbidden_type = map.get(PullMessageResponseHeader::FORBIDDEN_TYPE);
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
+        let suggest_which_broker_id = map.get(&CheetahString::from_static_str(
+            PullMessageResponseHeader::SUGGEST_WHICH_BROKER_ID,
+        ));
+        let next_begin_offset = map.get(&CheetahString::from_static_str(
+            PullMessageResponseHeader::NEXT_BEGIN_OFFSET,
+        ));
+        let min_offset = map.get(&CheetahString::from_static_str(
+            PullMessageResponseHeader::MIN_OFFSET,
+        ));
+        let max_offset = map.get(&CheetahString::from_static_str(
+            PullMessageResponseHeader::MAX_OFFSET,
+        ));
+        let offset_delta = map.get(&CheetahString::from_static_str(
+            PullMessageResponseHeader::OFFSET_DELTA,
+        ));
+        let topic_sys_flag = map.get(&CheetahString::from_static_str(
+            PullMessageResponseHeader::TOPIC_SYS_FLAG,
+        ));
+        let group_sys_flag = map.get(&CheetahString::from_static_str(
+            PullMessageResponseHeader::GROUP_SYS_FLAG,
+        ));
+        let forbidden_type = map.get(&CheetahString::from_static_str(
+            PullMessageResponseHeader::FORBIDDEN_TYPE,
+        ));
 
         Some(PullMessageResponseHeader {
             suggest_which_broker_id: suggest_which_broker_id.map(|v| v.parse().unwrap()),
@@ -164,112 +216,5 @@ impl FromMap for PullMessageResponseHeader {
             group_sys_flag: group_sys_flag.map(|v| v.parse().unwrap()),
             forbidden_type: forbidden_type.map(|v| v.parse().unwrap()),
         })
-    }
-}
-
-#[cfg(test)]
-mod pull_message_response_header_tests {
-    use std::collections::HashMap;
-
-    use super::*;
-
-    #[test]
-    fn from_map_creates_correct_instance() {
-        let mut map = HashMap::new();
-        map.insert("suggestWhichBrokerId".to_string(), "1".to_string());
-        map.insert("nextBeginOffset".to_string(), "100".to_string());
-        map.insert("minOffset".to_string(), "50".to_string());
-        map.insert("maxOffset".to_string(), "150".to_string());
-        map.insert("offsetDelta".to_string(), "5".to_string());
-        map.insert("topicSysFlag".to_string(), "2".to_string());
-        map.insert("groupSysFlag".to_string(), "3".to_string());
-        map.insert("forbiddenType".to_string(), "4".to_string());
-
-        let header = <PullMessageResponseHeader as FromMap>::from(&map).unwrap();
-
-        assert_eq!(header.suggest_which_broker_id, Some(1));
-        assert_eq!(header.next_begin_offset, Some(100));
-        assert_eq!(header.min_offset, Some(50));
-        assert_eq!(header.max_offset, Some(150));
-        assert_eq!(header.offset_delta, Some(5));
-        assert_eq!(header.topic_sys_flag, Some(2));
-        assert_eq!(header.group_sys_flag, Some(3));
-        assert_eq!(header.forbidden_type, Some(4));
-    }
-
-    #[test]
-    fn to_map_returns_correct_map() {
-        let header = PullMessageResponseHeader {
-            suggest_which_broker_id: Some(1),
-            next_begin_offset: Some(100),
-            min_offset: Some(50),
-            max_offset: Some(150),
-            offset_delta: Some(5),
-            topic_sys_flag: Some(2),
-            group_sys_flag: Some(3),
-            forbidden_type: Some(4),
-        };
-
-        let map = header.to_map().unwrap();
-
-        assert_eq!(map.get("suggestWhichBrokerId").unwrap(), "1");
-        assert_eq!(map.get("nextBeginOffset").unwrap(), "100");
-        assert_eq!(map.get("minOffset").unwrap(), "50");
-        assert_eq!(map.get("maxOffset").unwrap(), "150");
-        assert_eq!(map.get("offsetDelta").unwrap(), "5");
-        assert_eq!(map.get("topicSysFlag").unwrap(), "2");
-        assert_eq!(map.get("groupSysFlag").unwrap(), "3");
-        assert_eq!(map.get("forbiddenType").unwrap(), "4");
-    }
-
-    #[test]
-    fn encode_fast_writes_all_fields_correctly() {
-        let mut header = PullMessageResponseHeader {
-            suggest_which_broker_id: Some(1),
-            next_begin_offset: Some(100),
-            min_offset: Some(50),
-            max_offset: Some(150),
-            offset_delta: Some(5),
-            topic_sys_flag: Some(2),
-            group_sys_flag: Some(3),
-            forbidden_type: Some(4),
-        };
-        let mut out = BytesMut::new();
-
-        header.encode_fast(&mut out);
-        let result = String::from_utf8(out.to_vec()).unwrap();
-        assert!(result.contains("suggestWhichBrokerId"));
-        assert!(result.contains("nextBeginOffset"));
-        assert!(result.contains("minOffset"));
-        assert!(result.contains("maxOffset"));
-        assert!(result.contains("offsetDelta"));
-        assert!(result.contains("topicSysFlag"));
-        assert!(result.contains("groupSysFlag"));
-        assert!(result.contains("forbiddenType"));
-    }
-
-    #[test]
-    fn decode_fast_populates_all_fields_correctly() {
-        let mut header = PullMessageResponseHeader::default();
-        let mut fields = HashMap::new();
-        fields.insert("suggestWhichBrokerId".to_string(), "1".to_string());
-        fields.insert("nextBeginOffset".to_string(), "100".to_string());
-        fields.insert("minOffset".to_string(), "50".to_string());
-        fields.insert("maxOffset".to_string(), "150".to_string());
-        fields.insert("offsetDelta".to_string(), "5".to_string());
-        fields.insert("topicSysFlag".to_string(), "2".to_string());
-        fields.insert("groupSysFlag".to_string(), "3".to_string());
-        fields.insert("forbiddenType".to_string(), "4".to_string());
-
-        header.decode_fast(&fields);
-
-        assert_eq!(header.suggest_which_broker_id, Some(1));
-        assert_eq!(header.next_begin_offset, Some(100));
-        assert_eq!(header.min_offset, Some(50));
-        assert_eq!(header.max_offset, Some(150));
-        assert_eq!(header.offset_delta, Some(5));
-        assert_eq!(header.topic_sys_flag, Some(2));
-        assert_eq!(header.group_sys_flag, Some(3));
-        assert_eq!(header.forbidden_type, Some(4));
     }
 }

@@ -106,7 +106,7 @@ impl ClientRemotingProcessor {
             .unwrap();
 
         let mut msg = MessageExt::default();
-        msg.message.topic = request_header.topic.clone();
+        msg.message.topic = request_header.topic.clone().to_string();
         msg.queue_id = request_header.queue_id;
         msg.store_timestamp = request_header.store_timestamp;
         if !request_header.born_host.is_empty() {

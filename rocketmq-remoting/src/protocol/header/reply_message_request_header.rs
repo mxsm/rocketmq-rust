@@ -16,6 +16,7 @@
  */
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -28,13 +29,13 @@ use crate::protocol::header::namesrv::topic_operation_header::TopicRequestHeader
 #[serde(rename_all = "camelCase")]
 pub struct ReplyMessageRequestHeader {
     /// Producer group associated with the message.
-    pub producer_group: String,
+    pub producer_group: CheetahString,
 
     /// The topic of the message.
-    pub topic: String,
+    pub topic: CheetahString,
 
     /// Default topic used when the specified topic is not found.
-    pub default_topic: String,
+    pub default_topic: CheetahString,
 
     /// Number of queues in the default topic.
     pub default_topic_queue_nums: i32,
@@ -52,7 +53,7 @@ pub struct ReplyMessageRequestHeader {
     pub flag: i32,
 
     /// Properties of the message (nullable).
-    pub properties: Option<String>,
+    pub properties: Option<CheetahString>,
 
     /// Number of times the message has been reconsumed (nullable).
     pub reconsume_times: Option<i32>,
@@ -61,10 +62,10 @@ pub struct ReplyMessageRequestHeader {
     pub unit_mode: Option<bool>,
 
     /// Host where the message was born.
-    pub born_host: String,
+    pub born_host: CheetahString,
 
     /// Host where the message is stored.
-    pub store_host: String,
+    pub store_host: CheetahString,
 
     /// Timestamp of when the message was stored.
     pub store_timestamp: i64,
@@ -91,39 +92,71 @@ impl ReplyMessageRequestHeader {
 }
 
 impl CommandCustomHeader for ReplyMessageRequestHeader {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         let mut map = HashMap::new();
         map.insert(
-            Self::PRODUCER_GROUP.to_string(),
+            CheetahString::from_static_str(Self::PRODUCER_GROUP),
             self.producer_group.clone(),
         );
-        map.insert(Self::TOPIC.to_string(), self.topic.clone());
-        map.insert(Self::DEFAULT_TOPIC.to_string(), self.default_topic.clone());
+
         map.insert(
-            Self::DEFAULT_TOPIC_QUEUE_NUMS.to_string(),
-            self.default_topic_queue_nums.to_string(),
+            CheetahString::from_static_str(Self::TOPIC),
+            self.topic.clone(),
         );
-        map.insert(Self::QUEUE_ID.to_string(), self.queue_id.to_string());
-        map.insert(Self::SYS_FLAG.to_string(), self.sys_flag.to_string());
         map.insert(
-            Self::BORN_TIMESTAMP.to_string(),
-            self.born_timestamp.to_string(),
+            CheetahString::from_static_str(Self::DEFAULT_TOPIC),
+            self.default_topic.clone(),
         );
-        map.insert(Self::FLAG.to_string(), self.flag.to_string());
+        map.insert(
+            CheetahString::from_static_str(Self::DEFAULT_TOPIC_QUEUE_NUMS),
+            CheetahString::from_string(self.default_topic_queue_nums.to_string()),
+        );
+        map.insert(
+            CheetahString::from_static_str(Self::QUEUE_ID),
+            CheetahString::from_string(self.queue_id.to_string()),
+        );
+        map.insert(
+            CheetahString::from_static_str(Self::SYS_FLAG),
+            CheetahString::from_string(self.sys_flag.to_string()),
+        );
+        map.insert(
+            CheetahString::from_static_str(Self::BORN_TIMESTAMP),
+            CheetahString::from_string(self.born_timestamp.to_string()),
+        );
+        map.insert(
+            CheetahString::from_static_str(Self::FLAG),
+            CheetahString::from_string(self.flag.to_string()),
+        );
+
         if let Some(value) = self.properties.as_ref() {
-            map.insert(Self::PROPERTIES.to_string(), value.clone());
+            map.insert(
+                CheetahString::from_static_str(Self::PROPERTIES),
+                value.clone(),
+            );
         }
         if let Some(value) = self.reconsume_times.as_ref() {
-            map.insert(Self::RECONSUME_TIMES.to_string(), value.to_string());
+            map.insert(
+                CheetahString::from_static_str(Self::RECONSUME_TIMES),
+                CheetahString::from_string(value.to_string()),
+            );
         }
         if let Some(value) = self.unit_mode.as_ref() {
-            map.insert(Self::UNIT_MODE.to_string(), value.to_string());
+            map.insert(
+                CheetahString::from_static_str(Self::UNIT_MODE),
+                CheetahString::from_string(value.to_string()),
+            );
         }
-        map.insert(Self::BORN_HOST.to_string(), self.born_host.clone());
-        map.insert(Self::STORE_HOST.to_string(), self.store_host.clone());
         map.insert(
-            Self::STORE_TIMESTAMP.to_string(),
-            self.store_timestamp.to_string(),
+            CheetahString::from_static_str(Self::BORN_HOST),
+            self.born_host.clone(),
+        );
+        map.insert(
+            CheetahString::from_static_str(Self::STORE_HOST),
+            self.store_host.clone(),
+        );
+        map.insert(
+            CheetahString::from_static_str(Self::STORE_TIMESTAMP),
+            CheetahString::from_string(self.store_timestamp.to_string()),
         );
         if let Some(value) = self.topic_request.as_ref() {
             if let Some(value) = value.to_map() {
@@ -137,42 +170,61 @@ impl CommandCustomHeader for ReplyMessageRequestHeader {
 impl FromMap for ReplyMessageRequestHeader {
     type Target = Self;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(ReplyMessageRequestHeader {
-            producer_group: map.get(Self::PRODUCER_GROUP).cloned().unwrap_or_default(),
-            topic: map.get(Self::TOPIC).cloned().unwrap_or_default(),
-            default_topic: map.get(Self::DEFAULT_TOPIC).cloned().unwrap_or_default(),
+            producer_group: map
+                .get(&CheetahString::from_static_str(Self::PRODUCER_GROUP))
+                .cloned()
+                .unwrap_or_default(),
+            topic: map
+                .get(&CheetahString::from_static_str(Self::TOPIC))
+                .cloned()
+                .unwrap_or_default(),
+            default_topic: map
+                .get(&CheetahString::from_static_str(Self::DEFAULT_TOPIC))
+                .cloned()
+                .unwrap_or_default(),
             default_topic_queue_nums: map
-                .get(Self::DEFAULT_TOPIC_QUEUE_NUMS)
+                .get(&CheetahString::from_static_str(
+                    Self::DEFAULT_TOPIC_QUEUE_NUMS,
+                ))
                 .and_then(|value| value.parse().ok())
                 .unwrap_or_default(),
             queue_id: map
-                .get(Self::QUEUE_ID)
+                .get(&CheetahString::from_static_str(Self::QUEUE_ID))
                 .and_then(|value| value.parse().ok())
                 .unwrap_or_default(),
             sys_flag: map
-                .get(Self::SYS_FLAG)
+                .get(&CheetahString::from_static_str(Self::SYS_FLAG))
                 .and_then(|value| value.parse().ok())
                 .unwrap_or_default(),
             born_timestamp: map
-                .get(Self::BORN_TIMESTAMP)
+                .get(&CheetahString::from_static_str(Self::BORN_TIMESTAMP))
                 .and_then(|value| value.parse().ok())
                 .unwrap_or_default(),
             flag: map
-                .get(Self::FLAG)
+                .get(&CheetahString::from_static_str(Self::FLAG))
                 .and_then(|value| value.parse().ok())
                 .unwrap_or_default(),
-            properties: map.get(Self::PROPERTIES).cloned(),
+            properties: map
+                .get(&CheetahString::from_static_str(Self::PROPERTIES))
+                .cloned(),
             reconsume_times: map
-                .get(Self::RECONSUME_TIMES)
+                .get(&CheetahString::from_static_str(Self::RECONSUME_TIMES))
                 .and_then(|value| value.parse().ok()),
             unit_mode: map
-                .get(Self::UNIT_MODE)
+                .get(&CheetahString::from_static_str(Self::UNIT_MODE))
                 .and_then(|value| value.parse().ok()),
-            born_host: map.get(Self::BORN_HOST).cloned().unwrap_or_default(),
-            store_host: map.get(Self::STORE_HOST).cloned().unwrap_or_default(),
+            born_host: map
+                .get(&CheetahString::from_static_str(Self::BORN_HOST))
+                .cloned()
+                .unwrap_or_default(),
+            store_host: map
+                .get(&CheetahString::from_static_str(Self::STORE_HOST))
+                .cloned()
+                .unwrap_or_default(),
             store_timestamp: map
-                .get(Self::STORE_TIMESTAMP)
+                .get(&CheetahString::from_static_str(Self::STORE_TIMESTAMP))
                 .and_then(|value| value.parse().ok())
                 .unwrap_or_default(),
             topic_request: <TopicRequestHeader as FromMap>::from(map),

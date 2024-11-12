@@ -22,6 +22,7 @@ use bytes::Buf;
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
+use cheetah_string::CheetahString;
 
 use crate::error::Error;
 use crate::protocol::remoting_command::RemotingCommand;
@@ -50,7 +51,7 @@ impl RocketMQSerializable {
         buf: &mut BytesMut,
         use_short_length: bool,
         limit: usize,
-    ) -> Result<Option<String>> {
+    ) -> Result<Option<CheetahString>> {
         let len = if use_short_length {
             buf.get_u16() as usize
         } else {
@@ -66,9 +67,10 @@ impl RocketMQSerializable {
         }
 
         let bytes = buf.split_to(len).freeze(); // Convert BytesMut to Bytes
-        str::from_utf8(&bytes)
-            .map(|s| Some(s.to_string()))
-            .map_err(Error::Utf8Error)
+                                                /*str::from_utf8(&bytes)
+                                                .map(|s| Some(s.to_string()))
+                                                .map_err(Error::Utf8Error)*/
+        Ok(Some(CheetahString::from_bytes(bytes)))
     }
 
     pub fn rocketmq_protocol_encode(cmd: &mut RemotingCommand, buf: &mut BytesMut) -> usize {
@@ -152,7 +154,7 @@ impl RocketMQSerializable {
         header_buffer.freeze()
     }
 
-    pub fn map_serialize(map: &HashMap<String, String>) -> Option<BytesMut> {
+    pub fn map_serialize(map: &HashMap<CheetahString, CheetahString>) -> Option<BytesMut> {
         // Calculate the total length of the serialized map
         let mut total_length = 0;
 
@@ -196,12 +198,12 @@ impl RocketMQSerializable {
         // HashMap<String, String> extFields length: 4 bytes + actual length of extFields
 
         2   // int code
-            + 1          // LanguageCode language
-            + 2          // int version
-            + 4          // int opaque
-            + 4          // int flag
-            + 4 + remark_len   // String remark
-            + 4 + ext_len // HashMap<String, String> extFields
+             + 1          // LanguageCode language
+             + 2          // int version
+             + 4          // int opaque
+             + 4          // int flag
+             + 4 + remark_len   // String remark
+             + 4 + ext_len // HashMap<String, String> extFields
     }
 
     pub fn rocket_mq_protocol_decode(
@@ -228,10 +230,13 @@ impl RocketMQSerializable {
             HashMap::new()
         };
 
-        Ok(cmd.set_remark(remark).set_ext_fields(ext))
+        Ok(cmd.set_remark_cheetah_string(remark).set_ext_fields(ext))
     }
 
-    pub fn map_deserialize(buffer: &mut BytesMut, len: usize) -> Result<HashMap<String, String>> {
+    pub fn map_deserialize(
+        buffer: &mut BytesMut,
+        len: usize,
+    ) -> Result<HashMap<CheetahString, CheetahString>> {
         let mut map = HashMap::new();
         let end_index = buffer.len() - len;
 
@@ -271,14 +276,14 @@ mod tests {
     fn read_str_short_length() {
         let mut buf = BytesMut::from(&[0, 4, 116, 101, 115, 116][..]);
         let read = RocketMQSerializable::read_str(&mut buf, true, 10).unwrap();
-        assert_eq!(read, Some("test".to_string()));
+        assert_eq!(read, Some("test".into()));
     }
 
     #[test]
     fn read_str_long_length() {
         let mut buf = BytesMut::from(&[0, 0, 0, 4, 116, 101, 115, 116][..]);
         let read = RocketMQSerializable::read_str(&mut buf, false, 10).unwrap();
-        assert_eq!(read, Some("test".to_string()));
+        assert_eq!(read, Some("test".into()));
     }
 
     #[test]
@@ -298,7 +303,7 @@ mod tests {
     #[test]
     fn map_serialize_non_empty() {
         let mut map = HashMap::new();
-        map.insert("key".to_string(), "value".to_string());
+        map.insert("key".into(), "value".into());
         let serialized = RocketMQSerializable::map_serialize(&map).unwrap();
         assert_eq!(
             serialized,
@@ -320,10 +325,7 @@ mod tests {
         let deserialized = RocketMQSerializable::map_deserialize(&mut buf, 14).unwrap();
         assert_eq!(
             deserialized,
-            [("key".to_string(), "value".to_string())]
-                .iter()
-                .cloned()
-                .collect()
+            [("key".into(), "value".into())].iter().cloned().collect()
         );
     }
 }

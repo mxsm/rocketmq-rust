@@ -16,6 +16,7 @@
  */
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -27,7 +28,7 @@ use crate::rpc::topic_request_header::TopicRequestHeader;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetMaxOffsetRequestHeader {
-    pub topic: String,
+    pub topic: CheetahString,
 
     pub queue_id: i32,
 
@@ -55,11 +56,20 @@ impl GetMaxOffsetRequestHeader {
 }
 
 impl CommandCustomHeader for GetMaxOffsetRequestHeader {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         let mut map = HashMap::new();
-        map.insert(Self::TOPIC.to_string(), self.topic.clone());
-        map.insert(Self::QUEUE_ID.to_string(), self.queue_id.to_string());
-        map.insert(Self::COMMITTED.to_string(), self.committed.to_string());
+        map.insert(
+            CheetahString::from_static_str(Self::TOPIC),
+            self.topic.clone(),
+        );
+        map.insert(
+            CheetahString::from_static_str(Self::QUEUE_ID),
+            CheetahString::from_string(self.queue_id.to_string()),
+        );
+        map.insert(
+            CheetahString::from_static_str(Self::COMMITTED),
+            CheetahString::from_string(self.committed.to_string()),
+        );
         if let Some(topic_request_header) = &self.topic_request_header {
             if let Some(topic_request_header_map) = topic_request_header.to_map() {
                 map.extend(topic_request_header_map);
@@ -72,18 +82,24 @@ impl CommandCustomHeader for GetMaxOffsetRequestHeader {
 impl FromMap for GetMaxOffsetRequestHeader {
     type Target = Self;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(GetMaxOffsetRequestHeader {
             topic: map
-                .get(GetMaxOffsetRequestHeader::TOPIC)
-                .map(|s| s.to_string())
+                .get(&CheetahString::from_static_str(
+                    GetMaxOffsetRequestHeader::TOPIC,
+                ))
+                .cloned()
                 .unwrap_or_default(),
             queue_id: map
-                .get(GetMaxOffsetRequestHeader::QUEUE_ID)
+                .get(&CheetahString::from_static_str(
+                    GetMaxOffsetRequestHeader::QUEUE_ID,
+                ))
                 .map(|s| s.parse().unwrap())
                 .unwrap_or_default(),
             committed: map
-                .get(GetMaxOffsetRequestHeader::COMMITTED)
+                .get(&CheetahString::from_static_str(
+                    GetMaxOffsetRequestHeader::COMMITTED,
+                ))
                 .map(|s| s.parse().unwrap())
                 .unwrap_or(true),
             topic_request_header: <TopicRequestHeader as FromMap>::from(map),
@@ -100,7 +116,7 @@ impl TopicRequestHeaderTrait for GetMaxOffsetRequestHeader {
         self.topic_request_header.as_ref().unwrap().lo
     }
 
-    fn set_topic(&mut self, topic: String) {
+    fn set_topic(&mut self, topic: CheetahString) {
         self.topic = topic;
     }
 
@@ -119,7 +135,7 @@ impl TopicRequestHeaderTrait for GetMaxOffsetRequestHeader {
             .as_deref()
     }
 
-    fn set_broker_name(&mut self, broker_name: String) {
+    fn set_broker_name(&mut self, broker_name: CheetahString) {
         self.topic_request_header
             .as_mut()
             .unwrap()
@@ -140,7 +156,7 @@ impl TopicRequestHeaderTrait for GetMaxOffsetRequestHeader {
             .as_deref()
     }
 
-    fn set_namespace(&mut self, namespace: String) {
+    fn set_namespace(&mut self, namespace: CheetahString) {
         self.topic_request_header
             .as_mut()
             .unwrap()

@@ -151,11 +151,11 @@ impl ClientMetadata {
         {
             let scope = info.scope.as_ref();
             if let Some(scope_inner) = scope {
-                if !mapping_infos_by_scope.contains_key(scope_inner) {
+                if !mapping_infos_by_scope.contains_key(scope_inner.as_str()) {
                     mapping_infos_by_scope.insert(scope_inner.to_string(), HashMap::new());
                 }
                 mapping_infos_by_scope
-                    .get_mut(scope_inner)
+                    .get_mut(scope_inner.as_str())
                     .unwrap()
                     .insert(broker_name.to_string(), info.clone());
             }
@@ -204,7 +204,7 @@ impl ClientMetadata {
                     );
                 } else {
                     let broker_name = mq_endpoints.get(&mq).unwrap().bname.clone().unwrap();
-                    mq_end_points_of_broker.insert(mq, broker_name);
+                    mq_end_points_of_broker.insert(mq, broker_name.to_string());
                 }
             }
         }

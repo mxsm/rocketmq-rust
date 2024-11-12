@@ -16,19 +16,20 @@
  */
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct BrokerMemberGroup {
-    pub cluster: String,
-    pub broker_name: String,
+    pub cluster: CheetahString,
+    pub broker_name: CheetahString,
     pub broker_addrs: HashMap<u64 /* brokerId */, String /* broker address */>,
 }
 
 impl BrokerMemberGroup {
-    pub fn new(cluster: String, broker_name: String) -> Self {
+    pub fn new(cluster: CheetahString, broker_name: CheetahString) -> Self {
         Self {
             cluster,
             broker_name,

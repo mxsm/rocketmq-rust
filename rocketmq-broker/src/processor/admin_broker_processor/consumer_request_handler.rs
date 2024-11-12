@@ -117,7 +117,7 @@ impl ConsumerRequestHandler {
                 .consumer_offset_manager
                 .which_topic_by_consumer(request_header.get_consumer_group());
         } else {
-            topics.insert(request_header.get_topic().clone());
+            topics.insert(request_header.get_topic().to_string());
         }
         for topic in topics.iter() {
             let topic_config = self.inner.topic_config_manager.select_topic_config(topic);

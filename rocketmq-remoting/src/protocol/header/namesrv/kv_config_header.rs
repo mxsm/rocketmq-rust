@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -25,9 +26,9 @@ use crate::protocol::command_custom_header::FromMap;
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct PutKVConfigRequestHeader {
-    pub namespace: String,
-    pub key: String,
-    pub value: String,
+    pub namespace: CheetahString,
+    pub key: CheetahString,
+    pub value: CheetahString,
 }
 
 impl PutKVConfigRequestHeader {
@@ -43,9 +44,9 @@ impl PutKVConfigRequestHeader {
     /// * `key` - The key.
     /// * `value` - The value.
     pub fn new(
-        namespace: impl Into<String>,
-        key: impl Into<String>,
-        value: impl Into<String>,
+        namespace: impl Into<CheetahString>,
+        key: impl Into<CheetahString>,
+        value: impl Into<CheetahString>,
     ) -> Self {
         Self {
             namespace: namespace.into(),
@@ -56,15 +57,18 @@ impl PutKVConfigRequestHeader {
 }
 
 impl CommandCustomHeader for PutKVConfigRequestHeader {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         Some(HashMap::from([
             (
-                PutKVConfigRequestHeader::NAMESPACE.to_string(),
+                CheetahString::from_static_str(PutKVConfigRequestHeader::NAMESPACE),
                 self.namespace.clone(),
             ),
-            (PutKVConfigRequestHeader::KEY.to_string(), self.key.clone()),
             (
-                PutKVConfigRequestHeader::VALUE.to_string(),
+                CheetahString::from_static_str(PutKVConfigRequestHeader::KEY),
+                self.key.clone(),
+            ),
+            (
+                CheetahString::from_static_str(PutKVConfigRequestHeader::VALUE),
                 self.value.clone(),
             ),
         ]))
@@ -74,26 +78,38 @@ impl CommandCustomHeader for PutKVConfigRequestHeader {
 impl FromMap for PutKVConfigRequestHeader {
     type Target = PutKVConfigRequestHeader;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(PutKVConfigRequestHeader {
-            namespace: map.get(PutKVConfigRequestHeader::NAMESPACE).cloned()?,
-            key: map.get(PutKVConfigRequestHeader::KEY).cloned()?,
-            value: map.get(PutKVConfigRequestHeader::VALUE).cloned()?,
+            namespace: map
+                .get(&CheetahString::from_static_str(
+                    PutKVConfigRequestHeader::NAMESPACE,
+                ))
+                .cloned()?,
+            key: map
+                .get(&CheetahString::from_static_str(
+                    PutKVConfigRequestHeader::KEY,
+                ))
+                .cloned()?,
+            value: map
+                .get(&CheetahString::from_static_str(
+                    PutKVConfigRequestHeader::VALUE,
+                ))
+                .cloned()?,
         })
     }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct GetKVConfigRequestHeader {
-    pub namespace: String,
-    pub key: String,
+    pub namespace: CheetahString,
+    pub key: CheetahString,
 }
 
 impl GetKVConfigRequestHeader {
     const KEY: &'static str = "key";
     const NAMESPACE: &'static str = "namespace";
 
-    pub fn new(namespace: impl Into<String>, key: impl Into<String>) -> Self {
+    pub fn new(namespace: impl Into<CheetahString>, key: impl Into<CheetahString>) -> Self {
         Self {
             namespace: namespace.into(),
             key: key.into(),
@@ -102,13 +118,16 @@ impl GetKVConfigRequestHeader {
 }
 
 impl CommandCustomHeader for GetKVConfigRequestHeader {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         Some(HashMap::from([
             (
-                GetKVConfigRequestHeader::NAMESPACE.to_string(),
+                CheetahString::from_static_str(GetKVConfigRequestHeader::NAMESPACE),
                 self.namespace.clone(),
             ),
-            (GetKVConfigRequestHeader::KEY.to_string(), self.key.clone()),
+            (
+                CheetahString::from_static_str(GetKVConfigRequestHeader::KEY),
+                self.key.clone(),
+            ),
         ]))
     }
 }
@@ -116,32 +135,40 @@ impl CommandCustomHeader for GetKVConfigRequestHeader {
 impl FromMap for GetKVConfigRequestHeader {
     type Target = GetKVConfigRequestHeader;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(GetKVConfigRequestHeader {
-            namespace: map.get(GetKVConfigRequestHeader::NAMESPACE).cloned()?,
-            key: map.get(GetKVConfigRequestHeader::KEY).cloned()?,
+            namespace: map
+                .get(&CheetahString::from_static_str(
+                    GetKVConfigRequestHeader::NAMESPACE,
+                ))
+                .cloned()?,
+            key: map
+                .get(&CheetahString::from_static_str(
+                    GetKVConfigRequestHeader::KEY,
+                ))
+                .cloned()?,
         })
     }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct GetKVConfigResponseHeader {
-    pub value: Option<String>,
+    pub value: Option<CheetahString>,
 }
 
 impl GetKVConfigResponseHeader {
     const VALUE: &'static str = "value";
 
-    pub fn new(value: Option<String>) -> Self {
+    pub fn new(value: Option<CheetahString>) -> Self {
         Self { value }
     }
 }
 
 impl CommandCustomHeader for GetKVConfigResponseHeader {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         if let Some(ref value) = self.value {
             return Some(HashMap::from([(
-                GetKVConfigResponseHeader::VALUE.to_string(),
+                CheetahString::from_static_str(GetKVConfigResponseHeader::VALUE),
                 value.clone(),
             )]));
         }
@@ -152,24 +179,28 @@ impl CommandCustomHeader for GetKVConfigResponseHeader {
 impl FromMap for GetKVConfigResponseHeader {
     type Target = GetKVConfigResponseHeader;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(GetKVConfigResponseHeader {
-            value: map.get(GetKVConfigResponseHeader::VALUE).cloned(),
+            value: map
+                .get(&CheetahString::from_static_str(
+                    GetKVConfigResponseHeader::VALUE,
+                ))
+                .cloned(),
         })
     }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct DeleteKVConfigRequestHeader {
-    pub namespace: String,
-    pub key: String,
+    pub namespace: CheetahString,
+    pub key: CheetahString,
 }
 
 impl DeleteKVConfigRequestHeader {
     const KEY: &'static str = "key";
     const NAMESPACE: &'static str = "namespace";
 
-    pub fn new(namespace: impl Into<String>, key: impl Into<String>) -> Self {
+    pub fn new(namespace: impl Into<CheetahString>, key: impl Into<CheetahString>) -> Self {
         Self {
             namespace: namespace.into(),
             key: key.into(),
@@ -178,14 +209,14 @@ impl DeleteKVConfigRequestHeader {
 }
 
 impl CommandCustomHeader for DeleteKVConfigRequestHeader {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         Some(HashMap::from([
             (
-                DeleteKVConfigRequestHeader::NAMESPACE.to_string(),
+                CheetahString::from_static_str(DeleteKVConfigRequestHeader::NAMESPACE),
                 self.namespace.clone(),
             ),
             (
-                DeleteKVConfigRequestHeader::KEY.to_string(),
+                CheetahString::from_static_str(DeleteKVConfigRequestHeader::KEY),
                 self.key.clone(),
             ),
         ]))
@@ -195,23 +226,31 @@ impl CommandCustomHeader for DeleteKVConfigRequestHeader {
 impl FromMap for DeleteKVConfigRequestHeader {
     type Target = DeleteKVConfigRequestHeader;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(DeleteKVConfigRequestHeader {
-            namespace: map.get(DeleteKVConfigRequestHeader::NAMESPACE).cloned()?,
-            key: map.get(DeleteKVConfigRequestHeader::KEY).cloned()?,
+            namespace: map
+                .get(&CheetahString::from_static_str(
+                    DeleteKVConfigRequestHeader::NAMESPACE,
+                ))
+                .cloned()?,
+            key: map
+                .get(&CheetahString::from_static_str(
+                    DeleteKVConfigRequestHeader::KEY,
+                ))
+                .cloned()?,
         })
     }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct GetKVListByNamespaceRequestHeader {
-    pub namespace: String,
+    pub namespace: CheetahString,
 }
 
 impl GetKVListByNamespaceRequestHeader {
     const NAMESPACE: &'static str = "namespace";
 
-    pub fn new(namespace: impl Into<String>) -> Self {
+    pub fn new(namespace: impl Into<CheetahString>) -> Self {
         Self {
             namespace: namespace.into(),
         }
@@ -219,9 +258,9 @@ impl GetKVListByNamespaceRequestHeader {
 }
 
 impl CommandCustomHeader for GetKVListByNamespaceRequestHeader {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         Some(HashMap::from([(
-            GetKVListByNamespaceRequestHeader::NAMESPACE.to_string(),
+            CheetahString::from_static_str(GetKVListByNamespaceRequestHeader::NAMESPACE),
             self.namespace.clone(),
         )]))
     }
@@ -230,10 +269,12 @@ impl CommandCustomHeader for GetKVListByNamespaceRequestHeader {
 impl FromMap for GetKVListByNamespaceRequestHeader {
     type Target = GetKVListByNamespaceRequestHeader;
 
-    fn from(map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(GetKVListByNamespaceRequestHeader {
             namespace: map
-                .get(GetKVListByNamespaceRequestHeader::NAMESPACE)
+                .get(&CheetahString::from_static_str(
+                    GetKVListByNamespaceRequestHeader::NAMESPACE,
+                ))
                 .cloned()?,
         })
     }

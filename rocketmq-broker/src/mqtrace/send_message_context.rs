@@ -17,40 +17,41 @@
 use std::any::Any;
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_enum::MessageType;
 use rocketmq_store::stats::stats_type::StatsType;
 
 #[derive(Debug, Default)]
 pub struct SendMessageContext {
-    pub namespace: String,
-    pub producer_group: String,
-    pub topic: String,
-    pub msg_id: String,
-    pub origin_msg_id: String,
+    pub namespace: CheetahString,
+    pub producer_group: CheetahString,
+    pub topic: CheetahString,
+    pub msg_id: CheetahString,
+    pub origin_msg_id: CheetahString,
     pub queue_id: Option<i32>,
     pub queue_offset: Option<i64>,
-    pub broker_addr: String,
-    pub born_host: String,
+    pub broker_addr: CheetahString,
+    pub born_host: CheetahString,
     pub body_length: i32,
     pub code: i32,
-    pub error_msg: String,
-    pub msg_props: String,
+    pub error_msg: CheetahString,
+    pub msg_props: CheetahString,
     pub mq_trace_context: Option<Box<dyn Any + Send + 'static>>,
     pub ext_props: HashMap<String, String>,
-    pub broker_region_id: String,
-    pub msg_unique_key: String,
+    pub broker_region_id: CheetahString,
+    pub msg_unique_key: CheetahString,
     pub born_time_stamp: i64,
     pub request_time_stamp: i64,
     pub msg_type: MessageType,
     pub is_success: bool,
-    pub account_auth_type: String,
-    pub account_owner_parent: String,
-    pub account_owner_self: String,
+    pub account_auth_type: CheetahString,
+    pub account_owner_parent: CheetahString,
+    pub account_owner_self: CheetahString,
     pub send_msg_num: i32,
     pub send_msg_size: i32,
     pub send_stat: StatsType,
     pub commercial_send_msg_num: i32,
-    pub commercial_owner: String,
+    pub commercial_owner: CheetahString,
     pub commercial_send_stats: StatsType,
     pub commercial_send_size: i32,
     pub commercial_send_times: i32,
@@ -60,7 +61,7 @@ impl SendMessageContext {
         Self::default()
     }
 
-    pub fn topic(&mut self, topic: String) {
+    pub fn topic(&mut self, topic: CheetahString) {
         self.topic = topic;
     }
 
@@ -68,11 +69,11 @@ impl SendMessageContext {
         self.body_length = body_length;
     }
 
-    pub fn msg_props(&mut self, msg_props: String) {
+    pub fn msg_props(&mut self, msg_props: CheetahString) {
         self.msg_props = msg_props;
     }
 
-    pub fn broker_addr(&mut self, broker_addr: String) {
+    pub fn broker_addr(&mut self, broker_addr: CheetahString) {
         self.broker_addr = broker_addr;
     }
 
@@ -84,15 +85,15 @@ impl SendMessageContext {
         self.queue_offset = Some(queue_offset);
     }
 
-    pub fn born_host(&mut self, born_host: String) {
+    pub fn born_host(&mut self, born_host: CheetahString) {
         self.born_host = born_host;
     }
 
-    pub fn broker_region_id(&mut self, broker_region_id: String) {
+    pub fn broker_region_id(&mut self, broker_region_id: CheetahString) {
         self.broker_region_id = broker_region_id;
     }
 
-    pub fn msg_unique_key(&mut self, msg_unique_key: String) {
+    pub fn msg_unique_key(&mut self, msg_unique_key: CheetahString) {
         self.msg_unique_key = msg_unique_key;
     }
 
@@ -112,15 +113,15 @@ impl SendMessageContext {
         self.is_success = is_success;
     }
 
-    pub fn account_auth_type(&mut self, account_auth_type: String) {
+    pub fn account_auth_type(&mut self, account_auth_type: CheetahString) {
         self.account_auth_type = account_auth_type;
     }
 
-    pub fn account_owner_parent(&mut self, account_owner_parent: String) {
+    pub fn account_owner_parent(&mut self, account_owner_parent: CheetahString) {
         self.account_owner_parent = account_owner_parent;
     }
 
-    pub fn account_owner_self(&mut self, account_owner_self: String) {
+    pub fn account_owner_self(&mut self, account_owner_self: CheetahString) {
         self.account_owner_self = account_owner_self;
     }
 
@@ -140,7 +141,7 @@ impl SendMessageContext {
         self.commercial_send_msg_num = commercial_send_msg_num;
     }
 
-    pub fn commercial_owner(&mut self, commercial_owner: String) {
+    pub fn commercial_owner(&mut self, commercial_owner: CheetahString) {
         self.commercial_owner = commercial_owner;
     }
 

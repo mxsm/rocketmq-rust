@@ -16,6 +16,7 @@
  */
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -26,14 +27,14 @@ use crate::protocol::command_custom_header::FromMap;
 pub struct GetAllTopicConfigResponseHeader;
 
 impl CommandCustomHeader for GetAllTopicConfigResponseHeader {
-    fn to_map(&self) -> Option<HashMap<String, String>> {
+    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         None
     }
 }
 impl FromMap for GetAllTopicConfigResponseHeader {
     type Target = Self;
 
-    fn from(_map: &HashMap<String, String>) -> Option<Self::Target> {
+    fn from(_map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
         Some(Self {})
     }
 }
