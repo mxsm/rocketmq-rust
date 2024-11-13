@@ -253,8 +253,8 @@ impl PullMessageResultHandler for DefaultPullMessageResultHandler {
                         .read_custom_header_mut::<PullMessageResponseHeader>()
                         .unwrap();
                     let mut mq = MessageQueue::new();
-                    mq.set_topic(request_header.topic.to_string());
-                    mq.set_broker_name(self.broker_config.broker_name.clone());
+                    mq.set_topic(request_header.topic.clone());
+                    mq.set_broker_name(self.broker_config.broker_name.clone().into());
                     mq.set_queue_id(request_header.queue_id.unwrap());
 
                     let offset_moved_event = OffsetMovedEvent {
