@@ -123,12 +123,12 @@ impl OffsetRequestHandler {
         if !mapping_context.is_leader() {
             return Some(
                 RemotingCommand::create_response_command_with_code(ResponseCode::NotLeaderForQueue)
-                    .set_remark(Some(format!(
+                    .set_remark(format!(
                         "{}-{:?} does not exit in request process of current broker {:?}",
                         mapping_context.topic,
                         mapping_context.global_id,
                         mapping_detail.topic_queue_mapping_info.bname
-                    ))),
+                    )),
             );
         }
 
@@ -157,7 +157,7 @@ impl OffsetRequestHandler {
             if let Err(e) = rpc_response {
                 return Some(
                     RemotingCommand::create_response_command_with_code(ResponseCode::SystemError)
-                        .set_remark(Some(format!("{}", e))),
+                        .set_remark(format!("{}", e)),
                 );
             } else {
                 match rpc_response
@@ -169,7 +169,7 @@ impl OffsetRequestHandler {
                             RemotingCommand::create_response_command_with_code(
                                 ResponseCode::SystemError,
                             )
-                            .set_remark(Some("Rpc response header is None".to_string())),
+                            .set_remark("Rpc response header is None"),
                         );
                     }
                     Some(offset_response_header) => offset_response_header.offset,
@@ -192,12 +192,12 @@ impl OffsetRequestHandler {
         if !mapping_context.is_leader() {
             return Some(
                 RemotingCommand::create_response_command_with_code(ResponseCode::NotLeaderForQueue)
-                    .set_remark(Some(format!(
+                    .set_remark(format!(
                         "{}-{:?} does not exit in request process of current broker {:?}",
                         mapping_context.topic,
                         mapping_context.global_id,
                         mapping_detail.topic_queue_mapping_info.bname
-                    ))),
+                    )),
             );
         }
 
@@ -229,7 +229,7 @@ impl OffsetRequestHandler {
             if let Err(e) = rpc_response {
                 return Some(
                     RemotingCommand::create_response_command_with_code(ResponseCode::SystemError)
-                        .set_remark(Some(format!("{}", e))),
+                        .set_remark(format!("{}", e)),
                 );
             } else {
                 match rpc_response
@@ -241,7 +241,7 @@ impl OffsetRequestHandler {
                             RemotingCommand::create_response_command_with_code(
                                 ResponseCode::SystemError,
                             )
-                            .set_remark(Some("Rpc response header is None".to_string())),
+                            .set_remark("Rpc response header is None"),
                         );
                     }
                     Some(offset_response_header) => offset_response_header.offset,

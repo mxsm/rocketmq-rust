@@ -193,7 +193,7 @@ where
 
         Some(
             RemotingCommand::create_remoting_command(result.response_code)
-                .set_remark(result.response_remark),
+                .set_remark_option(result.response_remark),
         )
     }
 
@@ -232,29 +232,28 @@ where
             ));
             if pgroup_read.is_none() {
                 command.set_code_mut(ResponseCode::SystemError);
-                command.set_remark_mut(Some("he producer group wrong".to_string()));
+                command.set_remark_mut("he producer group wrong");
                 return command;
             }
             let pgroup = pgroup_read.unwrap();
             if pgroup != params.0 {
                 command.set_code_mut(ResponseCode::SystemError);
-                command.set_remark_mut(Some("The producer group wrong".to_string()));
+                command.set_remark_mut("The producer group wrong");
                 return command;
             }
             if message_ext.queue_offset != params.1 {
                 command.set_code_mut(ResponseCode::SystemError);
-                command
-                    .set_remark_mut(Some("The transaction state table offset wrong".to_string()));
+                command.set_remark_mut("The transaction state table offset wrong");
                 return command;
             }
             if message_ext.commit_log_offset != params.2 {
                 command.set_code_mut(ResponseCode::SystemError);
-                command.set_remark_mut(Some("The commit log offset wrong".to_string()));
+                command.set_remark_mut("The commit log offset wrong");
                 return command;
             }
         } else {
             command.set_code_mut(ResponseCode::SystemError);
-            command.set_remark_mut(Some("Find prepared transaction message failed".to_string()));
+            command.set_remark_mut("Find prepared transaction message failed");
         }
         command
     }
@@ -269,67 +268,65 @@ where
             | PutMessageStatus::SlaveNotAvailable => {}
             PutMessageStatus::ServiceNotAvailable => {
                 response.set_code_mut(ResponseCode::ServiceNotAvailable);
-                response.set_remark_mut(Some("Service not available now. ".to_string()));
+                response.set_remark_mut("Service not available now. ");
             }
             PutMessageStatus::CreateMappedFileFailed => {
                 response.set_code_mut(ResponseCode::SystemError);
-                response.set_remark_mut(Some("Create mapped file failed.".to_string()));
+                response.set_remark_mut("Create mapped file failed.");
             }
             PutMessageStatus::MessageIllegal | PutMessageStatus::PropertiesSizeExceeded => {
                 response.set_code_mut(ResponseCode::MessageIllegal);
-                response.set_remark_mut(Some(format!(
+                response.set_remark_mut(format!(
                     "The message is illegal, maybe msg body or properties length not matched. msg \
                      body length limit {}B, msg properties length limit 32KB.",
                     self.message_store_config.max_message_size
-                )));
+                ));
             }
             PutMessageStatus::OsPageCacheBusy => {
                 response.set_code_mut(ResponseCode::SystemError);
-                response.set_remark_mut(Some(
-                    "OS page cache busy, please try another machine".to_string(),
-                ));
+                response.set_remark_mut("OS page cache busy, please try another machine");
             }
             PutMessageStatus::UnknownError => {
                 response.set_code_mut(ResponseCode::SystemError);
-                response.set_remark_mut(Some("Unknown error".to_string()));
+                response.set_remark_mut("Unknown error");
             }
             PutMessageStatus::InSyncReplicasNotEnough => {
                 response.set_code_mut(ResponseCode::SystemError);
-                response.set_remark_mut(Some("In sync replicas not enough".to_string()));
+                response.set_remark_mut("In sync replicas not enough");
             }
             PutMessageStatus::PutToRemoteBrokerFail => {
                 response.set_code_mut(ResponseCode::SystemError);
-                response.set_remark_mut(Some("Put to remote broker failed".to_string()));
+                response.set_remark_mut("Put to remote broker failed");
             }
             PutMessageStatus::LmqConsumeQueueNumExceeded => {
                 response.set_code_mut(ResponseCode::SystemError);
-                response.set_remark_mut(Some("UNKNOWN_ERROR DEFAULT".to_string()));
+                response.set_remark_mut("UNKNOWN_ERROR DEFAULT");
             }
             PutMessageStatus::WheelTimerFlowControl => {
                 response.set_code_mut(ResponseCode::SystemError);
-                response.set_remark_mut(Some(format!(
+                response.set_remark_mut(format!(
                     "timer message is under flow control, max num limit is {} or the current \
                      value is greater than {} and less than {}, trigger random flow control",
                     self.message_store_config.timer_congest_num_each_slot * 2,
                     self.message_store_config.timer_congest_num_each_slot,
                     self.message_store_config.timer_congest_num_each_slot * 2,
-                )));
+                ));
             }
             PutMessageStatus::WheelTimerMsgIllegal => {
                 response.set_code_mut(ResponseCode::MessageIllegal);
-                response.set_remark_mut(Some(format!(
+                response.set_remark_mut(format!(
                     "timer message illegal, the delay time should not be bigger than the max \
                      delay {}ms; or if set del msg, the delay time should be bigger than the \
                      current time",
                     self.message_store_config.timer_max_delay_sec * 1000
-                )));
+                ));
             }
             PutMessageStatus::WheelTimerNotEnable => {
                 response.set_code_mut(ResponseCode::SystemError);
-                response.set_remark_mut(Some(format!(
+                response.set_remark_mut(format!(
                     "accurate timer message is not enabled, timerWheelEnable is {}",
                     self.message_store_config.timer_wheel_enable
-                )));
+                ));
             }
         }
         response

@@ -1146,7 +1146,7 @@ impl MQClientAPIImpl {
     ) -> Result<()> {
         let request =
             RemotingCommand::create_request_command(RequestCode::EndTransaction, request_header)
-                .set_remark(Some(remark));
+                .set_remark(remark);
 
         self.remoting_client
             .invoke_oneway(addr.to_string(), request, timeout_millis)

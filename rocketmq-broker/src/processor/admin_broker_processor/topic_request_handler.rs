@@ -87,7 +87,7 @@ impl TopicRequestHandler {
             return Some(
                 response
                     .set_code(ResponseCode::SystemError)
-                    .set_remark(Some(result.remark().to_string())),
+                    .set_remark(result.remark()),
             );
         }
         if self
@@ -99,10 +99,10 @@ impl TopicRequestHandler {
             return Some(
                 response
                     .set_code(ResponseCode::SystemError)
-                    .set_remark(Some(format!(
+                    .set_remark(format!(
                         "The topic[{}] is conflict with system topic.",
                         topic
-                    ))),
+                    )),
             );
         }
 
@@ -115,11 +115,7 @@ impl TopicRequestHandler {
         ) {
             Ok(value) => value,
             Err(err) => {
-                return Some(
-                    response
-                        .set_code(ResponseCode::SystemError)
-                        .set_remark(Some(err)),
-                );
+                return Some(response.set_code(ResponseCode::SystemError).set_remark(err));
             }
         };
         let mut topic_config = TopicConfig {
@@ -142,7 +138,7 @@ impl TopicRequestHandler {
             return Some(
                 response
                     .set_code(ResponseCode::SystemError)
-                    .set_remark(Some("MIXED message type is not supported.".to_string())),
+                    .set_remark("MIXED message type is not supported."),
             );
         }
 
@@ -217,7 +213,7 @@ impl TopicRequestHandler {
                 return Some(
                     response
                         .set_code(ResponseCode::SystemError)
-                        .set_remark(Some(result.remark().to_string())),
+                        .set_remark(result.remark()),
                 );
             }
             if self
@@ -229,10 +225,10 @@ impl TopicRequestHandler {
                 return Some(
                     response
                         .set_code(ResponseCode::SystemError)
-                        .set_remark(Some(format!(
+                        .set_remark(format!(
                             "The topic[{}] is conflict with system topic.",
                             topic
-                        ))),
+                        )),
                 );
             }
             if topic_config.get_topic_message_type() == TopicMessageType::Mixed
@@ -241,7 +237,7 @@ impl TopicRequestHandler {
                 return Some(
                     response
                         .set_code(ResponseCode::SystemError)
-                        .set_remark(Some("MIXED message type is not supported.".to_string())),
+                        .set_remark("MIXED message type is not supported.".to_string()),
                 );
             }
             let topic_config_origin = self
@@ -313,7 +309,7 @@ impl TopicRequestHandler {
             return Some(
                 response
                     .set_code(ResponseCode::SystemError)
-                    .set_remark(Some("he specified topic is blank.".to_string())),
+                    .set_remark("he specified topic is blank."),
             );
         }
         if self
@@ -325,10 +321,10 @@ impl TopicRequestHandler {
             return Some(
                 response
                     .set_code(ResponseCode::SystemError)
-                    .set_remark(Some(format!(
+                    .set_remark(format!(
                         "The topic[{}] is conflict with system topic.",
                         topic
-                    ))),
+                    )),
             );
         }
         let groups = self
@@ -437,7 +433,7 @@ impl TopicRequestHandler {
             return Some(
                 response
                     .set_code(ResponseCode::TopicNotExist)
-                    .set_remark(Some(format!("The topic[{}] not exist.", topic))),
+                    .set_remark(format!("The topic[{}] not exist.", topic)),
             );
         }
         let topic_config = topic_config.unwrap();
@@ -498,7 +494,7 @@ impl TopicRequestHandler {
             return Some(
                 response
                     .set_code(ResponseCode::TopicNotExist)
-                    .set_remark(Some(format!("No topic in this broker. topic: {}", topic))),
+                    .set_remark(format!("No topic in this broker. topic: {}", topic)),
             );
         }
         let mut topic_queue_mapping_detail: Option<TopicQueueMappingDetail> = None;

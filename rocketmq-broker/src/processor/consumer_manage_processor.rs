@@ -147,10 +147,10 @@ where
         }
         Some(
             response
-                .set_remark(Some(format!(
+                .set_remark(format!(
                     "no consumer for this group, {}",
                     request_header.consumer_group
-                )))
+                ))
                 .set_code(ResponseCode::SystemError),
         )
     }
@@ -187,7 +187,7 @@ where
             return Some(
                 response
                     .set_code(ResponseCode::SubscriptionGroupNotExist)
-                    .set_remark(Some(format!("subscription group not exist, {}", group))),
+                    .set_remark(format!("subscription group not exist, {}", group)),
             );
         }
 
@@ -195,7 +195,7 @@ where
             return Some(
                 response
                     .set_code(ResponseCode::TopicNotExist)
-                    .set_remark(Some(format!("topic not exist, {}", topic))),
+                    .set_remark(format!("topic not exist, {}", topic)),
             );
         }
 
@@ -203,14 +203,14 @@ where
             return Some(
                 response
                     .set_code(ResponseCode::SystemError)
-                    .set_remark(Some(format!("QueueId is null, topic is {}", topic))),
+                    .set_remark(format!("QueueId is null, topic is {}", topic)),
             );
         }
         if offset.is_none() {
             return Some(
                 response
                     .set_code(ResponseCode::SystemError)
-                    .set_remark(Some(format!("Offset is null, topic is {}", topic))),
+                    .set_remark(format!("Offset is null, topic is {}", topic)),
             );
         }
         if self.broker_config.use_server_side_reset_offset
@@ -226,7 +226,7 @@ where
                 queue_id.unwrap(),
                 offset.unwrap()
             );
-            return Some(response.set_remark(Some("Offset has been previously reset".to_string())));
+            return Some(response.set_remark("Offset has been previously reset"));
         }
         self.consumer_offset_manager.commit_offset(
             channel.remote_address(),
@@ -272,10 +272,7 @@ where
                 if !value {
                     response = response
                         .set_code(ResponseCode::QueryNotFound)
-                        .set_remark(Some(
-                            "Not found, do not set to zero, maybe this group boot first"
-                                .to_string(),
-                        ));
+                        .set_remark("Not found, do not set to zero, maybe this group boot first");
                 }
             } else if min_offset <= 0
                 && self.message_store.check_in_mem_by_consume_offset(
@@ -289,10 +286,7 @@ where
             } else {
                 response = response
                     .set_code(ResponseCode::QueryNotFound)
-                    .set_remark(Some(
-                        "Not found, V3_0_6_SNAPSHOT maybe this group consumer boot first"
-                            .to_string(),
-                    ));
+                    .set_remark("Not found, V3_0_6_SNAPSHOT maybe this group consumer boot first");
             }
         }
         if let Some(result) = self.rewrite_response_for_static_topic(
@@ -393,9 +387,7 @@ where
         } else {
             response = response
                 .set_code(ResponseCode::QueryNotFound)
-                .set_remark(Some(
-                    "Not found, maybe this group consumer boot first".to_string(),
-                ));
+                .set_remark("Not found, maybe this group consumer boot first");
         }
         let rewrite_response_result = self.rewrite_response_for_static_topic(
             request_header,

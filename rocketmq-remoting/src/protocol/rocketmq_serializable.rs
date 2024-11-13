@@ -230,7 +230,7 @@ impl RocketMQSerializable {
             HashMap::new()
         };
 
-        Ok(cmd.set_remark_cheetah_string(remark).set_ext_fields(ext))
+        Ok(cmd.set_remark_option(remark).set_ext_fields(ext))
     }
 
     pub fn map_deserialize(

@@ -201,7 +201,7 @@ mod tests {
             .set_opaque(1)
             .set_flag(1)
             .set_command_custom_header(GetRouteInfoRequestHeader::new("1111", Some(true)))
-            .set_remark(Some("remark".to_string()));
+            .set_remark_option(Some("remark".to_string()));
         assert!(encoder.encode(command, &mut dst).is_ok());
     }
 
@@ -216,7 +216,7 @@ mod tests {
             .set_flag(1)
             .set_body(Bytes::from("body"))
             .set_command_custom_header(GetRouteInfoRequestHeader::new("1111", Some(true)))
-            .set_remark(Some("remark".to_string()));
+            .set_remark_option(Some("remark".to_string()));
         assert!(encoder.encode(command, &mut dst).is_ok());
     }
 }

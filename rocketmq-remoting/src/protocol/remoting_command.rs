@@ -208,11 +208,11 @@ impl RemotingCommand {
 
     pub fn create_response_command_with_code_remark(
         code: impl Into<i32>,
-        remark: impl Into<String>,
+        remark: impl Into<CheetahString>,
     ) -> Self {
         Self::default()
             .set_code(code)
-            .set_remark(Some(remark.into()))
+            .set_remark_option(Some(remark.into()))
             .mark_response_type()
     }
 
@@ -293,23 +293,29 @@ impl RemotingCommand {
         self.opaque = opaque;
     }
 
+    #[inline]
     pub fn set_flag(mut self, flag: i32) -> Self {
         self.flag = flag;
         self
     }
 
-    pub fn set_remark(mut self, remark: Option<String>) -> Self {
-        self.remark = remark.map(CheetahString::from);
-        self
-    }
-
-    pub fn set_remark_cheetah_string(mut self, remark: Option<CheetahString>) -> Self {
-        self.remark = remark;
-        self
-    }
-
-    pub fn set_remark_mut(&mut self, remark: Option<impl Into<CheetahString>>) {
+    #[inline]
+    pub fn set_remark_option(mut self, remark: Option<impl Into<CheetahString>>) -> Self {
         self.remark = remark.map(|item| item.into());
+        self
+    }
+
+    pub fn set_remark(mut self, remark: impl Into<CheetahString>) -> Self {
+        self.remark = Some(remark.into());
+        self
+    }
+
+    pub fn set_remark_option_mut(&mut self, remark: Option<impl Into<CheetahString>>) {
+        self.remark = remark.map(|item| item.into());
+    }
+
+    pub fn set_remark_mut(&mut self, remark: impl Into<CheetahString>) {
+        self.remark = Some(remark.into());
     }
 
     pub fn set_ext_fields(mut self, ext_fields: HashMap<CheetahString, CheetahString>) -> Self {
@@ -538,10 +544,12 @@ impl RemotingCommand {
         self.opaque
     }
 
+    #[inline]
     pub fn flag(&self) -> i32 {
         self.flag
     }
 
+    #[inline]
     pub fn remark(&self) -> Option<&CheetahString> {
         self.remark.as_ref()
     }
@@ -558,10 +566,12 @@ impl RemotingCommand {
         self.body.take()
     }
 
+    #[inline]
     pub fn suspended(&self) -> bool {
         self.suspended
     }
 
+    #[inline]
     pub fn serialize_type(&self) -> SerializeType {
         self.serialize_type
     }
@@ -749,7 +759,7 @@ mod tests {
             .set_opaque(1)
             .set_flag(1)
             .set_ext_fields(HashMap::new())
-            .set_remark(Some("remark".to_string()));
+            .set_remark_option(Some("remark".to_string()));
 
         assert_eq!(
             "{\"code\":1,\"language\":\"JAVA\",\"version\":0,\"opaque\":1,\"flag\":1,\"remark\":\"\
