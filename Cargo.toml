@@ -81,4 +81,4 @@ uuid = { version = "1.11.0", features = ["v4", # Lets you generate random UUIDs
 
 futures = "0.3"
 
-cheetah-string = { git = "https://github.com/mxsm/cheetah-string.git", features = ["serde", "bytes"] }
+cheetah-string = { version = "0.1.4", features = ["serde", "bytes"] }
