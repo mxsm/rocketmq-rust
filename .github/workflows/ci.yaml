@@ -40,7 +40,7 @@ jobs:
         run: cargo clippy -- -D warnings
 
       - name: Build
-        run: cargo build --verbose
+        run: cargo build --verbose --all-features
 
       - name: Test
         run: cargo test --verbose
