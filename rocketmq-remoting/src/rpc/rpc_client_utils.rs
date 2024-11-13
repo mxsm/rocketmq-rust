@@ -51,7 +51,9 @@ impl RpcClientUtils {
         };
         match rpc_response.exception {
             None => {}
-            Some(value) => cmd.set_remark_mut(Some(CheetahString::from_string(value.to_string()))),
+            Some(value) => {
+                cmd.set_remark_option_mut(Some(CheetahString::from_string(value.to_string())))
+            }
         }
         if let Some(ref _body) = rpc_response.body {
             return cmd;

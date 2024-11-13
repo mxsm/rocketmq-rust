@@ -108,9 +108,7 @@ where
         Some(
             response
                 .set_code(ResponseCode::QueryNotFound)
-                .set_remark(Some(
-                    "can not find message, maybe time range not correct".to_string(),
-                )),
+                .set_remark("can not find message, maybe time range not correct"),
         )
     }
 
@@ -138,10 +136,10 @@ where
         Some(
             response
                 .set_code(ResponseCode::SystemError)
-                .set_remark(Some(format!(
+                .set_remark(format!(
                     "can not find message by offset: {}",
                     request_header.offset
-                ))),
+                )),
         )
     }
 }

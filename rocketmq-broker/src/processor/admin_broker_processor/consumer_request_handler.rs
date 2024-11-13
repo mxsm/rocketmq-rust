@@ -90,10 +90,10 @@ impl ConsumerRequestHandler {
             None => Some(
                 response
                     .set_code(ResponseCode::ConsumerNotOnline)
-                    .set_remark(Some(format!(
+                    .set_remark(format!(
                         "the consumer group[{}] not online",
                         request_header.get_consumer_group()
-                    ))),
+                    )),
             ),
         }
     }
@@ -234,7 +234,7 @@ impl ConsumerRequestHandler {
             Some(
                 response
                     .set_code(ResponseCode::SystemError)
-                    .set_remark(Some("No consumer offset in this broker".to_string())),
+                    .set_remark("No consumer offset in this broker"),
             )
         }
     }

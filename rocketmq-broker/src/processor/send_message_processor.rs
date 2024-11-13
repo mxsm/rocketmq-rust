@@ -237,10 +237,10 @@ where
             return Some(
                 response
                     .set_code(ResponseCode::MessageIllegal)
-                    .set_remark(Some(format!(
+                    .set_remark(format!(
                         "message topic length too long {}",
                         request_header.topic().len()
-                    ))),
+                    )),
             );
         }
 
@@ -250,10 +250,10 @@ where
             return Some(
                 response
                     .set_code(ResponseCode::MessageIllegal)
-                    .set_remark(Some(format!(
+                    .set_remark(format!(
                         "batch request does not support retry group  {}",
                         request_header.topic()
-                    ))),
+                    )),
             );
         }
         let mut message_ext = MessageExtBrokerInner::default();
@@ -488,7 +488,7 @@ where
                     return Some(
                         response
                             .set_code(ResponseCode::MessageIllegal)
-                            .set_remark(Some("Required message key is missing".to_string())),
+                            .set_remark("Required message key is missing"),
                     );
                 }
             }
@@ -519,24 +519,23 @@ where
             tra_flag_inner.parse().unwrap_or(false)
         });
 
-        let send_transaction_prepare_message = if tra_flag
-            && !(message_ext.reconsume_times() > 0
-                && message_ext.message_ext_inner.message.get_delay_time_level() > 0)
-        {
-            if self.inner.broker_config.reject_transaction_message {
-                return Some(
-                    response
-                        .set_code(ResponseCode::NoPermission)
-                        .set_remark(Some(format!(
+        let send_transaction_prepare_message =
+            if tra_flag
+                && !(message_ext.reconsume_times() > 0
+                    && message_ext.message_ext_inner.message.get_delay_time_level() > 0)
+            {
+                if self.inner.broker_config.reject_transaction_message {
+                    return Some(response.set_code(ResponseCode::NoPermission).set_remark(
+                        format!(
                             "the broker[{}] sending transaction message is forbidden",
                             self.inner.broker_config.broker_ip1
-                        ))),
-                );
-            }
-            true
-        } else {
-            false
-        };
+                        ),
+                    ));
+                }
+                true
+            } else {
+                false
+            };
 
         let start = Instant::now();
         let topic = message_ext.topic().to_string();
@@ -634,38 +633,39 @@ where
                         response.set_code_ref(ResponseCode::SlaveNotAvailable);
                     },
                     rocketmq_store::base::message_status_enum::PutMessageStatus::ServiceNotAvailable => {
-                        response.set_code_mut(ResponseCode::ServiceNotAvailable).set_remark_mut(Some("service not available now. It may be caused by one of the following reasons: the broker's disk is full %s, messages are put to the slave, message store has been shut down, etc.".to_string()));
+                        response.set_code_mut(ResponseCode::ServiceNotAvailable).set_remark_mut("service not available now. It may be caused by one of the following reasons: \
+                        the broker's disk is full %s, messages are put to the slave, message store has been shut down, etc.");
                     },
                     rocketmq_store::base::message_status_enum::PutMessageStatus::CreateMappedFileFailed => {
-                       response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut(Some("create mapped file failed, remoting_server is busy or broken.".to_string()));
+                       response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut("create mapped file failed, remoting_server is busy or broken.");
                     },
                     rocketmq_store::base::message_status_enum::PutMessageStatus::MessageIllegal |
                     rocketmq_store::base::message_status_enum::PutMessageStatus::PropertiesSizeExceeded => {
-                       response.set_code_mut(ResponseCode::MessageIllegal).set_remark_mut(Some("the message is illegal, maybe msg body or properties length not matched. msg body length limit B, msg properties length limit 32KB.".to_string()));
+                       response.set_code_mut(ResponseCode::MessageIllegal).set_remark_mut("the message is illegal, maybe msg body or properties length not matched. msg body length limit B, msg properties length limit 32KB.");
                     },
                     rocketmq_store::base::message_status_enum::PutMessageStatus::OsPageCacheBusy =>{
-                        response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut(Some("[PC_SYNCHRONIZED]broker busy, start flow control for a while".to_string()));
+                        response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut("[PC_SYNCHRONIZED]broker busy, start flow control for a while");
                     },
                     rocketmq_store::base::message_status_enum::PutMessageStatus::UnknownError => {
-                       response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut(Some("UNKNOWN_ERROR".to_string()));
+                       response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut("UNKNOWN_ERROR");
                     },
                     rocketmq_store::base::message_status_enum::PutMessageStatus::InSyncReplicasNotEnough => {
-                        response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut(Some("in-sync replicas not enough".to_string()));
+                        response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut("in-sync replicas not enough");
                     },
                     rocketmq_store::base::message_status_enum::PutMessageStatus::LmqConsumeQueueNumExceeded => {
-                        response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut(Some("[LMQ_CONSUME_QUEUE_NUM_EXCEEDED]broker config enableLmq and enableMultiDispatch, lmq consumeQueue num exceed maxLmqConsumeQueueNum config num, default limit 2w.".to_string()));
+                        response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut("[LMQ_CONSUME_QUEUE_NUM_EXCEEDED]broker config enableLmq and enableMultiDispatch, lmq consumeQueue num exceed maxLmqConsumeQueueNum config num, default limit 2w.");
                     },
                     rocketmq_store::base::message_status_enum::PutMessageStatus::WheelTimerFlowControl => {
-                        response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut(Some("timer message is under flow control, max num limit is %d or the current value is greater than %d and less than %d, trigger random flow control".to_string()));
+                        response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut("timer message is under flow control, max num limit is %d or the current value is greater than %d and less than %d, trigger random flow control");
                     },
                     rocketmq_store::base::message_status_enum::PutMessageStatus::WheelTimerMsgIllegal => {
-                        response.set_code_mut(ResponseCode::MessageIllegal).set_remark_mut(Some("timer message illegal, the delay time should not be bigger than the max delay %dms; or if set del msg, the delay time should be bigger than the current time".to_string()));
+                        response.set_code_mut(ResponseCode::MessageIllegal).set_remark_mut("timer message illegal, the delay time should not be bigger than the max delay %dms; or if set del msg, the delay time should be bigger than the current time");
                     },
                     rocketmq_store::base::message_status_enum::PutMessageStatus::WheelTimerNotEnable => {
-                        response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut(Some("accurate timer message is not enabled, timerWheelEnable is %s".to_string()));
+                        response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut("accurate timer message is not enabled, timerWheelEnable is %s");
                     },
                     _ => {
-                        response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut(Some("UNKNOWN_ERROR DEFAULT".to_string()));
+                        response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut("UNKNOWN_ERROR DEFAULT");
                     }
                 }
 
@@ -833,10 +833,10 @@ where
         if self.inner.message_store.now() < (start_timestamp as u64) {
             response = response
                 .set_code(RemotingSysResponseCode::SystemError)
-                .set_remark(Some(format!(
+                .set_remark(format!(
                     "broker unable to service, until {}",
                     util_all::time_millis_to_human_string2(start_timestamp)
-                )));
+                ));
             return response;
         }
         response = response.set_code(-1);

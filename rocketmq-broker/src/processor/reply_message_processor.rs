@@ -156,10 +156,10 @@ where
         if get_current_millis() < start_timstamp {
             return response
                 .set_code(ResponseCode::SystemError)
-                .set_remark(Some(format!(
+                .set_remark(format!(
                     "broker unable to service, until, {}",
                     start_timstamp
-                )));
+                ));
         }
         response.set_code_mut(-1);
         self.inner
@@ -346,7 +346,7 @@ where
     ) {
         if !push_reply_result.0 {
             response.set_code_mut(ResponseCode::SystemError);
-            response.set_remark_mut(Some(push_reply_result.1.clone()));
+            response.set_remark_mut(push_reply_result.1.clone());
         } else {
             response.set_code_mut(ResponseCode::Success);
             //response.set_remark_mut(None);

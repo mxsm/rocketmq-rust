@@ -98,7 +98,7 @@ async fn run_recv<PR: RequestProcessor>(mut client: ArcMut<ClientInner>, mut pro
                             let command = RemotingCommand::create_response_command()
                                 .set_opaque(opaque)
                                 .set_code(ResponseCode::SystemBusy)
-                                .set_remark(Some("System busy".to_string()));
+                                .set_remark_option(Some("System busy".to_string()));
                             client.tx.send((command, None, None)).await.unwrap();
                         }
                     }

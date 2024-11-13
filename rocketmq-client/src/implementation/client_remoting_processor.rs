@@ -118,7 +118,7 @@ impl ClientRemotingProcessor {
                     return Ok(Some(
                         response
                             .set_code(ResponseCode::SystemError)
-                            .set_remark(Some("parse born_host failed".to_string())),
+                            .set_remark("parse born_host failed"),
                     ));
                 }
             }
@@ -131,7 +131,7 @@ impl ClientRemotingProcessor {
                     return Ok(Some(
                         response
                             .set_code(ResponseCode::SystemError)
-                            .set_remark(Some("parse store_host failed".to_string())),
+                            .set_remark("parse store_host failed"),
                     ));
                 }
             }

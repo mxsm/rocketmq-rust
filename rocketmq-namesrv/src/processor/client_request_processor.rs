@@ -74,7 +74,7 @@ impl ClientRequestProcessor {
             return RemotingCommand::create_response_command_with_code(
                 RemotingSysResponseCode::SystemError,
             )
-            .set_remark(Some(String::from("name remoting_server not ready")));
+            .set_remark("name remoting_server not ready");
         }
         match self
             .route_info_manager
@@ -82,11 +82,11 @@ impl ClientRequestProcessor {
             .pickup_topic_route_data(request_header.topic.as_str())
         {
             None => RemotingCommand::create_response_command_with_code(ResponseCode::TopicNotExist)
-                .set_remark(Some(format!(
+                .set_remark(format!(
                     "No topic route info in name remoting_server for the topic:{}{}",
                     request_header.topic,
                     FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
-                ))),
+                )),
             Some(mut topic_route_data) => {
                 if self.need_check_namesrv_ready.load(Ordering::Relaxed) {
                     self.need_check_namesrv_ready.store(false, Ordering::SeqCst);

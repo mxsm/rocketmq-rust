@@ -130,7 +130,7 @@ impl DefaultRequestProcessor {
             return RemotingCommand::create_response_command_with_code(
                 RemotingSysResponseCode::SystemError,
             )
-            .set_remark(Some("namespace or key is empty".to_string()));
+            .set_remark("namespace or key is empty");
         }
         self.kvconfig_manager.write().put_kv_config(
             request_header.namespace.as_str(),
@@ -156,11 +156,11 @@ impl DefaultRequestProcessor {
             );
         }
         RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::SystemError)
-            .set_remark(Some(format!(
+            .set_remark(format!(
                 "No config item, Namespace: {} Key: {}",
                 request_header.namespace.as_str(),
                 request_header.key.as_str()
-            )))
+            ))
     }
 
     fn delete_kv_config(&self, request: RemotingCommand) -> RemotingCommand {
@@ -235,7 +235,7 @@ impl DefaultRequestProcessor {
             return RemotingCommand::create_response_command_with_code(
                 RemotingSysResponseCode::SystemError,
             )
-            .set_remark(Some(String::from("crc32 not match")));
+            .set_remark("crc32 not match");
         }
 
         let mut response_command = RemotingCommand::create_response_command();
@@ -276,7 +276,7 @@ impl DefaultRequestProcessor {
         if result.is_none() {
             return response_command
                 .set_code(RemotingSysResponseCode::SystemError)
-                .set_remark(Some(String::from("register broker failed")));
+                .set_remark("register broker failed");
         }
         if self
             .kvconfig_manager
@@ -387,7 +387,7 @@ impl DefaultRequestProcessor {
             return RemotingCommand::create_response_command().set_body(topics.encode());
         }
         RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::SystemError)
-            .set_remark(Some(String::from("disable")))
+            .set_remark("disable")
     }
 
     fn delete_topic_in_name_srv(&self, request: RemotingCommand) -> RemotingCommand {
@@ -428,10 +428,10 @@ impl DefaultRequestProcessor {
             return RemotingCommand::create_response_command().set_body(value);
         }
         RemotingCommand::create_response_command_with_code(ResponseCode::QueryNotFound).set_remark(
-            Some(format!(
+            format!(
                 "No config item, Namespace: {}",
                 request_header.namespace.as_str()
-            )),
+            ),
         )
     }
 
@@ -445,7 +445,7 @@ impl DefaultRequestProcessor {
             return RemotingCommand::create_response_command_with_code(
                 RemotingSysResponseCode::SystemError,
             )
-            .set_remark(Some(String::from("disable")));
+            .set_remark("disable");
         }
 
         let request_header = request
@@ -474,7 +474,7 @@ impl DefaultRequestProcessor {
             return RemotingCommand::create_response_command().set_body(topic_list.encode());
         }
         RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::SystemError)
-            .set_remark(Some(String::from("disable")))
+            .set_remark("disable")
     }
 
     fn get_has_unit_sub_topic_list(&self, _request: RemotingCommand) -> RemotingCommand {
@@ -488,7 +488,7 @@ impl DefaultRequestProcessor {
             return RemotingCommand::create_response_command().set_body(topic_list.encode());
         }
         RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::SystemError)
-            .set_remark(Some(String::from("disable")))
+            .set_remark("disable")
     }
 
     fn get_has_unit_sub_un_unit_topic_list(&self, _request: RemotingCommand) -> RemotingCommand {
@@ -505,7 +505,7 @@ impl DefaultRequestProcessor {
             return RemotingCommand::create_response_command().set_body(topic_list.encode());
         }
         RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::SystemError)
-            .set_remark(Some(String::from("disable")))
+            .set_remark("disable")
     }
 }
 

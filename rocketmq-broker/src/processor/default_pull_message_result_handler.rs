@@ -420,7 +420,7 @@ impl DefaultPullMessageResultHandler {
         client_address: &str,
     ) {
         let mut response_header = PullMessageResponseHeader::default();
-        response.set_remark_mut(Some(format!("{:?}", get_message_result.status())));
+        response.set_remark_mut(format!("{:?}", get_message_result.status()));
         response_header.next_begin_offset = Some(get_message_result.next_begin_offset());
         response_header.min_offset = Some(get_message_result.min_offset());
         response_header.max_offset = Some(get_message_result.max_offset());
