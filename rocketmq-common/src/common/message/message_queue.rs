@@ -140,3 +140,82 @@ impl Default for MessageQueue {
         MessageQueue::new()
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn new_message_queue_has_default_values() {
+        let mq = MessageQueue::new();
+        assert_eq!(mq.get_topic(), "");
+        assert_eq!(mq.get_broker_name(), "");
+        assert_eq!(mq.get_queue_id(), 0);
+    }
+
+    #[test]
+    fn from_other_creates_identical_copy() {
+        let mq1 = MessageQueue::from_parts("topic1", "broker1", 1);
+        let mq2 = MessageQueue::from_other(&mq1);
+        assert_eq!(mq1, mq2);
+    }
+
+    #[test]
+    fn from_parts_creates_message_queue_with_given_values() {
+        let mq = MessageQueue::from_parts("topic1", "broker1", 1);
+        assert_eq!(mq.get_topic(), "topic1");
+        assert_eq!(mq.get_broker_name(), "broker1");
+        assert_eq!(mq.get_queue_id(), 1);
+    }
+
+    #[test]
+    fn set_topic_updates_topic() {
+        let mut mq = MessageQueue::new();
+        mq.set_topic(CheetahString::from("new_topic"));
+        assert_eq!(mq.get_topic(), "new_topic");
+    }
+
+    #[test]
+    fn set_broker_name_updates_broker_name() {
+        let mut mq = MessageQueue::new();
+        mq.set_broker_name(CheetahString::from("new_broker"));
+        assert_eq!(mq.get_broker_name(), "new_broker");
+    }
+
+    #[test]
+    fn set_queue_id_updates_queue_id() {
+        let mut mq = MessageQueue::new();
+        mq.set_queue_id(10);
+        assert_eq!(mq.get_queue_id(), 10);
+    }
+
+    #[test]
+    fn message_queue_equality() {
+        let mq1 = MessageQueue::from_parts("topic1", "broker1", 1);
+        let mq2 = MessageQueue::from_parts("topic1", "broker1", 1);
+        assert_eq!(mq1, mq2);
+    }
+
+    #[test]
+    fn message_queue_inequality() {
+        let mq1 = MessageQueue::from_parts("topic1", "broker1", 1);
+        let mq2 = MessageQueue::from_parts("topic2", "broker2", 2);
+        assert_ne!(mq1, mq2);
+    }
+
+    #[test]
+    fn message_queue_ordering() {
+        let mq1 = MessageQueue::from_parts("topic1", "broker1", 1);
+        let mq2 = MessageQueue::from_parts("topic1", "broker1", 2);
+        assert!(mq1 < mq2);
+    }
+
+    #[test]
+    fn message_queue_display_format() {
+        let mq = MessageQueue::from_parts("topic1", "broker1", 1);
+        assert_eq!(
+            format!("{}", mq),
+            "MessageQueue [topic=topic1, broker_name=broker1, queue_id=1]"
+        );
+    }
+}
