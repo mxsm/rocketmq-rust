@@ -156,8 +156,8 @@ mod tests {
     fn test_get_sharding_key_index_by_msg() {
         let mut message = MessageExt::default();
         message.message.properties.insert(
-            MessageConst::PROPERTY_SHARDING_KEY.to_owned(),
-            "example_key".to_owned(),
+            MessageConst::PROPERTY_SHARDING_KEY.into(),
+            "example_key".into(),
         );
         let index_size = 10;
         let result = get_sharding_key_index_by_msg(&message, index_size);
@@ -168,16 +168,16 @@ mod tests {
     fn test_get_sharding_key_indexes() {
         let mut messages = Vec::new();
         let mut message1 = MessageExt::default();
-        message1.message.properties.insert(
-            MessageConst::PROPERTY_SHARDING_KEY.to_owned(),
-            "key1".to_owned(),
-        );
+        message1
+            .message
+            .properties
+            .insert(MessageConst::PROPERTY_SHARDING_KEY.into(), "key1".into());
         messages.push(message1);
         let mut message2 = MessageExt::default();
-        message2.message.properties.insert(
-            MessageConst::PROPERTY_SHARDING_KEY.to_owned(),
-            "key2".to_owned(),
-        );
+        message2
+            .message
+            .properties
+            .insert(MessageConst::PROPERTY_SHARDING_KEY.into(), "key2".into());
         messages.push(message2);
         let index_size = 10;
         let result = get_sharding_key_indexes(&messages, index_size);
