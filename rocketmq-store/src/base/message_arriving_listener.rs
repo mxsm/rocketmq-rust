@@ -16,6 +16,8 @@
  */
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
+
 pub trait MessageArrivingListener {
     /// This method is called when a new message arrives.
     ///
@@ -37,6 +39,6 @@ pub trait MessageArrivingListener {
         tags_code: Option<i64>,
         msg_store_time: i64,
         filter_bit_map: Option<Vec<u8>>,
-        properties: Option<&HashMap<String, String>>,
+        properties: Option<&HashMap<CheetahString, CheetahString>>,
     );
 }

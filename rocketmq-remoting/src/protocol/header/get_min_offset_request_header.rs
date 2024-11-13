@@ -96,8 +96,8 @@ impl TopicRequestHeaderTrait for GetMinOffsetRequestHeader {
         self.topic = topic;
     }
 
-    fn topic(&self) -> &str {
-        self.topic.as_str()
+    fn topic(&self) -> &CheetahString {
+        &self.topic
     }
 
     fn broker_name(&self) -> Option<&str> {

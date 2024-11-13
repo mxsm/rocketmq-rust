@@ -24,6 +24,7 @@ use std::string::ToString;
 
 use bytes::Buf;
 use bytes::Bytes;
+use cheetah_string::CheetahString;
 use lazy_static::lazy_static;
 
 pub mod message_accessor;
@@ -48,8 +49,11 @@ pub trait MessageTrait: Any + Display + Debug {
     /// # Arguments
     ///
     /// * `keys` - The keys to set, converted into a `String`.
-    fn set_keys(&mut self, keys: String) {
-        self.put_property(MessageConst::PROPERTY_KEYS.to_owned(), keys);
+    fn set_keys(&mut self, keys: CheetahString) {
+        self.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_KEYS),
+            keys,
+        );
     }
 
     /// Adds a property to the message.
@@ -58,7 +62,7 @@ pub trait MessageTrait: Any + Display + Debug {
     ///
     /// * `key` - The property key, converted into a `String`.
     /// * `value` - The property value, converted into a `String`.
-    fn put_property(&mut self, key: String, value: String);
+    fn put_property(&mut self, key: CheetahString, value: CheetahString);
 
     /// Clears a specific property from the message.
     ///
@@ -73,9 +77,7 @@ pub trait MessageTrait: Any + Display + Debug {
     ///
     /// * `name` - The name of the user property, converted into a `String`.
     /// * `value` - The value of the user property, converted into a `String`.
-    fn put_user_property(&mut self, name: String, value: String) {
-        let name = name.trim().to_owned();
-        let value = value.trim().to_owned();
+    fn put_user_property(&mut self, name: CheetahString, value: CheetahString) {
         if STRING_HASH_SET.contains(name.as_str()) {
             panic!(
                 "The Property<{}> is used by system, input another please",
@@ -97,7 +99,7 @@ pub trait MessageTrait: Any + Display + Debug {
     /// # Returns
     ///
     /// An `Option<String>` containing the property value if it exists, otherwise `None`.
-    fn get_user_property(&self, name: &str) -> Option<String> {
+    fn get_user_property(&self, name: &CheetahString) -> Option<CheetahString> {
         self.get_property(name)
     }
 
@@ -110,29 +112,29 @@ pub trait MessageTrait: Any + Display + Debug {
     /// # Returns
     ///
     /// An `Option<String>` containing the property value if it exists, otherwise `None`.
-    fn get_property(&self, name: &str) -> Option<String>;
+    fn get_property(&self, name: &CheetahString) -> Option<CheetahString>;
 
     /// Retrieves the topic of the message.
     ///
     /// # Returns
     ///
     /// A reference to the topic as a `&str`.
-    fn get_topic(&self) -> &str;
+    fn get_topic(&self) -> &CheetahString;
 
     /// Sets the topic for the message.
     ///
     /// # Arguments
     ///
     /// * `topic` - The topic to set, converted into a `String`.
-    fn set_topic(&mut self, topic: String);
+    fn set_topic(&mut self, topic: CheetahString);
 
     /// Retrieves the tags associated with the message.
     ///
     /// # Returns
     ///
     /// An `Option<String>` containing the tags if they exist, otherwise `None`.
-    fn get_tags(&self) -> Option<String> {
-        self.get_property(MessageConst::PROPERTY_TAGS)
+    fn get_tags(&self) -> Option<CheetahString> {
+        self.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_TAGS))
     }
 
     /// Sets the tags for the message.
@@ -140,8 +142,11 @@ pub trait MessageTrait: Any + Display + Debug {
     /// # Arguments
     ///
     /// * `tags` - The tags to set, converted into a `String`.
-    fn set_tags(&mut self, tags: String) {
-        self.put_property(MessageConst::PROPERTY_TAGS.to_owned(), tags);
+    fn set_tags(&mut self, tags: CheetahString) {
+        self.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_TAGS),
+            tags,
+        );
     }
 
     /// Retrieves the keys associated with the message.
@@ -149,8 +154,8 @@ pub trait MessageTrait: Any + Display + Debug {
     /// # Returns
     ///
     /// An `Option<String>` containing the keys if they exist, otherwise `None`.
-    fn get_keys(&self) -> Option<String> {
-        self.get_property(MessageConst::PROPERTY_KEYS)
+    fn get_keys(&self) -> Option<CheetahString> {
+        self.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_KEYS))
     }
 
     /// Sets multiple keys from a collection for the message.
@@ -160,7 +165,7 @@ pub trait MessageTrait: Any + Display + Debug {
     /// * `key_collection` - A vector of keys to set.
     fn set_keys_from_collection(&mut self, key_collection: Vec<String>) {
         let keys = key_collection.join(MessageConst::KEY_SEPARATOR);
-        self.set_keys(keys);
+        self.set_keys(CheetahString::from_string(keys));
     }
 
     /// Retrieves the delay time level of the message.
@@ -169,10 +174,12 @@ pub trait MessageTrait: Any + Display + Debug {
     ///
     /// An `i32` representing the delay time level.
     fn get_delay_time_level(&self) -> i32 {
-        self.get_property(MessageConst::PROPERTY_DELAY_TIME_LEVEL)
-            .unwrap_or("0".to_string())
-            .parse()
-            .unwrap_or(0)
+        self.get_property(&CheetahString::from_static_str(
+            MessageConst::PROPERTY_DELAY_TIME_LEVEL,
+        ))
+        .unwrap_or(CheetahString::from_slice("0"))
+        .parse()
+        .unwrap_or(0)
     }
 
     /// Sets the delay time level for the message.
@@ -182,8 +189,8 @@ pub trait MessageTrait: Any + Display + Debug {
     /// * `level` - The delay time level to set.
     fn set_delay_time_level(&mut self, level: i32) {
         self.put_property(
-            MessageConst::PROPERTY_DELAY_TIME_LEVEL.to_owned(),
-            level.to_string(),
+            CheetahString::from_static_str(MessageConst::PROPERTY_DELAY_TIME_LEVEL),
+            CheetahString::from_string(level.to_string()),
         );
     }
 
@@ -193,10 +200,12 @@ pub trait MessageTrait: Any + Display + Debug {
     ///
     /// `true` if the message should wait for store acknowledgment; `false` otherwise.
     fn is_wait_store_msg_ok(&self) -> bool {
-        self.get_property(MessageConst::PROPERTY_WAIT_STORE_MSG_OK)
-            .unwrap_or("true".to_string())
-            .parse()
-            .unwrap_or(true)
+        self.get_property(&CheetahString::from_static_str(
+            MessageConst::PROPERTY_WAIT_STORE_MSG_OK,
+        ))
+        .unwrap_or(CheetahString::from_slice("true"))
+        .parse()
+        .unwrap_or(true)
     }
 
     /// Sets whether the message should wait for store acknowledgment.
@@ -206,8 +215,8 @@ pub trait MessageTrait: Any + Display + Debug {
     /// * `wait_store_msg_ok` - A boolean indicating whether to wait for store acknowledgment.
     fn set_wait_store_msg_ok(&mut self, wait_store_msg_ok: bool) {
         self.put_property(
-            MessageConst::PROPERTY_WAIT_STORE_MSG_OK.to_owned(),
-            wait_store_msg_ok.to_string(),
+            CheetahString::from_static_str(MessageConst::PROPERTY_WAIT_STORE_MSG_OK),
+            CheetahString::from_string(wait_store_msg_ok.to_string()),
         );
     }
 
@@ -216,8 +225,11 @@ pub trait MessageTrait: Any + Display + Debug {
     /// # Arguments
     ///
     /// * `instance_id` - The instance ID to set.
-    fn set_instance_id(&mut self, instance_id: String) {
-        self.put_property(MessageConst::PROPERTY_INSTANCE_ID.to_owned(), instance_id);
+    fn set_instance_id(&mut self, instance_id: CheetahString) {
+        self.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_INSTANCE_ID),
+            instance_id,
+        );
     }
 
     /// Retrieves the flag associated with the message.
@@ -253,22 +265,24 @@ pub trait MessageTrait: Any + Display + Debug {
     /// # Returns
     ///
     /// A reference to a `HashMap<String, String>` containing the properties.
-    fn get_properties(&self) -> &HashMap<String, String>;
+    fn get_properties(&self) -> &HashMap<CheetahString, CheetahString>;
 
     /// Sets multiple properties for the message.
     ///
     /// # Arguments
     ///
     /// * `properties` - A `HashMap<String, String>` containing the properties to set.
-    fn set_properties(&mut self, properties: HashMap<String, String>);
+    fn set_properties(&mut self, properties: HashMap<CheetahString, CheetahString>);
 
     /// Retrieves the buyer ID associated with the message.
     ///
     /// # Returns
     ///
     /// An `Option<String>` containing the buyer ID if it exists, otherwise `None`.
-    fn get_buyer_id(&self) -> Option<String> {
-        self.get_property(MessageConst::PROPERTY_BUYER_ID)
+    fn get_buyer_id(&self) -> Option<CheetahString> {
+        self.get_property(&CheetahString::from_static_str(
+            MessageConst::PROPERTY_BUYER_ID,
+        ))
     }
 
     /// Sets the buyer ID for the message.
@@ -276,8 +290,11 @@ pub trait MessageTrait: Any + Display + Debug {
     /// # Arguments
     ///
     /// * `buyer_id` - The buyer ID to set.
-    fn set_buyer_id(&mut self, buyer_id: String) {
-        self.put_property(MessageConst::PROPERTY_BUYER_ID.to_owned(), buyer_id);
+    fn set_buyer_id(&mut self, buyer_id: CheetahString) {
+        self.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_BUYER_ID),
+            buyer_id,
+        );
     }
 
     /// Retrieves the transaction ID associated with the message.
@@ -292,7 +309,7 @@ pub trait MessageTrait: Any + Display + Debug {
     /// # Arguments
     ///
     /// * `transaction_id` - The transaction ID to set.
-    fn set_transaction_id(&mut self, transaction_id: String);
+    fn set_transaction_id(&mut self, transaction_id: CheetahString);
 
     /// Sets the delay time for the message in seconds.
     ///
@@ -301,8 +318,8 @@ pub trait MessageTrait: Any + Display + Debug {
     /// * `sec` - The delay time in seconds.
     fn set_delay_time_sec(&mut self, sec: u64) {
         self.put_property(
-            MessageConst::PROPERTY_TIMER_DELAY_SEC.to_owned(),
-            sec.to_string(),
+            CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELAY_SEC),
+            CheetahString::from_string(sec.to_string()),
         );
     }
 
@@ -312,10 +329,12 @@ pub trait MessageTrait: Any + Display + Debug {
     ///
     /// The delay time in seconds.
     fn get_delay_time_sec(&self) -> u64 {
-        self.get_property(MessageConst::PROPERTY_TIMER_DELAY_SEC)
-            .unwrap_or("0".to_string())
-            .parse()
-            .unwrap_or(0)
+        self.get_property(&CheetahString::from_static_str(
+            MessageConst::PROPERTY_TIMER_DELAY_SEC,
+        ))
+        .unwrap_or(CheetahString::from_slice("0"))
+        .parse()
+        .unwrap_or(0)
     }
 
     /// Sets the delay time for the message in milliseconds.
@@ -325,8 +344,8 @@ pub trait MessageTrait: Any + Display + Debug {
     /// * `time_ms` - The delay time in milliseconds.
     fn set_delay_time_ms(&mut self, time_ms: u64) {
         self.put_property(
-            MessageConst::PROPERTY_TIMER_DELAY_MS.to_owned(),
-            time_ms.to_string(),
+            CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELAY_MS),
+            CheetahString::from_string(time_ms.to_string()),
         );
     }
 
@@ -336,10 +355,12 @@ pub trait MessageTrait: Any + Display + Debug {
     ///
     /// The delay time in milliseconds.
     fn get_delay_time_ms(&self) -> u64 {
-        self.get_property(MessageConst::PROPERTY_TIMER_DELAY_MS)
-            .unwrap_or("0".to_string())
-            .parse()
-            .unwrap_or(0)
+        self.get_property(&CheetahString::from_static_str(
+            MessageConst::PROPERTY_TIMER_DELAY_MS,
+        ))
+        .unwrap_or(CheetahString::from_slice("0"))
+        .parse()
+        .unwrap_or(0)
     }
 
     /// Sets the delivery time for the message in milliseconds.
@@ -349,8 +370,8 @@ pub trait MessageTrait: Any + Display + Debug {
     /// * `time_ms` - The delivery time in milliseconds.
     fn set_deliver_time_ms(&mut self, time_ms: u64) {
         self.put_property(
-            MessageConst::PROPERTY_TIMER_DELIVER_MS.to_owned(),
-            time_ms.to_string(),
+            CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELIVER_MS),
+            CheetahString::from_string(time_ms.to_string()),
         );
     }
 
@@ -360,10 +381,12 @@ pub trait MessageTrait: Any + Display + Debug {
     ///
     /// The delivery time in milliseconds.
     fn get_deliver_time_ms(&self) -> u64 {
-        self.get_property(MessageConst::PROPERTY_TIMER_DELIVER_MS)
-            .unwrap_or("0".to_string())
-            .parse()
-            .unwrap_or(0)
+        self.get_property(&CheetahString::from_static_str(
+            MessageConst::PROPERTY_TIMER_DELIVER_MS,
+        ))
+        .unwrap_or(CheetahString::from_slice("0"))
+        .parse()
+        .unwrap_or(0)
     }
 
     fn get_compressed_body_mut(&mut self) -> &mut Option<Bytes>;

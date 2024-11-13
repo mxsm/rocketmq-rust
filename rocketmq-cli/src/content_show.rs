@@ -76,7 +76,7 @@ pub fn print_content(from: Option<u32>, to: Option<u32>, path: Option<PathBuf>) 
             None => {}
             Some(value) => {
                 table.push(MessagePrint {
-                    message_id: value.msg_id.clone(),
+                    message_id: value.msg_id.to_string(),
                 });
             }
         }

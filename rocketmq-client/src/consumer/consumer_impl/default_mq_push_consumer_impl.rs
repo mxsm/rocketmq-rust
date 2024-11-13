@@ -22,6 +22,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::base::service_state::ServiceState;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_common::common::key_builder::KeyBuilder;
@@ -1064,7 +1065,7 @@ impl DefaultMQPushConsumerImpl {
                 let normal_topic = KeyBuilder::parse_normal_topic(msg.get_topic(), consumer_group);
 
                 if !normal_topic.is_empty() {
-                    msg.set_topic(normal_topic);
+                    msg.set_topic(CheetahString::from_string(normal_topic));
                 }
             }
         }
@@ -1078,17 +1079,21 @@ impl DefaultMQPushConsumerImpl {
         let group_topic = mix_all::get_retry_topic(consumer_group);
         let namespace = self.client_config.get_namespace().unwrap_or("".to_string());
         for msg in msgs.iter_mut() {
-            if let Some(retry_topic) = msg.get_property(MessageConst::PROPERTY_RETRY_TOPIC) {
-                if group_topic == msg.get_topic() {
+            if let Some(retry_topic) = msg.get_property(&CheetahString::from_static_str(
+                MessageConst::PROPERTY_RETRY_TOPIC,
+            )) {
+                if group_topic == msg.get_topic().as_str() {
                     msg.set_topic(retry_topic);
                 }
             }
 
             if !namespace.is_empty() {
                 let topic = msg.get_topic().to_string();
-                msg.set_topic(NamespaceUtil::without_namespace_with_namespace(
-                    topic.as_str(),
-                    namespace.as_str(),
+                msg.set_topic(CheetahString::from_string(
+                    NamespaceUtil::without_namespace_with_namespace(
+                        topic.as_str(),
+                        namespace.as_str(),
+                    ),
                 ));
             }
         }
@@ -1175,12 +1180,14 @@ impl DefaultMQPushConsumerImpl {
                 self.send_message_back_as_normal_message(msg).await?;
             }
         }
-        msg.set_topic(NamespaceUtil::without_namespace_with_namespace(
-            msg.get_topic(),
-            self.client_config
-                .get_namespace()
-                .unwrap_or("".to_string())
-                .as_str(),
+        msg.set_topic(CheetahString::from_string(
+            NamespaceUtil::without_namespace_with_namespace(
+                msg.get_topic(),
+                self.client_config
+                    .get_namespace()
+                    .unwrap_or("".to_string())
+                    .as_str(),
+            ),
         ));
         Ok(())
     }
@@ -1196,13 +1203,16 @@ impl DefaultMQPushConsumerImpl {
         MessageAccessor::set_properties(&mut new_msg, msg.get_properties().clone());
         MessageAccessor::put_property(
             &mut new_msg,
-            MessageConst::PROPERTY_RETRY_TOPIC.to_owned(),
+            CheetahString::from_static_str(MessageConst::PROPERTY_RETRY_TOPIC),
             msg.get_topic().to_owned(),
         );
-        MessageAccessor::set_reconsume_time(&mut new_msg, (msg.reconsume_times + 1).to_string());
+        MessageAccessor::set_reconsume_time(
+            &mut new_msg,
+            CheetahString::from_string((msg.reconsume_times + 1).to_string()),
+        );
         MessageAccessor::set_max_reconsume_times(
             &mut new_msg,
-            self.get_max_reconsume_times().to_string(),
+            CheetahString::from_string(self.get_max_reconsume_times().to_string()),
         );
         MessageAccessor::clear_property(&mut new_msg, MessageConst::PROPERTY_TRANSACTION_PREPARED);
         new_msg.set_delay_time_level(3 + msg.reconsume_times);

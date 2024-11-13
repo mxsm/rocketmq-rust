@@ -16,6 +16,7 @@
  */
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use rocketmq_store::consume_queue::consume_queue_ext::CqExtUnit;
 use rocketmq_store::filter::MessageFilter;
 
@@ -34,7 +35,7 @@ impl MessageFilter for ExpressionForRetryMessageFilter {
     fn is_matched_by_commit_log(
         &self,
         msg_buffer: Option<&[u8]>,
-        properties: Option<&HashMap<String, String>>,
+        properties: Option<&HashMap<CheetahString, CheetahString>>,
     ) -> bool {
         true
     }

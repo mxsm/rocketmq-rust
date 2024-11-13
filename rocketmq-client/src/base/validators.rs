@@ -16,6 +16,7 @@
  */
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::message::MessageConst;
@@ -97,7 +98,9 @@ impl Validators {
             ));
         }
 
-        let lmq_path = msg.get_user_property(MessageConst::PROPERTY_INNER_MULTI_DISPATCH);
+        let lmq_path = msg.get_user_property(&CheetahString::from_static_str(
+            MessageConst::PROPERTY_INNER_MULTI_DISPATCH,
+        ));
         if let Some(value) = lmq_path {
             if value.contains(std::path::MAIN_SEPARATOR) {
                 return Err(MQClientErr(

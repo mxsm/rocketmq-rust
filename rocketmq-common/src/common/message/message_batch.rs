@@ -23,6 +23,7 @@ use std::fmt::Formatter;
 use std::path::Iter;
 
 use bytes::Bytes;
+use cheetah_string::CheetahString;
 
 use crate::common::message::message_decoder;
 use crate::common::message::message_ext_broker_inner::MessageExtBrokerInner;
@@ -134,7 +135,7 @@ impl fmt::Display for MessageBatch {
 
 #[allow(unused_variables)]
 impl MessageTrait for MessageBatch {
-    fn put_property(&mut self, key: String, value: String) {
+    fn put_property(&mut self, key: CheetahString, value: CheetahString) {
         self.final_message.properties.insert(key, value);
     }
 
@@ -142,15 +143,15 @@ impl MessageTrait for MessageBatch {
         self.final_message.properties.remove(name);
     }
 
-    fn get_property(&self, name: &str) -> Option<String> {
+    fn get_property(&self, name: &CheetahString) -> Option<CheetahString> {
         self.final_message.properties.get(name).cloned()
     }
 
-    fn get_topic(&self) -> &str {
+    fn get_topic(&self) -> &CheetahString {
         &self.final_message.topic
     }
 
-    fn set_topic(&mut self, topic: String) {
+    fn set_topic(&mut self, topic: CheetahString) {
         self.final_message.topic = topic;
     }
 
@@ -170,11 +171,11 @@ impl MessageTrait for MessageBatch {
         self.final_message.body = Some(body);
     }
 
-    fn get_properties(&self) -> &HashMap<String, String> {
+    fn get_properties(&self) -> &HashMap<CheetahString, CheetahString> {
         &self.final_message.properties
     }
 
-    fn set_properties(&mut self, properties: HashMap<String, String>) {
+    fn set_properties(&mut self, properties: HashMap<CheetahString, CheetahString>) {
         self.final_message.properties = properties;
     }
 
@@ -182,7 +183,7 @@ impl MessageTrait for MessageBatch {
         self.final_message.transaction_id.as_deref().unwrap()
     }
 
-    fn set_transaction_id(&mut self, transaction_id: String) {
+    fn set_transaction_id(&mut self, transaction_id: CheetahString) {
         self.final_message.transaction_id = Some(transaction_id);
     }
 
@@ -219,7 +220,7 @@ impl MessageExtBatch {
         self.message_ext_broker_inner.body()
     }
 
-    pub fn get_tags(&self) -> Option<String> {
+    pub fn get_tags(&self) -> Option<CheetahString> {
         self.message_ext_broker_inner.get_tags()
     }
 }

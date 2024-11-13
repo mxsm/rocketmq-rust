@@ -22,6 +22,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_single::Message;
 use rocketmq_common::common::message::MessageTrait;
 use tokio::sync::Notify;
@@ -32,7 +33,7 @@ type AtomicMessagePtr = AtomicPtr<Option<Box<dyn MessageTrait + Send>>>;
 type AtomicCausePtr = AtomicPtr<Box<dyn Error + Send + Sync>>;
 
 pub struct RequestResponseFuture {
-    correlation_id: String,
+    correlation_id: CheetahString,
     request_callback: Option<RequestCallbackFn>,
     begin_timestamp: Instant,
     request_msg: Option<Message>,
@@ -47,7 +48,7 @@ pub struct RequestResponseFuture {
 
 impl RequestResponseFuture {
     pub fn new(
-        correlation_id: String,
+        correlation_id: CheetahString,
         timeout_millis: u64,
         request_callback: Option<RequestCallbackFn>,
     ) -> Self {

@@ -22,6 +22,7 @@ use std::fmt::Formatter;
 use std::net::SocketAddr;
 
 use bytes::Bytes;
+use cheetah_string::CheetahString;
 
 use crate::common::hasher::string_hasher::JavaStringHasher;
 use crate::common::message::message_ext::MessageExt;
@@ -34,7 +35,7 @@ use crate::MessageUtils;
 #[derive(Debug, Default)]
 pub struct MessageExtBrokerInner {
     pub message_ext_inner: MessageExt,
-    pub properties_string: String,
+    pub properties_string: CheetahString,
     pub tags_code: i64,
     pub encoded_buff: Option<bytes::BytesMut>,
     pub encode_completed: bool,
@@ -44,11 +45,13 @@ pub struct MessageExtBrokerInner {
 impl MessageExtBrokerInner {
     const VERSION: MessageVersion = MessageVersion::V1;
 
-    pub fn delete_property(&mut self, name: impl Into<String>) {
+    pub fn delete_property(&mut self, name: impl Into<CheetahString>) {
         let name = name.into();
         self.message_ext_inner.message.clear_property(name.as_str());
-        self.properties_string =
-            MessageUtils::delete_property(self.properties_string.as_str(), name.as_str());
+        self.properties_string = CheetahString::from_string(MessageUtils::delete_property(
+            self.properties_string.as_str(),
+            name.as_str(),
+        ));
     }
 
     pub fn with_version(&mut self, version: MessageVersion) {
@@ -123,7 +126,7 @@ impl MessageExtBrokerInner {
         self.message_ext_inner.prepared_transaction_offset()
     }
 
-    pub fn property(&self, name: &str) -> Option<String> {
+    pub fn property(&self, name: &str) -> Option<CheetahString> {
         self.message_ext_inner.properties().get(name).cloned()
     }
 
@@ -149,7 +152,7 @@ impl MessageExtBrokerInner {
         JavaStringHasher::new().hash_str(tags) as i64
     }
 
-    pub fn get_tags(&self) -> Option<String> {
+    pub fn get_tags(&self) -> Option<CheetahString> {
         self.message_ext_inner.get_tags()
     }
 
@@ -184,7 +187,7 @@ impl fmt::Display for MessageExtBrokerInner {
 }
 
 impl MessageTrait for MessageExtBrokerInner {
-    fn put_property(&mut self, key: String, value: String) {
+    fn put_property(&mut self, key: CheetahString, value: CheetahString) {
         self.message_ext_inner.put_property(key, value);
     }
 
@@ -192,15 +195,15 @@ impl MessageTrait for MessageExtBrokerInner {
         self.message_ext_inner.clear_property(name);
     }
 
-    fn get_property(&self, name: &str) -> Option<String> {
+    fn get_property(&self, name: &CheetahString) -> Option<CheetahString> {
         self.message_ext_inner.get_property(name)
     }
 
-    fn get_topic(&self) -> &str {
+    fn get_topic(&self) -> &CheetahString {
         self.message_ext_inner.get_topic()
     }
 
-    fn set_topic(&mut self, topic: String) {
+    fn set_topic(&mut self, topic: CheetahString) {
         self.message_ext_inner.set_topic(topic);
     }
 
@@ -220,11 +223,11 @@ impl MessageTrait for MessageExtBrokerInner {
         self.message_ext_inner.set_body(body);
     }
 
-    fn get_properties(&self) -> &HashMap<String, String> {
+    fn get_properties(&self) -> &HashMap<CheetahString, CheetahString> {
         self.message_ext_inner.get_properties()
     }
 
-    fn set_properties(&mut self, properties: HashMap<String, String>) {
+    fn set_properties(&mut self, properties: HashMap<CheetahString, CheetahString>) {
         self.message_ext_inner.set_properties(properties);
     }
 
@@ -232,7 +235,7 @@ impl MessageTrait for MessageExtBrokerInner {
         self.message_ext_inner.get_transaction_id()
     }
 
-    fn set_transaction_id(&mut self, transaction_id: String) {
+    fn set_transaction_id(&mut self, transaction_id: CheetahString) {
         self.message_ext_inner.set_transaction_id(transaction_id);
     }
 

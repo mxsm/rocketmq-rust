@@ -14,12 +14,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use cheetah_string::CheetahString;
+
 use crate::protocol::static_topic::logic_queue_mapping_item::LogicQueueMappingItem;
 use crate::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 
 #[derive(Default)]
 pub struct TopicQueueMappingContext {
-    pub topic: String,
+    pub topic: CheetahString,
     pub global_id: Option<i32>,
     pub mapping_detail: Option<TopicQueueMappingDetail>,
     pub mapping_item_list: Vec<LogicQueueMappingItem>,
@@ -29,7 +31,7 @@ pub struct TopicQueueMappingContext {
 
 impl TopicQueueMappingContext {
     pub fn new(
-        topic: impl Into<String>,
+        topic: impl Into<CheetahString>,
         global_id: Option<i32>,
         mapping_detail: Option<TopicQueueMappingDetail>,
         mapping_item_list: Vec<LogicQueueMappingItem>,

@@ -257,7 +257,7 @@ where
             );
         }
         let mut message_ext = MessageExtBrokerInner::default();
-        message_ext.message_ext_inner.message.topic = request_header.topic().to_string();
+        message_ext.message_ext_inner.message.topic = request_header.topic().clone();
         message_ext.message_ext_inner.queue_id = queue_id.unwrap();
         let mut sys_flag = request_header.sys_flag;
         if TopicFilterType::MultiTag == topic_config.topic_filter_type {
@@ -287,8 +287,8 @@ where
             .broker_cluster_name
             .clone();
         message_ext.message_ext_inner.message.put_property(
-            MessageConst::PROPERTY_CLUSTER.to_owned(),
-            cluster_name.to_string(),
+            CheetahString::from_static_str(MessageConst::PROPERTY_CLUSTER),
+            cluster_name,
         );
 
         let mut batch_message = MessageExtBatch {
@@ -329,8 +329,8 @@ where
                 .message_ext_inner
                 .message
                 .put_property(
-                    MessageConst::PROPERTY_INNER_NUM.to_owned(),
-                    inner_num.to_string(),
+                    CheetahString::from_static_str(MessageConst::PROPERTY_INNER_NUM),
+                    CheetahString::from_string(inner_num.to_string()),
                 );
             batch_message.message_ext_broker_inner.properties_string = message_properties_to_string(
                 batch_message
@@ -339,7 +339,7 @@ where
                     .message
                     .properties(),
             );
-            response_header.set_batch_uniq_id(batch_uniq_id.map(CheetahString::from_string));
+            response_header.set_batch_uniq_id(batch_uniq_id);
             is_inner_batch = true;
         }
         let start = Instant::now();
@@ -440,7 +440,7 @@ where
         }
 
         let mut message_ext = MessageExtBrokerInner::default();
-        message_ext.message_ext_inner.message.topic = request_header.topic().to_string();
+        message_ext.message_ext_inner.message.topic = request_header.topic().clone();
         message_ext.message_ext_inner.queue_id = *queue_id.as_ref().unwrap();
         let mut ori_props =
             MessageDecoder::string_to_message_properties(request_header.properties.as_ref());
@@ -464,10 +464,10 @@ where
         let uniq_key = ori_props.get(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX);
         let uniq_key_inner = match uniq_key {
             Some(inner) if !inner.is_empty() => inner.clone(),
-            _ => MessageClientIDSetter::create_uniq_id(),
+            _ => CheetahString::from_string(MessageClientIDSetter::create_uniq_id()),
         };
         ori_props.insert(
-            MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX.to_string(),
+            CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
             uniq_key_inner,
         );
 
@@ -495,7 +495,7 @@ where
         }
         message_ext.tags_code = MessageExtBrokerInner::tags_string2tags_code(
             &topic_config.topic_filter_type,
-            message_ext.get_tags().unwrap_or("".to_string()).as_str(),
+            message_ext.get_tags().unwrap_or_default().as_str(),
         );
 
         message_ext.message_ext_inner.born_timestamp = request_header.born_timestamp;
@@ -504,13 +504,12 @@ where
         message_ext.message_ext_inner.reconsume_times = request_header.reconsume_times.unwrap_or(0);
 
         message_ext.message_ext_inner.message.properties.insert(
-            MessageConst::PROPERTY_CLUSTER.to_string(),
+            CheetahString::from_static_str(MessageConst::PROPERTY_CLUSTER),
             self.inner
                 .broker_config
                 .broker_identity
                 .broker_cluster_name
-                .clone()
-                .to_string(),
+                .clone(),
         );
 
         message_ext.properties_string = MessageDecoder::message_properties_to_string(
@@ -608,7 +607,7 @@ where
         mut response: RemotingCommand,
         request: &RemotingCommand,
         topic: &str,
-        transaction_id: Option<String>,
+        transaction_id: Option<CheetahString>,
         send_message_context: &mut SendMessageContext,
         ctx: &ConnectionHandlerContext,
         queue_id_int: i32,
@@ -741,7 +740,7 @@ where
                     .unwrap()
                     .logics_offset,
             );
-            response_header.set_transaction_id(transaction_id.map(CheetahString::from_string));
+            response_header.set_transaction_id(transaction_id);
 
             let rewrite_result =
                 rewrite_response_for_static_topic(response_header, mapping_context);
@@ -853,7 +852,7 @@ where
         request: &RemotingCommand,
         msg: &mut MessageExt,
         topic_config: &mut rocketmq_common::common::config::TopicConfig,
-        properties: &mut HashMap<String, String>,
+        properties: &mut HashMap<CheetahString, CheetahString>,
     ) -> bool {
         let mut new_topic = request_header.topic().to_string();
         if !new_topic.is_empty() && new_topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) {
@@ -898,8 +897,8 @@ where
                 || send_retry_message_to_dead_letter_queue_directly
             {
                 properties.insert(
-                    MessageConst::PROPERTY_DELAY_TIME_LEVEL.to_string(),
-                    "-1".to_string(),
+                    CheetahString::from_static_str(MessageConst::PROPERTY_DELAY_TIME_LEVEL),
+                    CheetahString::from_string("-1".to_string()),
                 );
                 new_topic = mix_all::get_dlq_topic(group_name.as_str());
                 let queue_id_int = self.inner.random_queue_id(DLQ_NUMS_PER_GROUP) as i32;
@@ -913,7 +912,8 @@ where
                         false,
                         0,
                     );
-                msg.message.topic = new_topic.to_string();
+                // can optimize
+                msg.message.topic = CheetahString::from_string(new_topic.to_string());
                 msg.queue_id = queue_id_int;
                 msg.message.set_delay_time_level(0);
                 if new_topic_config.is_none() {
@@ -1039,16 +1039,14 @@ impl<MS, TS> Inner<MS, TS> {
         let mut properties =
             MessageDecoder::string_to_message_properties(request_header.properties.as_ref());
         properties.insert(
-            MessageConst::PROPERTY_MSG_REGION.to_string(),
-            self.broker_config.region_id().to_string(),
+            CheetahString::from_static_str(MessageConst::PROPERTY_MSG_REGION),
+            CheetahString::from_string(self.broker_config.region_id().to_string()),
         );
         properties.insert(
-            MessageConst::PROPERTY_TRACE_SWITCH.to_string(),
-            self.broker_config.trace_on.to_string(),
+            CheetahString::from_static_str(MessageConst::PROPERTY_TRACE_SWITCH),
+            CheetahString::from_string(self.broker_config.trace_on.to_string()),
         );
-        request_header.properties = Some(CheetahString::from_string(
-            MessageDecoder::message_properties_to_string(&properties),
-        ));
+        request_header.properties = Some(MessageDecoder::message_properties_to_string(&properties));
 
         if let Some(unique_key) =
             properties.get(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX)

@@ -16,6 +16,7 @@
  */
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::message::message_decoder;
 use rocketmq_common::common::message::message_ext::MessageExt;
@@ -204,9 +205,10 @@ where
         if from_transaction_check {
             return false;
         }
-        let check_immunity_time_str =
-            message_ext.get_user_property(MessageConst::PROPERTY_CHECK_IMMUNITY_TIME_IN_SECONDS);
-        if StringUtils::is_not_empty_string(check_immunity_time_str.as_ref()) {
+        let check_immunity_time_str = message_ext.get_user_property(
+            &CheetahString::from_static_str(MessageConst::PROPERTY_CHECK_IMMUNITY_TIME_IN_SECONDS),
+        );
+        if StringUtils::is_not_empty_ch_string(check_immunity_time_str.as_ref()) {
             let value_of_current_minus_born =
                 get_current_millis() - (message_ext.born_timestamp as u64);
             let check_immunity_time = TransactionalMessageUtil::get_immunity_time(
@@ -225,7 +227,9 @@ where
     ) -> RemotingCommand {
         let mut command = RemotingCommand::create_response_command();
         if let Some(message_ext) = message_ext {
-            let pgroup_read = message_ext.get_property(MessageConst::PROPERTY_PRODUCER_GROUP);
+            let pgroup_read = message_ext.get_property(&CheetahString::from_static_str(
+                MessageConst::PROPERTY_PRODUCER_GROUP,
+            ));
             if pgroup_read.is_none() {
                 command.set_code_mut(ResponseCode::SystemError);
                 command.set_remark_mut(Some("he producer group wrong".to_string()));
@@ -336,11 +340,15 @@ fn end_message_transaction(msg_ext: &MessageExt) -> MessageExtBrokerInner {
     let mut msg_inner = MessageExtBrokerInner::default();
     msg_inner.set_topic(
         msg_ext
-            .get_user_property(MessageConst::PROPERTY_REAL_TOPIC)
+            .get_user_property(&CheetahString::from_static_str(
+                MessageConst::PROPERTY_REAL_TOPIC,
+            ))
             .unwrap_or_default(),
     );
     msg_inner.message_ext_inner.queue_id = msg_ext
-        .get_user_property(MessageConst::PROPERTY_REAL_QUEUE_ID)
+        .get_user_property(&CheetahString::from_static_str(
+            MessageConst::PROPERTY_REAL_QUEUE_ID,
+        ))
         .unwrap_or_default()
         .parse()
         .unwrap_or_default();
@@ -353,9 +361,9 @@ fn end_message_transaction(msg_ext: &MessageExt) -> MessageExtBrokerInner {
     msg_inner.message_ext_inner.store_host = msg_ext.store_host;
     msg_inner.message_ext_inner.reconsume_times = msg_ext.reconsume_times;
     msg_inner.set_wait_store_msg_ok(false);
-    if let Some(transaction_id) =
-        msg_ext.get_user_property(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX)
-    {
+    if let Some(transaction_id) = msg_ext.get_user_property(&CheetahString::from_static_str(
+        MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
+    )) {
         msg_inner.set_transaction_id(transaction_id);
     }
     msg_inner.message_ext_inner.sys_flag = msg_ext.sys_flag;

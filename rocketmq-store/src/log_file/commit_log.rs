@@ -166,10 +166,13 @@ pub fn get_message_num(
     if MessageSysFlag::check(msg_inner.sys_flag(), MessageSysFlag::INNER_BATCH_FLAG)
         || cq_type == CQType::BatchCQ
     {
-        if let Some(num) = msg_inner
-            .message_ext_inner
-            .message
-            .get_property(MessageConst::PROPERTY_INNER_NUM)
+        if let Some(num) =
+            msg_inner
+                .message_ext_inner
+                .message
+                .get_property(&CheetahString::from_static_str(
+                    MessageConst::PROPERTY_INNER_NUM,
+                ))
         {
             message_num = num.parse().unwrap_or(1i16);
         }
@@ -1271,12 +1274,12 @@ pub fn check_message_and_return_size(
         let tags_code = tags_string2tags_code(tags);
         (
             tags_code,
-            keys.unwrap_or("".to_string()),
+            keys.unwrap_or_default(),
             uniq_key,
             properties_map,
         )
     } else {
-        (0, "".to_string(), None, HashMap::new())
+        (0, CheetahString::new(), None, HashMap::new())
     };
 
     if check_crc && !message_store_config.force_verify_prop_crc {
@@ -1325,7 +1328,7 @@ pub fn check_message_and_return_size(
 }
 
 fn set_batch_size_if_needed(
-    properties_map: &HashMap<String, String>,
+    properties_map: &HashMap<CheetahString, CheetahString>,
     dispatch_request: &mut DispatchRequest,
 ) {
     if !properties_map.is_empty()

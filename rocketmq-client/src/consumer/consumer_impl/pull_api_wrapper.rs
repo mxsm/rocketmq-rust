@@ -149,7 +149,7 @@ impl PullAPIWrapper {
                     let mut msg_vec_again = Vec::with_capacity(msg_vec.len());
                     for msg in msg_vec {
                         if let Some(ref tag) = msg.get_tags() {
-                            if subscription_data.tags_set.contains(tag) {
+                            if subscription_data.tags_set.contains(tag.as_str()) {
                                 msg_vec_again.push(msg);
                             }
                         }
@@ -169,26 +169,29 @@ impl PullAPIWrapper {
 
             for msg in &mut msg_list_filter_again {
                 let tra_flag = msg
-                    .get_property(MessageConst::PROPERTY_TRANSACTION_PREPARED)
+                    .get_property(&CheetahString::from_static_str(
+                        MessageConst::PROPERTY_TRANSACTION_PREPARED,
+                    ))
                     .map_or(false, |v| v.parse().unwrap_or(false));
                 if tra_flag {
-                    if let Some(transaction_id) =
-                        msg.get_property(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX)
-                    {
+                    if let Some(transaction_id) = msg.get_property(&CheetahString::from_static_str(
+                        MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
+                    )) {
                         msg.set_transaction_id(transaction_id);
                     }
                 }
                 MessageAccessor::put_property(
                     msg,
-                    MessageConst::PROPERTY_MIN_OFFSET.to_owned(),
-                    pull_result_ext.pull_result.min_offset.to_string(),
+                    CheetahString::from_static_str(MessageConst::PROPERTY_MIN_OFFSET),
+                    CheetahString::from_string(pull_result_ext.pull_result.min_offset.to_string()),
                 );
                 MessageAccessor::put_property(
                     msg,
-                    MessageConst::PROPERTY_MAX_OFFSET.to_owned(),
-                    pull_result_ext.pull_result.max_offset.to_string(),
+                    CheetahString::from_static_str(MessageConst::PROPERTY_MAX_OFFSET),
+                    CheetahString::from_string(pull_result_ext.pull_result.max_offset.to_string()),
                 );
-                msg.message_ext_inner.broker_name = message_queue.get_broker_name().to_string();
+                msg.message_ext_inner.broker_name =
+                    CheetahString::from_string(message_queue.get_broker_name().to_string());
                 msg.message_ext_inner.queue_id = message_queue.get_queue_id();
                 if let Some(offset_delta) = pull_result_ext.offset_delta {
                     msg.message_ext_inner.queue_offset += offset_delta;

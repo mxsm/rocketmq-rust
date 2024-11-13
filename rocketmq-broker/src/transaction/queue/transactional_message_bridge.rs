@@ -20,6 +20,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use bytes::Bytes;
+use cheetah_string::CheetahString;
 use rocketmq_client::consumer::pull_result::PullResult;
 use rocketmq_client::consumer::pull_status::PullStatus;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
@@ -264,27 +265,34 @@ where
     }
 
     pub fn parse_half_message_inner(message: &mut MessageExtBrokerInner) {
-        let uniq_id =
-            message.get_user_property(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX);
+        let uniq_id = message.get_user_property(&CheetahString::from_static_str(
+            MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
+        ));
         if let Some(uniq_id) = uniq_id {
             MessageAccessor::put_property(
                 message,
-                TransactionalMessageUtil::TRANSACTION_ID.to_owned(),
+                CheetahString::from_static_str(TransactionalMessageUtil::TRANSACTION_ID),
                 uniq_id,
             );
         }
-        let topic = message.get_topic().to_string();
-        MessageAccessor::put_property(message, MessageConst::PROPERTY_REAL_TOPIC.to_owned(), topic);
+        let topic = message.get_topic().clone();
         MessageAccessor::put_property(
             message,
-            MessageConst::PROPERTY_REAL_QUEUE_ID.to_owned(),
-            message.message_ext_inner.queue_id.to_string(),
+            CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC),
+            topic,
+        );
+        MessageAccessor::put_property(
+            message,
+            CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID),
+            CheetahString::from_string(message.message_ext_inner.queue_id.to_string()),
         );
         message.message_ext_inner.sys_flag = MessageSysFlag::reset_transaction_value(
             message.message_ext_inner.sys_flag,
             MessageSysFlag::TRANSACTION_NOT_TYPE,
         );
-        message.set_topic(TransactionalMessageUtil::build_half_topic().to_owned());
+        message.set_topic(CheetahString::from_static_str(
+            TransactionalMessageUtil::build_half_topic(),
+        ));
         message.message_ext_inner.queue_id = 0;
         let properties_to_string =
             message_decoder::message_properties_to_string(message.get_properties());
@@ -293,19 +301,24 @@ where
 
     pub fn renew_immunity_half_message_inner(msg_ext: &MessageExt) -> MessageExtBrokerInner {
         let mut message_inner = Self::renew_half_message_inner(msg_ext);
-        let queue_offset_from_prepare =
-            msg_ext.get_user_property(MessageConst::PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET);
+        let queue_offset_from_prepare = msg_ext.get_user_property(&CheetahString::from_static_str(
+            MessageConst::PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET,
+        ));
         if let Some(queue_offset_from_prepare) = queue_offset_from_prepare {
             MessageAccessor::put_property(
                 &mut message_inner,
-                MessageConst::PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET.to_owned(),
+                CheetahString::from_static_str(
+                    MessageConst::PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET,
+                ),
                 queue_offset_from_prepare,
             );
         } else {
             MessageAccessor::put_property(
                 &mut message_inner,
-                MessageConst::PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET.to_owned(),
-                msg_ext.queue_offset.to_string(),
+                CheetahString::from_static_str(
+                    MessageConst::PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET,
+                ),
+                CheetahString::from_string(msg_ext.queue_offset.to_string()),
             );
         }
         let properties_to_string =

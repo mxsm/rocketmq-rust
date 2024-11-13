@@ -24,6 +24,7 @@ use std::net::SocketAddr;
 use bytes::Buf;
 use bytes::BufMut;
 use bytes::Bytes;
+use cheetah_string::CheetahString;
 
 use crate::common::message::message_single::Message;
 use crate::common::message::MessageTrait;
@@ -32,7 +33,7 @@ use crate::common::sys_flag::message_sys_flag::MessageSysFlag;
 #[derive(Clone, Debug)]
 pub struct MessageExt {
     pub message: Message,
-    pub broker_name: String,
+    pub broker_name: CheetahString,
     pub queue_id: i32,
     pub store_size: i32,
     pub queue_offset: i64,
@@ -41,7 +42,7 @@ pub struct MessageExt {
     pub born_host: SocketAddr,
     pub store_timestamp: i64,
     pub store_host: SocketAddr,
-    pub msg_id: String,
+    pub msg_id: CheetahString,
     pub commit_log_offset: i64,
     pub body_crc: u32,
     pub reconsume_times: i32,
@@ -141,7 +142,7 @@ impl MessageExt {
         self.store_timestamp
     }
 
-    pub fn msg_id(&self) -> &str {
+    pub fn msg_id(&self) -> &CheetahString {
         &self.msg_id
     }
 
@@ -161,7 +162,7 @@ impl MessageExt {
         self.message = message_inner;
     }
 
-    pub fn set_broker_name(&mut self, broker_name: String) {
+    pub fn set_broker_name(&mut self, broker_name: CheetahString) {
         self.broker_name = broker_name;
     }
 
@@ -197,7 +198,7 @@ impl MessageExt {
         self.store_host = store_host;
     }
 
-    pub fn set_msg_id(&mut self, msg_id: String) {
+    pub fn set_msg_id(&mut self, msg_id: CheetahString) {
         self.msg_id = msg_id;
     }
 
@@ -217,11 +218,11 @@ impl MessageExt {
         self.prepared_transaction_offset = prepared_transaction_offset;
     }
 
-    pub fn properties(&self) -> &HashMap<String, String> {
+    pub fn properties(&self) -> &HashMap<CheetahString, CheetahString> {
         self.message.properties()
     }
 
-    pub fn get_tags(&self) -> Option<String> {
+    pub fn get_tags(&self) -> Option<CheetahString> {
         self.message.get_tags()
     }
 }
@@ -230,7 +231,7 @@ impl Default for MessageExt {
     fn default() -> Self {
         Self {
             message: Default::default(),
-            broker_name: "".to_string(),
+            broker_name: CheetahString::default(),
             queue_id: 0,
             store_size: 0,
             queue_offset: 0,
@@ -239,7 +240,7 @@ impl Default for MessageExt {
             born_host: "127.0.0.1:10911".parse().unwrap(),
             store_timestamp: 0,
             store_host: "127.0.0.1:10911".parse().unwrap(),
-            msg_id: "".to_string(),
+            msg_id: CheetahString::default(),
             commit_log_offset: 0,
             body_crc: 0,
             reconsume_times: 0,
@@ -275,7 +276,7 @@ impl fmt::Display for MessageExt {
     }
 }
 impl MessageTrait for MessageExt {
-    fn put_property(&mut self, key: String, value: String) {
+    fn put_property(&mut self, key: CheetahString, value: CheetahString) {
         self.message.put_property(key, value);
     }
 
@@ -283,15 +284,15 @@ impl MessageTrait for MessageExt {
         self.message.clear_property(name);
     }
 
-    fn get_property(&self, name: &str) -> Option<String> {
+    fn get_property(&self, name: &CheetahString) -> Option<CheetahString> {
         self.message.get_property(name)
     }
 
-    fn get_topic(&self) -> &str {
+    fn get_topic(&self) -> &CheetahString {
         self.message.get_topic()
     }
 
-    fn set_topic(&mut self, topic: String) {
+    fn set_topic(&mut self, topic: CheetahString) {
         self.message.set_topic(topic);
     }
 
@@ -311,11 +312,11 @@ impl MessageTrait for MessageExt {
         self.message.set_body(body);
     }
 
-    fn get_properties(&self) -> &HashMap<String, String> {
+    fn get_properties(&self) -> &HashMap<CheetahString, CheetahString> {
         self.message.get_properties()
     }
 
-    fn set_properties(&mut self, properties: HashMap<String, String>) {
+    fn set_properties(&mut self, properties: HashMap<CheetahString, CheetahString>) {
         self.message.set_properties(properties);
     }
 
@@ -323,7 +324,7 @@ impl MessageTrait for MessageExt {
         self.message.get_transaction_id()
     }
 
-    fn set_transaction_id(&mut self, transaction_id: String) {
+    fn set_transaction_id(&mut self, transaction_id: CheetahString) {
         self.message.set_transaction_id(transaction_id);
     }
 

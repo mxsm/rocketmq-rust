@@ -58,7 +58,9 @@ pub const QUEUE_OFFSET_POSITION: usize = 4 + 4 + 4 + 4 + 4;
 pub const SYSFLAG_POSITION: usize = 4 + 4 + 4 + 4 + 4 + 8 + 8;
 pub const BORN_TIMESTAMP_POSITION: usize = 4 + 4 + 4 + 4 + 4 + 8 + 8 + 4 + 8;
 
-pub fn string_to_message_properties(properties: Option<&CheetahString>) -> HashMap<String, String> {
+pub fn string_to_message_properties(
+    properties: Option<&CheetahString>,
+) -> HashMap<CheetahString, CheetahString> {
     let mut map = HashMap::new();
     if let Some(properties) = properties {
         let mut index = 0;
@@ -74,7 +76,7 @@ pub fn string_to_message_properties(properties: Option<&CheetahString>) -> HashM
                     if kv_sep_index > index && kv_sep_index < new_index - 1 {
                         let k = &properties[index..kv_sep_index];
                         let v = &properties[kv_sep_index + 1..new_index];
-                        map.insert(k.to_string(), v.to_string());
+                        map.insert(CheetahString::from_slice(k), CheetahString::from_slice(v));
                     }
                 }
             }
@@ -84,7 +86,9 @@ pub fn string_to_message_properties(properties: Option<&CheetahString>) -> HashM
     map
 }
 
-pub fn str_to_message_properties(properties: Option<&str>) -> HashMap<String, String> {
+pub fn str_to_message_properties(
+    properties: Option<&str>,
+) -> HashMap<CheetahString, CheetahString> {
     let mut map = HashMap::new();
     if let Some(properties) = properties {
         let mut index = 0;
@@ -100,7 +104,7 @@ pub fn str_to_message_properties(properties: Option<&str>) -> HashMap<String, St
                     if kv_sep_index > index && kv_sep_index < new_index - 1 {
                         let k = &properties[index..kv_sep_index];
                         let v = &properties[kv_sep_index + 1..new_index];
-                        map.insert(k.to_string(), v.to_string());
+                        map.insert(CheetahString::from_slice(k), CheetahString::from_slice(v));
                     }
                 }
             }
@@ -110,7 +114,9 @@ pub fn str_to_message_properties(properties: Option<&str>) -> HashMap<String, St
     map
 }
 
-pub fn message_properties_to_string(properties: &HashMap<String, String>) -> String {
+pub fn message_properties_to_string(
+    properties: &HashMap<CheetahString, CheetahString>,
+) -> CheetahString {
     let mut len = 0;
     for (name, value) in properties.iter() {
         len += name.len();
@@ -127,7 +133,7 @@ pub fn message_properties_to_string(properties: &HashMap<String, String>) -> Str
         sb.push_str(value);
         sb.push(PROPERTY_SEPARATOR);
     }
-    sb
+    CheetahString::from_string(sb)
 }
 
 pub fn decode_client(
@@ -323,7 +329,7 @@ pub fn decode(
     let mut topic = vec![0; topic_len];
     byte_buffer.copy_to_slice(&mut topic);
     let topic_str = str::from_utf8(&topic).unwrap();
-    msg_ext.message.topic = topic_str.to_string();
+    msg_ext.message.topic = CheetahString::from_slice(topic_str);
 
     // 17 properties
     let properties_length = byte_buffer.get_i16();
@@ -332,21 +338,26 @@ pub fn decode(
         let mut properties = vec![0; properties_length as usize];
         byte_buffer.copy_to_slice(&mut properties);
         if !is_set_properties_string {
-            let properties_string = String::from_utf8_lossy(properties.as_slice()).to_string();
-            let message_properties =
-                string_to_message_properties(Some(&CheetahString::from_string(properties_string)));
+            //can optimize later
+            let properties_string = CheetahString::from_string(
+                String::from_utf8_lossy(properties.as_slice()).to_string(),
+            );
+            let message_properties = string_to_message_properties(Some(&properties_string));
             msg_ext.message.properties = message_properties;
         } else {
-            let properties_string = String::from_utf8_lossy(properties.as_slice()).to_string();
-            let mut message_properties = string_to_message_properties(Some(
-                &CheetahString::from_string(properties_string.clone()),
-            ));
-            message_properties.insert("propertiesString".to_string(), properties_string);
+            let properties_string = CheetahString::from_string(
+                String::from_utf8_lossy(properties.as_slice()).to_string(),
+            );
+            let mut message_properties = string_to_message_properties(Some(&properties_string));
+            message_properties.insert(
+                CheetahString::from_static_str("propertiesString"),
+                properties_string,
+            );
             msg_ext.message.properties = message_properties;
         }
     }
     let msg_id = build_message_id(store_host_address, physic_offset);
-    msg_ext.set_msg_id(msg_id);
+    msg_ext.set_msg_id(CheetahString::from_string(msg_id));
 
     if is_client {
         unimplemented!()

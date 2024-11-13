@@ -19,6 +19,7 @@ use std::sync::atomic::Ordering;
 
 use bytes::BufMut;
 use bytes::BytesMut;
+use cheetah_string::CheetahString;
 use chrono::Datelike;
 use chrono::Months;
 use chrono::TimeZone;
@@ -68,11 +69,13 @@ pub struct MessageClientIDSetter;
 
 impl MessageClientIDSetter {
     #[inline]
-    pub fn get_uniq_id<T>(message: &T) -> Option<String>
+    pub fn get_uniq_id<T>(message: &T) -> Option<CheetahString>
     where
         T: MessageTrait,
     {
-        message.get_property(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX)
+        message.get_property(&CheetahString::from_static_str(
+            MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
+        ))
     }
 
     fn set_start_time(millis: i64) {
@@ -117,13 +120,17 @@ impl MessageClientIDSetter {
         T: MessageTrait,
     {
         if message
-            .get_property(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX)
+            .get_property(&CheetahString::from_static_str(
+                MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
+            ))
             .is_none()
         {
             let uniq_id = Self::create_uniq_id();
             message.put_property(
-                MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX.to_owned(),
-                uniq_id,
+                CheetahString::from_static_str(
+                    MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
+                ),
+                CheetahString::from_string(uniq_id),
             );
         }
     }

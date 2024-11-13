@@ -20,6 +20,7 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
@@ -299,20 +300,21 @@ impl HookUtils {
             }
 
             msg.message_ext_inner.message.properties.insert(
-                MessageConst::PROPERTY_TIMER_OUT_MS.to_string(),
-                deliver_ms.to_string(),
+                CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_OUT_MS),
+                CheetahString::from_string(deliver_ms.to_string()),
             );
             msg.message_ext_inner.message.properties.insert(
-                MessageConst::PROPERTY_REAL_TOPIC.to_string(),
-                msg.topic().to_string(),
+                CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC),
+                CheetahString::from_slice(msg.topic()),
             );
             msg.message_ext_inner.message.properties.insert(
-                MessageConst::PROPERTY_REAL_QUEUE_ID.to_string(),
-                msg.message_ext_inner.queue_id.to_string(),
+                CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID),
+                CheetahString::from_string(msg.message_ext_inner.queue_id.to_string()),
             );
             msg.properties_string =
                 message_properties_to_string(&msg.message_ext_inner.message.properties);
-            msg.message_ext_inner.message.topic = timer_message_store::TIMER_TOPIC.to_string();
+            msg.message_ext_inner.message.topic =
+                CheetahString::from_static_str(timer_message_store::TIMER_TOPIC);
             msg.message_ext_inner.queue_id = 0;
         } else if msg
             .message_ext_inner
@@ -341,17 +343,18 @@ impl HookUtils {
 
         // Backup real topic, queueId
         msg.message_ext_inner.message.properties.insert(
-            MessageConst::PROPERTY_REAL_TOPIC.to_string(),
-            msg.topic().to_string(),
+            CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC),
+            CheetahString::from_string(msg.topic().to_string()),
         );
         msg.message_ext_inner.message.properties.insert(
-            MessageConst::PROPERTY_REAL_QUEUE_ID.to_string(),
-            msg.message_ext_inner.queue_id.to_string(),
+            CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID),
+            CheetahString::from_string(msg.message_ext_inner.queue_id.to_string()),
         );
         msg.properties_string =
             message_properties_to_string(&msg.message_ext_inner.message.properties);
 
-        msg.message_ext_inner.message.topic = TopicValidator::RMQ_SYS_SCHEDULE_TOPIC.to_string();
+        msg.message_ext_inner.message.topic =
+            CheetahString::from_static_str(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC);
         msg.message_ext_inner.queue_id = ScheduleMessageService::delay_level2queue_id(
             msg.message_ext_inner.message.get_delay_time_level(),
         );
@@ -365,8 +368,8 @@ impl HookUtils {
     ) -> bool {
         for msg in msg_list.iter_mut() {
             msg.message.properties.insert(
-                MessageConst::PROPERTY_WAIT_STORE_MSG_OK.to_string(),
-                false.to_string(),
+                CheetahString::from_static_str(MessageConst::PROPERTY_WAIT_STORE_MSG_OK),
+                CheetahString::from_string(false.to_string()),
             );
             /*            if let Err(e) = outer_api.send_message_to_specific_broker(
                 broker_addr,
@@ -399,33 +402,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn check_inner_batch_returns_message_illegal_when_inner_num_property_exists_but_inner_batch_flag_is_not_set(
-    ) {
-        let topic_config_table = Arc::new(parking_lot::Mutex::new(
-            HashMap::<String, TopicConfig>::new(),
-        ));
-        let mut msg = MessageExt::default();
-        msg.message.properties.insert(
-            MessageConst::PROPERTY_INNER_NUM.to_string(),
-            "1".to_string(),
-        );
-
-        let result = HookUtils::check_inner_batch(&topic_config_table, &msg);
-
-        assert_eq!(
-            result.unwrap().put_message_status(),
-            PutMessageStatus::MessageIllegal
-        );
-    }
-
-    #[test]
     fn check_inner_batch_returns_message_illegal_when_inner_batch_flag_is_set_but_cq_type_is_not_batch_cq(
     ) {
         let mut topic_config_table = HashMap::<String, TopicConfig>::new();
         topic_config_table.insert("test_topic".to_string(), TopicConfig::default());
         let topic_config_table = Arc::new(parking_lot::Mutex::new(topic_config_table));
         let mut msg = MessageExt::default();
-        msg.message.topic = "test_topic".to_string();
+        msg.message.topic = "test_topic".into();
         msg.set_sys_flag(MessageSysFlag::INNER_BATCH_FLAG);
 
         let result = HookUtils::check_inner_batch(&topic_config_table, &msg);

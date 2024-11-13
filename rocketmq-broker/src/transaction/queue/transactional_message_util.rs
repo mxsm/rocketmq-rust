@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::message::MessageConst;
@@ -51,14 +52,18 @@ impl TransactionalMessageUtil {
         msg_inner.set_wait_store_msg_ok(false);
         msg_inner
             .message_ext_inner
-            .set_msg_id(msg_ext.msg_id().to_string());
+            .set_msg_id(msg_ext.msg_id().clone());
         msg_inner.set_topic(
             msg_ext
-                .get_property(MessageConst::PROPERTY_REAL_TOPIC)
+                .get_property(&CheetahString::from_static_str(
+                    MessageConst::PROPERTY_REAL_TOPIC,
+                ))
                 .unwrap_or_default(),
         );
         // msg_inner.set_body(msg_ext.get_body().clone());
-        if let Some(real_queue_id_str) = msg_ext.get_property("REAL_QUEUE_ID") {
+        if let Some(real_queue_id_str) =
+            msg_ext.get_property(&CheetahString::from_static_str("REAL_QUEUE_ID"))
+        {
             if let Ok(value) = real_queue_id_str.parse::<i32>() {
                 msg_inner.message_ext_inner.set_queue_id(value);
             }
@@ -76,15 +81,17 @@ impl TransactionalMessageUtil {
         msg_inner.message_ext_inner.set_born_host(msg_ext.born_host);
         msg_inner.set_transaction_id(
             msg_ext
-                .get_property(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX)
+                .get_property(&CheetahString::from_static_str(
+                    MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
+                ))
                 .unwrap_or_default(),
         );
 
         MessageAccessor::set_properties(&mut msg_inner, msg_ext.get_properties().clone());
         MessageAccessor::put_property(
             &mut msg_inner,
-            MessageConst::PROPERTY_TRANSACTION_PREPARED.to_owned(),
-            "true".to_owned(),
+            CheetahString::from_static_str(MessageConst::PROPERTY_TRANSACTION_PREPARED),
+            CheetahString::from_string("true".to_owned()),
         );
         MessageAccessor::clear_property(
             &mut msg_inner,

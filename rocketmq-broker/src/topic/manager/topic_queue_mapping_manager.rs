@@ -86,7 +86,7 @@ impl TopicQueueMappingManager {
         if let Some(value) = request_header.lo() {
             if !value {
                 return TopicQueueMappingContext::new(
-                    request_header.topic(),
+                    request_header.topic().clone(),
                     None,
                     None,
                     vec![],
@@ -100,10 +100,10 @@ impl TopicQueueMappingManager {
         let mut global_id: Option<i32> = request_header.queue_id();
 
         let mutex_guard = self.topic_queue_mapping_table.lock();
-        let tqmd = mutex_guard.get(topic);
+        let tqmd = mutex_guard.get(topic.as_str());
         if tqmd.is_none() {
             return TopicQueueMappingContext {
-                topic: topic.to_string(),
+                topic: topic.clone(),
                 global_id: None,
                 mapping_detail: None,
                 mapping_item_list: vec![],
@@ -124,7 +124,7 @@ impl TopicQueueMappingManager {
 
         if global_id.is_none() {
             return TopicQueueMappingContext {
-                topic: topic.to_string(),
+                topic: topic.clone(),
                 global_id: None,
                 mapping_detail: Some(mapping_detail.clone()),
                 mapping_item_list: vec![],
@@ -135,7 +135,7 @@ impl TopicQueueMappingManager {
         // If not find mappingItem, it encounters some errors
         if global_id.unwrap() < 0 && !select_one_when_miss {
             return TopicQueueMappingContext {
-                topic: topic.to_string(),
+                topic: topic.clone(),
                 global_id,
                 mapping_detail: Some(mapping_detail.clone()),
                 mapping_item_list: vec![],
@@ -156,7 +156,7 @@ impl TopicQueueMappingManager {
         if let Some(global_id_value) = global_id {
             if global_id_value < 0 {
                 return TopicQueueMappingContext {
-                    topic: topic.to_string(),
+                    topic: topic.clone(),
                     global_id,
                     mapping_detail: Some(mapping_detail.clone()),
                     mapping_item_list: vec![],
@@ -180,7 +180,7 @@ impl TopicQueueMappingManager {
             (None, vec![])
         };
         TopicQueueMappingContext {
-            topic: topic.to_string(),
+            topic: topic.clone(),
             global_id,
             mapping_detail: Some(mapping_detail.clone()),
             mapping_item_list,

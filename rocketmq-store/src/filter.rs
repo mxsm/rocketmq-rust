@@ -17,6 +17,8 @@
 
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
+
 use crate::consume_queue::consume_queue_ext::CqExtUnit;
 
 /// Represents a message filter.
@@ -36,6 +38,6 @@ pub trait MessageFilter: Send + Sync {
     fn is_matched_by_commit_log(
         &self,
         msg_buffer: Option<&[u8]>,
-        properties: Option<&HashMap<String, String>>,
+        properties: Option<&HashMap<CheetahString, CheetahString>>,
     ) -> bool;
 }
