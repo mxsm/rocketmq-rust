@@ -448,8 +448,8 @@ impl TopicRequestHandler {
         let mut map = HashMap::new();
         for i in 0..max_queue_nums {
             let mut message_queue = MessageQueue::new();
-            message_queue.set_topic(topic.to_string());
-            message_queue.set_broker_name(self.inner.broker_config.broker_name.clone());
+            message_queue.set_topic(topic.into());
+            message_queue.set_broker_name(self.inner.broker_config.broker_name.clone().into());
             message_queue.set_queue_id(i as i32);
             let mut topic_offset = TopicOffset::new();
             let min = std::cmp::max(

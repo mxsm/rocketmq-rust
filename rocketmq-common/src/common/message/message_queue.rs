@@ -20,22 +20,23 @@ use std::fmt;
 use std::hash::Hash;
 use std::hash::Hasher;
 
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageQueue {
-    topic: String,
-    broker_name: String,
+    topic: CheetahString,
+    broker_name: CheetahString,
     queue_id: i32,
 }
 
 impl MessageQueue {
     pub fn new() -> Self {
         MessageQueue {
-            topic: String::new(),
-            broker_name: String::new(),
+            topic: CheetahString::new(),
+            broker_name: CheetahString::new(),
             queue_id: 0,
         }
     }
@@ -49,8 +50,8 @@ impl MessageQueue {
     }
 
     pub fn from_parts(
-        topic: impl Into<String>,
-        broker_name: impl Into<String>,
+        topic: impl Into<CheetahString>,
+        broker_name: impl Into<CheetahString>,
         queue_id: i32,
     ) -> Self {
         MessageQueue {
@@ -65,7 +66,7 @@ impl MessageQueue {
     }
 
     #[inline]
-    pub fn set_topic(&mut self, topic: String) {
+    pub fn set_topic(&mut self, topic: CheetahString) {
         self.topic = topic;
     }
 
@@ -74,7 +75,7 @@ impl MessageQueue {
         &self.broker_name
     }
 
-    pub fn set_broker_name(&mut self, broker_name: String) {
+    pub fn set_broker_name(&mut self, broker_name: CheetahString) {
         self.broker_name = broker_name;
     }
 
