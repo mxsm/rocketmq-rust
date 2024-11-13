@@ -19,7 +19,6 @@ use std::any::Any;
 
 use bytes::Bytes;
 use bytes::BytesMut;
-use cheetah_string::CheetahString;
 
 use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
