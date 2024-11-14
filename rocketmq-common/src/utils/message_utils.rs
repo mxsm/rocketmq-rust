@@ -75,15 +75,13 @@ pub fn delete_property(properties_string: &str, name: &str) -> String {
                     }
                     let idx1 = idx1.unwrap();
                     start_idx = idx1 + name.len();
-                    if idx1 == 0
-                        || properties_string.chars().nth(idx1 - 1) == Some(PROPERTY_SEPARATOR)
+                    if (idx1 == 0
+                        || properties_string.chars().nth(idx1 - 1) == Some(PROPERTY_SEPARATOR))
+                        && (properties_string.len() > idx1 + name.len())
+                        && properties_string.chars().nth(idx1 + name.len())
+                            == Some(NAME_VALUE_SEPARATOR)
                     {
-                        if properties_string.len() > idx1 + name.len()
-                            && properties_string.chars().nth(idx1 + name.len())
-                                == Some(NAME_VALUE_SEPARATOR)
-                        {
-                            break;
-                        }
+                        break;
                     }
                 }
                 if idx1.is_none() {
