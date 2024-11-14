@@ -61,7 +61,7 @@ pub fn delete_property(properties_string: &str, name: &str) -> String {
         let mut idx1;
         let mut idx2;
         idx1 = properties_string.find(name);
-        if let Some(_) = idx1 {
+        if idx1.is_some() {
             // cropping may be required
             let mut string_builder = String::with_capacity(properties_string.len());
             loop {
