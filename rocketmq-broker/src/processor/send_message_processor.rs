@@ -864,11 +864,11 @@ where
             if subscription_group_config.is_none() {
                 response
                     .with_code(ResponseCode::SubscriptionNotExist)
-                    .with_remark(Some(format!(
+                    .with_remark(format!(
                         "subscription group not exist, {}  {}",
                         group_name.as_str(),
                         FAQUrl::suggest_todo(FAQUrl::SUBSCRIPTION_GROUP_NOT_EXIST)
-                    )));
+                    ));
                 return false;
             }
             let subscription_group_config = subscription_group_config.unwrap();
@@ -919,10 +919,7 @@ where
                 if new_topic_config.is_none() {
                     response
                         .with_code(ResponseCode::SystemError)
-                        .with_remark(Some(format!(
-                            "topic {} not exist, apply DLQ failed",
-                            new_topic
-                        )));
+                        .with_remark(format!("topic {} not exist, apply DLQ failed", new_topic));
                     return false;
                 }
                 *topic_config = new_topic_config.unwrap();
@@ -1079,10 +1076,10 @@ impl<MS, TS> Inner<MS, TS> {
                 .is_order_topic(request_header.topic.as_str())
         {
             response.with_code(ResponseCode::NoPermission);
-            response.with_remark(Some(format!(
+            response.with_remark(format!(
                 "the broker[{}] sending message is forbidden",
                 self.broker_config.broker_ip1.clone()
-            )));
+            ));
             return;
         }
 
@@ -1090,16 +1087,16 @@ impl<MS, TS> Inner<MS, TS> {
         let result = TopicValidator::validate_topic(request_header.topic.as_str());
         if !result.valid() {
             response.with_code(SystemError);
-            response.with_remark(Some(result.remark().to_string()));
+            response.with_remark(result.remark().clone());
             return;
         }
 
         if TopicValidator::is_not_allowed_send_topic(request_header.topic.as_str()) {
             response.with_code(ResponseCode::NoPermission);
-            response.with_remark(Some(format!(
+            response.with_remark(format!(
                 "Sending message to topic[{}] is forbidden.",
                 request_header.topic.as_str()
-            )));
+            ));
             return;
         }
         let mut topic_config = self
@@ -1144,10 +1141,10 @@ impl<MS, TS> Inner<MS, TS> {
 
             if topic_config.is_none() {
                 response.with_code(ResponseCode::TopicNotExist);
-                response.with_remark(Some(format!(
+                response.with_remark(format!(
                     "topic[{}] not exist, apply first please!",
                     request_header.topic.as_str()
-                )));
+                ));
             }
         }
 
@@ -1158,12 +1155,12 @@ impl<MS, TS> Inner<MS, TS> {
             .max(topic_config_inner.read_queue_nums);
         if queue_id_int >= id_valid as i32 {
             response.with_code(ResponseCode::SystemError);
-            response.with_remark(Some(format!(
+            response.with_remark(format!(
                 "request queueId[{}] is illegal, {:?} Producer: {}",
                 queue_id_int,
                 topic_config_inner,
                 channel.remote_address()
-            )));
+            ));
         }
     }
 

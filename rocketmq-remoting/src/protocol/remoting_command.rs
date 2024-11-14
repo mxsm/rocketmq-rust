@@ -645,8 +645,8 @@ impl RemotingCommand {
         self
     }
 
-    pub fn with_remark(&mut self, remark: Option<impl Into<CheetahString>>) -> &mut Self {
-        self.remark = remark.map(|item| item.into());
+    pub fn with_remark(&mut self, remark: impl Into<CheetahString>) -> &mut Self {
+        self.remark = Some(remark.into());
         self
     }
 
