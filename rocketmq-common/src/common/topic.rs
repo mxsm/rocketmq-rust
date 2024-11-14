@@ -18,6 +18,7 @@
 use std::collections::HashSet;
 use std::sync::Mutex;
 
+use cheetah_string::CheetahString;
 use lazy_static::lazy_static;
 
 pub const TOPIC_MAX_LENGTH: usize = 127;
@@ -97,35 +98,35 @@ impl TopicValidator {
 
     pub fn validate_topic(topic: &str) -> ValidateTopicResult {
         if topic.trim().is_empty() {
+            const REMARK: &str = "The specified topic is blank.";
             return ValidateTopicResult {
                 valid: false,
-                remark: String::from("The specified topic is blank."),
+                remark: CheetahString::from_static_str(REMARK),
             };
         }
 
         if Self::is_topic_or_group_illegal(topic) {
+            const REMARK: &str =
+                "The specified topic contains illegal characters, allowing only ^[%|a-zA-Z0-9_-]+$";
             return ValidateTopicResult {
                 valid: false,
-                remark: String::from(
-                    "The specified topic contains illegal characters, allowing only \
-                     ^[%|a-zA-Z0-9_-]+$",
-                ),
+                remark: CheetahString::from_static_str(REMARK),
             };
         }
 
         if topic.len() > TOPIC_MAX_LENGTH {
             return ValidateTopicResult {
                 valid: false,
-                remark: format!(
+                remark: CheetahString::from(format!(
                     "The specified topic is longer than topic max length {}.",
                     TOPIC_MAX_LENGTH
-                ),
+                )),
             };
         }
 
         ValidateTopicResult {
             valid: true,
-            remark: String::new(),
+            remark: CheetahString::empty(),
         }
     }
 
@@ -155,21 +156,105 @@ impl TopicValidator {
 
 pub struct ValidateTopicResult {
     valid: bool,
-    remark: String,
+    remark: CheetahString,
 }
 
 impl ValidateTopicResult {
     pub fn valid(&self) -> bool {
         self.valid
     }
-    pub fn remark(&self) -> &str {
+    pub fn remark(&self) -> &CheetahString {
         &self.remark
     }
 
     pub fn set_valid(&mut self, valid: bool) {
         self.valid = valid;
     }
-    pub fn set_remark(&mut self, remark: String) {
+    pub fn set_remark(&mut self, remark: CheetahString) {
         self.remark = remark;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn validate_topic_with_valid_topic() {
+        let result = TopicValidator::validate_topic("valid_topic");
+        assert!(result.valid());
+        assert_eq!(result.remark(), "");
+    }
+
+    #[test]
+    fn validate_topic_with_empty_topic() {
+        let result = TopicValidator::validate_topic("");
+        assert!(!result.valid());
+        assert_eq!(result.remark(), "The specified topic is blank.");
+    }
+
+    #[test]
+    fn validate_topic_with_illegal_characters() {
+        let result = TopicValidator::validate_topic("invalid@topic");
+        assert!(!result.valid());
+        assert_eq!(
+            result.remark(),
+            "The specified topic contains illegal characters, allowing only ^[%|a-zA-Z0-9_-]+$"
+        );
+    }
+
+    #[test]
+    fn validate_topic_with_exceeding_length() {
+        let long_topic = "a".repeat(TOPIC_MAX_LENGTH + 1);
+        let result = TopicValidator::validate_topic(&long_topic);
+        assert!(!result.valid());
+        assert_eq!(
+            result.remark().as_str(),
+            format!(
+                "The specified topic is longer than topic max length {}.",
+                TOPIC_MAX_LENGTH
+            )
+        );
+    }
+
+    #[test]
+    fn is_system_topic_with_system_topic() {
+        assert!(TopicValidator::is_system_topic(
+            TopicValidator::RMQ_SYS_SCHEDULE_TOPIC
+        ));
+    }
+
+    #[test]
+    fn is_system_topic_with_non_system_topic() {
+        assert!(!TopicValidator::is_system_topic("non_system_topic"));
+    }
+
+    #[test]
+    fn is_not_allowed_send_topic_with_not_allowed_topic() {
+        assert!(TopicValidator::is_not_allowed_send_topic(
+            TopicValidator::RMQ_SYS_SCHEDULE_TOPIC
+        ));
+    }
+
+    #[test]
+    fn is_not_allowed_send_topic_with_allowed_topic() {
+        assert!(!TopicValidator::is_not_allowed_send_topic("allowed_topic"));
+    }
+
+    #[test]
+    fn add_system_topic_adds_new_topic() {
+        TopicValidator::add_system_topic("new_system_topic");
+        assert!(TopicValidator::is_system_topic("new_system_topic"));
+    }
+
+    #[test]
+    fn get_system_topic_set_returns_all_system_topics() {
+        let system_topics = TopicValidator::get_system_topic_set();
+        assert!(system_topics.contains(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC));
+    }
+
+    #[test]
+    fn get_not_allowed_send_topic_set_returns_all_not_allowed_topics() {
+        let not_allowed_topics = TopicValidator::get_not_allowed_send_topic_set();
+        assert!(not_allowed_topics.contains(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC));
     }
 }
