@@ -24,6 +24,7 @@ use bytes::BufMut;
 
 use crate::common::message::message_ext::MessageExt;
 use crate::common::message::MessageConst;
+use crate::MessageDecoder::NAME_VALUE_SEPARATOR;
 use crate::MessageDecoder::PROPERTY_SEPARATOR;
 use crate::UtilAll::bytes_to_string;
 
@@ -54,21 +55,60 @@ pub fn get_sharding_key_indexes(msgs: &[MessageExt], index_size: usize) -> HashS
     index_set
 }
 
-//need refactor
 pub fn delete_property(properties_string: &str, name: &str) -> String {
-    if properties_string.is_empty() {
-        return properties_string.to_owned();
+    if !properties_string.is_empty() {
+        let mut idx0 = 0;
+        let mut idx1;
+        let mut idx2;
+        idx1 = properties_string.find(name);
+        if let Some(_) = idx1 {
+            // cropping may be required
+            let mut string_builder = String::with_capacity(properties_string.len());
+            loop {
+                let mut start_idx = idx0;
+                loop {
+                    idx1 = properties_string[start_idx..]
+                        .find(name)
+                        .map(|i| i + start_idx);
+                    if idx1.is_none() {
+                        break;
+                    }
+                    let idx1 = idx1.unwrap();
+                    start_idx = idx1 + name.len();
+                    if idx1 == 0
+                        || properties_string.chars().nth(idx1 - 1) == Some(PROPERTY_SEPARATOR)
+                    {
+                        if properties_string.len() > idx1 + name.len()
+                            && properties_string.chars().nth(idx1 + name.len())
+                                == Some(NAME_VALUE_SEPARATOR)
+                        {
+                            break;
+                        }
+                    }
+                }
+                if idx1.is_none() {
+                    // there are no characters that need to be skipped. Append all remaining
+                    // characters.
+                    string_builder.push_str(&properties_string[idx0..]);
+                    break;
+                }
+                let idx1 = idx1.unwrap();
+                // there are characters that need to be cropped
+                string_builder.push_str(&properties_string[idx0..idx1]);
+                // move idx2 to the end of the cropped character
+                idx2 = properties_string[idx1 + name.len() + 1..]
+                    .find(PROPERTY_SEPARATOR)
+                    .map(|i| i + idx1 + name.len() + 1);
+                // all subsequent characters will be cropped
+                if idx2.is_none() {
+                    break;
+                }
+                idx0 = idx2.unwrap() + 1;
+            }
+            return string_builder;
+        }
     }
-    let index1 = properties_string.find(name);
-    if index1.is_none() {
-        return properties_string.to_owned();
-    }
-    properties_string
-        .split(PROPERTY_SEPARATOR)
-        .map(|s| s.to_owned())
-        .filter(|s| s.starts_with(name))
-        .collect::<Vec<String>>()
-        .join(PROPERTY_SEPARATOR.to_string().as_str())
+    properties_string.to_string()
 }
 
 pub fn build_message_id(socket_addr: SocketAddr, wrote_offset: i64) -> String {
@@ -187,9 +227,59 @@ mod tests {
     #[test]
     fn test_delete_property() {
         let properties_string = "aa\u{0001}bb\u{0002}cc\u{0001}bb\u{0002}";
-        let name = "a";
+        let name = "aa";
         let result = delete_property(properties_string, name);
-        assert_eq!(result, "aa\u{0001}bb");
+        assert_eq!(result, "cc\u{0001}bb\u{0002}");
+    }
+
+    #[test]
+    fn delete_property_removes_property_correctly() {
+        let properties_string =
+            "key1\u{0001}value1\u{0002}key2\u{0001}value2\u{0002}key3\u{0001}value3";
+        let name = "key2";
+        let result = delete_property(properties_string, name);
+        assert_eq!(result, "key1\u{0001}value1\u{0002}key3\u{0001}value3");
+    }
+
+    #[test]
+    fn delete_property_handles_empty_string() {
+        let properties_string = "";
+        let name = "key";
+        let result = delete_property(properties_string, name);
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn delete_property_handles_non_existent_key() {
+        let properties_string = "key1\u{0001}value1\u{0002}key2\u{0001}value2";
+        let name = "key3";
+        let result = delete_property(properties_string, name);
+        assert_eq!(result, "key1\u{0001}value1\u{0002}key2\u{0001}value2");
+    }
+
+    #[test]
+    fn delete_property_handles_key_at_start() {
+        let properties_string = "key1\u{0001}value1\u{0002}key2\u{0001}value2";
+        let name = "key1";
+        let result = delete_property(properties_string, name);
+        assert_eq!(result, "key2\u{0001}value2");
+    }
+
+    #[test]
+    fn delete_property_handles_key_at_end() {
+        let properties_string = "key1\u{0001}value1\u{0002}key2\u{0001}value2";
+        let name = "key2";
+        let result = delete_property(properties_string, name);
+        assert_eq!(result, "key1\u{0001}value1\u{0002}");
+    }
+
+    #[test]
+    fn delete_property_handles_multiple_occurrences() {
+        let properties_string =
+            "key1\u{0001}value1\u{0002}key2\u{0001}value2\u{0002}key1\u{0001}value3";
+        let name = "key1";
+        let result = delete_property(properties_string, name);
+        assert_eq!(result, "key2\u{0001}value2\u{0002}");
     }
 
     #[test]
