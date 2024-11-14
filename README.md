@@ -123,11 +123,9 @@ cargo run --bin rocketmq-broker-rust
 
 First, start the RocketMQ NameServer and Broker services.
 
-- [**Send a single message
-  **](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md#Send-a-single-message)
+- [**Send a single message**](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md#Send-a-single-message)
 
-- [**Send batch messages
-  **](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md#Send-batch-messages)
+- [**Send batch messages**](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md#Send-batch-messages)
 
 - [**Send RPC messages**](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md#Send-RPC-messages)
 
