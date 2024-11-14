@@ -87,7 +87,7 @@ impl TopicRequestHandler {
             return Some(
                 response
                     .set_code(ResponseCode::SystemError)
-                    .set_remark(result.remark()),
+                    .set_remark(result.remark().clone()),
             );
         }
         if self
@@ -213,7 +213,7 @@ impl TopicRequestHandler {
                 return Some(
                     response
                         .set_code(ResponseCode::SystemError)
-                        .set_remark(result.remark()),
+                        .set_remark(result.remark().clone()),
                 );
             }
             if self
