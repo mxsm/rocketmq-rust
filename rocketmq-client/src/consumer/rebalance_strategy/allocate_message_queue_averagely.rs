@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 
 use crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
@@ -28,7 +29,7 @@ impl AllocateMessageQueueStrategy for AllocateMessageQueueAveragely {
         consumer_group: &str,
         current_cid: &str,
         mq_all: &[MessageQueue],
-        cid_all: &[String],
+        cid_all: &[CheetahString],
     ) -> Result<Vec<MessageQueue>> {
         let mut result = Vec::new();
         if !check(consumer_group, current_cid, mq_all, cid_all)? {

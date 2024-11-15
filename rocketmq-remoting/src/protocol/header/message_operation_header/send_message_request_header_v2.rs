@@ -301,13 +301,13 @@ impl TopicRequestHeaderTrait for SendMessageRequestHeaderV2 {
         &self.b
     }
 
-    fn broker_name(&self) -> Option<&str> {
+    fn broker_name(&self) -> Option<&CheetahString> {
         self.topic_request_header
             .as_ref()?
             .rpc_request_header
             .as_ref()?
             .broker_name
-            .as_deref()
+            .as_ref()
     }
 
     fn set_broker_name(&mut self, broker_name: CheetahString) {

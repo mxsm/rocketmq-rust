@@ -50,7 +50,7 @@ use crate::Result;
 #[derive(Clone)]
 pub struct PullAPIWrapper {
     client_instance: ArcMut<MQClientInstance>,
-    consumer_group: String,
+    consumer_group: CheetahString,
     unit_mode: bool,
     pull_from_which_node_table: ArcMut<HashMap<MessageQueue, AtomicU64>>,
     connect_broker_by_user: bool,
@@ -61,7 +61,7 @@ pub struct PullAPIWrapper {
 impl PullAPIWrapper {
     pub fn new(
         mq_client_factory: ArcMut<MQClientInstance>,
-        consumer_group: String,
+        consumer_group: CheetahString,
         unit_mode: bool,
     ) -> Self {
         Self {
@@ -249,8 +249,8 @@ impl PullAPIWrapper {
     pub async fn pull_kernel_impl<PCB>(
         &mut self,
         mq: &MessageQueue,
-        sub_expression: &str,
-        expression_type: &str,
+        sub_expression: CheetahString,
+        expression_type: CheetahString,
         sub_version: i64,
         offset: i64,
         max_nums: i32,
@@ -277,7 +277,7 @@ impl PullAPIWrapper {
 
         if find_broker_result.is_none() {
             self.client_instance
-                .update_topic_route_info_from_name_server_topic(mq.get_topic())
+                .update_topic_route_info_from_name_server_topic(mq.get_topic_cs())
                 .await;
             let broker_name_again = self
                 .client_instance
@@ -296,7 +296,7 @@ impl PullAPIWrapper {
 
         if let Some(find_broker_result) = find_broker_result {
             {
-                if !ExpressionType::is_tag_type(Some(expression_type))
+                if !ExpressionType::is_tag_type(Some(expression_type.as_str()))
                     && find_broker_result.broker_version < RocketMqVersion::V410Snapshot.into()
                 {
                     return Err(MQClientErr(
@@ -319,7 +319,7 @@ impl PullAPIWrapper {
             }
 
             let request_header = PullMessageRequestHeader {
-                consumer_group: CheetahString::from_string(self.consumer_group.clone()),
+                consumer_group: self.consumer_group.clone(),
                 topic: CheetahString::from_string(mq.get_topic().to_string()),
                 queue_id: Some(mq.get_queue_id()),
                 queue_offset: offset,
@@ -349,7 +349,7 @@ impl PullAPIWrapper {
             let mut broker_addr = find_broker_result.broker_addr.clone();
             if PullSysFlag::has_class_filter_flag(sys_flag_inner as u32) {
                 broker_addr = self
-                    .compute_pull_from_which_filter_server(mq.get_topic(), broker_addr.as_str())
+                    .compute_pull_from_which_filter_server(mq.get_topic_cs(), &broker_addr)
                     .await?;
             }
 
@@ -372,9 +372,9 @@ impl PullAPIWrapper {
 
     async fn compute_pull_from_which_filter_server(
         &mut self,
-        topic: &str,
-        broker_addr: &str,
-    ) -> Result<String> {
+        topic: &CheetahString,
+        broker_addr: &CheetahString,
+    ) -> Result<CheetahString> {
         let topic_route_table = self.client_instance.topic_route_table.read().await;
         let topic_route_data = topic_route_table.get(topic);
         let vec = topic_route_data

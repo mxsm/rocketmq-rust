@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use cheetah_string::CheetahString;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
 use rocketmq_common::common::hasher::string_hasher::JavaStringHasher;
 
@@ -23,17 +24,18 @@ pub struct FilterAPI;
 
 impl FilterAPI {
     pub fn build_subscription_data(
-        topic: &str,
-        sub_string: &str,
+        topic: &CheetahString,
+        sub_string: &CheetahString,
     ) -> Result<SubscriptionData, String> {
         let mut subscription_data = SubscriptionData {
-            topic: topic.to_string(),
-            sub_string: sub_string.to_string(),
+            topic: topic.clone(),
+            sub_string: sub_string.clone(),
             ..Default::default()
         };
 
         if sub_string.is_empty() || sub_string == SubscriptionData::SUB_ALL {
-            subscription_data.sub_string = SubscriptionData::SUB_ALL.to_string();
+            subscription_data.sub_string =
+                CheetahString::from_static_str(SubscriptionData::SUB_ALL);
             return Ok(subscription_data);
         }
 
@@ -45,7 +47,7 @@ impl FilterAPI {
         for tag in tags {
             let trimmed_tag = tag.trim();
             if !trimmed_tag.is_empty() {
-                subscription_data.tags_set.insert(trimmed_tag.to_string());
+                subscription_data.tags_set.insert(trimmed_tag.into());
                 subscription_data
                     .code_set
                     .insert(JavaStringHasher::new().hash_str(tag));
@@ -56,10 +58,10 @@ impl FilterAPI {
     }
 
     pub fn build_subscription_data_with_expression_type(
-        topic: &str,
-        sub_string: &str,
-        expression_type: Option<String>,
-    ) -> Result<SubscriptionData, String> {
+        topic: &CheetahString,
+        sub_string: &CheetahString,
+        expression_type: Option<CheetahString>,
+    ) -> Result<SubscriptionData, CheetahString> {
         let mut subscription_data = FilterAPI::build_subscription_data(topic, sub_string)?;
         if let Some(expr_type) = expression_type {
             subscription_data.expression_type = expr_type;
@@ -68,9 +70,9 @@ impl FilterAPI {
     }
 
     pub fn build(
-        topic: &str,
-        sub_string: &str,
-        type_: Option<String>,
+        topic: &CheetahString,
+        sub_string: &CheetahString,
+        type_: Option<CheetahString>,
     ) -> Result<SubscriptionData, String> {
         if type_.is_none() || type_.as_ref().unwrap().as_str() == ExpressionType::TAG {
             return FilterAPI::build_subscription_data(topic, sub_string);
@@ -84,8 +86,8 @@ impl FilterAPI {
         }
 
         let mut subscription_data = SubscriptionData {
-            topic: topic.to_string(),
-            sub_string: sub_string.to_string(),
+            topic: topic.clone(),
+            sub_string: sub_string.clone(),
             ..Default::default()
         };
         subscription_data.expression_type = type_.unwrap();
@@ -95,16 +97,17 @@ impl FilterAPI {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     #[test]
     fn build_subscription_data_creates_correct_subscription_data() {
-        let topic = "test_topic";
-        let sub_string = "tag1||tag2";
+        let topic = "test_topic".into();
+        let sub_string = "tag1||tag2".into();
         let subscription_data = FilterAPI::build_subscription_data(topic, sub_string).unwrap();
 
-        assert_eq!(subscription_data.topic, topic);
-        assert_eq!(subscription_data.sub_string, sub_string);
+        assert_eq!(subscription_data.topic.as_str(), topic);
+        assert_eq!(subscription_data.sub_string.as_str(), sub_string);
         assert!(subscription_data.tags_set.contains("tag1"));
         assert!(subscription_data.tags_set.contains("tag2"));
     }
@@ -121,9 +124,9 @@ mod tests {
 
     #[test]
     fn build_subscription_data_with_expression_type_sets_expression_type() {
-        let topic = "test_topic";
-        let sub_string = "tag1||tag2";
-        let expression_type = Some("SQL92".to_string());
+        let topic = "test_topic".into();
+        let sub_string = "tag1||tag2".into();
+        let expression_type = Some("SQL92".into());
         let subscription_data = FilterAPI::build_subscription_data_with_expression_type(
             topic,
             sub_string,
@@ -131,27 +134,27 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(subscription_data.topic, topic);
-        assert_eq!(subscription_data.sub_string, sub_string);
+        assert_eq!(subscription_data.topic.as_str(), topic);
+        assert_eq!(subscription_data.sub_string.as_str(), sub_string);
         assert_eq!(subscription_data.expression_type, expression_type.unwrap());
     }
 
     #[test]
     fn build_creates_correct_subscription_data_for_tag_expression_type() {
-        let topic = "test_topic";
-        let sub_string = "tag1||tag2";
-        let type_ = Some(ExpressionType::TAG.to_string());
+        let topic = "test_topic".into();
+        let sub_string = "tag1||tag2".into();
+        let type_ = Some(ExpressionType::TAG.into());
         let subscription_data = FilterAPI::build(topic, sub_string, type_).unwrap();
 
-        assert_eq!(subscription_data.topic, topic);
-        assert_eq!(subscription_data.sub_string, sub_string);
+        assert_eq!(subscription_data.topic.as_str(), topic);
+        assert_eq!(subscription_data.sub_string.as_str(), sub_string);
     }
 
     #[test]
     fn build_returns_error_for_empty_sub_string_and_non_tag_expression_type() {
-        let topic = "test_topic";
-        let sub_string = "";
-        let type_ = Some(ExpressionType::SQL92.to_string());
+        let topic = "test_topic".into();
+        let sub_string = "".into();
+        let type_ = Some(ExpressionType::SQL92.into());
         let result = FilterAPI::build(topic, sub_string, type_);
 
         assert!(result.is_err());

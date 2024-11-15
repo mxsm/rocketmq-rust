@@ -17,6 +17,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::FileUtils;
@@ -29,8 +30,10 @@ use crate::kvconfig::KVConfigSerializeWrapper;
 
 #[derive(Debug, Clone)]
 pub struct KVConfigManager {
-    pub(crate) config_table:
-        HashMap<String /* Namespace */, HashMap<String /* Key */, String /* Value */>>,
+    pub(crate) config_table: HashMap<
+        CheetahString, /* Namespace */
+        HashMap<CheetahString /* Key */, CheetahString /* Value */>,
+    >,
 
     pub(crate) namesrv_config: Arc<NamesrvConfig>,
 }
@@ -57,7 +60,9 @@ impl KVConfigManager {
     /// # Returns
     ///
     /// A reference to the configuration table.
-    pub fn get_config_table(&self) -> &HashMap<String, HashMap<String, String>> {
+    pub fn get_config_table(
+        &self,
+    ) -> &HashMap<CheetahString, HashMap<CheetahString, CheetahString>> {
         &self.config_table
     }
 
@@ -104,9 +109,9 @@ impl KVConfigManager {
     /// Adds or updates a key-value configuration.
     pub fn put_kv_config(
         &mut self,
-        namespace: impl Into<String>,
-        key: impl Into<String>,
-        value: impl Into<String>,
+        namespace: impl Into<CheetahString>,
+        key: impl Into<CheetahString>,
+        value: impl Into<CheetahString>,
     ) {
         let namespace_inner = namespace.into();
         if !self.config_table.contains_key(namespace_inner.as_str()) {
@@ -164,7 +169,10 @@ impl KVConfigManager {
     }
 
     /// Gets the key-value list for a specific namespace.
-    pub fn get_kv_list_by_namespace(&mut self, namespace: impl Into<String>) -> Option<Vec<u8>> {
+    pub fn get_kv_list_by_namespace(
+        &mut self,
+        namespace: impl Into<CheetahString>,
+    ) -> Option<Vec<u8>> {
         let namespace_inner = namespace.into();
         match self.config_table.get(namespace_inner.as_str()) {
             None => None,
@@ -180,9 +188,9 @@ impl KVConfigManager {
     // Gets the value for a specific key in a namespace.
     pub fn get_kvconfig(
         &self,
-        namespace: impl Into<String>,
-        key: impl Into<String>,
-    ) -> Option<String> {
+        namespace: impl Into<CheetahString>,
+        key: impl Into<CheetahString>,
+    ) -> Option<CheetahString> {
         match self.config_table.get(namespace.into().as_str()) {
             None => None,
             Some(kv_table) => {

@@ -506,15 +506,12 @@ where
             PullSysFlag::has_subscription_flag(request_header.sys_flag as u32);
         let (subscription_data, consumer_filter_data) = if has_subscription_flag {
             let subscription_data = FilterAPI::build(
-                request_header.topic.as_str(),
+                request_header.topic.as_ref(),
                 request_header
                     .subscription
                     .as_ref()
-                    .map_or_else(|| "", |value| value.as_str()),
-                request_header
-                    .expression_type
-                    .clone()
-                    .map(|value| value.to_string()),
+                    .unwrap_or(&CheetahString::default()),
+                request_header.expression_type.clone(),
             );
             if subscription_data.is_err() {
                 return Some(
@@ -810,7 +807,7 @@ where
                     None => {
                         return -1;
                     }
-                    Some(value) => Some(CheetahString::from_string(value.client_id().clone())),
+                    Some(value) => Some(value.client_id().clone()),
                 }
             };
             return self.broadcast_offset_manager.query_init_offset(

@@ -17,10 +17,11 @@
 
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
 #[derive(Deserialize, Serialize, Debug, Clone, Default)]
 pub struct KVTable {
-    pub table: HashMap<String, String>,
+    pub table: HashMap<CheetahString, CheetahString>,
 }

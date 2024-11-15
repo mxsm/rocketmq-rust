@@ -66,12 +66,17 @@ impl MessageQueue {
     }
 
     #[inline]
+    pub fn get_topic_cs(&self) -> &CheetahString {
+        &self.topic
+    }
+
+    #[inline]
     pub fn set_topic(&mut self, topic: CheetahString) {
         self.topic = topic;
     }
 
     #[inline]
-    pub fn get_broker_name(&self) -> &str {
+    pub fn get_broker_name(&self) -> &CheetahString {
         &self.broker_name
     }
 

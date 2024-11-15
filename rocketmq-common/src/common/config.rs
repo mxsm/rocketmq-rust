@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -28,14 +29,14 @@ use crate::TopicAttributes::TOPIC_MESSAGE_TYPE_ATTRIBUTE;
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TopicConfig {
-    pub topic_name: Option<String>,
+    pub topic_name: Option<CheetahString>,
     pub read_queue_nums: u32,
     pub write_queue_nums: u32,
     pub perm: u32,
     pub topic_filter_type: TopicFilterType,
     pub topic_sys_flag: u32,
     pub order: bool,
-    pub attributes: HashMap<String, String>,
+    pub attributes: HashMap<CheetahString, CheetahString>,
 }
 
 impl Default for TopicConfig {
@@ -69,7 +70,7 @@ impl TopicConfig {
         TopicMessageType::Normal
     }
 
-    pub fn new(topic_name: impl Into<String>) -> Self {
+    pub fn new(topic_name: impl Into<CheetahString>) -> Self {
         TopicConfig {
             topic_name: Some(topic_name.into()),
             ..Self::default()
@@ -77,7 +78,7 @@ impl TopicConfig {
     }
 
     pub fn with_queues(
-        topic_name: impl Into<String>,
+        topic_name: impl Into<CheetahString>,
         read_queue_nums: u32,
         write_queue_nums: u32,
     ) -> Self {
@@ -89,7 +90,7 @@ impl TopicConfig {
     }
 
     pub fn with_perm(
-        topic_name: impl Into<String>,
+        topic_name: impl Into<CheetahString>,
         read_queue_nums: u32,
         write_queue_nums: u32,
         perm: u32,
@@ -103,7 +104,7 @@ impl TopicConfig {
     }
 
     pub fn with_sys_flag(
-        topic_name: impl Into<String>,
+        topic_name: impl Into<CheetahString>,
         read_queue_nums: u32,
         write_queue_nums: u32,
         perm: u32,
@@ -139,7 +140,7 @@ impl TopicConfig {
     pub fn decode(&mut self, input: &str) -> bool {
         let parts: Vec<&str> = input.split(Self::SEPARATOR).collect();
         if parts.len() >= 5 {
-            self.topic_name = Some(parts[0].to_string());
+            self.topic_name = Some(parts[0].into());
             self.read_queue_nums = parts[1].parse().unwrap_or(Self::DEFAULT_READ_QUEUE_NUMS);
             self.write_queue_nums = parts[2].parse().unwrap_or(Self::DEFAULT_WRITE_QUEUE_NUMS);
             self.perm = parts[3]

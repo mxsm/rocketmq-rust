@@ -53,10 +53,7 @@ impl MQAdminImpl {
         for message_queue in message_queue_array {
             let user_topic = NamespaceUtil::without_namespace_with_namespace(
                 message_queue.get_topic(),
-                client_config
-                    .get_namespace()
-                    .unwrap_or("".to_string())
-                    .as_str(),
+                client_config.get_namespace().unwrap_or_default().as_str(),
             );
 
             let message_queue = MessageQueue::from_parts(
@@ -103,15 +100,15 @@ impl MQAdminImpl {
         let client = self.client.as_mut().expect("client is None");
         let broker_name = client.get_broker_name_from_message_queue(mq).await;
         let mut broker_addr = client
-            .find_broker_address_in_publish(broker_name.as_str())
+            .find_broker_address_in_publish(broker_name.as_ref())
             .await;
         if broker_addr.is_none() {
             client
-                .update_topic_route_info_from_name_server_topic(mq.get_topic())
+                .update_topic_route_info_from_name_server_topic(mq.get_topic_cs())
                 .await;
             let broker_name = client.get_broker_name_from_message_queue(mq).await;
             broker_addr = client
-                .find_broker_address_in_publish(broker_name.as_str())
+                .find_broker_address_in_publish(broker_name.as_ref())
                 .await;
         }
         if let Some(ref broker_addr) = broker_addr {

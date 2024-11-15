@@ -43,26 +43,26 @@ pub const HEART_BEAT_V2: &str = "com.rocketmq.heartbeat.v2";
 
 #[derive(Clone)]
 pub struct ClientConfig {
-    pub namesrv_addr: Option<String>,
-    pub client_ip: Option<String>,
-    pub instance_name: String,
+    pub namesrv_addr: Option<CheetahString>,
+    pub client_ip: Option<CheetahString>,
+    pub instance_name: CheetahString,
     pub client_callback_executor_threads: usize,
-    pub namespace: Option<String>,
+    pub namespace: Option<CheetahString>,
     pub namespace_initialized: Arc<AtomicBool>,
-    pub namespace_v2: Option<String>,
+    pub namespace_v2: Option<CheetahString>,
     pub access_channel: AccessChannel,
     pub poll_name_server_interval: u32,
     pub heartbeat_broker_interval: u32,
     pub persist_consumer_offset_interval: u32,
     pub pull_time_delay_millis_when_exception: u32,
     pub unit_mode: bool,
-    pub unit_name: Option<String>,
+    pub unit_name: Option<CheetahString>,
     pub decode_read_body: bool,
     pub decode_decompress_body: bool,
     pub vip_channel_enabled: bool,
     pub use_heartbeat_v2: bool,
     pub use_tls: bool,
-    pub socks_proxy_config: String,
+    pub socks_proxy_config: CheetahString,
     pub mq_client_api_timeout: u64,
     pub detect_timeout: u32,
     pub detect_interval: u32,
@@ -72,7 +72,7 @@ pub struct ClientConfig {
     pub start_detector_enable: bool,
     pub enable_heartbeat_channel_event_listener: bool,
     pub enable_trace: bool,
-    pub trace_topic: Option<String>,
+    pub trace_topic: Option<CheetahString>,
 }
 
 impl Default for ClientConfig {
@@ -84,10 +84,12 @@ impl Default for ClientConfig {
 impl ClientConfig {
     pub fn new() -> Self {
         ClientConfig {
-            namesrv_addr: NameServerAddressUtils::get_name_server_addresses(),
-            client_ip: NetworkUtil::get_local_address(),
+            namesrv_addr: NameServerAddressUtils::get_name_server_addresses()
+                .map(|addr| addr.into()),
+            client_ip: NetworkUtil::get_local_address().map(|addr| addr.into()),
             instance_name: env::var("rocketmq.client.name")
-                .unwrap_or_else(|_| "DEFAULT".to_string()),
+                .unwrap_or_else(|_| "DEFAULT".to_string())
+                .into(),
             client_callback_executor_threads: num_cpus::get(),
             namespace: None,
             namespace_initialized: Arc::new(AtomicBool::new(false)),
@@ -116,7 +118,9 @@ impl ClientConfig {
                 .parse::<bool>()
                 .unwrap_or(false),
             use_tls: false,
-            socks_proxy_config: env::var(SOCKS_PROXY_CONFIG).unwrap_or_else(|_| "{}".to_string()),
+            socks_proxy_config: env::var(SOCKS_PROXY_CONFIG)
+                .unwrap_or_else(|_| "{}".to_string())
+                .into(),
             mq_client_api_timeout: Duration::from_secs(3).as_millis() as u64,
             detect_timeout: 200,
             detect_interval: Duration::from_secs(2).as_millis() as u32,
@@ -136,11 +140,9 @@ impl ClientConfig {
 }
 
 impl ClientConfig {
-    pub fn with_namespace(&mut self, resource: &str) -> String {
-        NamespaceUtil::wrap_namespace(
-            self.get_namespace().unwrap_or("".to_string()).as_str(),
-            resource,
-        )
+    pub fn with_namespace(&mut self, resource: &str) -> CheetahString {
+        NamespaceUtil::wrap_namespace(self.get_namespace().unwrap_or_default().as_str(), resource)
+            .into()
     }
 
     pub fn queue_with_namespace(&mut self, mut queue: MessageQueue) -> MessageQueue {
@@ -157,7 +159,7 @@ impl ClientConfig {
         queue
     }
 
-    pub fn get_namespace(&mut self) -> Option<String> {
+    pub fn get_namespace(&mut self) -> Option<CheetahString> {
         let namespace_initialized = self.namespace_initialized.load(Ordering::Acquire);
         if namespace_initialized {
             return self.namespace.clone();
@@ -168,9 +170,10 @@ impl ClientConfig {
         }
 
         if let Some(ref namesrv_addr) = self.namesrv_addr {
-            if NameServerAddressUtils::validate_instance_endpoint(namesrv_addr) {
+            if NameServerAddressUtils::validate_instance_endpoint(namesrv_addr.as_ref()) {
                 self.namespace =
-                    NameServerAddressUtils::parse_instance_id_from_endpoint(namesrv_addr);
+                    NameServerAddressUtils::parse_instance_id_from_endpoint(namesrv_addr.as_ref())
+                        .map(|id| id.into());
             }
         }
         self.namespace_initialized.store(true, Ordering::Release);
@@ -179,7 +182,7 @@ impl ClientConfig {
 
     pub fn change_instance_name_to_pid(&mut self) {
         if self.instance_name == "DEFAULT" {
-            self.instance_name = format!("{}#{}", std::process::id(), get_current_nano());
+            self.instance_name = format!("{}#{}", std::process::id(), get_current_nano()).into();
         }
     }
 
@@ -204,13 +207,14 @@ impl ClientConfig {
         sb
     }
 
-    pub fn get_namesrv_addr(&self) -> Option<String> {
+    pub fn get_namesrv_addr(&self) -> Option<CheetahString> {
         if StringUtils::is_not_empty_str(self.namesrv_addr.as_deref())
             && NAMESRV_ENDPOINT_PATTERN.is_match(self.namesrv_addr.as_ref().unwrap().as_str())
         {
             NameServerAddressUtils::get_name_srv_addr_from_namesrv_endpoint(
                 self.namesrv_addr.as_ref().unwrap().as_str(),
             )
+            .map(|addr| addr.into())
         } else {
             self.namesrv_addr.clone()
         }

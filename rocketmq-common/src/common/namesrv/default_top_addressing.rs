@@ -17,6 +17,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use tracing::error;
 use tracing::warn;
 
@@ -25,15 +26,15 @@ use crate::common::namesrv::top_addressing::TopAddressing;
 use crate::utils::http_tiny_client::HttpTinyClient;
 
 pub struct DefaultTopAddressing {
-    ns_addr: Option<String>,
-    ws_addr: String,
-    unit_name: Option<String>,
-    para: Option<HashMap<String, String>>,
+    ns_addr: Option<CheetahString>,
+    ws_addr: CheetahString,
+    unit_name: Option<CheetahString>,
+    para: Option<HashMap<CheetahString, CheetahString>>,
     top_addressing_list: Vec<Arc<dyn TopAddressing>>,
 }
 
 impl DefaultTopAddressing {
-    pub fn new(ws_addr: String, unit_name: Option<String>) -> Self {
+    pub fn new(ws_addr: CheetahString, unit_name: Option<CheetahString>) -> Self {
         let top_addressing_list = Self::load_custom_top_addressing();
         DefaultTopAddressing {
             ns_addr: None,
@@ -60,7 +61,7 @@ impl DefaultTopAddressing {
             }
         }
 
-        let mut url = self.ws_addr.clone();
+        let mut url = self.ws_addr.to_string();
         if let Some(para) = &self.para {
             if let Some(unit_name) = &self.unit_name {
                 url.push_str(&format!("-{}?nofix=1&", unit_name));

@@ -216,7 +216,7 @@ impl BrokerRuntime {
         );
         broker_member_group.broker_addrs.insert(
             broker_config.broker_identity.broker_id,
-            broker_config.get_broker_addr(),
+            broker_config.get_broker_addr().into(),
         );
         Self {
             broker_config: broker_config.clone(),

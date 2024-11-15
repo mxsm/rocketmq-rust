@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_remoting::code::request_code::RequestCode;
@@ -98,7 +99,7 @@ impl BrokerConfigRequestHandler {
         Some(response)
     }
 
-    fn prepare_runtime_info(&self) -> HashMap<String, String> {
+    fn prepare_runtime_info(&self) -> HashMap<CheetahString, CheetahString> {
         let mut runtime_info = self.inner.default_message_store.get_runtime_info();
         self.inner
             .schedule_message_service
@@ -262,7 +263,7 @@ impl BrokerConfigRequestHandler {
             ),
         );
         let store_path_root_dir = &self.inner.message_store_config.store_path_root_dir;
-        let commit_log_dir = std::path::Path::new(&store_path_root_dir);
+        let commit_log_dir = std::path::Path::new(store_path_root_dir.as_str());
         if commit_log_dir.exists() {
             let disks = Disks::new_with_refreshed_list();
             let path_str = commit_log_dir.to_str().unwrap();
@@ -283,6 +284,9 @@ impl BrokerConfigRequestHandler {
             }
         }
         runtime_info
+            .into_iter()
+            .map(|(k, v)| (k.into(), v.into()))
+            .collect()
     }
     fn is_special_service_running(&self) -> bool {
         true

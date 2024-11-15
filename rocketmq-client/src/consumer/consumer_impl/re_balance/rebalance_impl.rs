@@ -20,6 +20,7 @@ use std::collections::HashSet;
 use std::ops::Deref;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::TimeUtils::get_current_millis;
@@ -48,15 +49,16 @@ const QUERY_ASSIGNMENT_TIMEOUT: u32 = 3000;
 pub(crate) struct RebalanceImpl<R> {
     pub(crate) process_queue_table: Arc<RwLock<HashMap<MessageQueue, Arc<ProcessQueue>>>>,
     pub(crate) pop_process_queue_table: Arc<RwLock<HashMap<MessageQueue, PopProcessQueue>>>,
-    pub(crate) topic_subscribe_info_table: Arc<RwLock<HashMap<String, HashSet<MessageQueue>>>>,
-    pub(crate) subscription_inner: Arc<RwLock<HashMap<String, SubscriptionData>>>,
-    pub(crate) consumer_group: Option<String>,
+    pub(crate) topic_subscribe_info_table:
+        Arc<RwLock<HashMap<CheetahString, HashSet<MessageQueue>>>>,
+    pub(crate) subscription_inner: Arc<RwLock<HashMap<CheetahString, SubscriptionData>>>,
+    pub(crate) consumer_group: Option<CheetahString>,
     pub(crate) message_model: Option<MessageModel>,
     pub(crate) allocate_message_queue_strategy: Option<Arc<dyn AllocateMessageQueueStrategy>>,
     pub(crate) client_instance: Option<ArcMut<MQClientInstance>>,
     pub(crate) sub_rebalance_impl: Option<WeakArcMut<R>>,
-    pub(crate) topic_broker_rebalance: Arc<RwLock<HashMap<String, String>>>,
-    pub(crate) topic_client_rebalance: Arc<RwLock<HashMap<String, String>>>,
+    pub(crate) topic_broker_rebalance: Arc<RwLock<HashMap<CheetahString, CheetahString>>>,
+    pub(crate) topic_client_rebalance: Arc<RwLock<HashMap<CheetahString, CheetahString>>>,
 }
 
 impl<R> RebalanceImpl<R>
@@ -64,7 +66,7 @@ where
     R: Rebalance,
 {
     pub fn new(
-        consumer_group: Option<String>,
+        consumer_group: Option<CheetahString>,
         message_model: Option<MessageModel>,
         allocate_message_queue_strategy: Option<Arc<dyn AllocateMessageQueueStrategy>>,
         mqclient_instance: Option<ArcMut<MQClientInstance>>,
@@ -84,9 +86,13 @@ where
         }
     }
 
-    pub async fn put_subscription_data(&self, topic: &str, subscription_data: SubscriptionData) {
+    pub async fn put_subscription_data(
+        &self,
+        topic: &CheetahString,
+        subscription_data: SubscriptionData,
+    ) {
         let mut subscription_inner = self.subscription_inner.write().await;
-        subscription_inner.insert(topic.to_string(), subscription_data);
+        subscription_inner.insert(topic.clone(), subscription_data);
     }
 
     #[inline]
@@ -94,7 +100,7 @@ where
         let mut balanced = true;
         let sub_table = self.subscription_inner.read().await;
         if !sub_table.is_empty() {
-            let topics = sub_table.keys().cloned().collect::<HashSet<String>>();
+            let topics = sub_table.keys().cloned().collect::<Vec<CheetahString>>();
             drop(sub_table);
             for topic in &topics {
                 //try_query_assignment unimplemented
@@ -292,7 +298,7 @@ where
         changed
     }
 
-    async fn rebalance_by_topic(&mut self, topic: &str, is_order: bool) -> bool {
+    async fn rebalance_by_topic(&mut self, topic: &CheetahString, is_order: bool) -> bool {
         match self.message_model.unwrap() {
             MessageModel::Broadcasting => {
                 let topic_sub_cloned = self.topic_subscribe_info_table.clone();
@@ -676,7 +682,7 @@ where
 
     async fn build_process_queue_table_by_broker_name(
         &self,
-    ) -> HashMap<String /* brokerName */, HashSet<MessageQueue>> {
+    ) -> HashMap<CheetahString /* brokerName */, HashSet<MessageQueue>> {
         let mut result = HashMap::new();
         let process_queue_table = self.process_queue_table.read().await;
         let client = self.client_instance.as_ref().unwrap();

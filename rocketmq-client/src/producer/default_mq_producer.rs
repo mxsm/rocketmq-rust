@@ -65,8 +65,8 @@ pub struct ProducerConfig {
     /// See [core concepts](https://rocketmq.apache.org/docs/introduction/02concepts) for more discussion.
     producer_group: CheetahString,
     /// Topics that need to be initialized for transaction producer
-    topics: Vec<String>,
-    create_topic_key: String,
+    topics: Vec<CheetahString>,
+    create_topic_key: CheetahString,
     /// Number of queues to create per default topic.
     default_topic_queue_nums: u32,
     /// Timeout for sending messages.
@@ -110,15 +110,15 @@ impl ProducerConfig {
         &self.retry_response_codes
     }
 
-    pub fn producer_group(&self) -> &str {
+    pub fn producer_group(&self) -> &CheetahString {
         &self.producer_group
     }
 
-    pub fn topics(&self) -> &Vec<String> {
+    pub fn topics(&self) -> &Vec<CheetahString> {
         &self.topics
     }
 
-    pub fn create_topic_key(&self) -> &str {
+    pub fn create_topic_key(&self) -> &CheetahString {
         &self.create_topic_key
     }
 
@@ -213,7 +213,9 @@ impl Default for ProducerConfig {
             retry_response_codes,
             producer_group: CheetahString::empty(),
             topics: vec![],
-            create_topic_key: TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC.to_string(),
+            create_topic_key: CheetahString::from_static_str(
+                TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC,
+            ),
             default_topic_queue_nums: 4,
             send_msg_timeout: 3000,
             compress_msg_body_over_howmuch: 1024 * 4,
@@ -268,7 +270,7 @@ impl DefaultMQProducer {
         &self.producer_config.producer_group
     }
 
-    pub fn topics(&self) -> &Vec<String> {
+    pub fn topics(&self) -> &Vec<CheetahString> {
         &self.producer_config.topics
     }
 
@@ -362,16 +364,16 @@ impl DefaultMQProducer {
     }
 
     #[inline]
-    pub fn set_producer_group(&mut self, producer_group: CheetahString) {
-        self.producer_config.producer_group = producer_group;
+    pub fn set_producer_group(&mut self, producer_group: impl Into<CheetahString>) {
+        self.producer_config.producer_group = producer_group.into();
     }
 
-    pub fn set_topics(&mut self, topics: Vec<String>) {
+    pub fn set_topics(&mut self, topics: Vec<CheetahString>) {
         self.producer_config.topics = topics;
     }
 
-    pub fn set_create_topic_key(&mut self, create_topic_key: String) {
-        self.producer_config.create_topic_key = create_topic_key;
+    pub fn set_create_topic_key(&mut self, create_topic_key: impl Into<CheetahString>) {
+        self.producer_config.create_topic_key = create_topic_key.into();
     }
 
     pub fn set_default_topic_queue_nums(&mut self, default_topic_queue_nums: u32) {
@@ -619,7 +621,7 @@ impl DefaultMQProducer {
 impl DefaultMQProducer {
     #[inline]
     pub fn with_namespace(&mut self, resource: &str) -> CheetahString {
-        CheetahString::from_string(self.client_config.with_namespace(resource))
+        self.client_config.with_namespace(resource)
     }
 }
 

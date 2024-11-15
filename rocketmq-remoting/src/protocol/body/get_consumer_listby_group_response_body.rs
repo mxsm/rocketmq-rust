@@ -14,11 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct GetConsumerListByGroupResponseBody {
-    pub consumer_id_list: Vec<String>,
+    pub consumer_id_list: Vec<CheetahString>,
 }

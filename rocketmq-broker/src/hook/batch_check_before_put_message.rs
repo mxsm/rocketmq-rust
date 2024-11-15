@@ -17,6 +17,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_store::base::message_result::PutMessageResult;
@@ -25,11 +26,13 @@ use rocketmq_store::hook::put_message_hook::PutMessageHook;
 use crate::util::hook_utils::HookUtils;
 
 pub struct BatchCheckBeforePutMessageHook {
-    topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
+    topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
 }
 
 impl BatchCheckBeforePutMessageHook {
-    pub fn new(topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>) -> Self {
+    pub fn new(
+        topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
+    ) -> Self {
         Self { topic_config_table }
     }
 }

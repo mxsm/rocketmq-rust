@@ -20,6 +20,7 @@ use std::sync::atomic::AtomicI32;
 use std::sync::Arc;
 use std::time::Duration;
 
+use cheetah_string::CheetahString;
 use rand::Rng;
 use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_rust::ArcMut;
@@ -50,10 +51,10 @@ pub type ArcSyncClient = Arc<Mutex<Client>>;
 pub struct RocketmqDefaultClient<PR = DefaultRemotingRequestProcessor> {
     tokio_client_config: Arc<TokioClientConfig>,
     //cache connection
-    connection_tables: Arc<Mutex<HashMap<String /* ip:port */, Client>>>,
-    namesrv_addr_list: ArcMut<Vec<String>>,
-    namesrv_addr_choosed: ArcMut<Option<String>>,
-    available_namesrv_addr_set: ArcMut<HashSet<String>>,
+    connection_tables: Arc<Mutex<HashMap<CheetahString /* ip:port */, Client>>>,
+    namesrv_addr_list: ArcMut<Vec<CheetahString>>,
+    namesrv_addr_choosed: ArcMut<Option<CheetahString>>,
+    available_namesrv_addr_set: ArcMut<HashSet<CheetahString>>,
     namesrv_index: Arc<AtomicI32>,
     client_runtime: Arc<RocketMQRuntime>,
     processor: PR,
@@ -128,7 +129,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             drop(connection_tables);
             return self
                 .create_client(
-                    new_addr.as_str(),
+                    new_addr,
                     //&mut connection_tables,
                     Duration::from_millis(self.tokio_client_config.connect_timeout_millis as u64),
                 )
@@ -137,14 +138,19 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         None
     }
 
-    async fn get_and_create_client(&self, addr: Option<&str>) -> Option<Client> {
+    async fn get_and_create_client(&self, addr: Option<CheetahString>) -> Option<Client> {
         match addr {
             None => self.get_and_create_nameserver_client().await,
             Some(addr) => {
                 if addr.is_empty() {
                     return self.get_and_create_nameserver_client().await;
                 }
-                let client = self.connection_tables.lock().await.get(addr).cloned();
+                let client = self
+                    .connection_tables
+                    .lock()
+                    .await
+                    .get(addr.as_str())
+                    .cloned();
                 // if client.is_some() && client.as_ref()?.lock().await.connection().ok {
                 if client.is_some() && client.as_ref()?.connection().ok {
                     return client;
@@ -158,9 +164,9 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         }
     }
 
-    async fn create_client(&self, addr: &str, duration: Duration) -> Option<Client> {
+    async fn create_client(&self, addr: CheetahString, duration: Duration) -> Option<Client> {
         let mut connection_tables = self.connection_tables.lock().await;
-        let cw = connection_tables.get(addr);
+        let cw = connection_tables.get(addr.as_str());
         if let Some(cw) = cw {
             // if cw.lock().await.connection().ok {
             if cw.connection().ok {
@@ -168,14 +174,14 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             }
         }
 
-        let cw = connection_tables.get(addr);
+        let cw = connection_tables.get(addr.as_str());
         if let Some(cw) = cw {
             if cw.connection().ok {
                 // if cw.lock().await.connection().ok {
                 return Some(cw.clone());
             }
         } else {
-            let _ = connection_tables.remove(addr);
+            let _ = connection_tables.remove(addr.as_str());
         }
 
         let addr_inner = addr.to_string();
@@ -189,7 +195,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
                 Ok(client_r) => {
                     //let client = Arc::new(Mutex::new(client_r));
                     let client = client_r;
-                    connection_tables.insert(addr.to_string(), client.clone());
+                    connection_tables.insert(addr, client.clone());
                     Some(client)
                 }
                 Err(_) => {
@@ -218,9 +224,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             }
         }
         for namesrv_addr in self.namesrv_addr_list.as_ref().iter() {
-            let client = self
-                .get_and_create_client(Some(namesrv_addr.as_str()))
-                .await;
+            let client = self.get_and_create_client(Some(namesrv_addr.clone())).await;
             match client {
                 None => {
                     self.available_namesrv_addr_set
@@ -266,7 +270,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingService for Rocketmq
 
 #[allow(unused_variables)]
 impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqDefaultClient<PR> {
-    async fn update_name_server_address_list(&self, addrs: Vec<String>) {
+    async fn update_name_server_address_list(&self, addrs: Vec<CheetahString>) {
         let old = self.namesrv_addr_list.mut_from_ref();
         let mut update = false;
 
@@ -299,7 +303,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
                         let mut remove_vec = Vec::new();
                         let mut result = self.connection_tables.lock().await;
                         for (addr, client) in result.iter() {
-                            if addr.contains(namesrv_addr) {
+                            if addr == namesrv_addr {
                                 remove_vec.push(addr.clone());
                             }
                         }
@@ -312,11 +316,11 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
         }
     }
 
-    fn get_name_server_address_list(&self) -> &[String] {
+    fn get_name_server_address_list(&self) -> &[CheetahString] {
         self.namesrv_addr_list.as_ref()
     }
 
-    fn get_available_name_srv_list(&self) -> Vec<String> {
+    fn get_available_name_srv_list(&self) -> Vec<CheetahString> {
         self.available_namesrv_addr_set
             .as_ref()
             .clone()
@@ -326,11 +330,11 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
 
     async fn invoke_async(
         &self,
-        addr: Option<String>,
+        addr: Option<CheetahString>,
         request: RemotingCommand,
         timeout_millis: u64,
     ) -> Result<RemotingCommand> {
-        let client = self.get_and_create_client(addr.as_deref()).await;
+        let client = self.get_and_create_client(addr).await;
         match client {
             None => Err(Error::RemoteException("get client failed".to_string())),
             Some(mut client) => {
@@ -358,8 +362,13 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
         }
     }
 
-    async fn invoke_oneway(&self, addr: String, request: RemotingCommand, timeout_millis: u64) {
-        let client = self.get_and_create_client(Some(addr.as_str())).await;
+    async fn invoke_oneway(
+        &self,
+        addr: CheetahString,
+        request: RemotingCommand,
+        timeout_millis: u64,
+    ) {
+        let client = self.get_and_create_client(Some(addr)).await;
         match client {
             None => {
                 error!("get client failed");

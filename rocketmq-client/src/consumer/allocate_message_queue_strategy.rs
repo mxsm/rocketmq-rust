@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 
 use crate::Result;
@@ -24,7 +25,7 @@ pub trait AllocateMessageQueueStrategy: Send + Sync {
         consumer_group: &str,
         current_cid: &str,
         mq_all: &[MessageQueue],
-        cid_all: &[String],
+        cid_all: &[CheetahString],
     ) -> Result<Vec<MessageQueue>>;
 
     fn get_name(&self) -> &'static str;

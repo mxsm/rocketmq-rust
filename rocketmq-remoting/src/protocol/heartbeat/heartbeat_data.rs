@@ -16,6 +16,7 @@
  */
 use std::collections::HashSet;
 
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -26,7 +27,7 @@ use crate::protocol::heartbeat::producer_data::ProducerData;
 #[serde(rename_all = "camelCase")]
 pub struct HeartbeatData {
     #[serde(rename = "clientID")]
-    pub client_id: String,
+    pub client_id: CheetahString,
     #[serde(default)]
     pub producer_data_set: HashSet<ProducerData>,
     #[serde(default)]

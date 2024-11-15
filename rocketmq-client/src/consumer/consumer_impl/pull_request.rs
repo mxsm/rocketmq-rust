@@ -18,6 +18,7 @@ use std::hash::Hash;
 use std::hash::Hasher;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 
@@ -26,7 +27,7 @@ use crate::consumer::consumer_impl::process_queue::ProcessQueue;
 
 #[derive(Clone)]
 pub(crate) struct PullRequest {
-    pub(crate) consumer_group: String,
+    pub(crate) consumer_group: CheetahString,
     pub(crate) message_queue: MessageQueue,
     pub(crate) process_queue: Arc<ProcessQueue>,
     pub(crate) next_offset: i64,
@@ -35,7 +36,7 @@ pub(crate) struct PullRequest {
 
 impl PullRequest {
     pub fn new(
-        consumer_group: String,
+        consumer_group: CheetahString,
         message_queue: MessageQueue,
         process_queue: Arc<ProcessQueue>,
         next_offset: i64,
@@ -61,7 +62,7 @@ impl PullRequest {
         &self.consumer_group
     }
 
-    pub fn set_consumer_group(&mut self, consumer_group: String) {
+    pub fn set_consumer_group(&mut self, consumer_group: CheetahString) {
         self.consumer_group = consumer_group;
     }
 

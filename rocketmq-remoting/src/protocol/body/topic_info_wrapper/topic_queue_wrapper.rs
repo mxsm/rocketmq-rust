@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -26,13 +27,13 @@ use crate::protocol::DataVersion;
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct TopicQueueMappingSerializeWrapper {
-    topic_queue_mapping_info_map: Option<HashMap<String, TopicQueueMappingDetail>>,
+    topic_queue_mapping_info_map: Option<HashMap<CheetahString, TopicQueueMappingDetail>>,
     data_version: Option<DataVersion>,
 }
 
 impl TopicQueueMappingSerializeWrapper {
     pub fn new(
-        topic_queue_mapping_info_map: Option<HashMap<String, TopicQueueMappingDetail>>,
+        topic_queue_mapping_info_map: Option<HashMap<CheetahString, TopicQueueMappingDetail>>,
         data_version: Option<DataVersion>,
     ) -> Self {
         Self {
@@ -45,11 +46,8 @@ impl TopicQueueMappingSerializeWrapper {
 impl TopicQueueMappingSerializeWrapper {
     pub fn topic_queue_mapping_info_map(
         &self,
-    ) -> Option<&HashMap<String, TopicQueueMappingDetail>> {
-        match &self.topic_queue_mapping_info_map {
-            None => None,
-            Some(value) => Some(value),
-        }
+    ) -> Option<&HashMap<CheetahString, TopicQueueMappingDetail>> {
+        self.topic_queue_mapping_info_map.as_ref()
     }
 
     pub fn data_version(&self) -> Option<&DataVersion> {

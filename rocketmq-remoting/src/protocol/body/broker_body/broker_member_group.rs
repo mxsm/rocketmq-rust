@@ -25,7 +25,7 @@ use serde::Serialize;
 pub struct BrokerMemberGroup {
     pub cluster: CheetahString,
     pub broker_name: CheetahString,
-    pub broker_addrs: HashMap<u64 /* brokerId */, String /* broker address */>,
+    pub broker_addrs: HashMap<u64 /* brokerId */, CheetahString /* broker address */>,
 }
 
 impl BrokerMemberGroup {

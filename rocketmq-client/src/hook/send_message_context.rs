@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_enum::MessageType;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::MessageTrait;
@@ -29,17 +30,17 @@ use crate::producer::send_result::SendResult;
 
 #[derive(Default)]
 pub struct SendMessageContext<'a> {
-    pub producer_group: Option<String>,
+    pub producer_group: Option<CheetahString>,
     pub message: Option<Box<dyn MessageTrait + Send + Sync>>,
     pub mq: Option<&'a MessageQueue>,
-    pub broker_addr: Option<String>,
-    pub born_host: Option<String>,
+    pub broker_addr: Option<CheetahString>,
+    pub born_host: Option<CheetahString>,
     pub communication_mode: Option<CommunicationMode>,
     pub send_result: Option<SendResult>,
     pub exception: Option<Arc<Box<dyn Error + Send + Sync>>>,
     pub mq_trace_context: Option<Arc<Box<dyn std::any::Any + Send + Sync>>>,
-    pub props: HashMap<String, String>,
+    pub props: HashMap<CheetahString, CheetahString>,
     pub producer: Option<ArcMut<DefaultMQProducerImpl>>,
     pub msg_type: Option<MessageType>,
-    pub namespace: Option<String>,
+    pub namespace: Option<CheetahString>,
 }

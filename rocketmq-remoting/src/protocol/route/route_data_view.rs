@@ -26,13 +26,13 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct BrokerData {
-    cluster: String,
+    cluster: CheetahString,
     #[serde(rename = "brokerName")]
-    broker_name: String,
+    broker_name: CheetahString,
     #[serde(rename = "brokerAddrs")]
-    broker_addrs: HashMap<i64 /* broker id */, String /* broker ip */>,
+    broker_addrs: HashMap<i64 /* broker id */, CheetahString /* broker ip */>,
     #[serde(rename = "zoneName")]
-    zone_name: Option<String>,
+    zone_name: Option<CheetahString>,
     #[serde(rename = "enableActingMaster")]
     enable_acting_master: bool,
 }
@@ -51,10 +51,10 @@ impl Ord for BrokerData {
 
 impl BrokerData {
     pub fn new(
-        cluster: String,
-        broker_name: String,
-        broker_addrs: HashMap<i64, String>,
-        zone_name: Option<String>,
+        cluster: CheetahString,
+        broker_name: CheetahString,
+        broker_addrs: HashMap<i64, CheetahString>,
+        zone_name: Option<CheetahString>,
     ) -> BrokerData {
         BrokerData {
             cluster,
@@ -65,19 +65,19 @@ impl BrokerData {
         }
     }
 
-    pub fn set_cluster(&mut self, cluster: String) {
+    pub fn set_cluster(&mut self, cluster: CheetahString) {
         self.cluster = cluster;
     }
 
-    pub fn set_broker_name(&mut self, broker_name: String) {
+    pub fn set_broker_name(&mut self, broker_name: CheetahString) {
         self.broker_name = broker_name;
     }
 
-    pub fn set_broker_addrs(&mut self, broker_addrs: HashMap<i64, String>) {
+    pub fn set_broker_addrs(&mut self, broker_addrs: HashMap<i64, CheetahString>) {
         self.broker_addrs = broker_addrs;
     }
 
-    pub fn set_zone_name(&mut self, zone_name: Option<String>) {
+    pub fn set_zone_name(&mut self, zone_name: Option<CheetahString>) {
         self.zone_name = zone_name;
     }
 
@@ -89,19 +89,15 @@ impl BrokerData {
         &self.cluster
     }
 
-    pub fn broker_name(&self) -> &str {
+    pub fn broker_name(&self) -> &CheetahString {
         &self.broker_name
     }
 
-    pub fn broker_name_mut(&mut self) -> &str {
-        &self.broker_name
-    }
-
-    pub fn broker_addrs(&self) -> &HashMap<i64, String> {
+    pub fn broker_addrs(&self) -> &HashMap<i64, CheetahString> {
         &self.broker_addrs
     }
 
-    pub fn broker_addrs_mut(&mut self) -> &mut HashMap<i64, String> {
+    pub fn broker_addrs_mut(&mut self) -> &mut HashMap<i64, CheetahString> {
         &mut self.broker_addrs
     }
 
@@ -110,7 +106,7 @@ impl BrokerData {
             .retain(|key, value| value != broker_addr || *key == broker_id);
     }
 
-    pub fn zone_name(&self) -> &Option<String> {
+    pub fn zone_name(&self) -> &Option<CheetahString> {
         &self.zone_name
     }
 
@@ -118,7 +114,7 @@ impl BrokerData {
         self.enable_acting_master
     }
 
-    pub fn select_broker_addr(&self) -> Option<String> {
+    pub fn select_broker_addr(&self) -> Option<CheetahString> {
         let master_address = self.broker_addrs.get(&(mix_all::MASTER_ID as i64)).cloned();
         if master_address.is_none() {
             return self
@@ -161,7 +157,7 @@ impl QueueData {
         }
     }
 
-    pub fn broker_name(&self) -> &str {
+    pub fn broker_name(&self) -> &CheetahString {
         &self.broker_name
     }
 

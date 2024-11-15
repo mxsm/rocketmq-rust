@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+use cheetah_string::CheetahString;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::LanguageCode;
@@ -22,14 +22,19 @@ use rocketmq_remoting::protocol::LanguageCode;
 #[derive(Debug, Clone, Hash, PartialEq)]
 pub struct ClientChannelInfo {
     channel: Channel,
-    client_id: String,
+    client_id: CheetahString,
     language: LanguageCode,
     version: i32,
     last_update_timestamp: u64,
 }
 
 impl ClientChannelInfo {
-    pub fn new(channel: Channel, client_id: String, language: LanguageCode, version: i32) -> Self {
+    pub fn new(
+        channel: Channel,
+        client_id: CheetahString,
+        language: LanguageCode,
+        version: i32,
+    ) -> Self {
         Self {
             channel,
             client_id,
@@ -39,7 +44,7 @@ impl ClientChannelInfo {
         }
     }
 
-    pub fn client_id(&self) -> &String {
+    pub fn client_id(&self) -> &CheetahString {
         &self.client_id
     }
 
@@ -55,8 +60,8 @@ impl ClientChannelInfo {
         self.last_update_timestamp
     }
 
-    pub fn set_client_id(&mut self, client_id: String) {
-        self.client_id = client_id;
+    pub fn set_client_id(&mut self, client_id: impl Into<CheetahString>) {
+        self.client_id = client_id.into();
     }
 
     pub fn set_language(&mut self, language: LanguageCode) {

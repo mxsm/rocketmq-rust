@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_remoting::code::response_code::ResponseCode;
@@ -37,7 +38,7 @@ use crate::broker_path_config_helper::get_topic_queue_mapping_path;
 pub(crate) struct TopicQueueMappingManager {
     pub(crate) data_version: parking_lot::Mutex<DataVersion>,
     pub(crate) topic_queue_mapping_table:
-        parking_lot::Mutex<HashMap<String /* topic */, TopicQueueMappingDetail>>,
+        parking_lot::Mutex<HashMap<CheetahString /* topic */, TopicQueueMappingDetail>>,
     pub(crate) broker_config: Arc<BrokerConfig>,
 }
 
@@ -283,10 +284,10 @@ mod tests {
         let broker_config = Arc::new(BrokerConfig::default());
         let manager = TopicQueueMappingManager::new(broker_config);
         let detail = TopicQueueMappingDetail::default();
-        manager
-            .topic_queue_mapping_table
-            .lock()
-            .insert("existing_topic".to_string(), detail.clone());
+        manager.topic_queue_mapping_table.lock().insert(
+            CheetahString::from_static_str("existing_topic"),
+            detail.clone(),
+        );
 
         assert!(manager.get_topic_queue_mapping("existing_topic").is_some());
     }
@@ -299,7 +300,7 @@ mod tests {
         manager
             .topic_queue_mapping_table
             .lock()
-            .insert("existing_topic".to_string(), detail.clone());
+            .insert("existing_topic".into(), detail.clone());
 
         manager.delete("existing_topic");
 

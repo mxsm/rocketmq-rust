@@ -18,6 +18,7 @@ pub mod allocate_message_queue_averagely;
 
 use std::collections::HashSet;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use tracing::info;
 
@@ -28,7 +29,7 @@ pub fn check(
     consumer_group: &str,
     current_cid: &str,
     mq_all: &[MessageQueue],
-    cid_all: &[String],
+    cid_all: &[CheetahString],
 ) -> Result<bool> {
     if current_cid.is_empty() {
         return Err(IllegalArgumentError("currentCID is empty".to_string()));
@@ -43,7 +44,7 @@ pub fn check(
             "cidAll is null or cidAll empty".to_string(),
         ));
     }
-    let current_cid = current_cid.to_string();
+    let current_cid: CheetahString = current_cid.to_string().into();
     let cid_set: HashSet<_> = cid_all.iter().collect();
     if !cid_set.contains(&current_cid) {
         info!(

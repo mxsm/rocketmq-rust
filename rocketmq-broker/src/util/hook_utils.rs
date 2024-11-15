@@ -135,7 +135,7 @@ impl HookUtils {
     }
 
     pub fn check_inner_batch(
-        topic_config_table: &Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
+        topic_config_table: &Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
         msg: &MessageExt,
     ) -> Option<PutMessageResult> {
         if msg

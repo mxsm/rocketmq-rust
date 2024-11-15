@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::thread;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
@@ -55,15 +56,15 @@ use crate::trace::trace_dispatcher::Type;
 
 #[derive(Clone)]
 pub struct ConsumerConfig {
-    pub(crate) consumer_group: String,
-    pub(crate) topic: String,
-    pub(crate) sub_expression: String,
+    pub(crate) consumer_group: CheetahString,
+    pub(crate) topic: CheetahString,
+    pub(crate) sub_expression: CheetahString,
     pub(crate) message_model: MessageModel,
     pub(crate) consume_from_where: ConsumeFromWhere,
-    pub(crate) consume_timestamp: Option<String>,
+    pub(crate) consume_timestamp: Option<CheetahString>,
     pub(crate) allocate_message_queue_strategy: Option<Arc<dyn AllocateMessageQueueStrategy>>,
     //this field will be removed in a certain version after April 5, 2020
-    pub(crate) subscription: ArcMut<HashMap<String, String>>,
+    pub(crate) subscription: ArcMut<HashMap<CheetahString, CheetahString>>,
     pub(crate) message_listener: Option<ArcMut<MessageListener>>,
     pub(crate) message_queue_listener: Option<Arc<Box<dyn MessageQueueListener>>>,
     pub(crate) consume_thread_min: u32,
@@ -105,7 +106,7 @@ impl ConsumerConfig {
         self.consume_from_where
     }
 
-    pub fn consume_timestamp(&self) -> &Option<String> {
+    pub fn consume_timestamp(&self) -> &Option<CheetahString> {
         &self.consume_timestamp
     }
 
@@ -113,7 +114,7 @@ impl ConsumerConfig {
         self.allocate_message_queue_strategy.clone()
     }
 
-    pub fn subscription(&self) -> &ArcMut<HashMap<String, String>> {
+    pub fn subscription(&self) -> &ArcMut<HashMap<CheetahString, CheetahString>> {
         &self.subscription
     }
 
@@ -221,7 +222,7 @@ impl ConsumerConfig {
         &self.rpc_hook
     }
 
-    pub fn set_consumer_group(&mut self, consumer_group: String) {
+    pub fn set_consumer_group(&mut self, consumer_group: CheetahString) {
         self.consumer_group = consumer_group;
     }
 
@@ -233,7 +234,7 @@ impl ConsumerConfig {
         self.consume_from_where = consume_from_where;
     }
 
-    pub fn set_consume_timestamp(&mut self, consume_timestamp: Option<String>) {
+    pub fn set_consume_timestamp(&mut self, consume_timestamp: Option<CheetahString>) {
         self.consume_timestamp = consume_timestamp;
     }
 
@@ -248,7 +249,10 @@ impl ConsumerConfig {
      * This method will be removed in a certain version after April 5, 2020, so please do not
      * use this method.
      */
-    pub fn set_subscription(&mut self, subscription: ArcMut<HashMap<String, String>>) {
+    pub fn set_subscription(
+        &mut self,
+        subscription: ArcMut<HashMap<CheetahString, CheetahString>>,
+    ) {
         self.subscription = subscription;
     }
 
@@ -378,13 +382,15 @@ impl ConsumerConfig {
 impl Default for ConsumerConfig {
     fn default() -> Self {
         ConsumerConfig {
-            consumer_group: String::new(),
-            topic: "".to_string(),
-            sub_expression: "".to_string(),
+            consumer_group: CheetahString::new(),
+            topic: CheetahString::new(),
+            sub_expression: CheetahString::new(),
             message_model: MessageModel::Clustering,
             consume_from_where: ConsumeFromWhere::ConsumeFromLastOffset,
-            consume_timestamp: Some(util_all::time_millis_to_human_string3(
-                (get_current_millis() - (1000 * 60 * 30)) as i64,
+            consume_timestamp: Some(CheetahString::from_string(
+                util_all::time_millis_to_human_string3(
+                    (get_current_millis() - (1000 * 60 * 30)) as i64,
+                ),
             )),
             allocate_message_queue_strategy: Some(Arc::new(AllocateMessageQueueAveragely)),
             subscription: ArcMut::new(HashMap::new()),
@@ -502,7 +508,7 @@ impl MQPushConsumer for DefaultMQPushConsumer {
         let consumer_group = NamespaceUtil::wrap_namespace(
             self.client_config
                 .get_namespace()
-                .unwrap_or("".to_string())
+                .unwrap_or_default()
                 .as_str(),
             self.consumer_config.consumer_group.as_str(),
         );
@@ -604,7 +610,7 @@ impl MQPushConsumer for DefaultMQPushConsumer {
                 default_mqpush_consumer_impl
                     .as_mut()
                     .unwrap()
-                    .subscribe(topic.as_str(), sub_expression.as_str())
+                    .subscribe(topic.into(), sub_expression.into())
                     .await
             })
         })
@@ -644,8 +650,8 @@ impl DefaultMQPushConsumer {
     }
 
     #[inline]
-    pub fn set_consumer_group(&mut self, consumer_group: &str) {
-        self.consumer_config.consumer_group = consumer_group.to_string();
+    pub fn set_consumer_group(&mut self, consumer_group: impl Into<CheetahString>) {
+        self.consumer_config.consumer_group = consumer_group.into();
     }
 
     pub fn new(
@@ -667,7 +673,7 @@ impl DefaultMQPushConsumer {
         }
     }
 
-    pub fn set_name_server_addr(&mut self, name_server_addr: String) {
+    pub fn set_name_server_addr(&mut self, name_server_addr: CheetahString) {
         self.client_config.namesrv_addr = Some(name_server_addr);
         self.client_config
             .namespace_initialized

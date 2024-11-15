@@ -23,7 +23,7 @@ use crate::latency::resolver::Resolver;
 use crate::latency::service_detector::ServiceDetector;
 
 pub struct LatencyFaultToleranceImpl<R, S> {
-    fault_item_table: tokio::sync::Mutex<HashMap<String, FaultItem>>,
+    fault_item_table: tokio::sync::Mutex<HashMap<CheetahString, FaultItem>>,
     detect_timeout: u32,
     detect_interval: u32,
     which_item_worst: ThreadLocalIndex,
@@ -46,14 +46,14 @@ impl<R, S> LatencyFaultToleranceImpl<R, S> {
     }
 }
 
-impl<R, S> LatencyFaultTolerance<String, R, S> for LatencyFaultToleranceImpl<R, S>
+impl<R, S> LatencyFaultTolerance<CheetahString, R, S> for LatencyFaultToleranceImpl<R, S>
 where
     R: Resolver,
     S: ServiceDetector,
 {
     async fn update_fault_item(
         &mut self,
-        name: String,
+        name: CheetahString,
         current_latency: u64,
         not_available_duration: u64,
         reachable: bool,
@@ -75,7 +75,7 @@ where
         }
     }
 
-    async fn is_available(&self, name: &String) -> bool {
+    async fn is_available(&self, name: &CheetahString) -> bool {
         let fault_item_table = self.fault_item_table.lock().await;
         if let Some(fault_item) = fault_item_table.get(name) {
             return fault_item.is_available();
@@ -83,7 +83,7 @@ where
         true
     }
 
-    async fn is_reachable(&self, name: &String) -> bool {
+    async fn is_reachable(&self, name: &CheetahString) -> bool {
         let fault_item_table = self.fault_item_table.lock().await;
         if let Some(fault_item) = fault_item_table.get(name) {
             return fault_item.is_reachable();
@@ -91,11 +91,11 @@ where
         true
     }
 
-    async fn remove(&mut self, name: &String) {
+    async fn remove(&mut self, name: &CheetahString) {
         self.fault_item_table.lock().await.remove(name);
     }
 
-    async fn pick_one_at_least(&self) -> Option<String> {
+    async fn pick_one_at_least(&self) -> Option<CheetahString> {
         let fault_item_table = self.fault_item_table.lock().await;
         let mut tmp_list: Vec<_> = fault_item_table.values().collect();
 
@@ -153,7 +153,7 @@ where
                 .resolver
                 .as_ref()
                 .unwrap()
-                .resolve(fault_item.name.as_str())
+                .resolve(fault_item.name.as_ref())
                 .await;
             if broker_addr.is_none() {
                 remove_set.insert(name.clone());
@@ -222,6 +222,7 @@ use std::cmp::Ordering;
 use std::hash::Hash;
 use std::sync::atomic::AtomicBool;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_rust::ArcMut;
 use tracing::info;
@@ -230,7 +231,7 @@ use crate::common::thread_local_index::ThreadLocalIndex;
 
 #[derive(Debug)]
 pub struct FaultItem {
-    name: String,
+    name: CheetahString,
     current_latency: std::sync::atomic::AtomicU64,
     start_timestamp: std::sync::atomic::AtomicU64,
     check_stamp: std::sync::atomic::AtomicU64,
@@ -238,7 +239,7 @@ pub struct FaultItem {
 }
 
 impl FaultItem {
-    pub fn new(name: String) -> Self {
+    pub fn new(name: CheetahString) -> Self {
         FaultItem {
             name,
             current_latency: std::sync::atomic::AtomicU64::new(0),

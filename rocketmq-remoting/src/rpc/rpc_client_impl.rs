@@ -69,7 +69,7 @@ impl RpcClientImpl {
         self.client_hook_list.clear();
     }
 
-    fn get_broker_addr_by_name_or_exception(&self, broker_name: &str) -> Result<String> {
+    fn get_broker_addr_by_name_or_exception(&self, broker_name: &str) -> Result<CheetahString> {
         match self.client_metadata.find_master_broker_addr(broker_name) {
             None => Err(RpcException(
                 From::from(ResponseCode::SystemError),
@@ -81,7 +81,7 @@ impl RpcClientImpl {
 
     async fn handle_pull_message<H: CommandCustomHeader + TopicRequestHeaderTrait>(
         &self,
-        addr: String,
+        addr: CheetahString,
         request: RpcRequest<H>,
         timeout_millis: u64,
     ) -> Result<RpcResponse> {
@@ -121,7 +121,7 @@ impl RpcClientImpl {
 
     async fn handle_get_min_offset<H: CommandCustomHeader + TopicRequestHeaderTrait>(
         &self,
-        addr: String,
+        addr: CheetahString,
         request: RpcRequest<H>,
         timeout_millis: u64,
     ) -> Result<RpcResponse> {
@@ -157,7 +157,7 @@ impl RpcClientImpl {
     }
     async fn handle_get_max_offset<H: CommandCustomHeader + TopicRequestHeaderTrait>(
         &self,
-        addr: String,
+        addr: CheetahString,
         request: RpcRequest<H>,
         timeout_millis: u64,
     ) -> Result<RpcResponse> {
@@ -193,7 +193,7 @@ impl RpcClientImpl {
     }
     async fn handle_search_offset<H: CommandCustomHeader + TopicRequestHeaderTrait>(
         &self,
-        addr: String,
+        addr: CheetahString,
         request: RpcRequest<H>,
         timeout_millis: u64,
     ) -> Result<RpcResponse> {
@@ -229,7 +229,7 @@ impl RpcClientImpl {
     }
     async fn handle_get_earliest_msg_storetime<H: CommandCustomHeader + TopicRequestHeaderTrait>(
         &self,
-        addr: String,
+        addr: CheetahString,
         request: RpcRequest<H>,
         timeout_millis: u64,
     ) -> Result<RpcResponse> {
@@ -265,7 +265,7 @@ impl RpcClientImpl {
     }
     async fn handle_query_consumer_offset<H: CommandCustomHeader + TopicRequestHeaderTrait>(
         &self,
-        addr: String,
+        addr: CheetahString,
         request: RpcRequest<H>,
         timeout_millis: u64,
     ) -> Result<RpcResponse> {
@@ -305,7 +305,7 @@ impl RpcClientImpl {
     }
     async fn handle_update_consumer_offset<H: CommandCustomHeader + TopicRequestHeaderTrait>(
         &self,
-        addr: String,
+        addr: CheetahString,
         request: RpcRequest<H>,
         timeout_millis: u64,
     ) -> Result<RpcResponse> {
@@ -341,7 +341,7 @@ impl RpcClientImpl {
     }
     async fn handle_common_body_request<H: CommandCustomHeader + TopicRequestHeaderTrait>(
         &self,
-        addr: String,
+        addr: CheetahString,
         request: RpcRequest<H>,
         timeout_millis: u64,
     ) -> Result<RpcResponse> {
@@ -391,7 +391,7 @@ impl RpcClient for RpcClientImpl {
         let bname = request
             .header
             .broker_name()
-            .map_or("".to_string(), |value| value.to_string());
+            .expect("broker name is required");
         let addr = self.get_broker_addr_by_name_or_exception(bname.as_ref())?;
         let result = match RequestCode::from(request.code) {
             RequestCode::PullMessage => {
@@ -447,9 +447,7 @@ impl RpcClient for RpcClientImpl {
         timeout_millis: u64,
     ) -> Result<RpcResponse> {
         if let Some(broker_name) = self.client_metadata.get_broker_name_from_message_queue(&mq) {
-            request
-                .header
-                .set_broker_name(CheetahString::from_string(broker_name));
+            request.header.set_broker_name(broker_name);
         }
         self.invoke(request, timeout_millis).await
     }

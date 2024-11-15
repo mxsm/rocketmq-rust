@@ -3,6 +3,7 @@ use std::fmt::Display;
 use std::fmt::Formatter;
 use std::net::SocketAddr;
 
+use cheetah_string::CheetahString;
 use rocketmq_remoting::protocol::DataVersion;
 use serde::Deserialize;
 use serde::Serialize;
@@ -11,14 +12,17 @@ use serde::Serialize;
 pub(crate) struct BrokerAddrInfo {
     // mq cluster name
     #[serde(rename = "clusterName")]
-    pub(crate) cluster_name: String,
+    pub(crate) cluster_name: CheetahString,
     // broker ip address
     #[serde(rename = "brokerAddr")]
-    pub(crate) broker_addr: String,
+    pub(crate) broker_addr: CheetahString,
 }
 
 impl BrokerAddrInfo {
-    pub fn new(cluster_name: impl Into<String>, broker_addr: impl Into<String>) -> Self {
+    pub fn new(
+        cluster_name: impl Into<CheetahString>,
+        broker_addr: impl Into<CheetahString>,
+    ) -> Self {
         Self {
             cluster_name: cluster_name.into(),
             broker_addr: broker_addr.into(),
@@ -44,16 +48,16 @@ impl Display for BrokerAddrInfo {
 
 #[derive(Clone, Debug)]
 pub(crate) struct BrokerStatusChangeInfo {
-    pub(crate) broker_addrs: HashMap<i64, String>,
-    pub(crate) offline_broker_addr: String,
-    pub(crate) ha_broker_addr: String,
+    pub(crate) broker_addrs: HashMap<i64, CheetahString>,
+    pub(crate) offline_broker_addr: CheetahString,
+    pub(crate) ha_broker_addr: CheetahString,
 }
 
 impl BrokerStatusChangeInfo {
     fn new(
-        broker_addrs: HashMap<i64, String>,
-        offline_broker_addr: String,
-        ha_broker_addr: String,
+        broker_addrs: HashMap<i64, CheetahString>,
+        offline_broker_addr: CheetahString,
+        ha_broker_addr: CheetahString,
     ) -> Self {
         BrokerStatusChangeInfo {
             broker_addrs,
@@ -62,27 +66,27 @@ impl BrokerStatusChangeInfo {
         }
     }
 
-    fn get_broker_addrs(&self) -> &HashMap<i64, String> {
+    fn get_broker_addrs(&self) -> &HashMap<i64, CheetahString> {
         &self.broker_addrs
     }
 
-    fn set_broker_addrs(&mut self, broker_addrs: HashMap<i64, String>) {
+    fn set_broker_addrs(&mut self, broker_addrs: HashMap<i64, CheetahString>) {
         self.broker_addrs = broker_addrs;
     }
 
-    fn get_offline_broker_addr(&self) -> &String {
+    fn get_offline_broker_addr(&self) -> &CheetahString {
         &self.offline_broker_addr
     }
 
-    fn set_offline_broker_addr(&mut self, offline_broker_addr: String) {
+    fn set_offline_broker_addr(&mut self, offline_broker_addr: CheetahString) {
         self.offline_broker_addr = offline_broker_addr;
     }
 
-    fn get_ha_broker_addr(&self) -> &String {
+    fn get_ha_broker_addr(&self) -> &CheetahString {
         &self.ha_broker_addr
     }
 
-    fn set_ha_broker_addr(&mut self, ha_broker_addr: String) {
+    fn set_ha_broker_addr(&mut self, ha_broker_addr: CheetahString) {
         self.ha_broker_addr = ha_broker_addr;
     }
 }
@@ -102,7 +106,7 @@ pub(crate) struct BrokerLiveInfo {
     pub last_update_timestamp: i64,
     pub heartbeat_timeout_millis: i64,
     pub data_version: DataVersion,
-    pub ha_server_addr: String,
+    pub ha_server_addr: CheetahString,
     pub remote_addr: SocketAddr,
 }
 
@@ -111,7 +115,7 @@ impl BrokerLiveInfo {
         last_update_timestamp: i64,
         heartbeat_timeout_millis: i64,
         data_version: DataVersion,
-        ha_server_addr: String,
+        ha_server_addr: CheetahString,
         remote_addr: SocketAddr,
     ) -> Self {
         Self {
@@ -135,7 +139,7 @@ impl BrokerLiveInfo {
         self.heartbeat_timeout_millis
     }
 
-    pub fn ha_server_addr(&self) -> &str {
+    pub fn ha_server_addr(&self) -> &CheetahString {
         &self.ha_server_addr
     }
 }
@@ -181,7 +185,7 @@ mod tests {
             1000,
             2000,
             data_version.clone(),
-            "192.168.1.4".to_string(),
+            "192.168.1.4".into(),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 5)), 8080),
         );
         assert_eq!(broker_live_info.last_update_timestamp(), 1000);

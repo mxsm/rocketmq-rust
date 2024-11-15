@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::config::TopicConfig;
 use serde::Deserialize;
 use serde::Serialize;
@@ -29,7 +30,7 @@ pub mod topic_queue_wrapper;
 #[derive(Debug, Deserialize, Serialize, Default)]
 pub struct TopicConfigSerializeWrapper {
     #[serde(rename = "topicConfigTable")]
-    topic_config_table: Option<HashMap<String, TopicConfig>>,
+    topic_config_table: Option<HashMap<CheetahString, TopicConfig>>,
 
     #[serde(rename = "dataVersion")]
     data_version: Option<DataVersion>,
@@ -37,7 +38,7 @@ pub struct TopicConfigSerializeWrapper {
 
 impl TopicConfigSerializeWrapper {
     pub fn new(
-        topic_config_table: Option<HashMap<String, TopicConfig>>,
+        topic_config_table: Option<HashMap<CheetahString, TopicConfig>>,
         data_version: Option<DataVersion>,
     ) -> Self {
         Self {
@@ -48,7 +49,7 @@ impl TopicConfigSerializeWrapper {
 }
 
 impl TopicConfigSerializeWrapper {
-    pub fn topic_config_table(&self) -> Option<&HashMap<String, TopicConfig>> {
+    pub fn topic_config_table(&self) -> Option<&HashMap<CheetahString, TopicConfig>> {
         match &self.topic_config_table {
             None => None,
             Some(value) => Some(value),
@@ -64,7 +65,7 @@ impl TopicConfigSerializeWrapper {
 
     pub fn set_topic_config_table(
         &mut self,
-        topic_config_table: Option<HashMap<String, TopicConfig>>,
+        topic_config_table: Option<HashMap<CheetahString, TopicConfig>>,
     ) {
         self.topic_config_table = topic_config_table;
     }

@@ -16,6 +16,7 @@
  */
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::config::TopicConfig;
 use serde::Deserialize;
 use serde::Serialize;
@@ -27,10 +28,12 @@ use crate::protocol::DataVersion;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TopicConfigAndMappingSerializeWrapper {
     #[serde(rename = "topicQueueMappingInfoMap")]
-    pub topic_queue_mapping_info_map: HashMap<String /* topic */, TopicQueueMappingInfo>,
+    pub topic_queue_mapping_info_map:
+        HashMap<CheetahString /* topic */, TopicQueueMappingInfo>,
 
     #[serde(rename = "topicQueueMappingDetailMap")]
-    pub topic_queue_mapping_detail_map: HashMap<String /* topic */, TopicQueueMappingDetail>,
+    pub topic_queue_mapping_detail_map:
+        HashMap<CheetahString /* topic */, TopicQueueMappingDetail>,
 
     #[serde(rename = "mappingDataVersion")]
     pub mapping_data_version: DataVersion,
@@ -42,17 +45,19 @@ pub struct TopicConfigAndMappingSerializeWrapper {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TopicConfigSerializeWrapper {
     #[serde(rename = "topicConfigTable")]
-    pub topic_config_table: HashMap<String, TopicConfig>,
+    pub topic_config_table: HashMap<CheetahString, TopicConfig>,
     #[serde(rename = "dataVersion")]
     pub data_version: DataVersion,
 }
 
 impl TopicConfigAndMappingSerializeWrapper {
-    pub fn topic_queue_mapping_info_map(&self) -> &HashMap<String, TopicQueueMappingInfo> {
+    pub fn topic_queue_mapping_info_map(&self) -> &HashMap<CheetahString, TopicQueueMappingInfo> {
         &self.topic_queue_mapping_info_map
     }
 
-    pub fn topic_queue_mapping_detail_map(&self) -> &HashMap<String, TopicQueueMappingDetail> {
+    pub fn topic_queue_mapping_detail_map(
+        &self,
+    ) -> &HashMap<CheetahString, TopicQueueMappingDetail> {
         &self.topic_queue_mapping_detail_map
     }
 
@@ -65,7 +70,7 @@ impl TopicConfigAndMappingSerializeWrapper {
 }
 
 impl TopicConfigSerializeWrapper {
-    pub fn topic_config_table(&self) -> &HashMap<String, TopicConfig> {
+    pub fn topic_config_table(&self) -> &HashMap<CheetahString, TopicConfig> {
         &self.topic_config_table
     }
 
@@ -131,18 +136,18 @@ mod tests {
         wrapper.topic_config_serialize_wrapper = topic_config_serialize_wrapper.clone();
         wrapper
             .topic_queue_mapping_info_map
-            .insert("test".to_string(), topic_queue_mapping_info.clone());
+            .insert("test".into(), topic_queue_mapping_info.clone());
         wrapper
             .topic_queue_mapping_detail_map
-            .insert("test".to_string(), topic_queue_mapping_detail.clone());
+            .insert("test".into(), topic_queue_mapping_detail.clone());
 
         assert_eq!(
             wrapper.topic_queue_mapping_info_map(),
-            &HashMap::from([("test".to_string(), topic_queue_mapping_info)])
+            &HashMap::from([("test".into(), topic_queue_mapping_info)])
         );
         assert_eq!(
             wrapper.topic_queue_mapping_detail_map(),
-            &HashMap::from([("test".to_string(), topic_queue_mapping_detail)])
+            &HashMap::from([("test".into(), topic_queue_mapping_detail)])
         );
         //assert_eq!(wrapper.mapping_data_version(), &data_version);
         assert_eq!(

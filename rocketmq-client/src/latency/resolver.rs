@@ -14,8 +14,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use cheetah_string::CheetahString;
 
 #[trait_variant::make(Resolver: Send)]
 pub trait ResolverLocal: Send + Sync + 'static {
-    async fn resolve(&self, name: &str) -> Option<String>;
+    async fn resolve(&self, name: &CheetahString) -> Option<CheetahString>;
 }

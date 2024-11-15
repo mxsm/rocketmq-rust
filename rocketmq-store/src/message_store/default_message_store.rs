@@ -29,6 +29,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use bytes::Buf;
+use cheetah_string::CheetahString;
 use rocketmq_common::common::attribute::cleanup_policy::CleanupPolicy;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_ext::MessageExt;
@@ -104,7 +105,7 @@ pub struct DefaultMessageStore {
     message_store_config: Arc<MessageStoreConfig>,
     broker_config: Arc<BrokerConfig>,
     put_message_hook_list: Arc<parking_lot::RwLock<Vec<BoxedPutMessageHook>>>,
-    topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
+    topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
     //message_store_runtime: Option<RocketMQRuntime>,
     commit_log: CommitLog,
     compaction_service: CompactionService,
@@ -138,7 +139,7 @@ impl DefaultMessageStore {
     pub fn new(
         message_store_config: Arc<MessageStoreConfig>,
         broker_config: Arc<BrokerConfig>,
-        topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
+        topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
         broker_stats_manager: Option<Arc<BrokerStatsManager>>,
         notify_message_arrive_in_batch: bool,
     ) -> Self {

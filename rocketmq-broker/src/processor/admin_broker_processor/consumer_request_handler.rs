@@ -80,7 +80,7 @@ impl ConsumerRequestHandler {
                     connection.set_client_id(info.client_id().clone());
                     connection.set_language(info.language());
                     connection.set_version(info.version());
-                    connection.set_client_addr(channel.remote_address().to_string());
+                    connection.set_client_addr(channel.remote_address().to_string().into());
                     body_data.get_connection_set().insert(connection);
                 }
                 let body = body_data.encode();
@@ -158,7 +158,7 @@ impl ConsumerRequestHandler {
             for i in 0..topic_config.unwrap().get_read_queue_nums() {
                 let mut mq = MessageQueue::new();
                 mq.set_topic(topic.to_string().into());
-                mq.set_broker_name(self.inner.broker_config.broker_name.clone().into());
+                mq.set_broker_name(self.inner.broker_config.broker_name.clone());
                 mq.set_queue_id(i as i32);
 
                 let mut offset_wrapper = OffsetWrapper::new();
