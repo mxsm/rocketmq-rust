@@ -165,11 +165,11 @@ mod tests {
     #[test]
     fn broker_status_change_info_display_format() {
         let mut broker_addrs = HashMap::new();
-        broker_addrs.insert(1, "192.168.1.1".to_string());
+        broker_addrs.insert(1, "192.168.1.1".into());
         let broker_status_info = BrokerStatusChangeInfo::new(
             broker_addrs,
-            "192.168.1.2".to_string(),
-            "192.168.1.3".to_string(),
+            "192.168.1.2".into(),
+            "192.168.1.3".into(),
         );
         assert_eq!(
             format!("{}", broker_status_info),
