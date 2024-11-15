@@ -104,21 +104,21 @@ mod tests {
     fn build_subscription_data_creates_correct_subscription_data() {
         let topic = "test_topic".into();
         let sub_string = "tag1||tag2".into();
-        let subscription_data = FilterAPI::build_subscription_data(topic, sub_string).unwrap();
+        let subscription_data = FilterAPI::build_subscription_data(&topic, &sub_string).unwrap();
 
-        assert_eq!(subscription_data.topic.as_str(), topic);
-        assert_eq!(subscription_data.sub_string.as_str(), sub_string);
+        assert_eq!(subscription_data.topic.as_str(), topic.as_str());
+        assert_eq!(subscription_data.sub_string.as_str(), sub_string.as_str());
         assert!(subscription_data.tags_set.contains("tag1"));
         assert!(subscription_data.tags_set.contains("tag2"));
     }
 
     #[test]
     fn build_subscription_data_with_empty_sub_string_creates_subscription_data_with_sub_all() {
-        let topic = "test_topic";
-        let sub_string = "";
-        let subscription_data = FilterAPI::build_subscription_data(topic, sub_string).unwrap();
+        let topic = "test_topic".into();
+        let sub_string = "".into();
+        let subscription_data = FilterAPI::build_subscription_data(&topic, &sub_string).unwrap();
 
-        assert_eq!(subscription_data.topic, topic);
+        assert_eq!(subscription_data.topic.as_str(), topic.as_str());
         assert_eq!(subscription_data.sub_string, SubscriptionData::SUB_ALL);
     }
 
@@ -128,14 +128,14 @@ mod tests {
         let sub_string = "tag1||tag2".into();
         let expression_type = Some("SQL92".into());
         let subscription_data = FilterAPI::build_subscription_data_with_expression_type(
-            topic,
-            sub_string,
+            &topic,
+            &sub_string,
             expression_type.clone(),
         )
         .unwrap();
 
-        assert_eq!(subscription_data.topic.as_str(), topic);
-        assert_eq!(subscription_data.sub_string.as_str(), sub_string);
+        assert_eq!(subscription_data.topic.as_str(), topic.as_str());
+        assert_eq!(subscription_data.sub_string.as_str(), sub_string.as_str());
         assert_eq!(subscription_data.expression_type, expression_type.unwrap());
     }
 
@@ -144,10 +144,10 @@ mod tests {
         let topic = "test_topic".into();
         let sub_string = "tag1||tag2".into();
         let type_ = Some(ExpressionType::TAG.into());
-        let subscription_data = FilterAPI::build(topic, sub_string, type_).unwrap();
+        let subscription_data = FilterAPI::build(&topic, &sub_string, type_).unwrap();
 
         assert_eq!(subscription_data.topic.as_str(), topic);
-        assert_eq!(subscription_data.sub_string.as_str(), sub_string);
+        assert_eq!(subscription_data.sub_string.as_str(), sub_string.as_str());
     }
 
     #[test]
@@ -155,7 +155,7 @@ mod tests {
         let topic = "test_topic".into();
         let sub_string = "".into();
         let type_ = Some(ExpressionType::SQL92.into());
-        let result = FilterAPI::build(topic, sub_string, type_);
+        let result = FilterAPI::build(&topic, &sub_string, type_);
 
         assert!(result.is_err());
     }
