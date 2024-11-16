@@ -57,10 +57,8 @@ mod tests {
     fn is_compaction_returns_true_when_cleanup_policy_is_compaction() {
         let mut topic_config = TopicConfig::default();
         topic_config.attributes.insert(
-            TopicAttributes::CLEANUP_POLICY_ATTRIBUTE
-                .get_name()
-                .to_string(),
-            CleanupPolicy::COMPACTION.to_string(),
+            TopicAttributes::CLEANUP_POLICY_ATTRIBUTE.get_name().into(),
+            CleanupPolicy::COMPACTION.to_string().into(),
         );
         assert_eq!(is_compaction(&Some(topic_config)), true);
     }
@@ -71,8 +69,9 @@ mod tests {
         topic_config.attributes.insert(
             TopicAttributes::CLEANUP_POLICY_ATTRIBUTE
                 .get_name()
-                .to_string(),
-            CleanupPolicy::DELETE.to_string(),
+                .to_string()
+                .into(),
+            CleanupPolicy::DELETE.to_string().into(),
         );
         assert_eq!(is_compaction(&Some(topic_config)), false);
     }
@@ -88,8 +87,9 @@ mod tests {
         topic_config.attributes.insert(
             TopicAttributes::CLEANUP_POLICY_ATTRIBUTE
                 .get_name()
-                .to_string(),
-            CleanupPolicy::DELETE.to_string(),
+                .to_string()
+                .into(),
+            CleanupPolicy::DELETE.to_string().into(),
         );
         assert_eq!(
             get_delete_policy(Some(&topic_config)),
