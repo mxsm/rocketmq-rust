@@ -37,9 +37,9 @@ pub struct TransactionMQProducerBuilder {
     client_config: Option<ClientConfig>,
     default_mqproducer_impl: Option<DefaultMQProducerImpl>,
     retry_response_codes: Option<HashSet<i32>>,
-    producer_group: Option<String>,
-    topics: Option<Vec<String>>,
-    create_topic_key: Option<String>,
+    producer_group: Option<CheetahString>,
+    topics: Option<Vec<CheetahString>>,
+    create_topic_key: Option<CheetahString>,
     default_topic_queue_nums: Option<u32>,
     send_msg_timeout: Option<u32>,
     compress_msg_body_over_howmuch: Option<u32>,
@@ -110,19 +110,19 @@ impl TransactionMQProducerBuilder {
         self
     }
 
-    pub fn producer_group(mut self, producer_group: impl Into<String>) -> Self {
+    pub fn producer_group(mut self, producer_group: impl Into<CheetahString>) -> Self {
         self.producer_group = Some(producer_group.into());
         self
     }
 
-    pub fn topics(mut self, topics: Vec<String>) -> Self {
-        self.topics = Some(topics);
+    pub fn topics(mut self, topics: Vec<impl Into<CheetahString>>) -> Self {
+        self.topics = Some(topics.into_iter().map(|t| t.into()).collect());
         self
     }
 
-    pub fn name_server_addr(mut self, name_server_addr: String) -> Self {
+    pub fn name_server_addr(mut self, name_server_addr: impl Into<CheetahString>) -> Self {
         if let Some(client_config) = self.client_config.as_mut() {
-            client_config.namesrv_addr = Some(name_server_addr);
+            client_config.namesrv_addr = Some(name_server_addr.into());
             client_config
                 .namespace_initialized
                 .store(false, std::sync::atomic::Ordering::Release);
@@ -130,8 +130,8 @@ impl TransactionMQProducerBuilder {
         self
     }
 
-    pub fn create_topic_key(mut self, create_topic_key: String) -> Self {
-        self.create_topic_key = Some(create_topic_key);
+    pub fn create_topic_key(mut self, create_topic_key: impl Into<CheetahString>) -> Self {
+        self.create_topic_key = Some(create_topic_key.into());
         self
     }
 
@@ -253,7 +253,7 @@ impl TransactionMQProducerBuilder {
             mq_producer.set_retry_response_codes(retry_response_codes);
         }
         if let Some(producer_group) = self.producer_group {
-            mq_producer.set_producer_group(CheetahString::from_string(producer_group));
+            mq_producer.set_producer_group(producer_group);
         }
         if let Some(topics) = self.topics {
             mq_producer.set_topics(topics);

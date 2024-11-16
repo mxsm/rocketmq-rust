@@ -51,7 +51,7 @@ pub struct ConsumeMessageConcurrentlyService {
     pub(crate) default_mqpush_consumer_impl: Option<WeakArcMut<DefaultMQPushConsumerImpl>>,
     pub(crate) client_config: ArcMut<ClientConfig>,
     pub(crate) consumer_config: ArcMut<ConsumerConfig>,
-    pub(crate) consumer_group: Arc<String>,
+    pub(crate) consumer_group: CheetahString,
     pub(crate) message_listener: ArcBoxMessageListenerConcurrently,
     pub(crate) consume_runtime: RocketMQRuntime,
 }
@@ -60,7 +60,7 @@ impl ConsumeMessageConcurrentlyService {
     pub fn new(
         client_config: ArcMut<ClientConfig>,
         consumer_config: ArcMut<ConsumerConfig>,
-        consumer_group: String,
+        consumer_group: CheetahString,
         message_listener: ArcBoxMessageListenerConcurrently,
         default_mqpush_consumer_impl: Option<WeakArcMut<DefaultMQPushConsumerImpl>>,
     ) -> Self {
@@ -70,7 +70,7 @@ impl ConsumeMessageConcurrentlyService {
             default_mqpush_consumer_impl,
             client_config,
             consumer_config,
-            consumer_group: Arc::new(consumer_group),
+            consumer_group,
             message_listener,
             consume_runtime: RocketMQRuntime::new_multi(
                 consume_thread as usize,
@@ -213,9 +213,7 @@ impl ConsumeMessageConcurrentlyService {
         context: &ConsumeConcurrentlyContext,
     ) -> bool {
         let delay_level = context.delay_level_when_next_consume;
-        msg.set_topic(CheetahString::from_string(
-            self.client_config.with_namespace(msg.get_topic().as_str()),
-        ));
+        msg.set_topic(self.client_config.with_namespace(msg.get_topic().as_str()));
         match self
             .default_mqpush_consumer_impl
             .as_ref()
@@ -296,7 +294,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
                 process_queue,
                 message_queue,
                 dispatch_to_consume,
-                consumer_group: self.consumer_group.as_ref().clone(),
+                consumer_group: self.consumer_group.clone(),
                 default_mqpush_consumer_impl: self.default_mqpush_consumer_impl.clone(),
             };
 
@@ -313,7 +311,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
                         process_queue: process_queue.clone(),
                         message_queue: message_queue.clone(),
                         dispatch_to_consume,
-                        consumer_group: self.consumer_group.as_ref().clone(),
+                        consumer_group: self.consumer_group.clone(),
                         default_mqpush_consumer_impl: self.default_mqpush_consumer_impl.clone(),
                     };
                     let consume_message_concurrently_service = this.clone();
@@ -342,7 +340,7 @@ struct ConsumeRequest {
     process_queue: Arc<ProcessQueue>,
     message_queue: MessageQueue,
     dispatch_to_consume: bool,
-    consumer_group: String,
+    consumer_group: CheetahString,
     default_mqpush_consumer_impl: Option<WeakArcMut<DefaultMQPushConsumerImpl>>,
 }
 
@@ -402,13 +400,13 @@ impl ConsumeRequest {
                     msg_list: &self.msgs,
                     mq: Some(queue),
                     success: false,
-                    status: "".to_string(),
+                    status: CheetahString::new(),
                     mq_trace_context: None,
                     props: Default::default(),
                     namespace: default_mqpush_consumer_impl
                         .client_config
                         .get_namespace()
-                        .unwrap_or("".to_string()),
+                        .unwrap_or_default(),
                     access_channel: Default::default(),
                 });
                 default_mqpush_consumer_impl.execute_hook_before(&mut consume_message_context);
@@ -447,8 +445,8 @@ impl ConsumeRequest {
 
         if default_mqpush_consumer_impl.has_hook() {
             consume_message_context.as_mut().unwrap().props.insert(
-                mix_all::CONSUME_CONTEXT_TYPE.to_string(),
-                return_type.to_string(),
+                CheetahString::from_static_str(mix_all::CONSUME_CONTEXT_TYPE),
+                return_type.to_string().into(),
             );
         }
 
@@ -458,7 +456,7 @@ impl ConsumeRequest {
 
         if default_mqpush_consumer_impl.has_hook() {
             let cmc = consume_message_context.as_mut().unwrap();
-            cmc.status = status.unwrap().to_string();
+            cmc.status = status.unwrap().to_string().into();
             cmc.success = status.unwrap() == ConsumeConcurrentlyStatus::ConsumeSuccess;
             cmc.access_channel = Some(default_mqpush_consumer_impl.client_config.access_channel);
             default_mqpush_consumer_impl.execute_hook_after(&mut consume_message_context);

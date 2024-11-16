@@ -105,11 +105,11 @@ where
     ) -> Option<RemotingCommand> {
         let request_header = request
             .decode_command_custom_header::<UnregisterClientRequestHeader>()
-            .unwrap();
+            .expect("decode UnregisterClientRequestHeader failed");
 
         let client_channel_info = ClientChannelInfo::new(
             channel.clone(),
-            request_header.client_id.to_string(),
+            request_header.client_id.clone(),
             request.language(),
             request.version(),
         );

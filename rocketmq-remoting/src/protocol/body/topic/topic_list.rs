@@ -14,14 +14,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct TopicList {
-    pub topic_list: Vec<String>,
-    pub broker_addr: Option<String>,
+    pub topic_list: Vec<CheetahString>,
+    pub broker_addr: Option<CheetahString>,
 }
 
 #[cfg(test)]
@@ -38,13 +39,16 @@ mod tests {
     #[test]
     fn topic_list_creation_with_data() {
         let topic_list = TopicList {
-            topic_list: vec!["topic1".to_string(), "topic2".to_string()],
-            broker_addr: Some("broker1".to_string()),
+            topic_list: vec!["topic1".into(), "topic2".into()],
+            broker_addr: Some("broker1".into()),
         };
         assert_eq!(
             topic_list.topic_list,
-            vec!["topic1".to_string(), "topic2".to_string()]
+            vec![
+                <&str as Into<CheetahString>>::into("topic1"),
+                "topic2".into()
+            ]
         );
-        assert_eq!(topic_list.broker_addr, Some("broker1".to_string()));
+        assert_eq!(topic_list.broker_addr, Some("broker1".into()));
     }
 }

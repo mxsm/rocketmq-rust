@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 pub use blocking_client::BlockingClient;
+use cheetah_string::CheetahString;
 pub use client::Client;
 
 use crate::base::response_future::ResponseFuture;
@@ -42,19 +43,19 @@ pub trait RemotingClient: RemotingService {
     ///
     /// # Arguments
     /// * `addrs` - A list of name remoting_server addresses to update.
-    async fn update_name_server_address_list(&self, addrs: Vec<String>);
+    async fn update_name_server_address_list(&self, addrs: Vec<CheetahString>);
 
     /// Retrieves the current list of name remoting_server addresses.
     ///
     /// # Returns
     /// A vector containing the current list of name remoting_server addresses.
-    fn get_name_server_address_list(&self) -> &[String];
+    fn get_name_server_address_list(&self) -> &[CheetahString];
 
     /// Retrieves a list of available name remoting_server addresses.
     ///
     /// # Returns
     /// A vector containing the list of available name remoting_server addresses.
-    fn get_available_name_srv_list(&self) -> Vec<String>;
+    fn get_available_name_srv_list(&self) -> Vec<CheetahString>;
 
     /// Asynchronously invokes a command on a specified address.
     ///
@@ -67,7 +68,7 @@ pub trait RemotingClient: RemotingService {
     /// A `Result` containing either the response `RemotingCommand` or an `Error`.
     async fn invoke_async(
         &self,
-        addr: Option<String>,
+        addr: Option<CheetahString>,
         request: RemotingCommand,
         timeout_millis: u64,
     ) -> Result<RemotingCommand>;
@@ -78,7 +79,12 @@ pub trait RemotingClient: RemotingService {
     /// * `addr` - The address to invoke the command on.
     /// * `request` - The `RemotingCommand` to be sent.
     /// * `timeout_millis` - The timeout for the operation in milliseconds.
-    async fn invoke_oneway(&self, addr: String, request: RemotingCommand, timeout_millis: u64);
+    async fn invoke_oneway(
+        &self,
+        addr: CheetahString,
+        request: RemotingCommand,
+        timeout_millis: u64,
+    );
 
     /// Checks if a specified address is reachable.
     ///

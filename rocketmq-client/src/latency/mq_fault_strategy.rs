@@ -19,6 +19,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::thread::scope;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_rust::ArcMut;
 use tokio::runtime::Handle;
@@ -86,11 +87,11 @@ impl MQFaultStrategy {
     pub fn select_one_message_queue(
         &self,
         tp_info: &TopicPublishInfo,
-        last_broker_name: Option<&str>,
+        last_broker_name: Option<&CheetahString>,
         reset_index: bool,
     ) -> Option<MessageQueue> {
         THREAD_BROKER_FILTER.with(|filer| {
-            filer.borrow_mut().last_broker_name = last_broker_name.map(|s| s.to_string());
+            filer.borrow_mut().last_broker_name = last_broker_name.cloned();
         });
         if self.send_latency_fault_enable.load(Ordering::Relaxed) {
             if reset_index {
@@ -127,7 +128,7 @@ impl MQFaultStrategy {
 
     pub async fn update_fault_item(
         &self,
-        broker_name: &str,
+        broker_name: CheetahString,
         current_latency: u64,
         isolation: bool,
         reachable: bool,
@@ -140,12 +141,7 @@ impl MQFaultStrategy {
             });
             self.latency_fault_tolerance
                 .mut_from_ref()
-                .update_fault_item(
-                    broker_name.to_string(),
-                    current_latency,
-                    duration,
-                    reachable,
-                )
+                .update_fault_item(broker_name, current_latency, duration, reachable)
                 .await;
         }
     }
@@ -168,7 +164,7 @@ impl MQFaultStrategy {
 
 #[derive(Default, Clone)]
 struct BrokerFilter {
-    last_broker_name: Option<String>,
+    last_broker_name: Option<CheetahString>,
 }
 
 impl QueueFilter for BrokerFilter {
@@ -194,7 +190,7 @@ impl QueueFilter for ReachableFilter {
             s.spawn(|| {
                 flag = handle.block_on(async {
                     self.latency_fault_tolerance
-                        .is_reachable(&message_queue.get_broker_name().to_string())
+                        .is_reachable(message_queue.get_broker_name())
                         .await
                 });
             });
@@ -216,7 +212,7 @@ impl QueueFilter for AvailableFilter {
             s.spawn(|| {
                 flag = handle.block_on(async {
                     self.latency_fault_tolerance
-                        .is_available(&message_queue.get_broker_name().to_string())
+                        .is_available(message_queue.get_broker_name())
                         .await
                 });
             });

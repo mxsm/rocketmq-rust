@@ -128,17 +128,17 @@ impl BrokerOuterAPI {
         self.remoting_client.start(wrapper).await;
     }
 
-    pub async fn update_name_server_address_list(&self, addrs: String) {
+    pub async fn update_name_server_address_list(&self, addrs: CheetahString) {
         let addr_vec = addrs
-            .split("';'")
-            .map(|s| s.to_string())
-            .collect::<Vec<String>>();
+            .split(";")
+            .map(CheetahString::from_slice)
+            .collect::<Vec<CheetahString>>();
         self.remoting_client
             .update_name_server_address_list(addr_vec)
             .await
     }
 
-    pub async fn update_name_server_address_list_by_dns_lookup(&self, domain: String) {
+    pub async fn update_name_server_address_list_by_dns_lookup(&self, domain: CheetahString) {
         let address_list = dns_lookup_address_by_domain(domain.as_str());
         self.remoting_client
             .update_name_server_address_list(address_list)
@@ -233,7 +233,7 @@ impl BrokerOuterAPI {
 
     async fn register_broker(
         &self,
-        namesrv_addr: String,
+        namesrv_addr: CheetahString,
         oneway: bool,
         timeout_mills: u64,
         request_header: RegisterBrokerRequestHeader,
@@ -338,7 +338,7 @@ impl BrokerOuterAPI {
 
     pub async fn lock_batch_mq_async(
         &self,
-        addr: String,
+        addr: CheetahString,
         request_body: bytes::Bytes,
         timeout_millis: u64,
     ) -> Result<HashSet<MessageQueue>> {
@@ -375,7 +375,7 @@ impl BrokerOuterAPI {
 
     pub async fn unlock_batch_mq_async(
         &self,
-        addr: String,
+        addr: CheetahString,
         request_body: bytes::Bytes,
         timeout_millis: u64,
     ) -> Result<()> {
@@ -409,7 +409,7 @@ impl BrokerOuterAPI {
     }
 }
 
-fn dns_lookup_address_by_domain(domain: &str) -> Vec<String> {
+fn dns_lookup_address_by_domain(domain: &str) -> Vec<CheetahString> {
     let mut address_list = Vec::new();
     // Ensure logging is initialized
 
@@ -419,7 +419,7 @@ fn dns_lookup_address_by_domain(domain: &str) -> Vec<String> {
             match lookup_host(domain_str) {
                 Ok(addresses) => {
                     for address in addresses {
-                        address_list.push(format!("{}{}", address, port_str));
+                        address_list.push(format!("{}{}", address, port_str).into());
                     }
                     info!(
                         "DNS lookup address by domain success, domain={}, result={:?}",
@@ -450,7 +450,7 @@ mod tests {
     fn dns_lookup_address_by_domain_returns_correct_addresses() {
         let domain = "localhost:8080";
         let addresses = dns_lookup_address_by_domain(domain);
-        assert!(addresses.contains(&"127.0.0.1:8080".to_string()));
+        assert!(addresses.contains(&"127.0.0.1:8080".into()));
     }
 
     #[test]

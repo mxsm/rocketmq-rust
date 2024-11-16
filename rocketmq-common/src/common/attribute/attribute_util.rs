@@ -19,21 +19,22 @@ use std::collections::HashSet;
 use std::string::ToString;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use tracing::info;
 
 use crate::common::attribute::AttributeTrait;
 
 pub fn alter_current_attributes<A: AttributeTrait>(
     create: bool,
-    all: HashMap<String, A>,
-    current_attributes: HashMap<String, String>,
-    new_attributes: HashMap<String, String>,
-) -> HashMap<String, String> {
-    let mut init: HashMap<String, String> = HashMap::new();
-    let mut add: HashMap<String, String> = HashMap::new();
-    let mut update: HashMap<String, String> = HashMap::new();
-    let mut delete: HashMap<String, String> = HashMap::new();
-    let mut keys: HashSet<String> = HashSet::new();
+    all: HashMap<CheetahString, A>,
+    current_attributes: HashMap<CheetahString, CheetahString>,
+    new_attributes: HashMap<CheetahString, CheetahString>,
+) -> HashMap<CheetahString, CheetahString> {
+    let mut init = HashMap::new();
+    let mut add = HashMap::new();
+    let mut update = HashMap::new();
+    let mut delete = HashMap::new();
+    let mut keys = HashSet::new();
 
     for (key, value) in new_attributes {
         let real_key = real_key(key.as_str());
@@ -42,7 +43,7 @@ pub fn alter_current_attributes<A: AttributeTrait>(
 
         if create {
             if key.starts_with('+') {
-                init.insert(real_key.clone(), value);
+                init.insert(real_key.clone().into(), value);
             } else {
                 panic!(
                     "only add attribute is supported while creating topic. key: {}",
@@ -50,16 +51,16 @@ pub fn alter_current_attributes<A: AttributeTrait>(
                 );
             }
         } else if key.starts_with('+') {
-            if !current_attributes.contains_key(&real_key) {
-                add.insert(real_key.clone(), value);
+            if !current_attributes.contains_key(real_key.as_str()) {
+                add.insert(real_key.clone().into(), value);
             } else {
-                update.insert(real_key.clone(), value);
+                update.insert(real_key.clone().into(), value);
             }
         } else if key.starts_with('-') {
-            if !current_attributes.contains_key(&real_key) {
+            if !current_attributes.contains_key(real_key.as_str()) {
                 panic!("attempt to delete a nonexistent key: {}", real_key);
             }
-            delete.insert(real_key.clone(), value);
+            delete.insert(real_key.clone().into(), value);
         } else {
             panic!("wrong format key: {}", real_key);
         }
@@ -82,8 +83,8 @@ pub fn alter_current_attributes<A: AttributeTrait>(
     final_attributes
 }
 
-fn duplication_check(keys: &mut HashSet<String>, key: &String) {
-    if !keys.insert(key.clone()) {
+fn duplication_check(keys: &mut HashSet<CheetahString>, key: &String) {
+    if !keys.insert(key.into()) {
         panic!("alter duplication key. key: {}", key);
     }
 }
@@ -95,8 +96,8 @@ fn validate(kv_attribute: &str) {
 }
 
 fn validate_alter<A: AttributeTrait>(
-    all: &HashMap<String, A>,
-    alter: &HashMap<String, String>,
+    all: &HashMap<CheetahString, A>,
+    alter: &HashMap<CheetahString, CheetahString>,
     init: bool,
     delete: bool,
 ) {

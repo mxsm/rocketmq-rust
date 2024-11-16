@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -26,16 +27,16 @@ use crate::protocol::route::route_data_view::BrokerData;
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ClusterInfo {
     #[serde(rename = "brokerAddrTable")]
-    pub broker_addr_table: Option<HashMap<String, BrokerData>>,
+    pub broker_addr_table: Option<HashMap<CheetahString, BrokerData>>,
 
     #[serde(rename = "clusterAddrTable")]
-    pub cluster_addr_table: Option<HashMap<String, HashSet<String>>>,
+    pub cluster_addr_table: Option<HashMap<CheetahString, HashSet<CheetahString>>>,
 }
 
 impl ClusterInfo {
     pub fn new(
-        broker_addr_table: Option<HashMap<String, BrokerData>>,
-        cluster_addr_table: Option<HashMap<String, HashSet<String>>>,
+        broker_addr_table: Option<HashMap<CheetahString, BrokerData>>,
+        cluster_addr_table: Option<HashMap<CheetahString, HashSet<CheetahString>>>,
     ) -> ClusterInfo {
         ClusterInfo {
             broker_addr_table,

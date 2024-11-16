@@ -96,7 +96,7 @@ use crate::Result;
 pub struct DefaultMQProducerImpl {
     client_config: ClientConfig,
     producer_config: Arc<ProducerConfig>,
-    topic_publish_info_table: Arc<RwLock<HashMap<String /* topic */, TopicPublishInfo>>>,
+    topic_publish_info_table: Arc<RwLock<HashMap<CheetahString /* topic */, TopicPublishInfo>>>,
     send_message_hook_list: ArcMut<Vec<Box<dyn SendMessageHook>>>,
     end_transaction_hook_list: Arc<Vec<Box<dyn EndTransactionHook>>>,
     check_forbidden_hook_list: Vec<Arc<Box<dyn CheckForbiddenHook>>>,
@@ -406,7 +406,7 @@ impl DefaultMQProducerImpl {
                     user_message.get_topic(),
                     self.client_config
                         .get_namespace()
-                        .unwrap_or("".to_string())
+                        .unwrap_or_default()
                         .as_str(),
                 );
                 user_message.set_topic(CheetahString::from_string(user_topic));
@@ -690,8 +690,8 @@ impl DefaultMQProducerImpl {
         let begin_timestamp_first = Instant::now();
         let mut begin_timestamp_prev = begin_timestamp_first;
         let mut end_timestamp = begin_timestamp_first;
-        let topic = msg.get_topic().to_string();
-        let topic_publish_info = self.try_to_find_topic_publish_info(topic.as_str()).await;
+        let topic = msg.get_topic().clone();
+        let topic_publish_info = self.try_to_find_topic_publish_info(&topic).await;
         if let Some(topic_publish_info) = topic_publish_info {
             if topic_publish_info.ok() {
                 let mut call_timeout = false;
@@ -725,8 +725,7 @@ impl DefaultMQProducerImpl {
                         begin_timestamp_prev = Instant::now();
                         if times > 0 {
                             //Reset topic with namespace during resend.
-                            let namespace =
-                                self.client_config.get_namespace().unwrap_or("".to_string());
+                            let namespace = self.client_config.get_namespace().unwrap_or_default();
                             msg.set_topic(CheetahString::from_string(
                                 NamespaceUtil::wrap_namespace(namespace.as_str(), topic.as_str()),
                             ));
@@ -755,7 +754,7 @@ impl DefaultMQProducerImpl {
                                 send_result = result;
                                 end_timestamp = Instant::now();
                                 self.update_fault_item(
-                                    mq.as_ref().unwrap().get_broker_name(),
+                                    mq.as_ref().unwrap().get_broker_name().clone(),
                                     (end_timestamp - begin_timestamp_prev).as_millis() as u64,
                                     false,
                                     true,
@@ -785,7 +784,7 @@ impl DefaultMQProducerImpl {
                                     let elapsed =
                                         (end_timestamp - begin_timestamp_prev).as_millis() as u64;
                                     self.update_fault_item(
-                                        mq.as_ref().unwrap().get_broker_name(),
+                                        mq.as_ref().unwrap().get_broker_name().clone(),
                                         elapsed,
                                         false,
                                         true,
@@ -808,7 +807,7 @@ impl DefaultMQProducerImpl {
                                     let elapsed =
                                         (end_timestamp - begin_timestamp_prev).as_millis() as u64;
                                     self.update_fault_item(
-                                        mq.as_ref().unwrap().get_broker_name(),
+                                        mq.as_ref().unwrap().get_broker_name().clone(),
                                         elapsed,
                                         true,
                                         false,
@@ -830,7 +829,7 @@ impl DefaultMQProducerImpl {
                                         (end_timestamp - begin_timestamp_prev).as_millis() as u64;
                                     if self.mq_fault_strategy.is_start_detector_enable() {
                                         self.update_fault_item(
-                                            mq.as_ref().unwrap().get_broker_name(),
+                                            mq.as_ref().unwrap().get_broker_name().clone(),
                                             elapsed,
                                             true,
                                             false,
@@ -838,7 +837,7 @@ impl DefaultMQProducerImpl {
                                         .await;
                                     } else {
                                         self.update_fault_item(
-                                            mq.as_ref().unwrap().get_broker_name(),
+                                            mq.as_ref().unwrap().get_broker_name().clone(),
                                             elapsed,
                                             true,
                                             true,
@@ -926,7 +925,7 @@ impl DefaultMQProducerImpl {
     #[inline]
     pub async fn update_fault_item(
         &self,
-        broker_name: &str,
+        broker_name: CheetahString,
         current_latency: u64,
         isolation: bool,
         reachable: bool,
@@ -960,10 +959,10 @@ impl DefaultMQProducerImpl {
             .client_instance
             .as_ref()
             .unwrap()
-            .find_broker_address_in_publish(broker_name.as_str())
+            .find_broker_address_in_publish(broker_name.as_ref())
             .await;
         if broker_addr.is_none() {
-            self.try_to_find_topic_publish_info(mq.get_topic()).await;
+            self.try_to_find_topic_publish_info(mq.get_topic_cs()).await;
             broker_name = self
                 .client_instance
                 .as_ref()
@@ -974,7 +973,7 @@ impl DefaultMQProducerImpl {
                 .client_instance
                 .as_ref()
                 .unwrap()
-                .find_broker_address_in_publish(broker_name.as_str())
+                .find_broker_address_in_publish(broker_name.as_ref())
                 .await;
         }
 
@@ -996,9 +995,7 @@ impl DefaultMQProducerImpl {
         }
         let mut topic_with_namespace = false;
         if self.client_config.get_namespace().is_some() {
-            msg.set_instance_id(CheetahString::from_string(
-                self.client_config.get_namespace().unwrap(),
-            ));
+            msg.set_instance_id(self.client_config.get_namespace().unwrap_or_default());
             topic_with_namespace = true;
         }
         let mut sys_flag = 0i32;
@@ -1021,7 +1018,7 @@ impl DefaultMQProducerImpl {
         if self.has_check_forbidden_hook() {
             let check_forbidden_context = CheckForbiddenContext {
                 name_srv_addr: self.client_config.get_namesrv_addr(),
-                group: Some(self.producer_config.producer_group().to_string()),
+                group: Some(self.producer_config.producer_group().clone()),
                 communication_mode: Some(communication_mode),
                 broker_addr: Some(broker_addr.clone()),
                 message: Some(msg),
@@ -1034,7 +1031,7 @@ impl DefaultMQProducerImpl {
 
         let mut send_message_context = if self.has_send_message_hook() {
             let namespace = self.client_config.get_namespace();
-            let producer_group = self.producer_config.producer_group().to_string();
+            let producer_group = self.producer_config.producer_group().clone();
             let born_host = self.client_config.client_ip.clone();
             let is_trans = msg.get_property(&CheetahString::from_static_str(
                 MessageConst::PROPERTY_TRANSACTION_PREPARED,
@@ -1099,7 +1096,7 @@ impl DefaultMQProducerImpl {
             batch: Some(batch),
             topic_request_header: Some(TopicRequestHeader {
                 rpc_request_header: Some(RpcRequestHeader {
-                    broker_name: Some(CheetahString::from_string(broker_name.clone())),
+                    broker_name: Some(broker_name.clone()),
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -1132,7 +1129,7 @@ impl DefaultMQProducerImpl {
                             msg.get_topic(),
                             self.client_config
                                 .get_namespace()
-                                .unwrap_or(String::from(""))
+                                .unwrap_or_default()
                                 .as_str(),
                         ),
                     ));
@@ -1143,8 +1140,8 @@ impl DefaultMQProducerImpl {
                     .unwrap()
                     .get_mq_client_api_impl()
                     .send_message(
-                        broker_addr.as_str(),
-                        broker_name.as_str(),
+                        broker_addr.clone(),
+                        broker_name.clone(),
                         msg,
                         request_header,
                         timeout - cost_time_sync,
@@ -1170,8 +1167,8 @@ impl DefaultMQProducerImpl {
                     .unwrap()
                     .get_mq_client_api_impl()
                     .send_message_simple(
-                        broker_addr.as_str(),
-                        broker_name.as_str(),
+                        broker_addr,
+                        broker_name,
                         msg,
                         request_header,
                         timeout - cost_time_sync,
@@ -1263,7 +1260,7 @@ impl DefaultMQProducerImpl {
     pub fn select_one_message_queue(
         &self,
         tp_info: &TopicPublishInfo,
-        last_broker_name: Option<&str>,
+        last_broker_name: Option<&CheetahString>,
         reset_index: bool,
     ) -> Option<MessageQueue> {
         self.mq_fault_strategy
@@ -1289,11 +1286,14 @@ impl DefaultMQProducerImpl {
         Ok(())
     }
 
-    async fn try_to_find_topic_publish_info(&self, topic: &str) -> Option<TopicPublishInfo> {
+    async fn try_to_find_topic_publish_info(
+        &self,
+        topic: &CheetahString,
+    ) -> Option<TopicPublishInfo> {
         let mut write_guard = self.topic_publish_info_table.write().await;
         let mut topic_publish_info = write_guard.get(topic).cloned();
         if topic_publish_info.is_none() || !topic_publish_info.as_ref().unwrap().ok() {
-            write_guard.insert(topic.to_string(), TopicPublishInfo::new());
+            write_guard.insert(topic.clone(), TopicPublishInfo::new());
             drop(write_guard);
             self.client_instance
                 .as_ref()
@@ -1372,7 +1372,7 @@ impl DefaultMQProducerImpl {
                     user_message.get_topic(),
                     self.client_config
                         .get_namespace()
-                        .unwrap_or("".to_string())
+                        .unwrap_or_default()
                         .as_str(),
                 );
                 user_message.set_topic(CheetahString::from_string(user_topic));
@@ -1830,7 +1830,7 @@ impl DefaultMQProducerImpl {
         MessageAccessor::put_property(
             msg,
             CheetahString::from_static_str(MessageConst::PROPERTY_MESSAGE_REPLY_TO_CLIENT),
-            CheetahString::from_string(request_client_id),
+            request_client_id,
         );
         MessageAccessor::put_property(
             msg,
@@ -1883,7 +1883,7 @@ impl DefaultMQProducerImpl {
         MessageAccessor::put_property(
             &mut msg,
             CheetahString::from_static_str(MessageConst::PROPERTY_PRODUCER_GROUP),
-            CheetahString::from_string(self.producer_config.producer_group().to_owned()),
+            self.producer_config.producer_group().to_owned(),
         );
         let result = self.send(&mut msg).await;
         if let Err(e) = result {
@@ -1969,7 +1969,7 @@ impl DefaultMQProducerImpl {
             .client_instance
             .as_mut()
             .unwrap()
-            .find_broker_address_in_publish(dest_broker_name.as_str())
+            .find_broker_address_in_publish(dest_broker_name.as_ref())
             .await;
         let request_header = EndTransactionRequestHeader {
             topic: CheetahString::from_string(msg.get_topic().to_string()),
@@ -1987,7 +1987,7 @@ impl DefaultMQProducerImpl {
             msg_id: send_result.msg_id.clone().unwrap_or_default(),
             transaction_id: transaction_id.map(CheetahString::from_string),
             rpc_request_header: RpcRequestHeader {
-                broker_name: Some(CheetahString::from_string(dest_broker_name)),
+                broker_name: Some(dest_broker_name),
                 ..Default::default()
             },
         };
@@ -2062,7 +2062,7 @@ impl DefaultMQProducerImpl {
 }
 
 impl MQProducerInner for DefaultMQProducerImpl {
-    fn get_publish_topic_list(&self) -> HashSet<String> {
+    fn get_publish_topic_list(&self) -> HashSet<CheetahString> {
         let handle = Handle::current();
         let topic_publish_info_table = self.topic_publish_info_table.clone();
         thread::spawn(move || {
@@ -2176,7 +2176,7 @@ impl MQProducerInner for DefaultMQProducerImpl {
             });
     }
 
-    fn update_topic_publish_info(&mut self, topic: String, info: Option<TopicPublishInfo>) {
+    fn update_topic_publish_info(&mut self, topic: CheetahString, info: Option<TopicPublishInfo>) {
         if topic.is_empty() || info.is_none() {
             return;
         }
@@ -2316,16 +2316,14 @@ impl DefaultMQProducerImpl {
 
     async fn init_topic_route(&mut self) {
         for topic in self.producer_config.topics() {
-            let new_topic = NamespaceUtil::wrap_namespace(
+            let new_topic = CheetahString::from_string(NamespaceUtil::wrap_namespace(
                 self.client_config
                     .get_namespace()
-                    .unwrap_or("".to_string())
+                    .unwrap_or_default()
                     .as_str(),
                 topic,
-            );
-            let topic_publish_info = self
-                .try_to_find_topic_publish_info(new_topic.as_str())
-                .await;
+            ));
+            let topic_publish_info = self.try_to_find_topic_publish_info(&new_topic).await;
             if topic_publish_info.is_none() || !topic_publish_info.unwrap().ok() {
                 warn!(
                     "No route info of this topic: {} {}",
@@ -2345,7 +2343,7 @@ impl DefaultMQProducerImpl {
 
 pub(crate) struct DefaultServiceDetector {
     client_instance: ArcMut<MQClientInstance>,
-    topic_publish_info_table: Arc<RwLock<HashMap<String /* topic */, TopicPublishInfo>>>,
+    topic_publish_info_table: Arc<RwLock<HashMap<CheetahString /* topic */, TopicPublishInfo>>>,
 }
 
 impl ServiceDetector for DefaultServiceDetector {
@@ -2359,7 +2357,7 @@ pub(crate) struct DefaultResolver {
 }
 
 impl Resolver for DefaultResolver {
-    async fn resolve(&self, name: &str) -> Option<String> {
+    async fn resolve(&self, name: &CheetahString) -> Option<CheetahString> {
         self.client_instance
             .find_broker_address_in_publish(name)
             .await

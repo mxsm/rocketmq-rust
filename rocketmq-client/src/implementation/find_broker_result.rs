@@ -16,9 +16,11 @@
  */
 use std::fmt::Display;
 
+use cheetah_string::CheetahString;
+
 #[derive(Debug, Clone, Default)]
 pub struct FindBrokerResult {
-    pub broker_addr: String,
+    pub broker_addr: CheetahString,
     pub slave: bool,
     pub broker_version: i32,
 }

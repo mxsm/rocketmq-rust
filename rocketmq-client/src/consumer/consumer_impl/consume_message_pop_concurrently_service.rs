@@ -16,6 +16,7 @@
  */
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_client_ext::MessageClientExt;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
@@ -35,7 +36,7 @@ pub struct ConsumeMessagePopConcurrentlyService {
     pub(crate) default_mqpush_consumer_impl: Option<WeakArcMut<DefaultMQPushConsumerImpl>>,
     pub(crate) client_config: ArcMut<ClientConfig>,
     pub(crate) consumer_config: ArcMut<ConsumerConfig>,
-    pub(crate) consumer_group: Arc<String>,
+    pub(crate) consumer_group: CheetahString,
     pub(crate) message_listener: ArcBoxMessageListenerConcurrently,
 }
 
@@ -43,14 +44,14 @@ impl ConsumeMessagePopConcurrentlyService {
     pub fn new(
         client_config: ArcMut<ClientConfig>,
         consumer_config: ArcMut<ConsumerConfig>,
-        consumer_group: String,
+        consumer_group: CheetahString,
         message_listener: ArcBoxMessageListenerConcurrently,
     ) -> Self {
         Self {
             default_mqpush_consumer_impl: None,
             client_config,
             consumer_config,
-            consumer_group: Arc::new(consumer_group),
+            consumer_group,
             message_listener,
         }
     }

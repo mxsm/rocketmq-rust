@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use cheetah_string::CheetahString;
 use lazy_static::lazy_static;
 use serde::Deserialize;
 
@@ -33,12 +34,12 @@ lazy_static! {
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageStoreConfig {
-    pub store_path_root_dir: String,
-    pub store_path_commit_log: Option<String>,
-    pub store_path_dledger_commit_log: Option<String>,
-    pub store_path_epoch_file: Option<String>,
-    pub store_path_broker_identity: Option<String>,
-    pub read_only_commit_log_store_paths: Option<String>,
+    pub store_path_root_dir: CheetahString,
+    pub store_path_commit_log: Option<CheetahString>,
+    pub store_path_dledger_commit_log: Option<CheetahString>,
+    pub store_path_epoch_file: Option<CheetahString>,
+    pub store_path_broker_identity: Option<CheetahString>,
+    pub read_only_commit_log_store_paths: Option<CheetahString>,
     pub mapped_file_size_commit_log: usize,
     pub compaction_mapped_file_size: usize,
     pub compaction_cq_mapped_file_size: usize,
@@ -215,7 +216,7 @@ impl Default for MessageStoreConfig {
             .to_string_lossy()
             .to_string();
         Self {
-            store_path_root_dir,
+            store_path_root_dir: store_path_root_dir.into(),
             store_path_commit_log: None,
             store_path_dledger_commit_log: None,
             store_path_epoch_file: None,
@@ -398,12 +399,12 @@ impl Default for MessageStoreConfig {
 impl MessageStoreConfig {
     pub fn get_store_path_commit_log(&self) -> String {
         if self.store_path_commit_log.is_none() {
-            return PathBuf::from(self.store_path_root_dir.clone())
+            return PathBuf::from(self.store_path_root_dir.to_string())
                 .join("commitlog")
                 .to_string_lossy()
                 .to_string();
         }
-        self.store_path_commit_log.clone().unwrap()
+        self.store_path_commit_log.clone().unwrap().to_string()
     }
 
     pub fn is_enable_rocksdb_store(&self) -> bool {
@@ -419,35 +420,46 @@ impl MessageStoreConfig {
         self.timer_wheel_enable
     }
 
-    pub fn get_properties(&self) -> HashMap<String, String> {
+    pub fn get_properties(&self) -> HashMap<CheetahString, CheetahString> {
         let mut properties: HashMap<String, String> = HashMap::new();
         properties.insert(
             "storePathRootDir".to_string(),
-            self.store_path_root_dir.clone(),
+            self.store_path_root_dir.clone().to_string(),
         );
         properties.insert(
             "storePathCommitLog".to_string(),
-            self.store_path_commit_log.clone().unwrap_or_default(),
+            self.store_path_commit_log
+                .clone()
+                .unwrap_or_default()
+                .to_string(),
         );
         properties.insert(
             "storePathDledgerCommitLog".to_string(),
             self.store_path_dledger_commit_log
                 .clone()
-                .unwrap_or_default(),
+                .unwrap_or_default()
+                .to_string(),
         );
         properties.insert(
             "storePathEpochFile".to_string(),
-            self.store_path_epoch_file.clone().unwrap_or_default(),
+            self.store_path_epoch_file
+                .clone()
+                .unwrap_or_default()
+                .to_string(),
         );
         properties.insert(
             "storePathBrokerIdentity".to_string(),
-            self.store_path_broker_identity.clone().unwrap_or_default(),
+            self.store_path_broker_identity
+                .clone()
+                .unwrap_or_default()
+                .to_string(),
         );
         properties.insert(
             "readOnlyCommitLogStorePaths".to_string(),
             self.read_only_commit_log_store_paths
                 .clone()
-                .unwrap_or_default(),
+                .unwrap_or_default()
+                .to_string(),
         );
         properties.insert(
             "mappedFileSizeCommitLog".to_string(),
@@ -1071,25 +1083,28 @@ impl MessageStoreConfig {
             self.stat_rocksdb_cq_interval_sec.to_string(),
         );
         properties.insert(
-            "memTableFlushIntervalMs".to_string(),
+            "memTableFlushIntervalMs".into(),
             self.mem_table_flush_interval_ms.to_string(),
         );
         properties.insert(
-            "realTimePersistRocksdbConfig".to_string(),
+            "realTimePersistRocksdbConfig".into(),
             self.real_time_persist_rocksdb_config.to_string(),
         );
         properties.insert(
-            "enableRocksdbLog".to_string(),
+            "enableRocksdbLog".into(),
             self.enable_rocksdb_log.to_string(),
         );
         properties.insert(
-            "topicQueueLockNum".to_string(),
+            "topicQueueLockNum".into(),
             self.topic_queue_lock_num.to_string(),
         );
         properties.insert(
-            "maxFilterMessageSize".to_string(),
+            "maxFilterMessageSize".into(),
             self.max_filter_message_size.to_string(),
         );
         properties
+            .into_iter()
+            .map(|(k, v)| (k.into(), v.into()))
+            .collect::<HashMap<CheetahString, CheetahString>>()
     }
 }

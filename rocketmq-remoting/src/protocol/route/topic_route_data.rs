@@ -16,6 +16,7 @@
  */
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -26,15 +27,15 @@ use crate::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
 #[derive(Debug, Serialize, Deserialize, Clone, Default, Eq, PartialEq)]
 pub struct TopicRouteData {
     #[serde(rename = "orderTopicConf")]
-    pub order_topic_conf: Option<String>,
+    pub order_topic_conf: Option<CheetahString>,
     #[serde(rename = "queueDatas")]
     pub queue_datas: Vec<QueueData>,
     #[serde(rename = "brokerDatas")]
     pub broker_datas: Vec<BrokerData>,
     #[serde(rename = "filterServerTable")]
-    pub filter_server_table: HashMap<String, Vec<String>>,
+    pub filter_server_table: HashMap<CheetahString, Vec<CheetahString>>,
     #[serde(rename = "TopicQueueMappingInfo")]
-    pub topic_queue_mapping_by_broker: Option<HashMap<String, TopicQueueMappingInfo>>,
+    pub topic_queue_mapping_by_broker: Option<HashMap<CheetahString, TopicQueueMappingInfo>>,
 }
 
 impl TopicRouteData {

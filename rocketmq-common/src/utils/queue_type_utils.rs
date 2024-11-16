@@ -49,8 +49,11 @@ mod tests {
 
         let topic_config = Some(TopicConfig {
             attributes: HashMap::from_iter([(
-                TopicAttributes::QUEUE_TYPE_ATTRIBUTE.get_name().to_string(),
-                "BatchCQ".to_string(),
+                TopicAttributes::QUEUE_TYPE_ATTRIBUTE
+                    .get_name()
+                    .to_string()
+                    .into(),
+                "BatchCQ".to_string().into(),
             )]),
             ..TopicConfig::default()
         });
@@ -58,8 +61,11 @@ mod tests {
 
         let topic_config = Some(TopicConfig {
             attributes: HashMap::from_iter([(
-                TopicAttributes::QUEUE_TYPE_ATTRIBUTE.get_name().to_string(),
-                "InvalidCQ".to_string(),
+                TopicAttributes::QUEUE_TYPE_ATTRIBUTE
+                    .get_name()
+                    .to_string()
+                    .into(),
+                "InvalidCQ".to_string().into(),
             )]),
             ..TopicConfig::default()
         });
@@ -79,8 +85,11 @@ mod tests {
 
         let topic_config = Some(TopicConfig {
             attributes: HashMap::from_iter([(
-                TopicAttributes::QUEUE_TYPE_ATTRIBUTE.get_name().to_string(),
-                "BatchCQ".to_string(),
+                TopicAttributes::QUEUE_TYPE_ATTRIBUTE
+                    .get_name()
+                    .to_string()
+                    .into(),
+                "BatchCQ".to_string().into(),
             )]),
             ..TopicConfig::default()
         });
@@ -88,8 +97,11 @@ mod tests {
 
         let topic_config = Some(TopicConfig {
             attributes: HashMap::from_iter([(
-                TopicAttributes::QUEUE_TYPE_ATTRIBUTE.get_name().to_string(),
-                "InvalidCQ".to_string(),
+                TopicAttributes::QUEUE_TYPE_ATTRIBUTE
+                    .get_name()
+                    .to_string()
+                    .into(),
+                "InvalidCQ".to_string().into(),
             )]),
             ..TopicConfig::default()
         });

@@ -17,6 +17,7 @@
 use std::collections::HashSet;
 use std::fmt::Display;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use serde::Deserialize;
 use serde::Serialize;
@@ -24,8 +25,8 @@ use serde::Serialize;
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct LockBatchRequestBody {
-    pub consumer_group: Option<String>,
-    pub client_id: Option<String>,
+    pub consumer_group: Option<CheetahString>,
+    pub client_id: Option<CheetahString>,
     pub only_this_broker: bool,
     pub mq_set: HashSet<MessageQueue>,
 }
@@ -36,8 +37,8 @@ impl Display for LockBatchRequestBody {
             f,
             "LockBatchRequestBody [consumer_group={}, client_id={}, only_this_broker={}, \
              mq_set={:?}]",
-            self.consumer_group.as_ref().unwrap_or(&"".to_string()),
-            self.client_id.as_ref().unwrap_or(&"".to_string()),
+            self.consumer_group.as_ref().unwrap_or(&"".into()),
+            self.client_id.as_ref().unwrap_or(&"".into()),
             self.only_this_broker,
             self.mq_set
         )

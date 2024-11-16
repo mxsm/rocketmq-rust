@@ -17,6 +17,7 @@
 
 use std::collections::HashSet;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_remoting::protocol::body::consumer_running_info::ConsumerRunningInfo;
@@ -67,7 +68,7 @@ pub trait MQConsumerInnerLocal: MQConsumerInnerAny + Sync + 'static {
     ///
     /// * `topic` - A string slice that holds the name of the topic.
     /// * `info` - A reference to a `HashSet` containing `MessageQueue` information.
-    async fn update_topic_subscribe_info(&self, topic: &str, info: &HashSet<MessageQueue>);
+    async fn update_topic_subscribe_info(&self, topic: CheetahString, info: &HashSet<MessageQueue>);
 
     /// Checks if the subscription information for a given topic needs to be updated asynchronously.
     ///
@@ -204,7 +205,11 @@ impl MQConsumerInner for MQConsumerInnerImpl {
         panic!("default_mqpush_consumer_impl is None");
     }
 
-    async fn update_topic_subscribe_info(&self, topic: &str, info: &HashSet<MessageQueue>) {
+    async fn update_topic_subscribe_info(
+        &self,
+        topic: CheetahString,
+        info: &HashSet<MessageQueue>,
+    ) {
         if let Some(ref default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl {
             if let Some(mut default_mqpush_consumer_impl) = default_mqpush_consumer_impl.upgrade() {
                 return MQConsumerInner::update_topic_subscribe_info(

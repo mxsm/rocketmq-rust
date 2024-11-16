@@ -21,6 +21,7 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use once_cell::sync::Lazy;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::utils::file_utils;
@@ -57,13 +58,13 @@ static LOCAL_OFFSET_STORE_DIR: Lazy<PathBuf> = Lazy::new(|| {
 
 pub struct LocalFileOffsetStore {
     client_instance: ArcMut<MQClientInstance>,
-    group_name: String,
-    store_path: String,
+    group_name: CheetahString,
+    store_path: CheetahString,
     offset_table: Arc<Mutex<HashMap<MessageQueue, ControllableOffset>>>,
 }
 
 impl LocalFileOffsetStore {
-    pub fn new(client_instance: ArcMut<MQClientInstance>, group_name: String) -> Self {
+    pub fn new(client_instance: ArcMut<MQClientInstance>, group_name: CheetahString) -> Self {
         let store_path = LOCAL_OFFSET_STORE_DIR
             .clone()
             .join(client_instance.client_id.as_str())
@@ -74,7 +75,7 @@ impl LocalFileOffsetStore {
         Self {
             client_instance,
             group_name,
-            store_path,
+            store_path: CheetahString::from(store_path),
             offset_table: Arc::new(Mutex::new(HashMap::new())),
         }
     }

@@ -133,7 +133,7 @@ impl MQClientAPIImpl {
         MQClientAPIImpl {
             remoting_client: ArcMut::new(default_client),
             top_addressing: Box::new(DefaultTopAddressing::new(
-                mix_all::get_ws_addr(),
+                mix_all::get_ws_addr().into(),
                 client_config.unit_name.clone(),
             )),
             //client_remoting_processor,
@@ -171,8 +171,8 @@ impl MQClientAPIImpl {
     pub async fn update_name_server_address_list(&self, addrs: &str) {
         let addr_vec = addrs
             .split(";")
-            .map(|s| s.to_string())
-            .collect::<Vec<String>>();
+            .map(CheetahString::from_slice)
+            .collect::<Vec<CheetahString>>();
         self.remoting_client
             .update_name_server_address_list(addr_vec)
             .await;
@@ -260,14 +260,14 @@ impl MQClientAPIImpl {
         }
     }
 
-    pub fn get_name_server_address_list(&self) -> &[String] {
+    pub fn get_name_server_address_list(&self) -> &[CheetahString] {
         self.remoting_client.get_name_server_address_list()
     }
 
     pub async fn send_message<T>(
         &mut self,
-        addr: &str,
-        broker_name: &str,
+        addr: CheetahString,
+        broker_name: CheetahString,
         msg: &mut T,
         request_header: SendMessageRequestHeader,
         timeout_millis: u64,
@@ -356,8 +356,8 @@ impl MQClientAPIImpl {
                     ));
                 }
                 Box::pin(self.send_message_async(
-                    addr,
-                    broker_name,
+                    &addr,
+                    &broker_name,
                     msg,
                     timeout_millis,
                     request,
@@ -374,7 +374,7 @@ impl MQClientAPIImpl {
             }
             CommunicationMode::Oneway => {
                 self.remoting_client
-                    .invoke_oneway(addr.to_string(), request, timeout_millis)
+                    .invoke_oneway(addr, request, timeout_millis)
                     .await;
                 Ok(None)
             }
@@ -383,8 +383,8 @@ impl MQClientAPIImpl {
 
     pub async fn send_message_simple<T>(
         &mut self,
-        addr: &str,
-        broker_name: &str,
+        addr: CheetahString,
+        broker_name: CheetahString,
         msg: &mut T,
         request_header: SendMessageRequestHeader,
         timeout_millis: u64,
@@ -414,8 +414,8 @@ impl MQClientAPIImpl {
 
     async fn send_message_sync<T>(
         &mut self,
-        addr: &str,
-        broker_name: &str,
+        addr: CheetahString,
+        broker_name: CheetahString,
         msg: &T,
         timeout_millis: u64,
         request: RemotingCommand,
@@ -425,15 +425,15 @@ impl MQClientAPIImpl {
     {
         let response = self
             .remoting_client
-            .invoke_async(Some(addr.to_string()), request, timeout_millis)
+            .invoke_async(Some(addr.clone()), request, timeout_millis)
             .await?;
         self.process_send_response(broker_name, msg, &response, addr)
     }
 
     async fn send_message_async<T: MessageTrait>(
         &mut self,
-        addr: &str,
-        broker_name: &str,
+        addr: &CheetahString,
+        broker_name: &CheetahString,
         msg: &T,
         timeout_millis: u64,
         request: RemotingCommand,
@@ -448,13 +448,22 @@ impl MQClientAPIImpl {
         let begin_start_time = Instant::now();
         let result = self
             .remoting_client
-            .invoke_async(Some(addr.to_string()), request.clone(), timeout_millis)
+            .invoke_async(
+                Some(CheetahString::from_slice(addr)),
+                request.clone(),
+                timeout_millis,
+            )
             .await;
         match result {
             Ok(response) => {
                 let cost_time = (Instant::now() - begin_start_time).as_millis() as u64;
                 if send_callback.is_none() {
-                    let send_result = self.process_send_response(broker_name, msg, &response, addr);
+                    let send_result = self.process_send_response(
+                        broker_name.clone(),
+                        msg,
+                        &response,
+                        addr.clone(),
+                    );
                     if let Ok(result) = send_result {
                         if context.is_some() {
                             let inner = context.as_mut().unwrap();
@@ -464,11 +473,12 @@ impl MQClientAPIImpl {
                     }
                     let duration = (Instant::now() - begin_start_time).as_millis() as u64;
                     producer
-                        .update_fault_item(broker_name, duration, false, true)
+                        .update_fault_item(broker_name.clone(), duration, false, true)
                         .await;
                     return;
                 }
-                let send_result = self.process_send_response(broker_name, msg, &response, addr);
+                let send_result =
+                    self.process_send_response(broker_name.clone(), msg, &response, addr.clone());
                 match send_result {
                     Ok(result) => {
                         if context.is_some() {
@@ -479,13 +489,13 @@ impl MQClientAPIImpl {
                         let duration = (Instant::now() - begin_start_time).as_millis() as u64;
                         send_callback.as_ref().unwrap()(Some(&result), None);
                         producer
-                            .update_fault_item(broker_name, duration, false, true)
+                            .update_fault_item(broker_name.clone(), duration, false, true)
                             .await;
                     }
                     Err(err) => {
                         let duration = (Instant::now() - begin_start_time).as_millis() as u64;
                         producer
-                            .update_fault_item(broker_name, duration, true, true)
+                            .update_fault_item(broker_name.clone(), duration, true, true)
                             .await;
                         Box::pin(self.on_exception_impl(
                             broker_name,
@@ -514,10 +524,10 @@ impl MQClientAPIImpl {
 
     fn process_send_response<T>(
         &mut self,
-        broker_name: &str,
+        broker_name: CheetahString,
         msg: &T,
         response: &RemotingCommand,
-        addr: &str,
+        addr: CheetahString,
     ) -> Result<SendResult>
     where
         T: MessageTrait,
@@ -589,7 +599,7 @@ impl MQClientAPIImpl {
 
     async fn on_exception_impl<T: MessageTrait>(
         &mut self,
-        broker_name: &str,
+        broker_name: &CheetahString,
         msg: &T,
         timeout_millis: u64,
         mut request: RemotingCommand,
@@ -605,10 +615,13 @@ impl MQClientAPIImpl {
     ) {
         let tmp = cur_times.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         if need_retry && tmp < times_total {
-            let mut retry_broker_name = broker_name.to_string();
+            let mut retry_broker_name = broker_name.clone();
             if let Some(topic_publish_info) = topic_publish_info {
-                let mq_chosen =
-                    producer.select_one_message_queue(topic_publish_info, Some(broker_name), false);
+                let mq_chosen = producer.select_one_message_queue(
+                    topic_publish_info,
+                    Some(&retry_broker_name),
+                    false,
+                );
                 retry_broker_name = instance
                     .as_ref()
                     .unwrap()
@@ -618,7 +631,7 @@ impl MQClientAPIImpl {
             let addr = instance
                 .as_ref()
                 .unwrap()
-                .find_broker_address_in_publish(retry_broker_name.as_str())
+                .find_broker_address_in_publish(retry_broker_name.as_ref())
                 .await
                 .unwrap();
             warn!(
@@ -630,8 +643,8 @@ impl MQClientAPIImpl {
             );
             request.set_opaque_mut(RemotingCommand::create_new_request_id());
             Box::pin(self.send_message_async(
-                addr.as_str(),
-                retry_broker_name.as_str(),
+                &addr,
+                &retry_broker_name,
                 msg,
                 timeout_millis,
                 request,
@@ -665,7 +678,11 @@ impl MQClientAPIImpl {
         .set_body(heartbeat_data.encode());
         let response = self
             .remoting_client
-            .invoke_async(Some(addr.to_string()), request, timeout_millis)
+            .invoke_async(
+                Some(CheetahString::from_slice(addr)),
+                request,
+                timeout_millis,
+            )
             .await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             return Ok(response.version());
@@ -717,7 +734,7 @@ impl MQClientAPIImpl {
         addr: &str,
         consumer_group: &str,
         timeout_millis: u64,
-    ) -> Result<Vec<String>> {
+    ) -> Result<Vec<CheetahString>> {
         let request_header = GetConsumerListByGroupRequestHeader {
             consumer_group: CheetahString::from_slice(consumer_group),
             rpc: None,
@@ -797,7 +814,7 @@ impl MQClientAPIImpl {
         );
         let response = self
             .remoting_client
-            .invoke_async(Some(addr.to_string()), request, timeout_millis)
+            .invoke_async(Some(addr.into()), request, timeout_millis)
             .await?;
         if ResponseCode::from(response.code()) != ResponseCode::Success {
             Err(MQClientError::MQBrokerError(
@@ -856,7 +873,7 @@ impl MQClientAPIImpl {
 
     pub async fn pull_message<PCB>(
         mut this: ArcMut<Self>,
-        addr: String,
+        addr: CheetahString,
         request_header: PullMessageRequestHeader,
         timeout_millis: u64,
         communication_mode: CommunicationMode,
@@ -873,7 +890,7 @@ impl MQClientAPIImpl {
         match communication_mode {
             CommunicationMode::Sync => {
                 let result_ext = this
-                    .pull_message_sync(addr.as_str(), request, timeout_millis)
+                    .pull_message_sync(addr, request, timeout_millis)
                     .await?;
                 Ok(Some(result_ext))
             }
@@ -881,7 +898,7 @@ impl MQClientAPIImpl {
                 tokio::spawn(async move {
                     let instant = Instant::now();
                     let _ = this
-                        .pull_message_async(addr.as_str(), request, timeout_millis, pull_callback)
+                        .pull_message_async(addr, request, timeout_millis, pull_callback)
                         .await;
                 });
                 Ok(None)
@@ -892,20 +909,20 @@ impl MQClientAPIImpl {
 
     async fn pull_message_sync(
         &mut self,
-        addr: &str,
+        addr: CheetahString,
         request: RemotingCommand,
         timeout_millis: u64,
     ) -> Result<PullResultExt> {
         let response = self
             .remoting_client
-            .invoke_async(Some(addr.to_string()), request, timeout_millis)
+            .invoke_async(Some(addr.clone()), request, timeout_millis)
             .await?;
         self.process_pull_response(response, addr).await
     }
 
     async fn pull_message_async<PCB>(
         &mut self,
-        addr: &str,
+        addr: CheetahString,
         request: RemotingCommand,
         timeout_millis: u64,
         mut pull_callback: PCB,
@@ -915,7 +932,7 @@ impl MQClientAPIImpl {
     {
         match self
             .remoting_client
-            .invoke_async(Some(addr.to_string()), request, timeout_millis)
+            .invoke_async(Some(addr.clone()), request, timeout_millis)
             .await
         {
             Ok(response) => {
@@ -939,7 +956,7 @@ impl MQClientAPIImpl {
     async fn process_pull_response(
         &mut self,
         mut response: RemotingCommand,
-        addr: &str,
+        addr: CheetahString,
     ) -> Result<PullResultExt> {
         let pull_status = match ResponseCode::from(response.code()) {
             ResponseCode::Success => PullStatus::Found,
@@ -1040,7 +1057,7 @@ impl MQClientAPIImpl {
             RemotingCommand::create_request_command(RequestCode::UnregisterClient, request_header);
         let response = self
             .remoting_client
-            .invoke_async(Some(addr.to_string()), request, timeout_millis)
+            .invoke_async(Some(addr.into()), request, timeout_millis)
             .await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             Ok(())
@@ -1067,7 +1084,7 @@ impl MQClientAPIImpl {
         request.set_body_mut_ref(request_body.encode());
         if oneway {
             self.remoting_client
-                .invoke_oneway(addr.to_string(), request, timeout_millis)
+                .invoke_oneway(addr.into(), request, timeout_millis)
                 .await;
             Ok(())
         } else {
@@ -1149,7 +1166,7 @@ impl MQClientAPIImpl {
                 .set_remark(remark);
 
         self.remoting_client
-            .invoke_oneway(addr.to_string(), request, timeout_millis)
+            .invoke_oneway(addr.into(), request, timeout_millis)
             .await;
         Ok(())
     }

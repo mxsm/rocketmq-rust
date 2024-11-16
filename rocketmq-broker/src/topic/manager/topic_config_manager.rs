@@ -20,6 +20,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::attribute::attribute_util::alter_current_attributes;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config::TopicConfig;
@@ -44,7 +45,7 @@ use crate::broker_path_config_helper::get_topic_config_path;
 use crate::broker_runtime::BrokerRuntimeInner;
 
 pub(crate) struct TopicConfigManager {
-    topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
+    topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
     data_version: ArcMut<DataVersion>,
     broker_config: Arc<BrokerConfig>,
     message_store: Option<ArcMut<DefaultMessageStore>>,
@@ -220,15 +221,15 @@ impl TopicConfigManager {
 
     pub fn build_serialize_wrapper(
         &self,
-        topic_config_table: HashMap<String, TopicConfig>,
+        topic_config_table: HashMap<CheetahString, TopicConfig>,
     ) -> TopicConfigAndMappingSerializeWrapper {
         self.build_serialize_wrapper_with_topic_queue_map(topic_config_table, HashMap::new())
     }
 
     pub fn build_serialize_wrapper_with_topic_queue_map(
         &self,
-        topic_config_table: HashMap<String, TopicConfig>,
-        topic_queue_mapping_info_map: HashMap<String, TopicQueueMappingInfo>,
+        topic_config_table: HashMap<CheetahString, TopicConfig>,
+        topic_queue_mapping_info_map: HashMap<CheetahString, TopicQueueMappingInfo>,
     ) -> TopicConfigAndMappingSerializeWrapper {
         if self.broker_config.enable_split_registration {
             self.data_version.mut_from_ref().next_version();
@@ -430,8 +431,16 @@ impl TopicConfigManager {
             .lock()
             .get(topic_config.topic_name.as_ref().unwrap().as_str())
             .is_none();
-        let final_attributes =
-            alter_current_attributes(create, ALL.clone(), new_attributes, current_attributes);
+
+        let final_attributes = alter_current_attributes(
+            create,
+            ALL.clone()
+                .into_iter()
+                .map(|(k, v)| (k.into(), v))
+                .collect(),
+            new_attributes,
+            current_attributes,
+        );
         topic_config.attributes = final_attributes;
         match self.put_topic_config(topic_config.clone()) {
             None => {
@@ -457,11 +466,11 @@ impl TopicConfigManager {
         );
     }
 
-    fn request(topic_config: &TopicConfig) -> HashMap<String, String> {
+    fn request(topic_config: &TopicConfig) -> HashMap<CheetahString, CheetahString> {
         topic_config.attributes.clone()
     }
 
-    fn current(&self, topic: &str) -> HashMap<String, String> {
+    fn current(&self, topic: &str) -> HashMap<CheetahString, CheetahString> {
         let topic_config = self.get_topic_config(topic);
         match topic_config {
             None => HashMap::new(),
@@ -469,13 +478,15 @@ impl TopicConfigManager {
         }
     }
 
-    pub fn topic_config_table(&self) -> Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>> {
+    pub fn topic_config_table(
+        &self,
+    ) -> Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>> {
         self.topic_config_table.clone()
     }
 
     pub fn set_topic_config_table(
         &mut self,
-        topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
+        topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
     ) {
         self.topic_config_table = topic_config_table;
     }

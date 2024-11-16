@@ -150,7 +150,7 @@ fn generate_key(msg: &MessageExtBrokerInner) -> String {
 }
 
 pub fn get_cq_type(
-    topic_config_table: &Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
+    topic_config_table: &Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
     msg_inner: &MessageExtBrokerInner,
 ) -> CQType {
     let option = topic_config_table.lock().get(msg_inner.topic()).cloned();
@@ -158,7 +158,7 @@ pub fn get_cq_type(
 }
 
 pub fn get_message_num(
-    topic_config_table: &Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
+    topic_config_table: &Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
     msg_inner: &MessageExtBrokerInner,
 ) -> i16 {
     let mut message_num = 1i16;
@@ -194,7 +194,7 @@ pub struct CommitLog {
     append_message_callback: Arc<DefaultAppendMessageCallback>,
     put_message_lock: Arc<tokio::sync::Mutex<()>>,
     topic_queue_lock: Arc<TopicQueueLock>,
-    topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
+    topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
     consume_queue_store: ConsumeQueueStore,
     flush_manager: Arc<tokio::sync::Mutex<DefaultFlushManager>>,
     //flush_manager: Arc<parking_lot::Mutex<DefaultFlushManager>>,
@@ -208,7 +208,7 @@ impl CommitLog {
         broker_config: Arc<BrokerConfig>,
         dispatcher: &CommitLogDispatcherDefault,
         store_checkpoint: Arc<StoreCheckpoint>,
-        topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
+        topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
         consume_queue_store: ConsumeQueueStore,
     ) -> Self {
         let enabled_append_prop_crc = message_store_config.enabled_append_prop_crc;

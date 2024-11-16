@@ -17,6 +17,7 @@
 
 use std::env;
 
+use cheetah_string::CheetahString;
 use once_cell::sync::Lazy;
 
 pub const ROCKETMQ_HOME_ENV: &str = "ROCKETMQ_HOME";
@@ -129,17 +130,17 @@ pub fn get_ws_addr() -> String {
     ws_addr
 }
 
-pub fn broker_vip_channel(is_change: bool, broker_addr: &str) -> String {
-    if is_change {
+pub fn broker_vip_channel(is_broker_vip_channel: bool, broker_addr: &str) -> CheetahString {
+    if is_broker_vip_channel {
         if let Some(split) = broker_addr.rfind(':') {
             let ip = &broker_addr[..split];
             if let Ok(port) = broker_addr[split + 1..].parse::<i32>() {
                 let broker_addr_new = format!("{}:{}", ip, port - 2);
-                return broker_addr_new;
+                return CheetahString::from_string(broker_addr_new);
             }
         }
     }
-    broker_addr.to_string()
+    CheetahString::from_slice(broker_addr)
 }
 
 pub fn human_readable_byte_count(bytes: i64, si: bool) -> String {

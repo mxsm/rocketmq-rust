@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
@@ -34,8 +35,8 @@ use crate::client::client_channel_info::ClientChannelInfo;
 
 #[derive(Debug, Clone)]
 pub struct ConsumerGroupInfo {
-    group_name: String,
-    subscription_table: Arc<RwLock<HashMap<String, SubscriptionData>>>,
+    group_name: CheetahString,
+    subscription_table: Arc<RwLock<HashMap<CheetahString, SubscriptionData>>>,
     channel_info_table: Arc<RwLock<HashMap<Channel, ClientChannelInfo>>>,
     consume_type: Arc<RwLock<ConsumeType>>,
     message_model: Arc<RwLock<MessageModel>>,
@@ -45,13 +46,13 @@ pub struct ConsumerGroupInfo {
 
 impl ConsumerGroupInfo {
     pub fn new(
-        group_name: String,
+        group_name: impl Into<CheetahString>,
         consume_type: ConsumeType,
         message_model: MessageModel,
         consume_from_where: ConsumeFromWhere,
     ) -> Self {
         ConsumerGroupInfo {
-            group_name,
+            group_name: group_name.into(),
             subscription_table: Arc::new(RwLock::new(HashMap::new())),
             channel_info_table: Arc::new(RwLock::new(HashMap::new())),
             consume_type: Arc::new(RwLock::new(consume_type)),
@@ -61,9 +62,9 @@ impl ConsumerGroupInfo {
         }
     }
 
-    pub fn with_group_name(group_name: String) -> Self {
+    pub fn with_group_name(group_name: impl Into<CheetahString>) -> Self {
         ConsumerGroupInfo {
-            group_name,
+            group_name: group_name.into(),
             subscription_table: Arc::new(RwLock::new(HashMap::new())),
             channel_info_table: Arc::new(RwLock::new(HashMap::new())),
             consume_type: Arc::new(RwLock::new(ConsumeType::ConsumePassively)),
@@ -83,7 +84,7 @@ impl ConsumerGroupInfo {
         None
     }
 
-    pub fn get_subscription_table(&self) -> Arc<RwLock<HashMap<String, SubscriptionData>>> {
+    pub fn get_subscription_table(&self) -> Arc<RwLock<HashMap<CheetahString, SubscriptionData>>> {
         Arc::clone(&self.subscription_table)
     }
 
@@ -101,7 +102,7 @@ impl ConsumerGroupInfo {
         channel_info_table.keys().cloned().collect()
     }
 
-    pub fn get_all_client_ids(&self) -> Vec<String> {
+    pub fn get_all_client_ids(&self) -> Vec<CheetahString> {
         let channel_info_table = self.channel_info_table.read();
         channel_info_table
             .values()
@@ -195,7 +196,7 @@ impl ConsumerGroupInfo {
 
     pub fn update_subscription(&self, sub_list: &HashSet<SubscriptionData>) -> bool {
         let mut updated = false;
-        let mut topic_set: HashSet<String> = HashSet::new();
+        let mut topic_set = HashSet::new();
 
         let mut subscription_table = self.subscription_table.write();
         for sub in sub_list.iter() {
@@ -238,7 +239,7 @@ impl ConsumerGroupInfo {
         updated
     }
 
-    pub fn get_subscribe_topics(&self) -> HashSet<String> {
+    pub fn get_subscribe_topics(&self) -> HashSet<CheetahString> {
         let subscription_table = self.subscription_table.read();
         subscription_table.keys().cloned().collect()
     }
@@ -266,7 +267,7 @@ impl ConsumerGroupInfo {
         *message_model_lock = message_model;
     }
 
-    pub fn get_group_name(&self) -> &String {
+    pub fn get_group_name(&self) -> &CheetahString {
         &self.group_name
     }
 
@@ -395,8 +396,8 @@ mod tests {
 
         let mut sub_list = HashSet::new();
         let subscription_data = SubscriptionData {
-            topic: "topic".to_string(),
-            sub_string: "sub_string".to_string(),
+            topic: "topic".into(),
+            sub_string: "sub_string".into(),
             ..Default::default()
         };
         sub_list.insert(subscription_data);

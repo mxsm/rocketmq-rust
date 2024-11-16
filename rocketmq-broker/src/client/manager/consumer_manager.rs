@@ -146,7 +146,7 @@ impl ConsumerManager {
         consumer_group_info
             .get_subscription_table()
             .write()
-            .insert(topic.to_string(), subscription_data.clone());
+            .insert(topic.into(), subscription_data.clone());
     }
 
     pub fn compensate_basic_consumer_info(

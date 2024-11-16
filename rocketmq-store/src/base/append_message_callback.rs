@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use bytes::BufMut;
+use cheetah_string::CheetahString;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
@@ -79,13 +80,13 @@ pub(crate) struct DefaultAppendMessageCallback {
     msg_store_item_memory: SyncUnsafeCellWrapper<bytes::BytesMut>,
     crc32_reserved_length: i32,
     message_store_config: Arc<MessageStoreConfig>,
-    topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
+    topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
 }
 
 impl DefaultAppendMessageCallback {
     pub fn new(
         message_store_config: Arc<MessageStoreConfig>,
-        topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
+        topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
     ) -> Self {
         Self {
             msg_store_item_memory: SyncUnsafeCellWrapper::new(bytes::BytesMut::with_capacity(

@@ -19,6 +19,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
+use cheetah_string::CheetahString;
 use once_cell::sync::Lazy;
 use rocketmq_common::common::constant::consume_init_mode::ConsumeInitMode;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
@@ -78,7 +79,7 @@ impl RebalancePushImpl {
 }
 
 impl RebalancePushImpl {
-    pub fn get_subscription_inner(&self) -> Arc<RwLock<HashMap<String, SubscriptionData>>> {
+    pub fn get_subscription_inner(&self) -> Arc<RwLock<HashMap<CheetahString, SubscriptionData>>> {
         self.rebalance_impl_inner.subscription_inner.clone()
     }
 
@@ -89,7 +90,7 @@ impl RebalancePushImpl {
         self.default_mqpush_consumer_impl = Some(default_mqpush_consumer_impl);
     }
 
-    pub fn set_consumer_group(&mut self, consumer_group: String) {
+    pub fn set_consumer_group(&mut self, consumer_group: CheetahString) {
         self.rebalance_impl_inner.consumer_group = Some(consumer_group);
     }
 
@@ -112,11 +113,11 @@ impl RebalancePushImpl {
     #[inline]
     pub async fn put_subscription_data(
         &mut self,
-        topic: &str,
+        topic: CheetahString,
         subscription_data: SubscriptionData,
     ) {
         let mut subscription_inner = self.rebalance_impl_inner.subscription_inner.write().await;
-        subscription_inner.insert(topic.to_string(), subscription_data);
+        subscription_inner.insert(topic, subscription_data);
     }
 
     pub fn set_rebalance_impl(&mut self, rebalance_impl: WeakArcMut<RebalancePushImpl>) {

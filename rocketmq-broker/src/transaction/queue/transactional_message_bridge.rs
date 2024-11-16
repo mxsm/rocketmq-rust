@@ -403,7 +403,7 @@ where
 }
 
 #[inline]
-fn get_op_queue_by_half(queue_id: i32, broker_name: String) -> MessageQueue {
+fn get_op_queue_by_half(queue_id: i32, broker_name: CheetahString) -> MessageQueue {
     MessageQueue::from_parts(
         TransactionalMessageUtil::build_op_topic(),
         broker_name,

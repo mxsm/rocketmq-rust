@@ -17,6 +17,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use parking_lot::RwLock;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
@@ -29,19 +30,31 @@ use crate::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingU
 
 #[derive(Default, Clone)]
 pub struct ClientMetadata {
-    topic_route_table: Arc<RwLock<HashMap<String /* Topic */, TopicRouteData>>>,
-    topic_end_points_table:
-        Arc<RwLock<HashMap<String /* Topic */, HashMap<MessageQueue, String /* brokerName */>>>>,
-    broker_addr_table: Arc<
+    topic_route_table: Arc<RwLock<HashMap<CheetahString /* Topic */, TopicRouteData>>>,
+    topic_end_points_table: Arc<
         RwLock<
             HashMap<
-                String, /* Broker Name */
-                HashMap<i64 /* brokerId */, String /* address */>,
+                CheetahString, /* Topic */
+                HashMap<MessageQueue, CheetahString /* brokerName */>,
             >,
         >,
     >,
-    broker_version_table:
-        Arc<RwLock<HashMap<String /* Broker Name */, HashMap<String /* address */, i32>>>>,
+    broker_addr_table: Arc<
+        RwLock<
+            HashMap<
+                CheetahString, /* Broker Name */
+                HashMap<i64 /* brokerId */, CheetahString /* address */>,
+            >,
+        >,
+    >,
+    broker_version_table: Arc<
+        RwLock<
+            HashMap<
+                CheetahString, /* Broker Name */
+                HashMap<CheetahString /* address */, i32>,
+            >,
+        >,
+    >,
 }
 
 impl ClientMetadata {
@@ -54,7 +67,11 @@ impl ClientMetadata {
         }
     }
 
-    pub fn fresh_topic_route(&self, topic: &str, topic_route_data: Option<TopicRouteData>) {
+    pub fn fresh_topic_route(
+        &self,
+        topic: &CheetahString,
+        topic_route_data: Option<TopicRouteData>,
+    ) {
         if topic.is_empty() || topic_route_data.is_none() {
             return;
         }
@@ -72,7 +89,7 @@ impl ClientMetadata {
         {
             let mut write_guard = self.broker_addr_table.write();
             for bd in topic_route_data.broker_datas.iter() {
-                write_guard.insert(bd.broker_name().to_string(), bd.broker_addrs().clone());
+                write_guard.insert(bd.broker_name().clone(), bd.broker_addrs().clone());
             }
         }
 
@@ -83,16 +100,16 @@ impl ClientMetadata {
             );
             if let Some(mq_end_points) = mq_end_points {
                 let mut write_guard = self.topic_end_points_table.write();
-                write_guard.insert(topic.to_string(), mq_end_points);
+                write_guard.insert(topic.clone(), mq_end_points);
             }
         }
     }
 
-    pub fn get_broker_name_from_message_queue(&self, mq: &MessageQueue) -> Option<String> {
+    pub fn get_broker_name_from_message_queue(&self, mq: &MessageQueue) -> Option<CheetahString> {
         let read_guard = self.topic_end_points_table.read();
         let topic_end_points = read_guard.get(mq.get_topic());
         if topic_end_points.is_none() {
-            return Some(mq.get_broker_name().to_string());
+            return Some(mq.get_broker_name().clone());
         }
         let topic_end_points = topic_end_points.unwrap();
         let broker_name = topic_end_points.get(mq);
@@ -115,7 +132,7 @@ impl ClientMetadata {
         }
     }
 
-    pub fn find_master_broker_addr(&self, broker_name: &str) -> Option<String> {
+    pub fn find_master_broker_addr(&self, broker_name: &str) -> Option<CheetahString> {
         let read_guard = self.broker_addr_table.read();
         if !read_guard.contains_key(broker_name) {
             return None;
@@ -130,7 +147,7 @@ impl ClientMetadata {
     pub fn topic_route_data2endpoints_for_static_topic(
         topic: &str,
         topic_route_data: &TopicRouteData,
-    ) -> Option<HashMap<MessageQueue, String>> {
+    ) -> Option<HashMap<MessageQueue, CheetahString>> {
         if topic_route_data.topic_queue_mapping_by_broker.is_none()
             || topic_route_data
                 .topic_queue_mapping_by_broker
@@ -200,11 +217,13 @@ impl ClientMetadata {
                 if !mq_endpoints.contains_key(&mq) {
                     mq_end_points_of_broker.insert(
                         mq,
-                        mix_all::LOGICAL_QUEUE_MOCK_BROKER_NAME_NOT_EXIST.to_string(),
+                        CheetahString::from_static_str(
+                            mix_all::LOGICAL_QUEUE_MOCK_BROKER_NAME_NOT_EXIST,
+                        ),
                     );
                 } else {
                     let broker_name = mq_endpoints.get(&mq).unwrap().bname.clone().unwrap();
-                    mq_end_points_of_broker.insert(mq, broker_name.to_string());
+                    mq_end_points_of_broker.insert(mq, broker_name);
                 }
             }
         }
@@ -212,7 +231,9 @@ impl ClientMetadata {
         Some(mq_end_points_of_broker)
     }
 
-    pub fn broker_addr_table(&self) -> Arc<RwLock<HashMap<String, HashMap<i64, String>>>> {
+    pub fn broker_addr_table(
+        &self,
+    ) -> Arc<RwLock<HashMap<CheetahString, HashMap<i64, CheetahString>>>> {
         self.broker_addr_table.clone()
     }
 }

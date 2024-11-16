@@ -40,12 +40,12 @@ use crate::Result;
 
 pub struct RemoteBrokerOffsetStore {
     client_instance: ArcMut<MQClientInstance>,
-    group_name: String,
+    group_name: CheetahString,
     offset_table: Arc<Mutex<HashMap<MessageQueue, ControllableOffset>>>,
 }
 
 impl RemoteBrokerOffsetStore {
-    pub fn new(client_instance: ArcMut<MQClientInstance>, group_name: String) -> Self {
+    pub fn new(client_instance: ArcMut<MQClientInstance>, group_name: CheetahString) -> Self {
         Self {
             client_instance,
             group_name,
@@ -67,7 +67,7 @@ impl RemoteBrokerOffsetStore {
         if find_broker_result.is_none() {
             self.client_instance
                 .mut_from_ref()
-                .update_topic_route_info_from_name_server_topic(mq.get_topic())
+                .update_topic_route_info_from_name_server_topic(mq.get_topic_cs())
                 .await;
             let broker_name = self
                 .client_instance
@@ -81,7 +81,7 @@ impl RemoteBrokerOffsetStore {
         }
         if let Some(find_broker_result) = find_broker_result {
             let request_header = QueryConsumerOffsetRequestHeader {
-                consumer_group: CheetahString::from_string(self.group_name.clone()),
+                consumer_group: self.group_name.clone(),
                 topic: CheetahString::from_string(mq.get_topic().to_string()),
                 queue_id: mq.get_queue_id(),
                 set_zero_if_not_found: None,
@@ -268,7 +268,7 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
 
         if find_broker_result.is_none() {
             self.client_instance
-                .update_topic_route_info_from_name_server_topic(mq.get_topic())
+                .update_topic_route_info_from_name_server_topic(mq.get_topic_cs())
                 .await;
             let broker_name = self
                 .client_instance
@@ -282,8 +282,8 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
 
         if let Some(find_broker_result) = find_broker_result {
             let request_header = UpdateConsumerOffsetRequestHeader {
-                consumer_group: CheetahString::from_string(self.group_name.clone()),
-                topic: CheetahString::from_string(mq.get_topic().to_string()),
+                consumer_group: self.group_name.clone(),
+                topic: mq.get_topic_cs().clone(),
                 queue_id: Some(mq.get_queue_id()),
                 commit_offset: Some(offset),
                 topic_request_header: Some(TopicRequestHeader {

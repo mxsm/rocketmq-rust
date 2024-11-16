@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
@@ -26,9 +27,10 @@ use crate::client::client_channel_info::ClientChannelInfo;
 
 #[derive(Default)]
 pub struct ProducerManager {
-    group_channel_table:
-        parking_lot::Mutex<HashMap<String /* group name */, HashMap<Channel, ClientChannelInfo>>>,
-    client_channel_table: parking_lot::Mutex<HashMap<String, Channel /* client ip:port */>>,
+    group_channel_table: parking_lot::Mutex<
+        HashMap<CheetahString /* group name */, HashMap<Channel, ClientChannelInfo>>,
+    >,
+    client_channel_table: parking_lot::Mutex<HashMap<CheetahString, Channel /* client ip:port */>>,
 }
 
 impl ProducerManager {
@@ -43,7 +45,7 @@ impl ProducerManager {
 impl ProducerManager {
     pub fn group_online(&self, group: String) -> bool {
         let binding = self.group_channel_table.lock();
-        let channels = binding.get(&group);
+        let channels = binding.get(group.as_str());
         if channels.is_none() {
             return false;
         }
@@ -82,10 +84,14 @@ impl ProducerManager {
     }
 
     #[allow(clippy::mutable_key_type)]
-    pub fn register_producer(&self, group: &str, client_channel_info: &ClientChannelInfo) {
+    pub fn register_producer(
+        &self,
+        group: &CheetahString,
+        client_channel_info: &ClientChannelInfo,
+    ) {
         let mut group_channel_table = self.group_channel_table.lock();
 
-        let key = group.to_string();
+        let key = group.clone();
         let channel_table = group_channel_table.entry(key).or_default();
 
         if let Some(client_channel_info_found) =

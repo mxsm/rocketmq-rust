@@ -17,6 +17,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::runtime::RPCHook;
@@ -32,13 +33,13 @@ use crate::trace::trace_dispatcher::TraceDispatcher;
 
 pub struct DefaultMQPushConsumerBuilder {
     client_config: Option<ClientConfig>,
-    consumer_group: Option<String>,
-    topic_sub_expression: (Option<String>, Option<String>),
+    consumer_group: Option<CheetahString>,
+    topic_sub_expression: (Option<CheetahString>, Option<CheetahString>),
     message_model: Option<MessageModel>,
     consume_from_where: Option<ConsumeFromWhere>,
-    consume_timestamp: Option<String>,
+    consume_timestamp: Option<CheetahString>,
     allocate_message_queue_strategy: Option<Arc<dyn AllocateMessageQueueStrategy>>,
-    subscription: Option<ArcMut<HashMap<String, String>>>,
+    subscription: Option<ArcMut<HashMap<CheetahString, CheetahString>>>,
 
     message_queue_listener: Option<Arc<Box<dyn MessageQueueListener>>>,
 
@@ -109,9 +110,9 @@ impl Default for DefaultMQPushConsumerBuilder {
 }
 
 impl DefaultMQPushConsumerBuilder {
-    pub fn name_server_addr(mut self, name_server_addr: String) -> Self {
+    pub fn name_server_addr(mut self, name_server_addr: impl Into<CheetahString>) -> Self {
         if let Some(client_config) = self.client_config.as_mut() {
-            client_config.namesrv_addr = Some(name_server_addr);
+            client_config.namesrv_addr = Some(name_server_addr.into());
             client_config
                 .namespace_initialized
                 .store(false, std::sync::atomic::Ordering::Release);
@@ -125,8 +126,8 @@ impl DefaultMQPushConsumerBuilder {
     }
 
     // Methods to set each field
-    pub fn consumer_group(mut self, consumer_group: String) -> Self {
-        self.consumer_group = Some(consumer_group);
+    pub fn consumer_group(mut self, consumer_group: impl Into<CheetahString>) -> Self {
+        self.consumer_group = Some(consumer_group.into());
         self
     }
 
@@ -140,8 +141,8 @@ impl DefaultMQPushConsumerBuilder {
         self
     }
 
-    pub fn consume_timestamp(mut self, consume_timestamp: Option<String>) -> Self {
-        self.consume_timestamp = consume_timestamp;
+    pub fn consume_timestamp(mut self, consume_timestamp: impl Into<CheetahString>) -> Self {
+        self.consume_timestamp = Some(consume_timestamp.into());
         self
     }
 
@@ -155,8 +156,8 @@ impl DefaultMQPushConsumerBuilder {
 
     pub fn subscribe(
         mut self,
-        topic: impl Into<String>,
-        sub_expression: impl Into<String>,
+        topic: impl Into<CheetahString>,
+        sub_expression: impl Into<CheetahString>,
     ) -> Self {
         self.topic_sub_expression.0 = Some(topic.into());
         self.topic_sub_expression.1 = Some(sub_expression.into());

@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -25,13 +26,17 @@ pub mod kvconfig_mananger;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct KVConfigSerializeWrapper {
     #[serde(rename = "configTable")]
-    pub config_table:
-        Option<HashMap<String /* Namespace */, HashMap<String /* Key */, String /* Value */>>>,
+    pub config_table: Option<
+        HashMap<
+            CheetahString, /* Namespace */
+            HashMap<CheetahString /* Key */, CheetahString /* Value */>,
+        >,
+    >,
 }
 
 impl KVConfigSerializeWrapper {
     pub fn new_with_config_table(
-        config_table: HashMap<String, HashMap<String, String>>,
+        config_table: HashMap<CheetahString, HashMap<CheetahString, CheetahString>>,
     ) -> KVConfigSerializeWrapper {
         KVConfigSerializeWrapper {
             config_table: Some(config_table),

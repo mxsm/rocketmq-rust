@@ -17,6 +17,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_rust::ArcMut;
 
@@ -69,5 +70,5 @@ impl AsyncTraceDispatcher {
     pub fn set_host_producer(&mut self, host_producer: ArcMut<DefaultMQProducerImpl>) {}
     pub fn set_host_consumer(&mut self, host_producer: ArcMut<DefaultMQPushConsumerImpl>) {}
 
-    pub fn set_namespace_v2(&mut self, namespace_v2: Option<String>) {}
+    pub fn set_namespace_v2(&mut self, namespace_v2: Option<CheetahString>) {}
 }

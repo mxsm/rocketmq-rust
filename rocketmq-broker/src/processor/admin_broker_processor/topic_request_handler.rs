@@ -81,8 +81,8 @@ impl TopicRequestHandler {
             request_header.topic,
             channel.remote_address()
         );
-        let topic = request_header.topic.as_str();
-        let result = TopicValidator::validate_topic(topic);
+        let topic = request_header.topic.clone();
+        let result = TopicValidator::validate_topic(topic.as_str());
         if !result.valid() {
             return Some(
                 response
@@ -94,14 +94,14 @@ impl TopicRequestHandler {
             .inner
             .broker_config
             .validate_system_topic_when_update_topic
-            && TopicValidator::is_system_topic(topic)
+            && TopicValidator::is_system_topic(topic.as_str())
         {
             return Some(
                 response
                     .set_code(ResponseCode::SystemError)
                     .set_remark(format!(
                         "The topic[{}] is conflict with system topic.",
-                        topic
+                        topic.as_str()
                     )),
             );
         }
@@ -113,13 +113,17 @@ impl TopicRequestHandler {
                 .unwrap_or(CheetahString::empty())
                 .as_str(),
         ) {
-            Ok(value) => value,
+            Ok(value) => value
+                .into_iter()
+                .map(|(k, v)| (k.into(), v.into()))
+                .collect(),
             Err(err) => {
                 return Some(response.set_code(ResponseCode::SystemError).set_remark(err));
             }
         };
+
         let mut topic_config = TopicConfig {
-            topic_name: Some(topic.to_string()),
+            topic_name: Some(topic.clone()),
             read_queue_nums: request_header.read_queue_nums as u32,
             write_queue_nums: request_header.write_queue_nums as u32,
             perm: request_header.perm as u32,
@@ -147,13 +151,13 @@ impl TopicRequestHandler {
             .topic_config_manager
             .topic_config_table()
             .lock()
-            .get(topic)
+            .get(&topic)
             .cloned();
         if topic_config_origin.is_some() && topic_config == topic_config_origin.unwrap() {
             info!(
                 "Broker receive request to update or create topic={}, but topicConfig has  no \
                  changes , so idempotent, caller address={}",
-                topic,
+                topic.as_str(),
                 channel.remote_address(),
             );
             return Some(response.set_code(ResponseCode::Success));
@@ -409,7 +413,7 @@ impl TopicRequestHandler {
         let mut response = RemotingCommand::create_response_command();
         let topics = TopicValidator::get_system_topic_set();
         let topic_list = TopicList {
-            topic_list: topics.into_iter().map(|s| s.to_string()).collect(),
+            topic_list: topics.into_iter().map(|s| s.into()).collect(),
             broker_addr: None,
         };
         response.set_body_mut_ref(topic_list.encode());
@@ -445,7 +449,7 @@ impl TopicRequestHandler {
         for i in 0..max_queue_nums {
             let mut message_queue = MessageQueue::new();
             message_queue.set_topic(topic.into());
-            message_queue.set_broker_name(self.inner.broker_config.broker_name.clone().into());
+            message_queue.set_broker_name(self.inner.broker_config.broker_name.clone());
             message_queue.set_queue_id(i as i32);
             let mut topic_offset = TopicOffset::new();
             let min = std::cmp::max(
@@ -560,8 +564,8 @@ impl TopicRequestHandler {
             self.inner.broker_config.broker_ip1, self.inner.server_config.listen_port
         );
         let topic_list = TopicList {
-            topic_list: topics.into_iter().collect(),
-            broker_addr: Some(broker_addr),
+            topic_list: topics.into_iter().map(|item| item.into()).collect(),
+            broker_addr: Some(broker_addr.into()),
         };
         response.set_body_mut_ref(topic_list.encode());
         Some(response)

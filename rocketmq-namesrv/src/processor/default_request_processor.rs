@@ -151,9 +151,8 @@ impl DefaultRequestProcessor {
         );
 
         if value.is_some() {
-            return RemotingCommand::create_response_command().set_command_custom_header(
-                GetKVConfigResponseHeader::new(value.map(CheetahString::from_string)),
-            );
+            return RemotingCommand::create_response_command()
+                .set_command_custom_header(GetKVConfigResponseHeader::new(value));
         }
         RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::SystemError)
             .set_remark(format!(
@@ -258,13 +257,13 @@ impl DefaultRequestProcessor {
             topic_config_wrapper = extract_register_topic_config_from_request(&request);
         }
         let result = self.route_info_manager.write().register_broker(
-            request_header.cluster_name.clone().to_string(),
-            request_header.broker_addr.clone().to_string(),
-            request_header.broker_name.clone().to_string(),
+            request_header.cluster_name.clone(),
+            request_header.broker_addr.clone(),
+            request_header.broker_name.clone(),
             request_header.broker_id,
-            request_header.ha_server_addr.clone().to_string(),
+            request_header.ha_server_addr.clone(),
             match request.ext_fields() {
-                Some(map) => map.get(mix_all::ZONE_NAME).map(|value| value.to_string()),
+                Some(map) => map.get(mix_all::ZONE_NAME).cloned(),
                 None => None,
             },
             request_header.heartbeat_timeout_millis,

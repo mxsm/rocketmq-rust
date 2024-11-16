@@ -19,6 +19,7 @@ use std::collections::HashSet;
 use std::hash::Hash;
 use std::hash::Hasher;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
 use rocketmq_common::TimeUtils::get_current_millis;
 use serde::Deserialize;
@@ -28,29 +29,29 @@ use serde::Serialize;
 #[serde(rename_all = "camelCase")]
 pub struct SubscriptionData {
     pub class_filter_mode: bool,
-    pub topic: String,
-    pub sub_string: String,
-    pub tags_set: HashSet<String>,
+    pub topic: CheetahString,
+    pub sub_string: CheetahString,
+    pub tags_set: HashSet<CheetahString>,
     pub code_set: HashSet<i32>,
     pub sub_version: i64,
-    pub expression_type: String,
+    pub expression_type: CheetahString,
     // In Rust, attributes like `@JSONField(serialize = false)` are typically handled through
     // documentation or external crates.
     #[serde(skip)]
-    pub filter_class_source: String, // This field is not used in this example.
+    pub filter_class_source: CheetahString, // This field is not used in this example.
 }
 
 impl Default for SubscriptionData {
     fn default() -> Self {
         SubscriptionData {
             class_filter_mode: false,
-            topic: String::new(),
-            sub_string: String::new(),
+            topic: CheetahString::new(),
+            sub_string: CheetahString::new(),
             tags_set: HashSet::new(),
             code_set: HashSet::new(),
             sub_version: get_current_millis() as i64,
-            expression_type: ExpressionType::TAG.to_string(),
-            filter_class_source: String::new(),
+            expression_type: CheetahString::from_static_str(ExpressionType::TAG),
+            filter_class_source: CheetahString::new(),
         }
     }
 }

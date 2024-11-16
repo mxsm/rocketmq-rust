@@ -64,7 +64,7 @@ pub struct ConsumeMessageOrderlyService {
     pub(crate) default_mqpush_consumer_impl: Option<WeakArcMut<DefaultMQPushConsumerImpl>>,
     pub(crate) client_config: ArcMut<ClientConfig>,
     pub(crate) consumer_config: ArcMut<ConsumerConfig>,
-    pub(crate) consumer_group: Arc<String>,
+    pub(crate) consumer_group: CheetahString,
     pub(crate) message_listener: ArcBoxMessageListenerOrderly,
     pub(crate) consume_runtime: RocketMQRuntime,
     pub(crate) stopped: AtomicBool,
@@ -76,7 +76,7 @@ impl ConsumeMessageOrderlyService {
     pub fn new(
         client_config: ArcMut<ClientConfig>,
         consumer_config: ArcMut<ConsumerConfig>,
-        consumer_group: String,
+        consumer_group: CheetahString,
         message_listener: ArcBoxMessageListenerOrderly,
         default_mqpush_consumer_impl: Option<WeakArcMut<DefaultMQPushConsumerImpl>>,
     ) -> Self {
@@ -86,7 +86,7 @@ impl ConsumeMessageOrderlyService {
             default_mqpush_consumer_impl,
             client_config,
             consumer_config,
-            consumer_group: Arc::new(consumer_group),
+            consumer_group,
             message_listener,
             consume_runtime: RocketMQRuntime::new_multi(
                 consume_thread as usize,
@@ -479,7 +479,7 @@ struct ConsumeRequest {
     process_queue: Arc<ProcessQueue>,
     message_queue: MessageQueue,
     default_mqpush_consumer_impl: Option<WeakArcMut<DefaultMQPushConsumerImpl>>,
-    consumer_group: Arc<String>,
+    consumer_group: CheetahString,
 }
 
 impl ConsumeRequest {
@@ -594,17 +594,17 @@ impl ConsumeRequest {
                 if default_mqpush_consumer_impl.has_hook() {
                     let queue = self.message_queue.clone();
                     consume_message_context = Some(ConsumeMessageContext {
-                        consumer_group: self.consumer_group.as_ref().clone(),
+                        consumer_group: self.consumer_group.clone(),
                         msg_list: &msgs,
                         mq: Some(queue),
                         success: false,
-                        status: "".to_string(),
+                        status: CheetahString::from_static_str(""),
                         mq_trace_context: None,
                         props: Default::default(),
                         namespace: default_mqpush_consumer_impl
                             .client_config
                             .get_namespace()
-                            .unwrap_or("".to_string()),
+                            .unwrap_or_default(),
                         access_channel: Default::default(),
                     });
                     default_mqpush_consumer_impl.execute_hook_before(&mut consume_message_context);
@@ -644,7 +644,7 @@ impl ConsumeRequest {
                 {
                     warn!(
                         "consumeMessage Orderly return not OK, Group: {} Msgs: {} MQ: {}",
-                        self.consumer_group.as_ref(),
+                        self.consumer_group,
                         msgs.len(),
                         self.message_queue,
                     );
@@ -669,8 +669,8 @@ impl ConsumeRequest {
                 }
                 if default_mqpush_consumer_impl.has_hook() {
                     consume_message_context.as_mut().unwrap().props.insert(
-                        mix_all::CONSUME_CONTEXT_TYPE.to_string(),
-                        return_type.to_string(),
+                        CheetahString::from_static_str(mix_all::CONSUME_CONTEXT_TYPE),
+                        return_type.to_string().into(),
                     );
                 }
                 if status.is_none() {
@@ -681,7 +681,7 @@ impl ConsumeRequest {
                     consume_message_context.as_mut().unwrap().success = status
                         == ConsumeOrderlyStatus::Success
                         || status == ConsumeOrderlyStatus::Commit;
-                    consume_message_context.as_mut().unwrap().status = status.to_string();
+                    consume_message_context.as_mut().unwrap().status = status.to_string().into();
                     default_mqpush_consumer_impl.execute_hook_after(&mut consume_message_context);
                 }
                 let continue_consume = consume_message_orderly_service_inner

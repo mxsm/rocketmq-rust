@@ -336,7 +336,7 @@ impl DefaultMQPushConsumerImpl {
                     .as_mut()
                     .unwrap()
                     .register_consumer(
-                        self.consumer_config.consumer_group.as_str(),
+                        self.consumer_config.consumer_group.as_ref(),
                         MQConsumerInnerImpl {
                             default_mqpush_consumer_impl: self.default_mqpush_consumer_impl.clone(),
                         },
@@ -684,7 +684,7 @@ impl DefaultMQPushConsumerImpl {
                     )
                 })?;
                 self.rebalance_impl
-                    .put_subscription_data(topic, subscription_data)
+                    .put_subscription_data(topic.clone(), subscription_data)
                     .await;
             }
         }
@@ -695,11 +695,12 @@ impl DefaultMQPushConsumerImpl {
         match self.consumer_config.message_model {
             MessageModel::Broadcasting => {}
             MessageModel::Clustering => {
-                let retry_topic =
-                    mix_all::get_retry_topic(self.consumer_config.consumer_group.as_str());
+                let retry_topic = CheetahString::from_string(mix_all::get_retry_topic(
+                    self.consumer_config.consumer_group.as_str(),
+                ));
                 let subscription_data = FilterAPI::build_subscription_data(
-                    retry_topic.as_str(),
-                    SubscriptionData::SUB_ALL,
+                    retry_topic.as_ref(),
+                    &CheetahString::from_static_str(SubscriptionData::SUB_ALL),
                 )
                 .map_err(|e| {
                     MQClientError::MQClientErr(
@@ -708,7 +709,7 @@ impl DefaultMQPushConsumerImpl {
                     )
                 })?;
                 self.rebalance_impl
-                    .put_subscription_data(retry_topic.as_str(), subscription_data)
+                    .put_subscription_data(retry_topic, subscription_data)
                     .await;
             }
         }
@@ -723,8 +724,12 @@ impl DefaultMQPushConsumerImpl {
         self.message_listener = message_listener;
     }
 
-    pub async fn subscribe(&mut self, topic: &str, sub_expression: &str) -> Result<()> {
-        let subscription_data = FilterAPI::build_subscription_data(topic, sub_expression);
+    pub async fn subscribe(
+        &mut self,
+        topic: CheetahString,
+        sub_expression: CheetahString,
+    ) -> Result<()> {
+        let subscription_data = FilterAPI::build_subscription_data(&topic, &sub_expression);
         if let Err(e) = subscription_data {
             return Err(MQClientError::MQClientErr(
                 -1,
@@ -991,8 +996,8 @@ impl DefaultMQPushConsumerImpl {
             .unwrap()
             .pull_kernel_impl(
                 &message_queue,
-                sub_expression.clone().unwrap_or("".to_string()).as_str(),
-                subscription_data.expression_type.clone().as_str(),
+                sub_expression.unwrap_or_default(),
+                subscription_data.expression_type.clone(),
                 subscription_data.sub_version,
                 next_offset,
                 self.consumer_config.pull_batch_size as i32,
@@ -1077,7 +1082,7 @@ impl DefaultMQPushConsumerImpl {
         consumer_group: &str,
     ) {
         let group_topic = mix_all::get_retry_topic(consumer_group);
-        let namespace = self.client_config.get_namespace().unwrap_or("".to_string());
+        let namespace = self.client_config.get_namespace().unwrap_or_default();
         for msg in msgs.iter_mut() {
             if let Some(retry_topic) = msg.get_property(&CheetahString::from_static_str(
                 MessageConst::PROPERTY_RETRY_TOPIC,
@@ -1129,7 +1134,7 @@ impl DefaultMQPushConsumerImpl {
         &mut self,
         msg: &mut MessageExt,
         delay_level: i32,
-        broker_name: Option<String>,
+        broker_name: Option<CheetahString>,
         mq: Option<&MessageQueue>,
     ) -> Result<()> {
         let need_retry = true;
@@ -1150,11 +1155,11 @@ impl DefaultMQPushConsumerImpl {
                 self.client_instance
                     .as_mut()
                     .unwrap()
-                    .find_broker_address_in_publish(broker_name_.as_str())
+                    .find_broker_address_in_publish(broker_name_.as_ref())
                     .await
                     .unwrap()
             } else {
-                msg.store_host.to_string()
+                CheetahString::from_string(msg.store_host.to_string())
             };
             let max_consume_retry_times = self.get_max_reconsume_times();
             let result = self
@@ -1182,10 +1187,10 @@ impl DefaultMQPushConsumerImpl {
         }
         msg.set_topic(CheetahString::from_string(
             NamespaceUtil::without_namespace_with_namespace(
-                msg.get_topic(),
+                msg.get_topic().as_str(),
                 self.client_config
                     .get_namespace()
-                    .unwrap_or("".to_string())
+                    .unwrap_or_default()
                     .as_str(),
             ),
         ));
@@ -1307,17 +1312,21 @@ impl MQConsumerInner for DefaultMQPushConsumerImpl {
         }
     }
 
-    async fn update_topic_subscribe_info(&self, topic: &str, info: &HashSet<MessageQueue>) {
+    async fn update_topic_subscribe_info(
+        &self,
+        topic: CheetahString,
+        info: &HashSet<MessageQueue>,
+    ) {
         let sub_table = self.rebalance_impl.get_subscription_inner();
         let sub_table_inner = sub_table.read().await;
-        if sub_table_inner.contains_key(topic) {
+        if sub_table_inner.contains_key(&topic) {
             let mut guard = self
                 .rebalance_impl
                 .rebalance_impl_inner
                 .topic_subscribe_info_table
                 .write()
                 .await;
-            guard.insert(topic.to_string(), info.clone());
+            guard.insert(topic, info.clone());
         }
     }
 

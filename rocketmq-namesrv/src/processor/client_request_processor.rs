@@ -79,7 +79,7 @@ impl ClientRequestProcessor {
         match self
             .route_info_manager
             .read()
-            .pickup_topic_route_data(request_header.topic.as_str())
+            .pickup_topic_route_data(request_header.topic.as_ref())
         {
             None => RemotingCommand::create_response_command_with_code(ResponseCode::TopicNotExist)
                 .set_remark(format!(

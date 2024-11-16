@@ -254,7 +254,7 @@ impl PullMessageResultHandler for DefaultPullMessageResultHandler {
                         .unwrap();
                     let mut mq = MessageQueue::new();
                     mq.set_topic(request_header.topic.clone());
-                    mq.set_broker_name(self.broker_config.broker_name.clone().into());
+                    mq.set_broker_name(self.broker_config.broker_name.clone());
                     mq.set_queue_id(request_header.queue_id.unwrap());
 
                     let offset_moved_event = OffsetMovedEvent {
@@ -582,7 +582,7 @@ impl DefaultPullMessageResultHandler {
                 if let Some(ref client_channel_info) =
                     consumer_group_info.find_channel_by_channel(channel)
                 {
-                    CheetahString::from_string(client_channel_info.client_id().clone())
+                    client_channel_info.client_id().clone()
                 } else {
                     return;
                 }

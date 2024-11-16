@@ -113,18 +113,18 @@ pub struct BrokerConfig {
 
     pub broker_server_config: ServerConfig,
 
-    pub broker_ip1: String,
-    pub broker_ip2: Option<String>,
+    pub broker_ip1: CheetahString,
+    pub broker_ip2: Option<CheetahString>,
     pub listen_port: u32,
     pub trace_topic_enable: bool,
-    pub msg_trace_topic_name: String,
+    pub msg_trace_topic_name: CheetahString,
     pub enable_controller_mode: bool,
-    pub broker_name: String,
-    pub region_id: String,
+    pub broker_name: CheetahString,
+    pub region_id: CheetahString,
     pub trace_on: bool,
     pub broker_permission: u32,
     pub async_send_enable: bool,
-    pub store_path_root_dir: String,
+    pub store_path_root_dir: CheetahString,
     pub enable_split_registration: bool,
     pub split_registration_size: i32,
     pub register_broker_timeout_mills: i32,
@@ -145,7 +145,7 @@ pub struct BrokerConfig {
     pub force_register: bool,
     pub register_name_server_period: u64,
     pub skip_pre_online: bool,
-    pub namesrv_addr: Option<String>,
+    pub namesrv_addr: Option<CheetahString>,
     pub fetch_name_srv_addr_by_dns_lookup: bool,
     pub lite_pull_message_enable: bool,
     pub auto_create_subscription_group: bool,
@@ -179,8 +179,8 @@ impl Default for BrokerConfig {
     fn default() -> Self {
         let broker_identity = BrokerIdentity::new();
         let local_ip = local_ip_address::local_ip().unwrap();
-        let broker_ip1 = local_ip.to_string();
-        let broker_ip2 = Some(local_ip.to_string());
+        let broker_ip1 = local_ip.to_string().into();
+        let broker_ip2 = Some(local_ip.to_string().into());
         let listen_port = 10911;
 
         BrokerConfig {
@@ -192,10 +192,12 @@ impl Default for BrokerConfig {
             broker_ip2,
             listen_port,
             trace_topic_enable: false,
-            msg_trace_topic_name: TopicValidator::RMQ_SYS_TRACE_TOPIC.to_string(),
+            msg_trace_topic_name: CheetahString::from_static_str(
+                TopicValidator::RMQ_SYS_TRACE_TOPIC,
+            ),
             enable_controller_mode: false,
-            broker_name: default_broker_name(),
-            region_id: mix_all::DEFAULT_TRACE_REGION_ID.to_string(),
+            broker_name: default_broker_name().into(),
+            region_id: CheetahString::from_static_str(mix_all::DEFAULT_TRACE_REGION_ID),
             trace_on: true,
             broker_permission: PermName::PERM_WRITE | PermName::PERM_READ,
             async_send_enable: false,
@@ -203,7 +205,8 @@ impl Default for BrokerConfig {
                 .unwrap()
                 .join("store")
                 .to_string_lossy()
-                .into_owned(),
+                .into_owned()
+                .into(),
             enable_split_registration: false,
             split_registration_size: 800,
             register_broker_timeout_mills: 24000,
@@ -224,7 +227,7 @@ impl Default for BrokerConfig {
             force_register: true,
             register_name_server_period: 1000 * 30,
             skip_pre_online: false,
-            namesrv_addr: NAMESRV_ADDR.clone(),
+            namesrv_addr: NAMESRV_ADDR.clone().map(|addr| addr.into()),
             fetch_name_srv_addr_by_dns_lookup: false,
             lite_pull_message_enable: true,
             auto_create_subscription_group: true,
@@ -257,15 +260,15 @@ impl Default for BrokerConfig {
 }
 
 impl BrokerConfig {
-    pub fn broker_name(&self) -> String {
+    pub fn broker_name(&self) -> CheetahString {
         self.broker_name.clone()
     }
 
-    pub fn broker_ip1(&self) -> String {
+    pub fn broker_ip1(&self) -> CheetahString {
         self.broker_ip1.clone()
     }
 
-    pub fn broker_ip2(&self) -> Option<String> {
+    pub fn broker_ip2(&self) -> Option<CheetahString> {
         self.broker_ip2.clone()
     }
 
@@ -297,237 +300,253 @@ impl BrokerConfig {
         self.start_accept_send_request_time_stamp
     }
 
-    pub fn get_properties(&self) -> HashMap<String, String> {
-        let mut properties: HashMap<String, String> = HashMap::new();
-        properties.insert("brokerName".to_string(), self.broker_name.clone());
+    pub fn get_properties(&self) -> HashMap<CheetahString, CheetahString> {
+        let mut properties = HashMap::new();
+        properties.insert("brokerName".into(), self.broker_name.clone());
         properties.insert(
-            "brokerClusterName".to_string(),
-            self.broker_identity.broker_cluster_name.to_string(),
+            "brokerClusterName".into(),
+            self.broker_identity.broker_cluster_name.clone(),
         );
         properties.insert(
-            "brokerId".to_string(),
-            self.broker_identity.broker_id.to_string(),
+            "brokerId".into(),
+            self.broker_identity.broker_id.to_string().into(),
         );
         properties.insert(
-            "isBrokerContainer".to_string(),
-            self.broker_identity.is_broker_container.to_string(),
+            "isBrokerContainer".into(),
+            self.broker_identity.is_broker_container.to_string().into(),
         );
         properties.insert(
-            "defaultTopicQueueNums".to_string(),
-            self.topic_queue_config.default_topic_queue_nums.to_string(),
+            "defaultTopicQueueNums".into(),
+            self.topic_queue_config
+                .default_topic_queue_nums
+                .to_string()
+                .into(),
         );
         properties.insert(
-            "timerWheelEnable".to_string(),
-            self.timer_wheel_config.timer_wheel_enable.to_string(),
+            "timerWheelEnable".into(),
+            self.timer_wheel_config
+                .timer_wheel_enable
+                .to_string()
+                .into(),
         );
         properties.insert(
-            "bindAddress".to_string(),
-            self.broker_server_config.bind_address.clone().to_string(),
+            "bindAddress".into(),
+            self.broker_server_config
+                .bind_address
+                .clone()
+                .to_string()
+                .into(),
         );
-        properties.insert("brokerIp1".to_string(), self.broker_ip1.clone().to_string());
         properties.insert(
-            "brokerIp2".to_string(),
+            "brokerIp1".into(),
+            self.broker_ip1.clone().to_string().into(),
+        );
+        properties.insert(
+            "brokerIp2".into(),
             self.broker_ip2.clone().unwrap_or_default(),
         );
-        properties.insert("listenPort".to_string(), self.listen_port.to_string());
+        properties.insert("listenPort".into(), self.listen_port.to_string().into());
         properties.insert(
-            "traceTopicEnable".to_string(),
-            self.trace_topic_enable.to_string(),
+            "traceTopicEnable".into(),
+            self.trace_topic_enable.to_string().into(),
         );
         properties.insert(
-            "msgTraceTopicName".to_string(),
+            "msgTraceTopicName".into(),
             self.msg_trace_topic_name.clone(),
         );
         properties.insert(
-            "enableControllerMode".to_string(),
-            self.enable_controller_mode.to_string(),
+            "enableControllerMode".into(),
+            self.enable_controller_mode.to_string().into(),
         );
-        properties.insert("regionId".to_string(), self.region_id.clone());
-        properties.insert("traceOn".to_string(), self.trace_on.to_string());
+        properties.insert("regionId".into(), self.region_id.clone());
+        properties.insert("brokerName".into(), self.broker_name.clone());
+        properties.insert("traceOn".into(), self.trace_on.to_string().into());
         properties.insert(
-            "brokerPermission".to_string(),
-            self.broker_permission.to_string(),
-        );
-        properties.insert(
-            "asyncSendEnable".to_string(),
-            self.async_send_enable.to_string(),
+            "brokerPermission".into(),
+            self.broker_permission.to_string().into(),
         );
         properties.insert(
-            "storePathRootDir".to_string(),
-            self.store_path_root_dir.clone(),
+            "asyncSendEnable".into(),
+            self.async_send_enable.to_string().into(),
+        );
+        properties.insert("storePathRootDir".into(), self.store_path_root_dir.clone());
+        properties.insert(
+            "enableSplitRegistration".into(),
+            self.enable_split_registration.to_string().into(),
         );
         properties.insert(
-            "enableSplitRegistration".to_string(),
-            self.enable_split_registration.to_string(),
+            "splitRegistrationSize".into(),
+            self.split_registration_size.to_string().into(),
         );
         properties.insert(
-            "splitRegistrationSize".to_string(),
-            self.split_registration_size.to_string(),
+            "registerBrokerTimeoutMills".into(),
+            self.register_broker_timeout_mills.to_string().into(),
         );
         properties.insert(
-            "registerBrokerTimeoutMills".to_string(),
-            self.register_broker_timeout_mills.to_string(),
+            "isInBrokerContainer".into(),
+            self.is_in_broker_container.to_string().into(),
         );
         properties.insert(
-            "isInBrokerContainer".to_string(),
-            self.is_in_broker_container.to_string(),
+            "commercialSizePerMsg".into(),
+            self.commercial_size_per_msg.to_string().into(),
         );
         properties.insert(
-            "commercialSizePerMsg".to_string(),
-            self.commercial_size_per_msg.to_string(),
+            "recoverConcurrently".into(),
+            self.recover_concurrently.to_string().into(),
         );
         properties.insert(
-            "recoverConcurrently".to_string(),
-            self.recover_concurrently.to_string(),
+            "duplicationEnable".into(),
+            self.duplication_enable.to_string().into(),
         );
         properties.insert(
-            "duplicationEnable".to_string(),
-            self.duplication_enable.to_string(),
+            "startAcceptSendRequestTimeStamp".into(),
+            self.start_accept_send_request_time_stamp.to_string().into(),
         );
         properties.insert(
-            "startAcceptSendRequestTimeStamp".to_string(),
-            self.start_accept_send_request_time_stamp.to_string(),
+            "autoCreateTopicEnable".into(),
+            self.auto_create_topic_enable.to_string().into(),
         );
         properties.insert(
-            "autoCreateTopicEnable".to_string(),
-            self.auto_create_topic_enable.to_string(),
+            "enableSingleTopicRegister".into(),
+            self.enable_single_topic_register.to_string().into(),
         );
         properties.insert(
-            "enableSingleTopicRegister".to_string(),
-            self.enable_single_topic_register.to_string(),
+            "brokerTopicEnable".into(),
+            self.broker_topic_enable.to_string().into(),
         );
         properties.insert(
-            "brokerTopicEnable".to_string(),
-            self.broker_topic_enable.to_string(),
+            "clusterTopicEnable".into(),
+            self.cluster_topic_enable.to_string().into(),
         );
         properties.insert(
-            "clusterTopicEnable".to_string(),
-            self.cluster_topic_enable.to_string(),
+            "reviveQueueNum".into(),
+            self.revive_queue_num.to_string().into(),
         );
         properties.insert(
-            "reviveQueueNum".to_string(),
-            self.revive_queue_num.to_string(),
+            "enableSlaveActingMaster".into(),
+            self.enable_slave_acting_master.to_string().into(),
         );
         properties.insert(
-            "enableSlaveActingMaster".to_string(),
-            self.enable_slave_acting_master.to_string(),
+            "rejectTransactionMessage".into(),
+            self.reject_transaction_message.to_string().into(),
         );
         properties.insert(
-            "rejectTransactionMessage".to_string(),
-            self.reject_transaction_message.to_string(),
+            "enableDetailStat".into(),
+            self.enable_detail_stat.to_string().into(),
         );
         properties.insert(
-            "enableDetailStat".to_string(),
-            self.enable_detail_stat.to_string(),
+            "flushConsumerOffsetInterval".into(),
+            self.flush_consumer_offset_interval.to_string().into(),
         );
         properties.insert(
-            "flushConsumerOffsetInterval".to_string(),
-            self.flush_consumer_offset_interval.to_string(),
-        );
-        properties.insert("forceRegister".to_string(), self.force_register.to_string());
-        properties.insert(
-            "registerNameServerPeriod".to_string(),
-            self.register_name_server_period.to_string(),
+            "forceRegister".into(),
+            self.force_register.to_string().into(),
         );
         properties.insert(
-            "skipPreOnline".to_string(),
-            self.skip_pre_online.to_string(),
+            "registerNameServerPeriod".into(),
+            self.register_name_server_period.to_string().into(),
         );
         properties.insert(
-            "namesrvAddr".to_string(),
+            "skipPreOnline".into(),
+            self.skip_pre_online.to_string().into(),
+        );
+        properties.insert(
+            "namesrvAddr".into(),
             self.namesrv_addr.clone().unwrap_or_default(),
         );
         properties.insert(
-            "fetchNameSrvAddrByDnsLookup".to_string(),
-            self.fetch_name_srv_addr_by_dns_lookup.to_string(),
+            "fetchNameSrvAddrByDnsLookup".into(),
+            self.fetch_name_srv_addr_by_dns_lookup.to_string().into(),
         );
         properties.insert(
-            "litePullMessageEnable".to_string(),
-            self.lite_pull_message_enable.to_string(),
+            "litePullMessageEnable".into(),
+            self.lite_pull_message_enable.to_string().into(),
         );
         properties.insert(
-            "autoCreateSubscriptionGroup".to_string(),
-            self.auto_create_subscription_group.to_string(),
+            "autoCreateSubscriptionGroup".into(),
+            self.auto_create_subscription_group.to_string().into(),
         );
         properties.insert(
-            "channelExpiredTimeout".to_string(),
-            self.channel_expired_timeout.to_string(),
+            "channelExpiredTimeout".into(),
+            self.channel_expired_timeout.to_string().into(),
         );
         properties.insert(
-            "subscriptionExpiredTimeout".to_string(),
-            self.subscription_expired_timeout.to_string(),
+            "subscriptionExpiredTimeout".into(),
+            self.subscription_expired_timeout.to_string().into(),
         );
         properties.insert(
-            "enablePropertyFilter".to_string(),
-            self.enable_property_filter.to_string(),
+            "enablePropertyFilter".into(),
+            self.enable_property_filter.to_string().into(),
         );
         properties.insert(
-            "filterSupportRetry".to_string(),
-            self.filter_support_retry.to_string(),
+            "filterSupportRetry".into(),
+            self.filter_support_retry.to_string().into(),
         );
         properties.insert(
-            "useServerSideResetOffset".to_string(),
-            self.use_server_side_reset_offset.to_string(),
+            "useServerSideResetOffset".into(),
+            self.use_server_side_reset_offset.to_string().into(),
         );
         properties.insert(
-            "slaveReadEnable".to_string(),
-            self.slave_read_enable.to_string(),
+            "slaveReadEnable".into(),
+            self.slave_read_enable.to_string().into(),
         );
         properties.insert(
-            "commercialBaseCount".to_string(),
-            self.commercial_base_count.to_string(),
+            "commercialBaseCount".into(),
+            self.commercial_base_count.to_string().into(),
         );
         properties.insert(
-            "rejectPullConsumerEnable".to_string(),
-            self.reject_pull_consumer_enable.to_string(),
+            "rejectPullConsumerEnable".into(),
+            self.reject_pull_consumer_enable.to_string().into(),
         );
         properties.insert(
-            "consumerOffsetUpdateVersionStep".to_string(),
-            self.consumer_offset_update_version_step.to_string(),
+            "consumerOffsetUpdateVersionStep".into(),
+            self.consumer_offset_update_version_step.to_string().into(),
         );
         properties.insert(
-            "enableBroadcastOffsetStore".to_string(),
-            self.enable_broadcast_offset_store.to_string(),
+            "enableBroadcastOffsetStore".into(),
+            self.enable_broadcast_offset_store.to_string().into(),
         );
         properties.insert(
-            "transferMsgByHeap".to_string(),
-            self.transfer_msg_by_heap.to_string(),
+            "transferMsgByHeap".into(),
+            self.transfer_msg_by_heap.to_string().into(),
         );
         properties.insert(
-            "shortPollingTimeMills".to_string(),
-            self.short_polling_time_mills.to_string(),
+            "shortPollingTimeMills".into(),
+            self.short_polling_time_mills.to_string().into(),
         );
         properties.insert(
-            "longPollingEnable".to_string(),
-            self.long_polling_enable.to_string(),
+            "longPollingEnable".into(),
+            self.long_polling_enable.to_string().into(),
         );
         properties.insert(
-            "maxErrorRateOfBloomFilter".to_string(),
-            self.max_error_rate_of_bloom_filter.to_string(),
+            "maxErrorRateOfBloomFilter".into(),
+            self.max_error_rate_of_bloom_filter.to_string().into(),
         );
         properties.insert(
-            "expectConsumerNumUseFilter".to_string(),
-            self.expect_consumer_num_use_filter.to_string(),
+            "expectConsumerNumUseFilter".into(),
+            self.expect_consumer_num_use_filter.to_string().into(),
         );
         properties.insert(
-            "bitMapLengthConsumeQueueExt".to_string(),
-            self.bit_map_length_consume_queue_ext.to_string(),
+            "bitMapLengthConsumeQueueExt".into(),
+            self.bit_map_length_consume_queue_ext.to_string().into(),
         );
         properties.insert(
-            "validateSystemTopicWhenUpdateTopic".to_string(),
-            self.validate_system_topic_when_update_topic.to_string(),
+            "validateSystemTopicWhenUpdateTopic".into(),
+            self.validate_system_topic_when_update_topic
+                .to_string()
+                .into(),
         );
         properties.insert(
-            "enableMixedMessageType".to_string(),
-            self.enable_mixed_message_type.to_string(),
+            "enableMixedMessageType".into(),
+            self.enable_mixed_message_type.to_string().into(),
         );
         properties.insert(
-            "autoDeleteUnusedStats".to_string(),
-            self.auto_delete_unused_stats.to_string(),
+            "autoDeleteUnusedStats".into(),
+            self.auto_delete_unused_stats.to_string().into(),
         );
         properties.insert(
-            "forwardTimeout".to_string(),
-            self.forward_timeout.to_string(),
+            "forwardTimeout".into(),
+            self.forward_timeout.to_string().into(),
         );
         properties
     }

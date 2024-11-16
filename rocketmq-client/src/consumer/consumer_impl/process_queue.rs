@@ -174,11 +174,11 @@ impl ProcessQueue {
 
             let mut msg = msg.unwrap();
             let msg_inner = &mut msg.as_mut().message_ext_inner;
-            msg_inner.set_topic(CheetahString::from_string(
+            msg_inner.set_topic(
                 push_consumer
                     .client_config
                     .with_namespace(msg_inner.topic()),
-            ));
+            );
             let _ = push_consumer
                 .send_message_back_with_broker_name(msg_inner, 3, None, None)
                 .await;

@@ -14,11 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, Hash, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ProducerData {
-    pub group_name: String,
+    pub group_name: CheetahString,
 }

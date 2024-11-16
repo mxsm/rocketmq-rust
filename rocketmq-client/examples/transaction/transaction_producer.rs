@@ -48,7 +48,7 @@ pub async fn main() -> Result<()> {
     let mut producer = builder
         .producer_group(PRODUCER_GROUP.to_string())
         .name_server_addr(DEFAULT_NAMESRVADDR.to_string())
-        .topics(vec![TOPIC.to_string()])
+        .topics(vec![TOPIC])
         .transaction_listener(TransactionListenerImpl::default())
         .build();
 

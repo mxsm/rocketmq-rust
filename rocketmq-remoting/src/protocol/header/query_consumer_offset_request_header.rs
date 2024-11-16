@@ -114,7 +114,7 @@ impl TopicRequestHeaderTrait for QueryConsumerOffsetRequestHeader {
         &self.topic
     }
 
-    fn broker_name(&self) -> Option<&str> {
+    fn broker_name(&self) -> Option<&CheetahString> {
         self.topic_request_header
             .as_ref()
             .unwrap()
@@ -122,7 +122,7 @@ impl TopicRequestHeaderTrait for QueryConsumerOffsetRequestHeader {
             .as_ref()
             .unwrap()
             .broker_name
-            .as_deref()
+            .as_ref()
     }
 
     fn set_broker_name(&mut self, broker_name: CheetahString) {

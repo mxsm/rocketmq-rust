@@ -22,6 +22,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use bytes::Bytes;
+use cheetah_string::CheetahString;
 use rocketmq_common::common::attribute::cq_type::CQType;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config::TopicConfig;
@@ -50,7 +51,7 @@ pub struct ConsumeQueueStore {
     inner: Arc<Inner>,
     running_flags: Arc<RunningFlags>,
     store_checkpoint: Arc<StoreCheckpoint>,
-    topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
+    topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
 }
 
 struct Inner {
@@ -75,7 +76,7 @@ impl ConsumeQueueStore {
     pub fn new(
         message_store_config: Arc<MessageStoreConfig>,
         broker_config: Arc<BrokerConfig>,
-        topic_config_table: Arc<parking_lot::Mutex<HashMap<String, TopicConfig>>>,
+        topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
         running_flags: Arc<RunningFlags>,
         store_checkpoint: Arc<StoreCheckpoint>,
     ) -> Self {
@@ -326,11 +327,7 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
         }
 
         let consume_queue = topic_map.entry(queue_id).or_insert_with(|| {
-            let option = self
-                .topic_config_table
-                .lock()
-                .get(&topic.to_string())
-                .cloned();
+            let option = self.topic_config_table.lock().get(topic).cloned();
             match QueueTypeUtils::get_cq_type(&option) {
                 CQType::SimpleCQ => ArcMut::new(Box::new(ConsumeQueue::new(
                     topic.to_string(),

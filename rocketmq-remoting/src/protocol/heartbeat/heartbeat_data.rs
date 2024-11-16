@@ -16,6 +16,7 @@
  */
 use std::collections::HashSet;
 
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -26,7 +27,7 @@ use crate::protocol::heartbeat::producer_data::ProducerData;
 #[serde(rename_all = "camelCase")]
 pub struct HeartbeatData {
     #[serde(rename = "clientID")]
-    pub client_id: String,
+    pub client_id: CheetahString,
     #[serde(default)]
     pub producer_data_set: HashSet<ProducerData>,
     #[serde(default)]
@@ -53,7 +54,7 @@ mod tests {
         consumer_data_set.insert(ConsumerData::default());
 
         let original = HeartbeatData {
-            client_id: "client1".to_string(),
+            client_id: "client1".into(),
             producer_data_set,
             consumer_data_set,
             heartbeat_fingerprint: 123,
@@ -69,7 +70,7 @@ mod tests {
     #[test]
     fn heartbeat_data_without_sub_serialization_deserialization() {
         let original = HeartbeatData {
-            client_id: "client1".to_string(),
+            client_id: "client1".into(),
             producer_data_set: HashSet::new(),
             consumer_data_set: HashSet::new(),
             heartbeat_fingerprint: 123,
@@ -85,7 +86,7 @@ mod tests {
     #[test]
     fn heartbeat_data_with_empty_sets_serialization_deserialization() {
         let original = HeartbeatData {
-            client_id: "client1".to_string(),
+            client_id: "client1".into(),
             producer_data_set: HashSet::new(),
             consumer_data_set: HashSet::new(),
             heartbeat_fingerprint: 123,
