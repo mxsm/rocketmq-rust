@@ -29,7 +29,7 @@ options:
   ignore_draft: true
   ignored_keywords:
     - DO NOT REVIEW
-  enable_group_assignment: false
+  enable_group_assignment: true
 
   # Randomly pick reviewers up to this number.
   # Do not set this option if you'd like to assign all matching reviewers.
