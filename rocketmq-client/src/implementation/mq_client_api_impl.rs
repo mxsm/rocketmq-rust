@@ -571,7 +571,7 @@ impl MQClientAPIImpl {
             .ext_fields()
             .unwrap()
             .get(MessageConst::PROPERTY_TRACE_SWITCH)
-            .map_or(false, |s| s.parse().unwrap_or(false));
+            .is_some_and(|s| s.parse().unwrap_or(false));
         let send_result = SendResult {
             send_status,
             msg_id: uniq_msg_id,

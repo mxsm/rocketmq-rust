@@ -515,9 +515,8 @@ where
         message_ext.properties_string = MessageDecoder::message_properties_to_string(
             &message_ext.message_ext_inner.message.properties,
         );
-        let tra_flag = tra_flag.map_or(false, |tra_flag_inner| {
-            tra_flag_inner.parse().unwrap_or(false)
-        });
+        let tra_flag =
+            tra_flag.is_some_and(|tra_flag_inner| tra_flag_inner.parse().unwrap_or(false));
 
         let send_transaction_prepare_message =
             if tra_flag
