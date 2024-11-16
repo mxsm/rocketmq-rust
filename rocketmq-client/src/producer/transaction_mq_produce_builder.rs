@@ -115,8 +115,8 @@ impl TransactionMQProducerBuilder {
         self
     }
 
-    pub fn topics(mut self, topics: Vec<CheetahString>) -> Self {
-        self.topics = Some(topics);
+    pub fn topics(mut self, topics: Vec<impl Into<CheetahString>>) -> Self {
+        self.topics = Some(topics.into_iter().map(|t| t.into()).collect());
         self
     }
 
