@@ -24,7 +24,7 @@
   ```cmd
   cargo run --bin rocketmq-namesrv-rust -- --help
   
-  RocketMQ Name server(Rust) 
+  RocketMQ Name server(Rust)  
   
   Usage: rocketmq-namesrv-rust.exe [OPTIONS]
   
