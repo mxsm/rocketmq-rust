@@ -793,7 +793,7 @@ impl CommitLog {
     pub fn is_multi_dispatch_msg(msg_inner: &MessageExtBrokerInner) -> bool {
         msg_inner
             .property(MessageConst::PROPERTY_INNER_MULTI_DISPATCH)
-            .map_or(false, |s| !s.is_empty())
+            .is_some_and(|s| !s.is_empty())
             && msg_inner
                 .topic()
                 .starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX)

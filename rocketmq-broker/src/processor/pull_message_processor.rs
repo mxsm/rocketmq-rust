@@ -868,7 +868,7 @@ pub(crate) fn is_broadcast(
     consumer_group_info: Option<&ConsumerGroupInfo>,
 ) -> bool {
     proxy_pull_broadcast
-        || consumer_group_info.map_or(false, |info| {
+        || consumer_group_info.is_some_and(|info| {
             matches!(info.get_message_model(), MessageModel::Broadcasting)
                 && matches!(info.get_consume_type(), ConsumeType::ConsumePassively)
         })

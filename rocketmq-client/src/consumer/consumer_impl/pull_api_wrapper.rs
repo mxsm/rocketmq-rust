@@ -172,7 +172,7 @@ impl PullAPIWrapper {
                     .get_property(&CheetahString::from_static_str(
                         MessageConst::PROPERTY_TRANSACTION_PREPARED,
                     ))
-                    .map_or(false, |v| v.parse().unwrap_or(false));
+                    .is_some_and(|v| v.parse().unwrap_or(false));
                 if tra_flag {
                     if let Some(transaction_id) = msg.get_property(&CheetahString::from_static_str(
                         MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,

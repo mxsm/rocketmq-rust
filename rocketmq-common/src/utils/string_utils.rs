@@ -21,17 +21,17 @@ pub struct StringUtils;
 impl StringUtils {
     #[inline]
     pub fn is_not_empty_str(s: Option<&str>) -> bool {
-        s.map_or(false, |s| !s.is_empty())
+        s.is_some_and(|s| !s.is_empty())
     }
 
     #[inline]
     pub fn is_not_empty_string(s: Option<&String>) -> bool {
-        s.map_or(false, |s| !s.is_empty())
+        s.is_some_and(|s| !s.is_empty())
     }
 
     #[inline]
     pub fn is_not_empty_ch_string(s: Option<&CheetahString>) -> bool {
-        s.map_or(false, |s| !s.is_empty())
+        s.is_some_and(|s| !s.is_empty())
     }
 }
 

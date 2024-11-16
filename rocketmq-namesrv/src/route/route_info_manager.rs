@@ -1047,7 +1047,7 @@ impl RouteInfoManager {
                     if self
                         .broker_addr_table
                         .get(broker_name)
-                        .map_or(false, |b| b.enable_acting_master())
+                        .is_some_and(|b| b.enable_acting_master())
                     {
                         // Master has been unregistered, wipe the write perm
                         let flag = {
