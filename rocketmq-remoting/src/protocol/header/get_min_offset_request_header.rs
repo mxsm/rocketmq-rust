@@ -103,12 +103,8 @@ impl TopicRequestHeaderTrait for GetMinOffsetRequestHeader {
     fn broker_name(&self) -> Option<&CheetahString> {
         self.topic_request_header
             .as_ref()
-            .unwrap()
-            .rpc_request_header
-            .as_ref()
-            .unwrap()
-            .broker_name
-            .as_ref()
+            .and_then(|h| h.rpc_request_header.as_ref())
+            .and_then(|h| h.broker_name.as_ref())
     }
 
     fn set_broker_name(&mut self, broker_name: CheetahString) {
@@ -121,15 +117,11 @@ impl TopicRequestHeaderTrait for GetMinOffsetRequestHeader {
             .broker_name = Some(broker_name);
     }
 
-    fn namespace(&self) -> Option<&str> {
+    fn namespace(&self) -> Option<&CheetahString> {
         self.topic_request_header
             .as_ref()
-            .unwrap()
-            .rpc_request_header
-            .as_ref()
-            .unwrap()
-            .namespace
-            .as_deref()
+            .and_then(|h| h.rpc_request_header.as_ref())
+            .and_then(|h| h.namespace.as_ref())
     }
 
     fn set_namespace(&mut self, namespace: CheetahString) {

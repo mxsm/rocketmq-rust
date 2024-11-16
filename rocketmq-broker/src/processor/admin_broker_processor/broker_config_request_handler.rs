@@ -285,7 +285,7 @@ impl BrokerConfigRequestHandler {
         }
         runtime_info
             .into_iter()
-            .map(|(k, v)| (k.into(), v.into()))
+            .map(|(k, v)| (CheetahString::from_string(k), CheetahString::from_string(v)))
             .collect()
     }
     fn is_special_service_running(&self) -> bool {

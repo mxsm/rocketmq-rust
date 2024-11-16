@@ -395,6 +395,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use mockall::Any;
     use rocketmq_common::common::config::TopicConfig;
     use rocketmq_common::common::message::message_ext::MessageExt;
     use rocketmq_store::base::message_status_enum::PutMessageStatus;
@@ -405,7 +406,7 @@ mod tests {
     fn check_inner_batch_returns_message_illegal_when_inner_batch_flag_is_set_but_cq_type_is_not_batch_cq(
     ) {
         let mut topic_config_table = HashMap::<String, TopicConfig>::new();
-        topic_config_table.insert("test_topic".to_string(), TopicConfig::default());
+        topic_config_table.insert("test_topic".into_any(), TopicConfig::default());
         let topic_config_table = Arc::new(parking_lot::Mutex::new(topic_config_table));
         let mut msg = MessageExt::default();
         msg.message.topic = "test_topic".into();
