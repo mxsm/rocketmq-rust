@@ -19,7 +19,7 @@
 
 **运行下面命令查看使用**：
 
-- **windows 平台**
+- **windows 平台** 
 
   ```cmd
   cargo run --bin rocketmq-namesrv-rust -- --help
