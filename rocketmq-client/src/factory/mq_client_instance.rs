@@ -631,7 +631,7 @@ impl MQClientInstance {
         false
     }
 
-    async fn is_need_update_topic_route_info(&self, topic: &str) -> bool {
+    async fn is_need_update_topic_route_info(&self, topic: &CheetahString) -> bool {
         let mut result = false;
         let producer_table = self.producer_table.read().await;
         for (key, value) in producer_table.iter() {

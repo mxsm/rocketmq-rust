@@ -1156,9 +1156,9 @@ impl MQClientAPIImpl {
 
     pub async fn end_transaction_oneway(
         &mut self,
-        addr: &str,
+        addr: &CheetahString,
         request_header: EndTransactionRequestHeader,
-        remark: String,
+        remark: CheetahString,
         timeout_millis: u64,
     ) -> Result<()> {
         let request =

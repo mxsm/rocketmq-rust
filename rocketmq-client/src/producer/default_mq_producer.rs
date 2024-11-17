@@ -678,7 +678,7 @@ impl MQProducer for DefaultMQProducer {
         self.default_mqproducer_impl
             .as_mut()
             .unwrap()
-            .fetch_publish_message_queues(topic.as_str())
+            .fetch_publish_message_queues(topic.as_ref())
             .await
     }
 

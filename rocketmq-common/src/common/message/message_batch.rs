@@ -179,8 +179,11 @@ impl MessageTrait for MessageBatch {
         self.final_message.properties = properties;
     }
 
-    fn get_transaction_id(&self) -> &str {
-        self.final_message.transaction_id.as_deref().unwrap()
+    fn get_transaction_id(&self) -> &CheetahString {
+        self.final_message
+            .transaction_id
+            .as_ref()
+            .expect("transaction_id is None")
     }
 
     fn set_transaction_id(&mut self, transaction_id: CheetahString) {

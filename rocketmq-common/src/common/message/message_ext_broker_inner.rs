@@ -231,7 +231,7 @@ impl MessageTrait for MessageExtBrokerInner {
         self.message_ext_inner.set_properties(properties);
     }
 
-    fn get_transaction_id(&self) -> &str {
+    fn get_transaction_id(&self) -> &CheetahString {
         self.message_ext_inner.get_transaction_id()
     }
 

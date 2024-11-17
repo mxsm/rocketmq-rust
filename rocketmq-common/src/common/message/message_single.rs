@@ -327,8 +327,11 @@ impl MessageTrait for Message {
         self.properties = properties;
     }
 
-    fn get_transaction_id(&self) -> &str {
-        self.transaction_id.as_deref().unwrap()
+    #[inline]
+    fn get_transaction_id(&self) -> &CheetahString {
+        self.transaction_id
+            .as_ref()
+            .expect("transaction_id is None")
     }
 
     fn set_transaction_id(&mut self, transaction_id: CheetahString) {
