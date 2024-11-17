@@ -68,7 +68,7 @@ impl OffsetRequestHandler {
         let offset = self
             .inner
             .default_message_store
-            .get_max_offset_in_queue(topic.as_str(), queue_id);
+            .get_max_offset_in_queue(topic.as_ref(), queue_id);
         let response_header = GetMaxOffsetResponseHeader { offset };
         Some(RemotingCommand::create_response_command_with_header(
             response_header,
@@ -100,7 +100,7 @@ impl OffsetRequestHandler {
         let offset = self
             .inner
             .default_message_store
-            .get_min_offset_in_queue(topic.as_str(), queue_id);
+            .get_min_offset_in_queue(topic.as_ref(), queue_id);
         let response_header = GetMinOffsetResponseHeader { offset };
         Some(RemotingCommand::create_response_command_with_header(
             response_header,
@@ -144,7 +144,7 @@ impl OffsetRequestHandler {
         {
             self.inner
                 .default_message_store
-                .get_min_offset_in_queue(mapping_context.topic.as_str(), max_item.queue_id)
+                .get_min_offset_in_queue(mapping_context.topic.as_ref(), max_item.queue_id)
         } else {
             let rpc_request =
                 RpcRequest::new(RequestCode::GetMinOffset.to_i32(), request_header, None);
@@ -213,7 +213,7 @@ impl OffsetRequestHandler {
         {
             self.inner
                 .default_message_store
-                .get_max_offset_in_queue(mapping_context.topic.as_str(), max_item.queue_id)
+                .get_max_offset_in_queue(mapping_context.topic.as_ref(), max_item.queue_id)
         } else {
             let rpc_request = RpcRequest::new(
                 RequestCode::GetMaxOffset.to_i32(),

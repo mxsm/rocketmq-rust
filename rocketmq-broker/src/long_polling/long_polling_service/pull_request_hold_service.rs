@@ -117,24 +117,24 @@ where
             if key_parts.len() != 2 {
                 continue;
             }
-            let topic = key_parts[0];
+            let topic = CheetahString::from(key_parts[0]);
             let queue_id = key_parts[1].parse::<i32>().unwrap();
             /*info!(
                 "check hold request, topic: {}, queue_id: {}",
                 topic, queue_id
             );*/
-            let max_offset = self.message_store.get_max_offset_in_queue(topic, queue_id);
-            self.notify_message_arriving(topic, queue_id, max_offset);
+            let max_offset = self.message_store.get_max_offset_in_queue(&topic, queue_id);
+            self.notify_message_arriving(&topic, queue_id, max_offset);
         }
     }
 
-    pub fn notify_message_arriving(&self, topic: &str, queue_id: i32, max_offset: i64) {
+    pub fn notify_message_arriving(&self, topic: &CheetahString, queue_id: i32, max_offset: i64) {
         self.notify_message_arriving_ext(topic, queue_id, max_offset, None, 0, None, None);
     }
 
     pub fn notify_message_arriving_ext(
         &self,
-        topic: &str,
+        topic: &CheetahString,
         queue_id: i32,
         max_offset: i64,
         tags_code: Option<i64>,

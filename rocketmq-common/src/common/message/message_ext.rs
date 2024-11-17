@@ -75,7 +75,7 @@ impl MessageExt {
         Self::socket_address_2_byte_buffer(&self.store_host)
     }
 
-    pub fn topic(&self) -> &str {
+    pub fn topic(&self) -> &CheetahString {
         self.message.topic()
     }
 

@@ -18,6 +18,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
@@ -85,23 +86,23 @@ impl ConfigManager for ConsumerFilterManager {
 #[allow(unused_variables)]
 impl ConsumerFilterManager {
     pub fn build(
-        topic: &str,
-        consumer_group: &str,
-        expression: Option<&str>,
-        type_: Option<&str>,
+        topic: CheetahString,
+        consumer_group: CheetahString,
+        expression: Option<CheetahString>,
+        type_: Option<CheetahString>,
         client_version: u64,
     ) -> Option<ConsumerFilterData> {
-        if ExpressionType::is_tag_type(type_) {
+        if ExpressionType::is_tag_type(type_.as_deref()) {
             return None;
         }
 
         let mut consumer_filter_data = ConsumerFilterData::default();
-        consumer_filter_data.set_topic(topic.to_string());
-        consumer_filter_data.set_consumer_group(consumer_group.to_string());
+        consumer_filter_data.set_topic(topic);
+        consumer_filter_data.set_consumer_group(consumer_group);
         consumer_filter_data.set_born_time(get_current_millis());
         consumer_filter_data.set_dead_time(0);
-        consumer_filter_data.set_expression(expression.map(|s| s.to_string()));
-        consumer_filter_data.set_expression_type(type_.map(|s| s.to_string()));
+        consumer_filter_data.set_expression(expression);
+        consumer_filter_data.set_expression_type(type_);
         consumer_filter_data.set_client_version(client_version);
 
         /*        let filter_factory = FilterFactory;
@@ -123,8 +124,8 @@ impl ConsumerFilterManager {
 
     pub fn get_consumer_filter_data(
         &self,
-        topic: &str,
-        consumer_group: &str,
+        topic: &CheetahString,
+        consumer_group: &CheetahString,
     ) -> Option<ConsumerFilterData> {
         None
     }

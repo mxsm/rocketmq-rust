@@ -194,7 +194,7 @@ impl TopicQueueMappingManager {
         self.topic_queue_mapping_table.lock().get(topic).cloned()
     }
 
-    pub fn delete(&self, topic: &str) {
+    pub fn delete(&self, topic: &CheetahString) {
         let old = self.topic_queue_mapping_table.lock().remove(topic);
         match old {
             None => {

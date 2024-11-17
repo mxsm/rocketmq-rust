@@ -38,7 +38,7 @@ use crate::Result;
 #[trait_variant::make(MQConsumerInner: Send)]
 pub trait MQConsumerInnerLocal: MQConsumerInnerAny + Sync + 'static {
     /// Returns the group name of the consumer.
-    fn group_name(&self) -> String;
+    fn group_name(&self) -> CheetahString;
 
     /// Returns the message model used by the consumer.
     fn message_model(&self) -> MessageModel;
@@ -130,7 +130,7 @@ impl MQConsumerInnerImpl {
 }
 
 impl MQConsumerInner for MQConsumerInnerImpl {
-    fn group_name(&self) -> String {
+    fn group_name(&self) -> CheetahString {
         if let Some(ref default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl {
             if let Some(default_mqpush_consumer_impl) = default_mqpush_consumer_impl.upgrade() {
                 return MQConsumerInner::group_name(default_mqpush_consumer_impl.as_ref());

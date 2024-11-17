@@ -17,6 +17,7 @@
 use std::collections::HashSet;
 use std::hash::Hash;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use serde::Deserialize;
 use serde::Serialize;
@@ -28,7 +29,7 @@ use crate::protocol::heartbeat::subscription_data::SubscriptionData;
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ConsumerData {
-    pub group_name: String,
+    pub group_name: CheetahString,
     pub consume_type: ConsumeType,
     pub message_model: MessageModel,
     pub consume_from_where: ConsumeFromWhere,

@@ -17,6 +17,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::statistics::state_getter::StateGetter;
 use rocketmq_common::common::statistics::statistics_item::StatisticsItem;
@@ -396,26 +397,28 @@ impl BrokerStatsManager {
                 if vec.is_empty() || vec.len() < 4 {
                     return false;
                 }
-                let instance_id = vec[1];
-                let topic = vec[1];
-                let group = vec[1];
+                let instance_id = CheetahString::from_slice(vec[1]);
+                let topic = CheetahString::from_slice(vec[2]);
+                let group = CheetahString::from_slice(vec[3]);
                 let kind = item.stat_kind();
                 if BrokerStatsManager::ACCOUNT_SEND == kind
                     || BrokerStatsManager::ACCOUNT_SEND_REJ == kind
                 {
-                    self.producer_state_getter
-                        .as_ref()
-                        .unwrap()
-                        .online(instance_id, group, topic);
+                    self.producer_state_getter.as_ref().unwrap().online(
+                        &instance_id,
+                        &group,
+                        &topic,
+                    );
                 } else if BrokerStatsManager::ACCOUNT_RCV == kind
                     || BrokerStatsManager::ACCOUNT_SEND_BACK == kind
                     || BrokerStatsManager::ACCOUNT_SEND_BACK_TO_DLQ == kind
                     || BrokerStatsManager::ACCOUNT_REV_REJ == kind
                 {
-                    self.consumer_state_getter
-                        .as_ref()
-                        .unwrap()
-                        .online(instance_id, group, topic);
+                    self.consumer_state_getter.as_ref().unwrap().online(
+                        &instance_id,
+                        &group,
+                        &topic,
+                    );
                 }
 
                 false
@@ -487,7 +490,7 @@ impl BrokerStatsManager {
     pub fn inc_broker_get_nums(&self, group: &str, inc_value: i32) {}
     pub fn inc_broker_put_nums(&self, group: &str, inc_value: i32) {}
 
-    pub fn on_topic_deleted(&self, topic: &str) {}
+    pub fn on_topic_deleted(&self, topic: &CheetahString) {}
 
     pub fn inc_queue_put_nums(&self, topic: &str, queue_id: i32, num: i32, times: i32) {}
     pub fn inc_queue_put_size(&self, topic: &str, queue_id: i32, size: i32) {}

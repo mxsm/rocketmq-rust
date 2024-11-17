@@ -127,7 +127,7 @@ impl PullMessageResultHandler for DefaultPullMessageResultHandler {
         let client_address = channel.remote_address().to_string();
         let topic_config = self
             .topic_config_manager
-            .select_topic_config(request_header.topic.as_str());
+            .select_topic_config(request_header.topic.as_ref());
         Self::compose_response_header(
             &self.broker_config,
             &request_header,
@@ -160,8 +160,8 @@ impl PullMessageResultHandler for DefaultPullMessageResultHandler {
             }
         }
         self.update_broadcast_pulled_offset(
-            request_header.topic.as_str(),
-            request_header.consumer_group.as_str(),
+            request_header.topic.as_ref(),
+            request_header.consumer_group.as_ref(),
             request_header.queue_id.unwrap(),
             &request_header,
             &channel,
@@ -527,8 +527,8 @@ impl DefaultPullMessageResultHandler {
     ) {
         self.consumer_offset_manager.commit_pull_offset(
             client_address,
-            request_header.consumer_group.as_str(),
-            request_header.topic.as_str(),
+            request_header.consumer_group.as_ref(),
+            request_header.topic.as_ref(),
             request_header.queue_id.unwrap(),
             next_offset,
         );
@@ -540,8 +540,8 @@ impl DefaultPullMessageResultHandler {
         if store_offset_enable {
             self.consumer_offset_manager.commit_offset(
                 client_address,
-                request_header.consumer_group.as_str(),
-                request_header.topic.as_str(),
+                request_header.consumer_group.as_ref(),
+                request_header.topic.as_ref(),
                 request_header.queue_id.unwrap(),
                 request_header.commit_offset,
             );
@@ -550,8 +550,8 @@ impl DefaultPullMessageResultHandler {
 
     fn update_broadcast_pulled_offset(
         &self,
-        topic: &str,
-        group: &str,
+        topic: &CheetahString,
+        group: &CheetahString,
         queue_id: i32,
         request_header: &PullMessageRequestHeader,
         channel: &Channel,

@@ -17,6 +17,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::attribute::cq_type::CQType;
 use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
@@ -37,7 +38,8 @@ mod queue_offset_operator;
 pub mod single_consume_queue;
 
 pub type ArcConsumeQueue = ArcMut<Box<dyn ConsumeQueueTrait>>;
-pub type ConsumeQueueTable = parking_lot::Mutex<HashMap<String, HashMap<i32, ArcConsumeQueue>>>;
+pub type ConsumeQueueTable =
+    parking_lot::Mutex<HashMap<CheetahString, HashMap<i32, ArcConsumeQueue>>>;
 
 /// Trait defining the lifecycle of a file-based queue, including operations for loading,
 /// recovery, flushing, and destruction.
@@ -355,7 +357,7 @@ pub trait ConsumeQueueStoreTrait: Send + Sync {
     /// or `None` if no messages match the criteria.
     fn range_query(
         &self,
-        topic: &str,
+        topic: &CheetahString,
         queue_id: i32,
         start_index: i64,
         num: i32,
@@ -375,7 +377,12 @@ pub trait ConsumeQueueStoreTrait: Send + Sync {
     /// # Returns
     /// An `Option` containing the signal message in the form of `bytes::Bytes` if found, or `None`
     /// if no signal message matches the criteria.
-    fn get_signal(&self, topic: &str, queue_id: i32, start_index: i64) -> Option<bytes::Bytes>;
+    fn get_signal(
+        &self,
+        topic: &CheetahString,
+        queue_id: i32,
+        start_index: i64,
+    ) -> Option<bytes::Bytes>;
 
     /// Increase queue offset.
     /// `msg`: Message itself.
@@ -401,7 +408,7 @@ pub trait ConsumeQueueStoreTrait: Send + Sync {
     /// # Arguments
     /// * `queue_key` - The key identifying the logical message queue.
     /// * `message_num` - The number of messages added, used for batch operations.
-    fn increase_lmq_offset(&mut self, queue_key: &str, message_num: i16);
+    fn increase_lmq_offset(&mut self, queue_key: &CheetahString, message_num: i16);
 
     /// Retrieves the current offset for a given logical message queue (LMQ).
     ///
@@ -413,7 +420,7 @@ pub trait ConsumeQueueStoreTrait: Send + Sync {
     ///
     /// # Returns
     /// The current offset of the logical message queue as a 64-bit integer.
-    fn get_lmq_queue_offset(&self, queue_key: &str) -> i64;
+    fn get_lmq_queue_offset(&self, queue_key: &CheetahString) -> i64;
 
     /// Recovers the offset table based on the minimum physical offset.
     ///
@@ -433,7 +440,7 @@ pub trait ConsumeQueueStoreTrait: Send + Sync {
     /// # Arguments
     /// * `topic_queue_table` - A `HashMap` where the key is a `String` representing the topic name,
     ///   and the value is a 64-bit integer representing the latest logical offset for that topic.
-    fn set_topic_queue_table(&mut self, topic_queue_table: HashMap<String, i64>);
+    fn set_topic_queue_table(&mut self, topic_queue_table: HashMap<CheetahString, i64>);
 
     /// Removes the mapping for a specific topic and queue ID from the topic queue table.
     ///
@@ -444,7 +451,7 @@ pub trait ConsumeQueueStoreTrait: Send + Sync {
     /// # Arguments
     /// * `topic` - A string slice that holds the name of the topic.
     /// * `queue_id` - An integer representing the ID of the queue to be removed.
-    fn remove_topic_queue_table(&mut self, topic: &str, queue_id: i32);
+    fn remove_topic_queue_table(&mut self, topic: &CheetahString, queue_id: i32);
 
     /// Retrieves a reference to the topic queue table.
     ///
@@ -455,7 +462,7 @@ pub trait ConsumeQueueStoreTrait: Send + Sync {
     /// # Returns
     /// A `HashMap` where the key is a `String` representing the topic name, and the value is
     /// a 64-bit integer representing the latest logical offset for that topic.
-    fn get_topic_queue_table(&self) -> HashMap<String, i64>;
+    fn get_topic_queue_table(&self) -> HashMap<CheetahString, i64>;
 
     /// Retrieves the maximum physical offset in the consume queue for a given topic and queue ID.
     ///
@@ -468,7 +475,7 @@ pub trait ConsumeQueueStoreTrait: Send + Sync {
     ///
     /// # Returns
     /// The maximum physical offset as a 64-bit integer.
-    fn get_max_phy_offset_in_consume_queue_id(&self, topic: &str, queue_id: i32) -> i64;
+    fn get_max_phy_offset_in_consume_queue_id(&self, topic: &CheetahString, queue_id: i32) -> i64;
 
     /// Retrieves the maximum physical offset across all consume queues.
     ///
@@ -492,7 +499,7 @@ pub trait ConsumeQueueStoreTrait: Send + Sync {
     /// # Returns
     /// An `Option` containing the maximum logical offset as a 64-bit integer, or `None` if the
     /// consume queue does not exist.
-    fn get_max_offset(&self, topic: &str, queue_id: i32) -> Option<i64>;
+    fn get_max_offset(&self, topic: &CheetahString, queue_id: i32) -> Option<i64>;
 
     /// Finds or creates a consume queue for a given topic and queue ID.
     ///
@@ -506,7 +513,8 @@ pub trait ConsumeQueueStoreTrait: Send + Sync {
     ///
     /// # Returns
     /// An atomic reference counted (`Arc`) wrapper around the consume queue.
-    fn find_or_create_consume_queue(&self, topic: &str, queue_id: i32) -> ArcConsumeQueue;
+    fn find_or_create_consume_queue(&self, topic: &CheetahString, queue_id: i32)
+        -> ArcConsumeQueue;
 
     /// Finds the consume queue map for a given topic.
     ///
@@ -520,7 +528,10 @@ pub trait ConsumeQueueStoreTrait: Send + Sync {
     /// An `Option` containing a `HashMap` where the key is an integer representing the queue ID,
     /// and the value is an atomic reference counted (`Arc`) wrapper around the consume queue,
     /// or `None` if the topic does not exist.
-    fn find_consume_queue_map(&self, topic: &str) -> Option<HashMap<i32, ArcConsumeQueue>>;
+    fn find_consume_queue_map(
+        &self,
+        topic: &CheetahString,
+    ) -> Option<HashMap<i32, ArcConsumeQueue>>;
 
     /// Returns the total size of the consume queue.
     ///
@@ -554,7 +565,7 @@ pub trait ConsumeQueueStoreTrait: Send + Sync {
     ///
     /// # Returns
     /// The minimum offset as a 64-bit integer.
-    fn get_min_offset_in_queue(&self, topic: &str, queue_id: i32) -> i64;
+    fn get_min_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64;
 
     /// Returns the maximum offset in the queue for a given topic and queue ID.
     ///
@@ -567,7 +578,7 @@ pub trait ConsumeQueueStoreTrait: Send + Sync {
     ///
     /// # Returns
     /// The maximum offset as a 64-bit integer.
-    fn get_max_offset_in_queue(&self, topic: &str, queue_id: i32) -> i64;
+    fn get_max_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64;
 
     /// Retrieves a reference to the consume queue table.
     ///
@@ -592,7 +603,7 @@ pub trait ConsumeQueueTrait: Send + Sync + FileQueueLifeCycle {
     ///
     /// # Returns
     /// A string slice reference to the topic name.
-    fn get_topic(&self) -> &str;
+    fn get_topic(&self) -> &CheetahString;
 
     /// Retrieves the queue ID of the consume queue.
     ///

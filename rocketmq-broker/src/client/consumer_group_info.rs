@@ -244,7 +244,7 @@ impl ConsumerGroupInfo {
         subscription_table.keys().cloned().collect()
     }
 
-    pub fn find_subscription_data(&self, topic: &str) -> Option<SubscriptionData> {
+    pub fn find_subscription_data(&self, topic: &CheetahString) -> Option<SubscriptionData> {
         let subscription_table = self.subscription_table.read();
         subscription_table.get(topic).cloned()
     }

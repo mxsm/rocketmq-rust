@@ -14,6 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use cheetah_string::CheetahString;
+
 use crate::base::get_message_result::GetMessageResult;
 
 pub struct CompactionStore;
@@ -28,8 +30,8 @@ impl CompactionStore {
 impl CompactionStore {
     pub fn get_message(
         &self,
-        group: &str,
-        topic: &str,
+        group: &CheetahString,
+        topic: &CheetahString,
         queue_id: i32,
         offset: i64,
         max_msg_nums: i32,

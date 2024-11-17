@@ -16,6 +16,7 @@
  */
 use std::sync::atomic::AtomicI64;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::system_clock::SystemClock;
 use rocketmq_rust::ArcMut;
@@ -96,7 +97,7 @@ impl TimerMessageStore {
             .default_message_store
             .as_ref()
             .unwrap()
-            .find_consume_queue(TIMER_TOPIC, 0);
+            .find_consume_queue(&CheetahString::from_static_str(TIMER_TOPIC), 0);
         let max_offset_in_queue = match consume_queue {
             Some(queue) => queue.get_max_offset_in_queue(),
             None => 0,

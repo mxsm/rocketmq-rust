@@ -20,6 +20,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::attribute::cq_type::CQType;
 use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
@@ -62,10 +63,10 @@ pub struct BatchConsumeQueue {
     message_store_config: Arc<MessageStoreConfig>,
     mapped_file_queue: MappedFileQueue,
     //message_store: Arc<RwLock<dyn MessageStore>>,
-    topic: String,
+    topic: CheetahString,
     queue_id: i32,
     byte_buffer_item: Vec<u8>,
-    store_path: String,
+    store_path: CheetahString,
     mapped_file_size: usize,
     max_msg_phy_offset_in_commit_log: Arc<AtomicI64>,
     min_logic_offset: Arc<AtomicI64>,
@@ -78,28 +79,28 @@ pub struct BatchConsumeQueue {
 
 impl BatchConsumeQueue {
     pub fn new(
-        topic: String,
+        topic: CheetahString,
         queue_id: i32,
-        store_path: String,
+        store_path: CheetahString,
         mapped_file_size: usize,
-        subfolder: Option<String>,
+        subfolder: Option<CheetahString>,
         message_store_config: Arc<MessageStoreConfig>,
     ) -> Self {
         let commit_log_size = message_store_config.mapped_file_size_commit_log;
 
         let mapped_file_queue = if let Some(subfolder) = subfolder {
-            let queue_dir = PathBuf::from(store_path.clone())
-                .join(topic.clone())
+            let queue_dir = PathBuf::from(store_path.as_str())
+                .join(topic.as_str())
                 .join(queue_id.to_string())
-                .join(subfolder);
+                .join(subfolder.as_str());
             MappedFileQueue::new(
                 queue_dir.to_string_lossy().to_string(),
                 mapped_file_size as u64,
                 None,
             )
         } else {
-            let queue_dir = PathBuf::from(store_path.clone())
-                .join(topic.clone())
+            let queue_dir = PathBuf::from(store_path.as_str())
+                .join(topic.as_str())
                 .join(queue_id.to_string());
             MappedFileQueue::new(
                 queue_dir.to_string_lossy().to_string(),
@@ -196,7 +197,7 @@ impl Swappable for BatchConsumeQueue {
 }
 
 impl ConsumeQueueTrait for BatchConsumeQueue {
-    fn get_topic(&self) -> &str {
+    fn get_topic(&self) -> &CheetahString {
         todo!()
     }
 

@@ -103,14 +103,14 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
 
     fn load(&mut self) -> bool {
         self.load_consume_queues(
-            get_store_path_consume_queue(
+            CheetahString::from_string(get_store_path_consume_queue(
                 self.inner.message_store_config.store_path_root_dir.as_str(),
-            ),
+            )),
             CQType::SimpleCQ,
         ) & self.load_consume_queues(
-            get_store_path_batch_consume_queue(
+            CheetahString::from_string(get_store_path_batch_consume_queue(
                 self.inner.message_store_config.store_path_root_dir.as_str(),
-            ),
+            )),
             CQType::BatchCQ,
         )
     }
@@ -201,7 +201,7 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     fn put_message_position_info_wrapper(&self, request: &DispatchRequest) {
-        let mut cq = self.find_or_create_consume_queue(request.topic.as_str(), request.queue_id);
+        let mut cq = self.find_or_create_consume_queue(request.topic.as_ref(), request.queue_id);
         self.put_message_position_info_wrapper_with_cq(&mut **cq.as_mut(), request);
         // println!("put_message_position_info_wrapper-----{}", request.topic)
     }
@@ -217,7 +217,7 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
 
     fn range_query(
         &self,
-        topic: &str,
+        topic: &CheetahString,
         queue_id: i32,
         start_index: i64,
         num: i32,
@@ -225,25 +225,25 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
         todo!()
     }
 
-    fn get_signal(&self, topic: &str, queue_id: i32, start_index: i64) -> Option<Bytes> {
+    fn get_signal(&self, topic: &CheetahString, queue_id: i32, start_index: i64) -> Option<Bytes> {
         todo!()
     }
 
     fn increase_queue_offset(&self, msg: &MessageExtBrokerInner, message_num: i16) {
-        let consume_queue = self.find_or_create_consume_queue(msg.topic(), msg.queue_id());
+        let consume_queue = self.find_or_create_consume_queue(msg.get_topic(), msg.queue_id());
         consume_queue.increase_queue_offset(&self.inner.queue_offset_operator, msg, message_num);
     }
 
     fn assign_queue_offset(&self, msg: &mut MessageExtBrokerInner) {
-        let consume_queue = self.find_or_create_consume_queue(msg.topic(), msg.queue_id());
+        let consume_queue = self.find_or_create_consume_queue(msg.get_topic(), msg.queue_id());
         consume_queue.assign_queue_offset(&self.inner.queue_offset_operator, msg);
     }
 
-    fn increase_lmq_offset(&mut self, queue_key: &str, message_num: i16) {
+    fn increase_lmq_offset(&mut self, queue_key: &CheetahString, message_num: i16) {
         todo!()
     }
 
-    fn get_lmq_queue_offset(&self, queue_key: &str) -> i64 {
+    fn get_lmq_queue_offset(&self, queue_key: &CheetahString) -> i64 {
         todo!()
     }
 
@@ -252,11 +252,11 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
         let mut bcq_offset_table = HashMap::with_capacity(1024);
         for (topic, consume_queue_table) in self.inner.consume_queue_table.lock().iter_mut() {
             for (queue_id, consume_queue) in consume_queue_table.iter() {
-                let key = format!(
+                let key = CheetahString::from_string(format!(
                     "{}-{}",
                     consume_queue.get_topic(),
                     consume_queue.get_queue_id()
-                );
+                ));
                 let max_offset_in_queue = consume_queue.get_max_offset_in_queue();
                 if consume_queue.get_cq_type() == CQType::SimpleCQ {
                     cq_offset_table.insert(key, max_offset_in_queue);
@@ -275,7 +275,7 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
         self.set_batch_topic_queue_table(bcq_offset_table);
     }
 
-    fn set_topic_queue_table(&mut self, topic_queue_table: HashMap<String, i64>) {
+    fn set_topic_queue_table(&mut self, topic_queue_table: HashMap<CheetahString, i64>) {
         self.inner
             .queue_offset_operator
             .set_topic_queue_table(topic_queue_table.clone());
@@ -284,15 +284,15 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
             .set_lmq_topic_queue_table(topic_queue_table);
     }
 
-    fn remove_topic_queue_table(&mut self, topic: &str, queue_id: i32) {
+    fn remove_topic_queue_table(&mut self, topic: &CheetahString, queue_id: i32) {
         self.inner.queue_offset_operator.remove(topic, queue_id);
     }
 
-    fn get_topic_queue_table(&self) -> HashMap<String, i64> {
+    fn get_topic_queue_table(&self) -> HashMap<CheetahString, i64> {
         todo!()
     }
 
-    fn get_max_phy_offset_in_consume_queue_id(&self, topic: &str, queue_id: i32) -> i64 {
+    fn get_max_phy_offset_in_consume_queue_id(&self, topic: &CheetahString, queue_id: i32) -> i64 {
         todo!()
     }
 
@@ -309,18 +309,22 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
         max_physic_offset
     }
 
-    fn get_max_offset(&self, topic: &str, queue_id: i32) -> Option<i64> {
+    fn get_max_offset(&self, topic: &CheetahString, queue_id: i32) -> Option<i64> {
         Some(
             self.inner
                 .queue_offset_operator
-                .current_queue_offset(format!("{}-{}", topic, queue_id).as_str()),
+                .current_queue_offset(&format!("{}-{}", topic, queue_id).into()),
         )
     }
 
-    fn find_or_create_consume_queue(&self, topic: &str, queue_id: i32) -> ArcConsumeQueue {
+    fn find_or_create_consume_queue(
+        &self,
+        topic: &CheetahString,
+        queue_id: i32,
+    ) -> ArcConsumeQueue {
         let mut consume_queue_table = self.inner.consume_queue_table.lock();
 
-        let topic_map = consume_queue_table.entry(topic.to_string()).or_default();
+        let topic_map = consume_queue_table.entry(topic.clone()).or_default();
 
         if let Some(value) = topic_map.get(&queue_id) {
             return value.clone();
@@ -330,11 +334,11 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
             let option = self.topic_config_table.lock().get(topic).cloned();
             match QueueTypeUtils::get_cq_type(&option) {
                 CQType::SimpleCQ => ArcMut::new(Box::new(ConsumeQueue::new(
-                    topic.to_string(),
+                    topic.clone(),
                     queue_id,
-                    get_store_path_consume_queue(
+                    CheetahString::from_string(get_store_path_consume_queue(
                         self.inner.message_store_config.store_path_root_dir.as_str(),
-                    ),
+                    )),
                     self.inner
                         .message_store_config
                         .get_mapped_file_size_consume_queue(),
@@ -343,11 +347,11 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
                     self.store_checkpoint.clone(),
                 ))),
                 CQType::BatchCQ => ArcMut::new(Box::new(BatchConsumeQueue::new(
-                    topic.to_string(),
+                    topic.clone(),
                     queue_id,
-                    get_store_path_batch_consume_queue(
+                    CheetahString::from_string(get_store_path_batch_consume_queue(
                         self.inner.message_store_config.store_path_root_dir.as_str(),
-                    ),
+                    )),
                     self.inner
                         .message_store_config
                         .mapper_file_size_batch_consume_queue,
@@ -362,7 +366,10 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
         consume_queue.clone()
     }
 
-    fn find_consume_queue_map(&self, topic: &str) -> Option<HashMap<i32, ArcConsumeQueue>> {
+    fn find_consume_queue_map(
+        &self,
+        topic: &CheetahString,
+    ) -> Option<HashMap<i32, ArcConsumeQueue>> {
         todo!()
     }
 
@@ -374,12 +381,12 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
         todo!()
     }
 
-    fn get_min_offset_in_queue(&self, topic: &str, queue_id: i32) -> i64 {
+    fn get_min_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64 {
         let queue = self.find_or_create_consume_queue(topic, queue_id);
         queue.get_min_offset_in_queue()
     }
 
-    fn get_max_offset_in_queue(&self, topic: &str, queue_id: i32) -> i64 {
+    fn get_max_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64 {
         todo!()
     }
 
@@ -397,21 +404,26 @@ impl ConsumeQueueStore {
         consume_queue.correct_min_offset(min_commit_log_offset)
     }
 
-    pub fn set_batch_topic_queue_table(&self, batch_topic_queue_table: HashMap<String, i64>) {
+    pub fn set_batch_topic_queue_table(
+        &self,
+        batch_topic_queue_table: HashMap<CheetahString, i64>,
+    ) {
         self.inner
             .queue_offset_operator
             .set_batch_topic_queue_table(batch_topic_queue_table)
     }
 
-    fn load_consume_queues(&mut self, store_path: String, cq_type: CQType) -> bool {
-        let dir = Path::new(&store_path);
+    fn load_consume_queues(&mut self, store_path: CheetahString, cq_type: CQType) -> bool {
+        let dir = Path::new(store_path.as_str());
         if let Ok(ls) = fs::read_dir(dir) {
             let dirs: Vec<_> = ls
                 .filter_map(Result::ok)
                 .map(|entry| entry.path())
                 .collect();
             for dir in dirs {
-                let topic = dir.file_name().unwrap().to_str().unwrap().to_string();
+                let topic = CheetahString::from_string(
+                    dir.file_name().unwrap().to_str().unwrap().to_string(),
+                );
                 if let Ok(ls) = fs::read_dir(&dir) {
                     let file_queue_id_list: Vec<_> = ls
                         .filter_map(Result::ok)
@@ -427,13 +439,13 @@ impl ConsumeQueueStore {
                             .unwrap();
                         self.queue_type_should_be(&topic, cq_type);
                         let logic = self.create_consume_queue_by_type(
-                            topic.as_str(),
+                            topic.as_ref(),
                             queue_id,
                             cq_type,
                             store_path.clone(),
                         );
                         self.put_consume_queue(topic.clone(), queue_id, logic);
-                        if !self.load_logic(topic.clone(), queue_id) {
+                        if !self.load_logic(&topic, queue_id) {
                             return false;
                         }
                     }
@@ -444,14 +456,14 @@ impl ConsumeQueueStore {
         true
     }
 
-    fn load_logic(&mut self, topic: String, queue_id: i32) -> bool {
-        let mut file_queue_life_cycle = self.get_life_cycle(topic.as_str(), queue_id);
+    fn load_logic(&mut self, topic: &CheetahString, queue_id: i32) -> bool {
+        let mut file_queue_life_cycle = self.get_life_cycle(topic, queue_id);
         file_queue_life_cycle.load()
     }
 
     fn put_consume_queue(
         &self,
-        topic: String,
+        topic: CheetahString,
         queue_id: i32,
         consume_queue: Box<dyn ConsumeQueueTrait>,
     ) {
@@ -481,7 +493,7 @@ impl ConsumeQueueStore {
             .truncate_dirty_logic_files(phy_offset);
     }*/
 
-    fn truncate_dirty_logic_files(&self, topic: &str, queue_id: i32, phy_offset: i64) {
+    fn truncate_dirty_logic_files(&self, topic: &CheetahString, queue_id: i32, phy_offset: i64) {
         let mut file_queue_life_cycle = self.get_life_cycle(topic, queue_id);
         file_queue_life_cycle.truncate_dirty_logic_files(phy_offset);
     }
@@ -490,15 +502,15 @@ impl ConsumeQueueStore {
 impl ConsumeQueueStore {
     fn create_consume_queue_by_type(
         &self,
-        topic: &str,
+        topic: &CheetahString,
         queue_id: i32,
         cq_type: CQType,
-        store_path: String,
+        store_path: CheetahString,
     ) -> Box<dyn ConsumeQueueTrait> {
         match cq_type {
             CQType::SimpleCQ => {
                 let consume_queue = ConsumeQueue::new(
-                    topic.to_string(),
+                    topic.clone(),
                     queue_id,
                     store_path,
                     self.inner
@@ -512,7 +524,7 @@ impl ConsumeQueueStore {
             }
             CQType::BatchCQ => {
                 let consume_queue = BatchConsumeQueue::new(
-                    topic.to_string(),
+                    topic.clone(),
                     queue_id,
                     store_path,
                     self.inner
@@ -529,7 +541,7 @@ impl ConsumeQueueStore {
         }
     }
 
-    fn get_life_cycle(&self, topic: &str, queue_id: i32) -> ArcConsumeQueue {
+    fn get_life_cycle(&self, topic: &CheetahString, queue_id: i32) -> ArcConsumeQueue {
         self.find_or_create_consume_queue(topic, queue_id)
     }
 }

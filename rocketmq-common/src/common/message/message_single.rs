@@ -184,7 +184,7 @@ impl Message {
         self.flag
     }
 
-    pub fn topic(&self) -> &str {
+    pub fn topic(&self) -> &CheetahString {
         &self.topic
     }
 

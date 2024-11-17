@@ -902,7 +902,7 @@ impl MQClientInstance {
         let consumer_table = self.consumer_table.read().await;
         for (_, value) in consumer_table.iter() {
             let mut consumer_data = ConsumerData {
-                group_name: value.group_name().to_string(),
+                group_name: value.group_name(),
                 consume_type: value.consume_type(),
                 message_model: value.message_model(),
                 consume_from_where: value.consume_from_where(),
