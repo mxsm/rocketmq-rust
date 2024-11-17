@@ -23,7 +23,7 @@ jobs:
             // Get PR creator's username
             const prCreator = context.payload.pull_request.user.login;
             
-            const commentBody = `🚀Thanks for your contribution 🎉 @${prCreator}. CodeRabbit(AI) will review your code first 🔥`;
+            const commentBody = `🔊@${prCreator} 🚀Thanks for your contribution 🎉. CodeRabbit(AI) will review your code first 🔥`;
             github.rest.issues.createComment({
               owner,
               repo,
@@ -34,5 +34,5 @@ jobs:
                 owner,
                 repo,
                 issue_number,
-                labels: ['ready to review','waiting-review','Ai ready to review']
+                labels: ['ready to review','waiting-review','AI review first']
               });
