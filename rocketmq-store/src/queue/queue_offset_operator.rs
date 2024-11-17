@@ -184,7 +184,7 @@ mod tests {
     fn update_queue_offset_updates_existing_value() {
         let operator = QueueOffsetOperator::new();
         operator.increase_queue_offset("key".into(), 5);
-        operator.update_queue_offset("key".into(), 10);
+        operator.update_queue_offset(&CheetahString::from_static_str("key"), 10);
         assert_eq!(operator.get_queue_offset("key".into()), 10);
     }
 
@@ -192,14 +192,20 @@ mod tests {
     fn remove_clears_key_from_all_tables() {
         let operator = QueueOffsetOperator::new();
         operator.increase_queue_offset("topic-1".into(), 5);
-        operator.increase_batch_queue_offset("topic-1".into(), 5);
-        operator.increase_lmq_offset("topic-1".into(), 5);
+        operator.increase_batch_queue_offset(&CheetahString::from_static_str("topic-1"), 5);
+        operator.increase_lmq_offset(&CheetahString::from_static_str("topic-1"), 5);
 
-        operator.remove("topic".into(), 1);
+        operator.remove(&CheetahString::from_static_str("topic"), 1);
 
         assert_eq!(operator.get_queue_offset("topic-1".into()), 0);
-        assert_eq!(operator.get_batch_queue_offset("topic-1".into()), 0);
-        assert_eq!(operator.get_lmq_offset("topic-1".into()), 0);
+        assert_eq!(
+            operator.get_batch_queue_offset(&CheetahString::from_static_str("topic-1")),
+            0
+        );
+        assert_eq!(
+            operator.get_lmq_offset(&CheetahString::from_static_str("topic-1")),
+            0
+        );
     }
 
     #[test]
