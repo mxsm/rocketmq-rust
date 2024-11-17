@@ -1,0 +1,48 @@
+name: Remove Label on Approval
+
+on:
+  pull_request_review:
+    types:
+      - submitted
+
+jobs:
+  remove-label-on-approve:
+    if: github.event.review.state == 'approved' # Trigger only when the review is approved
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Remove label using github-script
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.BOT_TOKEN  }}
+          script: |
+            const labelToRemove = 'waiting-review'; // The name of the label to remove
+            
+            // Get repository and PR context information
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            
+            // Get all labels on the current PR
+            const { data: labels } = await github.rest.issues.listLabelsOnIssue({
+              owner,
+              repo,
+              issue_number,
+            });
+            
+            // Check if the target label exists
+            const labelExists = labels.some(label => label.name === labelToRemove);
+            if (labelExists) {
+              // Remove the label
+              await github.rest.issues.removeLabel({
+                owner,
+                repo,
+                issue_number,
+                name: labelToRemove,
+              });
+              console.log(`Label '${labelToRemove}' has been removed.`);
+            } else {
+              console.log(`Label '${labelToRemove}' does not exist on this PR.`);
+            }
