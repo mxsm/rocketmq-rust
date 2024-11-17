@@ -17,6 +17,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::mix_all::MASTER_ID;
 use serde::Deserialize;
 use serde::Serialize;
@@ -27,7 +28,7 @@ use crate::protocol::subscription::simple_subscription_data::SimpleSubscriptionD
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubscriptionGroupConfig {
-    group_name: String,
+    group_name: CheetahString,
 
     consume_enable: bool,
     consume_from_min_enable: bool,
@@ -48,13 +49,13 @@ pub struct SubscriptionGroupConfig {
     consume_timeout_minute: i32,
 
     subscription_data_set: Option<HashSet<SimpleSubscriptionData>>,
-    attributes: HashMap<String, String>,
+    attributes: HashMap<CheetahString, CheetahString>,
 }
 
 impl SubscriptionGroupConfig {
-    pub fn new(group_name: &str) -> Self {
+    pub fn new(group_name: CheetahString) -> Self {
         Self {
-            group_name: group_name.to_string(),
+            group_name,
             ..Default::default()
         }
     }
@@ -63,7 +64,7 @@ impl SubscriptionGroupConfig {
 impl Default for SubscriptionGroupConfig {
     fn default() -> Self {
         SubscriptionGroupConfig {
-            group_name: "".to_string(),
+            group_name: CheetahString::default(),
 
             consume_enable: true,
             consume_from_min_enable: false,
@@ -146,11 +147,11 @@ impl SubscriptionGroupConfig {
         self.subscription_data_set.as_ref()
     }
 
-    pub fn attributes(&self) -> &HashMap<String, String> {
+    pub fn attributes(&self) -> &HashMap<CheetahString, CheetahString> {
         &self.attributes
     }
 
-    pub fn set_group_name(&mut self, group_name: String) {
+    pub fn set_group_name(&mut self, group_name: CheetahString) {
         self.group_name = group_name;
     }
     pub fn set_consume_enable(&mut self, consume_enable: bool) {
@@ -198,7 +199,7 @@ impl SubscriptionGroupConfig {
     ) {
         self.subscription_data_set = subscription_data_set;
     }
-    pub fn set_attributes(&mut self, attributes: HashMap<String, String>) {
+    pub fn set_attributes(&mut self, attributes: HashMap<CheetahString, CheetahString>) {
         self.attributes = attributes;
     }
 }
@@ -231,7 +232,7 @@ mod subscription_group_config_tests {
     #[test]
     fn setting_and_getting_fields() {
         let mut config = SubscriptionGroupConfig::default();
-        config.set_group_name("test_group".to_string());
+        config.set_group_name("test_group".into());
         config.set_consume_enable(false);
         config.set_consume_from_min_enable(true);
         config.set_consume_broadcast_enable(false);
@@ -245,7 +246,7 @@ mod subscription_group_config_tests {
         config.set_group_sys_flag(1);
         config.set_consume_timeout_minute(30);
         config.set_subscription_data_set(Some(HashSet::new()));
-        config.set_attributes(HashMap::from([("key".to_string(), "value".to_string())]));
+        config.set_attributes(HashMap::from([("key".into(), "value".into())]));
 
         assert_eq!(config.group_name(), "test_group");
         assert!(!config.consume_enable());
@@ -266,7 +267,7 @@ mod subscription_group_config_tests {
         assert!(config.subscription_data_set().is_some());
         assert_eq!(
             config.attributes(),
-            &HashMap::from([("key".to_string(), "value".to_string())])
+            &HashMap::from([("key".into(), "value".into())])
         );
     }
 }

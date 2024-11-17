@@ -94,7 +94,7 @@ pub struct ConsumerConfig {
 }
 
 impl ConsumerConfig {
-    pub fn consumer_group(&self) -> &str {
+    pub fn consumer_group(&self) -> &CheetahString {
         &self.consumer_group
     }
 

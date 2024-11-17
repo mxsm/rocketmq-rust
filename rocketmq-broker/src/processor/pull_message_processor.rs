@@ -407,7 +407,7 @@ where
         }
         let subscription_group_config = self
             .subscription_group_manager
-            .find_subscription_group_config(request_header.consumer_group.as_str());
+            .find_subscription_group_config(request_header.consumer_group.as_ref());
 
         if subscription_group_config.is_none() {
             return Some(
@@ -434,7 +434,7 @@ where
         }
         let topic_config = self
             .topic_config_manager
-            .select_topic_config(request_header.topic.as_str());
+            .select_topic_config(request_header.topic.as_ref());
         if topic_config.is_none() {
             error!(
                 "the topic {} not exist, consumer: {}",
@@ -497,7 +497,7 @@ where
                 unimplemented!("ProxyForStream not implement")
             }
             _ => self.consumer_manager.compensate_basic_consumer_info(
-                request_header.consumer_group.as_str(),
+                request_header.consumer_group.as_ref(),
                 ConsumeType::ConsumePassively,
                 MessageModel::Clustering,
             ),
@@ -522,17 +522,17 @@ where
             }
             let subscription_data = subscription_data.unwrap();
             self.consumer_manager.compensate_subscribe_data(
-                request_header.consumer_group.as_str(),
-                request_header.topic.as_str(),
+                request_header.consumer_group.as_ref(),
+                request_header.topic.as_ref(),
                 &subscription_data,
             );
             let consumer_filter_data =
                 if !ExpressionType::is_tag_type(Some(subscription_data.expression_type.as_str())) {
                     let consumer_filter_data = ConsumerFilterManager::build(
-                        request_header.topic.as_str(),
-                        request_header.consumer_group.as_str(),
-                        request_header.subscription.as_deref(),
-                        request_header.expression_type.as_deref(),
+                        request_header.topic.clone(),
+                        request_header.consumer_group.clone(),
+                        request_header.subscription.clone(),
+                        request_header.expression_type.clone(),
                         request_header.sub_version as u64,
                     );
                     if consumer_filter_data.is_none() {
@@ -550,7 +550,7 @@ where
         } else {
             let consumer_group_info = self
                 .consumer_manager
-                .get_consumer_group_info(request_header.consumer_group.as_str());
+                .get_consumer_group_info(request_header.consumer_group.as_ref());
             if consumer_group_info.is_none() {
                 warn!(
                     "the consumer's group info not exist, group: {}",
@@ -604,7 +604,7 @@ where
             let subscription_data = consumer_group_info
                 .as_ref()
                 .unwrap()
-                .find_subscription_data(request_header.topic.as_str());
+                .find_subscription_data(request_header.topic.as_ref());
             if subscription_data.is_none() {
                 warn!(
                     "the consumer's subscription not exist, group: {}, topic:{}",
@@ -637,8 +637,8 @@ where
                 subscription_data.as_ref().unwrap().expression_type.as_str(),
             )) {
                 let consumer_filter_data = self.consumer_filter_manager.get_consumer_filter_data(
-                    request_header.topic.as_str(),
-                    request_header.consumer_group.as_str(),
+                    request_header.topic.as_ref(),
+                    request_header.consumer_group.as_ref(),
                 );
                 if consumer_filter_data.is_none() {
                     return Some(
@@ -709,8 +709,8 @@ where
         }
 
         let use_reset_offset_feature = self.broker_config.use_server_side_reset_offset;
-        let topic = request_header.topic.as_str();
-        let group = request_header.consumer_group.as_str();
+        let topic = request_header.topic.as_ref();
+        let group = request_header.consumer_group.as_ref();
         let queue_id = request_header.queue_id.unwrap();
         let reset_offset = self
             .consumer_offset_manager
@@ -782,8 +782,8 @@ where
 
     fn query_broadcast_pull_init_offset(
         &mut self,
-        topic: &str,
-        group: &str,
+        topic: &CheetahString,
+        group: &CheetahString,
         queue_id: i32,
         request_header: &PullMessageRequestHeader,
         channel: &Channel,

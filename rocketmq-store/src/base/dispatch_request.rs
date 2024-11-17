@@ -23,7 +23,7 @@ use cheetah_string::CheetahString;
 
 #[derive(Debug)]
 pub struct DispatchRequest {
-    pub topic: String,
+    pub topic: CheetahString,
     pub queue_id: i32,
     pub commit_log_offset: i64,
     pub msg_size: i32,
@@ -41,13 +41,13 @@ pub struct DispatchRequest {
     pub msg_base_offset: i64,
     pub batch_size: i16,
     pub next_reput_from_offset: i64,
-    pub offset_id: Option<String>,
+    pub offset_id: Option<CheetahString>,
 }
 
 impl Default for DispatchRequest {
     fn default() -> Self {
         Self {
-            topic: "".to_string(),
+            topic: CheetahString::empty(),
             queue_id: 0,
             commit_log_offset: 0,
             msg_size: 0,

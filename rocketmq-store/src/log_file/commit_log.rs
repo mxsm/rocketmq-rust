@@ -1233,7 +1233,8 @@ pub fn check_message_and_return_size(
     }
     let topic_len = message_version.get_topic_length(bytes);
     let topic_bytes = bytes.copy_to_bytes(topic_len);
-    let topic = String::from_utf8_lossy(topic_bytes.as_ref()).to_string();
+    let topic =
+        CheetahString::from_string(String::from_utf8_lossy(topic_bytes.as_ref()).to_string());
     let properties_length = bytes.get_i16();
     let (tags_code, keys, uniq_key, properties_map) = if properties_length > 0 {
         let properties = bytes.copy_to_bytes(properties_length as usize);

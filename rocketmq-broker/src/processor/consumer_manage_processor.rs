@@ -115,7 +115,7 @@ where
             .unwrap();
         let consumer_group_info = self
             .consumer_manager
-            .get_consumer_group_info(request_header.consumer_group.as_str());
+            .get_consumer_group_info(request_header.consumer_group.as_ref());
 
         match consumer_group_info {
             None => {
@@ -175,8 +175,8 @@ where
         if let Some(result) = rewrite_result {
             return Some(result);
         }
-        let topic = request_header.topic.as_str();
-        let group = request_header.consumer_group.as_str();
+        let topic = request_header.topic.as_ref();
+        let group = request_header.consumer_group.as_ref();
         let queue_id = request_header.queue_id;
         let offset = request_header.commit_offset;
         let response = RemotingCommand::create_response_command();
@@ -256,8 +256,8 @@ where
             return Some(result);
         }
         let offset = self.consumer_offset_manager.query_offset(
-            request_header.consumer_group.as_str(),
-            request_header.topic.as_str(),
+            request_header.consumer_group.as_ref(),
+            request_header.topic.as_ref(),
             request_header.queue_id,
         );
         let mut response = RemotingCommand::create_response_command();
@@ -267,7 +267,7 @@ where
         } else {
             let min_offset = self
                 .message_store
-                .get_min_offset_in_queue(request_header.topic.as_str(), request_header.queue_id);
+                .get_min_offset_in_queue(request_header.topic.as_ref(), request_header.queue_id);
             if let Some(value) = request_header.set_zero_if_not_found {
                 if !value {
                     response = response
@@ -276,7 +276,7 @@ where
                 }
             } else if min_offset <= 0
                 && self.message_store.check_in_mem_by_consume_offset(
-                    request_header.topic.as_str(),
+                    request_header.topic.as_ref(),
                     request_header.queue_id,
                     0,
                     1,
@@ -341,8 +341,8 @@ where
             mapping_context.current_item = Some(mapping_item.clone());
             if mapping_item.bname == mapping_detail.topic_queue_mapping_info.bname {
                 offset = self.consumer_offset_manager.query_offset(
-                    request_header.consumer_group.as_str(),
-                    request_header.topic.as_str(),
+                    request_header.consumer_group.as_ref(),
+                    request_header.topic.as_ref(),
                     mapping_item.queue_id,
                 );
                 if offset >= 0 {

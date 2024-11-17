@@ -16,6 +16,7 @@
  */
 use std::path::PathBuf;
 
+use cheetah_string::CheetahString;
 use tracing::info;
 
 use crate::consume_queue::consume_queue_ext::CqExtUnit;
@@ -30,22 +31,22 @@ const MAX_REAL_OFFSET: i64 = MAX_ADDR - i64::MIN;
 #[derive(Clone)]
 pub struct ConsumeQueueExt {
     mapped_file_queue: MappedFileQueue,
-    topic: String,
+    topic: CheetahString,
     queue_id: i32,
-    store_path: String,
+    store_path: CheetahString,
     mapped_file_size: i32,
 }
 
 impl ConsumeQueueExt {
     pub fn new(
-        topic: String,
+        topic: CheetahString,
         queue_id: i32,
-        store_path: String,
+        store_path: CheetahString,
         mapped_file_size: i32,
         bit_map_length: i32,
     ) -> Self {
-        let queue_dir = PathBuf::from(store_path.clone())
-            .join(topic.clone())
+        let queue_dir = PathBuf::from(store_path.as_str())
+            .join(topic.as_str())
             .join(queue_id.to_string());
         let mapped_file_queue = MappedFileQueue::new(
             queue_dir.to_string_lossy().to_string(),

@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use cheetah_string::CheetahString;
 
 /// `StateGetter` is a trait that provides a method for checking the online status of a specific
 /// instance.
@@ -33,5 +34,10 @@ pub trait StateGetter: Send + Sync + 'static {
     ///
     /// * `bool` - The return value is `true` if the specified instance is online, and `false`
     ///   otherwise.
-    fn online(&self, instance_id: &str, group: &str, topic: &str) -> bool;
+    fn online(
+        &self,
+        instance_id: &CheetahString,
+        group: &CheetahString,
+        topic: &CheetahString,
+    ) -> bool;
 }

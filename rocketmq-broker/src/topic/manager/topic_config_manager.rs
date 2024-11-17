@@ -215,7 +215,8 @@ impl TopicConfigManager {
         }
     }
 
-    pub fn select_topic_config(&self, topic: &str) -> Option<TopicConfig> {
+    #[inline]
+    pub fn select_topic_config(&self, topic: &CheetahString) -> Option<TopicConfig> {
         self.topic_config_table.lock().get(topic).cloned()
     }
 
@@ -331,7 +332,7 @@ impl TopicConfigManager {
 
     pub fn create_topic_in_send_message_back_method(
         &mut self,
-        topic: &str,
+        topic: &CheetahString,
         client_default_topic_queue_nums: i32,
         perm: u32,
         is_order: bool,
@@ -405,7 +406,7 @@ impl TopicConfigManager {
         self.topic_config_table.lock().remove(topic)
     }
 
-    pub fn delete_topic_config(&self, topic: &str) {
+    pub fn delete_topic_config(&self, topic: &CheetahString) {
         let old = self.remove_topic_config(topic);
         if let Some(old) = old {
             info!("delete topic config OK, topic: {:?}", old);
@@ -541,7 +542,7 @@ impl TopicConfigManager {
         topic_config
     }
 
-    pub fn contains_topic(&self, topic: &str) -> bool {
+    pub fn contains_topic(&self, topic: &CheetahString) -> bool {
         self.topic_config_table.lock().contains_key(topic)
     }
 

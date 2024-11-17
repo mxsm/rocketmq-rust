@@ -1107,7 +1107,12 @@ struct ProducerStateGetter {
     producer_manager: Arc<ProducerManager>,
 }
 impl StateGetter for ProducerStateGetter {
-    fn online(&self, instance_id: &str, group: &str, topic: &str) -> bool {
+    fn online(
+        &self,
+        instance_id: &CheetahString,
+        group: &CheetahString,
+        topic: &CheetahString,
+    ) -> bool {
         if self
             .topic_config_manager
             .topic_config_table()
@@ -1127,18 +1132,25 @@ struct ConsumerStateGetter {
     consumer_manager: Arc<ConsumerManager>,
 }
 impl StateGetter for ConsumerStateGetter {
-    fn online(&self, instance_id: &str, group: &str, topic: &str) -> bool {
+    fn online(
+        &self,
+        instance_id: &CheetahString,
+        group: &CheetahString,
+        topic: &CheetahString,
+    ) -> bool {
         if self
             .topic_config_manager
             .topic_config_table()
             .lock()
             .contains_key(topic)
         {
-            let topic_full_name = NamespaceUtil::wrap_namespace(instance_id, topic);
+            let topic_full_name =
+                CheetahString::from_string(NamespaceUtil::wrap_namespace(instance_id, topic));
             self.consumer_manager
                 .find_subscription_data(
-                    NamespaceUtil::wrap_namespace(instance_id, group).as_str(),
-                    topic_full_name.as_str(),
+                    CheetahString::from_string(NamespaceUtil::wrap_namespace(instance_id, group))
+                        .as_ref(),
+                    topic_full_name.as_ref(),
                 )
                 .is_some()
         } else {

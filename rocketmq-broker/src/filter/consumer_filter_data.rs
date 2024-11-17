@@ -16,6 +16,7 @@
  */
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use rocketmq_filter::expression::Expression;
 use rocketmq_filter::utils::bloom_filter_data::BloomFilterData;
 use serde::Deserialize;
@@ -24,10 +25,10 @@ use serde::Serialize;
 #[derive(Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ConsumerFilterData {
-    consumer_group: String,
-    topic: String,
-    expression: Option<String>,
-    expression_type: Option<String>,
+    consumer_group: CheetahString,
+    topic: CheetahString,
+    expression: Option<CheetahString>,
+    expression_type: Option<CheetahString>,
     #[serde(skip)]
     compiled_expression: Option<Arc<Box<dyn Expression + Send + Sync + 'static>>>,
     born_time: u64,
@@ -37,19 +38,19 @@ pub struct ConsumerFilterData {
 }
 
 impl ConsumerFilterData {
-    pub fn consumer_group(&self) -> &str {
+    pub fn consumer_group(&self) -> &CheetahString {
         &self.consumer_group
     }
 
-    pub fn topic(&self) -> &str {
+    pub fn topic(&self) -> &CheetahString {
         &self.topic
     }
 
-    pub fn expression(&self) -> Option<&String> {
+    pub fn expression(&self) -> Option<&CheetahString> {
         self.expression.as_ref()
     }
 
-    pub fn expression_type(&self) -> Option<&String> {
+    pub fn expression_type(&self) -> Option<&CheetahString> {
         self.expression_type.as_ref()
     }
 
@@ -69,19 +70,19 @@ impl ConsumerFilterData {
         self.client_version
     }
 
-    pub fn set_consumer_group(&mut self, consumer_group: String) {
+    pub fn set_consumer_group(&mut self, consumer_group: CheetahString) {
         self.consumer_group = consumer_group;
     }
 
-    pub fn set_topic(&mut self, topic: String) {
+    pub fn set_topic(&mut self, topic: CheetahString) {
         self.topic = topic;
     }
 
-    pub fn set_expression(&mut self, expression: Option<String>) {
+    pub fn set_expression(&mut self, expression: Option<CheetahString>) {
         self.expression = expression;
     }
 
-    pub fn set_expression_type(&mut self, expression_type: Option<String>) {
+    pub fn set_expression_type(&mut self, expression_type: Option<CheetahString>) {
         self.expression_type = expression_type;
     }
 

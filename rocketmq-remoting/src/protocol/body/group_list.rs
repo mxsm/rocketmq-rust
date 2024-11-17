@@ -17,24 +17,25 @@
 
 use std::collections::HashSet;
 
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
 #[derive(Deserialize, Serialize, Debug, Clone, Default)]
 pub struct GroupList {
-    pub group_list: HashSet<String>,
+    pub group_list: HashSet<CheetahString>,
 }
 
 impl GroupList {
-    pub fn new(group_list: HashSet<String>) -> Self {
+    pub fn new(group_list: HashSet<CheetahString>) -> Self {
         Self { group_list }
     }
 
-    pub fn get_group_list(&self) -> &HashSet<String> {
+    pub fn get_group_list(&self) -> &HashSet<CheetahString> {
         &self.group_list
     }
 
-    pub fn set_group_list(&mut self, group_list: HashSet<String>) {
+    pub fn set_group_list(&mut self, group_list: HashSet<CheetahString>) {
         self.group_list = group_list;
     }
 }

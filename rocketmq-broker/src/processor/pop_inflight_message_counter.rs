@@ -14,11 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use cheetah_string::CheetahString;
 
 pub struct PopInflightMessageCounter;
 
 impl PopInflightMessageCounter {
-    pub fn clear_in_flight_message_num_by_topic_name(&self, _topic: &str) {
+    pub fn clear_in_flight_message_num_by_topic_name(&self, _topic: &CheetahString) {
         // TODO
     }
 }

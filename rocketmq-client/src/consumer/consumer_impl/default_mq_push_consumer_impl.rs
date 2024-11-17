@@ -1240,8 +1240,8 @@ impl DefaultMQPushConsumerImpl {
 }
 
 impl MQConsumerInner for DefaultMQPushConsumerImpl {
-    fn group_name(&self) -> String {
-        self.consumer_config.consumer_group().to_string()
+    fn group_name(&self) -> CheetahString {
+        self.consumer_config.consumer_group().clone()
     }
 
     fn message_model(&self) -> MessageModel {

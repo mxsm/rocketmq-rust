@@ -96,19 +96,20 @@ where
     MS: MessageStore,
 {
     pub(crate) fn fetch_consume_offset(&self, mq: &MessageQueue) -> i64 {
-        let group = TransactionalMessageUtil::build_consumer_group();
-        let topic = mq.get_topic();
+        let group =
+            CheetahString::from_static_str(TransactionalMessageUtil::build_consumer_group());
+        let topic = mq.get_topic_cs();
         let queue_id = mq.get_queue_id();
         let mut offset = self
             .consumer_offset_manager
-            .query_offset(group, topic, queue_id);
+            .query_offset(&group, topic, queue_id);
         if offset == -1 {
             offset = self.message_store.get_min_offset_in_queue(topic, queue_id);
         }
         offset
     }
 
-    pub fn fetch_message_queues(&mut self, topic: &str) -> HashSet<MessageQueue> {
+    pub fn fetch_message_queues(&mut self, topic: &CheetahString) -> HashSet<MessageQueue> {
         let mut message_queues = HashSet::new();
         let topic_config = self.select_topic_config(topic);
         let broker_name = self.broker_config.broker_name.clone();
@@ -124,8 +125,8 @@ where
     pub fn update_consume_offset(&self, mq: &MessageQueue, offset: i64) {
         self.consumer_offset_manager.commit_offset(
             self.store_host,
-            TransactionalMessageUtil::build_consumer_group(),
-            mq.get_topic(),
+            &CheetahString::from_static_str(TransactionalMessageUtil::build_consumer_group()),
+            mq.get_topic_cs(),
             mq.get_queue_id(),
             offset,
         );
@@ -138,8 +139,8 @@ where
         nums: i32,
     ) -> Option<PullResult> {
         self.get_message(
-            TransactionalMessageUtil::build_consumer_group(),
-            TransactionalMessageUtil::build_half_topic(),
+            &CheetahString::from_static_str(TransactionalMessageUtil::build_consumer_group()),
+            &CheetahString::from_static_str(TransactionalMessageUtil::build_half_topic()),
             queue_id,
             offset,
             nums,
@@ -155,8 +156,8 @@ where
         nums: i32,
     ) -> Option<PullResult> {
         self.get_message(
-            TransactionalMessageUtil::build_consumer_group(),
-            TransactionalMessageUtil::build_op_topic(),
+            &CheetahString::from_static_str(TransactionalMessageUtil::build_consumer_group()),
+            &CheetahString::from_static_str(TransactionalMessageUtil::build_op_topic()),
             queue_id,
             offset,
             nums,
@@ -167,8 +168,8 @@ where
 
     async fn get_message(
         &self,
-        group: &str,
-        topic: &str,
+        group: &CheetahString,
+        topic: &CheetahString,
         queue_id: i32,
         offset: i64,
         nums: i32,
@@ -240,7 +241,7 @@ where
         found_list
     }
 
-    pub fn select_topic_config(&mut self, topic: &str) -> Option<TopicConfig> {
+    pub fn select_topic_config(&mut self, topic: &CheetahString) -> Option<TopicConfig> {
         let mut topic_config = self.topic_config_manager.select_topic_config(topic);
         if topic_config.is_none() {
             topic_config = self

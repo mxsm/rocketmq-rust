@@ -20,6 +20,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Weak;
 
+use cheetah_string::CheetahString;
 use parking_lot::RwLock;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
@@ -34,8 +35,8 @@ use crate::client::consumer_group_info::ConsumerGroupInfo;
 use crate::client::consumer_ids_change_listener::ConsumerIdsChangeListener;
 
 pub struct ConsumerManager {
-    consumer_table: Arc<RwLock<HashMap<String, ConsumerGroupInfo>>>,
-    consumer_compensation_table: Arc<RwLock<HashMap<String, ConsumerGroupInfo>>>,
+    consumer_table: Arc<RwLock<HashMap<CheetahString, ConsumerGroupInfo>>>,
+    consumer_compensation_table: Arc<RwLock<HashMap<CheetahString, ConsumerGroupInfo>>>,
     consumer_ids_change_listener_list:
         Vec<Box<dyn ConsumerIdsChangeListener + Send + Sync + 'static>>,
     broker_stats_manager: Arc<RwLock<Option<Weak<BrokerStatsManager>>>>,
@@ -82,14 +83,18 @@ impl ConsumerManager {
 }
 
 impl ConsumerManager {
-    pub fn find_subscription_data(&self, group: &str, topic: &str) -> Option<SubscriptionData> {
+    pub fn find_subscription_data(
+        &self,
+        group: &CheetahString,
+        topic: &CheetahString,
+    ) -> Option<SubscriptionData> {
         self.find_subscription_data_internal(group, topic, true)
     }
 
     pub fn find_subscription_data_internal(
         &self,
-        group: &str,
-        topic: &str,
+        group: &CheetahString,
+        topic: &CheetahString,
         from_compensation_table: bool,
     ) -> Option<SubscriptionData> {
         if let Some(consumer_group_info) = self.get_consumer_group_info_internal(group, false) {
@@ -106,20 +111,20 @@ impl ConsumerManager {
         None
     }
 
-    pub fn find_subscription_data_count(&self, group: &str) -> usize {
+    pub fn find_subscription_data_count(&self, group: &CheetahString) -> usize {
         if let Some(consumer_group_info) = self.get_consumer_group_info(group) {
             return consumer_group_info.get_subscription_table().read().len();
         }
         0
     }
 
-    pub fn get_consumer_group_info(&self, group: &str) -> Option<ConsumerGroupInfo> {
+    pub fn get_consumer_group_info(&self, group: &CheetahString) -> Option<ConsumerGroupInfo> {
         self.get_consumer_group_info_internal(group, false)
     }
 
     pub fn get_consumer_group_info_internal(
         &self,
-        group: &str,
+        group: &CheetahString,
         from_compensation_table: bool,
     ) -> Option<ConsumerGroupInfo> {
         if let Some(consumer_group_info) = self.consumer_table.read().get(group) {
@@ -135,14 +140,14 @@ impl ConsumerManager {
 
     pub fn compensate_subscribe_data(
         &self,
-        group: &str,
-        topic: &str,
+        group: &CheetahString,
+        topic: &CheetahString,
         subscription_data: &SubscriptionData,
     ) {
         let mut write_guard = self.consumer_compensation_table.write();
         let consumer_group_info = write_guard
-            .entry(group.to_string())
-            .or_insert_with(|| ConsumerGroupInfo::with_group_name(group.to_string()));
+            .entry(group.clone())
+            .or_insert_with(|| ConsumerGroupInfo::with_group_name(group.clone()));
         consumer_group_info
             .get_subscription_table()
             .write()
@@ -151,21 +156,21 @@ impl ConsumerManager {
 
     pub fn compensate_basic_consumer_info(
         &self,
-        group: &str,
+        group: &CheetahString,
         consume_type: ConsumeType,
         message_model: MessageModel,
     ) {
         let mut write_guard = self.consumer_compensation_table.write();
         let consumer_group_info = write_guard
-            .entry(group.to_string())
-            .or_insert_with(|| ConsumerGroupInfo::with_group_name(group.to_string()));
+            .entry(group.clone())
+            .or_insert_with(|| ConsumerGroupInfo::with_group_name(group.clone()));
         consumer_group_info.set_consume_type(consume_type);
         consumer_group_info.set_message_model(message_model);
     }
 
     pub fn register_consumer(
         &self,
-        group: &str,
+        group: &CheetahString,
         client_channel_info: ClientChannelInfo,
         consume_type: ConsumeType,
         message_model: MessageModel,
@@ -187,7 +192,7 @@ impl ConsumerManager {
 
     fn register_consumer_ext(
         &self,
-        group: &str,
+        group: &CheetahString,
         client_channel_info: ClientChannelInfo,
         consume_type: ConsumeType,
         message_model: MessageModel,
@@ -197,9 +202,9 @@ impl ConsumerManager {
         update_subscription: bool,
     ) -> bool {
         let mut write_guard = self.consumer_table.write();
-        let consumer_group_info = write_guard.entry(group.to_string()).or_insert_with(|| {
+        let consumer_group_info = write_guard.entry(group.clone()).or_insert_with(|| {
             ConsumerGroupInfo::new(
-                group.to_string(),
+                group.clone(),
                 consume_type,
                 message_model,
                 consume_from_where,
@@ -250,7 +255,7 @@ impl ConsumerManager {
         }
     }
 
-    pub fn query_topic_consume_by_who(&self, topic: &str) -> HashSet<String> {
+    pub fn query_topic_consume_by_who(&self, topic: &CheetahString) -> HashSet<CheetahString> {
         let mut groups = HashSet::new();
         for (group, consumer_group_info) in self.consumer_table.read().iter() {
             if consumer_group_info.find_subscription_data(topic).is_some() {

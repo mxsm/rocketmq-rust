@@ -66,6 +66,10 @@ impl MessageExtBrokerInner {
         self.message_ext_inner.topic()
     }
 
+    pub fn get_topic(&self) -> &CheetahString {
+        self.message_ext_inner.get_topic()
+    }
+
     pub fn born_host(&self) -> SocketAddr {
         self.message_ext_inner.born_host()
     }

@@ -23,6 +23,7 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
@@ -75,12 +76,12 @@ impl ConsumerOffsetManager {
 }
 
 impl ConsumerOffsetManager {
-    pub fn clean_offset_by_topic(&self, topic: &str) {
+    pub fn clean_offset_by_topic(&self, topic: &CheetahString) {
         let mut offset_table = self.consumer_offset_wrapper.offset_table.write();
         let mut keys_to_remove = Vec::new();
 
         for (topic_at_group, _) in offset_table.iter() {
-            if topic_at_group.contains(topic) {
+            if topic_at_group.contains(topic.as_str()) {
                 let arrays: Vec<&str> = topic_at_group.split(TOPIC_GROUP_SEPARATOR).collect();
                 if arrays.len() == 2 && arrays[0] == topic {
                     keys_to_remove.push(topic_at_group.clone());
@@ -92,13 +93,13 @@ impl ConsumerOffsetManager {
         }
     }
 
-    pub fn which_group_by_topic(&self, topic: &str) -> HashSet<String> {
+    pub fn which_group_by_topic(&self, topic: &str) -> HashSet<CheetahString> {
         let read_guard = self.consumer_offset_wrapper.offset_table.read();
         let mut groups = HashSet::new();
         for (key, _) in read_guard.iter() {
             let arr: Vec<&str> = key.split(TOPIC_GROUP_SEPARATOR).collect();
             if arr.len() == 2 && arr[0] == topic {
-                let group = arr[1].to_string();
+                let group = CheetahString::from_string(arr[1].to_string());
                 groups.insert(group);
             }
         }
@@ -108,15 +109,16 @@ impl ConsumerOffsetManager {
     pub fn commit_offset(
         &self,
         client_host: SocketAddr,
-        group: &str,
-        topic: &str,
+        group: &CheetahString,
+        topic: &CheetahString,
         queue_id: i32,
         offset: i64,
     ) {
-        let key = format!("{}{}{}", topic, TOPIC_GROUP_SEPARATOR, group);
+        let key =
+            CheetahString::from_string(format!("{}{}{}", topic, TOPIC_GROUP_SEPARATOR, group));
 
         let mut write_guard = self.consumer_offset_wrapper.offset_table.write();
-        let map = write_guard.entry(key.to_string()).or_default();
+        let map = write_guard.entry(key.clone()).or_default();
         let store_offset = map.insert(queue_id, offset);
         if let Some(store_offset) = store_offset {
             if offset < store_offset {
@@ -163,7 +165,7 @@ impl ConsumerOffsetManager {
         }
     }
 
-    pub fn query_offset(&self, group: &str, topic: &str, queue_id: i32) -> i64 {
+    pub fn query_offset(&self, group: &CheetahString, topic: &CheetahString, queue_id: i32) -> i64 {
         let key = format!("{}{}{}", topic, TOPIC_GROUP_SEPARATOR, group);
         if self.broker_config.use_server_side_reset_offset {
             if let Some(value) = self
@@ -190,13 +192,13 @@ impl ConsumerOffsetManager {
         -1
     }
 
-    pub fn which_topic_by_consumer(&self, group: &str) -> HashSet<String> {
+    pub fn which_topic_by_consumer(&self, group: &CheetahString) -> HashSet<CheetahString> {
         let read_guard = self.consumer_offset_wrapper.offset_table.read();
         let mut topics = HashSet::new();
         for (key, _) in read_guard.iter() {
             let arr: Vec<&str> = key.split(TOPIC_GROUP_SEPARATOR).collect();
             if arr.len() == 2 && arr[1] == group {
-                let topic = arr[0].to_string();
+                let topic = CheetahString::from_string(arr[0].to_string());
                 topics.insert(topic);
             }
         }
@@ -238,12 +240,13 @@ impl ConsumerOffsetManager {
     pub fn commit_pull_offset(
         &self,
         _client_host: SocketAddr,
-        group: &str,
-        topic: &str,
+        group: &CheetahString,
+        topic: &CheetahString,
         queue_id: i32,
         offset: i64,
     ) {
-        let key = format!("{}{}{}", topic, TOPIC_GROUP_SEPARATOR, group);
+        let key =
+            CheetahString::from_string(format!("{}{}{}", topic, TOPIC_GROUP_SEPARATOR, group));
         self.consumer_offset_wrapper
             .pull_offset_table
             .write()
@@ -254,8 +257,8 @@ impl ConsumerOffsetManager {
 
     pub fn query_then_erase_reset_offset(
         &self,
-        topic: &str,
-        group: &str,
+        topic: &CheetahString,
+        group: &CheetahString,
         queue_id: i32,
     ) -> Option<i64> {
         let key = format!("{}{}{}", topic, TOPIC_GROUP_SEPARATOR, group);
@@ -271,22 +274,23 @@ impl ConsumerOffsetManager {
 #[derive(Default, Clone)]
 struct ConsumerOffsetWrapper {
     data_version: ArcMut<DataVersion>,
-    offset_table: Arc<parking_lot::RwLock<HashMap<String /* topic@group */, HashMap<i32, i64>>>>,
-    reset_offset_table: Arc<parking_lot::RwLock<HashMap<String, HashMap<i32, i64>>>>,
+    offset_table:
+        Arc<parking_lot::RwLock<HashMap<CheetahString /* topic@group */, HashMap<i32, i64>>>>,
+    reset_offset_table: Arc<parking_lot::RwLock<HashMap<CheetahString, HashMap<i32, i64>>>>,
     pull_offset_table:
-        Arc<parking_lot::RwLock<HashMap<String /* topic@group */, HashMap<i32, i64>>>>,
+        Arc<parking_lot::RwLock<HashMap<CheetahString /* topic@group */, HashMap<i32, i64>>>>,
     version_change_counter: Arc<AtomicI64>,
 }
 
 impl ConsumerOffsetWrapper {
-    pub fn get_group_topic_map(&self) -> HashMap<String, HashSet<String>> {
-        let mut ret_map: HashMap<String, HashSet<String>> = HashMap::with_capacity(128);
+    pub fn get_group_topic_map(&self) -> HashMap<CheetahString, HashSet<CheetahString>> {
+        let mut ret_map = HashMap::with_capacity(128);
 
         for key in self.offset_table.read().keys() {
             let arr: Vec<&str> = key.split(TOPIC_GROUP_SEPARATOR).collect();
             if arr.len() == 2 {
-                let topic = arr[0].to_string();
-                let group = arr[1].to_string();
+                let topic = CheetahString::from_string(arr[0].to_string());
+                let group = CheetahString::from_string(arr[1].to_string());
 
                 ret_map
                     .entry(group)

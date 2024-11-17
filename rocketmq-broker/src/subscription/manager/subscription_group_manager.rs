@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::common::mix_all::is_sys_consumer_group;
@@ -101,7 +102,7 @@ impl<MS> SubscriptionGroupManager<MS>
 where
     MS: MessageStore,
 {
-    pub fn contains_subscription_group(&self, group: &str) -> bool {
+    pub fn contains_subscription_group(&self, group: &CheetahString) -> bool {
         if group.is_empty() {
             return false;
         }
@@ -111,7 +112,10 @@ where
             .contains_key(group)
     }
 
-    pub fn find_subscription_group_config(&self, group: &str) -> Option<SubscriptionGroupConfig> {
+    pub fn find_subscription_group_config(
+        &self,
+        group: &CheetahString,
+    ) -> Option<SubscriptionGroupConfig> {
         let mut subscription_group_config = self.find_subscription_group_config_inner(group);
         if subscription_group_config.is_none()
             && (self.broker_config.auto_create_subscription_group || is_sys_consumer_group(group))
@@ -122,12 +126,12 @@ where
                 return None;
             }
             let mut subscription_group_config_new = SubscriptionGroupConfig::default();
-            subscription_group_config_new.set_group_name(group.to_string());
+            subscription_group_config_new.set_group_name(group.clone());
             let pre_config = self
                 .subscription_group_wrapper
                 .lock()
                 .subscription_group_table
-                .insert(group.to_string(), subscription_group_config_new.clone());
+                .insert(group.clone(), subscription_group_config_new.clone());
             if pre_config.is_none() {
                 info!(
                     "auto create a subscription group, {:?}",
@@ -151,7 +155,7 @@ where
 
     pub fn find_subscription_group_config_inner(
         &self,
-        group: &str,
+        group: &CheetahString,
     ) -> Option<SubscriptionGroupConfig> {
         self.subscription_group_wrapper
             .lock()
@@ -190,17 +194,17 @@ where
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SubscriptionGroupWrapper {
-    subscription_group_table: HashMap<String, SubscriptionGroupConfig>,
-    forbidden_table: HashMap<String, HashMap<String, i32>>,
+    subscription_group_table: HashMap<CheetahString, SubscriptionGroupConfig>,
+    forbidden_table: HashMap<CheetahString, HashMap<CheetahString, i32>>,
     data_version: DataVersion,
 }
 
 impl SubscriptionGroupWrapper {
-    pub fn subscription_group_table(&self) -> &HashMap<String, SubscriptionGroupConfig> {
+    pub fn subscription_group_table(&self) -> &HashMap<CheetahString, SubscriptionGroupConfig> {
         &self.subscription_group_table
     }
 
-    pub fn forbidden_table(&self) -> &HashMap<String, HashMap<String, i32>> {
+    pub fn forbidden_table(&self) -> &HashMap<CheetahString, HashMap<CheetahString, i32>> {
         &self.forbidden_table
     }
 }

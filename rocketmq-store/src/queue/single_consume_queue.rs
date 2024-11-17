@@ -23,6 +23,7 @@ use bytes::Buf;
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
+use cheetah_string::CheetahString;
 use rocketmq_common::common::attribute::cq_type::CQType;
 use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
@@ -69,9 +70,9 @@ pub const MSG_TAG_OFFSET_INDEX: i32 = 12;
 pub struct ConsumeQueue {
     message_store_config: Arc<MessageStoreConfig>,
     mapped_file_queue: MappedFileQueue,
-    topic: String,
+    topic: CheetahString,
     queue_id: i32,
-    store_path: String,
+    store_path: CheetahString,
     mapped_file_size: i32,
     max_physic_offset: Arc<AtomicI64>,
     min_logic_offset: Arc<AtomicI64>,
@@ -82,16 +83,16 @@ pub struct ConsumeQueue {
 
 impl ConsumeQueue {
     pub fn new(
-        topic: String,
+        topic: CheetahString,
         queue_id: i32,
-        store_path: String,
+        store_path: CheetahString,
         mapped_file_size: i32,
         message_store_config: Arc<MessageStoreConfig>,
         running_flags: Arc<RunningFlags>,
         store_checkpoint: Arc<StoreCheckpoint>,
     ) -> Self {
-        let queue_dir = PathBuf::from(store_path.clone())
-            .join(topic.clone())
+        let queue_dir = PathBuf::from(store_path.as_str())
+            .join(topic.as_str())
             .join(queue_id.to_string());
         let mapped_file_queue = MappedFileQueue::new(
             queue_dir.to_string_lossy().to_string(),
@@ -102,7 +103,9 @@ impl ConsumeQueue {
             Some(ConsumeQueueExt::new(
                 topic.clone(),
                 queue_id,
-                get_store_path_consume_queue_ext(message_store_config.store_path_root_dir.as_str()),
+                CheetahString::from_string(get_store_path_consume_queue_ext(
+                    message_store_config.store_path_root_dir.as_str(),
+                )),
                 message_store_config.mapped_file_size_consume_queue_ext as i32,
                 message_store_config.bit_map_length_consume_queue_ext as i32,
             ))
@@ -492,8 +495,8 @@ impl Swappable for ConsumeQueue {
 
 #[allow(unused_variables)]
 impl ConsumeQueueTrait for ConsumeQueue {
-    fn get_topic(&self) -> &str {
-        self.topic.as_str()
+    fn get_topic(&self) -> &CheetahString {
+        &self.topic
     }
 
     fn get_queue_id(&self) -> i32 {
@@ -774,7 +777,7 @@ impl ConsumeQueueTrait for ConsumeQueue {
         message_num: i16,
     ) {
         queue_offset_assigner.increase_queue_offset(
-            format!("{}-{}", msg.topic(), msg.queue_id()).as_str(),
+            CheetahString::from_string(format!("{}-{}", msg.topic(), msg.queue_id())),
             message_num,
         );
     }
@@ -784,8 +787,9 @@ impl ConsumeQueueTrait for ConsumeQueue {
         queue_offset_operator: &QueueOffsetOperator,
         msg: &mut MessageExtBrokerInner,
     ) {
-        let queue_offset = queue_offset_operator
-            .get_queue_offset(format!("{}-{}", msg.topic(), msg.queue_id()).as_str());
+        let queue_offset = queue_offset_operator.get_queue_offset(CheetahString::from_string(
+            format!("{}-{}", msg.topic(), msg.queue_id()),
+        ));
         msg.message_ext_inner.queue_offset = queue_offset;
     }
 

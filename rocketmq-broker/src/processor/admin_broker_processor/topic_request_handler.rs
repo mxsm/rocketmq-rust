@@ -16,7 +16,6 @@
  */
 
 use std::collections::HashMap;
-use std::collections::HashSet;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::attribute::attribute_parser::AttributeParser;
@@ -302,7 +301,7 @@ impl TopicRequestHandler {
         let request_header = request
             .decode_command_custom_header::<DeleteTopicRequestHeader>()
             .unwrap();
-        let topic = request_header.topic.as_str();
+        let topic = &request_header.topic;
         info!(
             "AdminBrokerProcessor#deleteTopic: broker receive request to delete topic={}, \
              caller={}",
@@ -336,23 +335,29 @@ impl TopicRequestHandler {
             .consumer_offset_manager
             .which_group_by_topic(topic);
         for group in groups.iter() {
-            let pop_retry_topic_v2 = KeyBuilder::build_pop_retry_topic(topic, group.as_str(), true);
+            let pop_retry_topic_v2 = CheetahString::from_string(KeyBuilder::build_pop_retry_topic(
+                topic,
+                group.as_str(),
+                true,
+            ));
             if self
                 .inner
                 .topic_config_manager
-                .select_topic_config(pop_retry_topic_v2.as_str())
+                .select_topic_config(pop_retry_topic_v2.as_ref())
                 .is_some()
             {
-                self.delete_topic_in_broker(pop_retry_topic_v2.as_str());
+                self.delete_topic_in_broker(pop_retry_topic_v2.as_ref());
             }
-            let pop_retry_topic_v1 = KeyBuilder::build_pop_retry_topic_v1(topic, group.as_str());
+            let pop_retry_topic_v1 = CheetahString::from_string(
+                KeyBuilder::build_pop_retry_topic_v1(topic, group.as_str()),
+            );
             if self
                 .inner
                 .topic_config_manager
-                .select_topic_config(pop_retry_topic_v1.as_str())
+                .select_topic_config(pop_retry_topic_v1.as_ref())
                 .is_some()
             {
-                self.delete_topic_in_broker(pop_retry_topic_v1.as_str());
+                self.delete_topic_in_broker(pop_retry_topic_v1.as_ref());
             }
             self.delete_topic_in_broker(topic);
         }
@@ -431,7 +436,7 @@ impl TopicRequestHandler {
         let request_header = request
             .decode_command_custom_header::<GetTopicStatsRequestHeader>()
             .unwrap();
-        let topic = request_header.topic.as_str();
+        let topic = request_header.topic.as_ref();
         let topic_config = self.inner.topic_config_manager.select_topic_config(topic);
         if topic_config.is_none() {
             return Some(
@@ -448,7 +453,7 @@ impl TopicRequestHandler {
         let mut map = HashMap::new();
         for i in 0..max_queue_nums {
             let mut message_queue = MessageQueue::new();
-            message_queue.set_topic(topic.into());
+            message_queue.set_topic(topic.clone());
             message_queue.set_broker_name(self.inner.broker_config.broker_name.clone());
             message_queue.set_queue_id(i as i32);
             let mut topic_offset = TopicOffset::new();
@@ -492,7 +497,7 @@ impl TopicRequestHandler {
         let request_header = request
             .decode_command_custom_header::<GetTopicConfigRequestHeader>()
             .unwrap();
-        let topic = request_header.topic.as_str();
+        let topic = &request_header.topic;
         let topic_config = self.inner.topic_config_manager.select_topic_config(topic);
         if topic_config.is_none() {
             return Some(
@@ -532,7 +537,7 @@ impl TopicRequestHandler {
         let request_header = request
             .decode_command_custom_header::<QueryTopicConsumeByWhoRequestHeader>()
             .unwrap();
-        let topic = request_header.topic.as_str();
+        let topic = request_header.topic.as_ref();
         let mut groups = self.inner.consume_manager.query_topic_consume_by_who(topic);
         let group_in_offset = self
             .inner
@@ -555,7 +560,7 @@ impl TopicRequestHandler {
         let request_header = request
             .decode_command_custom_header::<QueryTopicsByConsumerRequestHeader>()
             .unwrap();
-        let topics: HashSet<String> = self
+        let topics = self
             .inner
             .consumer_offset_manager
             .which_topic_by_consumer(request_header.get_group());
@@ -564,14 +569,14 @@ impl TopicRequestHandler {
             self.inner.broker_config.broker_ip1, self.inner.server_config.listen_port
         );
         let topic_list = TopicList {
-            topic_list: topics.into_iter().map(|item| item.into()).collect(),
+            topic_list: topics.into_iter().collect(),
             broker_addr: Some(broker_addr.into()),
         };
         response.set_body_mut_ref(topic_list.encode());
         Some(response)
     }
 
-    fn delete_topic_in_broker(&mut self, topic: &str) {
+    fn delete_topic_in_broker(&mut self, topic: &CheetahString) {
         self.inner.topic_config_manager.delete_topic_config(topic);
         self.inner.topic_queue_mapping_manager.delete(topic);
         self.inner

@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::mix_all;
@@ -43,7 +44,9 @@ use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
 pub struct ClientManageProcessor<MS> {
     consumer_group_heartbeat_table: Arc<
-        parking_lot::RwLock<HashMap<String /* ConsumerGroup */, i32 /* HeartbeatFingerprint */>>,
+        parking_lot::RwLock<
+            HashMap<CheetahString /* ConsumerGroup */, i32 /* HeartbeatFingerprint */>,
+        >,
     >,
     producer_manager: Arc<ProducerManager>,
     consumer_manager: Arc<ConsumerManager>,
@@ -169,7 +172,7 @@ where
             }
             let subscription_group_config = self
                 .subscription_group_manager
-                .find_subscription_group_config(consumer_data.group_name.as_str());
+                .find_subscription_group_config(consumer_data.group_name.as_ref());
             if subscription_group_config.is_none() {
                 continue;
             }
@@ -181,17 +184,19 @@ where
             } else {
                 0
             };
-            let new_topic = mix_all::get_retry_topic(consumer_data.group_name.as_str());
+            let new_topic = CheetahString::from_string(mix_all::get_retry_topic(
+                consumer_data.group_name.as_str(),
+            ));
             self.topic_config_manager
                 .create_topic_in_send_message_back_method(
-                    new_topic.as_str(),
+                    &new_topic,
                     subscription_group_config.retry_queue_nums(),
                     PermName::PERM_WRITE | PermName::PERM_READ,
                     has_order_topic_sub,
                     topic_sys_flag,
                 );
             let changed = self.consumer_manager.register_consumer(
-                consumer_data.group_name.as_str(),
+                consumer_data.group_name.as_ref(),
                 client_channel_info.clone(),
                 consumer_data.consume_type,
                 consumer_data.message_model,

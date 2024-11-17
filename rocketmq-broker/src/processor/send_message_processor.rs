@@ -853,13 +853,14 @@ where
         topic_config: &mut rocketmq_common::common::config::TopicConfig,
         properties: &mut HashMap<CheetahString, CheetahString>,
     ) -> bool {
-        let mut new_topic = request_header.topic().to_string();
+        let mut new_topic = request_header.topic();
         if !new_topic.is_empty() && new_topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) {
-            let group_name = KeyBuilder::parse_group(new_topic.as_str());
+            let group_name =
+                CheetahString::from_string(KeyBuilder::parse_group(new_topic.as_str()));
             let subscription_group_config = self
                 .inner
                 .subscription_group_manager
-                .find_subscription_group_config(group_name.as_str());
+                .find_subscription_group_config(group_name.as_ref());
             if subscription_group_config.is_none() {
                 response
                     .with_code(ResponseCode::SubscriptionNotExist)
@@ -899,13 +900,15 @@ where
                     CheetahString::from_static_str(MessageConst::PROPERTY_DELAY_TIME_LEVEL),
                     CheetahString::from_string("-1".to_string()),
                 );
-                new_topic = mix_all::get_dlq_topic(group_name.as_str());
+                let topic_ =
+                    CheetahString::from_string(mix_all::get_dlq_topic(group_name.as_str()));
+                new_topic = &topic_;
                 let queue_id_int = self.inner.random_queue_id(DLQ_NUMS_PER_GROUP) as i32;
                 let new_topic_config = self
                     .inner
                     .topic_config_manager
                     .create_topic_in_send_message_back_method(
-                        new_topic.as_str(),
+                        new_topic,
                         DLQ_NUMS_PER_GROUP as i32,
                         PermName::PERM_WRITE | PermName::PERM_READ,
                         false,
@@ -1100,7 +1103,7 @@ impl<MS, TS> Inner<MS, TS> {
         }
         let mut topic_config = self
             .topic_config_manager
-            .select_topic_config(request_header.topic.as_str());
+            .select_topic_config(&request_header.topic);
         if topic_config.is_none() {
             let mut topic_sys_flag = 0;
             if request_header.unit_mode.unwrap_or(false) {
@@ -1130,7 +1133,7 @@ impl<MS, TS> Inner<MS, TS> {
                 topic_config = self
                     .topic_config_manager
                     .create_topic_in_send_message_back_method(
-                        request_header.topic.as_str(),
+                        request_header.topic.as_ref(),
                         1,
                         PermName::PERM_WRITE | PermName::PERM_READ,
                         false,

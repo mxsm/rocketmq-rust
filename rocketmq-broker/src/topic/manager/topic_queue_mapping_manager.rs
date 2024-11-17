@@ -194,7 +194,7 @@ impl TopicQueueMappingManager {
         self.topic_queue_mapping_table.lock().get(topic).cloned()
     }
 
-    pub fn delete(&self, topic: &str) {
+    pub fn delete(&self, topic: &CheetahString) {
         let old = self.topic_queue_mapping_table.lock().remove(topic);
         match old {
             None => {
@@ -302,7 +302,7 @@ mod tests {
             .lock()
             .insert("existing_topic".into(), detail.clone());
 
-        manager.delete("existing_topic");
+        manager.delete(&CheetahString::from_static_str("existing_topic"));
 
         assert!(manager.get_topic_queue_mapping("existing_topic").is_none());
     }

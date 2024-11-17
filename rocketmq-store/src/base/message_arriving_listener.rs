@@ -33,7 +33,7 @@ pub trait MessageArrivingListener {
     ///   the properties of the message.
     fn arriving(
         &self,
-        topic: &str,
+        topic: &CheetahString,
         queue_id: i32,
         logic_offset: i64,
         tags_code: Option<i64>,

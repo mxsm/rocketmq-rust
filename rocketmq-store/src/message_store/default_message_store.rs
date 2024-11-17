@@ -758,18 +758,18 @@ impl MessageStore for DefaultMessageStore {
         0
     }
 
-    fn get_min_offset_in_queue(&self, topic: &str, queue_id: i32) -> i64 {
+    fn get_min_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64 {
         self.consume_queue_store
             .get_min_offset_in_queue(topic, queue_id)
     }
 
-    fn get_max_offset_in_queue(&self, topic: &str, queue_id: i32) -> i64 {
+    fn get_max_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64 {
         self.get_max_offset_in_queue_committed(topic, queue_id, true)
     }
 
     fn get_max_offset_in_queue_committed(
         &self,
-        topic: &str,
+        topic: &CheetahString,
         queue_id: i32,
         committed: bool,
     ) -> i64 {
@@ -788,8 +788,8 @@ impl MessageStore for DefaultMessageStore {
 
     async fn get_message(
         &self,
-        group: &str,
-        topic: &str,
+        group: &CheetahString,
+        topic: &CheetahString,
         queue_id: i32,
         offset: i64,
         max_msg_nums: i32,
@@ -1034,7 +1034,7 @@ impl MessageStore for DefaultMessageStore {
 
     fn check_in_mem_by_consume_offset(
         &self,
-        topic: &str,
+        topic: &CheetahString,
         queue_id: i32,
         consume_offset: i64,
         batch_size: i32,
@@ -1066,7 +1066,7 @@ impl MessageStore for DefaultMessageStore {
     fn notify_message_arrive_if_necessary(&self, dispatch_request: &mut DispatchRequest) {
         if self.broker_config.long_polling_enable && self.message_arriving_listener.is_some() {
             self.message_arriving_listener.as_ref().unwrap().arriving(
-                dispatch_request.topic.as_str(),
+                dispatch_request.topic.as_ref(),
                 dispatch_request.queue_id,
                 dispatch_request.consume_queue_offset + 1,
                 Some(dispatch_request.tags_code),
@@ -1079,14 +1079,14 @@ impl MessageStore for DefaultMessageStore {
         }
     }
 
-    fn find_consume_queue(&self, topic: &str, queue_id: i32) -> Option<ArcConsumeQueue> {
+    fn find_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue> {
         Some(
             self.consume_queue_store
                 .find_or_create_consume_queue(topic, queue_id),
         )
     }
 
-    fn delete_topics(&mut self, delete_topics: Vec<&str>) -> i32 {
+    fn delete_topics(&mut self, delete_topics: Vec<&CheetahString>) -> i32 {
         if delete_topics.is_empty() {
             return 0;
         }
@@ -1116,11 +1116,11 @@ impl MessageStore for DefaultMessageStore {
 
             let root_dir = self.message_store_config.store_path_root_dir.as_str();
             let consume_queue_dir =
-                PathBuf::from(get_store_path_consume_queue(root_dir)).join(topic);
+                PathBuf::from(get_store_path_consume_queue(root_dir)).join(topic.as_str());
             let consume_queue_ext_dir =
-                PathBuf::from(get_store_path_consume_queue_ext(root_dir)).join(topic);
+                PathBuf::from(get_store_path_consume_queue_ext(root_dir)).join(topic.as_str());
             let batch_consume_queue_dir =
-                PathBuf::from(get_store_path_batch_consume_queue(root_dir)).join(topic);
+                PathBuf::from(get_store_path_batch_consume_queue(root_dir)).join(topic.as_str());
 
             util_all::delete_empty_directory(consume_queue_dir);
             util_all::delete_empty_directory(consume_queue_ext_dir);
@@ -1133,8 +1133,8 @@ impl MessageStore for DefaultMessageStore {
     }
     async fn query_message(
         &self,
-        topic: &str,
-        key: &str,
+        topic: &CheetahString,
+        key: &CheetahString,
         max_num: i32,
         begin_timestamp: i64,
         end_timestamp: i64,
@@ -1230,7 +1230,7 @@ impl MessageStore for DefaultMessageStore {
 
     fn get_message_store_timestamp(
         &self,
-        topic: &str,
+        topic: &CheetahString,
         queue_id: i32,
         consume_queue_offset: i64,
     ) -> i64 {
@@ -1340,10 +1340,10 @@ impl ReputMessageService {
         }
         let reput_message_service_inner = self.inner.as_ref().unwrap();
         for i in 0..queues.len() {
-            let queue_name = queues[i];
+            let queue_name = CheetahString::from_slice(queues[i]);
             let queue_offset: i64 = queue_offsets[i].parse().unwrap();
             let mut queue_id = dispatch_request.queue_id;
-            if self.message_store_config.enable_lmq && is_lmq(Some(queue_name)) {
+            if self.message_store_config.enable_lmq && is_lmq(Some(queue_name.as_str())) {
                 queue_id = 0;
             }
             reput_message_service_inner
@@ -1352,7 +1352,7 @@ impl ReputMessageService {
                 .as_ref()
                 .unwrap()
                 .arriving(
-                    queue_name,
+                    &queue_name,
                     queue_id,
                     queue_offset + 1,
                     Some(dispatch_request.tags_code),
@@ -1475,10 +1475,10 @@ impl ReputMessageServiceInner {
             return;
         }
         for i in 0..queues.len() {
-            let queue_name = queues[i];
+            let queue_name = CheetahString::from_slice(queues[i]);
             let queue_offset: i64 = queue_offsets[i].parse().unwrap();
             let mut queue_id = dispatch_request.queue_id;
-            if self.message_store_config.enable_lmq && is_lmq(Some(queue_name)) {
+            if self.message_store_config.enable_lmq && is_lmq(Some(queue_name.as_str())) {
                 queue_id = 0;
             }
             self.message_store
@@ -1486,7 +1486,7 @@ impl ReputMessageServiceInner {
                 .as_ref()
                 .unwrap()
                 .arriving(
-                    queue_name,
+                    &queue_name,
                     queue_id,
                     queue_offset + 1,
                     Some(dispatch_request.tags_code),

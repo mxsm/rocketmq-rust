@@ -82,8 +82,8 @@ where
         let query_message_result = self
             .message_store
             .query_message(
-                request_header.topic.as_str(),
-                request_header.key.as_str(),
+                request_header.topic.as_ref(),
+                request_header.key.as_ref(),
                 request_header.max_num,
                 request_header.begin_timestamp,
                 request_header.end_timestamp,

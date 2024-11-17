@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use parking_lot::RwLock;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_ext::MessageExt;
@@ -190,7 +191,7 @@ pub trait RocketMQMessageStore: Sync + 'static {
     /// # Returns
     ///
     /// The minimum offset in the queue.
-    fn get_min_offset_in_queue(&self, topic: &str, queue_id: i32) -> i64;
+    fn get_min_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64;
 
     /// Get the maximum offset in the queue.
     ///
@@ -202,7 +203,7 @@ pub trait RocketMQMessageStore: Sync + 'static {
     /// # Returns
     ///
     /// The maximum offset in the queue.
-    fn get_max_offset_in_queue(&self, topic: &str, queue_id: i32) -> i64;
+    fn get_max_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64;
 
     /// Get the maximum committed offset in the queue.
     ///
@@ -215,8 +216,12 @@ pub trait RocketMQMessageStore: Sync + 'static {
     /// # Returns
     ///
     /// The maximum committed offset in the queue.
-    fn get_max_offset_in_queue_committed(&self, topic: &str, queue_id: i32, committed: bool)
-        -> i64;
+    fn get_max_offset_in_queue_committed(
+        &self,
+        topic: &CheetahString,
+        queue_id: i32,
+        committed: bool,
+    ) -> i64;
 
     /// Get a message asynchronously.
     ///
@@ -235,8 +240,8 @@ pub trait RocketMQMessageStore: Sync + 'static {
     /// An `Option` containing the result of the message retrieval.
     async fn get_message(
         &self,
-        group: &str,
-        topic: &str,
+        group: &CheetahString,
+        topic: &CheetahString,
         queue_id: i32,
         offset: i64,
         max_msg_nums: i32,
@@ -258,7 +263,7 @@ pub trait RocketMQMessageStore: Sync + 'static {
     /// `true` if messages are in memory; `false` otherwise.
     fn check_in_mem_by_consume_offset(
         &self,
-        topic: &str,
+        topic: &CheetahString,
         queue_id: i32,
         consume_offset: i64,
         batch_size: i32,
@@ -281,7 +286,7 @@ pub trait RocketMQMessageStore: Sync + 'static {
     /// # Returns
     ///
     /// An `Option` containing an `Arc` to the consume queue, if it exists.
-    fn find_consume_queue(&self, topic: &str, queue_id: i32) -> Option<ArcConsumeQueue>;
+    fn find_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue>;
 
     /// Delete topics from the message store.
     ///
@@ -292,7 +297,7 @@ pub trait RocketMQMessageStore: Sync + 'static {
     /// # Returns
     ///
     /// The number of topics deleted.
-    fn delete_topics(&mut self, delete_topics: Vec<&str>) -> i32;
+    fn delete_topics(&mut self, delete_topics: Vec<&CheetahString>) -> i32;
 
     /// Query messages asynchronously.
     ///
@@ -309,8 +314,8 @@ pub trait RocketMQMessageStore: Sync + 'static {
     /// An `Option` containing the result of the message query.
     async fn query_message(
         &self,
-        topic: &str,
-        key: &str,
+        topic: &CheetahString,
+        key: &CheetahString,
         max_num: i32,
         begin_timestamp: i64,
         end_timestamp: i64,
@@ -386,7 +391,7 @@ pub trait RocketMQMessageStore: Sync + 'static {
     /// The store timestamp of the message.
     fn get_message_store_timestamp(
         &self,
-        topic: &str,
+        topic: &CheetahString,
         queue_id: i32,
         consume_queue_offset: i64,
     ) -> i64;
