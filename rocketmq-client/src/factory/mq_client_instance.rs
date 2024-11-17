@@ -1096,17 +1096,17 @@ impl MQClientInstance {
         producer_table.get(group).cloned()
     }
 
-    pub async fn unregister_consumer(&mut self, group: impl Into<String>) {
+    pub async fn unregister_consumer(&mut self, group: impl Into<CheetahString>) {
         self.unregister_client(None, Some(group.into())).await;
     }
-    pub async fn unregister_producer(&mut self, group: impl Into<String>) {
+    pub async fn unregister_producer(&mut self, group: impl Into<CheetahString>) {
         self.unregister_client(Some(group.into()), None).await;
     }
 
     async fn unregister_client(
         &mut self,
-        producer_group: Option<String>,
-        consumer_group: Option<String>,
+        producer_group: Option<CheetahString>,
+        consumer_group: Option<CheetahString>,
     ) {
         let broker_addr_table = self.broker_addr_table.read().await;
         for (broker_name, broker_addrs) in broker_addr_table.iter() {
@@ -1117,7 +1117,7 @@ impl MQClientInstance {
                     .unwrap()
                     .unregister_client(
                         addr,
-                        self.client_id.as_str(),
+                        self.client_id.clone(),
                         producer_group.clone(),
                         consumer_group.clone(),
                         self.client_config.mq_client_api_timeout,

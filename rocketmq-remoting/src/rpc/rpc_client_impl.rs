@@ -81,14 +81,14 @@ impl RpcClientImpl {
 
     async fn handle_pull_message<H: CommandCustomHeader + TopicRequestHeaderTrait>(
         &self,
-        addr: CheetahString,
+        addr: &CheetahString,
         request: RpcRequest<H>,
         timeout_millis: u64,
     ) -> Result<RpcResponse> {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
-            .invoke_async(Some(addr.clone()), request_command, timeout_millis)
+            .invoke_async(Some(addr), request_command, timeout_millis)
             .await
         {
             Ok(response) => match ResponseCode::from(response.code()) {
@@ -121,14 +121,14 @@ impl RpcClientImpl {
 
     async fn handle_get_min_offset<H: CommandCustomHeader + TopicRequestHeaderTrait>(
         &self,
-        addr: CheetahString,
+        addr: &CheetahString,
         request: RpcRequest<H>,
         timeout_millis: u64,
     ) -> Result<RpcResponse> {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
-            .invoke_async(Some(addr.clone()), request_command, timeout_millis)
+            .invoke_async(Some(addr), request_command, timeout_millis)
             .await
         {
             Ok(response) => match ResponseCode::from(response.code()) {
@@ -157,14 +157,14 @@ impl RpcClientImpl {
     }
     async fn handle_get_max_offset<H: CommandCustomHeader + TopicRequestHeaderTrait>(
         &self,
-        addr: CheetahString,
+        addr: &CheetahString,
         request: RpcRequest<H>,
         timeout_millis: u64,
     ) -> Result<RpcResponse> {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
-            .invoke_async(Some(addr.clone()), request_command, timeout_millis)
+            .invoke_async(Some(addr), request_command, timeout_millis)
             .await
         {
             Ok(response) => match ResponseCode::from(response.code()) {
@@ -193,14 +193,14 @@ impl RpcClientImpl {
     }
     async fn handle_search_offset<H: CommandCustomHeader + TopicRequestHeaderTrait>(
         &self,
-        addr: CheetahString,
+        addr: &CheetahString,
         request: RpcRequest<H>,
         timeout_millis: u64,
     ) -> Result<RpcResponse> {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
-            .invoke_async(Some(addr.clone()), request_command, timeout_millis)
+            .invoke_async(Some(addr), request_command, timeout_millis)
             .await
         {
             Ok(response) => match ResponseCode::from(response.code()) {
@@ -229,14 +229,14 @@ impl RpcClientImpl {
     }
     async fn handle_get_earliest_msg_storetime<H: CommandCustomHeader + TopicRequestHeaderTrait>(
         &self,
-        addr: CheetahString,
+        addr: &CheetahString,
         request: RpcRequest<H>,
         timeout_millis: u64,
     ) -> Result<RpcResponse> {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
-            .invoke_async(Some(addr.clone()), request_command, timeout_millis)
+            .invoke_async(Some(addr), request_command, timeout_millis)
             .await
         {
             Ok(response) => match ResponseCode::from(response.code()) {
@@ -265,14 +265,14 @@ impl RpcClientImpl {
     }
     async fn handle_query_consumer_offset<H: CommandCustomHeader + TopicRequestHeaderTrait>(
         &self,
-        addr: CheetahString,
+        addr: &CheetahString,
         request: RpcRequest<H>,
         timeout_millis: u64,
     ) -> Result<RpcResponse> {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
-            .invoke_async(Some(addr.clone()), request_command, timeout_millis)
+            .invoke_async(Some(addr), request_command, timeout_millis)
             .await
         {
             Ok(response) => match ResponseCode::from(response.code()) {
@@ -305,14 +305,14 @@ impl RpcClientImpl {
     }
     async fn handle_update_consumer_offset<H: CommandCustomHeader + TopicRequestHeaderTrait>(
         &self,
-        addr: CheetahString,
+        addr: &CheetahString,
         request: RpcRequest<H>,
         timeout_millis: u64,
     ) -> Result<RpcResponse> {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
-            .invoke_async(Some(addr.clone()), request_command, timeout_millis)
+            .invoke_async(Some(addr), request_command, timeout_millis)
             .await
         {
             Ok(response) => match ResponseCode::from(response.code()) {
@@ -341,14 +341,14 @@ impl RpcClientImpl {
     }
     async fn handle_common_body_request<H: CommandCustomHeader + TopicRequestHeaderTrait>(
         &self,
-        addr: CheetahString,
+        addr: &CheetahString,
         request: RpcRequest<H>,
         timeout_millis: u64,
     ) -> Result<RpcResponse> {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
-            .invoke_async(Some(addr.clone()), request_command, timeout_millis)
+            .invoke_async(Some(addr), request_command, timeout_millis)
             .await
         {
             Ok(response) => match ResponseCode::from(response.code()) {
@@ -395,39 +395,39 @@ impl RpcClient for RpcClientImpl {
         let addr = self.get_broker_addr_by_name_or_exception(bname.as_ref())?;
         let result = match RequestCode::from(request.code) {
             RequestCode::PullMessage => {
-                self.handle_pull_message(addr, request, timeout_millis)
+                self.handle_pull_message(&addr, request, timeout_millis)
                     .await?
             }
             RequestCode::GetMinOffset => {
-                self.handle_get_min_offset(addr, request, timeout_millis)
+                self.handle_get_min_offset(&addr, request, timeout_millis)
                     .await?
             }
             RequestCode::GetMaxOffset => {
-                self.handle_get_max_offset(addr, request, timeout_millis)
+                self.handle_get_max_offset(&addr, request, timeout_millis)
                     .await?
             }
             RequestCode::SearchOffsetByTimestamp => {
-                self.handle_search_offset(addr, request, timeout_millis)
+                self.handle_search_offset(&addr, request, timeout_millis)
                     .await?
             }
             RequestCode::GetEarliestMsgStoreTime => {
-                self.handle_get_earliest_msg_storetime(addr, request, timeout_millis)
+                self.handle_get_earliest_msg_storetime(&addr, request, timeout_millis)
                     .await?
             }
             RequestCode::QueryConsumerOffset => {
-                self.handle_query_consumer_offset(addr, request, timeout_millis)
+                self.handle_query_consumer_offset(&addr, request, timeout_millis)
                     .await?
             }
             RequestCode::UpdateConsumerOffset => {
-                self.handle_update_consumer_offset(addr, request, timeout_millis)
+                self.handle_update_consumer_offset(&addr, request, timeout_millis)
                     .await?
             }
             RequestCode::GetTopicStatsInfo => {
-                self.handle_common_body_request(addr, request, timeout_millis)
+                self.handle_common_body_request(&addr, request, timeout_millis)
                     .await?
             }
             RequestCode::GetTopicConfig => {
-                self.handle_common_body_request(addr, request, timeout_millis)
+                self.handle_common_body_request(&addr, request, timeout_millis)
                     .await?
             }
             _ => {

@@ -471,7 +471,7 @@ impl Rebalance for RebalancePushImpl {
                 .as_mut()
                 .unwrap()
                 .unlock_batch_mq(
-                    find_broker_result.broker_addr.as_str(),
+                    find_broker_result.broker_addr.as_ref(),
                     request_body,
                     UNLOCK_BATCH_MQ_TIMEOUT_MS,
                     oneway,

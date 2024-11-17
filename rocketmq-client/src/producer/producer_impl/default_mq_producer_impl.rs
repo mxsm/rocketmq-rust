@@ -1140,8 +1140,8 @@ impl DefaultMQProducerImpl {
                     .unwrap()
                     .get_mq_client_api_impl()
                     .send_message(
-                        broker_addr.clone(),
-                        broker_name.clone(),
+                        &broker_addr,
+                        &broker_name,
                         msg,
                         request_header,
                         timeout - cost_time_sync,
@@ -1167,8 +1167,8 @@ impl DefaultMQProducerImpl {
                     .unwrap()
                     .get_mq_client_api_impl()
                     .send_message_simple(
-                        broker_addr,
-                        broker_name,
+                        &broker_addr,
+                        &broker_name,
                         msg,
                         request_header,
                         timeout - cost_time_sync,

@@ -68,7 +68,7 @@ pub trait RemotingClient: RemotingService {
     /// A `Result` containing either the response `RemotingCommand` or an `Error`.
     async fn invoke_async(
         &self,
-        addr: Option<CheetahString>,
+        addr: Option<&CheetahString>,
         request: RemotingCommand,
         timeout_millis: u64,
     ) -> Result<RemotingCommand>;
@@ -81,7 +81,7 @@ pub trait RemotingClient: RemotingService {
     /// * `timeout_millis` - The timeout for the operation in milliseconds.
     async fn invoke_oneway(
         &self,
-        addr: CheetahString,
+        addr: &CheetahString,
         request: RemotingCommand,
         timeout_millis: u64,
     );
@@ -90,7 +90,7 @@ pub trait RemotingClient: RemotingService {
     ///
     /// # Arguments
     /// * `addr` - The address to check for reachability.
-    fn is_address_reachable(&mut self, addr: String);
+    fn is_address_reachable(&mut self, addr: &CheetahString);
 
     /// Closes clients connected to the specified addresses.
     ///
