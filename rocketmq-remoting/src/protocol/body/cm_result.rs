@@ -133,3 +133,46 @@ impl Display for CMResult {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json;
+
+    use super::*;
+
+    #[test]
+    fn serialize_cr_success() {
+        let result = serde_json::to_string(&CMResult::CRSuccess).unwrap();
+        assert_eq!(result, "\"CR_SUCCESS\"");
+    }
+
+    #[test]
+    fn deserialize_cr_success() {
+        let result: CMResult = serde_json::from_str("\"CR_SUCCESS\"").unwrap();
+        assert_eq!(result, CMResult::CRSuccess);
+    }
+
+    #[test]
+    fn from_i32_to_cmresult() {
+        let result = CMResult::from(0);
+        assert_eq!(result, CMResult::CRSuccess);
+    }
+
+    #[test]
+    fn from_cmresult_to_i32() {
+        let result: i32 = CMResult::CRSuccess.into();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn display_cr_success() {
+        let result = format!("{}", CMResult::CRSuccess);
+        assert_eq!(result, "CR_SUCCESS");
+    }
+
+    #[test]
+    fn deserialize_unknown_variant() {
+        let result: Result<CMResult, _> = serde_json::from_str("\"UNKNOWN\"");
+        assert!(result.is_err());
+    }
+}
