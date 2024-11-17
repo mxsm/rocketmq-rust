@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use rocketmq_client::consumer::pull_result::PullResult;
+use rocketmq_client_rust::consumer::pull_result::PullResult;
 use rocketmq_common::common::message::message_ext::MessageExt;
 
 pub(crate) struct GetResult {

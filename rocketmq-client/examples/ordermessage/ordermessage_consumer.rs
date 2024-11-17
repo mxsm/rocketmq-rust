@@ -17,13 +17,13 @@
 use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
 
-use rocketmq_client::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
-use rocketmq_client::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
-use rocketmq_client::consumer::listener::consume_orderly_context::ConsumeOrderlyContext;
-use rocketmq_client::consumer::listener::consume_orderly_status::ConsumeOrderlyStatus;
-use rocketmq_client::consumer::listener::message_listener_orderly::MessageListenerOrderly;
-use rocketmq_client::consumer::mq_push_consumer::MQPushConsumer;
-use rocketmq_client::Result;
+use rocketmq_client_rust::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
+use rocketmq_client_rust::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
+use rocketmq_client_rust::consumer::listener::consume_orderly_context::ConsumeOrderlyContext;
+use rocketmq_client_rust::consumer::listener::consume_orderly_status::ConsumeOrderlyStatus;
+use rocketmq_client_rust::consumer::listener::message_listener_orderly::MessageListenerOrderly;
+use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
+use rocketmq_client_rust::Result;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;

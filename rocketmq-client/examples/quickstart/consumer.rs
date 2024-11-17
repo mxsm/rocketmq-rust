@@ -14,12 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use rocketmq_client::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
-use rocketmq_client::consumer::listener::consume_concurrently_context::ConsumeConcurrentlyContext;
-use rocketmq_client::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
-use rocketmq_client::consumer::listener::message_listener_concurrently::MessageListenerConcurrently;
-use rocketmq_client::consumer::mq_push_consumer::MQPushConsumer;
-use rocketmq_client::Result;
+use rocketmq_client_rust::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
+use rocketmq_client_rust::consumer::listener::consume_concurrently_context::ConsumeConcurrentlyContext;
+use rocketmq_client_rust::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
+use rocketmq_client_rust::consumer::listener::message_listener_concurrently::MessageListenerConcurrently;
+use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
+use rocketmq_client_rust::Result;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_rust::rocketmq;
 use tracing::info;
