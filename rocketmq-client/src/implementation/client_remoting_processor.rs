@@ -257,12 +257,8 @@ impl ClientRemotingProcessor {
                 if let Some(group) = group {
                     let producer = client_instance.select_producer(&group).await;
                     if let Some(producer) = producer {
-                        let addr = channel.remote_address().to_string();
-                        producer.check_transaction_state(
-                            addr.as_str(),
-                            message_ext,
-                            request_header,
-                        );
+                        let addr = CheetahString::from_string(channel.remote_address().to_string());
+                        producer.check_transaction_state(&addr, message_ext, request_header);
                     } else {
                         warn!("checkTransactionState, pick producer group failed");
                     }

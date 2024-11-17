@@ -1416,7 +1416,10 @@ impl DefaultMQProducerImpl {
         Ok(result.expect("send result is none"))
     }
 
-    pub async fn fetch_publish_message_queues(&mut self, topic: &str) -> Result<Vec<MessageQueue>> {
+    pub async fn fetch_publish_message_queues(
+        &mut self,
+        topic: &CheetahString,
+    ) -> Result<Vec<MessageQueue>> {
         self.make_sure_state_ok()?;
         let client_instance = self
             .client_instance
@@ -1477,7 +1480,7 @@ impl DefaultMQProducerImpl {
                     .set_cause(Box::new(MQClientError::MQClientErr(-1, error.to_string())));
             }
         };
-        let topic = msg.get_topic().to_string();
+        let topic = msg.get_topic().clone();
         let _ = self
             .send_select_impl(
                 msg,
@@ -1595,7 +1598,7 @@ impl DefaultMQProducerImpl {
                     .set_cause(Box::new(MQClientError::MQClientErr(-1, error.to_string())));
             }
         };
-        let topic = msg.get_topic().to_string();
+        let topic = msg.get_topic().clone();
         let _ = self
             .send_kernel_impl(
                 &mut msg,
@@ -1761,7 +1764,7 @@ impl DefaultMQProducerImpl {
                     .set_cause(Box::new(MQClientError::MQClientErr(-1, error.to_string())));
             }
         };
-        let topic = msg.get_topic().to_string();
+        let topic = msg.get_topic().clone();
         let cost = begin_timestamp.elapsed().as_millis() as u64;
         self.send_default_impl(
             &mut msg,
@@ -1783,7 +1786,7 @@ impl DefaultMQProducerImpl {
 
     async fn wait_response(
         &mut self,
-        topic: &str,
+        topic: &CheetahString,
         timeout: u64,
         request_response_future: Arc<RequestResponseFuture>,
         cost: u64,
@@ -2000,7 +2003,7 @@ impl DefaultMQProducerImpl {
             .end_transaction_oneway(
                 broker_addr.as_ref().unwrap(),
                 request_header,
-                "".to_string(),
+                CheetahString::from_static_str(""),
                 self.producer_config.send_msg_timeout() as u64,
             )
             .await;
@@ -2014,8 +2017,8 @@ impl DefaultMQProducerImpl {
     pub fn do_execute_end_transaction_hook(
         &mut self,
         msg: &Message,
-        msg_id: &str,
-        broker_addr: &str,
+        msg_id: &CheetahString,
+        broker_addr: &CheetahString,
         local_transaction_state: LocalTransactionState,
         from_transaction_check: bool,
     ) {
@@ -2023,11 +2026,11 @@ impl DefaultMQProducerImpl {
             return;
         }
         let end_transaction_context = EndTransactionContext {
-            producer_group: self.producer_config.producer_group().to_string(),
+            producer_group: self.producer_config.producer_group().clone(),
             message: msg,
-            msg_id: msg_id.to_string(),
-            transaction_id: msg.get_transaction_id().to_string(),
-            broker_addr: broker_addr.to_string(),
+            msg_id: msg_id.clone(),
+            transaction_id: msg.get_transaction_id().clone(),
+            broker_addr: broker_addr.clone(),
             from_transaction_check,
             transaction_state: local_transaction_state,
         };
@@ -2079,9 +2082,9 @@ impl MQProducerInner for DefaultMQProducerImpl {
         .unwrap()
     }
 
-    fn is_publish_topic_need_update(&self, topic: &str) -> bool {
+    fn is_publish_topic_need_update(&self, topic: &CheetahString) -> bool {
         let handle = Handle::current();
-        let topic = topic.to_string();
+        let topic = topic.clone();
         let topic_publish_info_table = self.topic_publish_info_table.clone();
         thread::spawn(move || {
             handle.block_on(async move {
@@ -2103,13 +2106,13 @@ impl MQProducerInner for DefaultMQProducerImpl {
 
     fn check_transaction_state(
         &self,
-        broker_addr: &str,
+        broker_addr: &CheetahString,
         msg: MessageExt,
         check_request_header: CheckTransactionStateRequestHeader,
     ) {
         let transaction_listener = self.transaction_listener.clone().unwrap();
         let mut producer_impl_inner = self.default_mqproducer_impl_inner.clone().unwrap();
-        let broker_addr = broker_addr.to_string();
+        let broker_addr = broker_addr.clone();
         self.check_runtime
             .as_ref()
             .unwrap()
@@ -2154,8 +2157,8 @@ impl MQProducerInner for DefaultMQProducerImpl {
                 };
                 producer_impl_inner.do_execute_end_transaction_hook(
                     &msg.message,
-                    unique_key.as_ref().unwrap().as_str(),
-                    broker_addr.as_str(),
+                    unique_key.as_ref().unwrap(),
+                    &broker_addr,
                     transaction_state,
                     true,
                 );
@@ -2167,9 +2170,9 @@ impl MQProducerInner for DefaultMQProducerImpl {
                     .as_mut()
                     .unwrap()
                     .end_transaction_oneway(
-                        broker_addr.as_str(),
+                        &broker_addr,
                         request_header,
-                        "".to_string(),
+                        CheetahString::from_static_str(""),
                         3000,
                     )
                     .await;

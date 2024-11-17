@@ -29,13 +29,13 @@ use crate::producer::transaction_listener::TransactionListener;
 pub trait MQProducerInner: Send + Sync + 'static {
     fn get_publish_topic_list(&self) -> HashSet<CheetahString>;
 
-    fn is_publish_topic_need_update(&self, topic: &str) -> bool;
+    fn is_publish_topic_need_update(&self, topic: &CheetahString) -> bool;
 
     fn get_check_listener(&self) -> Arc<Box<dyn TransactionListener>>;
 
     fn check_transaction_state(
         &self,
-        broker_addr: &str,
+        broker_addr: &CheetahString,
         msg: MessageExt,
         check_request_header: CheckTransactionStateRequestHeader,
     );
@@ -58,7 +58,7 @@ impl MQProducerInnerImpl {
         HashSet::new()
     }
 
-    pub fn is_publish_topic_need_update(&self, topic: &str) -> bool {
+    pub fn is_publish_topic_need_update(&self, topic: &CheetahString) -> bool {
         if let Some(default_mqproducer_impl_inner) = &self.default_mqproducer_impl_inner {
             return default_mqproducer_impl_inner.is_publish_topic_need_update(topic);
         }
@@ -74,7 +74,7 @@ impl MQProducerInnerImpl {
 
     pub fn check_transaction_state(
         &self,
-        addr: &str,
+        addr: &CheetahString,
         msg: MessageExt,
         check_request_header: CheckTransactionStateRequestHeader,
     ) {

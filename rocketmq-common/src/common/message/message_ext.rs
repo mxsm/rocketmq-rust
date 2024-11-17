@@ -320,7 +320,8 @@ impl MessageTrait for MessageExt {
         self.message.set_properties(properties);
     }
 
-    fn get_transaction_id(&self) -> &str {
+    #[inline]
+    fn get_transaction_id(&self) -> &CheetahString {
         self.message.get_transaction_id()
     }
 
