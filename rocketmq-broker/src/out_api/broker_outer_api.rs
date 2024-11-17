@@ -105,7 +105,7 @@ impl BrokerOuterAPI {
         let request_header =
             RegisterTopicRequestHeader::new(topic_config.topic_name.as_ref().cloned().unwrap());
         let queue_data = QueueData::new(
-            broker_name.clone(),
+            broker_name,
             topic_config.read_queue_nums,
             topic_config.write_queue_nums,
             topic_config.perm,
@@ -196,7 +196,7 @@ impl BrokerOuterAPI {
                     if let Some(outer_api) = outer_api.upgrade() {
                         outer_api
                             .register_broker(
-                                addr,
+                                &addr,
                                 oneway,
                                 timeout_mills,
                                 cloned_header,
@@ -233,7 +233,7 @@ impl BrokerOuterAPI {
 
     async fn register_broker(
         &self,
-        namesrv_addr: CheetahString,
+        namesrv_addr: &CheetahString,
         oneway: bool,
         timeout_mills: u64,
         request_header: RegisterBrokerRequestHeader,
@@ -258,7 +258,7 @@ impl BrokerOuterAPI {
         }
         match self
             .remoting_client
-            .invoke_async(Some(namesrv_addr.clone()), request, timeout_mills)
+            .invoke_async(Some(namesrv_addr), request, timeout_mills)
             .await
         {
             Ok(response) => match From::from(response.code()) {
@@ -318,7 +318,7 @@ impl BrokerOuterAPI {
             let client = self.remoting_client.clone();
             let join_handle = tokio::spawn(async move {
                 client
-                    .invoke_async(Some(addr), cloned_request, timeout_mills)
+                    .invoke_async(Some(&addr), cloned_request, timeout_mills)
                     .await
             });
             handle_vec.push(join_handle);
@@ -338,7 +338,7 @@ impl BrokerOuterAPI {
 
     pub async fn lock_batch_mq_async(
         &self,
-        addr: CheetahString,
+        addr: &CheetahString,
         request_body: bytes::Bytes,
         timeout_millis: u64,
     ) -> Result<HashSet<MessageQueue>> {
@@ -375,7 +375,7 @@ impl BrokerOuterAPI {
 
     pub async fn unlock_batch_mq_async(
         &self,
-        addr: CheetahString,
+        addr: &CheetahString,
         request_body: bytes::Bytes,
         timeout_millis: u64,
     ) -> Result<()> {

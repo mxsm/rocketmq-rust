@@ -86,7 +86,7 @@ impl BatchMqHandler {
                     let request_body_cloned = request_body.clone();
                     tokio::spawn(async move {
                         let result = broker_outer_api
-                            .lock_batch_mq_async(broker_addr, request_body_cloned, 1000)
+                            .lock_batch_mq_async(&broker_addr, request_body_cloned, 1000)
                             .await;
                         match result {
                             Ok(lock_ok_mqs) => {
@@ -139,7 +139,7 @@ impl BatchMqHandler {
                 match self
                     .inner
                     .broker_out_api
-                    .unlock_batch_mq_async(broker_addr.clone(), request_body.clone(), 1000)
+                    .unlock_batch_mq_async(broker_addr, request_body.clone(), 1000)
                     .await
                 {
                     Ok(_) => {}

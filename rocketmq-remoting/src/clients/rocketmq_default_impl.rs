@@ -118,7 +118,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
                 .fetch_and(1, std::sync::atomic::Ordering::Release)
                 .abs();
             let index = index as usize % addr_list.len();
-            let new_addr = addr_list[index].clone();
+            let new_addr = &addr_list[index];
             info!(
                 "new name remoting_server is chosen. OLD: {} , NEW: {}. namesrvIndex = {}",
                 new_addr, new_addr, index
@@ -138,19 +138,14 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         None
     }
 
-    async fn get_and_create_client(&self, addr: Option<CheetahString>) -> Option<Client> {
+    async fn get_and_create_client(&self, addr: Option<&CheetahString>) -> Option<Client> {
         match addr {
             None => self.get_and_create_nameserver_client().await,
             Some(addr) => {
                 if addr.is_empty() {
                     return self.get_and_create_nameserver_client().await;
                 }
-                let client = self
-                    .connection_tables
-                    .lock()
-                    .await
-                    .get(addr.as_str())
-                    .cloned();
+                let client = self.connection_tables.lock().await.get(addr).cloned();
                 // if client.is_some() && client.as_ref()?.lock().await.connection().ok {
                 if client.is_some() && client.as_ref()?.connection().ok {
                     return client;
@@ -164,9 +159,9 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         }
     }
 
-    async fn create_client(&self, addr: CheetahString, duration: Duration) -> Option<Client> {
+    async fn create_client(&self, addr: &CheetahString, duration: Duration) -> Option<Client> {
         let mut connection_tables = self.connection_tables.lock().await;
-        let cw = connection_tables.get(addr.as_str());
+        let cw = connection_tables.get(addr);
         if let Some(cw) = cw {
             // if cw.lock().await.connection().ok {
             if cw.connection().ok {
@@ -195,7 +190,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
                 Ok(client_r) => {
                     //let client = Arc::new(Mutex::new(client_r));
                     let client = client_r;
-                    connection_tables.insert(addr, client.clone());
+                    connection_tables.insert(addr.clone(), client.clone());
                     Some(client)
                 }
                 Err(_) => {
@@ -224,7 +219,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             }
         }
         for namesrv_addr in self.namesrv_addr_list.as_ref().iter() {
-            let client = self.get_and_create_client(Some(namesrv_addr.clone())).await;
+            let client = self.get_and_create_client(Some(namesrv_addr)).await;
             match client {
                 None => {
                     self.available_namesrv_addr_set
@@ -330,7 +325,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
 
     async fn invoke_async(
         &self,
-        addr: Option<CheetahString>,
+        addr: Option<&CheetahString>,
         request: RemotingCommand,
         timeout_millis: u64,
     ) -> Result<RemotingCommand> {
@@ -364,7 +359,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
 
     async fn invoke_oneway(
         &self,
-        addr: CheetahString,
+        addr: &CheetahString,
         request: RemotingCommand,
         timeout_millis: u64,
     ) {
@@ -390,7 +385,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
         }
     }
 
-    fn is_address_reachable(&mut self, addr: String) {
+    fn is_address_reachable(&mut self, addr: &CheetahString) {
         todo!()
     }
 

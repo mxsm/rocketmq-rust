@@ -652,12 +652,7 @@ where
                     .mq_client_api_impl
                     .as_mut()
                     .unwrap()
-                    .unlock_batch_mq(
-                        find_broker_result.broker_addr.as_str(),
-                        request_body,
-                        1_000,
-                        oneway,
-                    )
+                    .unlock_batch_mq(&find_broker_result.broker_addr, request_body, 1_000, oneway)
                     .await;
                 match result {
                     Ok(_) => {

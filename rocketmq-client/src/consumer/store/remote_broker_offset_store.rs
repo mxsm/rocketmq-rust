@@ -314,11 +314,7 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
                     .mq_client_api_impl
                     .as_mut()
                     .unwrap()
-                    .update_consumer_offset(
-                        find_broker_result.broker_addr.as_str(),
-                        request_header,
-                        5_000,
-                    )
+                    .update_consumer_offset(&find_broker_result.broker_addr, request_header, 5_000)
                     .await?;
             };
             Ok(())
