@@ -20,7 +20,6 @@ jobs:
           github-token: ${{ secrets.BOT_TOKEN  }}
           script: |
             const labelToRemove = 'waiting-review'; // The name of the label to remove
-            const { context, github } = require('@actions/github');
             
             // Get repository and PR context information
             const { owner, repo } = context.repo;
