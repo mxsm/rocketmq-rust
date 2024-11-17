@@ -19,8 +19,8 @@ use std::collections::HashMap;
 use std::sync::atomic::AtomicI32;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use parking_lot::Mutex;
-use rocketmq_client::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_client::producer::local_transaction_state::LocalTransactionState;
 use rocketmq_client::producer::mq_producer::MQProducer;
 use rocketmq_client::producer::transaction_listener::TransactionListener;
@@ -68,7 +68,7 @@ pub async fn main() -> Result<()> {
 }
 
 struct TransactionListenerImpl {
-    local_trans: Arc<Mutex<HashMap<String, i32>>>,
+    local_trans: Arc<Mutex<HashMap<CheetahString, i32>>>,
     transaction_index: AtomicI32,
 }
 
@@ -92,7 +92,7 @@ impl TransactionListener for TransactionListenerImpl {
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         let status = value % 3;
         let mut guard = self.local_trans.lock();
-        guard.insert(msg.get_transaction_id().to_string(), status);
+        guard.insert(msg.get_transaction_id().clone(), status);
         LocalTransactionState::Unknown
     }
 
