@@ -18,6 +18,12 @@ use std::str::FromStr;
 
 use tracing::level_filters::LevelFilter;
 
+/// Initializes the logger with the specified configuration.
+///
+/// This function sets up the logger using the `tracing_subscriber` crate.
+/// It reads the log level from the `RUST_LOG` environment variable, defaulting to "INFO" if not
+/// set. The logger is configured to include thread names, log levels, line numbers, and thread IDs
+/// in the log output.
 pub fn init_logger() {
     let info_level = std::env::var("RUST_LOG").unwrap_or(String::from("INFO"));
     tracing_subscriber::fmt()
