@@ -1,5 +1,5 @@
 [package]
-name = "rocketmq-client"
+name = "rocketmq-client-rust"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true

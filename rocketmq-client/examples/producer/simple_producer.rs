@@ -15,9 +15,9 @@
  * limitations under the License.
  */
 
-use rocketmq_client::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_client::producer::mq_producer::MQProducer;
-use rocketmq_client::Result;
+use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
+use rocketmq_client_rust::producer::mq_producer::MQProducer;
+use rocketmq_client_rust::Result;
 use rocketmq_common::common::message::message_single::Message;
 use rocketmq_rust::rocketmq;
 

@@ -21,8 +21,8 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
-use rocketmq_client::consumer::pull_result::PullResult;
-use rocketmq_client::consumer::pull_status::PullStatus;
+use rocketmq_client_rust::consumer::pull_result::PullResult;
+use rocketmq_client_rust::consumer::pull_status::PullStatus;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::constant::PermName;

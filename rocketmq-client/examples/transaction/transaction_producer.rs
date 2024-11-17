@@ -21,11 +21,11 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
-use rocketmq_client::producer::local_transaction_state::LocalTransactionState;
-use rocketmq_client::producer::mq_producer::MQProducer;
-use rocketmq_client::producer::transaction_listener::TransactionListener;
-use rocketmq_client::producer::transaction_mq_producer::TransactionMQProducer;
-use rocketmq_client::Result;
+use rocketmq_client_rust::producer::local_transaction_state::LocalTransactionState;
+use rocketmq_client_rust::producer::mq_producer::MQProducer;
+use rocketmq_client_rust::producer::transaction_listener::TransactionListener;
+use rocketmq_client_rust::producer::transaction_mq_producer::TransactionMQProducer;
+use rocketmq_client_rust::Result;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_single::Message;
 use rocketmq_common::common::message::MessageTrait;
