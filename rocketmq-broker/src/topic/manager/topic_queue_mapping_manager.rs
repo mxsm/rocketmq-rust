@@ -302,7 +302,7 @@ mod tests {
             .lock()
             .insert("existing_topic".into(), detail.clone());
 
-        manager.delete("existing_topic");
+        manager.delete(&CheetahString::from_static_str("existing_topic"));
 
         assert!(manager.get_topic_queue_mapping("existing_topic").is_none());
     }
