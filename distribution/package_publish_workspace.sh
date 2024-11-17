@@ -8,7 +8,7 @@ cd ..
 
 echo "Starting to package Rust workspace projects..."
 
-PROJECTS=("rocketmq-common" "rocketmq-runtime" "rocketmq-macros" "rocketmq" "rocketmq-filter" "rocketmq-store" "rocketmq-remoting" "rocketmq-cli" "rocketmq-client" "rocketmq-namesrv" "rocketmq-broker" "rocketmq-example")
+PROJECTS=("rocketmq-common" "rocketmq-runtime" "rocketmq-macros" "rocketmq" "rocketmq-filter" "rocketmq-store" "rocketmq-remoting" "rocketmq-cli" "rocketmq-example" "rocketmq-client" "rocketmq-namesrv" "rocketmq-broker")
 
 for PROJECT in "${PROJECTS[@]}"
 do
