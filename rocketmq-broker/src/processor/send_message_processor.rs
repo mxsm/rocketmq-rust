@@ -462,14 +462,22 @@ where
         message_ext.message_ext_inner.message.flag = request_header.flag;
 
         let uniq_key = ori_props.get(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX);
-        let uniq_key_inner = match uniq_key {
-            Some(inner) if !inner.is_empty() => inner.clone(),
-            _ => CheetahString::from_string(MessageClientIDSetter::create_uniq_id()),
-        };
-        ori_props.insert(
-            CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
-            uniq_key_inner,
-        );
+        if !uniq_key.is_some_and(|uniq_key_inner| uniq_key_inner.is_empty()) {
+            ori_props.insert(
+                CheetahString::from_static_str(
+                    MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
+                ),
+                CheetahString::from_string(MessageClientIDSetter::create_uniq_id()),
+            );
+        }
+        // let uniq_key_inner = match uniq_key {
+        //     Some(inner) if !inner.is_empty() => inner.clone(),
+        //     _ => CheetahString::from_string(MessageClientIDSetter::create_uniq_id()),
+        // };
+        // ori_props.insert(
+        //     CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
+        //     uniq_key_inner,
+        // );
 
         let tra_flag = ori_props
             .get(MessageConst::PROPERTY_TRANSACTION_PREPARED)
