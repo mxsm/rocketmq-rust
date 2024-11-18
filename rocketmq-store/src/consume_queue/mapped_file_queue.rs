@@ -22,6 +22,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use log::warn;
 use parking_lot::RwLock;
 use rocketmq_common::UtilAll::offset_to_file_name;
@@ -142,8 +143,10 @@ impl MappedFileQueue {
                 return false;
             }
 
-            let mapped_file =
-                DefaultMappedFile::new(file.to_string_lossy().to_string(), self.mapped_file_size);
+            let mapped_file = DefaultMappedFile::new(
+                CheetahString::from_string(file.to_string_lossy().to_string()),
+                self.mapped_file_size,
+            );
             // Set wrote, flushed, committed positions for mapped_file
             mapped_file.set_wrote_position(self.mapped_file_size as i32);
             mapped_file.set_flushed_position(self.mapped_file_size as i32);
@@ -210,7 +213,7 @@ impl MappedFileQueue {
     ) -> Option<Arc<DefaultMappedFile>> {
         let mut mapped_file = match self.allocate_mapped_file_service {
             None => DefaultMappedFile::new(
-                next_file_path.to_string_lossy().to_string(),
+                CheetahString::from_string(next_file_path.to_string_lossy().to_string()),
                 self.mapped_file_size,
             ),
             Some(ref _value) => {
