@@ -230,7 +230,7 @@ impl MessageExt {
 impl Default for MessageExt {
     fn default() -> Self {
         Self {
-            message: Default::default(),
+            message: Message::default(),
             broker_name: CheetahString::default(),
             queue_id: 0,
             store_size: 0,
@@ -321,7 +321,7 @@ impl MessageTrait for MessageExt {
     }
 
     #[inline]
-    fn get_transaction_id(&self) -> &CheetahString {
+    fn get_transaction_id(&self) -> Option<&CheetahString> {
         self.message.get_transaction_id()
     }
 

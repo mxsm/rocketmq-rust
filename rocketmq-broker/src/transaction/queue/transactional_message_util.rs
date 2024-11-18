@@ -79,13 +79,12 @@ impl TransactionalMessageUtil {
             .message_ext_inner
             .set_born_timestamp(msg_ext.born_timestamp);
         msg_inner.message_ext_inner.set_born_host(msg_ext.born_host);
-        msg_inner.set_transaction_id(
-            msg_ext
-                .get_property(&CheetahString::from_static_str(
-                    MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
-                ))
-                .unwrap_or_default(),
-        );
+
+        if let Some(transaction_id) = msg_ext.get_property(&CheetahString::from_static_str(
+            MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
+        )) {
+            msg_inner.set_transaction_id(transaction_id);
+        }
 
         MessageAccessor::set_properties(&mut msg_inner, msg_ext.get_properties().clone());
         MessageAccessor::put_property(
@@ -168,11 +167,11 @@ mod tests {
         assert_eq!(msg_inner.get_flag(), msg_ext.get_flag());
         assert_eq!(
             msg_inner.get_transaction_id(),
-            &msg_ext
+            msg_ext
                 .get_property(&CheetahString::from_static_str(
                     MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX
                 ))
-                .unwrap_or_default()
+                .as_ref()
         );
     }
 

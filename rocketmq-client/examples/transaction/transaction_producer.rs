@@ -92,13 +92,18 @@ impl TransactionListener for TransactionListenerImpl {
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         let status = value % 3;
         let mut guard = self.local_trans.lock();
-        guard.insert(msg.get_transaction_id().clone(), status);
+        guard.insert(
+            msg.get_transaction_id().cloned().unwrap_or_default(),
+            status,
+        );
         LocalTransactionState::Unknown
     }
 
     fn check_local_transaction(&self, msg: &MessageExt) -> LocalTransactionState {
         let mut guard = self.local_trans.lock();
-        let status = guard.get(msg.get_transaction_id()).unwrap_or(&-1);
+        let status = guard
+            .get(&msg.get_transaction_id().cloned().unwrap_or_default())
+            .unwrap_or(&-1);
         match status {
             1 => LocalTransactionState::CommitMessage,
             2 => LocalTransactionState::RollbackMessage,

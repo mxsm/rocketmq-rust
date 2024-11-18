@@ -2029,7 +2029,7 @@ impl DefaultMQProducerImpl {
             producer_group: self.producer_config.producer_group().clone(),
             message: msg,
             msg_id: msg_id.clone(),
-            transaction_id: msg.get_transaction_id().clone(),
+            transaction_id: msg.get_transaction_id().cloned().unwrap_or_default(),
             broker_addr: broker_addr.clone(),
             from_transaction_check,
             transaction_state: local_transaction_state,
