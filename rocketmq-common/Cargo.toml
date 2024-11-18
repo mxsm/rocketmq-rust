@@ -66,4 +66,4 @@ uuid = { workspace = true }
 cheetah-string = { workspace = true }
 
 [dev-dependencies]
-mockall = "0.13.0"
+mockall = "0.13.1"
