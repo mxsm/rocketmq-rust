@@ -38,7 +38,7 @@ use crate::common::sys_flag::message_sys_flag::MessageSysFlag;
 use crate::common::TopicFilterType;
 use crate::MessageUtils;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Message {
     pub topic: CheetahString,
     pub flag: i32,
@@ -48,6 +48,19 @@ pub struct Message {
     // compressed bytes, maybe none, if no need to compress
     pub compressed_body: Option<bytes::Bytes>,
     pub transaction_id: Option<CheetahString>,
+}
+
+impl Default for Message {
+    fn default() -> Self {
+        Self {
+            topic: CheetahString::new(),
+            flag: 0,
+            properties: HashMap::new(),
+            body: None,
+            compressed_body: None,
+            transaction_id: None,
+        }
+    }
 }
 
 impl Message {
@@ -328,10 +341,8 @@ impl MessageTrait for Message {
     }
 
     #[inline]
-    fn get_transaction_id(&self) -> &CheetahString {
-        self.transaction_id
-            .as_ref()
-            .expect("transaction_id is None")
+    fn get_transaction_id(&self) -> Option<&CheetahString> {
+        self.transaction_id.as_ref()
     }
 
     fn set_transaction_id(&mut self, transaction_id: CheetahString) {

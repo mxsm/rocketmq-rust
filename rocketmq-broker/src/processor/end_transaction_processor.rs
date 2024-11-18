@@ -429,14 +429,14 @@ mod tests {
             msg_ext.reconsume_times
         );
         assert!(msg_inner.is_wait_store_msg_ok());
-        /*        assert_eq!(
+        assert_eq!(
             msg_inner.get_transaction_id(),
-            &msg_ext
+            msg_ext
                 .get_user_property(&CheetahString::from_static_str(
                     MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX
                 ))
-                .unwrap_or_default()
-        );*/
+                .as_ref()
+        );
         assert_eq!(msg_inner.message_ext_inner.sys_flag, msg_ext.sys_flag);
         /*        assert_eq!(
             msg_inner.tags_code,
