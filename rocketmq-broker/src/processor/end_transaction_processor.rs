@@ -39,6 +39,7 @@ use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::config::broker_role::BrokerRole;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::log_file::MessageStore;
+use tracing::warn;
 
 use crate::transaction::operation_result::OperationResult;
 use crate::transaction::queue::transactional_message_util::TransactionalMessageUtil;
@@ -84,6 +85,7 @@ where
             .decode_command_custom_header::<EndTransactionRequestHeader>()
             .expect("EndTransactionRequestHeader decode failed");
         if BrokerRole::Slave == self.message_store_config.broker_role {
+            warn!("Message store is slave mode, so end transaction is forbidden. ");
             return Some(RemotingCommand::create_response_command_with_code(
                 ResponseCode::SlaveNotAvailable,
             ));
@@ -110,35 +112,36 @@ where
 
         let result = if MessageSysFlag::TRANSACTION_COMMIT_TYPE == request_header.commit_or_rollback
         {
-            let from_transaction_check = request_header.from_transaction_check;
-            let commit_or_rollback = request_header.commit_or_rollback;
-            let params = (
-                request_header.producer_group.to_string(),
-                request_header.tran_state_table_offset as i64,
-                request_header.commit_log_offset as i64,
-            );
             let result = self
                 .transactional_message_service
-                .commit_message(request_header);
+                .commit_message(&request_header);
             if result.response_code == ResponseCode::Success {
                 if self.reject_commit_or_rollback(
-                    from_transaction_check,
+                    request_header.from_transaction_check,
                     result.prepare_message.as_ref().unwrap(),
                 ) {
+                    warn!(
+                        "Message commit fail [producer end]. currentTimeMillis - bornTime > \
+                         checkImmunityTime, msgId={},commitLogOffset={}, wait check",
+                        request_header.msg_id, request_header.commit_log_offset
+                    );
                     return Some(RemotingCommand::create_response_command_with_code(
                         ResponseCode::IllegalOperation,
                     ));
                 }
-                let res = self.check_prepare_message(result.prepare_message.as_ref(), &params);
+                let res =
+                    self.check_prepare_message(result.prepare_message.as_ref(), &request_header);
                 if ResponseCode::from(res.code()) != ResponseCode::Success {
                     let mut msg_inner =
                         end_message_transaction(result.prepare_message.as_ref().unwrap());
                     msg_inner.message_ext_inner.sys_flag = MessageSysFlag::reset_transaction_value(
                         msg_inner.message_ext_inner.sys_flag,
-                        commit_or_rollback,
+                        request_header.commit_or_rollback,
                     );
-                    msg_inner.message_ext_inner.queue_offset = params.1;
-                    msg_inner.message_ext_inner.prepared_transaction_offset = params.2;
+                    msg_inner.message_ext_inner.queue_offset =
+                        request_header.tran_state_table_offset as i64;
+                    msg_inner.message_ext_inner.prepared_transaction_offset =
+                        request_header.commit_log_offset as i64;
                     msg_inner.message_ext_inner.store_timestamp =
                         result.prepare_message.as_ref().unwrap().store_timestamp;
                     MessageAccessor::clear_property(
@@ -159,25 +162,25 @@ where
                 OperationResult::default()
             }
         } else if MessageSysFlag::TRANSACTION_ROLLBACK_TYPE == request_header.commit_or_rollback {
-            let from_transaction_check = request_header.from_transaction_check;
-            let params = (
-                request_header.producer_group.to_string(),
-                request_header.tran_state_table_offset as i64,
-                request_header.commit_log_offset as i64,
-            );
             let result = self
                 .transactional_message_service
-                .rollback_message(request_header);
+                .rollback_message(&request_header);
             if result.response_code == ResponseCode::Success {
                 if self.reject_commit_or_rollback(
-                    from_transaction_check,
+                    request_header.from_transaction_check,
                     result.prepare_message.as_ref().unwrap(),
                 ) {
+                    warn!(
+                        "Message commit fail [producer end]. currentTimeMillis - bornTime > \
+                         checkImmunityTime, msgId={},commitLogOffset={}, wait check",
+                        request_header.msg_id, request_header.commit_log_offset
+                    );
                     return Some(RemotingCommand::create_response_command_with_code(
                         ResponseCode::IllegalOperation,
                     ));
                 }
-                let res = self.check_prepare_message(result.prepare_message.as_ref(), &params);
+                let res =
+                    self.check_prepare_message(result.prepare_message.as_ref(), &request_header);
                 if ResponseCode::from(res.code()) == ResponseCode::Success {
                     let _ = self
                         .transactional_message_service
@@ -223,7 +226,8 @@ where
     fn check_prepare_message(
         &self,
         message_ext: Option<&MessageExt>,
-        params: &(String, i64, i64),
+        // params: &(String, i64, i64),
+        request_header: &EndTransactionRequestHeader,
     ) -> RemotingCommand {
         let mut command = RemotingCommand::create_response_command();
         if let Some(message_ext) = message_ext {
@@ -236,17 +240,17 @@ where
                 return command;
             }
             let pgroup = pgroup_read.unwrap();
-            if pgroup != params.0 {
+            if pgroup != request_header.producer_group.as_str() {
                 command.set_code_mut(ResponseCode::SystemError);
                 command.set_remark_mut("The producer group wrong");
                 return command;
             }
-            if message_ext.queue_offset != params.1 {
+            if message_ext.queue_offset != request_header.tran_state_table_offset as i64 {
                 command.set_code_mut(ResponseCode::SystemError);
                 command.set_remark_mut("The transaction state table offset wrong");
                 return command;
             }
-            if message_ext.commit_log_offset != params.2 {
+            if message_ext.commit_log_offset != request_header.commit_log_offset as i64 {
                 command.set_code_mut(ResponseCode::SystemError);
                 command.set_remark_mut("The commit log offset wrong");
                 return command;
@@ -372,10 +376,11 @@ fn end_message_transaction(msg_ext: &MessageExt) -> MessageExtBrokerInner {
     } else {
         TopicFilterType::SingleTag
     };
-    let tags_code_value = MessageExtBrokerInner::tags_string2tags_code(
-        &topic_filter_type,
-        msg_ext.get_tags().as_ref().unwrap(),
-    );
+    let tags_code_value = if let Some(tags) = msg_ext.get_tags() {
+        MessageExtBrokerInner::tags_string2tags_code(&topic_filter_type, tags.as_str())
+    } else {
+        0
+    };
     msg_inner.tags_code = tags_code_value;
     MessageAccessor::set_properties(&mut msg_inner, msg_ext.get_properties().clone());
     msg_inner.properties_string =
@@ -383,4 +388,91 @@ fn end_message_transaction(msg_ext: &MessageExt) -> MessageExtBrokerInner {
     MessageAccessor::clear_property(&mut msg_inner, MessageConst::PROPERTY_REAL_TOPIC);
     MessageAccessor::clear_property(&mut msg_inner, MessageConst::PROPERTY_REAL_QUEUE_ID);
     msg_inner
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn end_message_transaction_with_valid_message() {
+        let msg_ext = MessageExt::default();
+        let msg_inner = end_message_transaction(&msg_ext);
+        assert_eq!(
+            msg_inner.get_topic(),
+            &msg_ext
+                .get_user_property(&CheetahString::from_static_str(
+                    MessageConst::PROPERTY_REAL_TOPIC
+                ))
+                .unwrap_or_default()
+        );
+        assert_eq!(
+            msg_inner.message_ext_inner.queue_id,
+            msg_ext
+                .get_user_property(&CheetahString::from_static_str(
+                    MessageConst::PROPERTY_REAL_QUEUE_ID
+                ))
+                .unwrap_or_default()
+                .parse::<i32>()
+                .unwrap_or_default()
+        );
+        assert_eq!(msg_inner.get_body(), msg_ext.get_body());
+        assert_eq!(msg_inner.get_flag(), msg_ext.get_flag());
+        assert_eq!(
+            msg_inner.message_ext_inner.born_timestamp,
+            msg_ext.born_timestamp
+        );
+        assert_eq!(msg_inner.message_ext_inner.born_host, msg_ext.born_host);
+        assert_eq!(msg_inner.message_ext_inner.store_host, msg_ext.store_host);
+        assert_eq!(
+            msg_inner.message_ext_inner.reconsume_times,
+            msg_ext.reconsume_times
+        );
+        assert!(msg_inner.is_wait_store_msg_ok());
+        /*        assert_eq!(
+            msg_inner.get_transaction_id(),
+            &msg_ext
+                .get_user_property(&CheetahString::from_static_str(
+                    MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX
+                ))
+                .unwrap_or_default()
+        );*/
+        assert_eq!(msg_inner.message_ext_inner.sys_flag, msg_ext.sys_flag);
+        /*        assert_eq!(
+            msg_inner.tags_code,
+            MessageExtBrokerInner::tags_string2tags_code(
+                &TopicFilterType::SingleTag,
+                msg_ext.get_tags().as_ref().unwrap()
+            )
+        );*/
+        assert_eq!(msg_inner.get_properties(), msg_ext.get_properties());
+        assert_eq!(
+            msg_inner.properties_string,
+            message_decoder::message_properties_to_string(msg_ext.get_properties())
+        );
+    }
+
+    #[test]
+    fn end_message_transaction_with_empty_body() {
+        let mut msg_ext = MessageExt::default();
+        //msg_ext.set_body(None);
+        let msg_inner = end_message_transaction(&msg_ext);
+        assert!(!msg_inner.get_body().is_some_and(|b| b.is_empty()));
+    }
+
+    #[test]
+    fn end_message_transaction_with_missing_properties() {
+        let mut msg_ext = MessageExt::default();
+        msg_ext.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC),
+            CheetahString::empty(),
+        );
+        msg_ext.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID),
+            CheetahString::empty(),
+        );
+        let msg_inner = end_message_transaction(&msg_ext);
+        assert!(msg_inner.get_topic().is_empty());
+        assert_eq!(msg_inner.message_ext_inner.queue_id, 0);
+    }
 }
