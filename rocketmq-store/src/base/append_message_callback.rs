@@ -99,7 +99,6 @@ impl DefaultAppendMessageCallback {
     }
 }
 
-#[allow(unused_variables)]
 impl AppendMessageCallback for DefaultAppendMessageCallback {
     fn do_append<MF: MappedFile>(
         &self,

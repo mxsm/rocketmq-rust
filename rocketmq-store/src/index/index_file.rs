@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use bytes::Buf;
 use bytes::Bytes;
+use cheetah_string::CheetahString;
 use rocketmq_common::common::hasher::string_hasher::JavaStringHasher;
 
 use crate::index::index_header::IndexHeader;
@@ -69,7 +70,7 @@ impl IndexFile {
         let file_total_size =
             INDEX_HEADER_SIZE + (hash_slot_num * HASH_SLOT_SIZE) + (index_num * INDEX_SIZE);
         let mapped_file = Arc::new(DefaultMappedFile::new(
-            file_name.to_string(),
+            CheetahString::from_slice(file_name),
             file_total_size as u64,
         ));
 
@@ -94,7 +95,7 @@ impl IndexFile {
         index_file
     }
 
-    pub fn get_file_name(&self) -> String {
+    pub fn get_file_name(&self) -> &CheetahString {
         self.mapped_file.get_file_name()
     }
 

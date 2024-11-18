@@ -20,6 +20,7 @@ use std::io;
 use std::sync::Arc;
 
 use bytes::Bytes;
+use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 
@@ -37,7 +38,7 @@ pub trait MappedFile {
     ///
     /// # Returns
     /// A `String` representing the name of the file.
-    fn get_file_name(&self) -> String;
+    fn get_file_name(&self) -> &CheetahString;
 
     /// Renames the mapped file to the specified file name.
     ///

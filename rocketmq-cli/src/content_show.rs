@@ -19,6 +19,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use bytes::Buf;
+use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_decoder;
 use rocketmq_store::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use rocketmq_store::log_file::mapped_file::MappedFile;
@@ -34,7 +35,7 @@ pub fn print_content(from: Option<u32>, to: Option<u32>, path: Option<PathBuf>) 
     let file_metadata = fs::metadata(path_buf.clone()).unwrap();
     println!("file size: {}B", file_metadata.len());
     let mapped_file = DefaultMappedFile::new(
-        path_buf.to_os_string().to_string_lossy().to_string(),
+        CheetahString::from(path_buf.to_string_lossy().to_string()),
         file_metadata.len(),
     );
     // read message number

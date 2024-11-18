@@ -28,6 +28,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use bytes::BytesMut;
+use cheetah_string::CheetahString;
 use memmap2::MmapMut;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
@@ -58,7 +59,7 @@ pub struct DefaultMappedFile {
     file: File,
     mmapped_file: SyncUnsafeCellWrapper<MmapMut>,
     transient_store_pool: Option<TransientStorePool>,
-    file_name: String,
+    file_name: CheetahString,
     file_from_offset: u64,
     mapped_byte_buffer: Option<bytes::Bytes>,
     wrote_position: AtomicI32,
@@ -94,14 +95,14 @@ impl PartialEq for DefaultMappedFile {
 
 impl Default for DefaultMappedFile {
     fn default() -> Self {
-        Self::new(String::new(), 0)
+        Self::new(CheetahString::new(), 0)
     }
 }
 
 impl DefaultMappedFile {
-    pub fn new(file_name: String, file_size: u64) -> Self {
+    pub fn new(file_name: CheetahString, file_size: u64) -> Self {
         let file_from_offset = Self::get_file_from_offset(&file_name);
-        let path_buf = PathBuf::from(file_name.clone());
+        let path_buf = PathBuf::from(file_name.as_str());
         ensure_dir_ok(path_buf.parent().unwrap().to_str().unwrap());
         let file = OpenOptions::new()
             .read(true)
@@ -140,8 +141,8 @@ impl DefaultMappedFile {
         }
     }
 
-    fn get_file_from_offset(file_name: &String) -> u64 {
-        let file_from_offset = PathBuf::from(file_name.to_owned())
+    fn get_file_from_offset(file_name: &CheetahString) -> u64 {
+        let file_from_offset = PathBuf::from(file_name.as_str())
             .file_name()
             .unwrap()
             .to_str()
@@ -151,8 +152,8 @@ impl DefaultMappedFile {
         file_from_offset
     }
 
-    fn build_file(file_name: &String, file_size: u64) -> File {
-        let path = PathBuf::from(file_name.clone());
+    fn build_file(file_name: &CheetahString, file_size: u64) -> File {
+        let path = PathBuf::from(file_name.as_str());
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -166,12 +167,12 @@ impl DefaultMappedFile {
     }
 
     pub fn new_with_transient_store_pool(
-        file_name: String,
+        file_name: CheetahString,
         file_size: u64,
         transient_store_pool: TransientStorePool,
     ) -> Self {
         let file_from_offset = Self::get_file_from_offset(&file_name);
-        let path_buf = PathBuf::from(file_name.clone());
+        let path_buf = PathBuf::from(file_name.as_str());
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -212,8 +213,8 @@ impl DefaultMappedFile {
 
 #[allow(unused_variables)]
 impl MappedFile for DefaultMappedFile {
-    fn get_file_name(&self) -> String {
-        self.file_name.clone()
+    fn get_file_name(&self) -> &CheetahString {
+        &self.file_name
     }
 
     fn rename_to(&mut self, file_name: &str) -> bool {
