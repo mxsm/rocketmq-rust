@@ -22,21 +22,76 @@ use rocketmq_store::base::message_result::PutMessageResult;
 use crate::transaction::operation_result::OperationResult;
 use crate::transaction::transaction_metrics::TransactionMetrics;
 
+/// Trait defining the local transactional message service.
+/// This trait provides methods for preparing, committing, rolling back, and checking transactional
+/// messages, as well as managing the state of the transactional message service.
 #[trait_variant::make(TransactionalMessageService: Send)]
 pub trait TransactionalMessageServiceLocal: Sync + 'static {
+    /// Prepares a transactional message.
+    ///
+    /// # Arguments
+    ///
+    /// * `message_inner` - The inner message to be prepared.
+    ///
+    /// # Returns
+    ///
+    /// A `PutMessageResult` indicating the result of the message preparation.
     async fn prepare_message(&mut self, message_inner: MessageExtBrokerInner) -> PutMessageResult;
 
+    /// Asynchronously prepares a transactional message.
+    ///
+    /// # Arguments
+    ///
+    /// * `message_inner` - The inner message to be prepared.
+    ///
+    /// # Returns
+    ///
+    /// A `PutMessageResult` indicating the result of the message preparation.
     async fn async_prepare_message(
         &mut self,
         message_inner: MessageExtBrokerInner,
     ) -> PutMessageResult;
 
+    /// Deletes a prepared transactional message.
+    ///
+    /// # Arguments
+    ///
+    /// * `message_ext` - The external message to be deleted.
+    ///
+    /// # Returns
+    ///
+    /// A boolean indicating whether the message was successfully deleted.
     async fn delete_prepare_message(&mut self, message_ext: &MessageExt) -> bool;
 
-    fn commit_message(&mut self, request_header: EndTransactionRequestHeader) -> OperationResult;
+    /// Commits a transactional message.
+    ///
+    /// # Arguments
+    ///
+    /// * `request_header` - The request header containing the transaction details.
+    ///
+    /// # Returns
+    ///
+    /// An `OperationResult` indicating the result of the commit operation.
+    fn commit_message(&mut self, request_header: &EndTransactionRequestHeader) -> OperationResult;
 
-    fn rollback_message(&mut self, request_header: EndTransactionRequestHeader) -> OperationResult;
+    /// Rolls back a transactional message.
+    ///
+    /// # Arguments
+    ///
+    /// * `request_header` - The request header containing the transaction details.
+    ///
+    /// # Returns
+    ///
+    /// An `OperationResult` indicating the result of the rollback operation.
+    fn rollback_message(&mut self, request_header: &EndTransactionRequestHeader)
+        -> OperationResult;
 
+    /// Checks the state of transactional messages.
+    ///
+    /// # Arguments
+    ///
+    /// * `transaction_timeout` - The timeout for the transaction.
+    /// * `transaction_check_max` - The maximum number of transaction checks.
     fn check(
         &self,
         transaction_timeout: u64,
@@ -44,11 +99,27 @@ pub trait TransactionalMessageServiceLocal: Sync + 'static {
         // listener: AbstractTransactionalMessageCheckListener,
     );
 
+    /// Opens the transactional message service.
+    ///
+    /// # Returns
+    ///
+    /// A boolean indicating whether the service was successfully opened.
     fn open(&self) -> bool;
 
+    /// Closes the transactional message service.
     fn close(&self);
 
+    /// Gets the transaction metrics.
+    ///
+    /// # Returns
+    ///
+    /// A reference to the `TransactionMetrics`.
     fn get_transaction_metrics(&self) -> &TransactionMetrics;
 
+    /// Sets the transaction metrics.
+    ///
+    /// # Arguments
+    ///
+    /// * `transaction_metrics` - The transaction metrics to be set.
     fn set_transaction_metrics(&mut self, transaction_metrics: TransactionMetrics);
 }

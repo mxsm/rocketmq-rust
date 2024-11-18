@@ -208,11 +208,16 @@ where
         }
     }
 
-    fn commit_message(&mut self, request_header: EndTransactionRequestHeader) -> OperationResult {
+    #[inline]
+    fn commit_message(&mut self, request_header: &EndTransactionRequestHeader) -> OperationResult {
         self.get_half_message_by_offset(request_header.commit_log_offset as i64)
     }
 
-    fn rollback_message(&mut self, request_header: EndTransactionRequestHeader) -> OperationResult {
+    #[inline]
+    fn rollback_message(
+        &mut self,
+        request_header: &EndTransactionRequestHeader,
+    ) -> OperationResult {
         self.get_half_message_by_offset(request_header.commit_log_offset as i64)
     }
 
