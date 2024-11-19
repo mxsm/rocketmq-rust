@@ -16,10 +16,14 @@
  */
 use thiserror::Error;
 
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Error)]
 pub enum BrokerError {
     #[error("broker client error: {0}")]
     BrokerClientError(#[from] rocketmq_remoting::error::Error),
+
+    #[error("Common error: {0}")]
+    BrokerCommonError(#[from] rocketmq_common::error::Error),
 
     #[error("Client exception occurred: CODE:{0}, broker address:{2}, Message:{1}")]
     MQBrokerError(i32, String, String),

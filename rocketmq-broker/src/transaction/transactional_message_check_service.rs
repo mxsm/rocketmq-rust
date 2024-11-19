@@ -15,4 +15,5 @@
  * limitations under the License.
  */
 
+#[derive(Clone)]
 pub struct TransactionalMessageCheckService;
