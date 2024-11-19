@@ -14,6 +14,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use bytes::Bytes;
+
+use crate::Result;
+
 pub trait Compressor {
     /// Compress message by different compressor.
     ///
@@ -25,7 +29,7 @@ pub trait Compressor {
     /// # Returns
     ///
     /// Compressed byte data or an `std::io::Error`.
-    fn compress(&self, src: &[u8], level: i32) -> Result<Vec<u8>, std::io::Error>;
+    fn compress(&self, src: &[u8], level: i32) -> Result<Bytes>;
 
     /// Decompress message by different compressor.
     ///
@@ -36,5 +40,5 @@ pub trait Compressor {
     /// # Returns
     ///
     /// Decompressed byte data or an `std::io::Error`.
-    fn decompress(&self, src: &[u8]) -> Result<Vec<u8>, std::io::Error>;
+    fn decompress(&self, src: &[u8]) -> Result<Bytes>;
 }

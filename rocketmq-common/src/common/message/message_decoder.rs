@@ -30,6 +30,7 @@ use bytes::BytesMut;
 use cheetah_string::CheetahString;
 
 use crate::common::compression::compression_type::CompressionType;
+use crate::common::compression::compressor_factory::CompressorFactory;
 use crate::common::message::message_client_ext::MessageClientExt;
 use crate::common::message::message_ext::MessageExt;
 use crate::common::message::message_id::MessageId;
@@ -556,6 +557,241 @@ pub fn decode_message_id(msg_id: &str) -> MessageId {
     }
 }
 
+pub fn encode(message_ext: &MessageExt, need_compress: bool) -> Result<Bytes> {
+    let body = message_ext.get_body().unwrap();
+    let topics = message_ext.get_topic().as_bytes();
+    let topic_len = topics.len();
+    let properties = message_properties_to_string(message_ext.get_properties());
+    let properties_bytes = properties.as_bytes();
+    let properties_length = properties_bytes.len();
+    let sys_flag = message_ext.sys_flag;
+    let born_host_length = if (sys_flag & MessageSysFlag::BORNHOST_V6_FLAG) == 0 {
+        8
+    } else {
+        20
+    };
+    let store_host_address_length = if (sys_flag & MessageSysFlag::STOREHOSTADDRESS_V6_FLAG) == 0 {
+        8
+    } else {
+        20
+    };
+    let new_body = if need_compress
+        && (sys_flag & MessageSysFlag::COMPRESSED_FLAG) == MessageSysFlag::COMPRESSED_FLAG
+    {
+        let compressor =
+            CompressorFactory::get_compressor(MessageSysFlag::get_compression_type(sys_flag));
+        let compressed_body = compressor.compress(body, 5)?;
+        Some(compressed_body)
+    } else {
+        None
+    };
+    let body_len = new_body.as_ref().map_or(body.len(), |b| b.len());
+    let store_size = message_ext.store_size;
+    let mut byte_buffer = if store_size > 0 {
+        BytesMut::with_capacity(store_size as usize)
+    } else {
+        let store_size = 4 // 1 TOTALSIZE
+            + 4 // 2 MAGICCODE
+            + 4 // 3 BODYCRC
+            + 4 // 4 QUEUEID
+            + 4 // 5 FLAG
+            + 8 // 6 QUEUEOFFSET
+            + 8 // 7 PHYSICALOFFSET
+            + 4 // 8 SYSFLAG
+            + 8 // 9 BORNTIMESTAMP
+            + born_host_length // 10 BORNHOST
+            + 8 // 11 STORETIMESTAMP
+            + store_host_address_length // 12 STOREHOSTADDRESS
+            + 4 // 13 RECONSUMETIMES
+            + 8 // 14 Prepared Transaction Offset
+            + 4 + body_len // 14 BODY
+            + 1 + topic_len // 15 TOPIC
+            + 2 + properties_length; // 16 propertiesLength
+        BytesMut::with_capacity(store_size)
+    };
+
+    // 1 TOTALSIZE
+    byte_buffer.put_i32(store_size);
+
+    // 2 MAGICCODE
+    byte_buffer.put_i32(MESSAGE_MAGIC_CODE);
+
+    // 3 BODYCRC
+    byte_buffer.put_u32(message_ext.body_crc);
+
+    // 4 QUEUEID
+    byte_buffer.put_i32(message_ext.queue_id);
+
+    // 5 FLAG
+    byte_buffer.put_i32(message_ext.message.flag);
+
+    // 6 QUEUEOFFSET
+    byte_buffer.put_i64(message_ext.queue_offset);
+
+    // 7 PHYSICALOFFSET
+    byte_buffer.put_i64(message_ext.commit_log_offset);
+
+    // 8 SYSFLAG
+    byte_buffer.put_i32(message_ext.sys_flag);
+
+    // 9 BORNTIMESTAMP
+    byte_buffer.put_i64(message_ext.born_timestamp);
+
+    // 10 BORNHOST
+
+    let born_host = message_ext.born_host;
+    match born_host {
+        SocketAddr::V4(value) => byte_buffer.extend(value.ip().octets()),
+        SocketAddr::V6(value) => byte_buffer.extend(value.ip().octets()),
+    };
+
+    byte_buffer.put_i32(born_host.port() as i32);
+
+    // 11 STORETIMESTAMP
+    byte_buffer.put_i64(message_ext.store_timestamp);
+
+    // 12 STOREHOST
+
+    let store_host = message_ext.store_host;
+    match store_host {
+        SocketAddr::V4(value) => byte_buffer.extend(value.ip().octets()),
+        SocketAddr::V6(value) => byte_buffer.extend(value.ip().octets()),
+    };
+
+    byte_buffer.put_i32(store_host.port() as i32);
+
+    // 13 RECONSUMETIMES
+    byte_buffer.put_i32(message_ext.reconsume_times);
+
+    // 14 Prepared Transaction Offset
+    byte_buffer.put_i64(message_ext.prepared_transaction_offset);
+
+    // 15 BODY
+    byte_buffer.put_i32(body_len as i32);
+    if let Some(new_body) = new_body {
+        byte_buffer.put_slice(&new_body);
+    } else {
+        byte_buffer.put_slice(body);
+    }
+
+    // 16 TOPIC
+    byte_buffer.put_i16(topic_len as i16);
+    byte_buffer.put_slice(topics);
+
+    // 17 properties
+    byte_buffer.put_i16(properties_length as i16);
+    byte_buffer.put_slice(properties_bytes);
+
+    Ok(byte_buffer.freeze())
+}
+
+pub fn encode_uniquely(message_ext: &MessageExt, need_compress: bool) -> Result<Bytes> {
+    let body = message_ext.get_body().unwrap();
+    let topics = message_ext.get_topic().as_bytes();
+    let topic_len = topics.len();
+    let properties = message_properties_to_string(message_ext.get_properties());
+    let properties_bytes = properties.as_bytes();
+    let properties_length = properties_bytes.len();
+    let sys_flag = message_ext.sys_flag;
+    let born_host_length = if (sys_flag & MessageSysFlag::BORNHOST_V6_FLAG) == 0 {
+        8
+    } else {
+        20
+    };
+    let new_body = if need_compress
+        && (sys_flag & MessageSysFlag::COMPRESSED_FLAG) == MessageSysFlag::COMPRESSED_FLAG
+    {
+        let compressor =
+            CompressorFactory::get_compressor(MessageSysFlag::get_compression_type(sys_flag));
+        let compressed_body = compressor.compress(body, 5)?;
+        Some(compressed_body)
+    } else {
+        None
+    };
+    let body_len = new_body.as_ref().map_or(body.len(), |b| b.len());
+    let store_size = message_ext.store_size;
+    let mut byte_buffer = if store_size > 0 {
+        BytesMut::with_capacity((store_size - 8) as usize)
+    } else {
+        let store_size = 4 // 1 TOTALSIZE
+            + 4 // 2 MAGICCODE
+            + 4 // 3 BODYCRC
+            + 4 // 4 QUEUEID
+            + 4 // 5 FLAG
+            + 8 // 6 QUEUEOFFSET
+            + 8 // 7 PHYSICALOFFSET
+            + 4 // 8 SYSFLAG
+            + 8 // 9 BORNTIMESTAMP
+            + born_host_length // 10 BORNHOST
+            + 4 // 11 RECONSUMETIMES
+            + 8 // 12 Prepared Transaction Offset
+            + 4 + body_len // 13 BODY
+            + 1 + topic_len // 14 TOPIC
+            + 2 + properties_length; // 15 propertiesLength
+        BytesMut::with_capacity(store_size)
+    };
+
+    // 1 TOTALSIZE
+    byte_buffer.put_i32(store_size);
+
+    // 2 MAGICCODE
+    byte_buffer.put_i32(MESSAGE_MAGIC_CODE);
+
+    // 3 BODYCRC
+    byte_buffer.put_u32(message_ext.body_crc);
+
+    // 4 QUEUEID
+    byte_buffer.put_i32(message_ext.queue_id);
+
+    // 5 FLAG
+    byte_buffer.put_i32(message_ext.message.flag);
+
+    // 6 QUEUEOFFSET
+    byte_buffer.put_i64(message_ext.queue_offset);
+
+    // 7 PHYSICALOFFSET
+    byte_buffer.put_i64(message_ext.commit_log_offset);
+
+    // 8 SYSFLAG
+    byte_buffer.put_i32(message_ext.sys_flag);
+
+    // 9 BORNTIMESTAMP
+    byte_buffer.put_i64(message_ext.born_timestamp);
+
+    // 10 BORNHOST
+
+    let born_host = message_ext.born_host;
+    match born_host {
+        SocketAddr::V4(value) => byte_buffer.extend(value.ip().octets()),
+        SocketAddr::V6(value) => byte_buffer.extend(value.ip().octets()),
+    };
+    byte_buffer.put_i32(born_host.port() as i32);
+
+    // 11 RECONSUMETIMES
+    byte_buffer.put_i32(message_ext.reconsume_times);
+
+    // 12 Prepared Transaction Offset
+    byte_buffer.put_i64(message_ext.prepared_transaction_offset);
+
+    // 13 BODY
+    byte_buffer.put_i32(body_len as i32);
+    if let Some(new_body) = new_body {
+        byte_buffer.put_slice(&new_body);
+    } else {
+        byte_buffer.put_slice(body);
+    }
+
+    // 14 TOPIC
+    byte_buffer.put_i16(topic_len as i16);
+    byte_buffer.put_slice(topics);
+
+    // 15 properties
+    byte_buffer.put_i16(properties_length as i16);
+    byte_buffer.put_slice(properties_bytes);
+
+    Ok(byte_buffer.freeze())
+}
+
 #[cfg(test)]
 mod tests {
     use bytes::BufMut;
@@ -600,5 +836,87 @@ mod tests {
         let message_id = decode_message_id(msg_id);
         assert_eq!(message_id.address, "127.0.0.1:55334".parse().unwrap());
         assert_eq!(message_id.offset, 860316681131967304);
+    }
+
+    #[test]
+    fn encode_with_compression() {
+        let mut message_ext = MessageExt::default();
+        message_ext.set_body(Bytes::from("Hello, World!"));
+        let result = encode(&message_ext, true);
+        assert!(result.is_ok());
+        let bytes = result.unwrap();
+        assert!(!bytes.is_empty());
+    }
+
+    #[test]
+    fn encode_without_compression() {
+        let mut message_ext = MessageExt::default();
+        message_ext.set_body(Bytes::from("Hello, World!"));
+        let result = encode(&message_ext, false);
+        assert!(result.is_ok());
+        let bytes = result.unwrap();
+        assert!(!bytes.is_empty());
+    }
+
+    #[test]
+    fn encode_with_empty_body() {
+        let mut message_ext = MessageExt::default();
+        message_ext.set_body(Bytes::new());
+        let result = encode(&message_ext, false);
+        assert!(result.is_ok());
+        let bytes = result.unwrap();
+        assert!(!bytes.is_empty());
+    }
+
+    #[test]
+    fn encode_with_large_body() {
+        let mut message_ext = MessageExt::default();
+        let large_body = vec![0u8; 1024 * 1024];
+        message_ext.set_body(Bytes::from(large_body));
+        let result = encode(&message_ext, false);
+        assert!(result.is_ok());
+        let bytes = result.unwrap();
+        assert!(!bytes.is_empty());
+    }
+
+    #[test]
+    fn encode_uniquely_with_compression() {
+        let mut message_ext = MessageExt::default();
+        message_ext.set_body(Bytes::from("Hello, World!"));
+        let result = encode_uniquely(&message_ext, true);
+        assert!(result.is_ok());
+        let bytes = result.unwrap();
+        assert!(!bytes.is_empty());
+    }
+
+    #[test]
+    fn encode_uniquely_without_compression() {
+        let mut message_ext = MessageExt::default();
+        message_ext.set_body(Bytes::from("Hello, World!"));
+        let result = encode_uniquely(&message_ext, false);
+        assert!(result.is_ok());
+        let bytes = result.unwrap();
+        assert!(!bytes.is_empty());
+    }
+
+    #[test]
+    fn encode_uniquely_with_empty_body() {
+        let mut message_ext = MessageExt::default();
+        message_ext.set_body(Bytes::new());
+        let result = encode_uniquely(&message_ext, false);
+        assert!(result.is_ok());
+        let bytes = result.unwrap();
+        assert!(!bytes.is_empty());
+    }
+
+    #[test]
+    fn encode_uniquely_with_large_body() {
+        let mut message_ext = MessageExt::default();
+        let large_body = vec![0u8; 1024 * 1024];
+        message_ext.set_body(Bytes::from(large_body));
+        let result = encode_uniquely(&message_ext, false);
+        assert!(result.is_ok());
+        let bytes = result.unwrap();
+        assert!(!bytes.is_empty());
     }
 }

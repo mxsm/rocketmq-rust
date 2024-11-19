@@ -55,7 +55,6 @@ use rocketmq_rust::ArcMut;
 use tokio::runtime::Handle;
 use tokio::sync::RwLock;
 use tokio::sync::Semaphore;
-use tokio_util::bytes::Bytes;
 use tracing::warn;
 
 use crate::base::client_config::ClientConfig;
@@ -1246,7 +1245,7 @@ impl DefaultMQProducerImpl {
                         .compress(body, self.producer_config.compress_level());
                     if let Ok(data) = data {
                         //store the compressed data
-                        msg.set_compressed_body_mut(Bytes::from(data));
+                        msg.set_compressed_body_mut(data);
                         return true;
                     }
                 }
