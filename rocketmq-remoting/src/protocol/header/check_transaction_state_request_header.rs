@@ -22,7 +22,7 @@ use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::FromMap;
 use crate::rpc::rpc_request_header::RpcRequestHeader;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckTransactionStateRequestHeader {
     pub topic: Option<CheetahString>,

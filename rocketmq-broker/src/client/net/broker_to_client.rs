@@ -14,10 +14,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use cheetah_string::CheetahString;
+use rocketmq_common::common::message::message_ext::MessageExt;
+use rocketmq_common::MessageDecoder;
+use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::net::channel::Channel;
+use rocketmq_remoting::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 
 use crate::error::BrokerError::BrokerClientError;
+use crate::error::BrokerError::BrokerCommonError;
 use crate::Result;
 
 #[derive(Default, Clone)]
@@ -32,6 +38,31 @@ impl Broker2Client {
     ) -> Result<RemotingCommand> {
         match channel.send_wait_response(request, timeout_millis).await {
             Ok(value) => Ok(value),
+            Err(e) => Err(BrokerClientError(e)),
+        }
+    }
+
+    pub async fn check_producer_transaction_state(
+        &self,
+        _group: &CheetahString,
+        channel: &mut Channel,
+        request_header: CheckTransactionStateRequestHeader,
+        message_ext: MessageExt,
+    ) -> Result<()> {
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::CheckTransactionState,
+            request_header,
+        );
+        match MessageDecoder::encode(&message_ext, false) {
+            Ok(body) => {
+                request.set_body_mut_ref(body);
+            }
+            Err(e) => {
+                return Err(BrokerCommonError(e));
+            }
+        }
+        match channel.send_one_way(request, 100).await {
+            Ok(_) => Ok(()),
             Err(e) => Err(BrokerClientError(e)),
         }
     }

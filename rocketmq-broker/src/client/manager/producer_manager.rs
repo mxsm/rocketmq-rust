@@ -16,6 +16,8 @@
  */
 
 use std::collections::HashMap;
+use std::sync::atomic::AtomicI32;
+use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::TimeUtils::get_current_millis;
@@ -31,6 +33,7 @@ pub struct ProducerManager {
         HashMap<CheetahString /* group name */, HashMap<Channel, ClientChannelInfo>>,
     >,
     client_channel_table: parking_lot::Mutex<HashMap<CheetahString, Channel /* client ip:port */>>,
+    positive_atomic_counter: Arc<AtomicI32>,
 }
 
 impl ProducerManager {
@@ -38,6 +41,7 @@ impl ProducerManager {
         Self {
             group_channel_table: parking_lot::Mutex::new(HashMap::new()),
             client_channel_table: parking_lot::Mutex::new(HashMap::new()),
+            positive_atomic_counter: Arc::new(Default::default()),
         }
     }
 }
@@ -115,5 +119,24 @@ impl ProducerManager {
 
     pub fn find_channel(&self, client_id: &str) -> Option<Channel> {
         self.client_channel_table.lock().get(client_id).cloned()
+    }
+
+    pub fn get_available_channel(&self, group: Option<&CheetahString>) -> Option<Channel> {
+        let group = group?;
+        let group_channel_table = self.group_channel_table.lock();
+        let channel_map = group_channel_table.get(group);
+        if let Some(channel_map) = channel_map {
+            if channel_map.is_empty() {
+                return None;
+            }
+            let channels = channel_map.keys().collect::<Vec<&Channel>>();
+            let index = self
+                .positive_atomic_counter
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            let index = index.unsigned_abs() as usize % channels.len();
+            let channel = channels[index].clone();
+            return Some(channel);
+        }
+        None
     }
 }

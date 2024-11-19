@@ -54,6 +54,7 @@ use crate::broker::broker_hook::BrokerShutdownHook;
 use crate::client::default_consumer_ids_change_listener::DefaultConsumerIdsChangeListener;
 use crate::client::manager::consumer_manager::ConsumerManager;
 use crate::client::manager::producer_manager::ProducerManager;
+use crate::client::net::broker_to_client::Broker2Client;
 use crate::client::rebalance::rebalance_lock_manager::RebalanceLockManager;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
 use crate::hook::batch_check_before_put_message::BatchCheckBeforePutMessageHook;
@@ -126,7 +127,9 @@ pub(crate) struct BrokerRuntime {
     #[cfg(feature = "local_file_store")]
     transactional_message_service:
         Option<ArcMut<DefaultTransactionalMessageService<DefaultMessageStore>>>,
-    transactional_message_check_listener: Option<Arc<DefaultTransactionalMessageCheckListener>>,
+    #[cfg(feature = "local_file_store")]
+    transactional_message_check_listener:
+        Option<Arc<DefaultTransactionalMessageCheckListener<DefaultMessageStore>>>,
     transactional_message_check_service: Option<Arc<TransactionalMessageCheckService>>,
     transaction_metrics_flush_service: Option<Arc<TransactionMetricsFlushService>>,
 }
@@ -689,7 +692,13 @@ impl BrokerRuntime {
             }
         }
         self.transactional_message_check_listener =
-            Some(Arc::new(DefaultTransactionalMessageCheckListener));
+            Some(Arc::new(DefaultTransactionalMessageCheckListener::new(
+                self.broker_config.clone(),
+                self.producer_manager.clone(),
+                Broker2Client,
+                self.topic_config_manager.clone(),
+                self.message_store.as_ref().cloned().unwrap(),
+            )));
         self.transactional_message_check_service = Some(Arc::new(TransactionalMessageCheckService));
         self.transaction_metrics_flush_service = Some(Arc::new(TransactionMetricsFlushService));
     }

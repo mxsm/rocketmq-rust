@@ -18,5 +18,6 @@ pub(crate) mod operation_result;
 pub(crate) mod queue;
 pub(crate) mod transaction_metrics;
 pub(crate) mod transaction_metrics_flush_service;
+pub(crate) mod transactional_message_check_listener;
 pub(crate) mod transactional_message_check_service;
 pub(crate) mod transactional_message_service;
