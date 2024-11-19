@@ -38,5 +38,5 @@ pub trait TransactionalMessageCheckListener {
     /// - The message cannot be resolved
     /// - The broker fails to process the resolution
     /// - The message is in an invalid state
-    async fn resolve_discard_msg(&mut self, msg_ext: MessageExt) -> Result<(), Box<dyn std::error::Error>>;
+    async fn resolve_discard_msg(&mut self, msg_ext: MessageExt);
 }

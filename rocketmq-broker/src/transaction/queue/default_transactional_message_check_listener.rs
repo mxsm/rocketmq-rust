@@ -78,22 +78,14 @@ where
              topic TRANS_CHECK_MAXTIME_TOPIC",
             msg_ext
         );
+
         let topic_config = self
             .topic_config_manager
             .create_topic_of_tran_check_max_time(
                 TCMT_QUEUE_NUMS,
                 PermName::PERM_READ | PermName::PERM_WRITE,
             )
-            let topic_config = self
-                .topic_config_manager
-                .create_topic_of_tran_check_max_time(
-                    TCMT_QUEUE_NUMS,
-                    PermName::PERM_READ | PermName::PERM_WRITE,
-                )
-                .map_err(|e| {
-                    error!("Failed to create topic TRANS_CHECK_MAXTIME_TOPIC: {:?}", e);
-                    e
-                })?;
+            .expect("Create topic of tran check max time failed");
         let broker_inner = to_message_ext_broker_inner(&topic_config, &msg_ext);
         let put_message_result = self.message_store.put_message(broker_inner).await;
 
