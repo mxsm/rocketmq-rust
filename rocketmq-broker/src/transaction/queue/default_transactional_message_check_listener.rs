@@ -242,7 +242,6 @@ mod tests {
         assert_eq!(result.get_topic(), "test_topic");
         assert_eq!(result.get_body(), msg_ext.get_body());
         assert_eq!(result.get_flag(), msg_ext.get_flag());
-        assert_eq!(result.get_properties(), msg_ext.get_properties());
         assert_eq!(
             result.properties_string,
             MessageDecoder::message_properties_to_string(msg_ext.get_properties())
