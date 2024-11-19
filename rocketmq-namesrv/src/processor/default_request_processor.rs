@@ -54,13 +54,11 @@ use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use tracing::info;
 use tracing::warn;
 
 use crate::route::route_info_manager::RouteInfoManager;
 use crate::KVConfigManager;
 
-#[derive(Clone)]
 pub struct DefaultRequestProcessor {
     route_info_manager: Arc<parking_lot::RwLock<RouteInfoManager>>,
     kvconfig_manager: Arc<parking_lot::RwLock<KVConfigManager>>,
@@ -68,47 +66,39 @@ pub struct DefaultRequestProcessor {
 
 impl DefaultRequestProcessor {
     pub fn process_request(
-        &self,
+        &mut self,
         channel: Channel,
         _ctx: ConnectionHandlerContext,
+        request_code: RequestCode,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
-        let code = request.code();
-        let broker_request_code = RequestCode::value_of(code);
-        info!(
-            "Received request code:{}-{:?}",
-            code,
-            broker_request_code.as_ref()
-        );
-        let response = match broker_request_code {
-            Some(RequestCode::PutKvConfig) => self.put_kv_config(request),
-            Some(RequestCode::GetKvConfig) => self.get_kv_config(request),
-            Some(RequestCode::DeleteKvConfig) => self.delete_kv_config(request),
-            Some(RequestCode::QueryDataVersion) => self.query_broker_topic_config(request),
+        let response = match request_code {
+            RequestCode::PutKvConfig => self.put_kv_config(request),
+            RequestCode::GetKvConfig => self.get_kv_config(request),
+            RequestCode::DeleteKvConfig => self.delete_kv_config(request),
+            RequestCode::QueryDataVersion => self.query_broker_topic_config(request),
             //handle register broker
-            Some(RequestCode::RegisterBroker) => {
+            RequestCode::RegisterBroker => {
                 self.process_register_broker(channel.remote_address(), request)
             }
-            Some(RequestCode::UnregisterBroker) => self.process_unregister_broker(request),
-            Some(RequestCode::BrokerHeartbeat) => self.process_broker_heartbeat(request),
-            Some(RequestCode::GetBrokerMemberGroup) => self.get_broker_member_group(request),
+            RequestCode::UnregisterBroker => self.process_unregister_broker(request),
+            RequestCode::BrokerHeartbeat => self.process_broker_heartbeat(request),
+            RequestCode::GetBrokerMemberGroup => self.get_broker_member_group(request),
             //handle get broker cluster info
-            Some(RequestCode::GetBrokerClusterInfo) => self.get_broker_cluster_info(request),
-            Some(RequestCode::WipeWritePermOfBroker) => self.wipe_write_perm_of_broker(request),
-            Some(RequestCode::AddWritePermOfBroker) => self.add_write_perm_of_broker(request),
-            Some(RequestCode::GetAllTopicListFromNameserver) => {
+            RequestCode::GetBrokerClusterInfo => self.get_broker_cluster_info(request),
+            RequestCode::WipeWritePermOfBroker => self.wipe_write_perm_of_broker(request),
+            RequestCode::AddWritePermOfBroker => self.add_write_perm_of_broker(request),
+            RequestCode::GetAllTopicListFromNameserver => {
                 self.get_all_topic_list_from_nameserver(request)
             }
-            Some(RequestCode::DeleteTopicInNamesrv) => self.delete_topic_in_name_srv(request),
-            Some(RequestCode::RegisterTopicInNamesrv) => self.register_topic_to_name_srv(request),
-            Some(RequestCode::GetKvlistByNamespace) => self.get_kv_list_by_namespace(request),
-            Some(RequestCode::GetTopicsByCluster) => self.get_topics_by_cluster(request),
-            Some(RequestCode::GetSystemTopicListFromNs) => {
-                self.get_system_topic_list_from_ns(request)
-            }
-            Some(RequestCode::GetUnitTopicList) => self.get_unit_topic_list(request),
-            Some(RequestCode::GetHasUnitSubTopicList) => self.get_has_unit_sub_topic_list(request),
-            Some(RequestCode::GetHasUnitSubUnunitTopicList) => {
+            RequestCode::DeleteTopicInNamesrv => self.delete_topic_in_name_srv(request),
+            RequestCode::RegisterTopicInNamesrv => self.register_topic_to_name_srv(request),
+            RequestCode::GetKvlistByNamespace => self.get_kv_list_by_namespace(request),
+            RequestCode::GetTopicsByCluster => self.get_topics_by_cluster(request),
+            RequestCode::GetSystemTopicListFromNs => self.get_system_topic_list_from_ns(request),
+            RequestCode::GetUnitTopicList => self.get_unit_topic_list(request),
+            RequestCode::GetHasUnitSubTopicList => self.get_has_unit_sub_topic_list(request),
+            RequestCode::GetHasUnitSubUnunitTopicList => {
                 self.get_has_unit_sub_un_unit_topic_list(request)
             }
             _ => RemotingCommand::create_response_command_with_code(

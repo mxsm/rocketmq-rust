@@ -101,8 +101,8 @@ impl NameServerRuntime {
                 Duration::from_secs(5),
             );
         NameServerRequestProcessor {
-            client_request_processor: Arc::new(client_request_processor),
-            default_request_processor: Arc::new(default_request_processor),
+            client_request_processor: ArcMut::new(client_request_processor),
+            default_request_processor: ArcMut::new(default_request_processor),
         }
     }
 }
