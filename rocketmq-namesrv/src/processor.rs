@@ -15,14 +15,13 @@
  * limitations under the License.
  */
 
-use std::sync::Arc;
-
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_remoting::Result;
+use rocketmq_rust::ArcMut;
 use tracing::info;
 
 pub use self::client_request_processor::ClientRequestProcessor;
@@ -31,18 +30,10 @@ use crate::processor::default_request_processor::DefaultRequestProcessor;
 mod client_request_processor;
 pub mod default_request_processor;
 
+#[derive(Clone)]
 pub struct NameServerRequestProcessor {
-    pub(crate) client_request_processor: Arc<ClientRequestProcessor>,
-    pub(crate) default_request_processor: Arc<DefaultRequestProcessor>,
-}
-
-impl Clone for NameServerRequestProcessor {
-    fn clone(&self) -> Self {
-        Self {
-            client_request_processor: self.client_request_processor.clone(),
-            default_request_processor: self.default_request_processor.clone(),
-        }
-    }
+    pub(crate) client_request_processor: ArcMut<ClientRequestProcessor>,
+    pub(crate) default_request_processor: ArcMut<DefaultRequestProcessor>,
 }
 
 impl RequestProcessor for NameServerRequestProcessor {
@@ -53,14 +44,16 @@ impl RequestProcessor for NameServerRequestProcessor {
         request: RemotingCommand,
     ) -> Result<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
-        info!("process_request: {:?}", request_code);
+        info!("Name server Received request code: {:?}", request_code);
         let result = match request_code {
-            RequestCode::GetRouteinfoByTopic => self
-                .client_request_processor
-                .process_request(channel, ctx, request),
-            _ => self
-                .default_request_processor
-                .process_request(channel, ctx, request),
+            RequestCode::GetRouteinfoByTopic => {
+                self.client_request_processor
+                    .process_request(channel, ctx, request_code, request)
+            }
+            _ => {
+                self.default_request_processor
+                    .process_request(channel, ctx, request_code, request)
+            }
         };
         Ok(result)
     }

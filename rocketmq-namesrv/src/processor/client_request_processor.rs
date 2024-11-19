@@ -23,6 +23,7 @@ use std::time::Duration;
 use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_common::common::FAQUrl;
 use rocketmq_common::TimeUtils;
+use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::RemotingSysResponseCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
@@ -118,9 +119,10 @@ impl ClientRequestProcessor {
 
 impl ClientRequestProcessor {
     pub fn process_request(
-        &self,
+        &mut self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
+        _request_code: RequestCode,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
         Some(self.get_route_info_by_topic(request))
