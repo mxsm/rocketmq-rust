@@ -49,37 +49,37 @@ impl CompressionType {
         }
     }
 
-    pub fn compression(&self, data: &Bytes) -> Bytes {
+    pub fn compression(&self, data: &[u8]) -> Bytes {
         match self {
             CompressionType::LZ4 => {
-                let compressed = compress_prepend_size(data.chunk());
+                let compressed = compress_prepend_size(data);
                 Bytes::from(compressed)
             }
             CompressionType::Zstd => {
-                let compressed = zstd::encode_all(data.clone().reader(), 5).unwrap();
+                let compressed = zstd::encode_all(data.reader(), 5).unwrap();
                 Bytes::from(compressed)
             }
             CompressionType::Zlib => {
                 let mut zlib_encoder = ZlibEncoder::new(Vec::new(), Compression::default());
-                let _ = zlib_encoder.write_all(data.chunk());
+                let _ = zlib_encoder.write_all(data);
                 let result = zlib_encoder.finish().unwrap();
                 Bytes::from(result)
             }
         }
     }
 
-    pub fn decompression(&self, data: &Bytes) -> Bytes {
+    pub fn decompression(&self, data: &[u8]) -> Bytes {
         match self {
             CompressionType::LZ4 => {
-                let compressed = decompress_size_prepended(data.chunk()).unwrap();
+                let compressed = decompress_size_prepended(data).unwrap();
                 Bytes::from(compressed)
             }
             CompressionType::Zstd => {
-                let compressed = zstd::decode_all(data.clone().reader()).unwrap();
+                let compressed = zstd::decode_all(data.reader()).unwrap();
                 Bytes::from(compressed)
             }
             CompressionType::Zlib => {
-                let mut zlib_encoder = ZlibDecoder::new(data.clone().reader());
+                let mut zlib_encoder = ZlibDecoder::new(data.reader());
                 let mut decompressed_data = Vec::new();
                 zlib_encoder.read_to_end(&mut decompressed_data).unwrap();
                 Bytes::from(decompressed_data)

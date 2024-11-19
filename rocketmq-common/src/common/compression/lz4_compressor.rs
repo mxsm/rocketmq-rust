@@ -14,18 +14,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::io::Error;
+use bytes::Bytes;
 
+use crate::common::compression::compression_type::CompressionType;
 use crate::common::compression::compressor::Compressor;
+use crate::Result;
 
 pub struct Lz4Compressor;
 
 impl Compressor for Lz4Compressor {
-    fn compress(&self, src: &[u8], level: i32) -> Result<Vec<u8>, Error> {
-        todo!()
+    fn compress(&self, src: &[u8], level: i32) -> Result<Bytes> {
+        Ok(CompressionType::LZ4.compression(src))
     }
 
-    fn decompress(&self, src: &[u8]) -> Result<Vec<u8>, Error> {
-        todo!()
+    fn decompress(&self, src: &[u8]) -> Result<Bytes> {
+        Ok(CompressionType::LZ4.decompression(src))
     }
 }
