@@ -18,16 +18,21 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_common::common::server::config::ServerConfig;
+use rocketmq_common::utils::network_util::NetworkUtil;
 use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
+use rocketmq_remoting::clients::RemotingClient;
+use rocketmq_remoting::remoting::RemotingService;
 use rocketmq_remoting::remoting_server::server::RocketMQServer;
 use rocketmq_remoting::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_runtime::RocketMQRuntime;
+use rocketmq_rust::wait_for_signal;
 use rocketmq_rust::ArcMut;
-use tokio::select;
 use tokio::sync::broadcast;
+use tracing::info;
 
 use crate::processor::ClientRequestProcessor;
 use crate::processor::NameServerRequestProcessor;
@@ -55,11 +60,12 @@ struct NameServerRuntime {
 
 impl NameServerBootstrap {
     pub async fn boot(mut self) {
-        select! {
+        /*select! {
             _ = self.name_server_runtime.start() =>{
 
             }
-        }
+        }*/
+        tokio::join!(self.name_server_runtime.start(), wait_for_signal());
     }
 }
 
@@ -69,7 +75,20 @@ impl NameServerRuntime {
         let receiver = notify_conn_disconnect.subscribe();
         let request_processor = self.init_processors(receiver);
         let server = RocketMQServer::new(self.server_config.clone());
-        server.run(request_processor).await;
+        tokio::spawn(async move {
+            server.run(request_processor).await;
+        });
+        let namesrv = CheetahString::from_string(format!(
+            "{}:{}",
+            NetworkUtil::get_local_address().unwrap(),
+            self.server_config.listen_port
+        ));
+        let weak_arc_mut = ArcMut::downgrade(&self.remoting_client);
+        self.remoting_client
+            .update_name_server_address_list(vec![namesrv])
+            .await;
+        self.remoting_client.start(weak_arc_mut).await;
+        info!("Rocketmq NameServer(Rust) started");
     }
 
     fn init_processors(
