@@ -2,7 +2,7 @@ name: Sync Issue Labels to PR
 
 on:
   pull_request:
-    types: [ opened, synchronize ] # Trigger when a PR is created or updated
+    types: [ opened, synchronize, edited ] # Trigger when a PR is created, updated, or edited
 
 jobs:
   sync-labels:
