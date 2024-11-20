@@ -1,0 +1,60 @@
+name: Sync Issue Labels to PR
+
+on:
+  pull_request:
+    types: [ opened, synchronize, edited ] # Trigger when a PR is created, updated, or edited
+
+jobs:
+  sync-labels:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout the repository
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      # Sync labels from the linked issue to the PR
+      - name: Sync Labels from Linked Issue
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.BOT_TOKEN  }}
+          script: |
+            // Extract linked issue numbers from the PR description
+            const issueNumbers = context.payload.pull_request.body
+              ?.match(/(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)?(?:\s*)?#(\d+)/gi)
+              ?.map(match => parseInt(match.match(/\d+/)[0])) || [];
+            
+            if (issueNumbers.length === 0) {
+              console.log("No linked issues found in the PR description.");
+              return;
+            }
+            
+            for (const issueNumber of issueNumbers) {
+              console.log(`Processing linked issue: #${issueNumber}`);
+            
+              // Fetch labels from the linked issue
+              const issueResponse = await github.rest.issues.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+              });
+            
+              const issueLabels = issueResponse.data.labels.map(label => label.name);
+            
+              if (issueLabels.length === 0) {
+                console.log(`No labels found on Issue #${issueNumber}`);
+                continue;
+              }
+            
+              console.log(`Labels from Issue #${issueNumber}: ${issueLabels.join(', ')}`);
+            
+              // Add labels to the PR
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                labels: issueLabels,
+              });
+            
+              console.log(`Labels synced to PR: ${issueLabels.join(', ')}`);
+            }
