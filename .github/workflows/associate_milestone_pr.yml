@@ -1,4 +1,4 @@
-name: Associate Milestone
+name: Associate Milestone(PR)
 
 on:
   issues:
