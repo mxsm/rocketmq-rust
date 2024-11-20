@@ -1,0 +1,40 @@
+name: Associate Milestone
+
+on:
+  issues:
+    types: [ opened ]
+
+jobs:
+  create-issue:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Associate Milestone
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.BOT_TOKEN  }}
+          script: |
+            const { owner, repo } = context.repo;
+            const issueNumber = context.issue.number;
+            const milestoneTitle = 'v0.4.0';
+
+            // Get the milestone ID by title
+            const milestones = await github.rest.issues.listMilestones({
+              owner,
+              repo,
+            });
+
+            const milestone = milestones.data.find(m => m.title === milestoneTitle);
+
+            if (!milestone) {
+              throw new Error(`Milestone with title "${milestoneTitle}" not found`);
+            }
+
+            // Associate the issue with the milestone
+            await github.rest.issues.update({
+              owner,
+              repo,
+              issue_number: issueNumber,
+              milestone: milestone.number,
+            });
+
+            console.log(`Associated issue #${issueNumber} with milestone "${milestoneTitle}"`);
