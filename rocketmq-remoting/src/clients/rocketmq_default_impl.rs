@@ -240,11 +240,11 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
 impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingService for RocketmqDefaultClient<PR> {
     async fn start(&self, this: WeakArcMut<Self>) {
         if let Some(client) = this.upgrade() {
-            client.scan_available_name_srv().await;
+            let connect_timeout_millis = self.tokio_client_config.connect_timeout_millis as u64;
             self.client_runtime.get_handle().spawn(async move {
                 loop {
-                    time::sleep(Duration::from_millis(1)).await;
                     client.scan_available_name_srv().await;
+                    time::sleep(Duration::from_millis(connect_timeout_millis)).await;
                 }
             });
         }
@@ -290,7 +290,9 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
                     "name remoting_server address updated. NEW : {:?} , OLD: {:?}",
                     addrs, old
                 );
-                old.clone_from(&addrs);
+                /* let mut rng = thread_rng();
+                addrs.shuffle(&mut rng);*/
+                self.namesrv_addr_list.mut_from_ref().extend(addrs.clone());
 
                 // should close the channel if choosed addr is not exist.
                 if let Some(namesrv_addr) = self.namesrv_addr_choosed.as_ref() {
