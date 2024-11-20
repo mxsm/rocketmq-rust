@@ -25,6 +25,8 @@ use crate::Result;
 pub struct DefaultRemotingRequestProcessor;
 
 impl RequestProcessor for DefaultRemotingRequestProcessor {
+
+    #[inline]
     async fn process_request(
         &mut self,
         _channel: Channel,
