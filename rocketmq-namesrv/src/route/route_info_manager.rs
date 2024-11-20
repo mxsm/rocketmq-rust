@@ -77,14 +77,14 @@ pub struct RouteInfoManager {
     pub(crate) broker_live_table: BrokerLiveTable,
     pub(crate) filter_server_table: FilterServerTable,
     pub(crate) topic_queue_mapping_info_table: TopicQueueMappingInfoTable,
-    pub(crate) namesrv_config: Arc<NamesrvConfig>,
+    pub(crate) namesrv_config: ArcMut<NamesrvConfig>,
     pub(crate) remoting_client: ArcMut<RocketmqDefaultClient>,
 }
 
 #[allow(private_interfaces)]
 impl RouteInfoManager {
     pub fn new(
-        namesrv_config: Arc<NamesrvConfig>,
+        namesrv_config: ArcMut<NamesrvConfig>,
         remoting_client: ArcMut<RocketmqDefaultClient>,
     ) -> Self {
         RouteInfoManager {

@@ -20,6 +20,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_common::common::FAQUrl;
 use rocketmq_common::TimeUtils;
@@ -31,24 +32,26 @@ use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequ
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_rust::ArcMut;
 use tracing::warn;
 
 use crate::kvconfig::kvconfig_mananger::KVConfigManager;
+use crate::processor::NAMESPACE_ORDER_TOPIC_CONFIG;
 use crate::route::route_info_manager::RouteInfoManager;
 
 pub struct ClientRequestProcessor {
     route_info_manager: Arc<parking_lot::RwLock<RouteInfoManager>>,
-    namesrv_config: Arc<NamesrvConfig>,
+    namesrv_config: ArcMut<NamesrvConfig>,
     need_check_namesrv_ready: AtomicBool,
     startup_time_millis: u64,
-    kvconfig_manager: Arc<parking_lot::RwLock<KVConfigManager>>,
+    kvconfig_manager: KVConfigManager,
 }
 
 impl ClientRequestProcessor {
     pub fn new(
         route_info_manager: Arc<parking_lot::RwLock<RouteInfoManager>>,
-        namesrv_config: Arc<NamesrvConfig>,
-        kvconfig_manager: Arc<parking_lot::RwLock<KVConfigManager>>,
+        namesrv_config: ArcMut<NamesrvConfig>,
+        kvconfig_manager: KVConfigManager,
     ) -> Self {
         Self {
             route_info_manager,
@@ -94,10 +97,10 @@ impl ClientRequestProcessor {
                 }
                 if self.namesrv_config.order_message_enable {
                     //get kv config
-                    let order_topic_config = self
-                        .kvconfig_manager
-                        .read()
-                        .get_kvconfig("ORDER_TOPIC_CONFIG", request_header.topic.clone());
+                    let order_topic_config = self.kvconfig_manager.get_kvconfig(
+                        &CheetahString::from_static_str(NAMESPACE_ORDER_TOPIC_CONFIG),
+                        &request_header.topic,
+                    );
                     topic_route_data.order_topic_conf = order_topic_config;
                 };
                 /*let standard_json_only = request_header.accept_standard_json_only.unwrap_or(false);

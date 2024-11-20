@@ -56,12 +56,13 @@ use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use tracing::warn;
 
+use crate::processor::NAMESPACE_ORDER_TOPIC_CONFIG;
 use crate::route::route_info_manager::RouteInfoManager;
 use crate::KVConfigManager;
 
 pub struct DefaultRequestProcessor {
     route_info_manager: Arc<parking_lot::RwLock<RouteInfoManager>>,
-    kvconfig_manager: Arc<parking_lot::RwLock<KVConfigManager>>,
+    kvconfig_manager: KVConfigManager,
 }
 
 impl DefaultRequestProcessor {
@@ -111,7 +112,7 @@ impl DefaultRequestProcessor {
 
 ///implementation put KV config
 impl DefaultRequestProcessor {
-    fn put_kv_config(&self, request: RemotingCommand) -> RemotingCommand {
+    fn put_kv_config(&mut self, request: RemotingCommand) -> RemotingCommand {
         let request_header = request
             .decode_command_custom_header::<PutKVConfigRequestHeader>()
             .unwrap();
@@ -120,12 +121,13 @@ impl DefaultRequestProcessor {
             return RemotingCommand::create_response_command_with_code(
                 RemotingSysResponseCode::SystemError,
             )
-            .set_remark("namespace or key is empty");
+            .set_remark(CheetahString::from_static_str("namespace or key is empty"));
         }
-        self.kvconfig_manager.write().put_kv_config(
-            request_header.namespace.as_str(),
-            request_header.key.as_str(),
-            request_header.value.as_str(),
+
+        self.kvconfig_manager.put_kv_config(
+            request_header.namespace.clone(),
+            request_header.key.clone(),
+            request_header.value.clone(),
         );
         RemotingCommand::create_response_command()
     }
@@ -135,10 +137,9 @@ impl DefaultRequestProcessor {
             .decode_command_custom_header::<GetKVConfigRequestHeader>()
             .unwrap();
 
-        let value = self.kvconfig_manager.read().get_kvconfig(
-            request_header.namespace.as_str(),
-            request_header.key.as_str(),
-        );
+        let value = self
+            .kvconfig_manager
+            .get_kvconfig(&request_header.namespace, &request_header.key);
 
         if value.is_some() {
             return RemotingCommand::create_response_command()
@@ -147,20 +148,17 @@ impl DefaultRequestProcessor {
         RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::SystemError)
             .set_remark(format!(
                 "No config item, Namespace: {} Key: {}",
-                request_header.namespace.as_str(),
-                request_header.key.as_str()
+                request_header.namespace, request_header.key
             ))
     }
 
-    fn delete_kv_config(&self, request: RemotingCommand) -> RemotingCommand {
+    fn delete_kv_config(&mut self, request: RemotingCommand) -> RemotingCommand {
         let request_header = request
             .decode_command_custom_header::<DeleteKVConfigRequestHeader>()
             .unwrap();
 
-        self.kvconfig_manager.write().delete_kv_config(
-            request_header.namespace.as_str(),
-            request_header.key.as_str(),
-        );
+        self.kvconfig_manager
+            .delete_kv_config(&request_header.namespace, &request_header.key);
         RemotingCommand::create_response_command()
     }
 
@@ -203,7 +201,7 @@ impl DefaultRequestProcessor {
 impl DefaultRequestProcessor {
     pub fn new(
         route_info_manager: Arc<parking_lot::RwLock<RouteInfoManager>>,
-        kvconfig_manager: Arc<parking_lot::RwLock<KVConfigManager>>,
+        kvconfig_manager: KVConfigManager,
     ) -> Self {
         Self {
             route_info_manager,
@@ -213,7 +211,7 @@ impl DefaultRequestProcessor {
 }
 impl DefaultRequestProcessor {
     fn process_register_broker(
-        &self,
+        &mut self,
         remote_addr: SocketAddr,
         request: RemotingCommand,
     ) -> RemotingCommand {
@@ -269,14 +267,14 @@ impl DefaultRequestProcessor {
         }
         if self
             .kvconfig_manager
-            .read()
             .namesrv_config
             .return_order_topic_config_to_broker
         {
-            if let Some(value) = self
-                .kvconfig_manager
-                .write()
-                .get_kv_list_by_namespace("ORDER_TOPIC_CONFIG")
+            if let Some(value) =
+                self.kvconfig_manager
+                    .get_kv_list_by_namespace(&CheetahString::from_static_str(
+                        NAMESPACE_ORDER_TOPIC_CONFIG,
+                    ))
             {
                 response_command = response_command.set_body(value);
             }
@@ -411,8 +409,7 @@ impl DefaultRequestProcessor {
             .unwrap();
         let value = self
             .kvconfig_manager
-            .write()
-            .get_kv_list_by_namespace(request_header.namespace.as_str());
+            .get_kv_list_by_namespace(&request_header.namespace);
         if let Some(value) = value {
             return RemotingCommand::create_response_command().set_body(value);
         }
