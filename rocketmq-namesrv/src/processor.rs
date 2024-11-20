@@ -30,6 +30,8 @@ use crate::processor::default_request_processor::DefaultRequestProcessor;
 mod client_request_processor;
 pub mod default_request_processor;
 
+const NAMESPACE_ORDER_TOPIC_CONFIG: &str = "ORDER_TOPIC_CONFIG";
+
 #[derive(Clone)]
 pub struct NameServerRequestProcessor {
     pub(crate) client_request_processor: ArcMut<ClientRequestProcessor>,

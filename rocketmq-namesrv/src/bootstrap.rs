@@ -49,11 +49,11 @@ pub struct Builder {
 }
 
 struct NameServerRuntime {
-    name_server_config: Arc<NamesrvConfig>,
+    name_server_config: ArcMut<NamesrvConfig>,
     tokio_client_config: Arc<TokioClientConfig>,
     server_config: Arc<ServerConfig>,
     route_info_manager: Arc<parking_lot::RwLock<RouteInfoManager>>,
-    kvconfig_manager: Arc<parking_lot::RwLock<KVConfigManager>>,
+    kvconfig_manager: KVConfigManager,
     name_server_runtime: Option<RocketMQRuntime>,
     remoting_client: ArcMut<RocketmqDefaultClient>,
 }
@@ -159,7 +159,7 @@ impl Builder {
     }
 
     pub fn build(self) -> NameServerBootstrap {
-        let name_server_config = Arc::new(self.name_server_config.unwrap());
+        let name_server_config = ArcMut::new(self.name_server_config.unwrap_or_default());
         let runtime = RocketMQRuntime::new_multi(10, "namesrv-thread");
         let tokio_client_config = Arc::new(TokioClientConfig::default());
         let remoting_client = ArcMut::new(RocketmqDefaultClient::new(
@@ -176,9 +176,7 @@ impl Builder {
                     name_server_config.clone(),
                     remoting_client.clone(),
                 ))),
-                kvconfig_manager: Arc::new(parking_lot::RwLock::new(KVConfigManager::new(
-                    name_server_config,
-                ))),
+                kvconfig_manager: KVConfigManager::new(name_server_config),
                 name_server_runtime: Some(runtime),
                 remoting_client,
             },
