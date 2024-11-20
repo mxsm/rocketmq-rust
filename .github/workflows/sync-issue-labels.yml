@@ -21,8 +21,8 @@ jobs:
           script: |
             // Extract linked issue numbers from the PR description
             const issueNumbers = context.payload.pull_request.body
-              ?.match(/#\d+/g)
-              ?.map(match => parseInt(match.replace('#', ''))) || [];
+              ?.match(/(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)?(?:\s*)?#(\d+)/gi)
+              ?.map(match => parseInt(match.match(/\d+/)[0])) || [];
             
             if (issueNumbers.length === 0) {
               console.log("No linked issues found in the PR description.");
