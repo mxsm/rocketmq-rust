@@ -180,15 +180,14 @@ impl DefaultRequestProcessor {
             );
         let mut rim_write = self.route_info_manager.write();
         rim_write.update_broker_info_update_timestamp(
-            request_header.cluster_name.as_str(),
-            request_header.broker_addr.as_str(),
+            request_header.cluster_name.clone(),
+            request_header.broker_addr.clone(),
         );
         let mut command = RemotingCommand::create_response_command()
             .set_command_custom_header(QueryDataVersionResponseHeader::new(changed));
-        if let Some(value) = rim_write.query_broker_topic_config(
-            request_header.cluster_name.as_str(),
-            request_header.broker_addr.as_str(),
-        ) {
+        if let Some(value) = rim_write
+            .query_broker_topic_config(request_header.cluster_name, request_header.broker_addr)
+        {
             command = command.set_body(value.encode());
         }
         drop(rim_write);
@@ -311,8 +310,8 @@ impl DefaultRequestProcessor {
         self.route_info_manager
             .write()
             .update_broker_info_update_timestamp(
-                request_header.cluster_name.as_str(),
-                request_header.broker_addr.as_str(),
+                request_header.cluster_name,
+                request_header.broker_addr,
             );
         RemotingCommand::create_response_command()
     }
@@ -322,10 +321,10 @@ impl DefaultRequestProcessor {
             .decode_command_custom_header::<GetBrokerMemberGroupRequestHeader>()
             .unwrap();
 
-        let broker_member_group = self.route_info_manager.write().get_broker_member_group(
-            request_header.cluster_name.as_str(),
-            request_header.broker_name.as_str(),
-        );
+        let broker_member_group = self
+            .route_info_manager
+            .write()
+            .get_broker_member_group(&request_header.cluster_name, &request_header.broker_name);
         let response_body = GetBrokerMemberGroupResponseBody {
             broker_member_group,
         };
@@ -397,7 +396,7 @@ impl DefaultRequestProcessor {
             if !topic_route_data.queue_datas.is_empty() {
                 self.route_info_manager
                     .write()
-                    .register_topic(request_header.topic.as_str(), topic_route_data.queue_datas)
+                    .register_topic(request_header.topic, topic_route_data.queue_datas)
             }
         }
         RemotingCommand::create_response_command()
