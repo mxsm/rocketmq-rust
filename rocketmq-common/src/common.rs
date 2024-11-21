@@ -59,7 +59,7 @@ pub mod system_clock;
 pub mod thread;
 pub mod topic;
 
-#[derive(Debug, Clone, Default, Eq, PartialEq, Copy)]
+#[derive(Clone, Default, Eq, PartialEq, Copy)]
 pub enum TopicFilterType {
     #[default]
     SingleTag,
