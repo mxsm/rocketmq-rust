@@ -139,7 +139,7 @@ impl TopicConfig {
         if !self.attributes.is_empty() {
             sb.push_str(&serde_json::to_string(&self.attributes).unwrap());
         }
-        sb
+        sb.trim().to_string()
     }
 
     pub fn decode(&mut self, input: &str) -> bool {
@@ -165,5 +165,119 @@ impl TopicConfig {
 
     pub fn get_read_queue_nums(&self) -> u32 {
         self.read_queue_nums
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use cheetah_string::CheetahString;
+
+    use super::*;
+
+    #[test]
+    fn default_topic_config() {
+        let config = TopicConfig::default();
+        assert_eq!(config.topic_name, None);
+        assert_eq!(config.read_queue_nums, TopicConfig::DEFAULT_READ_QUEUE_NUMS);
+        assert_eq!(
+            config.write_queue_nums,
+            TopicConfig::DEFAULT_WRITE_QUEUE_NUMS
+        );
+        assert_eq!(config.perm, PermName::PERM_READ | PermName::PERM_WRITE);
+        assert_eq!(config.topic_filter_type, TopicFilterType::SingleTag);
+        assert_eq!(config.topic_sys_flag, 0);
+        assert_eq!(config.order, false);
+        assert!(config.attributes.is_empty());
+    }
+
+    #[test]
+    fn new_topic_config() {
+        let topic_name = CheetahString::from("test_topic");
+        let config = TopicConfig::new(topic_name.clone());
+        assert_eq!(config.topic_name, Some(topic_name));
+    }
+
+    #[test]
+    fn with_queues_topic_config() {
+        let topic_name = CheetahString::from("test_topic");
+        let config = TopicConfig::with_queues(topic_name.clone(), 8, 8);
+        assert_eq!(config.topic_name, Some(topic_name));
+        assert_eq!(config.read_queue_nums, 8);
+        assert_eq!(config.write_queue_nums, 8);
+    }
+
+    #[test]
+    fn with_perm_topic_config() {
+        let topic_name = CheetahString::from("test_topic");
+        let config = TopicConfig::with_perm(topic_name.clone(), 8, 8, PermName::PERM_READ);
+        assert_eq!(config.topic_name, Some(topic_name));
+        assert_eq!(config.read_queue_nums, 8);
+        assert_eq!(config.write_queue_nums, 8);
+        assert_eq!(config.perm, PermName::PERM_READ);
+    }
+
+    #[test]
+    fn with_sys_flag_topic_config() {
+        let topic_name = CheetahString::from("test_topic");
+        let config = TopicConfig::with_sys_flag(topic_name.clone(), 8, 8, PermName::PERM_READ, 1);
+        assert_eq!(config.topic_name, Some(topic_name));
+        assert_eq!(config.read_queue_nums, 8);
+        assert_eq!(config.write_queue_nums, 8);
+        assert_eq!(config.perm, PermName::PERM_READ);
+        assert_eq!(config.topic_sys_flag, 1);
+    }
+
+    #[test]
+    fn encode_topic_config() {
+        let topic_name = CheetahString::from("test_topic");
+        let mut attributes = HashMap::new();
+        attributes.insert(CheetahString::from("key"), CheetahString::from("value"));
+        let config = TopicConfig {
+            topic_name: Some(topic_name.clone()),
+            read_queue_nums: 8,
+            write_queue_nums: 8,
+            perm: PermName::PERM_READ,
+            topic_filter_type: TopicFilterType::SingleTag,
+            topic_sys_flag: 1,
+            order: false,
+            attributes,
+        };
+        let encoded = config.encode();
+        assert!(encoded.contains("test_topic 8 8 4 SINGLE_TAG {\"key\":\"value\"}"));
+    }
+
+    #[test]
+    fn decode_topic_config() {
+        let mut config = TopicConfig::default();
+        let input = "test_topic 8 8 2 SingleTag {\"key\":\"value\"}";
+        let result = config.decode(input);
+        assert!(result);
+        assert_eq!(config.topic_name, Some(CheetahString::from("test_topic")));
+        assert_eq!(config.read_queue_nums, 8);
+        assert_eq!(config.write_queue_nums, 8);
+        assert_eq!(config.perm, PermName::PERM_WRITE);
+        assert_eq!(config.topic_filter_type, TopicFilterType::SingleTag);
+        assert_eq!(
+            config.attributes.get(&CheetahString::from("key")),
+            Some(&CheetahString::from("value"))
+        );
+    }
+
+    #[test]
+    fn get_topic_message_type_normal() {
+        let config = TopicConfig::default();
+        assert_eq!(config.get_topic_message_type(), TopicMessageType::Normal);
+    }
+
+    #[test]
+    fn get_topic_message_type_from_attributes() {
+        let mut config = TopicConfig::default();
+        config.attributes.insert(
+            CheetahString::from(TOPIC_MESSAGE_TYPE_ATTRIBUTE.get_name()),
+            CheetahString::from("Normal"),
+        );
+        assert_eq!(config.get_topic_message_type(), TopicMessageType::Normal);
     }
 }
