@@ -26,7 +26,7 @@ use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::FromMap;
 
 /// Represents the header for a broker registration request.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct RegisterBrokerRequestHeader {
     /// The name of the broker.
     #[serde(rename = "brokerName")]

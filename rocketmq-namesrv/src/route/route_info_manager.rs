@@ -18,7 +18,6 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::time::SystemTime;
 
 use cheetah_string::CheetahString;
@@ -57,19 +56,23 @@ use crate::route_info::broker_addr_info::BrokerStatusChangeInfo;
 
 const DEFAULT_BROKER_CHANNEL_EXPIRED_TIME: i64 = 1000 * 60 * 2;
 
-type TopicQueueTable =
-    HashMap<CheetahString /* topic */, HashMap<CheetahString /* broker name */, QueueData>>;
-type BrokerAddrTable = HashMap<CheetahString /* brokerName */, BrokerData>;
+type TopicQueueTable = ArcMut<
+    HashMap<CheetahString /* topic */, HashMap<CheetahString /* broker name */, QueueData>>,
+>;
+type BrokerAddrTable = ArcMut<HashMap<CheetahString /* brokerName */, BrokerData>>;
 type ClusterAddrTable =
-    HashMap<CheetahString /* clusterName */, HashSet<CheetahString /* brokerName */>>;
-type BrokerLiveTable = HashMap<BrokerAddrInfo /* brokerAddr */, BrokerLiveInfo>;
+    ArcMut<HashMap<CheetahString /* clusterName */, HashSet<CheetahString /* brokerName */>>>;
+type BrokerLiveTable = ArcMut<HashMap<BrokerAddrInfo /* brokerAddr */, BrokerLiveInfo>>;
 type FilterServerTable =
-    HashMap<BrokerAddrInfo /* brokerAddr */, Vec<String> /* Filter Server */>;
-type TopicQueueMappingInfoTable = HashMap<
-    CheetahString, /* topic */
-    HashMap<CheetahString /* brokerName */, TopicQueueMappingInfo>,
+    ArcMut<HashMap<BrokerAddrInfo /* brokerAddr */, Vec<String> /* Filter Server */>>;
+type TopicQueueMappingInfoTable = ArcMut<
+    HashMap<
+        CheetahString, /* topic */
+        HashMap<CheetahString /* brokerName */, TopicQueueMappingInfo>,
+    >,
 >;
 
+#[derive(Clone)]
 pub struct RouteInfoManager {
     pub(crate) topic_queue_table: TopicQueueTable,
     pub(crate) broker_addr_table: BrokerAddrTable,
@@ -88,12 +91,12 @@ impl RouteInfoManager {
         remoting_client: ArcMut<RocketmqDefaultClient>,
     ) -> Self {
         RouteInfoManager {
-            topic_queue_table: HashMap::new(),
-            broker_addr_table: HashMap::new(),
-            cluster_addr_table: HashMap::new(),
-            broker_live_table: HashMap::new(),
-            filter_server_table: HashMap::new(),
-            topic_queue_mapping_info_table: HashMap::new(),
+            topic_queue_table: ArcMut::new(HashMap::new()),
+            broker_addr_table: ArcMut::new(HashMap::new()),
+            cluster_addr_table: ArcMut::new(HashMap::new()),
+            broker_live_table: ArcMut::new(HashMap::new()),
+            filter_server_table: ArcMut::new(HashMap::new()),
+            topic_queue_mapping_info_table: ArcMut::new(HashMap::new()),
             namesrv_config,
             remoting_client,
         }
@@ -324,8 +327,8 @@ impl RouteInfoManager {
                     .broker_live_table
                     .get(BrokerAddrInfo::new(cluster_name.clone(), master_addr.clone()).as_ref());
                 if let Some(info) = master_livie_info {
-                    result.ha_server_addr = info.ha_server_addr().to_string();
-                    result.master_addr = info.ha_server_addr().to_string();
+                    result.ha_server_addr = info.ha_server_addr().clone();
+                    result.master_addr = info.ha_server_addr().clone();
                 }
             }
         }
@@ -349,8 +352,8 @@ impl RouteInfoManager {
 impl RouteInfoManager {
     pub(crate) fn get_all_cluster_info(&self) -> ClusterInfo {
         ClusterInfo::new(
-            Some(self.broker_addr_table.clone()),
-            Some(self.cluster_addr_table.clone()),
+            Some(self.broker_addr_table.as_ref().clone()),
+            Some(self.cluster_addr_table.as_ref().clone()),
         )
     }
 
@@ -1096,7 +1099,7 @@ impl RouteInfoManager {
 
     pub fn connection_disconnected(&mut self, socket_addr: SocketAddr) {
         let mut broker_addr_info = None;
-        for (bai, bli) in &self.broker_live_table {
+        for (bai, bli) in self.broker_live_table.as_ref() {
             if bli.remote_addr == socket_addr {
                 broker_addr_info = Some(bai.clone());
                 break;
@@ -1115,16 +1118,11 @@ impl RouteInfoManager {
 // Non-instance method implementations
 impl RouteInfoManager {
     /// start client connection disconnected listener
-    pub fn start(
-        route_info_manager: Arc<parking_lot::RwLock<Self>>,
-        receiver: broadcast::Receiver<SocketAddr>,
-    ) {
+    pub fn start(mut route_info_manager: Self, receiver: broadcast::Receiver<SocketAddr>) {
         let mut receiver = receiver;
         tokio::spawn(async move {
             while let Ok(socket_addr) = receiver.recv().await {
-                route_info_manager
-                    .write()
-                    .connection_disconnected(socket_addr);
+                route_info_manager.connection_disconnected(socket_addr);
             }
         });
     }

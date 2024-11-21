@@ -17,7 +17,6 @@
 
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
@@ -40,7 +39,7 @@ use crate::processor::NAMESPACE_ORDER_TOPIC_CONFIG;
 use crate::route::route_info_manager::RouteInfoManager;
 
 pub struct ClientRequestProcessor {
-    route_info_manager: Arc<parking_lot::RwLock<RouteInfoManager>>,
+    route_info_manager: RouteInfoManager,
     namesrv_config: ArcMut<NamesrvConfig>,
     need_check_namesrv_ready: AtomicBool,
     startup_time_millis: u64,
@@ -49,7 +48,7 @@ pub struct ClientRequestProcessor {
 
 impl ClientRequestProcessor {
     pub fn new(
-        route_info_manager: Arc<parking_lot::RwLock<RouteInfoManager>>,
+        route_info_manager: RouteInfoManager,
         namesrv_config: ArcMut<NamesrvConfig>,
         kvconfig_manager: KVConfigManager,
     ) -> Self {
@@ -82,7 +81,6 @@ impl ClientRequestProcessor {
         }
         match self
             .route_info_manager
-            .read()
             .pickup_topic_route_data(request_header.topic.as_ref())
         {
             None => RemotingCommand::create_response_command_with_code(ResponseCode::TopicNotExist)
