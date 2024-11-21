@@ -14,14 +14,26 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::collections::HashMap;
+use std::io::prelude::*;
 
+use bytes::Buf;
+use bytes::BufMut;
 use bytes::Bytes;
+use bytes::BytesMut;
+use flate2::read::DeflateDecoder;
+use flate2::write::DeflateEncoder;
+use flate2::Compression;
+use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
+use crate::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
+use crate::protocol::DataVersion;
+use crate::protocol::RemotingDeserializable;
 use crate::protocol::RemotingSerializable;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -55,8 +67,46 @@ impl RegisterBrokerBody {
         if !compress {
             return <Self as RemotingSerializable>::encode(self);
         }
+        let mut bytes_mut = BytesMut::new();
+        {
+            let buffer = self
+                .topic_config_serialize_wrapper
+                .mapping_data_version
+                .encode();
+            let topic_config_table = self
+                .topic_config_serialize_wrapper
+                .topic_config_serialize_wrapper
+                .topic_config_table
+                .clone();
 
-        unimplemented!()
+            bytes_mut.put_i32(buffer.len() as i32);
+            bytes_mut.put(buffer.as_ref());
+            let topic_number = topic_config_table.len();
+            bytes_mut.put_i32(topic_number as i32);
+            for (_topic, topic_config) in topic_config_table {
+                let topic_config_bytes = topic_config.encode();
+                bytes_mut.put_i32(topic_config_bytes.len() as i32);
+                bytes_mut.put(topic_config_bytes.as_bytes());
+            }
+            let buffer = SerdeJsonUtils::to_json(&self.filter_server_list).unwrap();
+            bytes_mut.put_i32(buffer.len() as i32);
+            bytes_mut.put(buffer.as_bytes());
+            let topic_queue_mapping_info_map = self
+                .topic_config_serialize_wrapper
+                .topic_queue_mapping_info_map
+                .clone();
+            bytes_mut.put_i32(topic_queue_mapping_info_map.len() as i32);
+            for (_, queue_mapping) in topic_queue_mapping_info_map {
+                let queue_mapping_bytes = queue_mapping.encode();
+                bytes_mut.put_i32(queue_mapping_bytes.len() as i32);
+                bytes_mut.put(queue_mapping_bytes.as_slice());
+            }
+        }
+        let bytes = bytes_mut.freeze();
+
+        let mut encoder = DeflateEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(bytes.as_ref()).unwrap();
+        encoder.finish().unwrap()
     }
 }
 
@@ -64,11 +114,99 @@ impl RegisterBrokerBody {
     pub fn decode(
         bytes: &Bytes,
         compressed: bool,
-        _broker_version: RocketMqVersion,
+        broker_version: RocketMqVersion,
     ) -> RegisterBrokerBody {
         if !compressed {
             return SerdeJsonUtils::decode::<RegisterBrokerBody>(bytes.iter().as_slice()).unwrap();
         }
-        todo!()
+        let mut decoder = DeflateDecoder::new(bytes.as_ref());
+        let mut bytes_mut = BytesMut::new();
+        let result = decoder.read(&mut bytes_mut);
+        let mut register_broker_body = RegisterBrokerBody::default();
+        if result.is_err() {
+            return register_broker_body;
+        }
+        let mut bytes = bytes_mut.freeze();
+        let data_version_length = bytes.get_i32();
+        let data_version_bytes = bytes.copy_to_bytes(data_version_length as usize);
+        let data_version = DataVersion::decode(data_version_bytes.as_ref()).unwrap();
+        register_broker_body
+            .topic_config_serialize_wrapper
+            .mapping_data_version = data_version;
+
+        let topic_config_number = bytes.get_i32();
+        for _ in 0..topic_config_number {
+            let topic_config_length = bytes.get_i32();
+            let topic_config_bytes = bytes.copy_to_bytes(topic_config_length as usize);
+            let cow = String::from_utf8_lossy(topic_config_bytes.as_ref()).to_string();
+            let mut topic_config = TopicConfig::default();
+            topic_config.decode(cow.as_str());
+            let topic = topic_config.topic_name.clone().unwrap_or_default();
+            register_broker_body
+                .topic_config_serialize_wrapper
+                .topic_config_serialize_wrapper
+                .topic_config_table
+                .insert(topic, topic_config);
+        }
+
+        let filter_server_list_json_length = bytes.get_i32();
+        let filter_server_list_json = bytes.copy_to_bytes(filter_server_list_json_length as usize);
+        register_broker_body.filter_server_list =
+            SerdeJsonUtils::from_json_slice(filter_server_list_json.as_ref()).unwrap();
+
+        if broker_version as i32 >= RocketMqVersion::V500 as i32 {
+            let topic_queue_mapping_num = bytes.get_i32();
+            let mut topic_queue_mapping_info_map = HashMap::new();
+            for _ in 0..topic_queue_mapping_num {
+                let queue_mapping_length = bytes.get_i32();
+                let buffer = bytes.copy_to_bytes(queue_mapping_length as usize);
+                let info = TopicQueueMappingInfo::decode(buffer.as_ref()).unwrap();
+                topic_queue_mapping_info_map.insert(info.topic.clone().unwrap_or_default(), info);
+            }
+            register_broker_body
+                .topic_config_serialize_wrapper
+                .topic_queue_mapping_info_map = topic_queue_mapping_info_map;
+        }
+        register_broker_body
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+    use cheetah_string::CheetahString;
+    use rocketmq_common::common::config::TopicConfig;
+    use rocketmq_common::common::mq_version::RocketMqVersion;
+    use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
+
+    use super::*;
+
+    #[test]
+    fn encode_without_compression() {
+        let wrapper = TopicConfigAndMappingSerializeWrapper::default();
+        let filter_list = vec!["filter1".to_string(), "filter2".to_string()];
+        let body = RegisterBrokerBody::new(wrapper, filter_list);
+        let encoded = body.encode(false);
+        assert!(!encoded.is_empty());
+    }
+
+    #[test]
+    fn encode_with_compression() {
+        let wrapper = TopicConfigAndMappingSerializeWrapper::default();
+        let filter_list = vec!["filter1".to_string(), "filter2".to_string()];
+        let body = RegisterBrokerBody::new(wrapper, filter_list);
+        let encoded = body.encode(true);
+        assert!(!encoded.is_empty());
+    }
+
+    #[test]
+    fn decode_without_compression() {
+        let wrapper = TopicConfigAndMappingSerializeWrapper::default();
+        let filter_list = vec!["filter1".to_string(), "filter2".to_string()];
+        let body = RegisterBrokerBody::new(wrapper, filter_list);
+        let encoded = body.encode(false);
+        let decoded =
+            RegisterBrokerBody::decode(&Bytes::from(encoded), false, RocketMqVersion::V500);
+        assert_eq!(decoded.filter_server_list, body.filter_server_list);
     }
 }
