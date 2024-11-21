@@ -92,4 +92,38 @@ impl RocketMQRuntime {
             }
         }
     }
+
+    pub fn schedule_at_fixed_rate_mut<F>(
+        &self,
+        mut task: F,
+        initial_delay: Option<Duration>,
+        period: Duration,
+    ) where
+        F: FnMut() + Send + 'static,
+    {
+        match self {
+            RocketMQRuntime::Multi(runtime) => {
+                runtime.handle().spawn(async move {
+                    // initial delay
+                    if let Some(initial_delay_inner) = initial_delay {
+                        tokio::time::sleep(initial_delay_inner).await;
+                    }
+
+                    loop {
+                        // record current execution time
+                        let current_execution_time = tokio::time::Instant::now();
+                        // execute task
+                        task();
+                        // Calculate the time of the next execution
+                        let next_execution_time = current_execution_time + period;
+
+                        // Wait until the next execution
+                        let delay = next_execution_time
+                            .saturating_duration_since(tokio::time::Instant::now());
+                        tokio::time::sleep(delay).await;
+                    }
+                });
+            }
+        }
+    }
 }
