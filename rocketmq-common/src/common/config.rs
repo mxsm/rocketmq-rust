@@ -121,7 +121,12 @@ impl TopicConfig {
 
     pub fn encode(&self) -> String {
         let mut sb = String::new();
-        sb.push_str(self.topic_name.as_deref().unwrap_or(""));
+        sb.push_str(
+            self.topic_name
+                .clone()
+                .unwrap_or(CheetahString::empty())
+                .as_str(),
+        );
         sb.push_str(Self::SEPARATOR);
         sb.push_str(&self.read_queue_nums.to_string());
         sb.push_str(Self::SEPARATOR);
@@ -129,9 +134,9 @@ impl TopicConfig {
         sb.push_str(Self::SEPARATOR);
         sb.push_str(&self.perm.to_string());
         sb.push_str(Self::SEPARATOR);
-        sb.push_str(&format!("{:?}", self.topic_filter_type));
+        sb.push_str(&format!("{}", self.topic_filter_type));
+        sb.push_str(Self::SEPARATOR);
         if !self.attributes.is_empty() {
-            sb.push_str(Self::SEPARATOR);
             sb.push_str(&serde_json::to_string(&self.attributes).unwrap());
         }
         sb
