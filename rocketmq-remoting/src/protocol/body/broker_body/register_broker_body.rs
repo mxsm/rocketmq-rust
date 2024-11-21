@@ -104,7 +104,7 @@ impl RegisterBrokerBody {
         }
         let bytes = bytes_mut.freeze();
 
-        let mut encoder = DeflateEncoder::new(Vec::new(), Compression::default());
+        let mut encoder = DeflateEncoder::new(Vec::new(), Compression::best());
         encoder.write_all(bytes.as_ref()).unwrap();
         encoder.finish().unwrap()
     }
@@ -120,13 +120,13 @@ impl RegisterBrokerBody {
             return SerdeJsonUtils::decode::<RegisterBrokerBody>(bytes.iter().as_slice()).unwrap();
         }
         let mut decoder = DeflateDecoder::new(bytes.as_ref());
-        let mut bytes_mut = BytesMut::new();
-        let result = decoder.read(&mut bytes_mut);
+        let mut vec = Vec::new();
+        let result = decoder.read_to_end(&mut vec);
         let mut register_broker_body = RegisterBrokerBody::default();
         if result.is_err() {
             return register_broker_body;
         }
-        let mut bytes = bytes_mut.freeze();
+        let mut bytes = Bytes::from(vec);
         let data_version_length = bytes.get_i32();
         let data_version_bytes = bytes.copy_to_bytes(data_version_length as usize);
         let data_version = DataVersion::decode(data_version_bytes.as_ref()).unwrap();
@@ -208,5 +208,36 @@ mod tests {
         let decoded =
             RegisterBrokerBody::decode(&Bytes::from(encoded), false, RocketMqVersion::V500);
         assert_eq!(decoded.filter_server_list, body.filter_server_list);
+    }
+
+    #[test]
+    fn test_encode() {
+        let mut register_broker_body = RegisterBrokerBody::default();
+        let mut topic_config_table = HashMap::new();
+        for i in 0..1 {
+            topic_config_table.insert(
+                CheetahString::from_string(i.to_string()),
+                TopicConfig::new(CheetahString::from_string(i.to_string())),
+            );
+        }
+        register_broker_body
+            .topic_config_serialize_wrapper
+            .topic_config_serialize_wrapper
+            .topic_config_table = topic_config_table;
+        let compare_encode = register_broker_body.encode(true);
+        let compare_decode =
+            RegisterBrokerBody::decode(&Bytes::from(compare_encode), true, RocketMqVersion::V500);
+        assert_eq!(
+            register_broker_body
+                .topic_config_serialize_wrapper
+                .topic_config_serialize_wrapper
+                .topic_config_table
+                .get("1"),
+            compare_decode
+                .topic_config_serialize_wrapper
+                .topic_config_serialize_wrapper
+                .topic_config_table
+                .get("1")
+        );
     }
 }
