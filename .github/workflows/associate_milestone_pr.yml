@@ -5,7 +5,7 @@ on:
     types: [ opened ]
 
 jobs:
-  create-issue:
+  associate-milestone-PR:
     runs-on: ubuntu-latest
     env:
       MILESTONE_TITLE: ${{ secrets.MILESTONE_TITLE }}
