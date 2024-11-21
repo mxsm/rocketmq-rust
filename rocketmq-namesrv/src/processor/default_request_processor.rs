@@ -51,6 +51,7 @@ use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::Regist
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::protocol::DataVersion;
+use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use tracing::warn;
@@ -165,10 +166,8 @@ impl DefaultRequestProcessor {
         let request_header = request
             .decode_command_custom_header::<QueryDataVersionRequestHeader>()
             .expect("decode QueryDataVersionRequestHeader failed");
-        let data_version = SerdeJsonUtils::decode::<DataVersion>(
-            request.body().as_ref().map(|v| v.as_ref()).unwrap(),
-        )
-        .unwrap();
+        let data_version = DataVersion::decode(request.get_body().expect("body is empty"))
+            .expect("decode DataVersion failed");
         let changed = self.route_info_manager.is_broker_topic_config_changed(
             &request_header.cluster_name,
             &request_header.broker_addr,

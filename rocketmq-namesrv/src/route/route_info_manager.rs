@@ -513,11 +513,10 @@ impl RouteInfoManager {
     ) -> bool {
         let option = self.query_broker_topic_config(cluster_name.clone(), broker_addr.clone());
         if let Some(pre) = option {
-            if pre != data_version {
-                return true;
-            }
+            pre != data_version
+        } else {
+            true
         }
-        false
     }
 
     pub(crate) fn query_broker_topic_config(
