@@ -11,7 +11,7 @@ jobs:
     steps:
       # Checkout the repository
       - name: Checkout Repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       # Sync labels from the linked issue to the PR
       - name: Sync Labels from Linked Issue
