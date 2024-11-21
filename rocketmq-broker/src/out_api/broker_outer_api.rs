@@ -276,13 +276,9 @@ impl BrokerOuterAPI {
                         result.ha_server_addr = header
                             .ha_server_addr
                             .clone()
-                            .unwrap_or(CheetahString::empty())
-                            .to_string();
-                        result.master_addr = header
-                            .master_addr
-                            .clone()
-                            .unwrap_or(CheetahString::empty())
-                            .to_string();
+                            .unwrap_or(CheetahString::empty());
+                        result.master_addr =
+                            header.master_addr.clone().unwrap_or(CheetahString::empty());
                     }
                     if let Some(body) = response.body() {
                         result.kv_table = SerdeJsonUtils::decode::<KVTable>(body.as_ref()).unwrap();

@@ -52,7 +52,7 @@ struct NameServerRuntime {
     name_server_config: ArcMut<NamesrvConfig>,
     tokio_client_config: Arc<TokioClientConfig>,
     server_config: Arc<ServerConfig>,
-    route_info_manager: Arc<parking_lot::RwLock<RouteInfoManager>>,
+    route_info_manager: RouteInfoManager,
     kvconfig_manager: KVConfigManager,
     name_server_runtime: Option<RocketMQRuntime>,
     remoting_client: ArcMut<RocketmqDefaultClient>,
@@ -108,13 +108,13 @@ impl NameServerRuntime {
                 self.kvconfig_manager.clone(),
             );
 
-        let route_info_manager_arc = self.route_info_manager.clone();
+        let mut route_info_manager_arc = self.route_info_manager.clone();
         self.name_server_runtime
             .as_ref()
             .unwrap()
-            .schedule_at_fixed_rate(
+            .schedule_at_fixed_rate_mut(
                 move || {
-                    route_info_manager_arc.write().scan_not_active_broker();
+                    route_info_manager_arc.scan_not_active_broker();
                 },
                 Some(Duration::from_secs(5)),
                 Duration::from_secs(5),
@@ -172,10 +172,10 @@ impl Builder {
                 name_server_config: name_server_config.clone(),
                 tokio_client_config,
                 server_config: Arc::new(self.server_config.unwrap()),
-                route_info_manager: Arc::new(parking_lot::RwLock::new(RouteInfoManager::new(
+                route_info_manager: RouteInfoManager::new(
                     name_server_config.clone(),
                     remoting_client.clone(),
-                ))),
+                ),
                 kvconfig_manager: KVConfigManager::new(name_server_config),
                 name_server_runtime: Some(runtime),
                 remoting_client,

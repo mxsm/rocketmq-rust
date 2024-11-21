@@ -178,6 +178,10 @@ impl RemotingCommand {
 }
 
 impl RemotingCommand {
+    pub fn new_request(code: impl Into<i32>, body: impl Into<Bytes>) -> Self {
+        Self::default().set_code(code).set_body(body)
+    }
+
     pub fn create_request_command<T>(code: impl Into<i32>, header: T) -> Self
     where
         T: CommandCustomHeader + Sync + Send + 'static,
