@@ -16,6 +16,8 @@
  */
 
 use std::fmt;
+use std::fmt::Debug;
+use std::fmt::Display;
 use std::str::FromStr;
 
 pub use faq::FAQUrl;
@@ -57,11 +59,29 @@ pub mod system_clock;
 pub mod thread;
 pub mod topic;
 
-#[derive(Debug, Clone, Default, Eq, PartialEq, Copy)]
+#[derive(Clone, Default, Eq, PartialEq, Copy)]
 pub enum TopicFilterType {
     #[default]
     SingleTag,
     MultiTag,
+}
+
+impl Display for TopicFilterType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            TopicFilterType::SingleTag => write!(f, "SINGLE_TAG"),
+            TopicFilterType::MultiTag => write!(f, "MULTI_TAG"),
+        }
+    }
+}
+
+impl Debug for TopicFilterType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            TopicFilterType::SingleTag => write!(f, "SINGLE_TAG"),
+            TopicFilterType::MultiTag => write!(f, "MULTI_TAG"),
+        }
+    }
 }
 
 impl From<&str> for TopicFilterType {
