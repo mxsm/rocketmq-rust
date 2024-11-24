@@ -721,12 +721,13 @@ impl RouteInfoManager {
     }
 
     pub(crate) fn get_all_topic_list(&self) -> TopicList {
+        let lock = self.lock.read();
         let topics = self
             .topic_queue_table
             .keys()
             .cloned()
             .collect::<Vec<CheetahString>>();
-
+        drop(lock);
         TopicList {
             topic_list: topics,
             broker_addr: None,
