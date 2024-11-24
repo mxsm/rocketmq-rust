@@ -225,12 +225,7 @@ impl DefaultRequestProcessor {
             topic_config_wrapper = register_broker_body
                 .topic_config_serialize_wrapper()
                 .clone();
-            register_broker_body
-                .filter_server_list()
-                .iter()
-                .for_each(|s| {
-                    filter_server_list.push(s.clone());
-                });
+            filter_server_list = register_broker_body.filter_server_list().clone();
         } else {
             topic_config_wrapper = extract_register_topic_config_from_request(&request);
         }
