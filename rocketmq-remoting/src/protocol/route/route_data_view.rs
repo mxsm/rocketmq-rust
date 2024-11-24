@@ -81,6 +81,7 @@ impl BrokerData {
         self.zone_name = zone_name;
     }
 
+    #[inline]
     pub fn set_enable_acting_master(&mut self, enable_acting_master: bool) {
         self.enable_acting_master = enable_acting_master;
     }

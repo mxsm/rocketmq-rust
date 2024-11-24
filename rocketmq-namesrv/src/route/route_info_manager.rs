@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::net::SocketAddr;
-use std::time::SystemTime;
+use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::config::TopicConfig;
@@ -28,6 +28,7 @@ use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::common::TopicSysFlag;
 use rocketmq_common::TimeUtils;
+use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
 use rocketmq_remoting::code::request_code::RequestCode;
@@ -82,6 +83,7 @@ pub struct RouteInfoManager {
     pub(crate) topic_queue_mapping_info_table: TopicQueueMappingInfoTable,
     pub(crate) namesrv_config: ArcMut<NamesrvConfig>,
     pub(crate) remoting_client: ArcMut<RocketmqDefaultClient>,
+    lock: Arc<parking_lot::RwLock<()>>,
 }
 
 #[allow(private_interfaces)]
@@ -99,6 +101,7 @@ impl RouteInfoManager {
             topic_queue_mapping_info_table: ArcMut::new(HashMap::new()),
             namesrv_config,
             remoting_client,
+            lock: Arc::new(Default::default()),
         }
     }
 }
@@ -106,7 +109,7 @@ impl RouteInfoManager {
 //impl register broker
 impl RouteInfoManager {
     pub fn register_broker(
-        &mut self,
+        &self,
         cluster_name: CheetahString,
         broker_addr: CheetahString,
         broker_name: CheetahString,
@@ -120,35 +123,39 @@ impl RouteInfoManager {
         remote_addr: SocketAddr,
     ) -> Option<RegisterBrokerResult> {
         let mut result = RegisterBrokerResult::default();
+        let _write = self.lock.write();
         //init or update cluster information
-        if !self.cluster_addr_table.contains_key(&cluster_name) {
-            self.cluster_addr_table
-                .insert(cluster_name.clone(), HashSet::new());
-        }
         self.cluster_addr_table
-            .get_mut(&cluster_name)
-            .unwrap()
+            .mut_from_ref()
+            .entry(cluster_name.clone())
+            .or_default()
             .insert(broker_name.clone());
 
         let enable_acting_master_inner = enable_acting_master.unwrap_or_default();
-        let mut register_first =
-            if let Some(broker_data) = self.broker_addr_table.get_mut(&broker_name) {
-                broker_data.set_enable_acting_master(enable_acting_master_inner);
-                broker_data.set_zone_name(zone_name.clone());
-                false
-            } else {
-                let mut broker_data = BrokerData::new(
-                    cluster_name.clone(),
-                    broker_name.clone(),
-                    HashMap::new(),
-                    zone_name,
-                );
-                broker_data.set_enable_acting_master(enable_acting_master_inner);
-                self.broker_addr_table
-                    .insert(broker_name.clone(), broker_data);
-                true
-            };
-        let broker_data = self.broker_addr_table.get_mut(&broker_name).unwrap();
+        let mut register_first = if let Some(broker_data) =
+            self.broker_addr_table.mut_from_ref().get_mut(&broker_name)
+        {
+            broker_data.set_enable_acting_master(enable_acting_master_inner);
+            broker_data.set_zone_name(zone_name.clone());
+            false
+        } else {
+            let mut broker_data = BrokerData::new(
+                cluster_name.clone(),
+                broker_name.clone(),
+                HashMap::new(),
+                zone_name,
+            );
+            broker_data.set_enable_acting_master(enable_acting_master_inner);
+            self.broker_addr_table
+                .mut_from_ref()
+                .insert(broker_name.clone(), broker_data);
+            true
+        };
+        let broker_data = self
+            .broker_addr_table
+            .mut_from_ref()
+            .get_mut(&broker_name)
+            .unwrap();
         let mut prev_min_broker_id = 0i64;
         if !broker_data.broker_addrs().is_empty() {
             prev_min_broker_id = broker_data.broker_addrs().keys().min().copied().unwrap();
@@ -186,7 +193,7 @@ impl RouteInfoManager {
                             &broker_addr,
                             new_state_version
                         );
-                        self.broker_live_table.remove(
+                        self.broker_live_table.mut_from_ref().remove(
                             BrokerAddrInfo::new(cluster_name.clone(), broker_addr.clone()).as_ref(),
                         );
                         return Some(result);
@@ -244,7 +251,10 @@ impl RouteInfoManager {
                     .map(|item| item.to_string())
                     .collect::<HashSet<String>>();
                 for to_delete_topic in to_delete_topics {
-                    let queue_data_map = self.topic_queue_table.get_mut(to_delete_topic.as_str());
+                    let queue_data_map = self
+                        .topic_queue_table
+                        .mut_from_ref()
+                        .get_mut(to_delete_topic.as_str());
                     if let Some(queue_data) = queue_data_map {
                         let removed_qd = queue_data.remove(&broker_name);
                         if let Some(ref removed_qd_inner) = removed_qd {
@@ -254,7 +264,9 @@ impl RouteInfoManager {
                             );
                         }
                         if queue_data.is_empty() {
-                            self.topic_queue_table.remove(to_delete_topic.as_str());
+                            self.topic_queue_table
+                                .mut_from_ref()
+                                .remove(to_delete_topic.as_str());
                         }
                     }
                 }
@@ -285,9 +297,11 @@ impl RouteInfoManager {
                 for (topic, vtq_info) in topic_queue_mapping_info_map {
                     if !self.topic_queue_mapping_info_table.contains_key(topic) {
                         self.topic_queue_mapping_info_table
+                            .mut_from_ref()
                             .insert(topic.clone(), HashMap::new());
                     }
                     self.topic_queue_mapping_info_table
+                        .mut_from_ref()
                         .get_mut(topic)
                         .unwrap()
                         .insert(vtq_info.bname.as_ref().unwrap().clone(), vtq_info.clone());
@@ -297,13 +311,10 @@ impl RouteInfoManager {
 
         let broker_addr_info = BrokerAddrInfo::new(cluster_name.clone(), broker_addr.clone());
 
-        self.broker_live_table.insert(
+        self.broker_live_table.mut_from_ref().insert(
             broker_addr_info.clone(),
             BrokerLiveInfo::new(
-                SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .expect("Time went backwards")
-                    .as_millis() as i64,
+                get_current_millis() as i64,
                 DEFAULT_BROKER_CHANNEL_EXPIRED_TIME,
                 topic_config_serialize_wrapper
                     .topic_config_serialize_wrapper
@@ -314,9 +325,12 @@ impl RouteInfoManager {
             ),
         );
         if filter_server_list.is_empty() {
-            self.filter_server_table.remove(&broker_addr_info);
+            self.filter_server_table
+                .mut_from_ref()
+                .remove(&broker_addr_info);
         } else {
             self.filter_server_table
+                .mut_from_ref()
                 .insert(broker_addr_info.clone(), filter_server_list);
         }
 
@@ -345,6 +359,7 @@ impl RouteInfoManager {
                 ),
             )
         }
+        drop(_write);
         Some(result)
     }
 }
@@ -471,7 +486,7 @@ impl RouteInfoManager {
 }
 
 impl RouteInfoManager {
-    fn topic_set_of_broker_name(&mut self, broker_name: &str) -> HashSet<String> {
+    fn topic_set_of_broker_name(&self, broker_name: &str) -> HashSet<String> {
         let mut topic_of_broker = HashSet::new();
         for (key, value) in self.topic_queue_table.iter() {
             if value.contains_key(broker_name) {
@@ -482,7 +497,7 @@ impl RouteInfoManager {
     }
 
     pub(crate) fn is_topic_config_changed(
-        &mut self,
+        &self,
         cluster_name: &CheetahString,
         broker_addr: &CheetahString,
         data_version: &DataVersion,
@@ -532,11 +547,7 @@ impl RouteInfoManager {
         None
     }
 
-    fn create_and_update_queue_data(
-        &mut self,
-        broker_name: &CheetahString,
-        topic_config: TopicConfig,
-    ) {
+    fn create_and_update_queue_data(&self, broker_name: &CheetahString, topic_config: TopicConfig) {
         let queue_data = QueueData::new(
             broker_name.clone(),
             topic_config.write_queue_nums,
@@ -547,6 +558,7 @@ impl RouteInfoManager {
 
         let queue_data_map = self
             .topic_queue_table
+            .mut_from_ref()
             .get_mut(topic_config.topic_name.as_ref().unwrap().as_str());
         if let Some(queue_data_map_inner) = queue_data_map {
             let existed_qd = queue_data_map_inner.get(broker_name);
@@ -572,7 +584,7 @@ impl RouteInfoManager {
                 &queue_data
             );
             queue_data_map_inner.insert(broker_name.clone(), queue_data);
-            self.topic_queue_table.insert(
+            self.topic_queue_table.mut_from_ref().insert(
                 topic_config.topic_name.as_ref().unwrap().clone(),
                 queue_data_map_inner,
             );
@@ -580,7 +592,7 @@ impl RouteInfoManager {
     }
 
     fn notify_min_broker_id_changed(
-        &mut self,
+        &self,
         broker_addr_map: &HashMap<i64, CheetahString>,
         offline_broker_addr: Option<CheetahString>,
         ha_broker_addr: Option<CheetahString>,
@@ -622,7 +634,7 @@ impl RouteInfoManager {
     }
 
     fn choose_broker_addrs_to_notify(
-        &mut self,
+        &self,
         broker_addr_map: &HashMap<i64, CheetahString>,
         offline_broker_addr: Option<CheetahString>,
     ) -> Option<Vec<CheetahString>> {
