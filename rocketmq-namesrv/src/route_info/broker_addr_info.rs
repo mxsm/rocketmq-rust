@@ -48,14 +48,14 @@ impl Display for BrokerAddrInfo {
 
 #[derive(Clone, Debug)]
 pub(crate) struct BrokerStatusChangeInfo {
-    pub(crate) broker_addrs: HashMap<i64, CheetahString>,
+    pub(crate) broker_addrs: HashMap<u64, CheetahString>,
     pub(crate) offline_broker_addr: CheetahString,
     pub(crate) ha_broker_addr: CheetahString,
 }
 
 impl BrokerStatusChangeInfo {
     fn new(
-        broker_addrs: HashMap<i64, CheetahString>,
+        broker_addrs: HashMap<u64, CheetahString>,
         offline_broker_addr: CheetahString,
         ha_broker_addr: CheetahString,
     ) -> Self {
@@ -66,11 +66,11 @@ impl BrokerStatusChangeInfo {
         }
     }
 
-    fn get_broker_addrs(&self) -> &HashMap<i64, CheetahString> {
+    fn get_broker_addrs(&self) -> &HashMap<u64, CheetahString> {
         &self.broker_addrs
     }
 
-    fn set_broker_addrs(&mut self, broker_addrs: HashMap<i64, CheetahString>) {
+    fn set_broker_addrs(&mut self, broker_addrs: HashMap<u64, CheetahString>) {
         self.broker_addrs = broker_addrs;
     }
 

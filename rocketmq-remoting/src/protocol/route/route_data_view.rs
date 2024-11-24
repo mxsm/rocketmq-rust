@@ -30,7 +30,7 @@ pub struct BrokerData {
     #[serde(rename = "brokerName")]
     broker_name: CheetahString,
     #[serde(rename = "brokerAddrs")]
-    broker_addrs: HashMap<i64 /* broker id */, CheetahString /* broker ip */>,
+    broker_addrs: HashMap<u64 /* broker id */, CheetahString /* broker ip */>,
     #[serde(rename = "zoneName")]
     zone_name: Option<CheetahString>,
     #[serde(rename = "enableActingMaster")]
@@ -53,7 +53,7 @@ impl BrokerData {
     pub fn new(
         cluster: CheetahString,
         broker_name: CheetahString,
-        broker_addrs: HashMap<i64, CheetahString>,
+        broker_addrs: HashMap<u64, CheetahString>,
         zone_name: Option<CheetahString>,
     ) -> BrokerData {
         BrokerData {
@@ -73,7 +73,7 @@ impl BrokerData {
         self.broker_name = broker_name;
     }
 
-    pub fn set_broker_addrs(&mut self, broker_addrs: HashMap<i64, CheetahString>) {
+    pub fn set_broker_addrs(&mut self, broker_addrs: HashMap<u64, CheetahString>) {
         self.broker_addrs = broker_addrs;
     }
 
@@ -94,15 +94,15 @@ impl BrokerData {
         &self.broker_name
     }
 
-    pub fn broker_addrs(&self) -> &HashMap<i64, CheetahString> {
+    pub fn broker_addrs(&self) -> &HashMap<u64, CheetahString> {
         &self.broker_addrs
     }
 
-    pub fn broker_addrs_mut(&mut self) -> &mut HashMap<i64, CheetahString> {
+    pub fn broker_addrs_mut(&mut self) -> &mut HashMap<u64, CheetahString> {
         &mut self.broker_addrs
     }
 
-    pub fn remove_broker_by_addr(&mut self, broker_id: i64, broker_addr: &str) {
+    pub fn remove_broker_by_addr(&mut self, broker_id: u64, broker_addr: &str) {
         self.broker_addrs
             .retain(|key, value| value != broker_addr || *key == broker_id);
     }
@@ -116,7 +116,7 @@ impl BrokerData {
     }
 
     pub fn select_broker_addr(&self) -> Option<CheetahString> {
-        let master_address = self.broker_addrs.get(&(mix_all::MASTER_ID as i64)).cloned();
+        let master_address = self.broker_addrs.get(&(mix_all::MASTER_ID)).cloned();
         if master_address.is_none() {
             return self
                 .broker_addrs

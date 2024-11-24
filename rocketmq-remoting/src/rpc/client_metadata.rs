@@ -43,7 +43,7 @@ pub struct ClientMetadata {
         RwLock<
             HashMap<
                 CheetahString, /* Broker Name */
-                HashMap<i64 /* brokerId */, CheetahString /* address */>,
+                HashMap<u64 /* brokerId */, CheetahString /* address */>,
             >,
         >,
     >,
@@ -137,10 +137,7 @@ impl ClientMetadata {
         if !read_guard.contains_key(broker_name) {
             return None;
         }
-        let broker_addr = read_guard
-            .get(broker_name)
-            .unwrap()
-            .get(&(MASTER_ID as i64));
+        let broker_addr = read_guard.get(broker_name).unwrap().get(&(MASTER_ID));
         broker_addr.cloned()
     }
 
@@ -233,7 +230,7 @@ impl ClientMetadata {
 
     pub fn broker_addr_table(
         &self,
-    ) -> Arc<RwLock<HashMap<CheetahString, HashMap<i64, CheetahString>>>> {
+    ) -> Arc<RwLock<HashMap<CheetahString, HashMap<u64, CheetahString>>>> {
         self.broker_addr_table.clone()
     }
 }
