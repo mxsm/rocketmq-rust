@@ -675,22 +675,35 @@ impl RouteInfoManager {
         Some(group_member)
     }
 
-    pub(crate) fn wipe_write_perm_of_broker_by_lock(&mut self, broker_name: &str) -> i32 {
-        self.operate_write_perm_of_broker(broker_name, RequestCode::WipeWritePermOfBroker)
+    #[inline]
+    pub(crate) fn wipe_write_perm_of_broker_by_lock(&self, broker_name: &CheetahString) -> i32 {
+        let lock = self.lock.write();
+        let cnt =
+            self.operate_write_perm_of_broker(broker_name, RequestCode::WipeWritePermOfBroker);
+        drop(lock);
+        cnt
     }
 
-    pub(crate) fn add_write_perm_of_broker_by_lock(&mut self, broker_name: &str) -> i32 {
-        self.operate_write_perm_of_broker(broker_name, RequestCode::AddWritePermOfBroker)
+    #[inline]
+    pub(crate) fn add_write_perm_of_broker_by_lock(&self, broker_name: &CheetahString) -> i32 {
+        let lock = self.lock.write();
+        let cnt = self.operate_write_perm_of_broker(broker_name, RequestCode::AddWritePermOfBroker);
+        drop(lock);
+        cnt
     }
 
     fn operate_write_perm_of_broker(
-        &mut self,
-        broker_name: &str,
+        &self,
+        broker_name: &CheetahString,
         request_code: RequestCode,
     ) -> i32 {
         let mut topic_cnt = 0;
-        for (_topic, qd_map) in self.topic_queue_table.iter_mut() {
-            let qd = qd_map.get_mut(broker_name).unwrap();
+        for (_topic, qd_map) in self.topic_queue_table.mut_from_ref().iter_mut() {
+            let qd = qd_map.get_mut(broker_name);
+            if qd.is_none() {
+                continue;
+            }
+            let qd = qd.unwrap();
             let mut perm = qd.perm;
             match request_code {
                 RequestCode::WipeWritePermOfBroker => {
