@@ -736,29 +736,30 @@ impl RouteInfoManager {
 
     pub(crate) fn delete_topic(
         &mut self,
-        topic: impl Into<String>,
-        cluster_name: Option<impl Into<String>>,
+        topic: CheetahString,
+        cluster_name: Option<CheetahString>,
     ) {
-        let topic_inner = topic.into();
-        if cluster_name.is_some() {
-            let cluster_name_inner = cluster_name.map(|s| s.into()).unwrap();
-            let broker_names = self.cluster_addr_table.get(cluster_name_inner.as_str());
+        let lock = self.lock.write();
+        if cluster_name.as_ref().is_some_and(|inner| !inner.is_empty()) {
+            let cluster_name_inner = cluster_name.unwrap();
+            let broker_names = self.cluster_addr_table.get(&cluster_name_inner);
             if broker_names.is_none() || broker_names.unwrap().is_empty() {
                 return;
             }
-            if let Some(queue_data_map) = self.topic_queue_table.get_mut(topic_inner.as_str()) {
+            if let Some(queue_data_map) = self.topic_queue_table.mut_from_ref().get_mut(&topic) {
                 for broker_name in broker_names.unwrap() {
                     if let Some(remove_qd) = queue_data_map.remove(broker_name) {
                         info!(
                             "deleteTopic, remove one broker's topic {} {} {:?}",
-                            broker_name, &topic_inner, remove_qd
+                            broker_name, &topic, remove_qd
                         )
                     }
                 }
             }
         } else {
-            self.topic_queue_table.remove(topic_inner.as_str());
+            self.topic_queue_table.mut_from_ref().remove(&topic);
         }
+        drop(lock)
     }
 
     pub(crate) fn register_topic(&mut self, topic: CheetahString, queue_data_vec: Vec<QueueData>) {

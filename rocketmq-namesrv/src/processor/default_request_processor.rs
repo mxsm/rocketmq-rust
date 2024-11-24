@@ -349,10 +349,8 @@ impl DefaultRequestProcessor {
         let request_header = request
             .decode_command_custom_header::<DeleteTopicFromNamesrvRequestHeader>()
             .expect("decode DeleteTopicFromNamesrvRequestHeader failed");
-        self.route_info_manager.delete_topic(
-            request_header.topic.as_str(),
-            request_header.cluster_name.clone(),
-        );
+        self.route_info_manager
+            .delete_topic(request_header.topic, request_header.cluster_name);
         RemotingCommand::create_response_command()
     }
 
