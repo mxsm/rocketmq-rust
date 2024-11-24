@@ -385,7 +385,7 @@ impl RouteInfoManager {
         let mut found_broker_data = false;
 
         // Acquire read lock
-
+        let lock = self.lock.read();
         if let Some(queue_data_map) = self.topic_queue_table.get(topic) {
             topic_route_data.queue_datas = queue_data_map.values().cloned().collect();
             found_queue_data = true;
@@ -417,7 +417,7 @@ impl RouteInfoManager {
                 }
             }
         }
-
+        drop(lock);
         debug!("pickup_topic_route_data {:?} {:?}", topic, topic_route_data);
 
         if found_broker_data && found_queue_data {

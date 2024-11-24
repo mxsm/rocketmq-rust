@@ -64,7 +64,7 @@ impl ClientRequestProcessor {
     fn get_route_info_by_topic(&self, request: RemotingCommand) -> RemotingCommand {
         let request_header = request
             .decode_command_custom_header::<GetRouteInfoRequestHeader>()
-            .unwrap();
+            .expect("GetRouteInfoRequestHeader failed");
         let namesrv_ready = self.need_check_namesrv_ready.load(Ordering::Relaxed)
             && TimeUtils::get_current_millis() - self.startup_time_millis
                 >= Duration::from_secs(self.namesrv_config.wait_seconds_for_service as u64)
@@ -90,8 +90,9 @@ impl ClientRequestProcessor {
                     FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
                 )),
             Some(mut topic_route_data) => {
-                if self.need_check_namesrv_ready.load(Ordering::Relaxed) {
-                    self.need_check_namesrv_ready.store(false, Ordering::SeqCst);
+                if self.need_check_namesrv_ready.load(Ordering::Acquire) {
+                    self.need_check_namesrv_ready
+                        .store(false, Ordering::Release);
                 }
                 if self.namesrv_config.order_message_enable {
                     //get kv config
