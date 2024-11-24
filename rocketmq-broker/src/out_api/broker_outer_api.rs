@@ -167,7 +167,7 @@ impl BrokerOuterAPI {
         if !name_server_address_list.is_empty() {
             let mut request_header = RegisterBrokerRequestHeader {
                 broker_addr,
-                broker_id: broker_id as i64,
+                broker_id,
                 broker_name,
                 cluster_name,
                 ha_server_addr,

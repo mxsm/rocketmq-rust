@@ -113,7 +113,7 @@ impl RouteInfoManager {
         cluster_name: CheetahString,
         broker_addr: CheetahString,
         broker_name: CheetahString,
-        broker_id: i64,
+        broker_id: u64,
         ha_server_addr: CheetahString,
         zone_name: Option<CheetahString>,
         _timeout_millis: Option<i64>,
@@ -156,7 +156,7 @@ impl RouteInfoManager {
             .mut_from_ref()
             .get_mut(&broker_name)
             .unwrap();
-        let mut prev_min_broker_id = 0i64;
+        let mut prev_min_broker_id = 0;
         if !broker_data.broker_addrs().is_empty() {
             prev_min_broker_id = broker_data.broker_addrs().keys().min().copied().unwrap();
         }
@@ -222,7 +222,7 @@ impl RouteInfoManager {
             .insert(broker_id, broker_addr.clone());
 
         register_first |= old_addr.is_none();
-        let is_master = mix_all::MASTER_ID == broker_id as u64;
+        let is_master = mix_all::MASTER_ID == broker_id;
 
         let is_prime_slave = enable_acting_master.is_some()
             && !is_master
@@ -334,8 +334,8 @@ impl RouteInfoManager {
                 .insert(broker_addr_info.clone(), filter_server_list);
         }
 
-        if mix_all::MASTER_ID != broker_id as u64 {
-            let master_address = broker_data.broker_addrs().get(&(mix_all::MASTER_ID as i64));
+        if mix_all::MASTER_ID != broker_id {
+            let master_address = broker_data.broker_addrs().get(&(mix_all::MASTER_ID));
             if let Some(master_addr) = master_address {
                 let master_livie_info = self
                     .broker_live_table
@@ -440,7 +440,7 @@ impl RouteInfoManager {
                 !broker_data.broker_addrs().is_empty()
                     && !broker_data
                         .broker_addrs()
-                        .contains_key(&(mix_all::MASTER_ID as i64))
+                        .contains_key(&(mix_all::MASTER_ID))
             });
 
             if !need_acting_master {
@@ -451,7 +451,7 @@ impl RouteInfoManager {
                 if broker_data.broker_addrs().is_empty()
                     || broker_data
                         .broker_addrs()
-                        .contains_key(&(mix_all::MASTER_ID as i64))
+                        .contains_key(&(mix_all::MASTER_ID))
                     || !broker_data.enable_acting_master()
                 {
                     continue;
@@ -469,7 +469,7 @@ impl RouteInfoManager {
                                 {
                                     broker_data
                                         .broker_addrs_mut()
-                                        .insert(mix_all::MASTER_ID as i64, acting_master_addr);
+                                        .insert(mix_all::MASTER_ID, acting_master_addr);
                                 }
                             }
                         }
@@ -593,7 +593,7 @@ impl RouteInfoManager {
 
     fn notify_min_broker_id_changed(
         &self,
-        broker_addr_map: &HashMap<i64, CheetahString>,
+        broker_addr_map: &HashMap<u64, CheetahString>,
         offline_broker_addr: Option<CheetahString>,
         ha_broker_addr: Option<CheetahString>,
     ) {
@@ -635,7 +635,7 @@ impl RouteInfoManager {
 
     fn choose_broker_addrs_to_notify(
         &self,
-        broker_addr_map: &HashMap<i64, CheetahString>,
+        broker_addr_map: &HashMap<u64, CheetahString>,
         offline_broker_addr: Option<CheetahString>,
     ) -> Option<Vec<CheetahString>> {
         if broker_addr_map.len() == 1 || offline_broker_addr.is_some() {
@@ -667,12 +667,11 @@ impl RouteInfoManager {
         broker_name: &CheetahString,
     ) -> Option<BrokerMemberGroup> {
         let mut group_member = BrokerMemberGroup::new(cluster_name.clone(), broker_name.clone());
+        let lock_ = self.lock.read();
         if let Some(broker_data) = self.broker_addr_table.get(broker_name) {
-            let map = broker_data.broker_addrs().clone();
-            for (key, value) in map {
-                group_member.broker_addrs.insert(key as u64, value);
-            }
+            group_member.broker_addrs = broker_data.broker_addrs().clone();
         }
+        drop(lock_);
         Some(group_member)
     }
 
@@ -913,7 +912,7 @@ impl RouteInfoManager {
                 if &broker_addr_info.broker_addr == ip {
                     un_register_request.broker_name =
                         CheetahString::from_string(broker_data.broker_name().to_string());
-                    un_register_request.broker_id = *broker_id as u64;
+                    un_register_request.broker_id = *broker_id;
                     return true;
                 }
             }
@@ -949,7 +948,7 @@ impl RouteInfoManager {
 
             if let Some(broker_data) = self.broker_addr_table.get_mut(broker_name.as_str()) {
                 if !broker_data.broker_addrs().is_empty()
-                    && un_register_request.broker_id as i64
+                    && un_register_request.broker_id
                         == broker_data
                             .broker_addrs()
                             .iter()

@@ -104,7 +104,7 @@ pub struct MQClientInstance {
     rebalance_service: RebalanceService,
     pub(crate) default_producer: ArcMut<DefaultMQProducer>,
     instance_runtime: Arc<RocketMQRuntime>,
-    broker_addr_table: Arc<RwLock<HashMap<CheetahString, HashMap<i64, CheetahString>>>>,
+    broker_addr_table: Arc<RwLock<HashMap<CheetahString, HashMap<u64, CheetahString>>>>,
     broker_version_table: Arc<
         RwLock<
             HashMap<
@@ -752,7 +752,7 @@ impl MQClientInstance {
         let guard = self.broker_addr_table.read().await;
         let map = guard.get(broker_name);
         if let Some(map) = map {
-            return map.get(&(mix_all::MASTER_ID as i64)).cloned();
+            return map.get(&(mix_all::MASTER_ID)).cloned();
         }
         None
     }
@@ -784,7 +784,7 @@ impl MQClientInstance {
                 if addr.is_empty() {
                     continue;
                 }
-                if consumer_empty && *id != mix_all::MASTER_ID as i64 {
+                if consumer_empty && *id != mix_all::MASTER_ID {
                     continue;
                 }
                 self.send_heartbeat_to_broker_inner(*id, broker_name, addr, &heartbeat_data)
@@ -797,7 +797,7 @@ impl MQClientInstance {
 
     pub async fn send_heartbeat_to_broker(
         &self,
-        id: i64,
+        id: u64,
         broker_name: &CheetahString,
         addr: &CheetahString,
     ) -> bool {
@@ -826,7 +826,7 @@ impl MQClientInstance {
 
     async fn send_heartbeat_to_broker_inner(
         &self,
-        id: i64,
+        id: u64,
         broker_name: &CheetahString,
         addr: &CheetahString,
         heartbeat_data: &HeartbeatData,
@@ -1047,17 +1047,17 @@ impl MQClientInstance {
         let mut found = false;
 
         if let Some(map) = map {
-            broker_addr = map.get(&(broker_id as i64));
+            broker_addr = map.get(&broker_id);
             slave = broker_id != mix_all::MASTER_ID;
             found = broker_addr.is_some();
             if !found && slave {
-                broker_addr = map.get(&((broker_id + 1) as i64));
+                broker_addr = map.get(&(broker_id + 1));
                 found = broker_addr.is_some();
             }
             if !found && !only_this_broker {
                 if let Some((key, value)) = map.iter().next() {
                     //broker_addr = Some(value.clone());
-                    slave = *key != mix_all::MASTER_ID as i64;
+                    slave = *key != mix_all::MASTER_ID;
                     found = !value.is_empty();
                 }
             }
@@ -1217,7 +1217,7 @@ pub fn topic_route_data2topic_publish_info(
                     .as_ref()
                     .unwrap()
                     .broker_addrs()
-                    .contains_key(&(mix_all::MASTER_ID as i64))
+                    .contains_key(&(mix_all::MASTER_ID))
                 {
                     continue;
                 }

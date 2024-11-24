@@ -11,7 +11,7 @@ use crate::protocol::command_custom_header::FromMap;
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct NotifyMinBrokerIdChangeRequestHeader {
     #[serde(rename = "minBrokerId")]
-    pub min_broker_id: Option<i64>,
+    pub min_broker_id: Option<u64>,
 
     #[serde(rename = "brokerName")]
     pub broker_name: Option<CheetahString>,
@@ -34,7 +34,7 @@ impl NotifyMinBrokerIdChangeRequestHeader {
     const OFFLINE_BROKER_ADDR: &'static str = "offlineBrokerAddr";
 
     pub fn new(
-        min_broker_id: Option<i64>,
+        min_broker_id: Option<u64>,
         broker_name: Option<CheetahString>,
         min_broker_addr: Option<CheetahString>,
         offline_broker_addr: Option<CheetahString>,
@@ -59,7 +59,7 @@ impl FromMap for NotifyMinBrokerIdChangeRequestHeader {
                 .get(&CheetahString::from_static_str(
                     NotifyMinBrokerIdChangeRequestHeader::MIN_BROKER_ID,
                 ))
-                .and_then(|s| s.parse::<i64>().ok()),
+                .and_then(|s| s.parse::<u64>().ok()),
             broker_name: map
                 .get(&CheetahString::from_static_str(
                     NotifyMinBrokerIdChangeRequestHeader::BROKER_NAME,

@@ -46,7 +46,7 @@ pub struct RegisterBrokerRequestHeader {
 
     /// The unique identifier for the broker.
     #[serde(rename = "brokerId")]
-    pub broker_id: i64,
+    pub broker_id: u64,
 
     /// The optional heartbeat timeout in milliseconds.
     #[serde(rename = "heartbeatTimeoutMillis")]
@@ -98,7 +98,7 @@ impl RegisterBrokerRequestHeader {
         broker_addr: CheetahString,
         cluster_name: CheetahString,
         ha_server_addr: CheetahString,
-        broker_id: i64,
+        broker_id: u64,
         heartbeat_timeout_millis: Option<i64>,
         enable_acting_master: Option<bool>,
         compressed: bool,
@@ -151,7 +151,7 @@ impl FromMap for RegisterBrokerRequestHeader {
                 .get(&CheetahString::from_static_str(
                     RegisterBrokerRequestHeader::BROKER_ID,
                 ))
-                .and_then(|s| s.parse::<i64>().ok())
+                .and_then(|s| s.parse::<u64>().ok())
                 .unwrap_or(0),
             heartbeat_timeout_millis: map
                 .get(&CheetahString::from_static_str(
