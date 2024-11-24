@@ -320,7 +320,7 @@ impl DefaultRequestProcessor {
             .expect("decode WipeWritePermOfBrokerRequestHeader failed");
         let wipe_topic_cnt = self
             .route_info_manager
-            .wipe_write_perm_of_broker_by_lock(request_header.broker_name.as_str());
+            .wipe_write_perm_of_broker_by_lock(&request_header.broker_name);
         RemotingCommand::create_response_command()
             .set_command_custom_header(WipeWritePermOfBrokerResponseHeader::new(wipe_topic_cnt))
     }
@@ -331,7 +331,7 @@ impl DefaultRequestProcessor {
             .expect("decode AddWritePermOfBrokerRequestHeader failed");
         let add_topic_cnt = self
             .route_info_manager
-            .add_write_perm_of_broker_by_lock(request_header.broker_name.as_str());
+            .add_write_perm_of_broker_by_lock(&request_header.broker_name);
         RemotingCommand::create_response_command()
             .set_command_custom_header(AddWritePermOfBrokerResponseHeader::new(add_topic_cnt))
     }
