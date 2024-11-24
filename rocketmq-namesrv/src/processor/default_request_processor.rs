@@ -359,7 +359,7 @@ impl DefaultRequestProcessor {
             .decode_command_custom_header::<RegisterTopicRequestHeader>()
             .expect("decode RegisterTopicRequestHeader failed");
         if let Some(ref body) = request.body() {
-            let topic_route_data = SerdeJsonUtils::decode::<TopicRouteData>(body).unwrap();
+            let topic_route_data = TopicRouteData::decode(body).unwrap_or_default();
             if !topic_route_data.queue_datas.is_empty() {
                 self.route_info_manager
                     .register_topic(request_header.topic, topic_route_data.queue_datas)
@@ -371,7 +371,7 @@ impl DefaultRequestProcessor {
     fn get_kv_list_by_namespace(&self, request: RemotingCommand) -> RemotingCommand {
         let request_header = request
             .decode_command_custom_header::<GetKVListByNamespaceRequestHeader>()
-            .unwrap();
+            .expect("decode GetKVListByNamespaceRequestHeader failed");
         let value = self
             .kvconfig_manager
             .get_kv_list_by_namespace(&request_header.namespace);
@@ -396,10 +396,10 @@ impl DefaultRequestProcessor {
 
         let request_header = request
             .decode_command_custom_header::<GetTopicsByClusterRequestHeader>()
-            .unwrap();
+            .expect("decode GetTopicsByClusterRequestHeader failed");
         let topics_by_cluster = self
             .route_info_manager
-            .get_topics_by_cluster(request_header.cluster.as_str());
+            .get_topics_by_cluster(&request_header.cluster);
         RemotingCommand::create_response_command().set_body(topics_by_cluster.encode())
     }
 

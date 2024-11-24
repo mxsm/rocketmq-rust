@@ -762,15 +762,21 @@ impl RouteInfoManager {
         drop(lock)
     }
 
-    pub(crate) fn register_topic(&mut self, topic: CheetahString, queue_data_vec: Vec<QueueData>) {
+    pub(crate) fn register_topic(&self, topic: CheetahString, queue_data_vec: Vec<QueueData>) {
         if queue_data_vec.is_empty() {
             return;
         }
-
+        let lock = self.lock.write();
         if !self.topic_queue_table.contains_key(&topic) {
-            self.topic_queue_table.insert(topic.clone(), HashMap::new());
+            self.topic_queue_table
+                .mut_from_ref()
+                .insert(topic.clone(), HashMap::new());
         }
-        let queue_data_map = self.topic_queue_table.get_mut(&topic).unwrap();
+        let queue_data_map = self
+            .topic_queue_table
+            .mut_from_ref()
+            .get_mut(&topic)
+            .unwrap();
         let vec_length = queue_data_vec.len();
         for queue_data in queue_data_vec {
             if !self
@@ -785,6 +791,7 @@ impl RouteInfoManager {
             }
             queue_data_map.insert(queue_data.broker_name().clone(), queue_data);
         }
+        drop(lock);
 
         if queue_data_map.len() > vec_length {
             info!("Topic route already exist.{}, {:?}", topic, queue_data_map)
@@ -793,8 +800,9 @@ impl RouteInfoManager {
         }
     }
 
-    pub(crate) fn get_topics_by_cluster(&self, cluster: &str) -> TopicList {
+    pub(crate) fn get_topics_by_cluster(&self, cluster: &CheetahString) -> TopicList {
         let mut topic_list = Vec::new();
+        let lock = self.lock.read();
         if let Some(broker_name_set) = self.cluster_addr_table.get(cluster) {
             for broker_name in broker_name_set {
                 for (topic, queue_data_map) in self.topic_queue_table.iter() {
@@ -804,6 +812,7 @@ impl RouteInfoManager {
                 }
             }
         }
+        drop(lock);
         TopicList {
             topic_list,
             broker_addr: None,
@@ -821,10 +830,6 @@ impl RouteInfoManager {
         }
         if !self.broker_addr_table.is_empty() {
             for broker_addr in self.broker_addr_table.values() {
-                /*for ip in broker_addr.broker_addrs().values() {
-                    broker_addr_out = Some(ip.clone());
-                    break;
-                }*/
                 let broker_addrs = broker_addr.broker_addrs();
                 if !broker_addrs.is_empty() {
                     broker_addr_out = Some(broker_addrs.values().next().unwrap().clone());
