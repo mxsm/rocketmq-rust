@@ -15,8 +15,10 @@
  * limitations under the License.
  */
 
+use std::collections::HashMap;
 use std::env;
 
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 
 use crate::common::mix_all::ROCKETMQ_HOME_ENV;
@@ -144,6 +146,118 @@ impl NamesrvConfig {
     pub fn new() -> NamesrvConfig {
         Self::default()
     }
+
+    /// Splits the `config_black_list` into a `Vec<CheetahString>` for easier usage.
+    pub fn get_config_blacklist(&self) -> Vec<CheetahString> {
+        self.config_black_list
+            .split(';')
+            .map(|s| CheetahString::from(s.trim()))
+            .collect()
+    }
+
+    pub fn update(
+        &mut self,
+        properties: HashMap<CheetahString, CheetahString>,
+    ) -> Result<(), String> {
+        for (key, value) in properties {
+            match key.as_str() {
+                "rocketmqHome" => self.rocketmq_home = value.to_string(),
+                "kvConfigPath" => self.kv_config_path = value.to_string(),
+                "configStorePath" => self.config_store_path = value.to_string(),
+                "productEnvName" => self.product_env_name = value.to_string(),
+                "clusterTest" => {
+                    self.cluster_test = value
+                        .parse()
+                        .map_err(|_| format!("Invalid boolean value for key '{}'", key))?
+                }
+                "orderMessageEnable" => {
+                    self.order_message_enable = value
+                        .parse()
+                        .map_err(|_| format!("Invalid boolean value for key '{}'", key))?
+                }
+                "clientRequestThreadPoolNums" => {
+                    self.client_request_thread_pool_nums = value
+                        .parse()
+                        .map_err(|_| format!("Invalid integer value for key '{}'", key))?
+                }
+                "defaultThreadPoolNums" => {
+                    self.default_thread_pool_nums = value
+                        .parse()
+                        .map_err(|_| format!("Invalid integer value for key '{}'", key))?
+                }
+                "clientRequestThreadPoolQueueCapacity" => {
+                    self.client_request_thread_pool_queue_capacity = value
+                        .parse()
+                        .map_err(|_| format!("Invalid integer value for key '{}'", key))?
+                }
+                "defaultThreadPoolQueueCapacity" => {
+                    self.default_thread_pool_queue_capacity = value
+                        .parse()
+                        .map_err(|_| format!("Invalid integer value for key '{}'", key))?
+                }
+                "scanNotActiveBrokerInterval" => {
+                    self.scan_not_active_broker_interval = value
+                        .parse()
+                        .map_err(|_| format!("Invalid value for key '{}'", key))?
+                }
+                "unRegisterBrokerQueueCapacity" => {
+                    self.unregister_broker_queue_capacity = value
+                        .parse()
+                        .map_err(|_| format!("Invalid integer value for key '{}'", key))?
+                }
+                "supportActingMaster" => {
+                    self.support_acting_master = value
+                        .parse()
+                        .map_err(|_| format!("Invalid boolean value for key '{}'", key))?
+                }
+                "enableAllTopicList" => {
+                    self.enable_all_topic_list = value
+                        .parse()
+                        .map_err(|_| format!("Invalid boolean value for key '{}'", key))?
+                }
+                "enableTopicList" => {
+                    self.enable_topic_list = value
+                        .parse()
+                        .map_err(|_| format!("Invalid boolean value for key '{}'", key))?
+                }
+                "notifyMinBrokerIdChanged" => {
+                    self.notify_min_broker_id_changed = value
+                        .parse()
+                        .map_err(|_| format!("Invalid boolean value for key '{}'", key))?
+                }
+                "enableControllerInNamesrv" => {
+                    self.enable_controller_in_namesrv = value
+                        .parse()
+                        .map_err(|_| format!("Invalid boolean value for key '{}'", key))?
+                }
+                "needWaitForService" => {
+                    self.need_wait_for_service = value
+                        .parse()
+                        .map_err(|_| format!("Invalid boolean value for key '{}'", key))?
+                }
+                "waitSecondsForService" => {
+                    self.wait_seconds_for_service = value
+                        .parse()
+                        .map_err(|_| format!("Invalid integer value for key '{}'", key))?
+                }
+                "deleteTopicWithBrokerRegistration" => {
+                    self.delete_topic_with_broker_registration = value
+                        .parse()
+                        .map_err(|_| format!("Invalid boolean value for key '{}'", key))?
+                }
+                "configBlackList" => {
+                    self.config_black_list = value
+                        .parse()
+                        .map_err(|_| format!("Invalid string value for key '{}'", key))?
+                }
+                _ => {
+                    return Err(format!("Unknown configuration key: '{}'", key));
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -203,5 +317,121 @@ mod tests {
             config.config_black_list,
             "configBlackList;configStorePath;kvConfigPath".to_string()
         );
+    }
+
+    #[test]
+    fn test_namesrv_config_update() {
+        let mut config = NamesrvConfig::new();
+
+        let mut properties = HashMap::new();
+        properties.insert(
+            CheetahString::from("rocketmqHome"),
+            CheetahString::from("/new/path"),
+        );
+        properties.insert(
+            CheetahString::from("kvConfigPath"),
+            CheetahString::from("/new/kvConfigPath"),
+        );
+        properties.insert(
+            CheetahString::from("configStorePath"),
+            CheetahString::from("/new/configStorePath"),
+        );
+        properties.insert(
+            CheetahString::from("productEnvName"),
+            CheetahString::from("new_env"),
+        );
+        properties.insert(
+            CheetahString::from("clusterTest"),
+            CheetahString::from("true"),
+        );
+        properties.insert(
+            CheetahString::from("orderMessageEnable"),
+            CheetahString::from("true"),
+        );
+        properties.insert(
+            CheetahString::from("clientRequestThreadPoolNums"),
+            CheetahString::from("10"),
+        );
+        properties.insert(
+            CheetahString::from("defaultThreadPoolNums"),
+            CheetahString::from("20"),
+        );
+        properties.insert(
+            CheetahString::from("clientRequestThreadPoolQueueCapacity"),
+            CheetahString::from("10000"),
+        );
+        properties.insert(
+            CheetahString::from("defaultThreadPoolQueueCapacity"),
+            CheetahString::from("20000"),
+        );
+        properties.insert(
+            CheetahString::from("scanNotActiveBrokerInterval"),
+            CheetahString::from("15000"),
+        );
+        properties.insert(
+            CheetahString::from("unRegisterBrokerQueueCapacity"),
+            CheetahString::from("4000"),
+        );
+        properties.insert(
+            CheetahString::from("supportActingMaster"),
+            CheetahString::from("true"),
+        );
+        properties.insert(
+            CheetahString::from("enableAllTopicList"),
+            CheetahString::from("false"),
+        );
+        properties.insert(
+            CheetahString::from("enableTopicList"),
+            CheetahString::from("false"),
+        );
+        properties.insert(
+            CheetahString::from("notifyMinBrokerIdChanged"),
+            CheetahString::from("true"),
+        );
+        properties.insert(
+            CheetahString::from("enableControllerInNamesrv"),
+            CheetahString::from("true"),
+        );
+        properties.insert(
+            CheetahString::from("needWaitForService"),
+            CheetahString::from("true"),
+        );
+        properties.insert(
+            CheetahString::from("waitSecondsForService"),
+            CheetahString::from("30"),
+        );
+        properties.insert(
+            CheetahString::from("deleteTopicWithBrokerRegistration"),
+            CheetahString::from("true"),
+        );
+        properties.insert(
+            CheetahString::from("configBlackList"),
+            CheetahString::from("newBlackList"),
+        );
+
+        let result = config.update(properties);
+        assert!(result.is_ok());
+
+        assert_eq!(config.rocketmq_home, "/new/path");
+        assert_eq!(config.kv_config_path, "/new/kvConfigPath");
+        assert_eq!(config.config_store_path, "/new/configStorePath");
+        assert_eq!(config.product_env_name, "new_env");
+        assert_eq!(config.cluster_test, true);
+        assert_eq!(config.order_message_enable, true);
+        assert_eq!(config.client_request_thread_pool_nums, 10);
+        assert_eq!(config.default_thread_pool_nums, 20);
+        assert_eq!(config.client_request_thread_pool_queue_capacity, 10000);
+        assert_eq!(config.default_thread_pool_queue_capacity, 20000);
+        assert_eq!(config.scan_not_active_broker_interval, 15000);
+        assert_eq!(config.unregister_broker_queue_capacity, 4000);
+        assert_eq!(config.support_acting_master, true);
+        assert_eq!(config.enable_all_topic_list, false);
+        assert_eq!(config.enable_topic_list, false);
+        assert_eq!(config.notify_min_broker_id_changed, true);
+        assert_eq!(config.enable_controller_in_namesrv, true);
+        assert_eq!(config.need_wait_for_service, true);
+        assert_eq!(config.wait_seconds_for_service, 30);
+        assert_eq!(config.delete_topic_with_broker_registration, true);
+        assert_eq!(config.config_black_list, "newBlackList");
     }
 }

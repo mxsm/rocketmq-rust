@@ -21,6 +21,7 @@ pub enum RemotingSysResponseCode {
     SystemBusy = 2,
     RequestCodeNotSupported = 3,
     TransactionFailed = 4,
+    NoPermission = 16,
 }
 
 impl From<RemotingSysResponseCode> for i32 {
@@ -37,6 +38,7 @@ impl From<i32> for RemotingSysResponseCode {
             2 => RemotingSysResponseCode::SystemBusy,
             3 => RemotingSysResponseCode::RequestCodeNotSupported,
             4 => RemotingSysResponseCode::TransactionFailed,
+            16 => RemotingSysResponseCode::NoPermission,
             _ => RemotingSysResponseCode::SystemError,
         }
     }

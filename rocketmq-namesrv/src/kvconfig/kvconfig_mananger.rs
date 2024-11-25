@@ -96,6 +96,14 @@ impl KVConfigManager {
         }
     }
 
+    /// Updates the Namesrv configuration.
+    pub fn update_namesrv_config(
+        &mut self,
+        updates: HashMap<CheetahString, CheetahString>,
+    ) -> Result<(), String> {
+        self.namesrv_config.update(updates)
+    }
+
     /// Persists the current key-value configurations to a file.
     pub fn persist(&mut self) {
         let wrapper =
