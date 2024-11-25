@@ -484,10 +484,8 @@ impl DefaultRequestProcessor {
             }
         }
 
-        return RemotingCommand::create_response_command_with_code(
-            RemotingSysResponseCode::Success,
-        )
-        .set_remark(CheetahString::empty());
+        RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::Success)
+            .set_remark(CheetahString::empty())
     }
 }
 
