@@ -26,8 +26,8 @@ pub struct AllocateMessageQueueAveragely;
 impl AllocateMessageQueueStrategy for AllocateMessageQueueAveragely {
     fn allocate(
         &self,
-        consumer_group: &str,
-        current_cid: &str,
+        consumer_group: &CheetahString,
+        current_cid: &CheetahString,
         mq_all: &[MessageQueue],
         cid_all: &[CheetahString],
     ) -> Result<Vec<MessageQueue>> {
