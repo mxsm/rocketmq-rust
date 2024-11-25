@@ -19,7 +19,21 @@ use rocketmq_common::common::message::message_queue::MessageQueue;
 
 use crate::Result;
 
+/// Trait for allocating message queues to consumers in a consumer group.
+/// This trait is implemented by different strategies for message queue allocation.
 pub trait AllocateMessageQueueStrategy: Send + Sync {
+    /// Allocates message queues to a consumer in a consumer group.
+    ///
+    /// # Arguments
+    ///
+    /// * `consumer_group` - The name of the consumer group.
+    /// * `current_cid` - The ID of the current consumer.
+    /// * `mq_all` - A slice of all available message queues.
+    /// * `cid_all` - A slice of all consumer IDs in the consumer group.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing a vector of allocated message queues or an error.
     fn allocate(
         &self,
         consumer_group: &CheetahString,
@@ -28,5 +42,10 @@ pub trait AllocateMessageQueueStrategy: Send + Sync {
         cid_all: &[CheetahString],
     ) -> Result<Vec<MessageQueue>>;
 
+    /// Returns the name of the allocation strategy.
+    ///
+    /// # Returns
+    ///
+    /// A static string slice representing the name of the strategy.
     fn get_name(&self) -> &'static str;
 }
