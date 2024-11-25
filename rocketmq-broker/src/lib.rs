@@ -36,6 +36,7 @@ pub(crate) mod controller;
 pub(crate) mod error;
 pub(crate) mod filter;
 pub(crate) mod hook;
+pub(crate) mod load_balance;
 pub(crate) mod long_polling;
 pub(crate) mod mqtrace;
 pub(crate) mod offset;
