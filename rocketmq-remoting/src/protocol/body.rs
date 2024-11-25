@@ -34,6 +34,7 @@ pub mod query_assignment_request_body;
 pub mod query_assignment_response_body;
 pub mod request;
 pub mod response;
+pub mod set_message_request_mode_request_body;
 pub mod topic;
 pub mod topic_info_wrapper;
 pub mod unlock_batch_request_body;
