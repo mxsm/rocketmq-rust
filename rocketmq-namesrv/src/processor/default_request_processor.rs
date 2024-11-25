@@ -443,7 +443,7 @@ impl DefaultRequestProcessor {
 
     fn update_config(&mut self, request: RemotingCommand) -> RemotingCommand {
         if let Some(body) = request.body() {
-            let body_str = match str::from_utf8(&body) {
+            let body_str = match str::from_utf8(body) {
                 Ok(s) => s,
                 Err(e) => {
                     return RemotingCommand::create_response_command_with_code(
