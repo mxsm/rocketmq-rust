@@ -14,6 +14,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::fmt;
+
+use serde::de;
+use serde::de::Visitor;
+use serde::Deserialize;
+use serde::Deserializer;
+use serde::Serialize;
+use serde::Serializer;
+
 #[derive(Debug, PartialEq, Copy, Clone, Default)]
 pub enum MessageType {
     #[default]
@@ -47,7 +56,7 @@ impl MessageType {
     }
 }
 
-#[derive(Debug, PartialEq, Copy, Clone)]
+#[derive(Debug, PartialEq, Copy, Clone, Hash, Eq)]
 pub enum MessageRequestMode {
     Pull,
     Pop,
@@ -59,6 +68,48 @@ impl MessageRequestMode {
             MessageRequestMode::Pull => "PULL",
             MessageRequestMode::Pop => "POP",
         }
+    }
+}
+
+impl Serialize for MessageRequestMode {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(match *self {
+            MessageRequestMode::Pull => "PULL",
+            MessageRequestMode::Pop => "POP",
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for MessageRequestMode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct MessageRequestModeVisitor;
+
+        impl Visitor<'_> for MessageRequestModeVisitor {
+            type Value = MessageRequestMode;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a string representing a MessageRequestMode")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<MessageRequestMode, E>
+            where
+                E: de::Error,
+            {
+                match value {
+                    "PULL" => Ok(MessageRequestMode::Pull),
+                    "POP" => Ok(MessageRequestMode::Pop),
+                    _ => Err(de::Error::unknown_variant(value, &["PULL", "POP"])),
+                }
+            }
+        }
+
+        deserializer.deserialize_str(MessageRequestModeVisitor)
     }
 }
 
@@ -107,5 +158,40 @@ mod tests {
     fn test_get_name() {
         assert_eq!(MessageRequestMode::Pull.get_name(), "PULL");
         assert_eq!(MessageRequestMode::Pop.get_name(), "POP");
+    }
+
+    #[test]
+    fn serialize_message_request_mode_pull() {
+        let mode = MessageRequestMode::Pull;
+        let serialized = serde_json::to_string(&mode).unwrap();
+        assert_eq!(serialized, "\"PULL\"");
+    }
+
+    #[test]
+    fn serialize_message_request_mode_pop() {
+        let mode = MessageRequestMode::Pop;
+        let serialized = serde_json::to_string(&mode).unwrap();
+        assert_eq!(serialized, "\"POP\"");
+    }
+
+    #[test]
+    fn deserialize_message_request_mode_pull() {
+        let json = "\"PULL\"";
+        let deserialized: MessageRequestMode = serde_json::from_str(json).unwrap();
+        assert_eq!(deserialized, MessageRequestMode::Pull);
+    }
+
+    #[test]
+    fn deserialize_message_request_mode_pop() {
+        let json = "\"POP\"";
+        let deserialized: MessageRequestMode = serde_json::from_str(json).unwrap();
+        assert_eq!(deserialized, MessageRequestMode::Pop);
+    }
+
+    #[test]
+    fn deserialize_message_request_mode_invalid() {
+        let json = "\"INVALID\"";
+        let deserialized: Result<MessageRequestMode, _> = serde_json::from_str(json);
+        assert!(deserialized.is_err());
     }
 }
