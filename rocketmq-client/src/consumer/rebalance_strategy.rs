@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 pub mod allocate_message_queue_averagely;
+mod allocate_message_queue_averagely_by_circle;
 
 use std::collections::HashSet;
 
@@ -26,8 +27,8 @@ use crate::error::MQClientError::IllegalArgumentError;
 use crate::Result;
 
 pub fn check(
-    consumer_group: &str,
-    current_cid: &str,
+    consumer_group: &CheetahString,
+    current_cid: &CheetahString,
     mq_all: &[MessageQueue],
     cid_all: &[CheetahString],
 ) -> Result<bool> {
@@ -44,9 +45,9 @@ pub fn check(
             "cidAll is null or cidAll empty".to_string(),
         ));
     }
-    let current_cid: CheetahString = current_cid.to_string().into();
+
     let cid_set: HashSet<_> = cid_all.iter().collect();
-    if !cid_set.contains(&current_cid) {
+    if !cid_set.contains(current_cid) {
         info!(
             "[BUG] ConsumerGroup: {} The consumerId: {} not in cidAll: {:?}",
             consumer_group, current_cid, cid_all

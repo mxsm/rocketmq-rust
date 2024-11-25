@@ -61,6 +61,7 @@ impl MessageQueue {
         }
     }
 
+    #[inline]
     pub fn get_topic(&self) -> &str {
         &self.topic
     }
@@ -80,6 +81,7 @@ impl MessageQueue {
         &self.broker_name
     }
 
+    #[inline]
     pub fn set_broker_name(&mut self, broker_name: CheetahString) {
         self.broker_name = broker_name;
     }
@@ -89,6 +91,7 @@ impl MessageQueue {
         self.queue_id
     }
 
+    #[inline]
     pub fn set_queue_id(&mut self, queue_id: i32) {
         self.queue_id = queue_id;
     }
