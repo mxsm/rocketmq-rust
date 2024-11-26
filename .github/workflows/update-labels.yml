@@ -1,19 +1,18 @@
-name: Update Labels After Approval
+name: Update Labels After Approval Comment
 
 on:
-  pull_request_target:
+  issue_comment:
     types:
-      - opened
-      - reopened
-      - synchronize
+      - created
 
 jobs:
   update-labels:
+    if: contains(github.event.comment.body, 'PR approved: Please update labels.')
     runs-on: ubuntu-latest
 
     permissions:
-      issues: write
       pull-requests: write
+      issues: write
 
     steps:
       - name: Checkout Repository
@@ -25,7 +24,7 @@ jobs:
           github-token: ${{ secrets.BOT_TOKEN }}
           script: |
             const { owner, repo } = context.repo;
-            const issue_number = context.payload.pull_request.number;
+            const issue_number = context.payload.issue.number;
 
             const labelsToRemove = ['waiting-review', 'ready to review'];
             const labelsToAdd = ['approved', 'auto merge'];

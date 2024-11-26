@@ -6,31 +6,27 @@ on:
       - submitted
 
 jobs:
-  detect-review:
+  add-approval-comment:
     runs-on: ubuntu-latest
 
     permissions:
-      contents: read
       pull-requests: write
+      issues: write
 
     steps:
-      - name: Check Review State
+      - name: Add Approval Comment
+        if: ${{ github.event.review.state == 'approved' }}
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const reviewState = context.payload.review.state;
-            const prNumber = context.payload.pull_request.number;
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
 
-            if (reviewState === 'approved') {
-              console.log(`PR #${prNumber} was approved.`);
-              core.setOutput('trigger_update', 'true');
-            } else {
-              console.log(`Review state is ${reviewState}, skipping.`);
-              core.setOutput('trigger_update', 'false');
-            }
-        id: check-review
-
-      - name: Trigger Follow-Up Workflow
-        if: steps.check-review.outputs.trigger_update == 'true'
-        run: |
-          echo "Triggering follow-up action for PR approval."
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number,
+              body: "PR approved: Please update labels.",
+            });
+            console.log(`Comment added for PR #${issue_number}`);
