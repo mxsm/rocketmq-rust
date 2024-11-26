@@ -7,6 +7,8 @@ on:
 jobs:
   sync-labels:
     runs-on: ubuntu-latest
+    env:
+      TOKEN: ${{ secrets.BOT_TOKEN_1 }}
 
     steps:
       # Checkout the repository
@@ -17,7 +19,7 @@ jobs:
       - name: Sync Labels from Linked Issue
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.BOT_TOKEN_1 }}
+          github-token: ${{ env.TOKEN }}
           script: |
             // Extract linked issue numbers from the PR description
             const issueNumbers = context.payload.pull_request.body
