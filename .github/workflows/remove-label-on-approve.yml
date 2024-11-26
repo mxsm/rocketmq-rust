@@ -7,7 +7,7 @@ on:
 
 jobs:
   remove-labels-on-approve:
-    if: github.event.review?.state == 'approved' # Trigger only when the review is approved
+    if: github.event.review.state == 'approved' # Trigger only when the review is approved
     runs-on: ubuntu-latest
     
     permissions:
