@@ -89,3 +89,57 @@ impl Display for MessageModel {
         write!(f, "{}", self.get_mode_cn())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json;
+
+    use super::*;
+
+    #[test]
+    fn serialize_message_model_broadcasting() {
+        let model = MessageModel::Broadcasting;
+        let serialized = serde_json::to_string(&model).unwrap();
+        assert_eq!(serialized, "\"BROADCASTING\"");
+    }
+
+    #[test]
+    fn serialize_message_model_clustering() {
+        let model = MessageModel::Clustering;
+        let serialized = serde_json::to_string(&model).unwrap();
+        assert_eq!(serialized, "\"CLUSTERING\"");
+    }
+
+    #[test]
+    fn deserialize_message_model_broadcasting() {
+        let json = "\"BROADCASTING\"";
+        let deserialized: MessageModel = serde_json::from_str(json).unwrap();
+        assert_eq!(deserialized, MessageModel::Broadcasting);
+    }
+
+    #[test]
+    fn deserialize_message_model_clustering() {
+        let json = "\"CLUSTERING\"";
+        let deserialized: MessageModel = serde_json::from_str(json).unwrap();
+        assert_eq!(deserialized, MessageModel::Clustering);
+    }
+
+    #[test]
+    fn deserialize_message_model_invalid() {
+        let json = "\"INVALID\"";
+        let deserialized: Result<MessageModel, _> = serde_json::from_str(json);
+        assert!(deserialized.is_err());
+    }
+
+    #[test]
+    fn display_message_model_broadcasting() {
+        let model = MessageModel::Broadcasting;
+        assert_eq!(model.to_string(), "BROADCASTING");
+    }
+
+    #[test]
+    fn display_message_model_clustering() {
+        let model = MessageModel::Clustering;
+        assert_eq!(model.to_string(), "CLUSTERING");
+    }
+}
