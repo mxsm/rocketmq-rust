@@ -24,7 +24,7 @@ jobs:
       - name: automerge
         uses: "pascalgn/automerge-action@v0.16.4"
         env:
-          GITHUB_TOKEN: "${{ secrets.BOT_TOKEN }}"
+          GITHUB_TOKEN: "${{ secrets.PAT }}"
           MERGE_LABELS: "approved,auto merge,!ready to review,!waiting-review"
           MERGE_METHOD: "squash"
           MERGE_COMMIT_MESSAGE: "automatic"
