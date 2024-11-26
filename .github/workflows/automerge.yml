@@ -20,6 +20,9 @@ on:
 jobs:
   automerge:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - name: automerge
         uses: "pascalgn/automerge-action@v0.16.4"
