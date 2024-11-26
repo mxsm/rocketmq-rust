@@ -1,4 +1,4 @@
-name: Detect Pull Request Review and Trigger Workflow
+name: Detect Pull Request Review
 
 on:
   pull_request_review:
@@ -6,29 +6,31 @@ on:
       - submitted
 
 jobs:
-  trigger-label-update:
+  detect-review:
     runs-on: ubuntu-latest
 
     permissions:
-      actions: write # Required to trigger workflows
-      pull-requests: read
+      contents: read
+      pull-requests: write
 
     steps:
-      - name: Trigger Label Update Workflow
-        if: ${{ github.event.review.state == 'approved' }}
+      - name: Check Review State
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.BOT_TOKEN }}
           script: |
-            const { owner, repo } = context.repo;
+            const reviewState = context.payload.review.state;
             const prNumber = context.payload.pull_request.number;
 
-            console.log(`Triggering label update workflow for PR #${prNumber}.`);
+            if (reviewState === 'approved') {
+              console.log(`PR #${prNumber} was approved.`);
+              core.setOutput('trigger_update', 'true');
+            } else {
+              console.log(`Review state is ${reviewState}, skipping.`);
+              core.setOutput('trigger_update', 'false');
+            }
+        id: check-review
 
-            await github.rest.actions.createWorkflowDispatch({
-              owner,
-              repo,
-              workflow_id: "update-labels.yml", // Replace with the actual workflow filename
-              ref: "main", // Default branch where the second workflow is defined
-              inputs: { pr_number: prNumber.toString() },
-            });
+      - name: Trigger Follow-Up Workflow
+        if: steps.check-review.outputs.trigger_update == 'true'
+        run: |
+          echo "Triggering follow-up action for PR approval."
