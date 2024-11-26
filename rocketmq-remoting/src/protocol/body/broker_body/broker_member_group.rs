@@ -43,3 +43,87 @@ impl BrokerMemberGroup {
 pub struct GetBrokerMemberGroupResponseBody {
     pub broker_member_group: Option<BrokerMemberGroup>,
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use cheetah_string::CheetahString;
+
+    use super::*;
+
+    #[test]
+    fn new_creates_broker_member_group_with_empty_broker_addrs() {
+        let cluster = CheetahString::from("test_cluster");
+        let broker_name = CheetahString::from("test_broker");
+        let group = BrokerMemberGroup::new(cluster.clone(), broker_name.clone());
+
+        assert_eq!(group.cluster, cluster);
+        assert_eq!(group.broker_name, broker_name);
+        assert!(group.broker_addrs.is_empty());
+    }
+
+    #[test]
+    fn broker_member_group_serializes_correctly() {
+        let cluster = CheetahString::from("test_cluster");
+        let broker_name = CheetahString::from("test_broker");
+        let mut broker_addrs = HashMap::new();
+        broker_addrs.insert(1, CheetahString::from("127.0.0.1:10911"));
+        let group = BrokerMemberGroup {
+            cluster: cluster.clone(),
+            broker_name: broker_name.clone(),
+            broker_addrs: broker_addrs.clone(),
+        };
+
+        let serialized = serde_json::to_string(&group).unwrap();
+        let expected = format!(
+            r#"{{"cluster":"{}","brokerName":"{}","brokerAddrs":{{"1":"{}"}}}}"#,
+            cluster,
+            broker_name,
+            broker_addrs.get(&1).unwrap()
+        );
+        assert_eq!(serialized, expected);
+    }
+
+    #[test]
+    fn broker_member_group_deserializes_correctly() {
+        let data = r#"{"cluster":"test_cluster","brokerName":"test_broker","brokerAddrs":{"1":"127.0.0.1:10911"}}"#;
+        let group: BrokerMemberGroup = serde_json::from_str(data).unwrap();
+
+        assert_eq!(group.cluster, CheetahString::from("test_cluster"));
+        assert_eq!(group.broker_name, CheetahString::from("test_broker"));
+        assert_eq!(
+            group.broker_addrs.get(&1).unwrap(),
+            &CheetahString::from("127.0.0.1:10911")
+        );
+    }
+
+    #[test]
+    fn get_broker_member_group_response_body_serializes_correctly() {
+        let cluster = CheetahString::from("test_cluster");
+        let broker_name = CheetahString::from("test_broker");
+        let group = BrokerMemberGroup::new(cluster.clone(), broker_name.clone());
+        let response_body = GetBrokerMemberGroupResponseBody {
+            broker_member_group: Some(group.clone()),
+        };
+
+        let serialized = serde_json::to_string(&response_body).unwrap();
+        let expected = format!(
+            r#"{{"brokerMemberGroup":{{"cluster":"{}","brokerName":"{}","brokerAddrs":{{}}}}}}"#,
+            cluster, broker_name
+        );
+        assert_eq!(serialized, expected);
+    }
+
+    #[test]
+    fn get_broker_member_group_response_body_deserializes_correctly() {
+        let data = r#"{"brokerMemberGroup":{"cluster":"test_cluster","brokerName":"test_broker","brokerAddrs":{}}}"#;
+        let response_body: GetBrokerMemberGroupResponseBody = serde_json::from_str(data).unwrap();
+
+        assert!(response_body.broker_member_group.is_some());
+        let group = response_body.broker_member_group.unwrap();
+        assert_eq!(group.cluster, CheetahString::from("test_cluster"));
+        assert_eq!(group.broker_name, CheetahString::from("test_broker"));
+        assert!(group.broker_addrs.is_empty());
+    }
+}
