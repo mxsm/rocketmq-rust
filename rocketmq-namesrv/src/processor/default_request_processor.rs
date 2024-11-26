@@ -15,10 +15,13 @@
  * limitations under the License.
  */
 
+use core::str;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::mix_all;
+use rocketmq_common::common::mix_all::string_to_properties;
 use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::CRC32Utils;
@@ -102,6 +105,7 @@ impl DefaultRequestProcessor {
             RequestCode::GetHasUnitSubUnunitTopicList => {
                 self.get_has_unit_sub_un_unit_topic_list(request)
             }
+            RequestCode::UpdateNamesrvConfig => self.update_config(request),
             _ => RemotingCommand::create_response_command_with_code(
                 RemotingSysResponseCode::SystemError,
             ),
@@ -436,6 +440,53 @@ impl DefaultRequestProcessor {
         RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::SystemError)
             .set_remark("disable")
     }
+
+    fn update_config(&mut self, request: RemotingCommand) -> RemotingCommand {
+        if let Some(body) = request.body() {
+            let body_str = match str::from_utf8(body) {
+                Ok(s) => s,
+                Err(e) => {
+                    return RemotingCommand::create_response_command_with_code(
+                        RemotingSysResponseCode::SystemError,
+                    )
+                    .set_remark(format!("UnsupportedEncodingException {:?}", e));
+                }
+            };
+
+            let properties = match string_to_properties(body_str) {
+                Some(props) => props,
+                None => {
+                    return RemotingCommand::create_response_command_with_code(
+                        RemotingSysResponseCode::SystemError,
+                    )
+                    .set_remark("string_to_properties error".to_string());
+                }
+            };
+            if validate_blacklist_config_exist(
+                &properties,
+                &self
+                    .kvconfig_manager
+                    .get_namesrv_config()
+                    .get_config_blacklist(),
+            ) {
+                return RemotingCommand::create_response_command_with_code(
+                    RemotingSysResponseCode::NoPermission,
+                )
+                .set_remark("Cannot update config in blacklist.".to_string());
+            }
+
+            let result = self.kvconfig_manager.update_namesrv_config(properties);
+            if let Err(e) = result {
+                return RemotingCommand::create_response_command_with_code(
+                    RemotingSysResponseCode::SystemError,
+                )
+                .set_remark(format!("Update error {:?}", e));
+            }
+        }
+
+        RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::Success)
+            .set_remark(CheetahString::empty())
+    }
 }
 
 fn extract_register_topic_config_from_request(
@@ -485,6 +536,18 @@ fn check_sum_crc32(
         }
     }
     true
+}
+
+fn validate_blacklist_config_exist(
+    properties: &HashMap<CheetahString, CheetahString>,
+    config_blacklist: &[CheetahString],
+) -> bool {
+    for black_config in config_blacklist {
+        if properties.contains_key(black_config.as_str()) {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]

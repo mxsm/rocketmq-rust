@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 
+use std::collections::HashMap;
 use std::env;
 
 use cheetah_string::CheetahString;
@@ -159,6 +160,29 @@ pub fn human_readable_byte_count(bytes: i64, si: bool) -> String {
     format!("{:.1} {}B", bytes / unit.powi(exp), pre)
 }
 
+pub fn string_to_properties(input: &str) -> Option<HashMap<CheetahString, CheetahString>> {
+    let mut properties = HashMap::new();
+
+    for line in input.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            // Skip empty lines or comments
+            continue;
+        }
+
+        if let Some((key, value)) = line.split_once('=') {
+            // Convert key and value to CheetahString
+            let key = CheetahString::from(key.trim());
+            let value = CheetahString::from(value.trim());
+            properties.insert(key, value);
+        } else {
+            return None; // Return None if the line isn't in `key=value` format
+        }
+    }
+
+    Some(properties)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,5 +264,34 @@ mod tests {
     #[test]
     fn returns_false_for_none_metadata() {
         assert!(!is_lmq(None));
+    }
+
+    #[test]
+    fn test_string_to_properties_valid_input() {
+        let input = r#"
+             # This is a comment
+             key1=value1
+             key2 = value2
+             key3=value3
+         "#;
+
+        let result = string_to_properties(input).expect("Parsing should succeed");
+        let mut expected = HashMap::new();
+        expected.insert(CheetahString::from("key1"), CheetahString::from("value1"));
+        expected.insert(CheetahString::from("key2"), CheetahString::from("value2"));
+        expected.insert(CheetahString::from("key3"), CheetahString::from("value3"));
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_string_to_properties_invalid_line() {
+        let input = r#"
+             key1=value1
+             invalid_line
+         "#;
+
+        let result = string_to_properties(input);
+        assert!(result.is_none(), "Parsing should fail for invalid input");
     }
 }
