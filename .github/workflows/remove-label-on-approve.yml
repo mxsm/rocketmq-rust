@@ -18,3 +18,7 @@ jobs:
       # Checkout the repository
       - name: Checkout Repository
         uses: actions/checkout@v4
+
+      - name: Set Pull Request Number
+        id: set-pr
+        run: echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_ENV
