@@ -28,7 +28,7 @@ jobs:
             
             // Get repository and PR context information
             const { owner, repo } = context.repo;
-            const issue_number = context.payload.pull_request.number;
+            const issue_number = context.payload.workflow_run.pull_requests[0].number;
             console.log(`======owner '${owner}' repo '${repo}'.`);
             // Get all labels on the current PR
             const { data: labels } = await github.rest.issues.listLabelsOnIssue({
