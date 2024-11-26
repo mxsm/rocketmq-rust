@@ -34,3 +34,48 @@ impl Default for OperationResult {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use rocketmq_common::common::message::message_ext::MessageExt;
+    use rocketmq_remoting::code::response_code::ResponseCode;
+
+    use super::*;
+
+    #[test]
+    fn default_operation_result_has_none_fields() {
+        let result = OperationResult::default();
+        assert!(result.prepare_message.is_none());
+        assert!(result.response_remark.is_none());
+        assert_eq!(result.response_code, ResponseCode::Success);
+    }
+
+    #[test]
+    fn operation_result_with_some_fields() {
+        let message = MessageExt::default();
+        let remark = Some(String::from("Test remark"));
+        let response_code = ResponseCode::SystemError;
+
+        let result = OperationResult {
+            prepare_message: Some(message.clone()),
+            response_remark: remark.clone(),
+            response_code,
+        };
+
+        assert_eq!(result.response_remark, remark);
+        assert_eq!(result.response_code, response_code);
+    }
+
+    #[test]
+    fn operation_result_with_none_fields() {
+        let result = OperationResult {
+            prepare_message: None,
+            response_remark: None,
+            response_code: ResponseCode::Success,
+        };
+
+        assert!(result.prepare_message.is_none());
+        assert!(result.response_remark.is_none());
+        assert_eq!(result.response_code, ResponseCode::Success);
+    }
+}
