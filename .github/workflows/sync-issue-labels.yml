@@ -17,7 +17,7 @@ jobs:
       - name: Sync Labels from Linked Issue
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.PAT  }}
+          github-token: ${{ secrets.GITHUB_TOKEN  }}
           script: |
             // Extract linked issue numbers from the PR description
             const issueNumbers = context.payload.pull_request.body
