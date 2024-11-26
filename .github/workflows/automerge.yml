@@ -20,11 +20,14 @@ on:
 jobs:
   automerge:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - name: automerge
         uses: "pascalgn/automerge-action@v0.16.4"
         env:
-          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+          GITHUB_TOKEN: "${{ secrets.BOT_TOKEN }}"
           MERGE_LABELS: "approved,auto merge,!ready to review,!waiting-review"
           MERGE_METHOD: "squash"
           MERGE_COMMIT_MESSAGE: "automatic"
