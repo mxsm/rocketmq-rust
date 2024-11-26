@@ -254,9 +254,9 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
 name = "cheetah-string"
-version = "0.1.5"
+version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82a578c334221239f89fbeae5bd193378dd558ff2fd8b3bf2feaaa1d16baab7e"
+checksum = "e3ced6aae29170370f5e53ff6cc59596152b71e066d3cf232c036acab6923bd3"
 dependencies = [
  "bytes",
  "serde",
