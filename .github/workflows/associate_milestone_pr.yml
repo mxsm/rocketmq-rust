@@ -13,7 +13,7 @@ jobs:
       - name: Associate Milestone
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.BOT_TOKEN_1  }}
+          github-token: ${{ secrets.BOT_TOKEN }}
           script: |
             const { owner, repo } = context.repo;
             const issueNumber = context.issue.number;
