@@ -21,9 +21,6 @@ on:
 
 jobs:
   remove-labels-on-approve:
-    if: |
-      (github.event_name == 'pull_request_review' && github.event.review.state == 'approved') ||
-      (github.event_name == 'pull_request_target' && github.event.action == 'opened')
     runs-on: ubuntu-latest
     permissions:
       issues: write
