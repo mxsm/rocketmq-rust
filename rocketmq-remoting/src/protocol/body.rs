@@ -23,6 +23,7 @@ pub mod get_consumer_listby_group_response_body;
 pub mod consumer_connection;
 
 pub mod check_client_request_body;
+pub mod check_rocksdb_cqwrite_progress_response_body;
 pub mod cluster_acl_version_info;
 pub mod cm_result;
 pub mod connection;
@@ -31,6 +32,7 @@ pub mod group_list;
 pub mod kv_table;
 pub mod pop_process_queue_info;
 pub mod process_queue_info;
+pub mod producer_connection;
 pub mod query_assignment_request_body;
 pub mod query_assignment_response_body;
 pub mod request;
