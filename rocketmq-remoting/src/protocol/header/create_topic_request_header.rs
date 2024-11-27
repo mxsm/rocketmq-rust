@@ -177,3 +177,201 @@ impl FromMap for CreateTopicRequestHeader {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    #[test]
+    fn create_topic_request_header_to_map() {
+        let header = CreateTopicRequestHeader {
+            topic: CheetahString::from("test_topic"),
+            default_topic: CheetahString::from("default_topic"),
+            read_queue_nums: 4,
+            write_queue_nums: 4,
+            perm: 6,
+            topic_filter_type: CheetahString::from("filter_type"),
+            topic_sys_flag: Some(1),
+            order: true,
+            attributes: Some(CheetahString::from("attributes")),
+            force: Some(true),
+            topic_request_header: None,
+        };
+
+        let map = header.to_map().unwrap();
+        assert_eq!(
+            map.get(&CheetahString::from_static_str(
+                CreateTopicRequestHeader::TOPIC
+            ))
+            .unwrap(),
+            &CheetahString::from("test_topic")
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str(
+                CreateTopicRequestHeader::DEFAULT_TOPIC
+            ))
+            .unwrap(),
+            &CheetahString::from("default_topic")
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str(
+                CreateTopicRequestHeader::READ_QUEUE_NUMS
+            ))
+            .unwrap(),
+            &CheetahString::from("4")
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str(
+                CreateTopicRequestHeader::WRITE_QUEUE_NUMS
+            ))
+            .unwrap(),
+            &CheetahString::from("4")
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str(
+                CreateTopicRequestHeader::PERM
+            ))
+            .unwrap(),
+            &CheetahString::from("6")
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str(
+                CreateTopicRequestHeader::TOPIC_FILTER_TYPE
+            ))
+            .unwrap(),
+            &CheetahString::from("filter_type")
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str(
+                CreateTopicRequestHeader::TOPIC_SYS_FLAG
+            ))
+            .unwrap(),
+            &CheetahString::from("1")
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str(
+                CreateTopicRequestHeader::ORDER
+            ))
+            .unwrap(),
+            &CheetahString::from("true")
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str(
+                CreateTopicRequestHeader::ATTRIBUTES
+            ))
+            .unwrap(),
+            &CheetahString::from("attributes")
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str(
+                CreateTopicRequestHeader::FORCE
+            ))
+            .unwrap(),
+            &CheetahString::from("true")
+        );
+    }
+
+    #[test]
+    fn create_topic_request_header_from_map() {
+        let mut map = HashMap::new();
+        map.insert(
+            CheetahString::from_static_str(CreateTopicRequestHeader::TOPIC),
+            CheetahString::from("test_topic"),
+        );
+        map.insert(
+            CheetahString::from_static_str(CreateTopicRequestHeader::DEFAULT_TOPIC),
+            CheetahString::from("default_topic"),
+        );
+        map.insert(
+            CheetahString::from_static_str(CreateTopicRequestHeader::READ_QUEUE_NUMS),
+            CheetahString::from("4"),
+        );
+        map.insert(
+            CheetahString::from_static_str(CreateTopicRequestHeader::WRITE_QUEUE_NUMS),
+            CheetahString::from("4"),
+        );
+        map.insert(
+            CheetahString::from_static_str(CreateTopicRequestHeader::PERM),
+            CheetahString::from("6"),
+        );
+        map.insert(
+            CheetahString::from_static_str(CreateTopicRequestHeader::TOPIC_FILTER_TYPE),
+            CheetahString::from("filter_type"),
+        );
+        map.insert(
+            CheetahString::from_static_str(CreateTopicRequestHeader::TOPIC_SYS_FLAG),
+            CheetahString::from("1"),
+        );
+        map.insert(
+            CheetahString::from_static_str(CreateTopicRequestHeader::ORDER),
+            CheetahString::from("true"),
+        );
+        map.insert(
+            CheetahString::from_static_str(CreateTopicRequestHeader::ATTRIBUTES),
+            CheetahString::from("attributes"),
+        );
+        map.insert(
+            CheetahString::from_static_str(CreateTopicRequestHeader::FORCE),
+            CheetahString::from("true"),
+        );
+
+        let header = <CreateTopicRequestHeader as FromMap>::from(&map).unwrap();
+        assert_eq!(header.topic, CheetahString::from("test_topic"));
+        assert_eq!(header.default_topic, CheetahString::from("default_topic"));
+        assert_eq!(header.read_queue_nums, 4);
+        assert_eq!(header.write_queue_nums, 4);
+        assert_eq!(header.perm, 6);
+        assert_eq!(header.topic_filter_type, CheetahString::from("filter_type"));
+        assert_eq!(header.topic_sys_flag, Some(1));
+        assert_eq!(header.order, true);
+        assert_eq!(header.attributes, Some(CheetahString::from("attributes")));
+        assert_eq!(header.force, Some(true));
+    }
+
+    #[test]
+    fn create_topic_request_header_from_map_missing_optional_fields() {
+        let mut map = HashMap::new();
+        map.insert(
+            CheetahString::from_static_str(CreateTopicRequestHeader::TOPIC),
+            CheetahString::from("test_topic"),
+        );
+        map.insert(
+            CheetahString::from_static_str(CreateTopicRequestHeader::DEFAULT_TOPIC),
+            CheetahString::from("default_topic"),
+        );
+        map.insert(
+            CheetahString::from_static_str(CreateTopicRequestHeader::READ_QUEUE_NUMS),
+            CheetahString::from("4"),
+        );
+        map.insert(
+            CheetahString::from_static_str(CreateTopicRequestHeader::WRITE_QUEUE_NUMS),
+            CheetahString::from("4"),
+        );
+        map.insert(
+            CheetahString::from_static_str(CreateTopicRequestHeader::PERM),
+            CheetahString::from("6"),
+        );
+        map.insert(
+            CheetahString::from_static_str(CreateTopicRequestHeader::TOPIC_FILTER_TYPE),
+            CheetahString::from("filter_type"),
+        );
+        map.insert(
+            CheetahString::from_static_str(CreateTopicRequestHeader::ORDER),
+            CheetahString::from("true"),
+        );
+
+        let header = <CreateTopicRequestHeader as FromMap>::from(&map).unwrap();
+        assert_eq!(header.topic, CheetahString::from("test_topic"));
+        assert_eq!(header.default_topic, CheetahString::from("default_topic"));
+        assert_eq!(header.read_queue_nums, 4);
+        assert_eq!(header.write_queue_nums, 4);
+        assert_eq!(header.perm, 6);
+        assert_eq!(header.topic_filter_type, CheetahString::from("filter_type"));
+        assert_eq!(header.topic_sys_flag, None);
+        assert_eq!(header.order, true);
+        assert_eq!(header.attributes, None);
+        assert_eq!(header.force, None);
+    }
+}
