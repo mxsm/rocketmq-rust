@@ -14,6 +14,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub(crate) mod common;
-pub(crate) mod mq_admin_ext;
-pub(crate) mod mq_admin_ext_async;
+use thiserror::Error;
+#[allow(clippy::enum_variant_names)]
+#[derive(Debug, Error)]
+pub enum ToolsError {
+    #[error("MQ client error occurred.")]
+    MQClientError,
+    #[error("MQ broker error occurred.")]
+    MQBrokerError,
+    #[error("Remoting timeout.")]
+    RemotingTimeoutError,
+    #[error("Remoting send request failed.")]
+    RemotingSendRequestError,
+    #[error("Remoting connect failed.")]
+    RemotingConnectError,
+    #[error("Unsupported encoding.")]
+    UnsupportedEncodingError,
+    #[error("Operation interrupted.")]
+    InterruptedError,
+}

@@ -14,4 +14,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use crate::tools_error::ToolsError;
+
 mod admin;
+mod tools_error;
+
+pub type Result<T> = std::result::Result<T, ToolsError>;
