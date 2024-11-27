@@ -1,32 +1,98 @@
-name: Detect Pull Request Review
+name: Remove and Add Multiple Labels on Approval
 
 on:
+  pull_request_target:
+    types:
+      - labeled
+      - unlabeled
+      - synchronize
+      - opened
+      - edited
+      - ready_for_review
+      - reopened
+      - unlocked
   pull_request_review:
     types:
       - submitted
+  check_suite:
+    types:
+      - completed
+  status: {}
 
 jobs:
-  add-approval-comment:
+  remove-labels-on-approve:
+    if: |
+      (github.event_name == 'pull_request_review' && github.event.review.state == 'approved') ||
+      (github.event_name == 'pull_request_target' && github.event.action == 'opened')
     runs-on: ubuntu-latest
-
     permissions:
-      pull-requests: write
       issues: write
+      pull-requests: write
 
     steps:
-      - name: Add Approval Comment
-        if: ${{ github.event.review.state == 'approved' }}
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Remove multiple labels using github-script
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.BOT_TOKEN }}
+          script: |
+            const labelsToRemove = ['waiting-review', 'ready to review']; // Labels to remove
+            
+            // Get repository and PR context information
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            
+            // Get all labels on the current PR
+            const { data: labels } = await github.rest.issues.listLabelsOnIssue({
+              owner,
+              repo,
+              issue_number,
+            });
+            
+            // Filter the labels that exist on the PR and are in the labelsToRemove list
+            const existingLabelsToRemove = labels
+              .filter(label => labelsToRemove.includes(label.name))
+              .map(label => label.name);
+            
+            // Remove each label
+            for (const label of existingLabelsToRemove) {
+              await github.rest.issues.removeLabel({
+                owner,
+                repo,
+                issue_number,
+                name: label,
+              });
+              console.log(`Label '${label}' has been removed.`);
+            }
+            
+            if (existingLabelsToRemove.length === 0) {
+              console.log('No matching labels found to remove.');
+            }
+            
+            // Add new labels
+            await github.rest.issues.addLabels({
+              owner,
+              repo,
+              issue_number,
+              labels: ['approved', 'auto merge']
+            });
+
+      - name: Add comment to PR
+        if: github.event_name == 'pull_request_review' && github.event.review.state == 'approved'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.BOT_TOKEN }}
           script: |
             const { owner, repo } = context.repo;
             const issue_number = context.payload.pull_request.number;
+            const comment = `This Pull Request has been approved. Labels have been updated.`;
 
             await github.rest.issues.createComment({
               owner,
               repo,
               issue_number,
-              body: "PR approved: Please update labels.",
+              body: comment
             });
-            console.log(`Comment added for PR #${issue_number}`);
+            console.log(`Comment added to PR #${issue_number}: ${comment}`);
