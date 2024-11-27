@@ -1,0 +1,14 @@
+[package]
+name = "rocketmq-tools"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords = ["apache-rocketmq", "rocketmq-rust", "apache", "rust", "rocketmq-tools"]
+categories.workspace = true
+readme = "README.md"
+description = "Rust implementation of Apache RocketMQ tools"
+
+[dependencies]
