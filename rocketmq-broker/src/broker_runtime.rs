@@ -72,6 +72,7 @@ use crate::processor::default_pull_message_result_handler::DefaultPullMessageRes
 use crate::processor::end_transaction_processor::EndTransactionProcessor;
 use crate::processor::pull_message_processor::PullMessageProcessor;
 use crate::processor::pull_message_result_handler::PullMessageResultHandler;
+use crate::processor::query_assignment_processor::QueryAssignmentProcessor;
 use crate::processor::query_message_processor::QueryMessageProcessor;
 use crate::processor::reply_message_processor::ReplyMessageProcessor;
 use crate::processor::send_message_processor::SendMessageProcessor;
@@ -537,7 +538,9 @@ impl BrokerRuntime {
                 self.subscription_group_manager.clone(),
             )),
             consumer_manage_processor: ArcMut::new(consumer_manage_processor),
-            query_assignment_processor: Default::default(),
+            query_assignment_processor: ArcMut::new(QueryAssignmentProcessor::new(
+                self.message_store_config.clone(),
+            )),
             query_message_processor: ArcMut::new(query_message_processor),
             end_transaction_processor: ArcMut::new(EndTransactionProcessor::new(
                 self.message_store_config.clone(),
