@@ -14,4 +14,5 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+pub mod plain_access_config;
 pub mod service_state;
