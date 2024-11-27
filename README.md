@@ -22,6 +22,9 @@ language.
 
 ## Roadmap
 
+### **🔊Note**: ***Rocketmq-rust*** is implemented based on ***Apache Rocketmq release-5.3.1📌(Tag)***, with subsequent feature enhancements to follow the updates of the version🚩.
+
+
 ![](resources/rocektmq-rust-roadmap.png)
 
 🔊Release a new version every three months to fix issues. If there are major updates or new features, additional releases will be scheduled🍻. 
