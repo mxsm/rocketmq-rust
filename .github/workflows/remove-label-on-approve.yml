@@ -18,3 +18,19 @@ jobs:
       # Checkout the repository
       - name: Checkout Repository
         uses: actions/checkout@v4
+
+    - name: Add comment to PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const comment = `This Pull Request has been approved. Labels have been updated.`;
+
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number,
+              body: comment
+            });
+            console.log(`Comment added to PR #${issue_number}: ${comment}`);
