@@ -14,4 +14,5 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-mod admin;
+pub(crate) mod admin_tool_result;
+pub(crate) mod admin_tools_result_code_enum;
