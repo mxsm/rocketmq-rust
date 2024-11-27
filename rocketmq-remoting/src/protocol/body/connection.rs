@@ -21,6 +21,7 @@ use serde::Serialize;
 use crate::protocol::LanguageCode;
 
 #[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq, Hash, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct Connection {
     client_id: CheetahString,
     client_addr: CheetahString,
