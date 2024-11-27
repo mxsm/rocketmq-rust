@@ -2124,6 +2124,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rocketmq-tools"
+version = "0.4.0"
+
+[[package]]
 name = "ron"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
