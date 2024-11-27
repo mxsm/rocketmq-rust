@@ -27,6 +27,10 @@ use crate::load_balance::message_request_mode_manager::MessageRequestModeManager
  use rocketmq_store::config::message_store_config::MessageStoreConfig;
  use std::collections::HashMap;
  use std::sync::Arc;
+use rocketmq_common::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
+use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::protocol::body::set_message_request_mode_request_body::SetMessageRequestModeRequestBody;
+use rocketmq_remoting::protocol::RemotingDeserializable;
 
 pub struct QueryAssignmentProcessor {
     message_request_mode_manager: MessageRequestModeManager,
@@ -89,8 +93,27 @@ impl QueryAssignmentProcessor {
         &mut self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
-        _request: RemotingCommand,
+        request: RemotingCommand,
     ) -> Option<RemotingCommand> {
-        unimplemented!()
+        let request_body =
+            SetMessageRequestModeRequestBody::decode(request.get_body().expect("empty body"))
+                .expect("decode SetMessageRequestModeRequestBody failed");
+        if request_body.topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) {
+            return Some(
+                RemotingCommand::create_response_command_with_code(ResponseCode::NoPermission)
+                    .set_remark(CheetahString::from_static_str(
+                        "retry topic is not allowed to set mode",
+                    )),
+            );
+        }
+        self.message_request_mode_manager.set_message_request_mode(
+            request_body.topic.clone(),
+            request_body.consumer_group.clone(),
+            request_body,
+        );
+        self.message_request_mode_manager.persist();
+        Some(RemotingCommand::create_response_command_with_code(
+            ResponseCode::Success,
+        ))
     }
 }
