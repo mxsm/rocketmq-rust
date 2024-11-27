@@ -1,4 +1,4 @@
-name: Detect Pull Request Review
+name: Approval
 
 on:
   pull_request_review:
@@ -6,7 +6,8 @@ on:
       - submitted
 
 jobs:
-  add-approval-comment:
+  remove-labels-on-approve:
+    if: github.event.review.state == 'approved' # Trigger only when the review is approved
     runs-on: ubuntu-latest
 
     permissions:
