@@ -23,6 +23,7 @@ pub mod get_consumer_listby_group_response_body;
 pub mod consumer_connection;
 
 pub mod check_client_request_body;
+pub mod cluster_acl_version_info;
 pub mod cm_result;
 pub mod connection;
 pub mod consume_message_directly_result;
