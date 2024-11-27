@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 pub mod allocate_message_queue_averagely;
-mod allocate_message_queue_averagely_by_circle;
+pub mod allocate_message_queue_averagely_by_circle;
 
 use std::collections::HashSet;
 

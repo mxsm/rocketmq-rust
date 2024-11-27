@@ -21,14 +21,13 @@ use cheetah_string::CheetahString;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_remoting::protocol::body::set_message_request_mode_request_body::SetMessageRequestModeRequestBody;
-use rocketmq_rust::ArcMut;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use tracing::info;
 
 use crate::broker_path_config_helper;
 
 pub(crate) struct MessageRequestModeManager {
-    message_store_config: ArcMut<MessageStoreConfig>,
+    message_store_config: Arc<MessageStoreConfig>,
     message_request_mode_map: Arc<
         parking_lot::Mutex<
             HashMap<
@@ -40,7 +39,7 @@ pub(crate) struct MessageRequestModeManager {
 }
 
 impl MessageRequestModeManager {
-    pub fn new(message_store_config: ArcMut<MessageStoreConfig>) -> Self {
+    pub fn new(message_store_config: Arc<MessageStoreConfig>) -> Self {
         Self {
             message_store_config,
             message_request_mode_map: Arc::new(parking_lot::Mutex::new(HashMap::new())),
@@ -113,14 +112,13 @@ mod tests {
     use cheetah_string::CheetahString;
     use rocketmq_common::common::message::message_enum::MessageRequestMode;
     use rocketmq_remoting::protocol::body::set_message_request_mode_request_body::SetMessageRequestModeRequestBody;
-    use rocketmq_rust::ArcMut;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
 
     use super::*;
 
     #[test]
     fn set_message_request_mode_adds_entry() {
-        let message_store_config = ArcMut::new(MessageStoreConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig::default());
         let manager = MessageRequestModeManager::new(message_store_config);
         let topic = CheetahString::from("test_topic");
         let consumer_group = CheetahString::from("test_group");
@@ -138,7 +136,7 @@ mod tests {
 
     #[test]
     fn get_message_request_mode_returns_none_for_nonexistent_entry() {
-        let message_store_config = ArcMut::new(MessageStoreConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig::default());
         let manager = MessageRequestModeManager::new(message_store_config);
         let topic = CheetahString::from("nonexistent_topic");
         let consumer_group = CheetahString::from("nonexistent_group");
@@ -150,7 +148,7 @@ mod tests {
 
     #[test]
     fn encode_pretty_returns_pretty_json() {
-        let message_store_config = ArcMut::new(MessageStoreConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig::default());
         let manager = MessageRequestModeManager::new(message_store_config);
         let topic = CheetahString::from("test_topic");
         let consumer_group = CheetahString::from("test_group");
@@ -169,18 +167,18 @@ mod tests {
 
     #[test]
     fn decode_populates_message_request_mode_map() {
-        let message_store_config = ArcMut::new(MessageStoreConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig::default());
         let manager = MessageRequestModeManager::new(message_store_config);
         let json = r#"{
-            "test_topic": {
-                "test_group": {
-                    "topic": "test_topic",
-                    "consumerGroup": "test_group",
-                    "mode": "PULL",
-                    "popShareQueueNum": 0
-                }
-            }
-        }"#;
+             "test_topic": {
+                 "test_group": {
+                     "topic": "test_topic",
+                     "consumerGroup": "test_group",
+                     "mode": "PULL",
+                     "popShareQueueNum": 0
+                 }
+             }
+         }"#;
 
         manager.decode(json);
         let result = manager.get_message_request_mode(
