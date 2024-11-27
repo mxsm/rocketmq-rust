@@ -64,3 +64,87 @@ impl FromMap for DeleteTopicRequestHeader {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    #[test]
+    fn delete_topic_request_header_to_map() {
+        let header = DeleteTopicRequestHeader {
+            topic: CheetahString::from("test_topic"),
+            topic_request_header: None,
+        };
+
+        let map = header.to_map().unwrap();
+        assert_eq!(
+            map.get(&CheetahString::from_static_str(
+                DeleteTopicRequestHeader::TOPIC
+            ))
+            .unwrap(),
+            &CheetahString::from("test_topic")
+        );
+    }
+
+    #[test]
+    fn delete_topic_request_header_to_map_with_topic_request_header() {
+        let topic_request_header = TopicRequestHeader {
+            // Initialize fields as needed
+            rpc_request_header: None,
+            lo: None,
+        };
+        let header = DeleteTopicRequestHeader {
+            topic: CheetahString::from("test_topic"),
+            topic_request_header: Some(topic_request_header),
+        };
+
+        let map = header.to_map().unwrap();
+        assert_eq!(
+            map.get(&CheetahString::from_static_str(
+                DeleteTopicRequestHeader::TOPIC
+            ))
+            .unwrap(),
+            &CheetahString::from("test_topic")
+        );
+        // Add assertions for fields from topic_request_header
+    }
+
+    #[test]
+    fn delete_topic_request_header_from_map() {
+        let mut map = HashMap::new();
+        map.insert(
+            CheetahString::from_static_str(DeleteTopicRequestHeader::TOPIC),
+            CheetahString::from("test_topic"),
+        );
+
+        let header = <DeleteTopicRequestHeader as FromMap>::from(&map).unwrap();
+        assert_eq!(header.topic, CheetahString::from("test_topic"));
+        assert!(!header.topic_request_header.is_none());
+    }
+
+    #[test]
+    fn delete_topic_request_header_from_map_with_topic_request_header() {
+        let mut map = HashMap::new();
+        map.insert(
+            CheetahString::from_static_str(DeleteTopicRequestHeader::TOPIC),
+            CheetahString::from("test_topic"),
+        );
+        // Add entries for fields from topic_request_header
+
+        let header = <DeleteTopicRequestHeader as FromMap>::from(&map).unwrap();
+        assert_eq!(header.topic, CheetahString::from("test_topic"));
+        assert!(header.topic_request_header.is_some());
+        // Add assertions for fields from topic_request_header
+    }
+
+    #[test]
+    fn delete_topic_request_header_from_map_missing_topic() {
+        let map = HashMap::new();
+
+        let header = <DeleteTopicRequestHeader as FromMap>::from(&map).unwrap();
+        assert_eq!(header.topic, CheetahString::default());
+        assert!(!header.topic_request_header.is_none());
+    }
+}
