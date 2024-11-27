@@ -12,3 +12,17 @@ readme = "README.md"
 description = "Rust implementation of Apache RocketMQ tools"
 
 [dependencies]
+rocketmq-common = { workspace = true }
+rocketmq-remoting = { workspace = true }
+rocketmq-rust = { workspace = true }
+
+
+cheetah-string = { workspace = true }
+thiserror = { workspace = true }
+
+trait-variant.workspace = true
+
+[features]
+default = ["async"]
+async = []
+sync = []
