@@ -81,6 +81,7 @@ use crate::schedule::schedule_message_service::ScheduleMessageService;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
+use crate::topic::manager::topic_route_info_manager::TopicRouteInfoManager;
 use crate::topic::topic_queue_mapping_clean_service::TopicQueueMappingCleanService;
 use crate::transaction::queue::default_transactional_message_check_listener::DefaultTransactionalMessageCheckListener;
 use crate::transaction::queue::default_transactional_message_service::DefaultTransactionalMessageService;
@@ -133,6 +134,7 @@ pub(crate) struct BrokerRuntime {
         Option<Arc<DefaultTransactionalMessageCheckListener<DefaultMessageStore>>>,
     transactional_message_check_service: Option<Arc<TransactionalMessageCheckService>>,
     transaction_metrics_flush_service: Option<Arc<TransactionMetricsFlushService>>,
+    topic_route_info_manager: Arc<TopicRouteInfoManager>,
 }
 
 impl Clone for BrokerRuntime {
@@ -171,6 +173,7 @@ impl Clone for BrokerRuntime {
             transactional_message_check_listener: self.transactional_message_check_listener.clone(),
             transactional_message_check_service: None,
             transaction_metrics_flush_service: None,
+            topic_route_info_manager: self.topic_route_info_manager.clone(),
         }
     }
 }
@@ -239,7 +242,7 @@ impl BrokerRuntime {
             broker_stats: None,
             schedule_message_service: Default::default(),
             timer_message_store: None,
-            broker_out_api: broker_outer_api,
+            broker_out_api: broker_outer_api.clone(),
             broker_runtime: Some(runtime),
             producer_manager,
             consumer_manager,
@@ -259,6 +262,10 @@ impl BrokerRuntime {
             transactional_message_check_listener: None,
             transactional_message_check_service: None,
             transaction_metrics_flush_service: None,
+            topic_route_info_manager: Arc::new(TopicRouteInfoManager::new(
+                broker_outer_api,
+                broker_config,
+            )),
         }
     }
 
@@ -540,6 +547,9 @@ impl BrokerRuntime {
             consumer_manage_processor: ArcMut::new(consumer_manage_processor),
             query_assignment_processor: ArcMut::new(QueryAssignmentProcessor::new(
                 self.message_store_config.clone(),
+                self.broker_config.clone(),
+                self.topic_route_info_manager.clone(),
+                self.consumer_manager.clone(),
             )),
             query_message_processor: ArcMut::new(query_message_processor),
             end_transaction_processor: ArcMut::new(EndTransactionProcessor::new(
@@ -736,6 +746,8 @@ impl BrokerRuntime {
             let this = pull_request_hold_service.clone();
             pull_request_hold_service.start(this);
         }
+
+        self.topic_route_info_manager.start();
     }
 
     async fn update_namesrv_addr(&mut self) {
