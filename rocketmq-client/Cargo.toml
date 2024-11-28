@@ -23,8 +23,6 @@ serde.workspace = true
 serde_json.workspace = true
 
 tokio.workspace = true
-tokio-util.workspace = true
-tokio-stream.workspace = true
 
 trait-variant = { workspace = true }
 num_cpus = { workspace = true }
@@ -33,8 +31,6 @@ lazy_static = { workspace = true }
 
 #log
 tracing.workspace = true
-tracing-subscriber.workspace = true
-regex = { version = "1.11.1", features = [] }
 
 parking_lot = { workspace = true }
 once_cell = { workspace = true }

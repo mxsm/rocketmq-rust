@@ -1923,7 +1923,6 @@ dependencies = [
  "once_cell",
  "parking_lot",
  "rand",
- "regex",
  "rocketmq-common",
  "rocketmq-remoting",
  "rocketmq-runtime",
@@ -1932,10 +1931,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
- "tokio-stream",
- "tokio-util",
  "tracing",
- "tracing-subscriber",
  "trait-variant",
 ]
 
