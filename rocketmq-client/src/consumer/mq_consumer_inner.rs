@@ -105,7 +105,7 @@ impl<T: MQConsumerInner> MQConsumerInnerAny for T {
 }
 
 #[derive(Clone)]
-pub(crate) struct MQConsumerInnerImpl {
+pub struct MQConsumerInnerImpl {
     pub(crate) default_mqpush_consumer_impl: Option<WeakArcMut<DefaultMQPushConsumerImpl>>,
 }
 

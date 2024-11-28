@@ -23,6 +23,7 @@ use cheetah_string::CheetahString;
 use lazy_static::lazy_static;
 use rocketmq_common::common::message::message_batch::MessageBatch;
 use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
+use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::MessageConst;
@@ -42,6 +43,7 @@ use rocketmq_remoting::protocol::body::check_client_request_body::CheckClientReq
 use rocketmq_remoting::protocol::body::get_consumer_listby_group_response_body::GetConsumerListByGroupResponseBody;
 use rocketmq_remoting::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
 use rocketmq_remoting::protocol::body::response::lock_batch_response_body::LockBatchResponseBody;
+use rocketmq_remoting::protocol::body::set_message_request_mode_request_body::SetMessageRequestModeRequestBody;
 use rocketmq_remoting::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
 use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_remoting::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
@@ -84,6 +86,7 @@ use crate::consumer::pull_result::PullResult;
 use crate::consumer::pull_status::PullStatus;
 use crate::error::MQClientError;
 use crate::error::MQClientError::MQBrokerError;
+use crate::error::MQClientError::MQClientErr;
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::hook::send_message_context::SendMessageContext;
 use crate::implementation::client_remoting_processor::ClientRemotingProcessor;
@@ -1204,5 +1207,42 @@ impl MQClientAPIImpl {
             response.remark().map_or("".to_string(), |s| s.to_string()),
             addr.to_string(),
         ))
+    }
+
+    pub async fn set_message_request_mode(
+        &mut self,
+        broker_addr: &CheetahString,
+        topic: &CheetahString,
+        consumer_group: &CheetahString,
+        mode: MessageRequestMode,
+        pop_share_queue_num: i32,
+        timeout_millis: u64,
+    ) -> Result<()> {
+        let body = SetMessageRequestModeRequestBody {
+            topic: topic.clone(),
+            consumer_group: consumer_group.clone(),
+            mode,
+            pop_share_queue_num,
+        };
+        let request = RemotingCommand::create_remoting_command(RequestCode::SetMessageRequestMode)
+            .set_body(body.encode());
+        let response = self
+            .remoting_client
+            .invoke_async(
+                Some(&mix_all::broker_vip_channel(
+                    self.client_config.vip_channel_enabled,
+                    broker_addr,
+                )),
+                request,
+                timeout_millis,
+            )
+            .await?;
+        if ResponseCode::from(response.code()) != ResponseCode::Success {
+            return Err(MQClientErr(
+                response.code(),
+                response.remark().cloned().unwrap_or_default().to_string(),
+            ));
+        }
+        Ok(())
     }
 }

@@ -46,7 +46,7 @@ pub trait MQProducerInner: Send + Sync + 'static {
 }
 
 #[derive(Clone)]
-pub(crate) struct MQProducerInnerImpl {
+pub struct MQProducerInnerImpl {
     pub(crate) default_mqproducer_impl_inner: Option<ArcMut<DefaultMQProducerImpl>>,
 }
 

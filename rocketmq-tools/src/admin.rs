@@ -14,6 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub(crate) mod common;
-pub(crate) mod mq_admin_ext;
-pub(crate) mod mq_admin_ext_async;
+pub mod common;
+pub mod default_mq_admin_ext;
+pub mod default_mq_admin_ext_impl;
+pub mod mq_admin_ext;
+pub mod mq_admin_ext_async;
