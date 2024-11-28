@@ -295,11 +295,9 @@ mod tests {
     use std::collections::HashSet;
 
     use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
-    use rocketmq_remoting::net::channel::Channel;
     use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
     use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
     use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
-    use rocketmq_remoting::protocol::LanguageCode;
 
     use super::*;
 
@@ -387,7 +385,7 @@ mod tests {
         let message_model = MessageModel::Clustering;
         let consume_from_where = ConsumeFromWhere::ConsumeFromLastOffset;
 
-        let mut consumer_group_info = ConsumerGroupInfo::new(
+        let consumer_group_info = ConsumerGroupInfo::new(
             group_name.clone(),
             consume_type,
             message_model,

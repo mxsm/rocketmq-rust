@@ -395,7 +395,6 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use mockall::Any;
     use rocketmq_common::common::config::TopicConfig;
     use rocketmq_common::common::message::message_ext::MessageExt;
     use rocketmq_store::base::message_status_enum::PutMessageStatus;

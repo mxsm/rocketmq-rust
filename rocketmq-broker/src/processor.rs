@@ -160,6 +160,12 @@ where
                     .await
             }
 
+            RequestCode::QueryConsumeQueue | RequestCode::SetMessageRequestMode => {
+                self.query_assignment_processor
+                    .process_request(channel, ctx, request_code, request)
+                    .await
+            }
+
             _ => {
                 self.admin_broker_processor
                     .process_request(channel, ctx, request_code, request)

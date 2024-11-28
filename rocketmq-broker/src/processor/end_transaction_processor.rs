@@ -454,7 +454,7 @@ mod tests {
 
     #[test]
     fn end_message_transaction_with_empty_body() {
-        let mut msg_ext = MessageExt::default();
+        let msg_ext = MessageExt::default();
         //msg_ext.set_body(None);
         let msg_inner = end_message_transaction(&msg_ext);
         assert!(!msg_inner.get_body().is_some_and(|b| b.is_empty()));
