@@ -16,9 +16,9 @@
  */
 use std::sync::Arc;
 
-use log::info;
 use rocketmq_common::TimeUtils::get_current_millis;
 use tokio::sync::Notify;
+use tracing::info;
 
 #[derive(Default, Clone)]
 pub struct TransactionalOpBatchService {

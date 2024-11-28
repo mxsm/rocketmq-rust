@@ -22,31 +22,21 @@ rocketmq-common = { workspace = true }
 rocketmq-remoting = { workspace = true }
 rocketmq-store = { workspace = true }
 rocketmq-filter = { workspace = true }
-rocketmq-macros = { workspace = true }
 rocketmq-runtime = { workspace = true }
 rocketmq-client-rust = { workspace = true }
 
 anyhow.workspace = true
-env_logger.workspace = true
 
 tokio.workspace = true
-tokio-util.workspace = true
-tokio-stream.workspace = true
 
 tracing.workspace = true
-tracing-subscriber.workspace = true
+
 
 #json spupport
 serde.workspace = true
 serde_json.workspace = true
 
-futures-core = "0.3.0"
-futures-sink = "0.3.0"
-futures-io = { version = "0.3.0" }
-futures-util = { version = "0.3.31" }
-futures = "0.3.31"
-bytes = "1.8.0"
-config.workspace = true
+bytes = { workspace = true }
 parking_lot.workspace = true
 
 clap = { version = "4.5.21", features = ["derive"] }
@@ -54,10 +44,8 @@ rand = "0.8.5"
 
 #tools
 dirs.workspace = true
-
-local-ip-address = "0.6.3"
 dns-lookup = "2.0"
-log = "0.4.22"
+
 cfg-if = { workspace = true }
 lazy_static.workspace = true
 num_cpus = { workspace = true }

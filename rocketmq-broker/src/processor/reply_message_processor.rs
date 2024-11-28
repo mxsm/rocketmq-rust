@@ -18,7 +18,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use log::warn;
 use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
@@ -43,6 +42,7 @@ use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::log_file::MessageStore;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use rocketmq_store::stats::stats_type::StatsType;
+use tracing::warn;
 
 use crate::client::manager::producer_manager::ProducerManager;
 use crate::client::rebalance::rebalance_lock_manager::RebalanceLockManager;
