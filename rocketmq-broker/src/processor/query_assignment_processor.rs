@@ -27,7 +27,7 @@ use crate::load_balance::message_request_mode_manager::MessageRequestModeManager
  use rocketmq_store::config::message_store_config::MessageStoreConfig;
  use std::collections::{HashMap, HashSet};
  use std::sync::Arc;
-use tracing::warn;
+use tracing::{info, warn};
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_common::common::message::message_queue::MessageQueue;
@@ -374,11 +374,9 @@ fn allocate(
 
     let mut result = HashSet::new();
     if !cid_all.contains(current_cid) {
-        log::info!(
+        info!(
             "[BUG] ConsumerGroup: {} The consumerId: {} not in cidAll: {:?}",
-            consumer_group,
-            current_cid,
-            cid_all
+            consumer_group, current_cid, cid_all
         );
         return Ok(result);
     }
