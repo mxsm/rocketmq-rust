@@ -33,6 +33,7 @@ use rocketmq_remoting::protocol::body::broker_body::register_broker_body::Regist
 use rocketmq_remoting::protocol::body::kv_table::KVTable;
 use rocketmq_remoting::protocol::body::response::lock_batch_response_body::LockBatchResponseBody;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
+use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_remoting::protocol::header::lock_batch_mq_request_header::LockBatchMqRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::register_broker_header::RegisterBrokerRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::register_broker_header::RegisterBrokerResponseHeader;
@@ -54,6 +55,7 @@ use rocketmq_rust::ArcMut;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
+use tracing::warn;
 
 use crate::error::BrokerError;
 use crate::error::BrokerError::BrokerClientError;
@@ -402,6 +404,50 @@ impl BrokerOuterAPI {
             }
             Err(e) => Err(BrokerClientError(e)),
         }
+    }
+
+    pub async fn get_topic_route_info_from_name_server(
+        &self,
+        topic: &CheetahString,
+        timeout_millis: u64,
+        allow_topic_not_exist: bool,
+    ) -> Result<TopicRouteData> {
+        let header = GetRouteInfoRequestHeader {
+            topic: topic.clone(),
+            ..Default::default()
+        };
+        let request =
+            RemotingCommand::create_request_command(RequestCode::GetRouteinfoByTopic, header);
+        let response = self
+            .remoting_client
+            .invoke_async(None, request, timeout_millis)
+            .await?;
+        match ResponseCode::from(response.code()) {
+            ResponseCode::TopicNotExist => {
+                if allow_topic_not_exist {
+                    warn!(
+                        "get Topic [{}] RouteInfoFromNameServer is not exist value",
+                        topic
+                    );
+                }
+            }
+            ResponseCode::Success => {
+                if let Some(body) = response.body() {
+                    let topic_route_data = TopicRouteData::decode(body).unwrap();
+                    return Ok(topic_route_data);
+                }
+            }
+            _ => {}
+        }
+        Err(BrokerError::MQBrokerError(
+            response.code(),
+            response
+                .remark()
+                .cloned()
+                .unwrap_or(CheetahString::empty())
+                .to_string(),
+            "".to_string(),
+        ))
     }
 }
 
