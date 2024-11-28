@@ -27,7 +27,7 @@ pub mod base;
 mod common;
 pub mod consumer;
 pub mod error;
-mod factory;
+pub mod factory;
 mod hook;
 mod implementation;
 mod latency;

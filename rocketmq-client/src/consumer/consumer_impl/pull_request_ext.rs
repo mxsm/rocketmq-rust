@@ -16,9 +16,9 @@
  */
 use crate::consumer::pull_result::PullResult;
 
-pub(crate) struct PullResultExt {
-    pub(crate) pull_result: PullResult,
-    pub(crate) suggest_which_broker_id: u64,
-    pub(crate) message_binary: Option<bytes::Bytes>,
-    pub(crate) offset_delta: Option<i64>,
+pub struct PullResultExt {
+    pub pull_result: PullResult,
+    pub suggest_which_broker_id: u64,
+    pub message_binary: Option<bytes::Bytes>,
+    pub offset_delta: Option<i64>,
 }

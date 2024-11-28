@@ -18,8 +18,8 @@ use thiserror::Error;
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug, Error)]
 pub enum ToolsError {
-    #[error("MQ client error occurred.")]
-    MQClientError,
+    #[error("MQ client error occurred. {0}")]
+    MQClientError(#[from] rocketmq_client_rust::error::MQClientError),
     #[error("MQ broker error occurred.")]
     MQBrokerError,
     #[error("Remoting timeout.")]

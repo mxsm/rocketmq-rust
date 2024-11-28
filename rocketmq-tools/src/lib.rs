@@ -16,7 +16,7 @@
  */
 use crate::tools_error::ToolsError;
 
-mod admin;
-mod tools_error;
+pub mod admin;
+pub mod tools_error;
 
 pub type Result<T> = std::result::Result<T, ToolsError>;

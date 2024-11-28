@@ -2128,6 +2128,8 @@ name = "rocketmq-tools"
 version = "0.4.0"
 dependencies = [
  "cheetah-string",
+ "lazy_static",
+ "rocketmq-client-rust",
  "rocketmq-common",
  "rocketmq-remoting",
  "rocketmq-rust",
