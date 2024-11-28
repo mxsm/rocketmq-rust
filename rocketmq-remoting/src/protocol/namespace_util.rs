@@ -163,7 +163,8 @@ impl NamespaceUtil {
         TopicValidator::is_system_topic(resource) || mix_all::is_sys_consumer_group(resource)
     }
 
-    fn is_retry_topic(resource: &str) -> bool {
+    #[inline]
+    pub fn is_retry_topic(resource: &str) -> bool {
         !resource.is_empty() && resource.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX)
     }
 

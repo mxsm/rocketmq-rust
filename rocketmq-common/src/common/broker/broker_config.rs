@@ -24,6 +24,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::common::constant::PermName;
+use crate::common::message::message_enum::MessageRequestMode;
 use crate::common::mix_all;
 use crate::common::mix_all::NAMESRV_ADDR_PROPERTY;
 use crate::common::server::config::ServerConfig;
@@ -173,6 +174,9 @@ pub struct BrokerConfig {
     pub lock_in_strict_mode: bool,
     pub transaction_timeout: u64,
     pub transaction_op_msg_max_size: i32,
+    pub default_message_request_mode: MessageRequestMode,
+    pub default_pop_share_queue_num: i32,
+    pub load_balance_poll_name_server_interval: u64,
 }
 
 impl Default for BrokerConfig {
@@ -255,6 +259,9 @@ impl Default for BrokerConfig {
             lock_in_strict_mode: false,
             transaction_timeout: 6_000,
             transaction_op_msg_max_size: 4096,
+            default_message_request_mode: MessageRequestMode::Pull,
+            default_pop_share_queue_num: -1,
+            load_balance_poll_name_server_interval: 30_000,
         }
     }
 }
