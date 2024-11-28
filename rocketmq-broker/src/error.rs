@@ -27,4 +27,10 @@ pub enum BrokerError {
 
     #[error("Client exception occurred: CODE:{0}, broker address:{2}, Message:{1}")]
     MQBrokerError(i32, String, String),
+
+    #[error("{0}")]
+    IllegalArgumentError(String),
+
+    #[error("Client error: {0}")]
+    ClientError(#[from] rocketmq_client_rust::error::MQClientError),
 }

@@ -177,6 +177,7 @@ pub struct BrokerConfig {
     pub default_message_request_mode: MessageRequestMode,
     pub default_pop_share_queue_num: i32,
     pub load_balance_poll_name_server_interval: u64,
+    pub server_load_balancer_enable: bool,
 }
 
 impl Default for BrokerConfig {
@@ -262,6 +263,7 @@ impl Default for BrokerConfig {
             default_message_request_mode: MessageRequestMode::Pull,
             default_pop_share_queue_num: -1,
             load_balance_poll_name_server_interval: 30_000,
+            server_load_balancer_enable: true,
         }
     }
 }
