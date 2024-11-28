@@ -31,6 +31,7 @@ pub struct WeakArcMut<T: ?Sized> {
 
 // Implementation of PartialEq for WeakArcMut<T>
 impl<T: PartialEq> PartialEq for WeakArcMut<T> {
+    #[inline]
     fn eq(&self, other: &Self) -> bool {
         // Upgrade the Weak references to Arc, then compare the inner values
         if let (Some(self_arc), Some(other_arc)) = (self.inner.upgrade(), other.inner.upgrade()) {
@@ -46,6 +47,7 @@ impl<T: PartialEq> Eq for WeakArcMut<T> {}
 
 // Implementation of Hash for WeakArcMut<T>
 impl<T: Hash> Hash for WeakArcMut<T> {
+    #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
         if let Some(arc) = self.inner.upgrade() {
             unsafe { (*arc.get()).hash(state) }
@@ -54,6 +56,7 @@ impl<T: Hash> Hash for WeakArcMut<T> {
 }
 
 impl<T: ?Sized> Clone for WeakArcMut<T> {
+    #[inline]
     fn clone(&self) -> Self {
         WeakArcMut {
             inner: self.inner.clone(),
@@ -62,6 +65,7 @@ impl<T: ?Sized> Clone for WeakArcMut<T> {
 }
 
 impl<T> WeakArcMut<T> {
+    #[inline]
     pub fn upgrade(&self) -> Option<ArcMut<T>> {
         self.inner.upgrade().map(|value| ArcMut { inner: value })
     }
@@ -74,6 +78,7 @@ pub struct ArcMut<T: ?Sized> {
 
 // Implementation of PartialEq for ArcMut<T>
 impl<T: PartialEq> PartialEq for ArcMut<T> {
+    #[inline]
     fn eq(&self, other: &Self) -> bool {
         // Compare the inner values by borrowing them unsafely
         unsafe { *self.inner.get() == *other.inner.get() }
@@ -81,6 +86,7 @@ impl<T: PartialEq> PartialEq for ArcMut<T> {
 }
 
 impl<T: Hash> Hash for ArcMut<T> {
+    #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
         // Compute the hash of the inner value
         unsafe { (*self.inner.get()).hash(state) }
@@ -118,6 +124,7 @@ impl<T> ArcMut<T> {
 }
 
 impl<T: ?Sized> Clone for ArcMut<T> {
+    #[inline]
     fn clone(&self) -> Self {
         ArcMut {
             inner: Arc::clone(&self.inner),
@@ -126,12 +133,14 @@ impl<T: ?Sized> Clone for ArcMut<T> {
 }
 
 impl<T> AsRef<T> for ArcMut<T> {
+    #[inline]
     fn as_ref(&self) -> &T {
         unsafe { &*self.inner.get() }
     }
 }
 
 impl<T> AsMut<T> for ArcMut<T> {
+    #[inline]
     fn as_mut(&mut self) -> &mut T {
         unsafe { &mut *self.inner.get() }
     }
@@ -139,12 +148,15 @@ impl<T> AsMut<T> for ArcMut<T> {
 
 impl<T> Deref for ArcMut<T> {
     type Target = T;
+
+    #[inline]
     fn deref(&self) -> &Self::Target {
         self.as_ref()
     }
 }
 
 impl<T> DerefMut for ArcMut<T> {
+    #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.as_mut()
     }
@@ -164,6 +176,7 @@ impl<T> SyncUnsafeCellWrapper<T> {
 }
 
 impl<T> SyncUnsafeCellWrapper<T> {
+    #[inline]
     #[allow(clippy::mut_from_ref)]
     pub fn mut_from_ref(&self) -> &mut T {
         unsafe { &mut *self.inner.get() }
@@ -171,12 +184,14 @@ impl<T> SyncUnsafeCellWrapper<T> {
 }
 
 impl<T> AsRef<T> for SyncUnsafeCellWrapper<T> {
+    #[inline]
     fn as_ref(&self) -> &T {
         unsafe { &*self.inner.get() }
     }
 }
 
 impl<T> AsMut<T> for SyncUnsafeCellWrapper<T> {
+    #[inline]
     fn as_mut(&mut self) -> &mut T {
         &mut *self.inner.get_mut()
     }
@@ -184,12 +199,15 @@ impl<T> AsMut<T> for SyncUnsafeCellWrapper<T> {
 
 impl<T> Deref for SyncUnsafeCellWrapper<T> {
     type Target = T;
+
+    #[inline]
     fn deref(&self) -> &Self::Target {
         self.as_ref()
     }
 }
 
 impl<T> DerefMut for SyncUnsafeCellWrapper<T> {
+    #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.as_mut()
     }
