@@ -1953,9 +1953,6 @@ dependencies = [
  "cheetah-string",
  "flate2",
  "futures",
- "futures-core",
- "futures-io",
- "futures-sink",
  "futures-util",
  "lazy_static",
  "num_cpus",
@@ -1973,7 +1970,6 @@ dependencies = [
  "tokio-stream",
  "tokio-util",
  "tracing",
- "tracing-subscriber",
  "trait-variant",
  "uuid",
 ]
