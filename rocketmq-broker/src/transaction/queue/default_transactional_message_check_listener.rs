@@ -282,7 +282,7 @@ mod tests {
             topic_name: Some("test_topic".into()),
             ..Default::default()
         };
-        let mut msg_ext = MessageExt::default();
+        let msg_ext = MessageExt::default();
         let result = to_message_ext_broker_inner(&topic_config, &msg_ext);
         assert!(result.get_body().is_none());
     }

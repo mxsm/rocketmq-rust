@@ -86,11 +86,6 @@ impl ClientChannelInfo {
 
 #[cfg(test)]
 mod tests {
-    use rocketmq_remoting::net::channel::Channel;
-    use rocketmq_remoting::protocol::LanguageCode;
-
-    use super::*;
-
     #[test]
     fn client_channel_info_new() {
         // let channel = Channel::new(

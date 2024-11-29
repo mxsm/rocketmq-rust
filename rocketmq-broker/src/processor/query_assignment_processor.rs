@@ -129,6 +129,7 @@ impl QueryAssignmentProcessor {
                     ..Default::default()
                 };
                 if request_body.topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) {
+                    // retry topic must be pull mode
                     body.mode = MessageRequestMode::Pull;
                 } else {
                     body.mode = self.broker_config.default_message_request_mode;
@@ -139,6 +140,8 @@ impl QueryAssignmentProcessor {
                 body
             };
         let mode = set_message_request_mode_request_body.mode;
+
+        //do load balance, get message queues
         let message_queues = self
             .do_load_balance(
                 &request_body.topic,
@@ -160,7 +163,7 @@ impl QueryAssignmentProcessor {
                 })
                 .collect()
         } else {
-            HashSet::new()
+            HashSet::with_capacity(0)
         };
         let body = QueryAssignmentResponseBody {
             message_queue_assignments: assignments,
@@ -179,6 +182,7 @@ impl QueryAssignmentProcessor {
         channel: Channel,
     ) -> Option<HashSet<MessageQueue>> {
         match message_model {
+            // handle broadcasting consumer
             MessageModel::Broadcasting => {
                 let assigned_queue_set = self
                     .topic_route_info_manager
@@ -192,6 +196,7 @@ impl QueryAssignmentProcessor {
                 }
                 assigned_queue_set
             }
+            // handle clustering consumer
             MessageModel::Clustering => {
                 let mq_set = if mix_all::is_lmq(Some(topic.as_str())) {
                     let mut set = HashSet::new();
@@ -208,8 +213,8 @@ impl QueryAssignmentProcessor {
                         .await
                 };
 
-                if mq_set.is_none() || mq_set.as_ref().unwrap().is_empty() {
-                    if topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) {
+                if mq_set.is_none() {
+                    if !topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) {
                         warn!(
                             "QueryLoad: no assignment for group[{}], the topic[{}] does not exist.",
                             consumer_group, topic
@@ -289,7 +294,7 @@ impl QueryAssignmentProcessor {
         cid_all: &[CheetahString],
         pop_share_queue_num: i32,
     ) -> Result<HashSet<MessageQueue>> {
-        if pop_share_queue_num <= 0 || pop_share_queue_num > cid_all.len() as i32 - 1 {
+        if pop_share_queue_num <= 0 || pop_share_queue_num >= cid_all.len() as i32 - 1 {
             Ok(mq_all
                 .iter()
                 .map(|mq| {
@@ -307,7 +312,7 @@ impl QueryAssignmentProcessor {
             let index = cid_all.iter().position(|cid| cid == current_cid);
             if let Some(mut index) = index {
                 for _i in 1..pop_share_queue_num {
-                    index += index;
+                    index += 1;
                     index %= cid_all.len();
                     let result = strategy
                         .allocate(consumer_group, &cid_all[index], mq_all, cid_all)
@@ -319,6 +324,7 @@ impl QueryAssignmentProcessor {
                 .into_iter()
                 .collect::<HashSet<MessageQueue>>())
         } else {
+            //make sure each cid is assigned
             allocate(consumer_group, current_cid, mq_all, cid_all)
         }
     }
@@ -384,4 +390,86 @@ fn allocate(
     let index = cid_all.iter().position(|cid| cid == current_cid).unwrap();
     result.insert(mq_all[index % mq_all.len()].clone());
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use cheetah_string::CheetahString;
+    use rocketmq_common::common::message::message_queue::MessageQueue;
+
+    use super::*;
+
+    #[test]
+    fn allocate_returns_error_when_current_cid_is_empty() {
+        let consumer_group = CheetahString::from("test_group");
+        let current_cid = CheetahString::from("");
+        let mq_all = vec![MessageQueue::from_parts("topic", "broker", 0)];
+        let cid_all = vec![CheetahString::from("consumer1")];
+
+        let result = allocate(&consumer_group, &current_cid, &mq_all, &cid_all);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn allocate_returns_error_when_mq_all_is_empty() {
+        let consumer_group = CheetahString::from("test_group");
+        let current_cid = CheetahString::from("consumer1");
+        let mq_all = vec![];
+        let cid_all = vec![CheetahString::from("consumer1")];
+
+        let result = allocate(&consumer_group, &current_cid, &mq_all, &cid_all);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn allocate_returns_error_when_cid_all_is_empty() {
+        let consumer_group = CheetahString::from("test_group");
+        let current_cid = CheetahString::from("consumer1");
+        let mq_all = vec![MessageQueue::from_parts("topic", "broker", 0)];
+        let cid_all = vec![];
+
+        let result = allocate(&consumer_group, &current_cid, &mq_all, &cid_all);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn allocate_returns_empty_when_current_cid_not_in_cid_all() {
+        let consumer_group = CheetahString::from("test_group");
+        let current_cid = CheetahString::from("consumer2");
+        let mq_all = vec![MessageQueue::from_parts("topic", "broker", 0)];
+        let cid_all = vec![CheetahString::from("consumer1")];
+
+        let result = allocate(&consumer_group, &current_cid, &mq_all, &cid_all).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn allocate_returns_correct_queue_for_single_consumer() {
+        let consumer_group = CheetahString::from("test_group");
+        let current_cid = CheetahString::from("consumer1");
+        let mq_all = vec![MessageQueue::from_parts("topic", "broker", 0)];
+        let cid_all = vec![CheetahString::from("consumer1")];
+
+        let result = allocate(&consumer_group, &current_cid, &mq_all, &cid_all).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result.iter().next().unwrap().get_queue_id(), 0);
+    }
+
+    #[test]
+    fn allocate_returns_correct_queue_for_multiple_consumers() {
+        let consumer_group = CheetahString::from("test_group");
+        let current_cid = CheetahString::from("consumer2");
+        let mq_all = vec![
+            MessageQueue::from_parts("topic", "broker", 0),
+            MessageQueue::from_parts("topic", "broker", 1),
+        ];
+        let cid_all = vec![
+            CheetahString::from("consumer1"),
+            CheetahString::from("consumer2"),
+        ];
+
+        let result = allocate(&consumer_group, &current_cid, &mq_all, &cid_all).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result.iter().next().unwrap().get_queue_id(), 1);
+    }
 }

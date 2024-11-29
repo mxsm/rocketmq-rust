@@ -129,7 +129,7 @@ mod tests {
             consumer_group.clone(),
             request_body.clone(),
         );
-        let result = manager.get_message_request_mode(&topic, &consumer_group);
+        let _result = manager.get_message_request_mode(&topic, &consumer_group);
 
         //assert_eq!(result, Some(request_body));
     }

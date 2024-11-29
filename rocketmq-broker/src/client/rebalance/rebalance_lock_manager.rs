@@ -216,8 +216,6 @@ impl LockEntry {
 
 #[cfg(test)]
 mod rebalance_lock_manager_tests {
-    use std::sync::Arc;
-
     use rocketmq_common::common::message::message_queue::MessageQueue;
 
     use super::*;
