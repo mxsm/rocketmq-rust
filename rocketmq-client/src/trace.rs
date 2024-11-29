@@ -16,5 +16,6 @@
  */
 pub mod async_trace_dispatcher;
 pub mod hook;
+pub mod trace_bean;
 pub mod trace_constants;
 pub mod trace_dispatcher;
