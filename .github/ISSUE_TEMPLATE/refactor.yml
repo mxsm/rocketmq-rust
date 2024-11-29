@@ -13,31 +13,31 @@ body:
         - Why is this refactor necessary? (e.g., code readability, performance, maintainability)
         - What is the expected outcome of the refactor?
 
-  - type: input
+  - type: textarea
     attributes:
       label: "Which part of the code will be refactored?"
       description: "Specify the files, modules, or functions that will be changed."
       placeholder: "E.g., refactor the user authentication module"
 
-  - type: input
+  - type: textarea
     attributes:
       label: "What problems does the refactor aim to solve?"
       description: "List the issues, inefficiencies, or code smells being addressed."
       placeholder: "E.g., code duplication, long functions, lack of test coverage"
 
-  - type: input
+  - type: textarea
     attributes:
       label: "Do you have any specific design or implementation considerations?"
       description: "Any specific patterns, tools, or libraries to be used?"
       placeholder: "E.g., use of design patterns, prefer async/await over callbacks, etc."
 
-  - type: input
+  - type: textarea
     attributes:
       label: "Is there a related issue or PR?"
       description: "Link to any related GitHub issues or pull requests that are part of the refactor."
       placeholder: "E.g., #123, PR #456"
 
-  - type: checkbox
+  - type: checkboxes
     attributes:
       label: "Checklist"
       options:
