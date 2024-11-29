@@ -18,5 +18,6 @@ pub mod async_trace_dispatcher;
 pub mod hook;
 pub mod trace_bean;
 pub mod trace_constants;
+pub mod trace_context;
 pub mod trace_dispatcher;
 pub mod trace_type;
