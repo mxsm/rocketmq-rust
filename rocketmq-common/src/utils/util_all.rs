@@ -26,6 +26,7 @@ use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use cheetah_string::CheetahString;
 use chrono::DateTime;
 use chrono::Datelike;
 use chrono::Local;
@@ -295,6 +296,22 @@ pub fn get_ip() -> Result<Vec<u8>> {
                 IpAddr::V6(ip) => Ok(ip.octets().to_vec()),
             },
             Err(value) => Err(RuntimeException(value.to_string())),
+        },
+    }
+}
+
+pub fn get_ip_str() -> CheetahString {
+    match local_ip_address::local_ip() {
+        Ok(value) => match value {
+            IpAddr::V4(ip) => CheetahString::from_string(ip.to_string()),
+            IpAddr::V6(ip) => CheetahString::from_string(ip.to_string()),
+        },
+        Err(_) => match local_ip_address::local_ipv6() {
+            Ok(value) => match value {
+                IpAddr::V4(ip) => CheetahString::from_string(ip.to_string()),
+                IpAddr::V6(ip) => CheetahString::from_string(ip.to_string()),
+            },
+            Err(value) => CheetahString::empty(),
         },
     }
 }
