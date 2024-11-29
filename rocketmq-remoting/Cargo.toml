@@ -6,6 +6,8 @@ edition.workspace = true
 homepage.workspace = true
 repository.workspace = true
 license.workspace = true
+keywords = ["rocketmq-rust", "async", "non-blocking", "futures", "rocketmq"]
+categories = ["asynchronous", "network-programming"]
 description = "Rust implementation of Apache rocketmq remoting"
 readme = "README.md"
 
@@ -28,7 +30,6 @@ tokio-stream.workspace = true
 
 #log
 tracing.workspace = true
-tracing-subscriber.workspace = true
 
 #json spupport
 serde.workspace = true
@@ -43,14 +44,12 @@ flate2 = { workspace = true }
 #futures
 futures = "0.3"
 futures-util = "0.3"
-futures-core = "0.3"
-futures-sink = "0.3"
-futures-io = "0.3"
 
 num_cpus.workspace = true
 parking_lot.workspace = true
 trait-variant.workspace = true
 uuid = { workspace = true }
 cheetah-string = { workspace = true }
+
 [dev-dependencies]
 bytes = "1.9.0"
