@@ -28,11 +28,13 @@ use rocketmq_common::common::base::service_state::ServiceState;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
 use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::base::connection_net_event::ConnectionNetEvent;
 use rocketmq_remoting::protocol::heartbeat::consumer_data::ConsumerData;
 use rocketmq_remoting::protocol::heartbeat::heartbeat_data::HeartbeatData;
+use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::producer_data::ProducerData;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::rpc::client_metadata::ClientMetadata;
@@ -1147,6 +1149,40 @@ impl MQClientInstance {
             }
         }
         false
+    }
+
+    pub async fn query_assignment(
+        &mut self,
+        topic: &CheetahString,
+        consumer_group: &CheetahString,
+        strategy_name: &CheetahString,
+        message_model: MessageModel,
+        timeout: u64,
+    ) -> Result<Option<HashSet<MessageQueueAssignment>>> {
+        let mut broker_addr = self.find_broker_addr_by_topic(topic).await;
+        if broker_addr.is_none() {
+            self.update_topic_route_info_from_name_server_topic(topic)
+                .await;
+            broker_addr = self.find_broker_addr_by_topic(topic).await;
+        }
+        if let Some(broker_addr) = broker_addr {
+            let client_id = self.client_id.clone();
+            self.mq_client_api_impl
+                .as_mut()
+                .unwrap()
+                .query_assignment(
+                    &broker_addr,
+                    topic.clone(),
+                    consumer_group.clone(),
+                    strategy_name.clone(),
+                    client_id,
+                    message_model,
+                    timeout,
+                )
+                .await
+        } else {
+            Ok(None)
+        }
     }
 }
 
