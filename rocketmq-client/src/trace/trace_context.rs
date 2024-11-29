@@ -15,9 +15,6 @@
  * limitations under the License.
  */
 use std::cmp::Ordering;
-use std::collections::HashMap;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
