@@ -41,10 +41,11 @@ use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
 use crate::consumer::consumer_impl::process_queue::ProcessQueue;
 use crate::consumer::consumer_impl::pull_request::PullRequest;
 use crate::consumer::consumer_impl::re_balance::Rebalance;
+use crate::error::MQClientError;
 use crate::factory::mq_client_instance::MQClientInstance;
 
 const TIMEOUT_CHECK_TIMES: u32 = 3;
-const QUERY_ASSIGNMENT_TIMEOUT: u32 = 3000;
+const QUERY_ASSIGNMENT_TIMEOUT: u64 = 3000;
 
 pub(crate) struct RebalanceImpl<R> {
     pub(crate) process_queue_table: Arc<RwLock<HashMap<MessageQueue, Arc<ProcessQueue>>>>,
@@ -125,8 +126,61 @@ where
         }
     }
 
-    async fn try_query_assignment(&self, topic: &str) -> bool {
-        unimplemented!("try_query_assignment")
+    async fn try_query_assignment(&mut self, topic: &CheetahString) -> bool {
+        let topic_client_rebalance = self.topic_client_rebalance.read().await;
+        if topic_client_rebalance.contains_key(topic) {
+            return false;
+        }
+        drop(topic_client_rebalance);
+        let topic_broker_rebalance = self.topic_broker_rebalance.read().await;
+        if topic_broker_rebalance.contains_key(topic) {
+            return true;
+        }
+        drop(topic_broker_rebalance);
+        let strategy_name = if let Some(strategy) = &self.allocate_message_queue_strategy {
+            CheetahString::from_static_str(strategy.get_name())
+        } else {
+            CheetahString::from_static_str("unknown")
+        };
+        let mut retry_times = 0;
+        for _ in 0..TIMEOUT_CHECK_TIMES {
+            retry_times += 1;
+            match self
+                .client_instance
+                .as_mut()
+                .unwrap()
+                .query_assignment(
+                    topic,
+                    self.consumer_group.as_ref().unwrap(),
+                    &strategy_name,
+                    self.message_model.unwrap(),
+                    QUERY_ASSIGNMENT_TIMEOUT,
+                )
+                .await
+            {
+                Ok(_) => {
+                    let mut topic_broker_rebalance = self.topic_broker_rebalance.write().await;
+                    topic_broker_rebalance.insert(topic.clone(), topic.clone());
+                    return true;
+                }
+                Err(e) => match e {
+                    MQClientError::RequestTimeoutError(_, _) => {}
+                    _ => {
+                        error!("tryQueryAssignment error {}.", e);
+                        let mut topic_client_rebalance = self.topic_client_rebalance.write().await;
+                        topic_client_rebalance.insert(topic.clone(), topic.clone());
+                        return false;
+                    }
+                },
+            }
+        }
+
+        if retry_times >= TIMEOUT_CHECK_TIMES {
+            let mut topic_client_rebalance = self.topic_client_rebalance.write().await;
+            topic_client_rebalance.insert(topic.clone(), topic.clone());
+            return false;
+        }
+        true
     }
 
     async fn truncate_message_queue_not_my_topic(&self) {

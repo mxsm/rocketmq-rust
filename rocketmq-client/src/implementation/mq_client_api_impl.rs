@@ -26,6 +26,7 @@ use rocketmq_common::common::message::message_client_id_setter::MessageClientIDS
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all;
@@ -41,6 +42,8 @@ use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::body::check_client_request_body::CheckClientRequestBody;
 use rocketmq_remoting::protocol::body::get_consumer_listby_group_response_body::GetConsumerListByGroupResponseBody;
+use rocketmq_remoting::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
+use rocketmq_remoting::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
 use rocketmq_remoting::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
 use rocketmq_remoting::protocol::body::response::lock_batch_response_body::LockBatchResponseBody;
 use rocketmq_remoting::protocol::body::set_message_request_mode_request_body::SetMessageRequestModeRequestBody;
@@ -64,6 +67,7 @@ use rocketmq_remoting::protocol::header::unlock_batch_mq_request_header::UnlockB
 use rocketmq_remoting::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
 use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
 use rocketmq_remoting::protocol::heartbeat::heartbeat_data::HeartbeatData;
+use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
@@ -1244,5 +1248,54 @@ impl MQClientAPIImpl {
             ));
         }
         Ok(())
+    }
+
+    pub async fn query_assignment(
+        &mut self,
+        addr: &CheetahString,
+        topic: CheetahString,
+        consumer_group: CheetahString,
+        client_id: CheetahString,
+        strategy_name: CheetahString,
+        message_model: MessageModel,
+        timeout: u64,
+    ) -> Result<Option<HashSet<MessageQueueAssignment>>> {
+        let request_body = QueryAssignmentRequestBody {
+            topic,
+            consumer_group,
+            client_id,
+            strategy_name,
+            message_model,
+        };
+        let request =
+            RemotingCommand::new_request(RequestCode::QueryAssignment, request_body.encode());
+        let response = self
+            .remoting_client
+            .invoke_async(
+                Some(&mix_all::broker_vip_channel(
+                    self.client_config.vip_channel_enabled,
+                    addr,
+                )),
+                request,
+                timeout,
+            )
+            .await?;
+
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            let body = response.body();
+            if let Some(body) = body {
+                let assignment = QueryAssignmentResponseBody::decode(body.as_ref());
+                if let Ok(assignment) = assignment {
+                    return Ok(Some(assignment.message_queue_assignments));
+                }
+            }
+            return Ok(None);
+        }
+
+        Err(MQBrokerError(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string()),
+            addr.to_string(),
+        ))
     }
 }
