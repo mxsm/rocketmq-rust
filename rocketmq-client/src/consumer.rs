@@ -30,3 +30,4 @@ pub mod pull_result;
 pub mod pull_status;
 pub mod rebalance_strategy;
 pub(crate) mod store;
+pub mod topic_message_queue_change_listener;
