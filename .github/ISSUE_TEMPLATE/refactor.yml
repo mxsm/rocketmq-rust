@@ -41,8 +41,18 @@ body:
     attributes:
       label: "Checklist"
       options:
-        - "Ensure the refactor does not introduce new bugs"
-        - "Update unit tests if applicable"
-        - "Ensure the refactor does not negatively impact performance"
-        - "Document any new patterns or architecture changes"
-        - "Test the refactor in different environments (e.g., staging, production)"
+		- label: >
+			Ensure the refactor does not introduce new bugs
+		  required: false
+        - label: >
+			Update unit tests if applicable
+		  required: false
+		- label: >
+			Ensure the refactor does not negatively impact performance
+		  required: false
+		- label: >
+			Document any new patterns or architecture changes
+		  required: false
+		- label: >
+			Test the refactor in different environments (e.g., staging, production)
+		  required: false
