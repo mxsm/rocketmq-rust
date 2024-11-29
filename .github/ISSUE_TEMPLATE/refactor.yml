@@ -1,0 +1,48 @@
+name: Code Refactor
+about: Template for creating issues related to code refactoring
+
+title: '[Refactor♻️]short description of the refactor'
+labels: [ 'refactor' ]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Description
+        <!-- Provide a clear and concise description of the changes to be made in the refactor. -->
+        - Why is this refactor necessary? (e.g., code readability, performance, maintainability)
+        - What is the expected outcome of the refactor?
+
+  - type: input
+    attributes:
+      label: "Which part of the code will be refactored?"
+      description: "Specify the files, modules, or functions that will be changed."
+      placeholder: "E.g., refactor the user authentication module"
+
+  - type: input
+    attributes:
+      label: "What problems does the refactor aim to solve?"
+      description: "List the issues, inefficiencies, or code smells being addressed."
+      placeholder: "E.g., code duplication, long functions, lack of test coverage"
+
+  - type: input
+    attributes:
+      label: "Do you have any specific design or implementation considerations?"
+      description: "Any specific patterns, tools, or libraries to be used?"
+      placeholder: "E.g., use of design patterns, prefer async/await over callbacks, etc."
+
+  - type: input
+    attributes:
+      label: "Is there a related issue or PR?"
+      description: "Link to any related GitHub issues or pull requests that are part of the refactor."
+      placeholder: "E.g., #123, PR #456"
+
+  - type: checkbox
+    attributes:
+      label: "Checklist"
+      options:
+        - "Ensure the refactor does not introduce new bugs"
+        - "Update unit tests if applicable"
+        - "Ensure the refactor does not negatively impact performance"
+        - "Document any new patterns or architecture changes"
+        - "Test the refactor in different environments (e.g., staging, production)"
