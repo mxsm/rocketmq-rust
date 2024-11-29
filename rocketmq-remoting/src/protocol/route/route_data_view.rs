@@ -24,7 +24,7 @@ use rocketmq_common::common::mix_all;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Default)]
 pub struct BrokerData {
     cluster: CheetahString,
     #[serde(rename = "brokerName")]
@@ -38,12 +38,14 @@ pub struct BrokerData {
 }
 
 impl PartialOrd for BrokerData {
+    #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for BrokerData {
+    #[inline]
     fn cmp(&self, other: &Self) -> Ordering {
         self.broker_name.cmp(&other.broker_name)
     }
@@ -65,18 +67,22 @@ impl BrokerData {
         }
     }
 
+    #[inline]
     pub fn set_cluster(&mut self, cluster: CheetahString) {
         self.cluster = cluster;
     }
 
+    #[inline]
     pub fn set_broker_name(&mut self, broker_name: CheetahString) {
         self.broker_name = broker_name;
     }
 
+    #[inline]
     pub fn set_broker_addrs(&mut self, broker_addrs: HashMap<u64, CheetahString>) {
         self.broker_addrs = broker_addrs;
     }
 
+    #[inline]
     pub fn set_zone_name(&mut self, zone_name: Option<CheetahString>) {
         self.zone_name = zone_name;
     }
@@ -86,31 +92,38 @@ impl BrokerData {
         self.enable_acting_master = enable_acting_master;
     }
 
+    #[inline]
     pub fn cluster(&self) -> &str {
         &self.cluster
     }
 
+    #[inline]
     pub fn broker_name(&self) -> &CheetahString {
         &self.broker_name
     }
 
+    #[inline]
     pub fn broker_addrs(&self) -> &HashMap<u64, CheetahString> {
         &self.broker_addrs
     }
 
+    #[inline]
     pub fn broker_addrs_mut(&mut self) -> &mut HashMap<u64, CheetahString> {
         &mut self.broker_addrs
     }
 
+    #[inline]
     pub fn remove_broker_by_addr(&mut self, broker_id: u64, broker_addr: &str) {
         self.broker_addrs
             .retain(|key, value| value != broker_addr || *key == broker_id);
     }
 
+    #[inline]
     pub fn zone_name(&self) -> &Option<CheetahString> {
         &self.zone_name
     }
 
+    #[inline]
     pub fn enable_acting_master(&self) -> bool {
         self.enable_acting_master
     }
@@ -128,7 +141,7 @@ impl BrokerData {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd, Default)]
 pub struct QueueData {
     #[serde(rename = "brokerName")]
     pub broker_name: CheetahString,
@@ -158,22 +171,27 @@ impl QueueData {
         }
     }
 
+    #[inline]
     pub fn broker_name(&self) -> &CheetahString {
         &self.broker_name
     }
 
+    #[inline]
     pub fn read_queue_nums(&self) -> u32 {
         self.read_queue_nums
     }
 
+    #[inline]
     pub fn write_queue_nums(&self) -> u32 {
         self.write_queue_nums
     }
 
+    #[inline]
     pub fn perm(&self) -> u32 {
         self.perm
     }
 
+    #[inline]
     pub fn topic_sys_flag(&self) -> u32 {
         self.topic_sys_flag
     }
