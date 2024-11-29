@@ -25,7 +25,7 @@ use crate::consumer::message_selector::MessageSelector;
 use crate::consumer::topic_message_queue_change_listener::TopicMessageQueueChangeListener;
 use crate::Result;
 
-#[trait_variant::make(MQProducer: Send)]
+#[trait_variant::make(LitePullConsumer: Send)]
 pub trait LitePullConsumerLocal: Sync {
     /// Starts the LitePullConsumer.
     ///
