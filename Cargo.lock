@@ -1978,8 +1978,6 @@ dependencies = [
 name = "rocketmq-runtime"
 version = "0.4.0"
 dependencies = [
- "rand",
- "thread_local",
  "tokio",
 ]
 
