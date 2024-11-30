@@ -22,8 +22,8 @@ use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 
-use crate::error::BrokerError::BrokerClientError;
-use crate::error::BrokerError::BrokerCommonError;
+use crate::broker_error::BrokerError::BrokerCommonError;
+use crate::broker_error::BrokerError::BrokerRemotingError;
 use crate::Result;
 
 #[derive(Default, Clone)]
@@ -38,7 +38,7 @@ impl Broker2Client {
     ) -> Result<RemotingCommand> {
         match channel.send_wait_response(request, timeout_millis).await {
             Ok(value) => Ok(value),
-            Err(e) => Err(BrokerClientError(e)),
+            Err(e) => Err(BrokerRemotingError(e)),
         }
     }
 
@@ -63,7 +63,7 @@ impl Broker2Client {
         }
         match channel.send_one_way(request, 100).await {
             Ok(_) => Ok(()),
-            Err(e) => Err(BrokerClientError(e)),
+            Err(e) => Err(BrokerRemotingError(e)),
         }
     }
 }

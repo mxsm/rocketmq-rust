@@ -20,7 +20,7 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum BrokerError {
     #[error("broker client error: {0}")]
-    BrokerClientError(#[from] rocketmq_remoting::remoting_error::RemotingError),
+    BrokerRemotingError(#[from] rocketmq_remoting::remoting_error::RemotingError),
 
     #[error("Common error: {0}")]
     BrokerCommonError(#[from] rocketmq_common::error::Error),
@@ -33,4 +33,35 @@ pub enum BrokerError {
 
     #[error("Client error: {0}")]
     ClientError(#[from] rocketmq_client_rust::error::MQClientError),
+}
+
+#[cfg(test)]
+mod tests {
+    use rocketmq_remoting::remoting_error::RemotingError;
+
+    use super::*;
+
+    #[test]
+    fn broker_remoting_error_displays_correctly() {
+        let error = BrokerError::BrokerRemotingError(RemotingError::RemoteError(
+            "remote error".to_string(),
+        ));
+        assert_eq!(format!("{}", error), "broker client error: remote error");
+    }
+
+    #[test]
+    fn mq_broker_error_displays_correctly() {
+        let error =
+            BrokerError::MQBrokerError(404, "not found".to_string(), "127.0.0.1".to_string());
+        assert_eq!(
+            format!("{}", error),
+            "Client exception occurred: CODE:404, broker address:127.0.0.1, Message:not found"
+        );
+    }
+
+    #[test]
+    fn illegal_argument_error_displays_correctly() {
+        let error = BrokerError::IllegalArgumentError("illegal argument".to_string());
+        assert_eq!(format!("{}", error), "illegal argument");
+    }
 }
