@@ -44,10 +44,14 @@ impl CommandCustomHeader for LockBatchMqRequestHeader {
 }
 
 impl FromMap for LockBatchMqRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        let rpc_request_header = <RpcRequestHeader as FromMap>::from(map);
-        Some(LockBatchMqRequestHeader { rpc_request_header })
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        let rpc_request_header = <RpcRequestHeader as FromMap>::from(map)?;
+        Ok(LockBatchMqRequestHeader {
+            rpc_request_header: Some(rpc_request_header),
+        })
     }
 }

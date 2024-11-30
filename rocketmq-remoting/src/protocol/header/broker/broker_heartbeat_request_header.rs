@@ -82,10 +82,12 @@ impl BrokerHeartbeatRequestHeader {
 }
 
 impl FromMap for BrokerHeartbeatRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = BrokerHeartbeatRequestHeader;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(BrokerHeartbeatRequestHeader {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(BrokerHeartbeatRequestHeader {
             cluster_name: map
                 .get(&CheetahString::from_static_str(
                     BrokerHeartbeatRequestHeader::CLUSTER_NAME,

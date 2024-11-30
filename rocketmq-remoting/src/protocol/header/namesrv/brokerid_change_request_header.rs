@@ -51,10 +51,12 @@ impl NotifyMinBrokerIdChangeRequestHeader {
 }
 
 impl FromMap for NotifyMinBrokerIdChangeRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(NotifyMinBrokerIdChangeRequestHeader {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(NotifyMinBrokerIdChangeRequestHeader {
             min_broker_id: map
                 .get(&CheetahString::from_static_str(
                     NotifyMinBrokerIdChangeRequestHeader::MIN_BROKER_ID,

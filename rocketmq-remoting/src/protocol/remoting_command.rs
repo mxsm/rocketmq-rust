@@ -580,28 +580,32 @@ impl RemotingCommand {
         self.serialize_type
     }
 
-    pub fn decode_command_custom_header<T>(&self) -> Option<T>
+    pub fn decode_command_custom_header<T>(&self) -> crate::Result<T>
     where
-        T: FromMap<Target = T>,
+        T: FromMap<Target = T, Error = RemotingError>,
     {
         match self.ext_fields {
-            None => None,
+            None => Err(RemotingError::RemotingCommandError(
+                "ExtFields is None".to_string(),
+            )),
             Some(ref header) => T::from(header),
         }
     }
 
-    pub fn decode_command_custom_header_fast<T>(&self) -> Option<T>
+    pub fn decode_command_custom_header_fast<T>(&self) -> crate::Result<T>
     where
-        T: FromMap<Target = T>,
+        T: FromMap<Target = T, Error = RemotingError>,
         T: Default + CommandCustomHeader,
     {
         match self.ext_fields {
-            None => None,
+            None => Err(RemotingError::RemotingCommandError(
+                "ExtFields is None".to_string(),
+            )),
             Some(ref header) => {
                 let mut target = T::default();
                 if target.support_fast_codec() {
                     target.decode_fast(header);
-                    Some(target)
+                    Ok(target)
                 } else {
                     T::from(header)
                 }

@@ -274,7 +274,7 @@ impl BrokerOuterAPI {
                     let register_broker_result =
                         response.decode_command_custom_header::<RegisterBrokerResponseHeader>();
                     let mut result = RegisterBrokerResult::default();
-                    if let Some(header) = register_broker_result {
+                    if let Ok(header) = register_broker_result {
                         result.ha_server_addr = header
                             .ha_server_addr
                             .clone()

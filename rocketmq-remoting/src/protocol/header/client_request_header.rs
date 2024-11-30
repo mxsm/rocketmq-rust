@@ -50,10 +50,12 @@ impl GetRouteInfoRequestHeader {
 }
 
 impl FromMap for GetRouteInfoRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = GetRouteInfoRequestHeader;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(GetRouteInfoRequestHeader {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(GetRouteInfoRequestHeader {
             topic: map
                 .get(&CheetahString::from_static_str(
                     GetRouteInfoRequestHeader::TOPIC,
@@ -65,7 +67,7 @@ impl FromMap for GetRouteInfoRequestHeader {
                     GetRouteInfoRequestHeader::ACCEPT_STANDARD_JSON_ONLY,
                 ))
                 .and_then(|s| s.parse::<bool>().ok()),
-            topic_request_header: <TopicRequestHeader as FromMap>::from(map),
+            topic_request_header: Some(<TopicRequestHeader as FromMap>::from(map)?),
         })
     }
 }

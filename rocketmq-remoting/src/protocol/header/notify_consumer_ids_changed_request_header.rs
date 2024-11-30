@@ -52,17 +52,21 @@ impl CommandCustomHeader for NotifyConsumerIdsChangedRequestHeader {
 }
 
 impl FromMap for NotifyConsumerIdsChangedRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &std::collections::HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
+    fn from(
+        map: &std::collections::HashMap<CheetahString, CheetahString>,
+    ) -> Result<Self::Target, Self::Error> {
         let consumer_group = map
             .get(&CheetahString::from_static_str(Self::CONSUMER_GROUP))
             .cloned()
             .unwrap_or_default();
-        let rpc_request_header = <RpcRequestHeader as FromMap>::from(map);
-        Some(NotifyConsumerIdsChangedRequestHeader {
+        let rpc_request_header = <RpcRequestHeader as FromMap>::from(map)?;
+        Ok(NotifyConsumerIdsChangedRequestHeader {
             consumer_group,
-            rpc_request_header,
+            rpc_request_header: Some(rpc_request_header),
         })
     }
 }

@@ -178,9 +178,11 @@ impl CommandCustomHeader for PullMessageResponseHeader {
 }
 
 impl FromMap for PullMessageResponseHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
         let suggest_which_broker_id = map.get(&CheetahString::from_static_str(
             PullMessageResponseHeader::SUGGEST_WHICH_BROKER_ID,
         ));
@@ -206,7 +208,7 @@ impl FromMap for PullMessageResponseHeader {
             PullMessageResponseHeader::FORBIDDEN_TYPE,
         ));
 
-        Some(PullMessageResponseHeader {
+        Ok(PullMessageResponseHeader {
             suggest_which_broker_id: suggest_which_broker_id.map(|v| v.parse().unwrap()),
             next_begin_offset: next_begin_offset.map(|v| v.parse().unwrap()),
             min_offset: min_offset.map(|v| v.parse().unwrap()),

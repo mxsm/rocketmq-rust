@@ -51,7 +51,9 @@ impl OffsetRequestHandler {
         _request_code: RequestCode,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
-        let request_header = request.decode_command_custom_header::<GetMaxOffsetRequestHeader>()?;
+        let request_header = request
+            .decode_command_custom_header::<GetMaxOffsetRequestHeader>()
+            .unwrap(); //need to optimize
         let mapping_context = self
             .inner
             .topic_queue_mapping_manager
@@ -82,7 +84,9 @@ impl OffsetRequestHandler {
         _request_code: RequestCode,
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
-        let request_header = request.decode_command_custom_header::<GetMinOffsetRequestHeader>()?;
+        let request_header = request
+            .decode_command_custom_header::<GetMinOffsetRequestHeader>()
+            .unwrap(); //need to optimize
 
         let mapping_context = self
             .inner

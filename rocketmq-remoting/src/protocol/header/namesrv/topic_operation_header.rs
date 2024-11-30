@@ -64,10 +64,12 @@ impl CommandCustomHeader for DeleteTopicFromNamesrvRequestHeader {
 }
 
 impl FromMap for DeleteTopicFromNamesrvRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(DeleteTopicFromNamesrvRequestHeader {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(DeleteTopicFromNamesrvRequestHeader {
             topic: map
                 .get(&CheetahString::from_static_str(Self::TOPIC))
                 .cloned()
@@ -113,15 +115,17 @@ impl CommandCustomHeader for RegisterTopicRequestHeader {
     }
 }
 impl FromMap for RegisterTopicRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(RegisterTopicRequestHeader {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(RegisterTopicRequestHeader {
             topic: map
                 .get(&CheetahString::from_static_str(Self::TOPIC))
                 .cloned()
                 .unwrap_or_default(),
-            topic_request: <TopicRequestHeader as FromMap>::from(map),
+            topic_request: Some(<TopicRequestHeader as FromMap>::from(map)?),
         })
     }
 }
@@ -152,10 +156,12 @@ impl CommandCustomHeader for GetTopicsByClusterRequestHeader {
 }
 
 impl FromMap for GetTopicsByClusterRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(GetTopicsByClusterRequestHeader {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(GetTopicsByClusterRequestHeader {
             cluster: map
                 .get(&CheetahString::from_static_str(Self::CLUSTER))
                 .cloned()
@@ -195,14 +201,16 @@ impl CommandCustomHeader for TopicRequestHeader {
 }
 
 impl FromMap for TopicRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(TopicRequestHeader {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(TopicRequestHeader {
             lo: map
                 .get(&CheetahString::from_static_str(Self::LO))
                 .and_then(|s| s.parse::<bool>().ok()),
-            rpc: <RpcRequestHeader as FromMap>::from(map),
+            rpc: Some(<RpcRequestHeader as FromMap>::from(map)?),
         })
     }
 }

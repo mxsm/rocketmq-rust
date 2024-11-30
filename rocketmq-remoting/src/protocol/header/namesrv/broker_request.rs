@@ -78,10 +78,11 @@ impl CommandCustomHeader for UnRegisterBrokerRequestHeader {
 }
 
 impl FromMap for UnRegisterBrokerRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
     type Target = Self;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(UnRegisterBrokerRequestHeader {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(UnRegisterBrokerRequestHeader {
             broker_name: map
                 .get(&CheetahString::from_static_str(Self::BROKER_NAME))
                 .cloned()
@@ -209,10 +210,12 @@ impl CommandCustomHeader for BrokerHeartbeatRequestHeader {
 }
 
 impl FromMap for BrokerHeartbeatRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(BrokerHeartbeatRequestHeader {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(BrokerHeartbeatRequestHeader {
             cluster_name: map
                 .get(&CheetahString::from_static_str(Self::CLUSTER_NAME))
                 .cloned()
@@ -288,10 +291,11 @@ impl CommandCustomHeader for GetBrokerMemberGroupRequestHeader {
 }
 
 impl FromMap for GetBrokerMemberGroupRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
     type Target = Self;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(GetBrokerMemberGroupRequestHeader {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(GetBrokerMemberGroupRequestHeader {
             cluster_name: map
                 .get(&CheetahString::from_static_str(Self::CLUSTER_NAME))
                 .cloned()

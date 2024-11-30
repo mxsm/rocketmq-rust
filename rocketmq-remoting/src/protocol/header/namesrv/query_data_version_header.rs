@@ -77,10 +77,12 @@ impl CommandCustomHeader for QueryDataVersionRequestHeader {
 }
 
 impl FromMap for QueryDataVersionRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(QueryDataVersionRequestHeader {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(QueryDataVersionRequestHeader {
             broker_name: map
                 .get(&CheetahString::from_static_str(
                     QueryDataVersionRequestHeader::BROKER_NAME,
@@ -132,10 +134,12 @@ impl CommandCustomHeader for QueryDataVersionResponseHeader {
 }
 
 impl FromMap for QueryDataVersionResponseHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(QueryDataVersionResponseHeader {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(QueryDataVersionResponseHeader {
             changed: map
                 .get(&CheetahString::from_static_str(
                     QueryDataVersionResponseHeader::CHANGED,

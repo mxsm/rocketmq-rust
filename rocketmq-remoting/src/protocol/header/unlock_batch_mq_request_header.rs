@@ -44,10 +44,14 @@ impl CommandCustomHeader for UnlockBatchMqRequestHeader {
 }
 
 impl FromMap for UnlockBatchMqRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        let rpc_request_header = <RpcRequestHeader as FromMap>::from(map);
-        Some(UnlockBatchMqRequestHeader { rpc_request_header })
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        let rpc_request_header = <RpcRequestHeader as FromMap>::from(map)?;
+        Ok(UnlockBatchMqRequestHeader {
+            rpc_request_header: Some(rpc_request_header),
+        })
     }
 }

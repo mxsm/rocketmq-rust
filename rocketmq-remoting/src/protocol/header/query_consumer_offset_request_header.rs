@@ -74,10 +74,12 @@ impl CommandCustomHeader for QueryConsumerOffsetRequestHeader {
 }
 
 impl FromMap for QueryConsumerOffsetRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(QueryConsumerOffsetRequestHeader {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(QueryConsumerOffsetRequestHeader {
             consumer_group: map
                 .get(&CheetahString::from_static_str(Self::CONSUMER_GROUP))
                 .cloned()
@@ -92,7 +94,7 @@ impl FromMap for QueryConsumerOffsetRequestHeader {
             set_zero_if_not_found: map
                 .get(&CheetahString::from_static_str(Self::SET_ZERO_IF_NOT_FOUND))
                 .and_then(|value| value.parse::<bool>().ok()),
-            topic_request_header: <TopicRequestHeader as FromMap>::from(map),
+            topic_request_header: Some(<TopicRequestHeader as FromMap>::from(map)?),
         })
     }
 }
