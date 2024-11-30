@@ -147,12 +147,15 @@ macro_rules! mq_client_err {
     // Handle errors with a custom ResponseCode and formatted string
     ($response_code:expr, $fmt:expr, $($arg:expr),*) => {{
         let formatted_msg = format!($fmt, $($arg),*);
-
-        std::result::Result::Err($crate::client_error::MQClientError::MQClientErr( ClientErr::new_with_code($response_code as i32, formatted_msg)))
+        std::result::Result::Err($crate::client_error::MQClientError::MQClientErr(
+            ClientErr::new_with_code($response_code as i32, formatted_msg),
+        ))
     }};
     // Handle errors without a ResponseCode, using only the error message
     ($error_message:expr) => {{
-        std::result::Result::Err($crate::client_error::MQClientError::MQClientErr(ClientErr::new($error_message)))
+        std::result::Result::Err($crate::client_error::MQClientError::MQClientErr(
+            ClientErr::new($error_message),
+        ))
     }};
 }
 
@@ -196,10 +199,76 @@ impl RequestTimeoutErr {
     }
 }
 
+#[macro_export]
+macro_rules! request_timeout_err {
+    // Handle errors with a custom ResponseCode and formatted string
+    ($response_code:expr, $fmt:expr, $($arg:expr),*) => {{
+        let formatted_msg = format!($fmt, $($arg),*);
+        std::result::Result::Err($crate::client_error::MQClientError::RequestTimeoutError(
+            $crate::client_error::RequestTimeoutErr::new_with_code(
+                $response_code as i32,
+                formatted_msg,
+            ),
+        ))
+    }};
+    ($response_code:expr, $error_message:expr) => {{
+        std::result::Result::Err($crate::client_error::MQClientError::RequestTimeoutError(
+            $crate::client_error::RequestTimeoutErr::new_with_code(
+                $response_code as i32,
+                $error_message,
+            ),
+        ))
+    }};
+    // Handle errors without a ResponseCode, using only the error message
+    ($error_message:expr) => {{
+        std::result::Result::Err($crate::client_error::MQClientError::RequestTimeoutError(
+            $crate::client_error::RequestTimeoutErr::new($error_message),
+        ))
+    }};
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::client_error;
+
+    #[test]
+    fn request_timeout_err_with_response_code_formats_correctly() {
+        let result: std::result::Result<(), client_error::MQClientError> =
+            request_timeout_err!(408, "Request timed out");
+        assert!(result.is_err());
+        if let Err(MQClientError::RequestTimeoutError(err)) = result {
+            assert_eq!(err.response_code(), 408);
+            assert_eq!(err.error_message().unwrap(), "Request timed out");
+        } else {
+            panic!("Expected MQClientError::RequestTimeoutError");
+        }
+    }
+
+    #[test]
+    fn request_timeout_err_without_response_code_formats_correctly() {
+        let result: Result<(), client_error::MQClientError> = request_timeout_err!("Timeout error");
+        assert!(result.is_err());
+        if let Err(MQClientError::RequestTimeoutError(err)) = result {
+            assert_eq!(err.response_code(), -1);
+            assert_eq!(err.error_message().unwrap(), "Timeout error");
+        } else {
+            panic!("Expected MQClientError::RequestTimeoutError");
+        }
+    }
+
+    #[test]
+    fn request_timeout_err_with_multiple_arguments_formats_correctly() {
+        let result: Result<(), client_error::MQClientError> =
+            request_timeout_err!(504, "Error: {} - {}", "Gateway", "Timeout");
+        assert!(result.is_err());
+        if let Err(MQClientError::RequestTimeoutError(err)) = result {
+            assert_eq!(err.response_code(), 504);
+            assert_eq!(err.error_message().unwrap(), "Error: Gateway - Timeout");
+        } else {
+            panic!("Expected MQClientError::RequestTimeoutError");
+        }
+    }
 
     #[test]
     fn mq_client_err_with_response_code_formats_correctly() {
