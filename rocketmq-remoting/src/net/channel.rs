@@ -234,11 +234,6 @@ impl Channel {
 
 #[cfg(test)]
 mod tests {
-    use std::net::IpAddr;
-    use std::net::Ipv4Addr;
-    use std::net::SocketAddr;
-
-    use super::*;
 
     #[test]
     fn channel_creation_with_new() {

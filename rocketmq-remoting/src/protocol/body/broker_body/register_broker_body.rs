@@ -177,7 +177,6 @@ mod tests {
     use cheetah_string::CheetahString;
     use rocketmq_common::common::config::TopicConfig;
     use rocketmq_common::common::mq_version::RocketMqVersion;
-    use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 
     use super::*;
 
