@@ -93,21 +93,38 @@ impl CommandCustomHeader for ConsumerSendMsgBackRequestHeader {
 }
 
 impl FromMap for ConsumerSendMsgBackRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &std::collections::HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(ConsumerSendMsgBackRequestHeader {
+    fn from(
+        map: &std::collections::HashMap<CheetahString, CheetahString>,
+    ) -> Result<Self::Target, Self::Error> {
+        Ok(ConsumerSendMsgBackRequestHeader {
             offset: map
-                .get(&CheetahString::from_static_str(Self::OFFSET))?
+                .get(&CheetahString::from_static_str(Self::OFFSET))
+                .cloned()
+                .ok_or(Self::Error::RemotingCommandError(
+                    "Missing offset".to_string(),
+                ))?
                 .parse()
-                .ok()?,
+                .map_err(|_| Self::Error::RemotingCommandError("Invalid offset".to_string()))?,
             group: map
-                .get(&CheetahString::from_static_str(Self::GROUP))?
-                .clone(),
+                .get(&CheetahString::from_static_str(Self::GROUP))
+                .cloned()
+                .ok_or(Self::Error::RemotingCommandError(
+                    "Missing group".to_string(),
+                ))?,
             delay_level: map
-                .get(&CheetahString::from_static_str(Self::DELAY_LEVEL))?
+                .get(&CheetahString::from_static_str(Self::DELAY_LEVEL))
+                .cloned()
+                .ok_or(Self::Error::RemotingCommandError(
+                    "Missing delay level".to_string(),
+                ))?
                 .parse()
-                .ok()?,
+                .map_err(|_| {
+                    Self::Error::RemotingCommandError("Invalid delay level".to_string())
+                })?,
             origin_msg_id: map
                 .get(&CheetahString::from_static_str(Self::ORIGIN_MSG_ID))
                 .cloned(),
@@ -115,14 +132,15 @@ impl FromMap for ConsumerSendMsgBackRequestHeader {
                 .get(&CheetahString::from_static_str(Self::ORIGIN_TOPIC))
                 .cloned(),
             unit_mode: map
-                .get(&CheetahString::from_static_str(Self::UNIT_MODE))?
+                .get(&CheetahString::from_static_str(Self::UNIT_MODE))
+                .cloned()
+                .unwrap_or(CheetahString::from_static_str("false"))
                 .parse()
-                .ok()?,
+                .unwrap_or(false),
             max_reconsume_times: map
-                .get(&CheetahString::from_static_str(Self::MAX_RECONSUME_TIMES))?
-                .parse()
-                .ok(),
-            rpc_request_header: <RpcRequestHeader as FromMap>::from(map),
+                .get(&CheetahString::from_static_str(Self::MAX_RECONSUME_TIMES))
+                .and_then(|value| value.parse().ok()),
+            rpc_request_header: Some(<RpcRequestHeader as FromMap>::from(map)?),
         })
     }
 }

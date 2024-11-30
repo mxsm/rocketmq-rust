@@ -204,18 +204,69 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
 }
 
 impl FromMap for SendMessageRequestHeaderV2 {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(SendMessageRequestHeaderV2 {
-            a: map.get(&CheetahString::from_slice("a"))?.clone(),
-            b: map.get(&CheetahString::from_slice("b"))?.clone(),
-            c: map.get(&CheetahString::from_slice("c"))?.clone(),
-            d: map.get(&CheetahString::from_slice("d"))?.parse().ok()?,
-            e: map.get(&CheetahString::from_slice("e"))?.parse().ok()?,
-            f: map.get(&CheetahString::from_slice("f"))?.parse().ok()?,
-            g: map.get(&CheetahString::from_slice("g"))?.parse().ok()?,
-            h: map.get(&CheetahString::from_slice("h"))?.parse().ok()?,
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(SendMessageRequestHeaderV2 {
+            a: map.get(&CheetahString::from_slice("a")).cloned().ok_or(
+                Self::Error::RemotingCommandError("Miss a field".to_string()),
+            )?,
+            b: map.get(&CheetahString::from_slice("b")).cloned().ok_or(
+                Self::Error::RemotingCommandError("Miss b field".to_string()),
+            )?,
+            c: map.get(&CheetahString::from_slice("c")).cloned().ok_or(
+                Self::Error::RemotingCommandError("Miss c field".to_string()),
+            )?,
+            d: map
+                .get(&CheetahString::from_slice("d"))
+                .cloned()
+                .ok_or(Self::Error::RemotingCommandError(
+                    "Miss d field".to_string(),
+                ))?
+                .parse()
+                .map_err(|_| {
+                    Self::Error::RemotingCommandError("Parse d field error".to_string())
+                })?,
+            e: map
+                .get(&CheetahString::from_slice("e"))
+                .cloned()
+                .ok_or(Self::Error::RemotingCommandError(
+                    "Miss e field".to_string(),
+                ))?
+                .parse()
+                .map_err(|_| {
+                    Self::Error::RemotingCommandError("Parse e field error".to_string())
+                })?,
+            f: map
+                .get(&CheetahString::from_slice("f"))
+                .cloned()
+                .ok_or(Self::Error::RemotingCommandError(
+                    "Miss f field".to_string(),
+                ))?
+                .parse()
+                .map_err(|_| {
+                    Self::Error::RemotingCommandError("Parse f field error".to_string())
+                })?,
+            g: map
+                .get(&CheetahString::from_slice("g"))
+                .ok_or(Self::Error::RemotingCommandError(
+                    "Miss g field".to_string(),
+                ))?
+                .parse()
+                .map_err(|_| {
+                    Self::Error::RemotingCommandError("Parse g field error".to_string())
+                })?,
+            h: map
+                .get(&CheetahString::from_slice("h"))
+                .ok_or(Self::Error::RemotingCommandError(
+                    "Miss h field".to_string(),
+                ))?
+                .parse()
+                .map_err(|_| {
+                    Self::Error::RemotingCommandError("Parse h field error".to_string())
+                })?,
             i: map.get(&CheetahString::from_slice("i")).cloned(),
             j: map
                 .get(&CheetahString::from_slice("j"))
@@ -230,7 +281,7 @@ impl FromMap for SendMessageRequestHeaderV2 {
                 .get(&CheetahString::from_slice("m"))
                 .and_then(|v| v.parse().ok()),
             n: map.get(&CheetahString::from_slice("n")).cloned(),
-            topic_request_header: <TopicRequestHeader as FromMap>::from(map),
+            topic_request_header: Some(<TopicRequestHeader as FromMap>::from(map)?),
         })
     }
 }

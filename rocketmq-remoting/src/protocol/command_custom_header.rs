@@ -19,6 +19,7 @@ use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
 
+use crate::remoting_error::RemotingError;
 use crate::rocketmq_serializable::RocketMQSerializable;
 
 pub trait CommandCustomHeader: AsAny {
@@ -100,9 +101,11 @@ impl<T: CommandCustomHeader> AsAny for T {
 }
 
 pub trait FromMap {
+    type Error: From<RemotingError>;
+
     type Target;
     /// Converts the implementing type from a map.
     ///
     /// Returns an instance of `Self::Target` that is created from the provided map.
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target>;
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error>;
 }

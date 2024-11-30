@@ -324,10 +324,12 @@ impl CommandCustomHeader for PullMessageRequestHeader {
 }
 
 impl FromMap for PullMessageRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(Self {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(Self {
             consumer_group: map
                 .get(&CheetahString::from_static_str(Self::CONSUMER_GROUP))
                 .cloned()
@@ -376,7 +378,7 @@ impl FromMap for PullMessageRequestHeader {
                     Self::PROXY_FORWARD_CLIENT_ID,
                 ))
                 .cloned(),
-            topic_request: <TopicRequestHeader as FromMap>::from(map),
+            topic_request: Some(<TopicRequestHeader as FromMap>::from(map)?),
         })
     }
 }

@@ -84,10 +84,14 @@ impl CommandCustomHeader for CheckTransactionStateRequestHeader {
 }
 
 impl FromMap for CheckTransactionStateRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &std::collections::HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(CheckTransactionStateRequestHeader {
+    fn from(
+        map: &std::collections::HashMap<CheetahString, CheetahString>,
+    ) -> Result<Self::Target, Self::Error> {
+        Ok(CheckTransactionStateRequestHeader {
             topic: map
                 .get(&CheetahString::from_static_str(Self::TOPIC))
                 .cloned(),
@@ -110,7 +114,7 @@ impl FromMap for CheckTransactionStateRequestHeader {
             offset_msg_id: map
                 .get(&CheetahString::from_static_str(Self::OFFSET_MSG_ID))
                 .cloned(),
-            rpc_request_header: <RpcRequestHeader as FromMap>::from(map),
+            rpc_request_header: Some(<RpcRequestHeader as FromMap>::from(map)?),
         })
     }
 }

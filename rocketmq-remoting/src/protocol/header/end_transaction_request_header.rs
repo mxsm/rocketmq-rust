@@ -111,10 +111,14 @@ impl CommandCustomHeader for EndTransactionRequestHeader {
 }
 
 impl FromMap for EndTransactionRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &std::collections::HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(EndTransactionRequestHeader {
+    fn from(
+        map: &std::collections::HashMap<CheetahString, CheetahString>,
+    ) -> Result<Self::Target, Self::Error> {
+        Ok(EndTransactionRequestHeader {
             topic: map
                 .get(&CheetahString::from_static_str(
                     EndTransactionRequestHeader::TOPIC,

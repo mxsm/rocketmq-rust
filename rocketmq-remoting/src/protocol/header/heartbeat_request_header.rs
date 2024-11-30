@@ -44,11 +44,13 @@ impl CommandCustomHeader for HeartbeatRequestHeader {
 }
 
 impl FromMap for HeartbeatRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(HeartbeatRequestHeader {
-            rpc_request: <RpcRequestHeader as FromMap>::from(map),
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(HeartbeatRequestHeader {
+            rpc_request: Some(<RpcRequestHeader as FromMap>::from(map)?),
         })
     }
 }

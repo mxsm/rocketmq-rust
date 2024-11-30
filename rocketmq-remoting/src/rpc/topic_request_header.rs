@@ -50,14 +50,16 @@ impl TopicRequestHeader {
 }
 
 impl FromMap for TopicRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(TopicRequestHeader {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(TopicRequestHeader {
             lo: map
                 .get(&CheetahString::from_static_str(Self::LO))
                 .and_then(|v| v.parse().ok()),
-            rpc_request_header: <RpcRequestHeader as FromMap>::from(map),
+            rpc_request_header: Some(<RpcRequestHeader as FromMap>::from(map)?),
         })
     }
 }

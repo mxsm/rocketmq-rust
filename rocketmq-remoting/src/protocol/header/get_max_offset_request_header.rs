@@ -80,10 +80,12 @@ impl CommandCustomHeader for GetMaxOffsetRequestHeader {
 }
 
 impl FromMap for GetMaxOffsetRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(GetMaxOffsetRequestHeader {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(GetMaxOffsetRequestHeader {
             topic: map
                 .get(&CheetahString::from_static_str(
                     GetMaxOffsetRequestHeader::TOPIC,
@@ -102,7 +104,7 @@ impl FromMap for GetMaxOffsetRequestHeader {
                 ))
                 .map(|s| s.parse().unwrap())
                 .unwrap_or(true),
-            topic_request_header: <TopicRequestHeader as FromMap>::from(map),
+            topic_request_header: Some(<TopicRequestHeader as FromMap>::from(map)?),
         })
     }
 }

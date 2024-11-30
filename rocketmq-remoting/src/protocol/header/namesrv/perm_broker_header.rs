@@ -49,10 +49,12 @@ impl CommandCustomHeader for WipeWritePermOfBrokerRequestHeader {
 }
 
 impl FromMap for WipeWritePermOfBrokerRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(WipeWritePermOfBrokerRequestHeader {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(WipeWritePermOfBrokerRequestHeader {
             broker_name: map
                 .get(&CheetahString::from_static_str(
                     WipeWritePermOfBrokerRequestHeader::BROKER_NAME,
@@ -87,10 +89,12 @@ impl CommandCustomHeader for WipeWritePermOfBrokerResponseHeader {
 }
 
 impl FromMap for WipeWritePermOfBrokerResponseHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(WipeWritePermOfBrokerResponseHeader {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(WipeWritePermOfBrokerResponseHeader {
             wipe_topic_count: map
                 .get(&CheetahString::from_static_str(
                     WipeWritePermOfBrokerResponseHeader::WIPE_TOPIC_COUNT,
@@ -127,10 +131,12 @@ impl CommandCustomHeader for AddWritePermOfBrokerRequestHeader {
 }
 
 impl FromMap for AddWritePermOfBrokerRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(AddWritePermOfBrokerRequestHeader {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(AddWritePermOfBrokerRequestHeader {
             broker_name: map
                 .get(&CheetahString::from_static_str(
                     AddWritePermOfBrokerRequestHeader::BROKER_NAME,
@@ -165,10 +171,12 @@ impl CommandCustomHeader for AddWritePermOfBrokerResponseHeader {
 }
 
 impl FromMap for AddWritePermOfBrokerResponseHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(AddWritePermOfBrokerResponseHeader {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(AddWritePermOfBrokerResponseHeader {
             add_topic_count: map
                 .get(&CheetahString::from_static_str(
                     AddWritePermOfBrokerResponseHeader::ADD_TOPIC_COUNT,

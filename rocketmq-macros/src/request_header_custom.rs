@@ -158,10 +158,13 @@ pub(super) fn request_header_codec_inner(
         }
 
         impl crate::protocol::command_custom_header::FromMap for #struct_name {
+
+            type Error = crate::remoting_error::RemotingError;
+
             type Target = Self;
 
-            fn from(map: &std::collections::HashMap<cheetah_string::CheetahString, cheetah_string::CheetahString>) -> Option<Self::Target> {
-                Some(#struct_name {
+            fn from(map: &std::collections::HashMap<cheetah_string::CheetahString, cheetah_string::CheetahString>) -> Result<Self::Target, Self::Error> {
+                Ok(#struct_name {
                     #(#from_map)*
                 })
             }

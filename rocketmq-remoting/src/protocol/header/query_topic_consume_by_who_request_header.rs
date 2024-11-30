@@ -52,15 +52,19 @@ impl CommandCustomHeader for QueryTopicConsumeByWhoRequestHeader {
 }
 
 impl FromMap for QueryTopicConsumeByWhoRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &std::collections::HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(QueryTopicConsumeByWhoRequestHeader {
+    fn from(
+        map: &std::collections::HashMap<CheetahString, CheetahString>,
+    ) -> Result<Self::Target, Self::Error> {
+        Ok(QueryTopicConsumeByWhoRequestHeader {
             topic: map
                 .get(&CheetahString::from_static_str(Self::TOPIC))
                 .cloned()
                 .unwrap_or_default(),
-            topic_request_header: <TopicRequestHeader as FromMap>::from(map),
+            topic_request_header: Some(<TopicRequestHeader as FromMap>::from(map)?),
         })
     }
 }

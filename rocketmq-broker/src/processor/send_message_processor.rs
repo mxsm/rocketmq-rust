@@ -113,10 +113,13 @@ where
     ) -> Option<RemotingCommand> {
         match request_code {
             RequestCode::ConsumerSendMsgBack => {
-                self.inner.consumer_send_msg_back(&channel, &ctx, &request)
+                //need to optimize
+                self.inner
+                    .consumer_send_msg_back(&channel, &ctx, &request)
+                    .unwrap()
             }
             _ => {
-                let mut request_header = parse_request_header(&request, request_code)?;
+                let mut request_header = parse_request_header(&request, request_code).unwrap(); //need to optimize
                 let mapping_context = self
                     .inner
                     .topic_queue_mapping_manager
@@ -979,7 +982,7 @@ impl<MS, TS> Inner<MS, TS> {
     ) {
         for hook in self.send_message_hook_vec.iter() {
             if let Some(ref response) = response {
-                if let Some(ref header) =
+                if let Ok(ref header) =
                     response.decode_command_custom_header::<SendMessageResponseHeader>()
                 {
                     context.msg_id = header.msg_id().clone();
@@ -999,7 +1002,7 @@ impl<MS, TS> Inner<MS, TS> {
         _channel: &Channel,
         _ctx: &ConnectionHandlerContext,
         _request: &RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> crate::Result<Option<RemotingCommand>> {
         todo!()
     }
 

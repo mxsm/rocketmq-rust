@@ -80,10 +80,12 @@ impl CommandCustomHeader for UpdateConsumerOffsetRequestHeader {
 }
 
 impl FromMap for UpdateConsumerOffsetRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(UpdateConsumerOffsetRequestHeader {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(UpdateConsumerOffsetRequestHeader {
             consumer_group: map
                 .get(&CheetahString::from_static_str(
                     UpdateConsumerOffsetRequestHeader::CONSUMER_GROUP,
@@ -106,7 +108,7 @@ impl FromMap for UpdateConsumerOffsetRequestHeader {
                     UpdateConsumerOffsetRequestHeader::COMMIT_OFFSET,
                 ))
                 .and_then(|v| v.parse().ok()),
-            topic_request_header: <TopicRequestHeader as FromMap>::from(map),
+            topic_request_header: Some(<TopicRequestHeader as FromMap>::from(map)?),
         })
     }
 }

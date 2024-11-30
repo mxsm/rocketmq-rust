@@ -76,25 +76,36 @@ impl CommandCustomHeader for PutKVConfigRequestHeader {
 }
 
 impl FromMap for PutKVConfigRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = PutKVConfigRequestHeader;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(PutKVConfigRequestHeader {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(PutKVConfigRequestHeader {
             namespace: map
                 .get(&CheetahString::from_static_str(
                     PutKVConfigRequestHeader::NAMESPACE,
                 ))
-                .cloned()?,
+                .cloned()
+                .ok_or(Self::Error::RemotingCommandError(
+                    "Miss namespace field".to_string(),
+                ))?,
             key: map
                 .get(&CheetahString::from_static_str(
                     PutKVConfigRequestHeader::KEY,
                 ))
-                .cloned()?,
+                .cloned()
+                .ok_or(Self::Error::RemotingCommandError(
+                    "Miss key field".to_string(),
+                ))?,
             value: map
                 .get(&CheetahString::from_static_str(
                     PutKVConfigRequestHeader::VALUE,
                 ))
-                .cloned()?,
+                .cloned()
+                .ok_or(Self::Error::RemotingCommandError(
+                    "Miss value field".to_string(),
+                ))?,
         })
     }
 }
@@ -133,20 +144,28 @@ impl CommandCustomHeader for GetKVConfigRequestHeader {
 }
 
 impl FromMap for GetKVConfigRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = GetKVConfigRequestHeader;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(GetKVConfigRequestHeader {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(GetKVConfigRequestHeader {
             namespace: map
                 .get(&CheetahString::from_static_str(
                     GetKVConfigRequestHeader::NAMESPACE,
                 ))
-                .cloned()?,
+                .cloned()
+                .ok_or(Self::Error::RemotingCommandError(
+                    "Miss namespace field".to_string(),
+                ))?,
             key: map
                 .get(&CheetahString::from_static_str(
                     GetKVConfigRequestHeader::KEY,
                 ))
-                .cloned()?,
+                .cloned()
+                .ok_or(Self::Error::RemotingCommandError(
+                    "Miss key field".to_string(),
+                ))?,
         })
     }
 }
@@ -177,10 +196,12 @@ impl CommandCustomHeader for GetKVConfigResponseHeader {
 }
 
 impl FromMap for GetKVConfigResponseHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = GetKVConfigResponseHeader;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(GetKVConfigResponseHeader {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(GetKVConfigResponseHeader {
             value: map
                 .get(&CheetahString::from_static_str(
                     GetKVConfigResponseHeader::VALUE,
@@ -224,20 +245,28 @@ impl CommandCustomHeader for DeleteKVConfigRequestHeader {
 }
 
 impl FromMap for DeleteKVConfigRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = DeleteKVConfigRequestHeader;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(DeleteKVConfigRequestHeader {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(DeleteKVConfigRequestHeader {
             namespace: map
                 .get(&CheetahString::from_static_str(
                     DeleteKVConfigRequestHeader::NAMESPACE,
                 ))
-                .cloned()?,
+                .cloned()
+                .ok_or(Self::Error::RemotingCommandError(
+                    "Miss namespace field".to_string(),
+                ))?,
             key: map
                 .get(&CheetahString::from_static_str(
                     DeleteKVConfigRequestHeader::KEY,
                 ))
-                .cloned()?,
+                .cloned()
+                .ok_or(Self::Error::RemotingCommandError(
+                    "Miss key field".to_string(),
+                ))?,
         })
     }
 }
@@ -267,15 +296,20 @@ impl CommandCustomHeader for GetKVListByNamespaceRequestHeader {
 }
 
 impl FromMap for GetKVListByNamespaceRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = GetKVListByNamespaceRequestHeader;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(GetKVListByNamespaceRequestHeader {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(GetKVListByNamespaceRequestHeader {
             namespace: map
                 .get(&CheetahString::from_static_str(
                     GetKVListByNamespaceRequestHeader::NAMESPACE,
                 ))
-                .cloned()?,
+                .cloned()
+                .ok_or(Self::Error::RemotingCommandError(
+                    "Miss namespace field".to_string(),
+                ))?,
         })
     }
 }

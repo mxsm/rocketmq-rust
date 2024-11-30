@@ -32,9 +32,11 @@ impl CommandCustomHeader for GetAllTopicConfigResponseHeader {
     }
 }
 impl FromMap for GetAllTopicConfigResponseHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(_map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(Self {})
+    fn from(_map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(Self {})
     }
 }

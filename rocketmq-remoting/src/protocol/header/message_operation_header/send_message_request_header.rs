@@ -142,40 +142,85 @@ impl CommandCustomHeader for SendMessageRequestHeader {
 }
 
 impl FromMap for SendMessageRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(SendMessageRequestHeader {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(SendMessageRequestHeader {
             producer_group: map
-                .get(&CheetahString::from_static_str(Self::PRODUCER_GROUP))?
-                .clone(),
+                .get(&CheetahString::from_static_str(Self::PRODUCER_GROUP))
+                .cloned()
+                .ok_or(Self::Error::RemotingCommandError(
+                    "Miss producerGroup field".to_string(),
+                ))?,
             topic: map
-                .get(&CheetahString::from_static_str(Self::TOPIC))?
-                .clone(),
+                .get(&CheetahString::from_static_str(Self::TOPIC))
+                .cloned()
+                .ok_or(Self::Error::RemotingCommandError(
+                    "Miss topic field".to_string(),
+                ))?,
             default_topic: map
-                .get(&CheetahString::from_static_str(Self::DEFAULT_TOPIC))?
-                .clone(),
+                .get(&CheetahString::from_static_str(Self::DEFAULT_TOPIC))
+                .cloned()
+                .ok_or(Self::Error::RemotingCommandError(
+                    "Miss defaultTopic field".to_string(),
+                ))?,
             default_topic_queue_nums: map
                 .get(&CheetahString::from_static_str(
                     Self::DEFAULT_TOPIC_QUEUE_NUMS,
+                ))
+                .cloned()
+                .ok_or(Self::Error::RemotingCommandError(
+                    "Miss defaultTopicQueueNums field".to_string(),
                 ))?
                 .parse()
-                .ok()?,
-            queue_id: map
-                .get(&CheetahString::from_static_str(Self::QUEUE_ID))
-                .and_then(|v| v.parse().ok()),
+                .map_err(|_| {
+                    Self::Error::RemotingCommandError(
+                        "Parse defaultTopicQueueNums field error".to_string(),
+                    )
+                })?,
+            queue_id: Some(
+                map.get(&CheetahString::from_static_str(Self::QUEUE_ID))
+                    .cloned()
+                    .ok_or(Self::Error::RemotingCommandError(
+                        "Miss queueId field".to_string(),
+                    ))?
+                    .parse()
+                    .map_err(|_| {
+                        Self::Error::RemotingCommandError("Parse queueId field error".to_string())
+                    })?,
+            ),
             sys_flag: map
-                .get(&CheetahString::from_static_str(Self::SYS_FLAG))?
+                .get(&CheetahString::from_static_str(Self::SYS_FLAG))
+                .cloned()
+                .ok_or(Self::Error::RemotingCommandError(
+                    "Miss sysFlag field".to_string(),
+                ))?
                 .parse()
-                .ok()?,
+                .map_err(|_| {
+                    Self::Error::RemotingCommandError("Parse sysFlag field error".to_string())
+                })?,
             born_timestamp: map
-                .get(&CheetahString::from_static_str(Self::BORN_TIMESTAMP))?
+                .get(&CheetahString::from_static_str(Self::BORN_TIMESTAMP))
+                .cloned()
+                .ok_or(Self::Error::RemotingCommandError(
+                    "Miss bornTimestamp field".to_string(),
+                ))?
                 .parse()
-                .ok()?,
+                .map_err(|_| {
+                    Self::Error::RemotingCommandError("Parse bornTimestamp field error".to_string())
+                })?,
             flag: map
-                .get(&CheetahString::from_static_str(Self::FLAG))?
+                .get(&CheetahString::from_static_str(Self::FLAG))
+                .cloned()
+                .ok_or(Self::Error::RemotingCommandError(
+                    "Miss flag field".to_string(),
+                ))?
                 .parse()
-                .ok()?,
+                .map_err(|_| {
+                    Self::Error::RemotingCommandError("Parse flag field error".to_string())
+                })?,
             properties: map
                 .get(&CheetahString::from_static_str(Self::PROPERTIES))
                 .cloned(),
@@ -191,7 +236,7 @@ impl FromMap for SendMessageRequestHeader {
             max_reconsume_times: map
                 .get(&CheetahString::from_static_str(Self::MAX_RECONSUME_TIMES))
                 .and_then(|v| v.parse().ok()),
-            topic_request_header: <TopicRequestHeader as FromMap>::from(map),
+            topic_request_header: Some(<TopicRequestHeader as FromMap>::from(map)?),
         })
     }
 }
@@ -306,15 +351,17 @@ impl TopicRequestHeaderTrait for SendMessageRequestHeader {
 pub fn parse_request_header(
     request: &RemotingCommand,
     request_code: RequestCode,
-) -> Option<SendMessageRequestHeader> {
+) -> crate::Result<SendMessageRequestHeader> {
     let mut request_header_v2 = None;
     if RequestCode::SendMessageV2 == request_code || RequestCode::SendBatchMessage == request_code {
-        request_header_v2 = request.decode_command_custom_header::<SendMessageRequestHeaderV2>();
+        request_header_v2 = request
+            .decode_command_custom_header::<SendMessageRequestHeaderV2>()
+            .ok();
     }
 
     match request_header_v2 {
         Some(header) => {
-            Some(SendMessageRequestHeaderV2::create_send_message_request_header_v1(&header))
+            Ok(SendMessageRequestHeaderV2::create_send_message_request_header_v1(&header))
         }
         None => request.decode_command_custom_header::<SendMessageRequestHeader>(),
     }

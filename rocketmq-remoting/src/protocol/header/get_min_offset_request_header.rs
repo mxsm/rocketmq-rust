@@ -62,10 +62,12 @@ impl CommandCustomHeader for GetMinOffsetRequestHeader {
 }
 
 impl FromMap for GetMinOffsetRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(GetMinOffsetRequestHeader {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(GetMinOffsetRequestHeader {
             topic: map
                 .get(&CheetahString::from_static_str(
                     GetMinOffsetRequestHeader::TOPIC,
@@ -78,7 +80,7 @@ impl FromMap for GetMinOffsetRequestHeader {
                 ))
                 .map(|s| s.parse().unwrap())
                 .unwrap_or_default(),
-            topic_request_header: <TopicRequestHeader as FromMap>::from(map),
+            topic_request_header: Some(<TopicRequestHeader as FromMap>::from(map)?),
         })
     }
 }

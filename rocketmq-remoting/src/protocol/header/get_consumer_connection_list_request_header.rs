@@ -42,15 +42,19 @@ impl GetConsumerConnectionListRequestHeader {
 }
 
 impl FromMap for GetConsumerConnectionListRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &std::collections::HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(GetConsumerConnectionListRequestHeader {
+    fn from(
+        map: &std::collections::HashMap<CheetahString, CheetahString>,
+    ) -> Result<Self::Target, Self::Error> {
+        Ok(GetConsumerConnectionListRequestHeader {
             consumer_group: map
                 .get(&CheetahString::from_static_str(Self::CONSUMER_GROUP))
                 .cloned()
                 .unwrap_or_default(),
-            rpc_request_header: <RpcRequestHeader as FromMap>::from(map),
+            rpc_request_header: Some(<RpcRequestHeader as FromMap>::from(map)?),
         })
     }
 }

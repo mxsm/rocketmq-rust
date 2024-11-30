@@ -108,7 +108,7 @@ where
         request: RemotingCommand,
     ) -> Option<RemotingCommand> {
         let request_header = parse_request_header(&request);
-        let mut request_header = request_header?;
+        let mut request_header = request_header.unwrap(); //need to optimize
         let mut mqtrace_context =
             self.inner
                 .build_msg_context(&channel, &ctx, &mut request_header, &request);
@@ -441,18 +441,22 @@ where
     }
 }
 
-fn parse_request_header(request: &RemotingCommand) -> Option<SendMessageRequestHeader> {
+fn parse_request_header(
+    request: &RemotingCommand,
+) -> rocketmq_remoting::Result<SendMessageRequestHeader> {
     let request_code = RequestCode::from(request.code());
     let mut request_header_v2 = None;
     if RequestCode::SendReplyMessageV2 == request_code
         || RequestCode::SendReplyMessage == request_code
     {
-        request_header_v2 = request.decode_command_custom_header::<SendMessageRequestHeaderV2>();
+        request_header_v2 = request
+            .decode_command_custom_header::<SendMessageRequestHeaderV2>()
+            .ok();
     }
 
     match request_header_v2 {
         Some(header) => {
-            Some(SendMessageRequestHeaderV2::create_send_message_request_header_v1(&header))
+            Ok(SendMessageRequestHeaderV2::create_send_message_request_header_v1(&header))
         }
         None => request.decode_command_custom_header::<SendMessageRequestHeader>(),
     }

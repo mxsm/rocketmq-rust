@@ -168,10 +168,12 @@ impl CommandCustomHeader for ReplyMessageRequestHeader {
 }
 
 impl FromMap for ReplyMessageRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(ReplyMessageRequestHeader {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(ReplyMessageRequestHeader {
             producer_group: map
                 .get(&CheetahString::from_static_str(Self::PRODUCER_GROUP))
                 .cloned()
@@ -227,7 +229,7 @@ impl FromMap for ReplyMessageRequestHeader {
                 .get(&CheetahString::from_static_str(Self::STORE_TIMESTAMP))
                 .and_then(|value| value.parse().ok())
                 .unwrap_or_default(),
-            topic_request: <TopicRequestHeader as FromMap>::from(map),
+            topic_request: Some(<TopicRequestHeader as FromMap>::from(map)?),
         })
     }
 }

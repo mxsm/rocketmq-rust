@@ -32,9 +32,11 @@ impl CommandCustomHeader for GetConsumerListByGroupResponseHeader {
     }
 }
 impl FromMap for GetConsumerListByGroupResponseHeader {
-    type Target = GetConsumerListByGroupResponseHeader;
+    type Error = crate::remoting_error::RemotingError;
 
-    fn from(_map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(Self {})
+    type Target = Self;
+
+    fn from(_map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(Self {})
     }
 }

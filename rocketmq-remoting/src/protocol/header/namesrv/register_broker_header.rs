@@ -119,10 +119,12 @@ impl RegisterBrokerRequestHeader {
 }
 
 impl FromMap for RegisterBrokerRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(RegisterBrokerRequestHeader {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(RegisterBrokerRequestHeader {
             broker_name: map
                 .get(&CheetahString::from_static_str(
                     RegisterBrokerRequestHeader::BROKER_NAME,
@@ -282,10 +284,12 @@ impl CommandCustomHeader for RegisterBrokerResponseHeader {
 }
 
 impl FromMap for RegisterBrokerResponseHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(RegisterBrokerResponseHeader {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(RegisterBrokerResponseHeader {
             ha_server_addr: map
                 .get(&CheetahString::from_static_str(
                     RegisterBrokerResponseHeader::HA_SERVER_ADDR,

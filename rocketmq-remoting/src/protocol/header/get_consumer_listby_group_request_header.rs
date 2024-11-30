@@ -52,15 +52,17 @@ impl CommandCustomHeader for GetConsumerListByGroupRequestHeader {
     }
 }
 impl FromMap for GetConsumerListByGroupRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(GetConsumerListByGroupRequestHeader {
+    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        Ok(GetConsumerListByGroupRequestHeader {
             consumer_group: map
                 .get(&CheetahString::from_static_str(Self::CONSUMER_GROUP))
                 .cloned()
                 .unwrap_or_default(),
-            rpc: <RpcRequestHeader as FromMap>::from(map),
+            rpc: Some(<RpcRequestHeader as FromMap>::from(map)?),
         })
     }
 }

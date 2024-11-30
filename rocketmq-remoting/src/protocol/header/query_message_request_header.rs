@@ -83,27 +83,59 @@ impl CommandCustomHeader for QueryMessageRequestHeader {
 }
 
 impl FromMap for QueryMessageRequestHeader {
+    type Error = crate::remoting_error::RemotingError;
+
     type Target = Self;
 
-    fn from(map: &std::collections::HashMap<CheetahString, CheetahString>) -> Option<Self::Target> {
-        Some(QueryMessageRequestHeader {
+    fn from(
+        map: &std::collections::HashMap<CheetahString, CheetahString>,
+    ) -> Result<Self::Target, Self::Error> {
+        Ok(QueryMessageRequestHeader {
             topic: map
-                .get(&CheetahString::from_static_str(Self::TOPIC))?
-                .clone(),
-            key: map.get(&CheetahString::from_static_str(Self::KEY))?.clone(),
+                .get(&CheetahString::from_static_str(Self::TOPIC))
+                .cloned()
+                .ok_or(Self::Error::RemotingCommandError(
+                    "Miss topic field".to_string(),
+                ))?,
+            key: map
+                .get(&CheetahString::from_static_str(Self::KEY))
+                .cloned()
+                .ok_or(Self::Error::RemotingCommandError(
+                    "Miss key field".to_string(),
+                ))?,
             max_num: map
-                .get(&CheetahString::from_static_str(Self::MAX_NUM))?
+                .get(&CheetahString::from_static_str(Self::MAX_NUM))
+                .cloned()
+                .ok_or(Self::Error::RemotingCommandError(
+                    "Miss maxNum field".to_string(),
+                ))?
                 .parse()
-                .ok()?,
+                .map_err(|_| {
+                    Self::Error::RemotingCommandError("Parse maxNum field error".to_string())
+                })?,
             begin_timestamp: map
-                .get(&CheetahString::from_static_str(Self::BEGIN_TIMESTAMP))?
+                .get(&CheetahString::from_static_str(Self::BEGIN_TIMESTAMP))
+                .cloned()
+                .ok_or(Self::Error::RemotingCommandError(
+                    "Miss beginTimestamp field".to_string(),
+                ))?
                 .parse()
-                .ok()?,
+                .map_err(|_| {
+                    Self::Error::RemotingCommandError(
+                        "Parse beginTimestamp field error".to_string(),
+                    )
+                })?,
             end_timestamp: map
-                .get(&CheetahString::from_static_str(Self::END_TIMESTAMP))?
+                .get(&CheetahString::from_static_str(Self::END_TIMESTAMP))
+                .cloned()
+                .ok_or(Self::Error::RemotingCommandError(
+                    "Miss endTimestamp field".to_string(),
+                ))?
                 .parse()
-                .ok()?,
-            topic_request_header: <TopicRequestHeader as FromMap>::from(map),
+                .map_err(|_| {
+                    Self::Error::RemotingCommandError("Parse endTimestamp field error".to_string())
+                })?,
+            topic_request_header: Some(<TopicRequestHeader as FromMap>::from(map)?),
         })
     }
 }
@@ -157,7 +189,7 @@ mod query_message_request_header_tests {
 
         let header = <QueryMessageRequestHeader as FromMap>::from(&map);
 
-        assert!(header.is_none());
+        assert!(header.is_err());
     }
 
     #[test]
