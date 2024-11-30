@@ -22,15 +22,17 @@ language.
 
 ## Roadmap
 
-### **🔊Note**: ***Rocketmq-rust*** is implemented based on ***Apache Rocketmq release-5.3.1📌(Tag)***, with subsequent feature enhancements to follow the updates of the version🚩.
-
+### **🔊Note**: ***[Rocketmq-rust](https://github.com/mxsm/rocketmq-rust)*** is implemented based on
+***[Apache Rocketmq release-5.3.1📌](https://github.com/apache/rocketmq/tree/release-5.3.1)
+***, with subsequent feature enhancements to follow the updates of the version🚩.
 
 ![](resources/rocektmq-rust-roadmap.png)
 
-🔊Release a new version every three months to fix issues. If there are major updates or new features, additional releases will be scheduled🍻. 
+🔊Release a new version every three months to fix issues. If there are major updates or new features, additional releases
+will be scheduled🍻.
 
 | 🔖Version | 🚩Release time | 🚧Remark   |
-| -------- | ------------- | --------- |
+|-----------|----------------|------------|
 | 🔖v0.1.0  | 🚩2024-01-28   | Released🎉 |
 | 🔖v0.2.0  | 🚩2024-06-05   | Released🎉 |
 | 🔖v0.3.0  | 🚩2024-11-17   | Released🎉 |
@@ -41,7 +43,6 @@ language.
 | 🔖v0.8.0  | 🚩2026-02-17   | 🚧         |
 | 🔖v0.9.0  | 🚩2026-05-17   | 🚧         |
 | 🔖....    | 🚩....         | 🚧...      |
-
 
 ## Getting Started
 
@@ -142,9 +143,11 @@ cargo run --bin rocketmq-broker-rust
 
 First, start the RocketMQ NameServer and Broker services.
 
-- [**Send a single message**](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md#Send-a-single-message)
+- [**Send a single message
+  **](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md#Send-a-single-message)
 
-- [**Send batch messages**](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md#Send-batch-messages)
+- [**Send batch messages
+  **](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md#Send-batch-messages)
 
 - [**Send RPC messages**](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md#Send-RPC-messages)
 
@@ -171,7 +174,7 @@ will be carried out sequentially in the following order.
 Contributions to code, issue reporting, and suggestions are welcome. The development of RocketMQ-Rust relies on the
 support of developers. Let's collaborate to advance Rust in the message middleware domain.
 
-![Alt](https://repobeats.axiom.co/api/embed/6ca125de92b36e1f78c6681d0a1296b8958adea1.svg "Repobeats analytics image")
+![](https://repobeats.axiom.co/api/embed/6ca125de92b36e1f78c6681d0a1296b8958adea1.svg "Repobeats analytics image")
 
 <a href="https://github.com/mxsm/rocketmq-rust/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=mxsm/rocketmq-rust&anon=1" />
