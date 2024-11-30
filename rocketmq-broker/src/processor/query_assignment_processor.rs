@@ -41,8 +41,8 @@ use rocketmq_remoting::protocol::body::set_message_request_mode_request_body::Se
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::{RemotingDeserializable, RemotingSerializable};
 use crate::client::manager::consumer_manager::ConsumerManager;
-use crate::error::BrokerError;
-use crate::error::BrokerError::IllegalArgumentError;
+use crate::broker_error::BrokerError;
+use crate::broker_error::BrokerError::IllegalArgumentError;
 use crate::topic::manager::topic_route_info_manager::TopicRouteInfoManager;
 use crate::Result;
 

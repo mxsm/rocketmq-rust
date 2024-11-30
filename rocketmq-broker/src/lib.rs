@@ -22,7 +22,7 @@
 pub use broker_bootstrap::BrokerBootstrap;
 pub use broker_bootstrap::Builder;
 
-use crate::error::BrokerError;
+use crate::broker_error::BrokerError;
 
 pub mod command;
 
@@ -33,7 +33,7 @@ pub(crate) mod broker_runtime;
 pub(crate) mod client;
 pub(crate) mod coldctr;
 pub(crate) mod controller;
-pub(crate) mod error;
+pub(crate) mod broker_error;
 pub(crate) mod filter;
 pub(crate) mod hook;
 pub(crate) mod load_balance;

@@ -57,8 +57,8 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-use crate::error::BrokerError;
-use crate::error::BrokerError::BrokerClientError;
+use crate::broker_error::BrokerError;
+use crate::broker_error::BrokerError::BrokerRemotingError;
 use crate::Result;
 
 pub struct BrokerOuterAPI {
@@ -367,7 +367,7 @@ impl BrokerOuterAPI {
                     ))
                 }
             }
-            Err(e) => Err(BrokerClientError(e)),
+            Err(e) => Err(BrokerRemotingError(e)),
         }
     }
 
@@ -402,7 +402,7 @@ impl BrokerOuterAPI {
                     ))
                 }
             }
-            Err(e) => Err(BrokerClientError(e)),
+            Err(e) => Err(BrokerRemotingError(e)),
         }
     }
 
