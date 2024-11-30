@@ -20,7 +20,7 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum BrokerError {
     #[error("broker client error: {0}")]
-    BrokerClientError(#[from] rocketmq_remoting::error::Error),
+    BrokerClientError(#[from] rocketmq_remoting::remoting_error::RemotingError),
 
     #[error("Common error: {0}")]
     BrokerCommonError(#[from] rocketmq_common::error::Error),

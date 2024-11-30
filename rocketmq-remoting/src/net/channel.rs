@@ -32,10 +32,10 @@ use uuid::Uuid;
 
 use crate::base::response_future::ResponseFuture;
 use crate::connection::Connection;
-use crate::error::Error;
-use crate::error::Error::ChannelSendRequestFailed;
-use crate::error::Error::Io;
 use crate::protocol::remoting_command::RemotingCommand;
+use crate::remoting_error::RemotingError;
+use crate::remoting_error::RemotingError::ChannelSendRequestFailed;
+use crate::remoting_error::RemotingError::Io;
 use crate::Result;
 
 #[derive(Clone)]
@@ -208,12 +208,12 @@ impl Channel {
                 Ok(response) => response,
                 Err(e) => {
                     self.response_table.remove(&opaque);
-                    Err(Error::ChannelRecvRequestFailed(e.to_string()))
+                    Err(RemotingError::ChannelRecvRequestFailed(e.to_string()))
                 }
             },
             Err(e) => {
                 self.response_table.remove(&opaque);
-                Err(Error::ChannelRecvRequestFailed(e.to_string()))
+                Err(RemotingError::ChannelRecvRequestFailed(e.to_string()))
             }
         }
     }
