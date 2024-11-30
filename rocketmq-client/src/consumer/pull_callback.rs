@@ -24,13 +24,13 @@ use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_rust::WeakArcMut;
 use tracing::warn;
 
+use crate::client_error::MQClientError;
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::PULL_TIME_DELAY_MILLS_WHEN_BROKER_FLOW_CONTROL;
 use crate::consumer::consumer_impl::pull_request::PullRequest;
 use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
 use crate::consumer::consumer_impl::re_balance::Rebalance;
 use crate::consumer::pull_status::PullStatus;
-use crate::error::MQClientError;
 
 pub type PullCallbackFn =
     Arc<dyn FnOnce(Option<PullResultExt>, Option<Box<dyn std::error::Error + Send>>) + Send + Sync>;
@@ -176,8 +176,10 @@ impl PullCallback for DefaultPullCallback {
         if !topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
             if let Some(er) = err.downcast_ref::<MQClientError>() {
                 match er {
-                    MQClientError::MQBrokerError(code, msg, addr) => {
-                        if ResponseCode::from(*code) == ResponseCode::SubscriptionNotLatest {
+                    MQClientError::MQClientBrokerError(broker_error) => {
+                        if ResponseCode::from(broker_error.response_code())
+                            == ResponseCode::SubscriptionNotLatest
+                        {
                             warn!(
                                 "the subscription is not latest, group={}",
                                 push_consumer_impl.consumer_config.consumer_group,
@@ -205,8 +207,9 @@ impl PullCallback for DefaultPullCallback {
         }
         let time_delay = if let Some(er) = err.downcast_ref::<MQClientError>() {
             match er {
-                MQClientError::MQBrokerError(code, _, _) => {
-                    if ResponseCode::from(*code) == ResponseCode::FlowControl {
+                MQClientError::MQClientBrokerError(broker_error) => {
+                    if ResponseCode::from(broker_error.response_code()) == ResponseCode::FlowControl
+                    {
                         PULL_TIME_DELAY_MILLS_WHEN_BROKER_FLOW_CONTROL
                     } else {
                         push_consumer_impl.pull_time_delay_mills_when_exception

@@ -39,7 +39,8 @@ use tracing::error;
 
 use crate::base::client_config::ClientConfig;
 use crate::base::validators::Validators;
-use crate::error::MQClientError::MQClientErr;
+use crate::client_error::ClientErr;
+use crate::client_error::MQClientError::MQClientErr;
 use crate::producer::default_mq_produce_builder::DefaultMQProducerBuilder;
 use crate::producer::mq_producer::MQProducer;
 use crate::producer::produce_accumulator::ProduceAccumulator;
@@ -490,10 +491,9 @@ impl DefaultMQProducer {
             }
             Err(err) => {
                 error!("Failed to initiate the MessageBatch: {:?}", err);
-                Err(MQClientErr(
-                    -1,
-                    "Failed to initiate the MessageBatch".to_string(),
-                ))
+                Err(MQClientErr(ClientErr::new(
+                    "Failed to initiate the MessageBatch",
+                )))
             }
         }
     }

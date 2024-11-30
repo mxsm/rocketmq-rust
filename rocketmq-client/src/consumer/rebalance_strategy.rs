@@ -23,7 +23,7 @@ use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use tracing::info;
 
-use crate::error::MQClientError::IllegalArgumentError;
+use crate::client_error::MQClientError::IllegalArgumentError;
 use crate::Result;
 
 pub fn check(

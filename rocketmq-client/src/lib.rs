@@ -20,13 +20,13 @@
 
 extern crate core;
 
-use crate::error::MQClientError;
+use crate::client_error::MQClientError;
 
 mod admin;
 pub mod base;
+pub mod client_error;
 mod common;
 pub mod consumer;
-pub mod error;
 pub mod factory;
 mod hook;
 mod implementation;

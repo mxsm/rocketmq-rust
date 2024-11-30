@@ -84,13 +84,15 @@ use tracing::error;
 use tracing::warn;
 
 use crate::base::client_config::ClientConfig;
+use crate::client_error::ClientErr;
+use crate::client_error::MQBrokerErr;
+use crate::client_error::MQClientError;
+use crate::client_error::MQClientError::MQClientBrokerError;
+use crate::client_error::MQClientError::MQClientErr;
 use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
 use crate::consumer::pull_callback::PullCallback;
 use crate::consumer::pull_result::PullResult;
 use crate::consumer::pull_status::PullStatus;
-use crate::error::MQClientError;
-use crate::error::MQClientError::MQBrokerError;
-use crate::error::MQClientError::MQClientErr;
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::hook::send_message_context::SendMessageContext;
 use crate::implementation::client_remoting_processor::ClientRemotingProcessor;
@@ -252,16 +254,16 @@ impl MQClientAPIImpl {
                         }
                     }
                     _ => {
-                        return Err(MQClientError::MQClientErr(
+                        return Err(MQClientError::MQClientErr(ClientErr::new_with_code(
                             code,
                             result.remark().cloned().unwrap_or_default().to_string(),
-                        ))
+                        )))
                     }
                 }
-                Err(MQClientError::MQClientErr(
+                Err(MQClientError::MQClientErr(ClientErr::new_with_code(
                     code,
                     result.remark().cloned().unwrap_or_default().to_string(),
-                ))
+                )))
             }
             Err(err) => Err(MQClientError::RemotingError(err)),
         }
@@ -536,10 +538,12 @@ impl MQClientAPIImpl {
             ResponseCode::SlaveNotAvailable => SendStatus::SlaveNotAvailable,
             ResponseCode::Success => SendStatus::SendOk,
             _ => {
-                return Err(MQClientError::MQBrokerError(
-                    response.code(),
-                    response.remark().map_or("".to_string(), |s| s.to_string()),
-                    addr.to_string(),
+                return Err(MQClientError::MQClientBrokerError(
+                    MQBrokerErr::new_with_broker(
+                        response.code(),
+                        response.remark().map_or("".to_string(), |s| s.to_string()),
+                        addr.to_string(),
+                    ),
                 ))
             }
         };
@@ -680,10 +684,12 @@ impl MQClientAPIImpl {
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             return Ok(response.version());
         }
-        Err(MQClientError::MQBrokerError(
-            response.code(),
-            response.remark().map_or("".to_string(), |s| s.to_string()),
-            addr.to_string(),
+        Err(MQClientError::MQClientBrokerError(
+            MQBrokerErr::new_with_broker(
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string()),
+                addr.to_string(),
+            ),
         ))
     }
 
@@ -717,10 +723,10 @@ impl MQClientAPIImpl {
             )
             .await?;
         if ResponseCode::from(response.code()) != ResponseCode::Success {
-            return Err(MQClientError::MQClientErr(
+            return Err(MQClientError::MQClientErr(ClientErr::new_with_code(
                 response.code(),
                 response.remark().map_or("".to_string(), |s| s.to_string()),
-            ));
+            )));
         }
         Ok(())
     }
@@ -756,25 +762,28 @@ impl MQClientAPIImpl {
                 if let Some(body) = response.body() {
                     return match GetConsumerListByGroupResponseBody::decode(body) {
                         Ok(value) => Ok(value.consumer_id_list),
-                        Err(e) => Err(MQClientError::MQClientErr(
-                            -1,
+                        Err(e) => Err(MQClientError::MQClientErr(ClientErr::new(
                             response.remark().map_or("".to_string(), |s| s.to_string()),
-                        )),
+                        ))),
                     };
                 }
             }
             _ => {
-                return Err(MQClientError::MQBrokerError(
-                    response.code(),
-                    response.remark().map_or("".to_string(), |s| s.to_string()),
-                    addr.to_string(),
+                return Err(MQClientError::MQClientBrokerError(
+                    MQBrokerErr::new_with_broker(
+                        response.code(),
+                        response.remark().map_or("".to_string(), |s| s.to_string()),
+                        addr.to_string(),
+                    ),
                 ));
             }
         }
-        Err(MQClientError::MQBrokerError(
-            response.code(),
-            response.remark().map_or("".to_string(), |s| s.to_string()),
-            addr.to_string(),
+        Err(MQClientError::MQClientBrokerError(
+            MQBrokerErr::new_with_broker(
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string()),
+                addr.to_string(),
+            ),
         ))
     }
 
@@ -813,10 +822,12 @@ impl MQClientAPIImpl {
             .invoke_async(Some(addr), request, timeout_millis)
             .await?;
         if ResponseCode::from(response.code()) != ResponseCode::Success {
-            Err(MQClientError::MQBrokerError(
-                response.code(),
-                response.remark().map_or("".to_string(), |s| s.to_string()),
-                addr.to_string(),
+            Err(MQClientError::MQClientBrokerError(
+                MQBrokerErr::new_with_broker(
+                    response.code(),
+                    response.remark().map_or("".to_string(), |s| s.to_string()),
+                    addr.to_string(),
+                ),
             ))
         } else {
             Ok(())
@@ -860,10 +871,12 @@ impl MQClientAPIImpl {
             }
             _ => {}
         }
-        Err(MQClientError::MQBrokerError(
-            response.code(),
-            response.remark().map_or("".to_string(), |s| s.to_string()),
-            addr.to_string(),
+        Err(MQClientError::MQClientBrokerError(
+            MQBrokerErr::new_with_broker(
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string()),
+                addr.to_string(),
+            ),
         ))
     }
 
@@ -960,11 +973,11 @@ impl MQClientAPIImpl {
             ResponseCode::PullRetryImmediately => PullStatus::NoMatchedMsg,
             ResponseCode::PullOffsetMoved => PullStatus::OffsetIllegal,
             _ => {
-                return Err(MQBrokerError(
+                return Err(MQClientBrokerError(MQBrokerErr::new_with_broker(
                     response.code(),
                     response.remark().map_or("".to_string(), |s| s.to_string()),
                     addr.to_string(),
-                ))
+                )))
             }
         };
         let response_header = response
@@ -1027,11 +1040,11 @@ impl MQClientAPIImpl {
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             Ok(())
         } else {
-            Err(MQBrokerError(
+            Err(MQClientBrokerError(MQBrokerErr::new_with_broker(
                 response.code(),
                 response.remark().map_or("".to_string(), |s| s.to_string()),
                 addr.to_string(),
-            ))
+            )))
         }
     }
 
@@ -1058,11 +1071,11 @@ impl MQClientAPIImpl {
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             Ok(())
         } else {
-            Err(MQBrokerError(
+            Err(MQClientBrokerError(MQBrokerErr::new_with_broker(
                 response.code(),
                 response.remark().map_or("".to_string(), |s| s.to_string()),
                 addr.to_string(),
-            ))
+            )))
         }
     }
 
@@ -1098,11 +1111,11 @@ impl MQClientAPIImpl {
             if ResponseCode::from(response.code()) == ResponseCode::Success {
                 Ok(())
             } else {
-                Err(MQBrokerError(
+                Err(MQClientBrokerError(MQBrokerErr::new_with_broker(
                     response.code(),
                     response.remark().map_or("".to_string(), |s| s.to_string()),
                     addr.to_string(),
-                ))
+                )))
             }
         }
     }
@@ -1133,20 +1146,26 @@ impl MQClientAPIImpl {
             if let Some(body) = response.body() {
                 LockBatchResponseBody::decode(body.as_ref())
                     .map(|body| body.lock_ok_mq_set)
-                    .map_err(|e| MQBrokerError(response.code(), e.to_string(), addr.to_string()))
+                    .map_err(|e| {
+                        MQClientBrokerError(MQBrokerErr::new_with_broker(
+                            response.code(),
+                            e.to_string(),
+                            addr.to_string(),
+                        ))
+                    })
             } else {
-                Err(MQBrokerError(
+                Err(MQClientBrokerError(MQBrokerErr::new_with_broker(
                     response.code(),
                     "Response body is empty".to_string(),
                     addr.to_string(),
-                ))
+                )))
             }
         } else {
-            Err(MQBrokerError(
+            Err(MQClientBrokerError(MQBrokerErr::new_with_broker(
                 response.code(),
                 response.remark().map_or("".to_string(), |s| s.to_string()),
                 addr.to_string(),
-            ))
+            )))
         }
     }
 
@@ -1206,11 +1225,11 @@ impl MQClientAPIImpl {
                 .expect("decode error");
             return Ok(response_header.offset);
         }
-        Err(MQBrokerError(
+        Err(MQClientBrokerError(MQBrokerErr::new_with_broker(
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string()),
             addr.to_string(),
-        ))
+        )))
     }
 
     pub async fn set_message_request_mode(
@@ -1242,10 +1261,10 @@ impl MQClientAPIImpl {
             )
             .await?;
         if ResponseCode::from(response.code()) != ResponseCode::Success {
-            return Err(MQClientErr(
+            return Err(MQClientErr(ClientErr::new_with_code(
                 response.code(),
                 response.remark().cloned().unwrap_or_default().to_string(),
-            ));
+            )));
         }
         Ok(())
     }
@@ -1292,10 +1311,10 @@ impl MQClientAPIImpl {
             return Ok(None);
         }
 
-        Err(MQBrokerError(
+        Err(MQClientBrokerError(MQBrokerErr::new_with_broker(
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string()),
             addr.to_string(),
-        ))
+        )))
     }
 }

@@ -19,7 +19,8 @@ use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_rust::ArcMut;
 
 use crate::base::client_config::ClientConfig;
-use crate::error::MQClientError::MQClientErr;
+use crate::client_error::ClientErr;
+use crate::client_error::MQClientError::MQClientErr;
 use crate::factory::mq_client_instance;
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::implementation::mq_client_api_impl::MQClientAPIImpl;
@@ -87,13 +88,10 @@ impl MQAdminImpl {
                 ));
             }
         }
-        Err(MQClientErr(
-            -1,
-            format!(
-                "Unknow why, Can not find Message Queue for this topic, {}",
-                topic
-            ),
-        ))
+        Err(MQClientErr(ClientErr::new(format!(
+            "Unknow why, Can not find Message Queue for this topic, {}",
+            topic
+        ))))
     }
 
     pub async fn max_offset(&mut self, mq: &MessageQueue) -> Result<i64> {

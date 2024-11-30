@@ -39,6 +39,8 @@ use tracing::info;
 use tracing::warn;
 
 use crate::base::client_config::ClientConfig;
+use crate::client_error::ClientErr;
+use crate::client_error::MQClientError;
 use crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
 use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
@@ -49,7 +51,6 @@ use crate::consumer::consumer_impl::re_balance::rebalance_impl::RebalanceImpl;
 use crate::consumer::consumer_impl::re_balance::Rebalance;
 use crate::consumer::default_mq_push_consumer::ConsumerConfig;
 use crate::consumer::store::read_offset_type::ReadOffsetType;
-use crate::error::MQClientError;
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::Result;
 
@@ -272,10 +273,9 @@ impl Rebalance for RebalancePushImpl {
             .unwrap()
             .upgrade();
         if default_mqpush_consumer_impl.is_none() {
-            return Err(MQClientError::MQClientErr(
-                -1,
-                "default_mqpush_consumer_impl is none".to_string(),
-            ));
+            return Err(MQClientError::MQClientErr(ClientErr::new(
+                "default_mqpush_consumer_impl is none",
+            )));
         }
         let mut default_mqpush_consumer_impl = default_mqpush_consumer_impl.unwrap();
         let offset_store = default_mqpush_consumer_impl.offset_store.as_mut().unwrap();
@@ -306,10 +306,10 @@ impl Rebalance for RebalancePushImpl {
                             .await?
                     }
                 } else {
-                    return Err(MQClientError::MQClientErr(
+                    return Err(MQClientError::MQClientErr(ClientErr::new_with_code(
                         ResponseCode::QueryNotFound.into(),
-                        "Failed to query consume offset from offset store".to_string(),
-                    ));
+                        "Failed to query consume offset from offset store",
+                    )));
                 }
             }
             ConsumeFromWhere::ConsumeFromFirstOffset => {
@@ -321,10 +321,10 @@ impl Rebalance for RebalancePushImpl {
                 } else if -1 == last_offset {
                     0
                 } else {
-                    return Err(MQClientError::MQClientErr(
+                    return Err(MQClientError::MQClientErr(ClientErr::new_with_code(
                         ResponseCode::QueryNotFound.into(),
-                        "Failed to query consume offset from offset store".to_string(),
-                    ));
+                        "Failed to query consume offset from offset store",
+                    )));
                 }
             }
             ConsumeFromWhere::ConsumeFromTimestamp => {
@@ -362,18 +362,18 @@ impl Rebalance for RebalancePushImpl {
                             .await?
                     }
                 } else {
-                    return Err(MQClientError::MQClientErr(
+                    return Err(MQClientError::MQClientErr(ClientErr::new_with_code(
                         ResponseCode::QueryNotFound.into(),
-                        "Failed to query consume offset from offset store".to_string(),
-                    ));
+                        "Failed to query consume offset from offset store",
+                    )));
                 }
             }
         };
         if result < 0 {
-            return Err(MQClientError::MQClientErr(
+            return Err(MQClientError::MQClientErr(ClientErr::new_with_code(
                 ResponseCode::SystemError.into(),
-                "Failed to query consume offset from offset store".to_string(),
-            ));
+                "Failed to query consume offset from offset store",
+            )));
         }
         Ok(result)
     }
