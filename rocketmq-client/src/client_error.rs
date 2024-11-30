@@ -168,13 +168,23 @@ macro_rules! mq_client_err {
     ($response_code:expr, $fmt:expr, $($arg:expr),*) => {{
         let formatted_msg = format!($fmt, $($arg),*);
         std::result::Result::Err($crate::client_error::MQClientError::MQClientErr(
-            ClientErr::new_with_code($response_code as i32, formatted_msg),
+            $crate::client_error::ClientErr::new_with_code($response_code as i32, formatted_msg),
         ))
     }};
+
+    ($response_code:expr, $error_message:expr) => {{
+        std::result::Result::Err($crate::client_error::MQClientError::MQClientErr(
+            $crate::client_error::ClientErr::new_with_code(
+                $response_code as i32,
+                $error_message,
+            ),
+        ))
+    }};
+
     // Handle errors without a ResponseCode, using only the error message
     ($error_message:expr) => {{
         std::result::Result::Err($crate::client_error::MQClientError::MQClientErr(
-            ClientErr::new($error_message),
+            $crate::client_error::ClientErr::new($error_message),
         ))
     }};
 }
@@ -251,6 +261,19 @@ macro_rules! request_timeout_err {
 mod tests {
     use super::*;
     use crate::client_error;
+
+    #[test]
+    fn client_err_with_response_code_formats_correctly() {
+        let result: std::result::Result<(), client_error::MQClientError> =
+            mq_client_err!(404, "Error: not found");
+        assert!(result.is_err());
+        if let Err(MQClientError::MQClientErr(err)) = result {
+            assert_eq!(err.response_code(), 404);
+            assert_eq!(err.error_message().unwrap(), "Error: not found");
+        } else {
+            panic!("Expected MQClientError::MQClientErr");
+        }
+    }
 
     #[test]
     fn client_broker_err_with_response_code_and_broker_formats_correctly() {
