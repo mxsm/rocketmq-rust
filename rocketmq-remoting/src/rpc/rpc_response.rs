@@ -18,15 +18,15 @@ use std::any::Any;
 
 use rocketmq_rust::ArcMut;
 
-use crate::error::Error;
 use crate::protocol::command_custom_header::CommandCustomHeader;
+use crate::remoting_error::RemotingError;
 
 #[derive(Default)]
 pub struct RpcResponse {
     pub code: i32,
     pub header: Option<ArcMut<Box<dyn CommandCustomHeader + Send + Sync + 'static>>>,
     pub body: Option<Box<dyn Any>>,
-    pub exception: Option<Error>,
+    pub exception: Option<RemotingError>,
 }
 
 impl RpcResponse {
@@ -60,10 +60,10 @@ impl RpcResponse {
         }
     }
 
-    pub fn new_exception(exception: Option<Error>) -> Self {
+    pub fn new_exception(exception: Option<RemotingError>) -> Self {
         Self {
             code: exception.as_ref().map_or(0, |e| match e {
-                Error::RpcException(code, _) => *code,
+                RemotingError::RpcError(code, _) => *code,
                 _ => 0,
             }),
             header: None,

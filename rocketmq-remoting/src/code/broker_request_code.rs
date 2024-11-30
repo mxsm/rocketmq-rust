@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
-use crate::error::Error;
-use crate::error::Error::FromStrError;
+use crate::remoting_error::RemotingError;
+use crate::remoting_error::RemotingError::FromStrErr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum BrokerRequestCode {
@@ -34,14 +34,14 @@ impl BrokerRequestCode {
 }
 
 impl FromStr for BrokerRequestCode {
-    type Err = Error;
+    type Err = RemotingError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_uppercase().as_str() {
             "REGISTERBROKER" => Ok(BrokerRequestCode::RegisterBroker),
             "BROKERHEARTBEAT" => Ok(BrokerRequestCode::BrokerHeartbeat),
             "GETBROKERCLUSTERINFO" => Ok(BrokerRequestCode::GetBrokerClusterInfo),
-            _ => Err(FromStrError(format!(
+            _ => Err(FromStrErr(format!(
                 "Parse from string error,Invalid BrokerRequestCode: {}",
                 s
             ))),

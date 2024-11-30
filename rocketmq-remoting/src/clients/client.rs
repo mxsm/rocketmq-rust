@@ -27,12 +27,12 @@ use crate::base::connection_net_event::ConnectionNetEvent;
 use crate::base::response_future::ResponseFuture;
 use crate::code::response_code::ResponseCode;
 use crate::connection::Connection;
-use crate::error::Error::ConnectionInvalid;
-use crate::error::Error::Io;
-use crate::error::Error::RemoteException;
 use crate::net::channel::Channel;
 use crate::protocol::remoting_command::RemotingCommand;
 use crate::protocol::RemotingCommandType;
+use crate::remoting_error::RemotingError::ConnectionInvalid;
+use crate::remoting_error::RemotingError::Io;
+use crate::remoting_error::RemotingError::RemoteError;
 use crate::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 use crate::runtime::processor::RequestProcessor;
 use crate::Result;
@@ -270,11 +270,11 @@ impl Client {
             .send((request, Some(tx), Some(timeout_millis)))
             .await
         {
-            return Err(RemoteException(err.to_string()));
+            return Err(RemoteError(err.to_string()));
         }
         match rx.await {
             Ok(value) => value,
-            Err(error) => Err(RemoteException(error.to_string())),
+            Err(error) => Err(RemoteError(error.to_string())),
         }
     }
 
@@ -314,7 +314,7 @@ impl Client {
             },
         }*/
         if let Err(err) = self.tx.send((request, None, None)).await {
-            return Err(RemoteException(err.to_string()));
+            return Err(RemoteError(err.to_string()));
         }
         Ok(())
     }

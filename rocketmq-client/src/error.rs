@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use rocketmq_remoting::error::Error as RemotingError;
+use rocketmq_remoting::remoting_error::RemotingError;
 use thiserror::Error;
 
 #[derive(Debug, Error)]

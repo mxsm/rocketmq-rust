@@ -40,10 +40,10 @@ use tracing::error;
 use super::RemotingCommandType;
 use super::SerializeType;
 use crate::code::response_code::RemotingSysResponseCode;
-use crate::error::Error;
 use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::FromMap;
 use crate::protocol::LanguageCode;
+use crate::remoting_error::RemotingError;
 use crate::rocketmq_serializable::RocketMQSerializable;
 
 pub const SERIALIZE_TYPE_PROPERTY: &str = "rocketmq.serialize.type";
@@ -474,7 +474,7 @@ impl RemotingCommand {
         let ori_header_length = cmd_data.get_i32();
         let header_length = parse_header_length(ori_header_length);
         if header_length > total_size - 4 {
-            return Err(Error::RemotingCommandDecoderError(format!(
+            return Err(RemotingError::RemotingCommandDecoderError(format!(
                 "Header length {} is greater than total size {}",
                 header_length, total_size
             )));
@@ -504,7 +504,7 @@ impl RemotingCommand {
                 let cmd =
                     SerdeJsonUtils::from_json_slice::<RemotingCommand>(src).map_err(|error| {
                         // Handle deserialization error gracefully
-                        Error::RemotingCommandDecoderError(format!(
+                        RemotingError::RemotingCommandDecoderError(format!(
                             "Deserialization error: {}",
                             error
                         ))
@@ -734,7 +734,7 @@ pub fn parse_header_length(size: i32) -> usize {
 pub fn parse_serialize_type(size: i32) -> crate::Result<SerializeType> {
     let code = (size >> 24) as u8;
     match SerializeType::value_of(code) {
-        None => Err(Error::NotSupportSerializeType(code)),
+        None => Err(RemotingError::NotSupportSerializeType(code)),
         Some(value) => Ok(value),
     }
 }

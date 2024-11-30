@@ -24,9 +24,9 @@ use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
 
-use crate::error::Error;
 use crate::protocol::remoting_command::RemotingCommand;
 use crate::protocol::LanguageCode;
+use crate::remoting_error::RemotingError;
 use crate::Result;
 
 pub struct RocketMQSerializable;
@@ -63,7 +63,7 @@ impl RocketMQSerializable {
         }
 
         if len > limit {
-            return Err(Error::DecodingError(len, limit));
+            return Err(RemotingError::DecodingError(len, limit));
         }
 
         let bytes = buf.split_to(len).freeze(); // Convert BytesMut to Bytes
@@ -223,7 +223,7 @@ impl RocketMQSerializable {
         let ext_fields_length = header_buffer.get_i32() as usize;
         let ext = if ext_fields_length > 0 {
             if ext_fields_length > header_len {
-                return Err(Error::DecodingError(ext_fields_length, header_len));
+                return Err(RemotingError::DecodingError(ext_fields_length, header_len));
             }
             Self::map_deserialize(header_buffer, ext_fields_length)?
         } else {

@@ -24,7 +24,6 @@ use crate::clients::rocketmq_default_impl::RocketmqDefaultClient;
 use crate::clients::RemotingClient;
 use crate::code::request_code::RequestCode;
 use crate::code::response_code::ResponseCode;
-use crate::error::Error::RpcException;
 use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::header::get_earliest_msg_storetime_response_header::GetEarliestMsgStoretimeResponseHeader;
 use crate::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader;
@@ -34,6 +33,7 @@ use crate::protocol::header::pull_message_response_header::PullMessageResponseHe
 use crate::protocol::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader;
 use crate::protocol::header::search_offset_response_header::SearchOffsetResponseHeader;
 use crate::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetResponseHeader;
+use crate::remoting_error::RemotingError::RpcError;
 use crate::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
 use crate::rpc::client_metadata::ClientMetadata;
 use crate::rpc::rpc_client::RpcClient;
@@ -71,7 +71,7 @@ impl RpcClientImpl {
 
     fn get_broker_addr_by_name_or_exception(&self, broker_name: &str) -> Result<CheetahString> {
         match self.client_metadata.find_master_broker_addr(broker_name) {
-            None => Err(RpcException(
+            None => Err(RpcError(
                 From::from(ResponseCode::SystemError),
                 format!("cannot find addr for broker {}", broker_name),
             )),
@@ -107,12 +107,12 @@ impl RpcClientImpl {
                         RpcResponse::new(response.code(), Box::new(response_header), body);
                     Ok(rpc_response)
                 }
-                _ => Ok(RpcResponse::new_exception(Some(RpcException(
+                _ => Ok(RpcResponse::new_exception(Some(RpcError(
                     response.code(),
                     "unexpected remote response code".to_string(),
                 )))),
             },
-            Err(_error) => Err(RpcException(
+            Err(_error) => Err(RpcError(
                 From::from(ResponseCode::SystemError),
                 format!("process failed. addr: {}. Request", addr),
             )),
@@ -144,12 +144,12 @@ impl RpcClientImpl {
                         RpcResponse::new(response.code(), Box::new(response_header), body);
                     Ok(rpc_response)
                 }
-                _ => Ok(RpcResponse::new_exception(Some(RpcException(
+                _ => Ok(RpcResponse::new_exception(Some(RpcError(
                     response.code(),
                     "unknown remote error".to_string(),
                 )))),
             },
-            Err(_error) => Err(RpcException(
+            Err(_error) => Err(RpcError(
                 From::from(ResponseCode::SystemError),
                 format!("process failed. addr: {}. Request", addr),
             )),
@@ -180,12 +180,12 @@ impl RpcClientImpl {
                         RpcResponse::new(response.code(), Box::new(response_header), body);
                     Ok(rpc_response)
                 }
-                _ => Ok(RpcResponse::new_exception(Some(RpcException(
+                _ => Ok(RpcResponse::new_exception(Some(RpcError(
                     response.code(),
                     "unknown remote error".to_string(),
                 )))),
             },
-            Err(_error) => Err(RpcException(
+            Err(_error) => Err(RpcError(
                 From::from(ResponseCode::SystemError),
                 format!("process failed. addr: {}. Request", addr),
             )),
@@ -216,12 +216,12 @@ impl RpcClientImpl {
                         RpcResponse::new(response.code(), Box::new(response_header), body);
                     Ok(rpc_response)
                 }
-                _ => Ok(RpcResponse::new_exception(Some(RpcException(
+                _ => Ok(RpcResponse::new_exception(Some(RpcError(
                     response.code(),
                     "unknown remote error".to_string(),
                 )))),
             },
-            Err(_error) => Err(RpcException(
+            Err(_error) => Err(RpcError(
                 From::from(ResponseCode::SystemError),
                 format!("process failed. addr: {}. Request", addr),
             )),
@@ -252,12 +252,12 @@ impl RpcClientImpl {
                         RpcResponse::new(response.code(), Box::new(response_header), body);
                     Ok(rpc_response)
                 }
-                _ => Ok(RpcResponse::new_exception(Some(RpcException(
+                _ => Ok(RpcResponse::new_exception(Some(RpcError(
                     response.code(),
                     "unknown remote error".to_string(),
                 )))),
             },
-            Err(_error) => Err(RpcException(
+            Err(_error) => Err(RpcError(
                 From::from(ResponseCode::SystemError),
                 format!("process failed. addr: {}. Request", addr),
             )),
@@ -292,12 +292,12 @@ impl RpcClientImpl {
                     let rpc_response = RpcResponse::new_option(response.code(), None);
                     Ok(rpc_response)
                 }
-                _ => Ok(RpcResponse::new_exception(Some(RpcException(
+                _ => Ok(RpcResponse::new_exception(Some(RpcError(
                     response.code(),
                     "unknown remote error".to_string(),
                 )))),
             },
-            Err(_error) => Err(RpcException(
+            Err(_error) => Err(RpcError(
                 From::from(ResponseCode::SystemError),
                 format!("process failed. addr: {}. Request", addr),
             )),
@@ -328,12 +328,12 @@ impl RpcClientImpl {
                         RpcResponse::new(response.code(), Box::new(response_header), body);
                     Ok(rpc_response)
                 }
-                _ => Ok(RpcResponse::new_exception(Some(RpcException(
+                _ => Ok(RpcResponse::new_exception(Some(RpcError(
                     response.code(),
                     "unknown remote error".to_string(),
                 )))),
             },
-            Err(_error) => Err(RpcException(
+            Err(_error) => Err(RpcError(
                 From::from(ResponseCode::SystemError),
                 format!("process failed. addr: {}. Request", addr),
             )),
@@ -360,12 +360,12 @@ impl RpcClientImpl {
                     let rpc_response = RpcResponse::new_option(response.code(), body);
                     Ok(rpc_response)
                 }
-                _ => Ok(RpcResponse::new_exception(Some(RpcException(
+                _ => Ok(RpcResponse::new_exception(Some(RpcError(
                     response.code(),
                     "unknown remote error".to_string(),
                 )))),
             },
-            Err(_error) => Err(RpcException(
+            Err(_error) => Err(RpcError(
                 From::from(ResponseCode::SystemError),
                 format!("process failed. addr: {}. Request", addr),
             )),
@@ -431,7 +431,7 @@ impl RpcClient for RpcClientImpl {
                     .await?
             }
             _ => {
-                return Err(RpcException(
+                return Err(RpcError(
                     From::from(ResponseCode::RequestCodeNotSupported),
                     format!("unknown request code {}", request.code),
                 ))

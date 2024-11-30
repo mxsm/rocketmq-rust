@@ -37,10 +37,10 @@ use tracing::warn;
 use crate::base::response_future::ResponseFuture;
 use crate::code::response_code::ResponseCode;
 use crate::connection::Connection;
-use crate::error::Error;
 use crate::net::channel::Channel;
 use crate::protocol::remoting_command::RemotingCommand;
 use crate::protocol::RemotingCommandType;
+use crate::remoting_error::RemotingError;
 use crate::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 use crate::runtime::processor::RequestProcessor;
 use crate::runtime::RPCHook;
@@ -186,7 +186,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                     Ok(_) =>{},
                     Err(err) => {
                         match err {
-                            Error::Io(io_error) => {
+                            RemotingError::Io(io_error) => {
                                 error!("connection disconnect: {}", io_error);
                                 return Ok(())
                             }
@@ -203,11 +203,11 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
         &mut self,
         oneway_rpc: bool,
         opaque: i32,
-        exception: Option<Error>,
+        exception: Option<RemotingError>,
     ) -> HandleErrorResult {
         if let Some(exception_inner) = exception {
             match exception_inner {
-                Error::AbortProcessException(code, message) => {
+                RemotingError::AbortProcessError(code, message) => {
                     if oneway_rpc {
                         return HandleErrorResult::Continue;
                     }
@@ -218,7 +218,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                             Ok(_) =>{},
                             Err(err) => {
                                 match err {
-                                    Error::Io(io_error) => {
+                                    RemotingError::Io(io_error) => {
                                         error!("send response failed: {}", io_error);
                                         return HandleErrorResult::ReturnMethod;
                                     }
@@ -239,7 +239,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                                 Ok(_) =>{},
                                 Err(err) => {
                                     match err {
-                                        Error::Io(io_error) => {
+                                        RemotingError::Io(io_error) => {
                                             error!("send response failed: {}", io_error);
                                             return HandleErrorResult::ReturnMethod;
                                         }
