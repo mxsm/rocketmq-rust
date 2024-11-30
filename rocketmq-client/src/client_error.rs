@@ -101,6 +101,26 @@ impl MQBrokerErr {
     }
 }
 
+#[macro_export]
+macro_rules! client_broker_err {
+    // Handle errors with a custom ResponseCode and formatted string
+    ($response_code:expr, $error_message:expr, $broker_addr:expr) => {{
+        std::result::Result::Err($crate::client_error::MQClientError::MQClientBrokerError(
+            $crate::client_error::MQBrokerErr::new_with_broker(
+                $response_code as i32,
+                $error_message,
+                $broker_addr,
+            ),
+        ))
+    }};
+    // Handle errors without a ResponseCode, using only the error message
+    ($response_code:expr, $error_message:expr) => {{
+        std::result::Result::Err($crate::client_error::MQClientError::MQClientBrokerError(
+            $crate::client_error::MQBrokerErr::new($response_code as i32, $error_message),
+        ))
+    }};
+}
+
 #[derive(Error, Debug)]
 #[error("{message}")]
 pub struct ClientErr {
@@ -233,6 +253,30 @@ mod tests {
     use crate::client_error;
 
     #[test]
+    fn client_broker_err_with_response_code_and_broker_formats_correctly() {
+        let result: std::result::Result<(), client_error::MQClientError> =
+            client_broker_err!(404, "Error: {}", "127.0.0.1");
+        assert!(result.is_err());
+        if let Err(MQClientError::MQClientBrokerError(err)) = result {
+            assert_eq!(err.response_code(), 404);
+            assert_eq!(err.error_message().unwrap(), "Error: {}");
+            assert_eq!(err.broker_addr().unwrap(), "127.0.0.1");
+        }
+    }
+
+    #[test]
+    fn client_broker_err_with_response_code_formats_correctly() {
+        let result: std::result::Result<(), client_error::MQClientError> =
+            client_broker_err!(404, "Error: not found");
+        assert!(result.is_err());
+        if let Err(MQClientError::MQClientBrokerError(err)) = result {
+            assert_eq!(err.response_code(), 404);
+            assert_eq!(err.error_message().unwrap(), "Error: not found");
+            assert!(err.broker_addr().is_none());
+        }
+    }
+
+    #[test]
     fn request_timeout_err_with_response_code_formats_correctly() {
         let result: std::result::Result<(), client_error::MQClientError> =
             request_timeout_err!(408, "Request timed out");
@@ -240,8 +284,6 @@ mod tests {
         if let Err(MQClientError::RequestTimeoutError(err)) = result {
             assert_eq!(err.response_code(), 408);
             assert_eq!(err.error_message().unwrap(), "Request timed out");
-        } else {
-            panic!("Expected MQClientError::RequestTimeoutError");
         }
     }
 
@@ -252,8 +294,6 @@ mod tests {
         if let Err(MQClientError::RequestTimeoutError(err)) = result {
             assert_eq!(err.response_code(), -1);
             assert_eq!(err.error_message().unwrap(), "Timeout error");
-        } else {
-            panic!("Expected MQClientError::RequestTimeoutError");
         }
     }
 
@@ -265,8 +305,6 @@ mod tests {
         if let Err(MQClientError::RequestTimeoutError(err)) = result {
             assert_eq!(err.response_code(), 504);
             assert_eq!(err.error_message().unwrap(), "Error: Gateway - Timeout");
-        } else {
-            panic!("Expected MQClientError::RequestTimeoutError");
         }
     }
 
@@ -278,8 +316,6 @@ mod tests {
         if let Err(MQClientError::MQClientErr(err)) = result {
             assert_eq!(err.response_code(), 404);
             assert_eq!(err.error_message().unwrap(), "Error: not found");
-        } else {
-            panic!("Expected MQClientError::MQClientErr");
         }
     }
 
@@ -290,8 +326,6 @@ mod tests {
         if let Err(MQClientError::MQClientErr(err)) = result {
             assert_eq!(err.response_code(), -1);
             assert_eq!(err.error_message().unwrap(), "simple error");
-        } else {
-            panic!("Expected MQClientError::MQClientErr");
         }
     }
 
@@ -306,8 +340,6 @@ mod tests {
                 err.error_message().unwrap(),
                 "Error: internal - server error"
             );
-        } else {
-            panic!("Expected MQClientError::MQClientErr");
         }
     }
 
