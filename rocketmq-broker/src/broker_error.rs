@@ -32,7 +32,7 @@ pub enum BrokerError {
     IllegalArgumentError(String),
 
     #[error("Client error: {0}")]
-    ClientError(#[from] rocketmq_client_rust::error::MQClientError),
+    ClientError(#[from] rocketmq_client_rust::client_error::MQClientError),
 }
 
 #[cfg(test)]

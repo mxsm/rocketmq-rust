@@ -51,11 +51,12 @@ use tracing::warn;
 
 use crate::admin::mq_admin_ext_inner::MQAdminExtInner;
 use crate::base::client_config::ClientConfig;
+use crate::client_error::ClientErr;
+use crate::client_error::MQClientError::MQClientErr;
 use crate::consumer::consumer_impl::pull_message_service::PullMessageService;
 use crate::consumer::consumer_impl::re_balance::rebalance_service::RebalanceService;
 use crate::consumer::mq_consumer_inner::MQConsumerInner;
 use crate::consumer::mq_consumer_inner::MQConsumerInnerImpl;
-use crate::error::MQClientError::MQClientErr;
 use crate::implementation::client_remoting_processor::ClientRemotingProcessor;
 use crate::implementation::find_broker_result::FindBrokerResult;
 use crate::implementation::mq_admin_impl::MQAdminImpl;
@@ -329,13 +330,10 @@ impl MQClientInstance {
             ServiceState::Running => {}
             ServiceState::ShutdownAlready => {}
             ServiceState::StartFailed => {
-                return Err(MQClientErr(
-                    -1,
-                    format!(
-                        "The Factory object[{}] has been created before, and failed.",
-                        self.client_id
-                    ),
-                ));
+                return Err(MQClientErr(ClientErr::new(format!(
+                    "The Factory object[{}] has been created before, and failed.",
+                    self.client_id
+                ))));
             }
         }
         Ok(())
@@ -975,8 +973,8 @@ impl MQClientInstance {
                     {
                         Ok(_) => {}
                         Err(e) => match e {
-                            MQClientErr(code, desc) => {
-                                return Err(MQClientErr(code, desc));
+                            MQClientErr(err) => {
+                                return Err(MQClientErr(err));
                             }
                             _ => {
                                 let desc = format!(
@@ -988,7 +986,7 @@ impl MQClientInstance {
                                      the log!",
                                     subscription_data.expression_type
                                 );
-                                return Err(MQClientErr(-1, desc));
+                                return Err(MQClientErr(ClientErr::new(desc)));
                             }
                         },
                     }

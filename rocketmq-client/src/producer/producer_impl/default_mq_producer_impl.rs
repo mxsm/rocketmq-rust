@@ -59,11 +59,13 @@ use tracing::warn;
 
 use crate::base::client_config::ClientConfig;
 use crate::base::validators::Validators;
+use crate::client_error::ClientErr;
+use crate::client_error::MQClientError;
+use crate::client_error::MQClientError::MQClientErr;
+use crate::client_error::MQClientError::RemotingTooMuchRequestError;
+use crate::client_error::MQClientError::RequestTimeoutError;
+use crate::client_error::RequestTimeoutErr;
 use crate::common::client_error_code::ClientErrorCode;
-use crate::error::MQClientError;
-use crate::error::MQClientError::MQClientErr;
-use crate::error::MQClientError::RemotingTooMuchRequestError;
-use crate::error::MQClientError::RequestTimeoutError;
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::hook::check_forbidden_context::CheckForbiddenContext;
 use crate::hook::check_forbidden_hook::CheckForbiddenHook;
@@ -257,24 +259,20 @@ impl DefaultMQProducerImpl {
         Validators::check_message(Some(&msg), self.producer_config.as_ref())?;
 
         if msg.get_topic() != mq.get_topic() {
-            return Err(MQClientError::MQClientErr(
-                -1,
-                format!(
-                    "message topic [{}] is not equal with message queue topic [{}]",
-                    msg.get_topic(),
-                    mq.get_topic()
-                ),
-            ));
+            return Err(MQClientError::MQClientErr(ClientErr::new(format!(
+                "message topic [{}] is not equal with message queue topic [{}]",
+                msg.get_topic(),
+                mq.get_topic()
+            ))));
         }
         let cost_time = begin_start_time.elapsed().as_millis() as u64;
         if timeout < cost_time {
-            return Err(MQClientError::RequestTimeoutError(
-                -1,
+            return Err(MQClientError::RequestTimeoutError(RequestTimeoutErr::new(
                 format!(
                     "send message timeout {}ms is required, but {}ms is given",
                     timeout, cost_time
                 ),
-            ));
+            )));
         }
         self.send_kernel_impl(
             &mut msg,
@@ -428,17 +426,16 @@ impl DefaultMQProducerImpl {
                         )
                         .await;
                 }
-                return Err(MQClientError::MQClientErr(
-                    -1,
-                    "select message queue return null.".to_string(),
-                ));
+                return Err(MQClientError::MQClientErr(ClientErr::new(
+                    "select message queue return null.",
+                )));
             }
         }
         self.validate_name_server_setting()?;
-        Err(MQClientError::MQClientErr(
-            -1,
-            format!("No route info for this topic, {}", msg.get_topic()),
-        ))
+        Err(MQClientError::MQClientErr(ClientErr::new(format!(
+            "No route info for this topic, {}",
+            msg.get_topic()
+        ))))
     }
 
     #[inline]
@@ -468,14 +465,11 @@ impl DefaultMQProducerImpl {
             if msg.get_topic() != mq.get_topic() {
                 send_callback_inner.as_ref().unwrap()(
                     None,
-                    Some(&MQClientError::MQClientErr(
-                        -1,
-                        format!(
-                            "message topic [{}] is not equal with message queue topic [{}]",
-                            msg.get_topic(),
-                            mq.get_topic()
-                        ),
-                    )),
+                    Some(&MQClientError::MQClientErr(ClientErr::new(format!(
+                        "message topic [{}] is not equal with message queue topic [{}]",
+                        msg.get_topic(),
+                        mq.get_topic()
+                    )))),
                 );
                 return;
             }
@@ -778,7 +772,7 @@ impl DefaultMQProducerImpl {
                                 };
                             }
                             Err(err) => match err {
-                                MQClientError::MQClientErr(_, _) => {
+                                MQClientError::MQClientErr(_) => {
                                     end_timestamp = Instant::now();
                                     let elapsed =
                                         (end_timestamp - begin_timestamp_prev).as_millis() as u64;
@@ -801,7 +795,7 @@ impl DefaultMQProducerImpl {
                                     exception = Some(err);
                                     continue;
                                 }
-                                MQClientError::MQBrokerError(code, _, _) => {
+                                MQClientError::MQClientBrokerError(ref er) => {
                                     end_timestamp = Instant::now();
                                     let elapsed =
                                         (end_timestamp - begin_timestamp_prev).as_millis() as u64;
@@ -812,7 +806,11 @@ impl DefaultMQProducerImpl {
                                         false,
                                     )
                                     .await;
-                                    if self.producer_config.retry_response_codes().contains(&code) {
+                                    if self
+                                        .producer_config
+                                        .retry_response_codes()
+                                        .contains(&er.response_code())
+                                    {
                                         exception = Some(err);
                                         continue;
                                     } else {
@@ -877,48 +875,60 @@ impl DefaultMQProducerImpl {
 
                 return if let Some(err) = exception {
                     match err {
-                        MQClientError::MQClientErr(_, _) => Err(MQClientErr(
-                            ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION,
-                            info,
-                        )),
-                        RemotingTooMuchRequestError(_) => Err(MQClientErr(
-                            ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION,
-                            info,
-                        )),
-                        MQClientError::MQBrokerError(_, _, _) => Err(MQClientErr(
-                            ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION,
-                            info,
-                        )),
-                        MQClientError::RequestTimeoutError(_, _) => Err(MQClientErr(
-                            ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION,
-                            info,
-                        )),
-                        MQClientError::OffsetNotFoundError(_, _, _) => Err(MQClientErr(
-                            ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION,
-                            info,
-                        )),
-                        MQClientError::RemotingError(_) => Err(MQClientErr(
-                            ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION,
-                            info,
-                        )),
+                        MQClientError::MQClientErr(_) => {
+                            Err(MQClientErr(ClientErr::new_with_code(
+                                ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION,
+                                info,
+                            )))
+                        }
+                        RemotingTooMuchRequestError(_) => {
+                            Err(MQClientErr(ClientErr::new_with_code(
+                                ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION,
+                                info,
+                            )))
+                        }
+                        MQClientError::MQClientBrokerError(_) => {
+                            Err(MQClientErr(ClientErr::new_with_code(
+                                ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION,
+                                info,
+                            )))
+                        }
+                        MQClientError::RequestTimeoutError(_) => {
+                            Err(MQClientErr(ClientErr::new_with_code(
+                                ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION,
+                                info,
+                            )))
+                        }
+                        MQClientError::OffsetNotFoundError(_, _, _) => {
+                            Err(MQClientErr(ClientErr::new_with_code(
+                                ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION,
+                                info,
+                            )))
+                        }
+                        MQClientError::RemotingError(_) => {
+                            Err(MQClientErr(ClientErr::new_with_code(
+                                ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION,
+                                info,
+                            )))
+                        }
                         _ => {
                             unimplemented!("not support error type");
                         }
                     }
                 } else {
-                    Err(MQClientErr(-1, info))
+                    Err(MQClientErr(ClientErr::new(info)))
                 };
             }
         }
         self.validate_name_server_setting()?;
-        Err(MQClientErr(
+        Err(MQClientErr(ClientErr::new_with_code(
             ClientErrorCode::NOT_FOUND_TOPIC_EXCEPTION,
             format!(
                 "No route info of this topic:{},{}",
                 topic,
                 FAQUrl::suggest_todo(FAQUrl::NO_TOPIC_ROUTE_INFO)
             ),
-        ))
+        )))
     }
 
     #[inline]
@@ -977,10 +987,10 @@ impl DefaultMQProducerImpl {
         }
 
         if broker_addr.is_none() {
-            return Err(MQClientError::MQClientErr(
-                -1,
-                format!("The broker[{}] not exist", broker_name,),
-            ));
+            return Err(MQClientError::MQClientErr(ClientErr::new(format!(
+                "The broker[{}] not exist",
+                broker_name,
+            ))));
         }
         let mut broker_addr = broker_addr.unwrap();
         broker_addr = mix_all::broker_vip_channel(
@@ -1274,13 +1284,13 @@ impl DefaultMQProducerImpl {
             .get_mq_client_api_impl();
         let ns_list = binding.get_name_server_address_list();
         if ns_list.is_empty() {
-            return Err(MQClientError::MQClientErr(
+            return Err(MQClientError::MQClientErr(ClientErr::new_with_code(
                 ClientErrorCode::NO_NAME_SERVER_EXCEPTION,
                 format!(
                     "No name remoting_server address, please set it. {}",
                     FAQUrl::suggest_todo(FAQUrl::NAME_SERVER_ADDR_NOT_EXIST_URL)
                 ),
-            ));
+            )));
         }
         Ok(())
     }
@@ -1328,14 +1338,11 @@ impl DefaultMQProducerImpl {
 
     fn make_sure_state_ok(&self) -> Result<()> {
         if self.service_state != ServiceState::Running {
-            return Err(MQClientError::MQClientErr(
-                -1,
-                format!(
-                    "The producer service state not OK, {:?} {}",
-                    self.service_state,
-                    FAQUrl::suggest_todo(FAQUrl::CLIENT_SERVICE_NOT_OK)
-                ),
-            ));
+            return Err(MQClientError::MQClientErr(ClientErr::new(format!(
+                "The producer service state not OK, {:?} {}",
+                self.service_state,
+                FAQUrl::suggest_todo(FAQUrl::CLIENT_SERVICE_NOT_OK)
+            ))));
         }
         Ok(())
     }
@@ -1385,17 +1392,15 @@ impl DefaultMQProducerImpl {
                 if let Some(message_queue) = message_queue {
                     return Ok(message_queue);
                 }
-                return Err(MQClientError::MQClientErr(
-                    -1,
-                    "select message queue return None.".to_string(),
-                ));
+                return Err(MQClientError::MQClientErr(ClientErr::new(
+                    "select message queue return None.",
+                )));
             }
         }
         self.validate_name_server_setting();
-        Err(MQClientErr(
-            -1,
-            "select message queue return null.".to_string(),
-        ))
+        Err(MQClientErr(ClientErr::new(
+            "select message queue return null.",
+        )))
     }
 
     pub async fn send_with_selector_timeout<M, T>(
@@ -1475,8 +1480,9 @@ impl DefaultMQProducerImpl {
             if let Some(error) = err {
                 request_response_future_inner.set_send_request_ok(false);
                 request_response_future_inner.put_response_message(None);
-                request_response_future_inner
-                    .set_cause(Box::new(MQClientError::MQClientErr(-1, error.to_string())));
+                request_response_future_inner.set_cause(Box::new(MQClientError::MQClientErr(
+                    ClientErr::new(error.to_string()),
+                )));
             }
         };
         let topic = msg.get_topic().clone();
@@ -1540,8 +1546,9 @@ impl DefaultMQProducerImpl {
                 return;
             }
             if let Some(error) = err {
-                request_response_future
-                    .set_cause(Box::new(MQClientError::MQClientErr(-1, error.to_string())));
+                request_response_future.set_cause(Box::new(MQClientError::MQClientErr(
+                    ClientErr::new(error.to_string()),
+                )));
                 Self::request_fail(correlation_id.as_str());
             }
         };
@@ -1593,8 +1600,9 @@ impl DefaultMQProducerImpl {
             if let Some(error) = err {
                 request_response_future_inner.set_send_request_ok(false);
                 request_response_future_inner.put_response_message(None);
-                request_response_future_inner
-                    .set_cause(Box::new(MQClientError::MQClientErr(-1, error.to_string())));
+                request_response_future_inner.set_cause(Box::new(MQClientError::MQClientErr(
+                    ClientErr::new(error.to_string()),
+                )));
             }
         };
         let topic = msg.get_topic().clone();
@@ -1651,8 +1659,9 @@ impl DefaultMQProducerImpl {
                 return;
             }
             if let Some(error) = err {
-                request_response_future
-                    .set_cause(Box::new(MQClientError::MQClientErr(-1, error.to_string())));
+                request_response_future.set_cause(Box::new(MQClientError::MQClientErr(
+                    ClientErr::new(error.to_string()),
+                )));
                 Self::request_fail(correlation_id.as_str());
             }
         };
@@ -1702,8 +1711,9 @@ impl DefaultMQProducerImpl {
                 return;
             }
             if let Some(error) = err {
-                request_response_future
-                    .set_cause(Box::new(MQClientError::MQClientErr(-1, error.to_string())));
+                request_response_future.set_cause(Box::new(MQClientError::MQClientErr(
+                    ClientErr::new(error.to_string()),
+                )));
                 Self::request_fail(correlation_id.as_str());
             }
         };
@@ -1759,8 +1769,9 @@ impl DefaultMQProducerImpl {
             if let Some(error) = err {
                 //request_response_future_inner.set_send_request_ok(false);
                 request_response_future_inner.put_response_message(None);
-                request_response_future_inner
-                    .set_cause(Box::new(MQClientError::MQClientErr(-1, error.to_string())));
+                request_response_future_inner.set_cause(Box::new(MQClientError::MQClientErr(
+                    ClientErr::new(error.to_string()),
+                )));
             }
         };
         let topic = msg.get_topic().clone();
@@ -1797,24 +1808,21 @@ impl DefaultMQProducerImpl {
         if let Some(response_message) = response_message {
             Ok(response_message)
         } else if request_response_future.is_send_request_ok().await {
-            Err(RequestTimeoutError(
+            Err(RequestTimeoutError(RequestTimeoutErr::new_with_code(
                 ClientErrorCode::REQUEST_TIMEOUT_EXCEPTION,
                 format!(
                     "send request message to <{}> OK, but wait reply message timeout, {} ms.",
                     topic, timeout
                 ),
-            ))
+            )))
         } else {
-            Err(MQClientErr(
-                -1,
-                format!(
-                    "send request message to <{}> fail, {}",
-                    topic,
-                    request_response_future
-                        .get_cause()
-                        .map_or("".to_string(), |cause| { cause.to_string() })
-                ),
-            ))
+            Err(MQClientErr(ClientErr::new(format!(
+                "send request message to <{}> fail, {}",
+                topic,
+                request_response_future
+                    .get_cause()
+                    .map_or("".to_string(), |cause| { cause.to_string() })
+            ))))
         }
     }
 
@@ -1889,10 +1897,10 @@ impl DefaultMQProducerImpl {
         );
         let result = self.send(&mut msg).await;
         if let Err(e) = result {
-            return Err(MQClientErr(
-                -1,
-                format!("send message in transaction error, {}", e),
-            ));
+            return Err(MQClientErr(ClientErr::new(format!(
+                "send message in transaction error, {}",
+                e
+            ))));
         }
         let send_result = result.unwrap().expect("send result is none");
         let local_transaction_state = match send_result.send_status {
@@ -2246,15 +2254,12 @@ impl DefaultMQProducerImpl {
                     .await;
                 if !register_ok {
                     self.service_state = ServiceState::CreateJust;
-                    return Err(MQClientError::MQClientErr(
-                        -1,
-                        format!(
-                            "The producer group[{}] has been created before, specify another name \
-                             please. {}",
-                            self.producer_config.producer_group(),
-                            FAQUrl::suggest_todo(FAQUrl::GROUP_NAME_DUPLICATE_URL)
-                        ),
-                    ));
+                    return Err(MQClientError::MQClientErr(ClientErr::new(format!(
+                        "The producer group[{}] has been created before, specify another name \
+                         please. {}",
+                        self.producer_config.producer_group(),
+                        FAQUrl::suggest_todo(FAQUrl::GROUP_NAME_DUPLICATE_URL)
+                    ))));
                 }
                 if start_factory {
                     let cloned = self.client_instance.as_mut().cloned().unwrap();
@@ -2267,26 +2272,21 @@ impl DefaultMQProducerImpl {
                 self.service_state = ServiceState::Running;
             }
             ServiceState::Running => {
-                return Err(MQClientError::MQClientErr(
-                    -1,
-                    "The producer service state is Running".to_string(),
-                ));
+                return Err(MQClientError::MQClientErr(ClientErr::new(
+                    "The producer service state is Running",
+                )));
             }
             ServiceState::ShutdownAlready => {
-                return Err(MQClientError::MQClientErr(
-                    -1,
-                    "The producer service state is ShutdownAlready".to_string(),
-                ));
+                return Err(MQClientError::MQClientErr(ClientErr::new(
+                    "The producer service state is ShutdownAlready",
+                )));
             }
             ServiceState::StartFailed => {
-                return Err(MQClientError::MQClientErr(
-                    -1,
-                    format!(
-                        "The producer service state not OK, maybe started once,{:?},{}",
-                        self.service_state,
-                        FAQUrl::suggest_todo(FAQUrl::CLIENT_SERVICE_NOT_OK)
-                    ),
-                ));
+                return Err(MQClientError::MQClientErr(ClientErr::new(format!(
+                    "The producer service state not OK, maybe started once,{:?},{}",
+                    self.service_state,
+                    FAQUrl::suggest_todo(FAQUrl::CLIENT_SERVICE_NOT_OK)
+                ))));
             }
         }
         Ok(())
@@ -2304,14 +2304,11 @@ impl DefaultMQProducerImpl {
     fn check_config(&self) -> Result<()> {
         Validators::check_group(self.producer_config.producer_group())?;
         if self.producer_config.producer_group() == DEFAULT_PRODUCER_GROUP {
-            return Err(MQClientError::MQClientErr(
-                -1,
-                format!(
-                    "The specified group name[{}] is equal to default group, please specify \
-                     another one.",
-                    DEFAULT_PRODUCER_GROUP
-                ),
-            ));
+            return Err(MQClientError::MQClientErr(ClientErr::new(format!(
+                "The specified group name[{}] is equal to default group, please specify another \
+                 one.",
+                DEFAULT_PRODUCER_GROUP
+            ))));
         }
         Ok(())
     }

@@ -19,7 +19,7 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum ToolsError {
     #[error("MQ client error occurred. {0}")]
-    MQClientError(#[from] rocketmq_client_rust::error::MQClientError),
+    MQClientError(#[from] rocketmq_client_rust::client_error::MQClientError),
     #[error("MQ broker error occurred.")]
     MQBrokerError,
     #[error("Remoting timeout.")]

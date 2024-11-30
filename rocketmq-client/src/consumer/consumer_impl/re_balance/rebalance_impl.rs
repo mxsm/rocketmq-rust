@@ -36,12 +36,12 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
+use crate::client_error::MQClientError;
 use crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
 use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
 use crate::consumer::consumer_impl::process_queue::ProcessQueue;
 use crate::consumer::consumer_impl::pull_request::PullRequest;
 use crate::consumer::consumer_impl::re_balance::Rebalance;
-use crate::error::MQClientError;
 use crate::factory::mq_client_instance::MQClientInstance;
 
 const TIMEOUT_CHECK_TIMES: u32 = 3;
@@ -164,7 +164,7 @@ where
                     return true;
                 }
                 Err(e) => match e {
-                    MQClientError::RequestTimeoutError(_, _) => {}
+                    MQClientError::RequestTimeoutError(_) => {}
                     _ => {
                         error!("tryQueryAssignment error {}.", e);
                         let mut topic_client_rebalance = self.topic_client_rebalance.write().await;
