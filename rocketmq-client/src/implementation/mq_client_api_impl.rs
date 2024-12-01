@@ -84,11 +84,9 @@ use tracing::error;
 use tracing::warn;
 
 use crate::base::client_config::ClientConfig;
-use crate::client_error::ClientErr;
 use crate::client_error::MQBrokerErr;
 use crate::client_error::MQClientError;
 use crate::client_error::MQClientError::MQClientBrokerError;
-use crate::client_error::MQClientError::MQClientErr;
 use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
 use crate::consumer::pull_callback::PullCallback;
 use crate::consumer::pull_result::PullResult;
@@ -97,6 +95,7 @@ use crate::factory::mq_client_instance::MQClientInstance;
 use crate::hook::send_message_context::SendMessageContext;
 use crate::implementation::client_remoting_processor::ClientRemotingProcessor;
 use crate::implementation::communication_mode::CommunicationMode;
+use crate::mq_client_err;
 use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl;
 use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
 use crate::producer::send_callback::SendMessageCallback;
@@ -254,16 +253,16 @@ impl MQClientAPIImpl {
                         }
                     }
                     _ => {
-                        return Err(MQClientError::MQClientErr(ClientErr::new_with_code(
+                        return mq_client_err!(
                             code,
-                            result.remark().cloned().unwrap_or_default().to_string(),
-                        )))
+                            result.remark().cloned().unwrap_or_default().to_string()
+                        )
                     }
                 }
-                Err(MQClientError::MQClientErr(ClientErr::new_with_code(
+                mq_client_err!(
                     code,
-                    result.remark().cloned().unwrap_or_default().to_string(),
-                )))
+                    result.remark().cloned().unwrap_or_default().to_string()
+                )
             }
             Err(err) => Err(MQClientError::RemotingError(err)),
         }
@@ -723,10 +722,10 @@ impl MQClientAPIImpl {
             )
             .await?;
         if ResponseCode::from(response.code()) != ResponseCode::Success {
-            return Err(MQClientError::MQClientErr(ClientErr::new_with_code(
+            return mq_client_err!(
                 response.code(),
-                response.remark().map_or("".to_string(), |s| s.to_string()),
-            )));
+                response.remark().map_or("".to_string(), |s| s.to_string())
+            );
         }
         Ok(())
     }
@@ -762,9 +761,9 @@ impl MQClientAPIImpl {
                 if let Some(body) = response.body() {
                     return match GetConsumerListByGroupResponseBody::decode(body) {
                         Ok(value) => Ok(value.consumer_id_list),
-                        Err(e) => Err(MQClientError::MQClientErr(ClientErr::new(
-                            response.remark().map_or("".to_string(), |s| s.to_string()),
-                        ))),
+                        Err(e) => mq_client_err!(response
+                            .remark()
+                            .map_or("".to_string(), |s| s.to_string())),
                     };
                 }
             }
@@ -1261,10 +1260,10 @@ impl MQClientAPIImpl {
             )
             .await?;
         if ResponseCode::from(response.code()) != ResponseCode::Success {
-            return Err(MQClientErr(ClientErr::new_with_code(
+            return mq_client_err!(
                 response.code(),
-                response.remark().cloned().unwrap_or_default().to_string(),
-            )));
+                response.remark().cloned().unwrap_or_default().to_string()
+            );
         }
         Ok(())
     }

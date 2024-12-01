@@ -36,8 +36,6 @@ use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
 use rocketmq_rust::ArcMut;
 
-use crate::client_error::ClientErr;
-use crate::client_error::MQClientError::MQClientErr;
 use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
 use crate::consumer::pull_callback::PullCallback;
 use crate::consumer::pull_status::PullStatus;
@@ -46,6 +44,7 @@ use crate::hook::filter_message_context::FilterMessageContext;
 use crate::hook::filter_message_hook::FilterMessageHook;
 use crate::implementation::communication_mode::CommunicationMode;
 use crate::implementation::mq_client_api_impl::MQClientAPIImpl;
+use crate::mq_client_err;
 use crate::Result;
 
 #[derive(Clone)]
@@ -300,13 +299,13 @@ impl PullAPIWrapper {
                 if !ExpressionType::is_tag_type(Some(expression_type.as_str()))
                     && find_broker_result.broker_version < RocketMqVersion::V410Snapshot.into()
                 {
-                    return Err(MQClientErr(ClientErr::new(format!(
+                    return mq_client_err!(format!(
                         "The broker[{}],[{}] does not support consumer to filter message by \
                          tag[{}]",
                         mq.get_broker_name(),
                         find_broker_result.broker_version,
                         expression_type
-                    ))));
+                    ));
                 }
             }
 
@@ -361,10 +360,7 @@ impl PullAPIWrapper {
             )
             .await
         } else {
-            Err(MQClientErr(ClientErr::new(format!(
-                "The broker[{}] not exist",
-                mq.get_broker_name(),
-            ))))
+            mq_client_err!(format!("The broker[{}] not exist", mq.get_broker_name(),))
         }
     }
 
@@ -381,17 +377,17 @@ impl PullAPIWrapper {
             .get(broker_addr);
         if let Some(vec) = vec {
             return vec.get(random_num() as usize % vec.len()).map_or(
-                Err(MQClientErr(ClientErr::new(format!(
+                mq_client_err!(format!(
                     "Find Filter Server Failed, Broker Addr: {},topic:{}",
                     broker_addr, topic
-                )))),
+                )),
                 |v| Ok(v.clone()),
             );
         }
-        Err(MQClientErr(ClientErr::new(format!(
+        mq_client_err!(format!(
             "Find Filter Server Failed, Broker Addr: {},topic:{}",
             broker_addr, topic
-        ))))
+        ))
     }
 }
 

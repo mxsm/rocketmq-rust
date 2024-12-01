@@ -83,6 +83,7 @@ use crate::hook::consume_message_hook::ConsumeMessageHook;
 use crate::hook::filter_message_hook::FilterMessageHook;
 use crate::implementation::communication_mode::CommunicationMode;
 use crate::implementation::mq_client_manager::MQClientManager;
+use crate::mq_client_err;
 use crate::producer::mq_producer::MQProducer;
 use crate::Result;
 
@@ -354,21 +355,17 @@ impl DefaultMQPushConsumerImpl {
                 *self.service_state = ServiceState::Running;
             }
             ServiceState::Running => {
-                return Err(MQClientError::MQClientErr(ClientErr::new(
-                    "The PushConsumer service state is Running",
-                )));
+                return mq_client_err!("The PushConsumer service state is Running");
             }
             ServiceState::ShutdownAlready => {
-                return Err(MQClientError::MQClientErr(ClientErr::new(
-                    "The PushConsumer service state is ShutdownAlready",
-                )));
+                return mq_client_err!("The PushConsumer service state is ShutdownAlready");
             }
             ServiceState::StartFailed => {
-                return Err(MQClientError::MQClientErr(ClientErr::new(format!(
+                return mq_client_err!(format!(
                     "The PushConsumer service state not OK, maybe started once,{:?},{}",
                     *self.service_state,
                     FAQUrl::suggest_todo(FAQUrl::CLIENT_SERVICE_NOT_OK)
-                ))));
+                ));
             }
         }
         self.update_topic_subscribe_info_when_subscription_changed()
@@ -448,18 +445,18 @@ impl DefaultMQPushConsumerImpl {
     fn check_config(&mut self) -> Result<()> {
         Validators::check_group(self.consumer_config.consumer_group.as_str())?;
         if self.consumer_config.consumer_group.is_empty() {
-            return Err(MQClientError::MQClientErr(ClientErr::new(format!(
+            return mq_client_err!(format!(
                 "consumer_group is empty, {}",
                 FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
-            ))));
+            ));
         }
 
         if self.consumer_config.consumer_group == DEFAULT_CONSUMER_GROUP {
-            return Err(MQClientError::MQClientErr(ClientErr::new(format!(
+            return mq_client_err!(format!(
                 "consumer_group can not equal {} please specify another one.{}",
                 DEFAULT_CONSUMER_GROUP,
                 FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
-            ))));
+            ));
         }
 
         if self
@@ -467,17 +464,17 @@ impl DefaultMQPushConsumerImpl {
             .allocate_message_queue_strategy
             .is_none()
         {
-            return Err(MQClientError::MQClientErr(ClientErr::new(format!(
+            return mq_client_err!(format!(
                 "allocate_message_queue_strategy is null{}",
                 FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
-            ))));
+            ));
         }
 
         if self.consumer_config.message_listener.is_none() {
-            return Err(MQClientError::MQClientErr(ClientErr::new(format!(
+            return mq_client_err!(format!(
                 "messageListener is null{}",
                 FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
-            ))));
+            ));
         }
 
         if self
@@ -495,120 +492,120 @@ impl DefaultMQPushConsumerImpl {
                 .message_listener_concurrently
                 .is_none()
         {
-            return Err(MQClientError::MQClientErr(ClientErr::new(format!(
+            return mq_client_err!(format!(
                 "messageListener must be instanceof MessageListenerOrderly or \
                  MessageListenerConcurrently{}",
                 FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
-            ))));
+            ));
         }
 
         let consume_thread_min = self.consumer_config.consume_thread_min;
         let consume_thread_max = self.consumer_config.consume_thread_max;
         if !(1..=1000).contains(&consume_thread_min) {
-            return Err(MQClientError::MQClientErr(ClientErr::new(format!(
+            return mq_client_err!(format!(
                 "consumeThreadMin Out of range [1, 1000]{}",
                 FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
-            ))));
+            ));
         }
         if !(1..=1000).contains(&consume_thread_max) {
-            return Err(MQClientError::MQClientErr(ClientErr::new(format!(
+            return mq_client_err!(format!(
                 "consumeThreadMax Out of range [1, 1000]{}",
                 FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
-            ))));
+            ));
         }
         if consume_thread_min > consume_thread_max {
-            return Err(MQClientError::MQClientErr(ClientErr::new(format!(
+            return mq_client_err!(format!(
                 "consumeThreadMin ({}) is larger than consumeThreadMax ({})",
                 consume_thread_min, consume_thread_max
-            ))));
+            ));
         }
 
         if self.consumer_config.consume_concurrently_max_span < 1
             || self.consumer_config.consume_concurrently_max_span > 65535
         {
-            return Err(MQClientError::MQClientErr(ClientErr::new(format!(
+            return mq_client_err!(format!(
                 "consumeConcurrentlyMaxSpan Out of range [1, 65535]{}",
                 FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
-            ))));
+            ));
         }
 
         if self.consumer_config.pull_threshold_for_queue < 1
             || self.consumer_config.pull_threshold_for_queue > 65535
         {
-            return Err(MQClientError::MQClientErr(ClientErr::new(format!(
+            return mq_client_err!(format!(
                 "pullThresholdForQueue Out of range [1, 65535]{}",
                 FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
-            ))));
+            ));
         }
 
         if self.consumer_config.pull_threshold_for_topic != -1
             && (self.consumer_config.pull_threshold_for_topic < 1
                 || self.consumer_config.pull_threshold_for_topic > 6553500)
         {
-            return Err(MQClientError::MQClientErr(ClientErr::new(format!(
+            return mq_client_err!(format!(
                 "pullThresholdForTopic Out of range [1, 65535]{}",
                 FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
-            ))));
+            ));
         }
 
         if self.consumer_config.pull_threshold_size_for_queue < 1
             || self.consumer_config.pull_threshold_size_for_queue > 1024
         {
-            return Err(MQClientError::MQClientErr(ClientErr::new(format!(
+            return mq_client_err!(format!(
                 "pullThresholdSizeForQueue Out of range [1, 1024]{}",
                 FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
-            ))));
+            ));
         }
 
         if self.consumer_config.pull_threshold_size_for_topic != -1
             && (self.consumer_config.pull_threshold_size_for_topic < 1
                 || self.consumer_config.pull_threshold_size_for_topic > 102400)
         {
-            return Err(MQClientError::MQClientErr(ClientErr::new(format!(
+            return mq_client_err!(format!(
                 "pullThresholdSizeForTopic Out of range [1, 102400]{}",
                 FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
-            ))));
+            ));
         }
 
         if self.consumer_config.pull_interval > 65535 {
-            return Err(MQClientError::MQClientErr(ClientErr::new(format!(
+            return mq_client_err!(format!(
                 "pullInterval Out of range [0, 65535]{}",
                 FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
-            ))));
+            ));
         }
 
         if self.consumer_config.consume_message_batch_max_size < 1
             || self.consumer_config.consume_message_batch_max_size > 1024
         {
-            return Err(MQClientError::MQClientErr(ClientErr::new(format!(
+            return mq_client_err!(format!(
                 "consumeMessageBatchMaxSize Out of range [1, 1024]{}",
                 FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
-            ))));
+            ));
         }
 
         if self.consumer_config.pull_batch_size < 1 || self.consumer_config.pull_batch_size > 1024 {
-            return Err(MQClientError::MQClientErr(ClientErr::new(format!(
+            return mq_client_err!(format!(
                 "pullBatchSize Out of range [1, 1024]{}",
                 FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
-            ))));
+            ));
         }
 
         if self.consumer_config.pop_invisible_time < MIN_POP_INVISIBLE_TIME
             || self.consumer_config.pop_invisible_time > MAX_POP_INVISIBLE_TIME
         {
-            return Err(MQClientError::MQClientErr(ClientErr::new(format!(
+            return mq_client_err!(format!(
                 "popInvisibleTime Out of range [{}, {}]{}",
                 MIN_POP_INVISIBLE_TIME,
                 MAX_POP_INVISIBLE_TIME,
                 FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
-            ))));
+            ));
         }
 
         if self.consumer_config.pop_batch_nums < 1 || self.consumer_config.pop_batch_nums > 32 {
-            return Err(MQClientError::MQClientErr(ClientErr::new(format!(
+            return mq_client_err!(format!(
                 "popBatchNums Out of range [1, 32]{}",
                 FAQUrl::suggest_todo(FAQUrl::CLIENT_PARAMETER_CHECK_URL)
-            ))));
+            ));
         }
 
         Ok(())
@@ -673,10 +670,7 @@ impl DefaultMQPushConsumerImpl {
     ) -> Result<()> {
         let subscription_data = FilterAPI::build_subscription_data(&topic, &sub_expression);
         if let Err(e) = subscription_data {
-            return Err(MQClientError::MQClientErr(ClientErr::new(format!(
-                "buildSubscriptionData exception, {}",
-                e
-            ))));
+            return mq_client_err!(format!("buildSubscriptionData exception, {}", e));
         }
         let subscription_data = subscription_data.unwrap();
         self.rebalance_impl
@@ -974,11 +968,11 @@ impl DefaultMQPushConsumerImpl {
 
     fn make_sure_state_ok(&self) -> Result<()> {
         if *self.service_state != ServiceState::Running {
-            return Err(MQClientError::MQClientErr(ClientErr::new(format!(
+            return mq_client_err!(format!(
                 "The consumer service state not OK, {},{}",
                 *self.service_state,
                 FAQUrl::suggest_todo(FAQUrl::CLIENT_SERVICE_NOT_OK)
-            ))));
+            ));
         }
         Ok(())
     }

@@ -39,8 +39,6 @@ use tracing::info;
 use tracing::warn;
 
 use crate::base::client_config::ClientConfig;
-use crate::client_error::ClientErr;
-use crate::client_error::MQClientError;
 use crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
 use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
@@ -52,6 +50,7 @@ use crate::consumer::consumer_impl::re_balance::Rebalance;
 use crate::consumer::default_mq_push_consumer::ConsumerConfig;
 use crate::consumer::store::read_offset_type::ReadOffsetType;
 use crate::factory::mq_client_instance::MQClientInstance;
+use crate::mq_client_err;
 use crate::Result;
 
 static UNLOCK_DELAY_TIME_MILLS: Lazy<u64> = Lazy::new(|| {
@@ -273,9 +272,7 @@ impl Rebalance for RebalancePushImpl {
             .unwrap()
             .upgrade();
         if default_mqpush_consumer_impl.is_none() {
-            return Err(MQClientError::MQClientErr(ClientErr::new(
-                "default_mqpush_consumer_impl is none",
-            )));
+            return mq_client_err!("default_mqpush_consumer_impl is none");
         }
         let mut default_mqpush_consumer_impl = default_mqpush_consumer_impl.unwrap();
         let offset_store = default_mqpush_consumer_impl.offset_store.as_mut().unwrap();
@@ -306,10 +303,10 @@ impl Rebalance for RebalancePushImpl {
                             .await?
                     }
                 } else {
-                    return Err(MQClientError::MQClientErr(ClientErr::new_with_code(
-                        ResponseCode::QueryNotFound.into(),
-                        "Failed to query consume offset from offset store",
-                    )));
+                    return mq_client_err!(
+                        ResponseCode::QueryNotFound as i32,
+                        "Failed to query consume offset from offset store"
+                    );
                 }
             }
             ConsumeFromWhere::ConsumeFromFirstOffset => {
@@ -321,10 +318,10 @@ impl Rebalance for RebalancePushImpl {
                 } else if -1 == last_offset {
                     0
                 } else {
-                    return Err(MQClientError::MQClientErr(ClientErr::new_with_code(
-                        ResponseCode::QueryNotFound.into(),
-                        "Failed to query consume offset from offset store",
-                    )));
+                    return mq_client_err!(
+                        ResponseCode::QueryNotFound as i32,
+                        "Failed to query consume offset from offset store"
+                    );
                 }
             }
             ConsumeFromWhere::ConsumeFromTimestamp => {
@@ -362,18 +359,18 @@ impl Rebalance for RebalancePushImpl {
                             .await?
                     }
                 } else {
-                    return Err(MQClientError::MQClientErr(ClientErr::new_with_code(
-                        ResponseCode::QueryNotFound.into(),
-                        "Failed to query consume offset from offset store",
-                    )));
+                    return mq_client_err!(
+                        ResponseCode::QueryNotFound as i32,
+                        "Failed to query consume offset from offset store"
+                    );
                 }
             }
         };
         if result < 0 {
-            return Err(MQClientError::MQClientErr(ClientErr::new_with_code(
-                ResponseCode::SystemError.into(),
-                "Failed to query consume offset from offset store",
-            )));
+            return mq_client_err!(
+                ResponseCode::SystemError as i32,
+                "Failed to query consume offset from offset store"
+            );
         }
         Ok(result)
     }
