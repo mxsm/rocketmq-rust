@@ -26,7 +26,7 @@ use crate::request_header_custom::request_header_codec_inner;
 mod remoting_serializable;
 mod request_header_custom;
 
-#[proc_macro_derive(RequestHeaderCodec)]
+#[proc_macro_derive(RequestHeaderCodec, attributes(required))]
 pub fn request_header_codec(input: TokenStream) -> TokenStream {
     request_header_codec_inner(input)
 }

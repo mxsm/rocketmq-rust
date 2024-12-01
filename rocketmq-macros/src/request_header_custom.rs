@@ -47,6 +47,16 @@ pub(super) fn request_header_codec_inner(
          .iter()
          .map(|field| {
              let field_name = field.ident.as_ref().unwrap();
+             let mut required = false;
+
+             for attr in &field.attrs {
+                 if let Some(ident) = attr.path().get_ident() {
+                     if ident == "required" {
+                         required = true;
+                     }
+                 }
+             }
+
              //Determining whether it is an Option type or a direct data type
              //This will lead to different ways of processing in the future.
              let has_option = is_option_type(&field.ty);
@@ -119,25 +129,71 @@ pub(super) fn request_header_codec_inner(
                      if let Some(value) = has_option {
                          let type_name = get_type_name(value);
                          if type_name == "CheetahString" || type_name == "String" {
-                             quote! {
+                             if required {
+                                 quote! {
+                                  #field_name: Some(
+                                         map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name))
+                                         .cloned()
+                                         .ok_or(Self::Error::RemotingCommandError(
+                                            format!("Missing {} field", Self::#static_name),
+                                         ))?
+                                     ),
+                                }
+                             }else {
+                                 quote! {
                                   #field_name: map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).cloned(),
-                              }
+                                 }
+                             }
                          } else {
-                             quote! {
-                                  #field_name:map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).and_then(|s| s.parse::<#value>().ok()),
+                             if required {
+                                 quote! {
+                                  #field_name: Some(
+                                         map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).ok_or(Self::Error::RemotingCommandError(
+                                            format!("Missing {} field", Self::#static_name),
+                                        ))?
+                                        .parse::<#value>()
+                                        .map_err(|_| Self::Error::RemotingCommandError(format!("Parse {} field error", Self::#static_name)))?
+                                     ),
                               }
+                             }else {
+                                 quote! {
+                                  #field_name:map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).and_then(|s| s.parse::<#value>().ok()),
+                                 }
+                             }
                          }
                      } else {
                          let types = &field.ty;
                          let type_name = get_type_name(types);
                          if type_name == "CheetahString" || type_name == "String" {
-                             quote! {
+                             if required {
+                                 quote! {
+                                  #field_name: map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name))
+                                         .cloned()
+                                         .ok_or(Self::Error::RemotingCommandError(
+                                            format!("Missing {} field", Self::#static_name),
+                                         ))?,
+                              }
+                             } else {
+                                 quote! {
                                   #field_name: map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).cloned().unwrap_or_default(),
-                              }
+                                }
+                             }
+
                          } else {
-                             quote! {
-                                #field_name:map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).and_then(|s| s.parse::<#types>().ok()).unwrap_or_default(),
-                              }
+                             if required {
+                                 quote! {
+                                    #field_name:map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).ok_or(Self::Error::RemotingCommandError(
+                                        format!("Missing {} field", Self::#static_name),
+                                    ))?
+                                    .parse::<#types>()
+                                    .map_err(|_| Self::Error::RemotingCommandError(format!("Parse {} field error", Self::#static_name)))?,
+                                  }
+                             } else {
+                                 quote! {
+                                    #field_name:map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).and_then(|s| s.parse::<#types>().ok()).unwrap_or_default(),
+                                  }
+                             }
+
                          }
                      }
                  )
