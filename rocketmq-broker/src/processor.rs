@@ -117,9 +117,10 @@ where
             | RequestCode::SendMessageV2
             | RequestCode::SendBatchMessage
             | RequestCode::ConsumerSendMsgBack => {
-                self.send_message_processor
+                return self
+                    .send_message_processor
                     .process_request(channel, ctx, request_code, request)
-                    .await
+                    .await;
             }
 
             RequestCode::SendReplyMessage | RequestCode::SendReplyMessageV2 => {

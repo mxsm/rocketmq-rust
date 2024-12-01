@@ -35,6 +35,32 @@ pub enum BrokerError {
     ClientError(#[from] rocketmq_client_rust::client_error::MQClientError),
 }
 
+impl From<BrokerError> for rocketmq_remoting::remoting_error::RemotingError {
+    fn from(value: BrokerError) -> Self {
+        match value {
+            BrokerError::BrokerRemotingError(e) => e,
+            BrokerError::BrokerCommonError(e) => {
+                rocketmq_remoting::remoting_error::RemotingError::RemoteError(format!("{}", e))
+            }
+            BrokerError::MQBrokerError(code, message, _) => {
+                rocketmq_remoting::remoting_error::RemotingError::RemoteError(format!(
+                    "CODE:{}, Message:{}",
+                    code, message
+                ))
+            }
+            BrokerError::IllegalArgumentError(e) => {
+                rocketmq_remoting::remoting_error::RemotingError::RemoteError(e)
+            }
+            BrokerError::ClientError(e) => {
+                rocketmq_remoting::remoting_error::RemotingError::RemotingCommandError(format!(
+                    "{}",
+                    e
+                ))
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rocketmq_remoting::remoting_error::RemotingError;

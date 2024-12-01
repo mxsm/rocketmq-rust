@@ -110,13 +110,13 @@ where
         ctx: ConnectionHandlerContext,
         request_code: RequestCode,
         request: RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_remoting::Result<Option<RemotingCommand>> {
         match request_code {
             RequestCode::ConsumerSendMsgBack => {
                 //need to optimize
                 self.inner
                     .consumer_send_msg_back(&channel, &ctx, &request)
-                    .unwrap()
+                    .map_err(Into::into)
             }
             _ => {
                 let mut request_header = parse_request_header(&request, request_code).unwrap(); //need to optimize
@@ -129,7 +129,7 @@ where
                     &mapping_context,
                 );
                 if let Some(rewrite_result) = rewrite_result {
-                    return Some(rewrite_result);
+                    return Ok(Some(rewrite_result));
                 }
 
                 let send_message_context =
@@ -145,28 +145,30 @@ where
                     };
                 if request_header.batch.is_none() || !request_header.batch.unwrap() {
                     //handle single message
-                    self.send_message(
-                        &channel,
-                        &ctx,
-                        request,
-                        send_message_context,
-                        request_header,
-                        mapping_context,
-                        execute_send_message_hook_after,
-                    )
-                    .await
+                    Ok(self
+                        .send_message(
+                            &channel,
+                            &ctx,
+                            request,
+                            send_message_context,
+                            request_header,
+                            mapping_context,
+                            execute_send_message_hook_after,
+                        )
+                        .await)
                 } else {
                     //handle batch message
-                    self.send_batch_message(
-                        &channel,
-                        &ctx,
-                        request,
-                        send_message_context,
-                        request_header,
-                        mapping_context,
-                        execute_send_message_hook_after,
-                    )
-                    .await
+                    Ok(self
+                        .send_batch_message(
+                            &channel,
+                            &ctx,
+                            request,
+                            send_message_context,
+                            request_header,
+                            mapping_context,
+                            execute_send_message_hook_after,
+                        )
+                        .await)
                 }
             }
         }
