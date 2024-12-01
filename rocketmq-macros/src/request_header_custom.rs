@@ -66,7 +66,7 @@ pub(super) fn request_header_codec_inner(
                 field_name.span(),
             );
             let type_name = if let Some(value) = &has_option {
-                get_type_name(*value)
+                get_type_name(value)
             } else {
                 get_type_name(&field.ty)
             };
@@ -75,7 +75,7 @@ pub(super) fn request_header_codec_inner(
                       const #static_name: &'static str = #camel_case_name;
                   },
                 (
-                    if let Some(_) = has_option {
+                    if has_option.is_some()  {
                         if type_name == "CheetahString" {
                             quote! {
                                   if let Some(ref value) = self.#field_name {
@@ -104,8 +104,7 @@ pub(super) fn request_header_codec_inner(
                                    }
                               }
                         }
-                    } else {
-                        if type_name == "CheetahString" {
+                    } else if type_name == "CheetahString" {
                             quote! {
                                      map.insert (
                                           cheetah_string::CheetahString::from_static_str(Self::#static_name),
@@ -127,7 +126,7 @@ pub(super) fn request_header_codec_inner(
                                  );
                               }
                         }
-                    },
+                    ,
                     // build FromMap impl
                     if let Some(value) = has_option {
                         if type_name == "CheetahString" || type_name == "String" {
