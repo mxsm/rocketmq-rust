@@ -106,6 +106,7 @@ impl DefaultRequestProcessor {
                 self.get_has_unit_sub_un_unit_topic_list(request)
             }
             RequestCode::UpdateNamesrvConfig => self.update_config(request),
+            RequestCode::GetNamesrvConfig => self.get_config(request),
             _ => RemotingCommand::create_response_command_with_code(
                 RemotingSysResponseCode::SystemError,
             ),
@@ -486,6 +487,23 @@ impl DefaultRequestProcessor {
 
         RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::Success)
             .set_remark(CheetahString::empty())
+    }
+
+    fn get_config(&mut self, _request: RemotingCommand) -> RemotingCommand {
+        let config = self.kvconfig_manager.get_namesrv_config();
+        match config.get_all_configs_format_string() {
+            Ok(content) => {
+                let response = RemotingCommand::create_response_command_with_code_remark(
+                    RemotingSysResponseCode::Success,
+                    CheetahString::empty(),
+                );
+                response.set_body(content.into_bytes())
+            }
+            Err(e) => RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::SystemError,
+                format!("UnsupportedEncodingException " + e),
+            ),
+        }
     }
 }
 
