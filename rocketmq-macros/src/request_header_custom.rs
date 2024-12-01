@@ -65,13 +65,17 @@ pub(super) fn request_header_codec_inner(
                 &format!("{}", field_name).to_ascii_uppercase(),
                 field_name.span(),
             );
+            let type_name = if let Some(value) = &has_option {
+                get_type_name(value)
+            } else {
+                get_type_name(&field.ty)
+            };
             (
                 quote! {
                       const #static_name: &'static str = #camel_case_name;
                   },
                 (
-                    if let Some(value) = has_option {
-                        let type_name = get_type_name(value);
+                    if has_option.is_some()  {
                         if type_name == "CheetahString" {
                             quote! {
                                   if let Some(ref value) = self.#field_name {
@@ -92,7 +96,7 @@ pub(super) fn request_header_codec_inner(
                               }
                         } else {
                             quote! {
-                                  if let Some(value) = self.#field_name {
+                                  if let Some(ref value) = self.#field_name {
                                      map.insert (
                                          cheetah_string::CheetahString::from_static_str(Self::#static_name),
                                          cheetah_string::CheetahString::from_string(value.to_string())
@@ -100,9 +104,7 @@ pub(super) fn request_header_codec_inner(
                                    }
                               }
                         }
-                    } else {
-                        let type_name = get_type_name(&field.ty);
-                        if type_name == "CheetahString" {
+                    } else if type_name == "CheetahString" {
                             quote! {
                                      map.insert (
                                           cheetah_string::CheetahString::from_static_str(Self::#static_name),
@@ -124,10 +126,9 @@ pub(super) fn request_header_codec_inner(
                                  );
                               }
                         }
-                    },
+                    ,
                     // build FromMap impl
                     if let Some(value) = has_option {
-                        let type_name = get_type_name(value);
                         if type_name == "CheetahString" || type_name == "String" {
                             if required {
                                 quote! {
@@ -161,7 +162,6 @@ pub(super) fn request_header_codec_inner(
                         }
                     } else {
                         let types = &field.ty;
-                        let type_name = get_type_name(types);
                         if type_name == "CheetahString" || type_name == "String" {
                             if required {
                                 quote! {
