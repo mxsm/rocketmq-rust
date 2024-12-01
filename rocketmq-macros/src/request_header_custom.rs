@@ -44,36 +44,36 @@ pub(super) fn request_header_codec_inner(
 
     //build CommandCustomHeader impl
     let (static_fields, (to_maps, from_map)): (Vec<_>, (Vec<_>, Vec<_>)) = fields
-         .iter()
-         .map(|field| {
-             let field_name = field.ident.as_ref().unwrap();
-             let mut required = false;
+        .iter()
+        .map(|field| {
+            let field_name = field.ident.as_ref().unwrap();
+            let mut required = false;
 
-             for attr in &field.attrs {
-                 if let Some(ident) = attr.path().get_ident() {
-                     if ident == "required" {
-                         required = true;
-                     }
-                 }
-             }
+            for attr in &field.attrs {
+                if let Some(ident) = attr.path().get_ident() {
+                    if ident == "required" {
+                        required = true;
+                    }
+                }
+            }
 
-             //Determining whether it is an Option type or a direct data type
-             //This will lead to different ways of processing in the future.
-             let has_option = is_option_type(&field.ty);
-             let camel_case_name = snake_to_camel_case(&format!("{}", field_name));
-             let static_name = Ident::new(
-                 &format!("{}", field_name).to_ascii_uppercase(),
-                 field_name.span(),
-             );
-             (
-                 quote! {
+            //Determining whether it is an Option type or a direct data type
+            //This will lead to different ways of processing in the future.
+            let has_option = is_option_type(&field.ty);
+            let camel_case_name = snake_to_camel_case(&format!("{}", field_name));
+            let static_name = Ident::new(
+                &format!("{}", field_name).to_ascii_uppercase(),
+                field_name.span(),
+            );
+            (
+                quote! {
                       const #static_name: &'static str = #camel_case_name;
                   },
-                 (
-                     if let Some(value) = has_option {
-                         let type_name = get_type_name(value);
-                         if type_name == "CheetahString" {
-                             quote! {
+                (
+                    if let Some(value) = has_option {
+                        let type_name = get_type_name(value);
+                        if type_name == "CheetahString" {
+                            quote! {
                                   if let Some(ref value) = self.#field_name {
                                      map.insert (
                                           cheetah_string::CheetahString::from_static_str(Self::#static_name),
@@ -81,8 +81,8 @@ pub(super) fn request_header_codec_inner(
                                      );
                                    }
                               }
-                         } else if type_name == "String" {
-                             quote! {
+                        } else if type_name == "String" {
+                            quote! {
                                   if let Some(ref value) = self.#field_name {
                                      map.insert (
                                           cheetah_string::CheetahString::from_static_str(Self::#static_name),
@@ -90,8 +90,8 @@ pub(super) fn request_header_codec_inner(
                                      );
                                    }
                               }
-                         } else {
-                             quote! {
+                        } else {
+                            quote! {
                                   if let Some(value) = self.#field_name {
                                      map.insert (
                                          cheetah_string::CheetahString::from_static_str(Self::#static_name),
@@ -99,38 +99,38 @@ pub(super) fn request_header_codec_inner(
                                      );
                                    }
                               }
-                         }
-                     } else {
-                         let type_name = get_type_name(&field.ty);
-                         if type_name == "CheetahString" {
-                             quote! {
+                        }
+                    } else {
+                        let type_name = get_type_name(&field.ty);
+                        if type_name == "CheetahString" {
+                            quote! {
                                      map.insert (
                                           cheetah_string::CheetahString::from_static_str(Self::#static_name),
                                           self.#field_name.clone()
                                      );
                               }
-                         } else if type_name == "String" {
-                             quote! {
+                        } else if type_name == "String" {
+                            quote! {
                                      map.insert (
                                           cheetah_string::CheetahString::from_static_str(Self::#static_name),
                                           cheetah_string::CheetahString::from_string(self.#field_name.clone())
                                      );
                               }
-                         } else {
-                             quote! {
+                        } else {
+                            quote! {
                                   map.insert (
                                      cheetah_string::CheetahString::from_static_str(Self::#static_name),
                                      cheetah_string::CheetahString::from_string(self.#field_name.to_string())
                                  );
                               }
-                         }
-                     },
-                     // build FromMap impl
-                     if let Some(value) = has_option {
-                         let type_name = get_type_name(value);
-                         if type_name == "CheetahString" || type_name == "String" {
-                             if required {
-                                 quote! {
+                        }
+                    },
+                    // build FromMap impl
+                    if let Some(value) = has_option {
+                        let type_name = get_type_name(value);
+                        if type_name == "CheetahString" || type_name == "String" {
+                            if required {
+                                quote! {
                                   #field_name: Some(
                                          map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name))
                                          .cloned()
@@ -139,14 +139,13 @@ pub(super) fn request_header_codec_inner(
                                          ))?
                                      ),
                                 }
-                             }else {
-                                 quote! {
+                            } else {
+                                quote! {
                                   #field_name: map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).cloned(),
                                  }
-                             }
-                         } else {
-                             if required {
-                                 quote! {
+                            }
+                        } else if required {
+                            quote! {
                                   #field_name: Some(
                                          map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).ok_or(Self::Error::RemotingCommandError(
                                             format!("Missing {} field", Self::#static_name),
@@ -155,51 +154,47 @@ pub(super) fn request_header_codec_inner(
                                         .map_err(|_| Self::Error::RemotingCommandError(format!("Parse {} field error", Self::#static_name)))?
                                      ),
                               }
-                             }else {
-                                 quote! {
+                        } else {
+                            quote! {
                                   #field_name:map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).and_then(|s| s.parse::<#value>().ok()),
                                  }
-                             }
-                         }
-                     } else {
-                         let types = &field.ty;
-                         let type_name = get_type_name(types);
-                         if type_name == "CheetahString" || type_name == "String" {
-                             if required {
-                                 quote! {
+                        }
+                    } else {
+                        let types = &field.ty;
+                        let type_name = get_type_name(types);
+                        if type_name == "CheetahString" || type_name == "String" {
+                            if required {
+                                quote! {
                                   #field_name: map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name))
                                          .cloned()
                                          .ok_or(Self::Error::RemotingCommandError(
                                             format!("Missing {} field", Self::#static_name),
                                          ))?,
                               }
-                             } else {
-                                 quote! {
+                            } else {
+                                quote! {
                                   #field_name: map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).cloned().unwrap_or_default(),
                                 }
-                             }
-
-                         } else {
-                             if required {
-                                 quote! {
+                            }
+                        } else if required {
+                                quote! {
                                     #field_name:map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).ok_or(Self::Error::RemotingCommandError(
                                         format!("Missing {} field", Self::#static_name),
                                     ))?
                                     .parse::<#types>()
                                     .map_err(|_| Self::Error::RemotingCommandError(format!("Parse {} field error", Self::#static_name)))?,
                                   }
-                             } else {
-                                 quote! {
+                            } else {
+                                quote! {
                                     #field_name:map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).and_then(|s| s.parse::<#types>().ok()).unwrap_or_default(),
                                   }
-                             }
+                            }
 
-                         }
-                     }
-                 )
-             )
-         })
-         .unzip();
+                    }
+                )
+            )
+        })
+        .unzip();
     let expanded: TokenStream2 = quote! {
         impl #struct_name {
             #(#static_fields)*
