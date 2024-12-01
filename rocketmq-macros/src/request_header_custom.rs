@@ -24,7 +24,9 @@ use syn::Fields;
 use syn::Ident;
 
 use crate::get_type_name;
+use crate::has_serde_flatten_attribute;
 use crate::is_option_type;
+use crate::is_struct_type;
 use crate::snake_to_camel_case;
 
 pub(super) fn request_header_codec_inner(
@@ -48,7 +50,8 @@ pub(super) fn request_header_codec_inner(
         .map(|field| {
             let field_name = field.ident.as_ref().unwrap();
             let mut required = false;
-
+            let is_struct_type = is_struct_type(&field.ty);
+            let has_serde_flatten_attribute = has_serde_flatten_attribute(field);
             for attr in &field.attrs {
                 if let Some(ident) = attr.path().get_ident() {
                     if ident == "required" {
@@ -75,7 +78,7 @@ pub(super) fn request_header_codec_inner(
                       const #static_name: &'static str = #camel_case_name;
                   },
                 (
-                    if has_option.is_some()  {
+                    if has_option.is_some() {
                         if type_name == "CheetahString" {
                             quote! {
                                   if let Some(ref value) = self.#field_name {
@@ -94,6 +97,14 @@ pub(super) fn request_header_codec_inner(
                                      );
                                    }
                               }
+                        } else if is_struct_type && has_serde_flatten_attribute {
+                            quote! {
+                                  if let Some(ref value) = self.#field_name {
+                                        if let Some(value) = value.to_map() {
+                                            map.extend(value);
+                                        }
+                                  }
+                              }
                         } else {
                             quote! {
                                   if let Some(ref value) = self.#field_name {
@@ -105,27 +116,33 @@ pub(super) fn request_header_codec_inner(
                               }
                         }
                     } else if type_name == "CheetahString" {
-                            quote! {
+                        quote! {
                                      map.insert (
                                           cheetah_string::CheetahString::from_static_str(Self::#static_name),
                                           self.#field_name.clone()
                                      );
                               }
-                        } else if type_name == "String" {
-                            quote! {
+                    } else if type_name == "String" {
+                        quote! {
                                      map.insert (
                                           cheetah_string::CheetahString::from_static_str(Self::#static_name),
                                           cheetah_string::CheetahString::from_string(self.#field_name.clone())
                                      );
                               }
-                        } else {
-                            quote! {
+                    } else if is_struct_type && has_serde_flatten_attribute {
+                        quote! {
+                            if let Some(value) = self.#field_name.to_map() {
+                                map.extend(value);
+                            }
+                        }
+                    } else {
+                        quote! {
                                   map.insert (
                                      cheetah_string::CheetahString::from_static_str(Self::#static_name),
                                      cheetah_string::CheetahString::from_string(self.#field_name.to_string())
                                  );
                               }
-                        }
+                    }
                     ,
                     // build FromMap impl
                     if let Some(value) = has_option {
@@ -144,6 +161,11 @@ pub(super) fn request_header_codec_inner(
                                 quote! {
                                   #field_name: map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).cloned(),
                                  }
+                            }
+                        } else if is_struct_type && has_serde_flatten_attribute {
+                            let type_ = has_option.unwrap();
+                            quote! {
+                                #field_name: Some(<#type_ as crate::protocol::command_custom_header::FromMap>::from(map)?),
                             }
                         } else if required {
                             quote! {
@@ -176,20 +198,24 @@ pub(super) fn request_header_codec_inner(
                                   #field_name: map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).cloned().unwrap_or_default(),
                                 }
                             }
+                        }else if is_struct_type && has_serde_flatten_attribute {
+                            let type_ = &field.ty;
+                            quote! {
+                                #field_name: <#type_ as crate::protocol::command_custom_header::FromMap>::from(map)?,
+                            }
                         } else if required {
-                                quote! {
+                            quote! {
                                     #field_name:map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).ok_or(Self::Error::RemotingCommandError(
                                         format!("Missing {} field", Self::#static_name),
                                     ))?
                                     .parse::<#types>()
                                     .map_err(|_| Self::Error::RemotingCommandError(format!("Parse {} field error", Self::#static_name)))?,
                                   }
-                            } else {
-                                quote! {
+                        } else {
+                            quote! {
                                     #field_name:map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).and_then(|s| s.parse::<#types>().ok()).unwrap_or_default(),
                                   }
-                            }
-
+                        }
                     }
                 )
             )
