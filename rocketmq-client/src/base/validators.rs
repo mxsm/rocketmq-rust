@@ -24,8 +24,7 @@ use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_remoting::code::response_code::ResponseCode;
 
-use crate::client_error::ClientErr;
-use crate::client_error::MQClientError::MQClientErr;
+use crate::mq_client_err;
 use crate::producer::default_mq_producer::ProducerConfig;
 use crate::Result;
 
@@ -37,21 +36,19 @@ impl Validators {
 
     pub fn check_group(group: &str) -> Result<()> {
         if group.trim().is_empty() {
-            return Err(MQClientErr(ClientErr::new("the specified group is blank")));
+            return mq_client_err!("the specified group is blank");
         }
 
         if group.len() > Self::CHARACTER_MAX_LENGTH {
-            return Err(MQClientErr(ClientErr::new(
-                "the specified group is longer than group max length 255.",
-            )));
+            return mq_client_err!("the specified group is longer than group max length 255.");
         }
 
         if TopicValidator::is_topic_or_group_illegal(group) {
-            return Err(MQClientErr(ClientErr::new(format!(
+            return mq_client_err!(format!(
                 "the specified group[{}] contains illegal characters, allowing only \
                  ^[%|a-zA-Z0-9_-]+$",
                 group
-            ))));
+            ));
         }
         Ok(())
     }
@@ -61,38 +58,38 @@ impl Validators {
         M: MessageTrait,
     {
         if msg.is_none() {
-            return Err(MQClientErr(ClientErr::new_with_code(
+            return mq_client_err!(
                 ResponseCode::MessageIllegal as i32,
-                "the message is null".to_string(),
-            )));
+                "the message is null".to_string()
+            );
         }
         let msg = msg.unwrap();
         Self::check_topic(msg.get_topic())?;
         Self::is_not_allowed_send_topic(msg.get_topic())?;
 
         if msg.get_body().is_none() {
-            return Err(MQClientErr(ClientErr::new_with_code(
+            return mq_client_err!(
                 ResponseCode::MessageIllegal as i32,
-                "the message body is null".to_string(),
-            )));
+                "the message body is null".to_string()
+            );
         }
 
         let length = msg.get_body().unwrap().len();
         if length == 0 {
-            return Err(MQClientErr(ClientErr::new_with_code(
+            return mq_client_err!(
                 ResponseCode::MessageIllegal as i32,
-                "the message body length is zero".to_string(),
-            )));
+                "the message body length is zero".to_string()
+            );
         }
 
         if length > producer_config.max_message_size() as usize {
-            return Err(MQClientErr(ClientErr::new_with_code(
+            return mq_client_err!(
                 ResponseCode::MessageIllegal as i32,
                 format!(
                     "the message body size over max value, MAX: {}",
                     producer_config.max_message_size()
-                ),
-            )));
+                )
+            );
         }
 
         let lmq_path = msg.get_user_property(&CheetahString::from_static_str(
@@ -100,14 +97,14 @@ impl Validators {
         ));
         if let Some(value) = lmq_path {
             if value.contains(std::path::MAIN_SEPARATOR) {
-                return Err(MQClientErr(ClientErr::new_with_code(
+                return mq_client_err!(
                     ResponseCode::MessageIllegal as i32,
                     format!(
                         "INNER_MULTI_DISPATCH {} can not contains {} character",
                         value,
                         std::path::MAIN_SEPARATOR
-                    ),
-                )));
+                    )
+                );
             }
         }
 
@@ -116,22 +113,22 @@ impl Validators {
 
     pub fn check_topic(topic: &str) -> Result<()> {
         if topic.trim().is_empty() {
-            return Err(MQClientErr(ClientErr::new("The specified topic is blank")));
+            return mq_client_err!("The specified topic is blank");
         }
 
         if topic.len() > Self::TOPIC_MAX_LENGTH {
-            return Err(MQClientErr(ClientErr::new(format!(
+            return mq_client_err!(format!(
                 "The specified topic is longer than topic max length {}.",
                 Self::TOPIC_MAX_LENGTH
-            ))));
+            ));
         }
 
         if TopicValidator::is_topic_or_group_illegal(topic) {
-            return Err(MQClientErr(ClientErr::new(format!(
+            return mq_client_err!(format!(
                 "The specified topic[{}] contains illegal characters, allowing only \
                  ^[%|a-zA-Z0-9_-]+$",
                 topic
-            ))));
+            ));
         }
 
         Ok(())
@@ -139,20 +136,17 @@ impl Validators {
 
     pub fn is_system_topic(topic: &str) -> Result<()> {
         if TopicValidator::is_system_topic(topic) {
-            return Err(MQClientErr(ClientErr::new(format!(
+            return mq_client_err!(format!(
                 "The topic[{}] is conflict with system topic.",
                 topic
-            ))));
+            ));
         }
         Ok(())
     }
 
     pub fn is_not_allowed_send_topic(topic: &str) -> Result<()> {
         if TopicValidator::is_not_allowed_send_topic(topic) {
-            return Err(MQClientErr(ClientErr::new(format!(
-                "Sending message to topic[{}] is forbidden.",
-                topic
-            ))));
+            return mq_client_err!(format!("Sending message to topic[{}] is forbidden.", topic));
         }
 
         Ok(())
@@ -160,10 +154,10 @@ impl Validators {
 
     pub fn check_topic_config(topic_config: &TopicConfig) -> Result<()> {
         if !PermName::is_valid(topic_config.perm) {
-            return Err(MQClientErr(ClientErr::new_with_code(
+            return mq_client_err!(
                 ResponseCode::NoPermission as i32,
-                format!("topicPermission value: {} is invalid.", topic_config.perm),
-            )));
+                format!("topicPermission value: {} is invalid.", topic_config.perm)
+            );
         }
 
         Ok(())
@@ -172,10 +166,10 @@ impl Validators {
     pub fn check_broker_config(broker_config: &HashMap<String, String>) -> Result<()> {
         if let Some(broker_permission) = broker_config.get("brokerPermission") {
             if !PermName::is_valid(broker_permission.parse().unwrap()) {
-                return Err(MQClientErr(ClientErr::new(format!(
+                return mq_client_err!(format!(
                     "brokerPermission value: {} is invalid.",
                     broker_permission
-                ))));
+                ));
             }
         }
 

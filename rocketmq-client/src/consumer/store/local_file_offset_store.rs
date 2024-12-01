@@ -32,14 +32,13 @@ use tokio::sync::Mutex;
 use tracing::error;
 use tracing::info;
 
-use crate::client_error::ClientErr;
-use crate::client_error::MQClientError;
 use crate::consumer::store::controllable_offset::ControllableOffset;
 use crate::consumer::store::offset_serialize::OffsetSerialize;
 use crate::consumer::store::offset_serialize_wrapper::OffsetSerializeWrapper;
 use crate::consumer::store::offset_store::OffsetStoreTrait;
 use crate::consumer::store::read_offset_type::ReadOffsetType;
 use crate::factory::mq_client_instance::MQClientInstance;
+use crate::mq_client_err;
 use crate::Result;
 
 static LOCAL_OFFSET_STORE_DIR: Lazy<PathBuf> = Lazy::new(|| {
@@ -89,10 +88,7 @@ impl LocalFileOffsetStore {
         } else {
             match OffsetSerialize::decode(content.as_bytes()) {
                 Ok(value) => Ok(Some(value.into())),
-                Err(e) => Err(MQClientError::MQClientErr(ClientErr::new(format!(
-                    "Failed to deserialize local offset: {}",
-                    e
-                )))),
+                Err(e) => mq_client_err!(format!("Failed to deserialize local offset: {}", e)),
             }
         }
     }
@@ -104,10 +100,10 @@ impl LocalFileOffsetStore {
         } else {
             match OffsetSerialize::decode(content.as_bytes()) {
                 Ok(value) => Ok(Some(value.into())),
-                Err(_) => Err(MQClientError::MQClientErr(ClientErr::new(format!(
+                Err(_) => mq_client_err!(format!(
                     "read local offset bak failed, content: {}",
                     content
-                )))),
+                )),
             }
         }
     }

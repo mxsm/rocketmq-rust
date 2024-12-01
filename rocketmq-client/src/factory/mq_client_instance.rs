@@ -51,7 +51,6 @@ use tracing::warn;
 
 use crate::admin::mq_admin_ext_inner::MQAdminExtInner;
 use crate::base::client_config::ClientConfig;
-use crate::client_error::ClientErr;
 use crate::client_error::MQClientError::MQClientErr;
 use crate::consumer::consumer_impl::pull_message_service::PullMessageService;
 use crate::consumer::consumer_impl::re_balance::rebalance_service::RebalanceService;
@@ -61,6 +60,7 @@ use crate::implementation::client_remoting_processor::ClientRemotingProcessor;
 use crate::implementation::find_broker_result::FindBrokerResult;
 use crate::implementation::mq_admin_impl::MQAdminImpl;
 use crate::implementation::mq_client_api_impl::MQClientAPIImpl;
+use crate::mq_client_err;
 use crate::producer::default_mq_producer::DefaultMQProducer;
 use crate::producer::default_mq_producer::ProducerConfig;
 use crate::producer::producer_impl::mq_producer_inner::MQProducerInnerImpl;
@@ -330,10 +330,10 @@ impl MQClientInstance {
             ServiceState::Running => {}
             ServiceState::ShutdownAlready => {}
             ServiceState::StartFailed => {
-                return Err(MQClientErr(ClientErr::new(format!(
+                return mq_client_err!(format!(
                     "The Factory object[{}] has been created before, and failed.",
                     self.client_id
-                ))));
+                ));
             }
         }
         Ok(())
@@ -986,7 +986,7 @@ impl MQClientInstance {
                                      the log!",
                                     subscription_data.expression_type
                                 );
-                                return Err(MQClientErr(ClientErr::new(desc)));
+                                return mq_client_err!(desc);
                             }
                         },
                     }

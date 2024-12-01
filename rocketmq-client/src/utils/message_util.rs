@@ -22,9 +22,8 @@ use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 
-use crate::client_error::ClientErr;
-use crate::client_error::MQClientError::MQClientErr;
 use crate::common::client_error_code::ClientErrorCode;
+use crate::mq_client_err;
 use crate::Result;
 
 pub struct MessageUtil;
@@ -73,13 +72,13 @@ impl MessageUtil {
             }
             Ok(reply_message)
         } else {
-            Err(MQClientErr(ClientErr::new_with_code(
+            mq_client_err!(
                 ClientErrorCode::CREATE_REPLY_MESSAGE_EXCEPTION,
                 format!(
                     "create reply message fail, requestMessage error, property[{}] is null.",
                     MessageConst::PROPERTY_CLUSTER
-                ),
-            )))
+                )
+            )
         }
     }
 

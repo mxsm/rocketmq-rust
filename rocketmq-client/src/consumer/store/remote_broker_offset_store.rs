@@ -31,12 +31,12 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-use crate::client_error::ClientErr;
 use crate::client_error::MQClientError;
 use crate::consumer::store::controllable_offset::ControllableOffset;
 use crate::consumer::store::offset_store::OffsetStoreTrait;
 use crate::consumer::store::read_offset_type::ReadOffsetType;
 use crate::factory::mq_client_instance::MQClientInstance;
+use crate::mq_client_err;
 use crate::Result;
 
 pub struct RemoteBrokerOffsetStore {
@@ -110,10 +110,7 @@ impl RemoteBrokerOffsetStore {
                 )
                 .await
         } else {
-            Err(MQClientError::MQClientErr(ClientErr::new(format!(
-                "broker not found, {}",
-                mq.get_broker_name()
-            ))))
+            mq_client_err!(format!("broker not found, {}", mq.get_broker_name()))
         }
     }
 }
@@ -320,10 +317,7 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
             };
             Ok(())
         } else {
-            Err(MQClientError::MQClientErr(ClientErr::new(format!(
-                "broker not found, {}",
-                mq.get_broker_name()
-            ))))
+            mq_client_err!(format!("broker not found, {}", mq.get_broker_name()))
         }
     }
 }
