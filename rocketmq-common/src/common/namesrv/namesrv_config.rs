@@ -240,9 +240,7 @@ impl NamesrvConfig {
         // Convert the HashMap to a JSON value
         match serde_json::to_string_pretty(&json_map) {
             Ok(json) => Ok(json),
-            Err(err) => {
-                return Err(format!("Failed to serialize NamesrvConfig: {}", err));
-            }
+            Err(err) => Err(format!("Failed to serialize NamesrvConfig: {}", err)),
         }
     }
 
