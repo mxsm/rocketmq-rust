@@ -501,7 +501,7 @@ impl DefaultRequestProcessor {
             }
             Err(e) => RemotingCommand::create_response_command_with_code_remark(
                 ResponseCode::SystemError,
-                format!("UnsupportedEncodingException " + e),
+                format!("UnsupportedEncodingException {}", e),
             ),
         }
     }
