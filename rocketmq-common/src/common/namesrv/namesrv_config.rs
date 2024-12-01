@@ -20,13 +20,12 @@ use std::env;
 
 use cheetah_string::CheetahString;
 use serde::Deserialize;
-use serde::Serialize;
 use serde_json::Value;
 
 use crate::common::mix_all::ROCKETMQ_HOME_ENV;
 use crate::common::mix_all::ROCKETMQ_HOME_PROPERTY;
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct NamesrvConfig {
     #[serde(alias = "rocketmqHome")]
     pub rocketmq_home: String,
