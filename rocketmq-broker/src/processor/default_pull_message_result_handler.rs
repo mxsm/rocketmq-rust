@@ -162,7 +162,7 @@ impl PullMessageResultHandler for DefaultPullMessageResultHandler {
         self.update_broadcast_pulled_offset(
             request_header.topic.as_ref(),
             request_header.consumer_group.as_ref(),
-            request_header.queue_id.unwrap(),
+            request_header.queue_id,
             &request_header,
             &channel,
             Some(&mut response),
@@ -199,7 +199,7 @@ impl PullMessageResultHandler for DefaultPullMessageResultHandler {
                         &get_message_result,
                         request_header.consumer_group.as_str(),
                         request_header.topic.as_str(),
-                        request_header.queue_id.unwrap(),
+                        request_header.queue_id,
                     );
                     if let Some(body) = body {
                         response.set_body_mut_ref(body);
@@ -223,7 +223,7 @@ impl PullMessageResultHandler for DefaultPullMessageResultHandler {
                         polling_time_mills = self.broker_config.short_polling_time_mills;
                     }
                     let topic = request_header.topic.as_str();
-                    let queue_id = request_header.queue_id.unwrap();
+                    let queue_id = request_header.queue_id;
                     let offset = request_header.queue_offset;
 
                     let pull_request = PullRequest::new(
@@ -255,7 +255,7 @@ impl PullMessageResultHandler for DefaultPullMessageResultHandler {
                     let mut mq = MessageQueue::new();
                     mq.set_topic(request_header.topic.clone());
                     mq.set_broker_name(self.broker_config.broker_name.clone());
-                    mq.set_queue_id(request_header.queue_id.unwrap());
+                    mq.set_queue_id(request_header.queue_id);
 
                     let offset_moved_event = OffsetMovedEvent {
                         consumer_group: request_header.consumer_group.to_string(),
@@ -349,7 +349,7 @@ impl DefaultPullMessageResultHandler {
                 .consumer_group
                 .clone_from(&request_header.consumer_group);
             context.topic.clone_from(&request_header.topic);
-            context.queue_id = request_header.queue_id;
+            context.queue_id = Some(request_header.queue_id);
             context.account_auth_type = auth_type;
             context.account_owner_parent = owner_parent;
             context.account_owner_self = owner_self;
@@ -443,7 +443,7 @@ impl DefaultPullMessageResultHandler {
                         request_header.queue_offset,
                         get_message_result.next_begin_offset(),
                         request_header.topic,
-                        request_header.queue_id.unwrap_or(0),
+                        request_header.queue_id,
                         request_header.consumer_group
                     );
                 } else {
@@ -504,7 +504,7 @@ impl DefaultPullMessageResultHandler {
                 "slave redirect pullRequest to master, topic: {}, queueId: {}, consumer group: \
                  {}, next: {}, min: {}, max: {}",
                 request_header.topic,
-                request_header.queue_id.unwrap_or(0),
+                request_header.queue_id,
                 request_header.consumer_group,
                 response_header.next_begin_offset.unwrap(),
                 response_header.min_offset.unwrap(),
@@ -529,7 +529,7 @@ impl DefaultPullMessageResultHandler {
             client_address,
             request_header.consumer_group.as_ref(),
             request_header.topic.as_ref(),
-            request_header.queue_id.unwrap(),
+            request_header.queue_id,
             next_offset,
         );
 
@@ -542,7 +542,7 @@ impl DefaultPullMessageResultHandler {
                 client_address,
                 request_header.consumer_group.as_ref(),
                 request_header.topic.as_ref(),
-                request_header.queue_id.unwrap(),
+                request_header.queue_id,
                 request_header.commit_offset,
             );
         }

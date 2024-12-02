@@ -318,7 +318,7 @@ impl PullAPIWrapper {
             let request_header = PullMessageRequestHeader {
                 consumer_group: self.consumer_group.clone(),
                 topic: CheetahString::from_string(mq.get_topic().to_string()),
-                queue_id: Some(mq.get_queue_id()),
+                queue_id: mq.get_queue_id(),
                 queue_offset: offset,
                 max_msg_nums: max_nums,
                 sys_flag: sys_flag_inner,

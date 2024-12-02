@@ -164,7 +164,7 @@ impl<MS> PullMessageProcessor<MS> {
         let bname = &mapping_item.bname;
         let phy_queue_id = mapping_item.queue_id;
         let phy_queue_offset = mapping_item.compute_physical_queue_offset(global_offset);
-        request_header.queue_id = Some(phy_queue_id);
+        request_header.queue_id = phy_queue_id;
         request_header.queue_offset = phy_queue_offset;
         if mapping_item.check_if_end_offset_decided()
         /* && request_header.max_msg_nums.is_some() */
@@ -471,10 +471,8 @@ where
         {
             return Some(resp);
         }
-        if request_header.queue_id.is_none()
-            || request_header.queue_id.unwrap() < 0
-            || request_header.queue_id.unwrap()
-                >= topic_config.as_ref().unwrap().read_queue_nums as i32
+        if request_header.queue_id < 0
+            || request_header.queue_id >= topic_config.as_ref().unwrap().read_queue_nums as i32
         {
             return Some(
                 response
@@ -482,7 +480,7 @@ where
                     .set_remark(format!(
                         "queueId[{}] is illegal, topic:[{}] topicConfig.readQueueNums:[{}] \
                          consumer:[{}]",
-                        request_header.queue_id.unwrap(),
+                        request_header.queue_id,
                         request_header.topic,
                         topic_config.as_ref().unwrap().read_queue_nums,
                         channel.remote_address()
@@ -711,7 +709,7 @@ where
         let use_reset_offset_feature = self.broker_config.use_server_side_reset_offset;
         let topic = request_header.topic.as_ref();
         let group = request_header.consumer_group.as_ref();
-        let queue_id = request_header.queue_id.unwrap();
+        let queue_id = request_header.queue_id;
         let reset_offset = self
             .consumer_offset_manager
             .query_then_erase_reset_offset(topic, group, queue_id);
