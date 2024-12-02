@@ -389,6 +389,8 @@ mod tests {
 
     use super::*;
     use crate::code::request_code::RequestCode;
+    use crate::protocol::command_custom_header::CommandCustomHeader;
+    use crate::protocol::command_custom_header::FromMap;
     use crate::protocol::remoting_command::RemotingCommand;
 
     #[test]
