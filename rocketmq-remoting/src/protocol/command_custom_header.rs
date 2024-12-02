@@ -71,7 +71,12 @@ pub trait CommandCustomHeader: AsAny {
     /// # Arguments
     ///
     /// * `_fields` - A reference to a `HashMap` that contains the fields to be decoded.
-    fn decode_fast(&mut self, _fields: &HashMap<CheetahString, CheetahString>) {}
+    fn decode_fast(
+        &mut self,
+        _fields: &HashMap<CheetahString, CheetahString>,
+    ) -> crate::Result<()> {
+        Ok(())
+    }
 
     /// Indicates whether the implementing type supports fast codec.
     ///
@@ -81,6 +86,37 @@ pub trait CommandCustomHeader: AsAny {
     /// support fast codec. This can be overridden by implementing types.
     fn support_fast_codec(&self) -> bool {
         false
+    }
+
+    /// Retrieves the value associated with the specified field from the provided map.
+    ///
+    /// # Arguments
+    ///
+    /// * `map` - A reference to a `HashMap` containing `CheetahString` keys and values.
+    /// * `field` - A reference to a `CheetahString` representing the field to retrieve.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(CheetahString)` - If the field is found in the map, returns the associated value.
+    /// * `Err(RemotingError::RemotingCommandError)` - If the field is not found in the map, returns
+    ///   an error indicating the field is required.
+    ///
+    /// # Errors
+    ///
+    /// This function returns a `RemotingError::RemotingCommandError` if the specified field is not
+    /// found in the map.
+    #[inline(always)]
+    fn get_and_check_not_none(
+        &self,
+        map: &HashMap<CheetahString, CheetahString>,
+        field: &CheetahString,
+    ) -> crate::Result<CheetahString> {
+        match map.get(field) {
+            Some(value) => Ok(value.clone()),
+            None => Err(crate::remoting_error::RemotingError::RemotingCommandError(
+                format!("The field {} is required.", field),
+            )),
+        }
     }
 }
 

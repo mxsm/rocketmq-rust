@@ -604,7 +604,7 @@ impl RemotingCommand {
             Some(ref header) => {
                 let mut target = T::default();
                 if target.support_fast_codec() {
-                    target.decode_fast(header);
+                    target.decode_fast(header)?;
                     Ok(target)
                 } else {
                     T::from(header)
