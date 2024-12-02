@@ -17,7 +17,6 @@
 
 use proc_macro::TokenStream;
 use quote::ToTokens;
-use syn::Field;
 use syn::PathArguments;
 use syn::Type;
 use syn::TypePath;
@@ -60,6 +59,20 @@ fn snake_to_camel_case(input: &str) -> String {
     camel_case
 }
 
+/// Determines if a given type is an `Option<T>` and returns the inner type `T`.
+///
+/// This function checks the provided `syn::Type` to see if it represents an `Option<T>`.
+/// If the type is `Option<T>`, it returns a reference to the inner type `T`.
+/// If the type is not `Option<T>`, it returns `None`.
+///
+/// # Arguments
+///
+/// * `ty` - A reference to the `syn::Type` to check.
+///
+/// # Returns
+///
+/// * `Some(&syn::Type)` if the type is `Option<T>`, containing a reference to the inner type `T`.
+/// * `None` if the type is not `Option<T>`.
 fn is_option_type(ty: &Type) -> Option<&Type> {
     match ty {
         Type::Path(path) => {
@@ -78,6 +91,24 @@ fn is_option_type(ty: &Type) -> Option<&Type> {
     }
 }
 
+/// Determines if a given type is a struct, excluding basic types, `String`, `CheetahString`, and
+/// `Option<T>` where `T` is a basic type or string.
+///
+/// This function checks the provided `syn::Type` to see if it represents a struct. It specifically
+/// excludes:
+/// - Basic data types (e.g., `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `f32`, `f64`,
+///   `bool`)
+/// - Standard Rust `String`
+/// - Custom `CheetahString` type
+/// - `Option<T>` where `T` is a basic type or string
+///
+/// # Arguments
+///
+/// * `ty` - A reference to the `syn::Type` to check.
+///
+/// # Returns
+///
+/// * `true` if the type is a struct, otherwise `false`.
 fn is_struct_type(ty: &Type) -> bool {
     // Check if the type is a path (i.e., a named type)
     if let Type::Path(TypePath { path, .. }) = ty {
@@ -113,11 +144,32 @@ fn is_struct_type(ty: &Type) -> bool {
     false
 }
 
-fn is_basic_or_string_type(ty: &Type) -> bool {
-    if let Type::Path(TypePath { path, .. }) = ty {
+/// Determines if a given type is a basic data type, a standard `String`, or a custom
+/// `CheetahString`.
+///
+/// This function checks the provided `Type` to see if it matches one of the following:
+/// - A basic numeric type (e.g., `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `f32`,
+///   `f64`)
+/// - A boolean type (`bool`)
+/// - A standard Rust `String`
+/// - A custom `CheetahString` type
+///
+/// # Arguments
+///
+/// * `ty` - A reference to the `syn::Type` to check.
+///
+/// # Returns
+///
+/// * `true` if the type is a basic data type, `String`, or `CheetahString`, otherwise `false`.
+fn is_basic_or_string_type(ty: &syn::Type) -> bool {
+    // Check if the type is a path (e.g., a named type)
+    if let syn::Type::Path(syn::TypePath { path, .. }) = ty {
+        // Get the last segment of the path, which should be the type name
         if let Some(segment) = path.segments.last() {
+            // Extract the identifier of the last segment
             let segment_ident = &segment.ident;
-            // check if the type is a basic type or a string or a CheetahString
+
+            // Check if the identifier matches any of the basic types, `String`, or `CheetahString`
             return segment_ident == "String"
                 || segment_ident == "CheetahString"
                 || segment_ident == "i8"
@@ -133,15 +185,36 @@ fn is_basic_or_string_type(ty: &Type) -> bool {
                 || segment_ident == "bool";
         }
     }
+
+    // If the type is not a path or does not match any of the expected types, return false
     false
 }
 
-fn has_serde_flatten_attribute(field: &Field) -> bool {
+/// Checks if a given field has the `serde(flatten)` attribute.
+///
+/// This function iterates over all attributes of the provided field and checks
+/// for the presence of the `serde` attribute. If the `serde` attribute is found,
+/// it then looks inside to see if the `flatten` argument is present.
+///
+/// # Arguments
+///
+/// * `field` - A reference to the `syn::Field` to check for the `serde(flatten)` attribute.
+///
+/// # Returns
+///
+/// * `true` if the `serde(flatten)` attribute is found, otherwise `false`.
+fn has_serde_flatten_attribute(field: &syn::Field) -> bool {
+    // Iterate over all attributes of the field
     for attr in &field.attrs {
+        // Check if the attribute is named "serde"
         if let Some(ident) = attr.path().get_ident() {
-            let mut has_serde_flatten_attribute = false;
             if ident == "serde" {
+                // Initialize a flag to determine if `flatten` is found
+                let mut has_serde_flatten_attribute = false;
+
+                // Parse the nested metadata of the `serde` attribute
                 let _ = attr.parse_nested_meta(|meta| {
+                    // Check if any segment within the `serde` path is named "flatten"
                     has_serde_flatten_attribute = meta
                         .path
                         .segments
@@ -149,9 +222,58 @@ fn has_serde_flatten_attribute(field: &Field) -> bool {
                         .any(|segment| segment.ident == "flatten");
                     Ok(())
                 });
+
+                // Return the result immediately if `flatten` is found
+                return has_serde_flatten_attribute;
             }
-            return has_serde_flatten_attribute;
         }
     }
+
+    // Return `false` if no `serde(flatten)` attribute was found
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snake_to_camel_case_converts_snake_case_to_camel_case() {
+        assert_eq!(snake_to_camel_case("hello_world"), "helloWorld");
+    }
+
+    #[test]
+    fn snake_to_camel_case_handles_empty_string() {
+        assert_eq!(snake_to_camel_case(""), "");
+    }
+
+    #[test]
+    fn snake_to_camel_case_handles_single_word() {
+        assert_eq!(snake_to_camel_case("hello"), "hello");
+    }
+
+    #[test]
+    fn snake_to_camel_case_handles_multiple_underscores() {
+        assert_eq!(snake_to_camel_case("hello__world"), "helloWorld");
+    }
+
+    #[test]
+    fn snake_to_camel_case_handles_trailing_underscore() {
+        assert_eq!(snake_to_camel_case("hello_world_"), "helloWorld");
+    }
+
+    #[test]
+    fn snake_to_camel_case_handles_leading_underscore() {
+        assert_eq!(snake_to_camel_case("_hello_world"), "HelloWorld");
+    }
+
+    #[test]
+    fn snake_to_camel_case_handles_consecutive_underscores() {
+        assert_eq!(snake_to_camel_case("hello___world"), "helloWorld");
+    }
+
+    #[test]
+    fn snake_to_camel_case_handles_all_underscores() {
+        assert_eq!(snake_to_camel_case("___"), "");
+    }
 }
