@@ -246,14 +246,14 @@ pub fn rewrite_response_for_static_topic(
     if code != ResponseCode::Success {
         let mut is_revised = false;
         if leader_item.gen == current_item.gen {
-            if request_offset > max_offset.unwrap() {
+            if request_offset > max_offset {
                 if code == ResponseCode::PullOffsetMoved {
                     response_code = ResponseCode::PullOffsetMoved;
                     next_begin_offset = max_offset;
                 } else {
                     response_code = code;
                 }
-            } else if request_offset < min_offset.unwrap() {
+            } else if request_offset < min_offset {
                 next_begin_offset = min_offset;
                 response_code = ResponseCode::PullRetryImmediately;
             } else {
@@ -262,7 +262,7 @@ pub fn rewrite_response_for_static_topic(
         }
 
         if earlist_item.gen == current_item.gen {
-            if request_offset < min_offset.unwrap() {
+            if request_offset < min_offset {
                 /*if code == ResponseCode::PullOffsetMoved {
                     response_code = ResponseCode::PullOffsetMoved;
                     next_begin_offset = min_offset;
@@ -272,13 +272,13 @@ pub fn rewrite_response_for_static_topic(
                 }*/
                 response_code = ResponseCode::PullOffsetMoved;
                 next_begin_offset = min_offset;
-            } else if request_offset >= max_offset.unwrap() {
+            } else if request_offset >= max_offset {
                 if let Some(next_item) =
                     TopicQueueMappingUtils::find_next(mapping_items, Some(current_item), true)
                 {
                     is_revised = true;
-                    next_begin_offset = Some(next_item.start_offset);
-                    min_offset = Some(next_item.start_offset);
+                    next_begin_offset = next_item.start_offset;
+                    min_offset = next_item.start_offset;
                     max_offset = min_offset;
                     response_code = ResponseCode::PullRetryImmediately;
                 } else {
@@ -293,15 +293,15 @@ pub fn rewrite_response_for_static_topic(
             && leader_item.gen != current_item.gen
             && earlist_item.gen != current_item.gen
         {
-            if request_offset < min_offset? {
+            if request_offset < min_offset {
                 next_begin_offset = min_offset;
                 response_code = ResponseCode::PullRetryImmediately;
-            } else if request_offset >= max_offset? {
+            } else if request_offset >= max_offset {
                 if let Some(next_item) =
                     TopicQueueMappingUtils::find_next(mapping_items, Some(current_item), true)
                 {
-                    next_begin_offset = Some(next_item.start_offset);
-                    min_offset = Some(next_item.start_offset);
+                    next_begin_offset = next_item.start_offset;
+                    min_offset = next_item.start_offset;
                     max_offset = min_offset;
                     response_code = ResponseCode::PullRetryImmediately;
                 } else {
@@ -313,26 +313,20 @@ pub fn rewrite_response_for_static_topic(
         }
     }
 
-    if current_item.check_if_end_offset_decided()
-        && next_begin_offset.unwrap() >= current_item.end_offset
-    {
-        next_begin_offset = Some(current_item.end_offset);
+    if current_item.check_if_end_offset_decided() && next_begin_offset >= current_item.end_offset {
+        next_begin_offset = current_item.end_offset;
     }
 
     response_header.next_begin_offset =
-        Some(current_item.compute_static_queue_offset_strictly(next_begin_offset.unwrap()));
-    response_header.min_offset =
-        Some(current_item.compute_static_queue_offset_strictly(
-            min_offset.unwrap().max(current_item.start_offset),
+        current_item.compute_static_queue_offset_strictly(next_begin_offset);
+    response_header.min_offset = current_item
+        .compute_static_queue_offset_strictly(min_offset.max(current_item.start_offset));
+    response_header.max_offset = current_item
+        .compute_static_queue_offset_strictly(max_offset)
+        .max(TopicQueueMappingDetail::compute_max_offset_from_mapping(
+            mapping_detail,
+            mapping_context.global_id,
         ));
-    response_header.max_offset = Some(
-        current_item
-            .compute_static_queue_offset_strictly(max_offset.unwrap())
-            .max(TopicQueueMappingDetail::compute_max_offset_from_mapping(
-                mapping_detail,
-                mapping_context.global_id,
-            )),
-    );
     response_header.offset_delta = Some(current_item.compute_offset_delta());
 
     if code != ResponseCode::Success {

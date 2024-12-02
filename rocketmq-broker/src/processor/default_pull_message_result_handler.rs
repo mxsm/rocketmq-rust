@@ -270,14 +270,13 @@ impl PullMessageResultHandler for DefaultPullMessageResultHandler {
                         request_header.consumer_group,
                         offset_moved_event.offset_request,
                         offset_moved_event.offset_new,
-                        response_header.suggest_which_broker_id.unwrap()
+                        response_header.suggest_which_broker_id
                     );
                 } else {
                     let response_header = response
                         .read_custom_header_mut::<PullMessageResponseHeader>()
                         .unwrap();
-                    response_header.suggest_which_broker_id =
-                        Some(subscription_group_config.broker_id());
+                    response_header.suggest_which_broker_id = subscription_group_config.broker_id();
                     response.set_code_ref(ResponseCode::PullRetryImmediately);
                     warn!(
                         "PULL_OFFSET_MOVED:correction offset. topic={}, groupId={}, \
@@ -421,9 +420,9 @@ impl DefaultPullMessageResultHandler {
     ) {
         let mut response_header = PullMessageResponseHeader::default();
         response.set_remark_mut(format!("{:?}", get_message_result.status()));
-        response_header.next_begin_offset = Some(get_message_result.next_begin_offset());
-        response_header.min_offset = Some(get_message_result.min_offset());
-        response_header.max_offset = Some(get_message_result.max_offset());
+        response_header.next_begin_offset = get_message_result.next_begin_offset();
+        response_header.min_offset = get_message_result.min_offset();
+        response_header.max_offset = get_message_result.max_offset();
         response_header.topic_sys_flag = Some(topic_sys_flag);
         response_header.group_sys_flag = Some(subscription_group_config.group_sys_flag());
 
@@ -488,13 +487,12 @@ impl DefaultPullMessageResultHandler {
         if broker_config.slave_read_enable && !broker_config.is_in_broker_container {
             if get_message_result.suggest_pulling_from_slave() {
                 response_header.suggest_which_broker_id =
-                    Some(subscription_group_config.which_broker_when_consume_slowly());
+                    subscription_group_config.which_broker_when_consume_slowly();
             } else {
-                response_header.suggest_which_broker_id =
-                    Some(subscription_group_config.broker_id());
+                response_header.suggest_which_broker_id = subscription_group_config.broker_id();
             }
         } else {
-            response_header.suggest_which_broker_id = Some(MASTER_ID);
+            response_header.suggest_which_broker_id = MASTER_ID;
         }
 
         if broker_config.broker_identity.broker_id != MASTER_ID
@@ -506,11 +504,11 @@ impl DefaultPullMessageResultHandler {
                 request_header.topic,
                 request_header.queue_id,
                 request_header.consumer_group,
-                response_header.next_begin_offset.unwrap(),
-                response_header.min_offset.unwrap(),
-                response_header.max_offset.unwrap()
+                response_header.next_begin_offset,
+                response_header.min_offset,
+                response_header.max_offset
             );
-            response_header.suggest_which_broker_id = Some(MASTER_ID);
+            response_header.suggest_which_broker_id = MASTER_ID;
             if get_message_result.status() != Some(GetMessageStatus::Found) {
                 response.set_code_ref(ResponseCode::PullRetryImmediately);
             }
