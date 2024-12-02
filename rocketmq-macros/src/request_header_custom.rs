@@ -44,183 +44,208 @@ pub(super) fn request_header_codec_inner(
         _ => return quote! {}.into(),
     };
 
-    //build CommandCustomHeader impl
     let (static_fields, (to_maps, from_map)): (Vec<_>, (Vec<_>, Vec<_>)) = fields
-        .iter()
-        .map(|field| {
-            let field_name = field.ident.as_ref().unwrap();
-            let mut required = false;
-            let is_struct_type = is_struct_type(&field.ty);
-            let has_serde_flatten_attribute = has_serde_flatten_attribute(field);
-            for attr in &field.attrs {
-                if let Some(ident) = attr.path().get_ident() {
-                    if ident == "required" {
-                        required = true;
-                    }
-                }
-            }
+         .iter()
+         .map(|field| {
+             let field_name = field.ident.as_ref().unwrap();
+             let mut required = false;
+             let is_struct_type = is_struct_type(&field.ty);
+             let has_serde_flatten_attribute = has_serde_flatten_attribute(field);
+             for attr in &field.attrs {
+                 if let Some(ident) = attr.path().get_ident() {
+                     if ident == "required" {
+                         required = true;
+                     }
+                 }
+             }
 
-            //Determining whether it is an Option type or a direct data type
-            //This will lead to different ways of processing in the future.
-            let has_option = is_option_type(&field.ty);
-            let camel_case_name = snake_to_camel_case(&format!("{}", field_name));
-            let static_name = Ident::new(
-                &format!("{}", field_name).to_ascii_uppercase(),
-                field_name.span(),
-            );
-            let type_name = if let Some(value) = &has_option {
-                get_type_name(value)
-            } else {
-                get_type_name(&field.ty)
-            };
-            (
-                quote! {
-                      const #static_name: &'static str = #camel_case_name;
-                  },
-                (
-                    if has_option.is_some() {
-                        if type_name == "CheetahString" {
-                            quote! {
-                                  if let Some(ref value) = self.#field_name {
-                                     map.insert (
-                                          cheetah_string::CheetahString::from_static_str(Self::#static_name),
-                                          value.clone()
-                                     );
+             //Determining whether it is an Option type or a direct data type
+             //This will lead to different ways of processing in the future.
+             let has_option = is_option_type(&field.ty);
+             let camel_case_name = snake_to_camel_case(&format!("{}", field_name));
+             let static_name = Ident::new(
+                 &format!("{}", field_name).to_ascii_uppercase(),
+                 field_name.span(),
+             );
+             let type_name = if let Some(value) = &has_option {
+                 get_type_name(value)
+             } else {
+                 get_type_name(&field.ty)
+             };
+             (
+                 //build static field
+                 quote! {
+                       const #static_name: &'static str = #camel_case_name;
+                 },
+                 (
+                     //build CommandCustomHeader impl
+                     if has_option.is_some() {
+                         if type_name == "CheetahString" {
+                             quote! {
+                                   if let Some(ref value) = self.#field_name {
+                                      map.insert (
+                                           cheetah_string::CheetahString::from_static_str(Self::#static_name),
+                                           value.clone()
+                                      );
+                                    }
+                               }
+                         } else if type_name == "String" {
+                             quote! {
+                                   if let Some(ref value) = self.#field_name {
+                                      map.insert (
+                                           cheetah_string::CheetahString::from_static_str(Self::#static_name),
+                                           cheetah_string::CheetahString::from_string(value.clone())
+                                      );
+                                    }
+                               }
+                         } else if is_struct_type && has_serde_flatten_attribute {
+                             quote! {
+                                   if let Some(ref value) = self.#field_name {
+                                         if let Some(value) = value.to_map() {
+                                             map.extend(value);
+                                         }
                                    }
-                              }
-                        } else if type_name == "String" {
-                            quote! {
-                                  if let Some(ref value) = self.#field_name {
-                                     map.insert (
+                               }
+                         } else {
+                             quote! {
+                                   if let Some(ref value) = self.#field_name {
+                                      map.insert (
                                           cheetah_string::CheetahString::from_static_str(Self::#static_name),
-                                          cheetah_string::CheetahString::from_string(value.clone())
-                                     );
-                                   }
-                              }
-                        } else if is_struct_type && has_serde_flatten_attribute {
-                            quote! {
-                                  if let Some(ref value) = self.#field_name {
-                                        if let Some(value) = value.to_map() {
-                                            map.extend(value);
-                                        }
-                                  }
-                              }
-                        } else {
-                            quote! {
-                                  if let Some(ref value) = self.#field_name {
-                                     map.insert (
-                                         cheetah_string::CheetahString::from_static_str(Self::#static_name),
-                                         cheetah_string::CheetahString::from_string(value.to_string())
-                                     );
-                                   }
-                              }
-                        }
-                    } else if type_name == "CheetahString" {
-                        quote! {
-                                     map.insert (
-                                          cheetah_string::CheetahString::from_static_str(Self::#static_name),
-                                          self.#field_name.clone()
-                                     );
-                              }
-                    } else if type_name == "String" {
-                        quote! {
-                                     map.insert (
-                                          cheetah_string::CheetahString::from_static_str(Self::#static_name),
-                                          cheetah_string::CheetahString::from_string(self.#field_name.clone())
-                                     );
-                              }
-                    } else if is_struct_type && has_serde_flatten_attribute {
-                        quote! {
-                            if let Some(value) = self.#field_name.to_map() {
-                                map.extend(value);
-                            }
-                        }
-                    } else {
-                        quote! {
-                                  map.insert (
-                                     cheetah_string::CheetahString::from_static_str(Self::#static_name),
-                                     cheetah_string::CheetahString::from_string(self.#field_name.to_string())
-                                 );
-                              }
-                    }
-                    ,
-                    // build FromMap impl
-                    if let Some(value) = has_option {
-                        if type_name == "CheetahString" || type_name == "String" {
-                            if required {
-                                quote! {
-                                  #field_name: Some(
-                                         map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name))
-                                         .cloned()
-                                         .ok_or(Self::Error::RemotingCommandError(
-                                            format!("Missing {} field", Self::#static_name),
+                                          cheetah_string::CheetahString::from_string(value.to_string())
+                                      );
+                                    }
+                               }
+                         }
+                     } else if type_name == "CheetahString" {
+                         quote! {
+                             map.insert (
+                                 cheetah_string::CheetahString::from_static_str(Self::#static_name),
+                                 self.#field_name.clone()
+                             );
+                         }
+                     } else if type_name == "String" {
+                         quote! {
+                             map.insert (
+                                 cheetah_string::CheetahString::from_static_str(Self::#static_name),
+                                 cheetah_string::CheetahString::from_string(self.#field_name.clone())
+                             );
+                         }
+                     } else if is_struct_type && has_serde_flatten_attribute {
+                         //If it is a struct type and has the serde(flatten) attribute,
+                         // it will be processed as a struct.
+                         quote! {
+                             if let Some(value) = self.#field_name.to_map() {
+                                 map.extend(value);
+                             }
+                         }
+                     } else {
+                         quote! {
+                             map.insert (
+                                 cheetah_string::CheetahString::from_static_str(Self::#static_name),
+                                 cheetah_string::CheetahString::from_string(self.#field_name.to_string())
+                             );
+                         }
+                     },
+
+                     // build FromMap impl
+                     if let Some(value) = has_option {
+                         if type_name == "CheetahString" || type_name == "String" {
+                             if required {
+                                 if type_name == "CheetahString" {
+                                     quote! {
+                                       #field_name: Some(
+                                              map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name))
+                                              .cloned()
+                                              .ok_or(Self::Error::RemotingCommandError(
+                                                 format!("Missing {} field", Self::#static_name),
+                                              ))?
+                                          ),
+                                     }
+                                 } else {
+                                     quote! {
+                                       Some(
+                                              map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name))
+                                              .cloned()
+                                              .ok_or(Self::Error::RemotingCommandError(
+                                                 format!("Missing {} field", Self::#static_name),
+                                              ))?.to_string()
+                                          )
+                                     }
+                                 }
+                             } else {
+                                 quote! {
+                                   #field_name: map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).cloned(),
+                                 }
+                             }
+                         } else if is_struct_type && has_serde_flatten_attribute {
+                             let type_ = has_option.unwrap();
+                             quote! {
+                                 #field_name: Some(<#type_ as crate::protocol::command_custom_header::FromMap>::from(map)?),
+                             }
+                         } else if required {
+                             quote! {
+                                   #field_name: Some(
+                                          map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).ok_or(Self::Error::RemotingCommandError(
+                                             format!("Missing {} field", Self::#static_name),
                                          ))?
-                                     ),
-                                }
-                            } else {
-                                quote! {
-                                  #field_name: map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).cloned(),
-                                 }
-                            }
-                        } else if is_struct_type && has_serde_flatten_attribute {
-                            let type_ = has_option.unwrap();
-                            quote! {
-                                #field_name: Some(<#type_ as crate::protocol::command_custom_header::FromMap>::from(map)?),
-                            }
-                        } else if required {
-                            quote! {
-                                  #field_name: Some(
-                                         map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).ok_or(Self::Error::RemotingCommandError(
-                                            format!("Missing {} field", Self::#static_name),
-                                        ))?
-                                        .parse::<#value>()
-                                        .map_err(|_| Self::Error::RemotingCommandError(format!("Parse {} field error", Self::#static_name)))?
-                                     ),
-                              }
-                        } else {
-                            quote! {
-                                  #field_name:map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).and_then(|s| s.parse::<#value>().ok()),
-                                 }
-                        }
-                    } else {
-                        let types = &field.ty;
-                        if type_name == "CheetahString" || type_name == "String" {
-                            if required {
-                                quote! {
-                                  #field_name: map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name))
-                                         .cloned()
-                                         .ok_or(Self::Error::RemotingCommandError(
-                                            format!("Missing {} field", Self::#static_name),
-                                         ))?,
-                              }
-                            } else {
-                                quote! {
-                                  #field_name: map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).cloned().unwrap_or_default(),
-                                }
-                            }
-                        }else if is_struct_type && has_serde_flatten_attribute {
-                            let type_ = &field.ty;
-                            quote! {
-                                #field_name: <#type_ as crate::protocol::command_custom_header::FromMap>::from(map)?,
-                            }
-                        } else if required {
-                            quote! {
-                                    #field_name:map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).ok_or(Self::Error::RemotingCommandError(
-                                        format!("Missing {} field", Self::#static_name),
-                                    ))?
-                                    .parse::<#types>()
-                                    .map_err(|_| Self::Error::RemotingCommandError(format!("Parse {} field error", Self::#static_name)))?,
+                                         .parse::<#value>()
+                                         .map_err(|_| Self::Error::RemotingCommandError(format!("Parse {} field error", Self::#static_name)))?
+                                      ),
+                               }
+                         } else {
+                             quote! {
+                                   #field_name:map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).and_then(|s| s.parse::<#value>().ok()),
                                   }
-                        } else {
-                            quote! {
-                                    #field_name:map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).and_then(|s| s.parse::<#types>().ok()).unwrap_or_default(),
-                                  }
-                        }
-                    }
-                )
-            )
-        })
-        .unzip();
+                         }
+                     } else {
+                         let types = &field.ty;
+                         if type_name == "CheetahString" || type_name == "String" {
+                             if required {
+                                 if type_name == "CheetahString" {
+                                     quote! {
+                                       #field_name: map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name))
+                                              .cloned()
+                                              .ok_or(Self::Error::RemotingCommandError(
+                                                 format!("Missing {} field", Self::#static_name),
+                                              ))?,
+                                     }
+                                 }else {
+                                     quote! {
+                                       #field_name: map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name))
+                                              .cloned()
+                                              .ok_or(Self::Error::RemotingCommandError(
+                                                 format!("Missing {} field", Self::#static_name),
+                                              ))?.to_string(),
+                                     }
+                                 }
+                             } else {
+                                 quote! {
+                                   #field_name: map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).cloned().unwrap_or_default(),
+                                 }
+                             }
+                         }else if is_struct_type && has_serde_flatten_attribute {
+                             let type_ = &field.ty;
+                             quote! {
+                                 #field_name: <#type_ as crate::protocol::command_custom_header::FromMap>::from(map)?,
+                             }
+                         } else if required {
+                             quote! {
+                                     #field_name:map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).ok_or(Self::Error::RemotingCommandError(
+                                         format!("Missing {} field", Self::#static_name),
+                                     ))?
+                                     .parse::<#types>()
+                                     .map_err(|_| Self::Error::RemotingCommandError(format!("Parse {} field error", Self::#static_name)))?,
+                                   }
+                         } else {
+                             quote! {
+                                     #field_name:map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).and_then(|s| s.parse::<#types>().ok()).unwrap_or_default(),
+                                   }
+                         }
+                     }
+                 )
+             )
+         })
+         .unzip();
     let expanded: TokenStream2 = quote! {
         impl #struct_name {
             #(#static_fields)*
