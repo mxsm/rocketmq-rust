@@ -211,7 +211,7 @@ impl CommandCustomHeader for PullMessageRequestHeader {
         }
     }
 
-    fn decode_fast(&mut self, fields: &HashMap<CheetahString, CheetahString>) {
+    fn decode_fast(&mut self, fields: &HashMap<CheetahString, CheetahString>) -> crate::Result<()> {
         if let Some(str) = fields.get(&CheetahString::from_slice("consumerGroup")) {
             self.consumer_group = CheetahString::from_slice(str);
         }
@@ -316,6 +316,7 @@ impl CommandCustomHeader for PullMessageRequestHeader {
                 .unwrap()
                 .oneway = Some(str.parse::<bool>().unwrap());
         }
+        Ok(())
     }
 
     fn support_fast_codec(&self) -> bool {

@@ -134,7 +134,7 @@ impl CommandCustomHeader for PullMessageResponseHeader {
         }
     }
 
-    fn decode_fast(&mut self, fields: &HashMap<CheetahString, CheetahString>) {
+    fn decode_fast(&mut self, fields: &HashMap<CheetahString, CheetahString>) -> crate::Result<()> {
         if let Some(offset_delta) = fields.get(&CheetahString::from_static_str(
             Self::SUGGEST_WHICH_BROKER_ID,
         )) {
@@ -170,6 +170,8 @@ impl CommandCustomHeader for PullMessageResponseHeader {
         {
             self.forbidden_type = Some(offset_delta.parse().unwrap());
         }
+
+        Ok(())
     }
 
     fn support_fast_codec(&self) -> bool {

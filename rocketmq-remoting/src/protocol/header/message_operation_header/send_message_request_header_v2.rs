@@ -25,6 +25,7 @@ use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::FromMap;
 use crate::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
+use crate::remoting_error::RemotingError::RemotingCommandError;
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -145,33 +146,30 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
         }
     }
 
-    fn decode_fast(&mut self, fields: &HashMap<CheetahString, CheetahString>) {
-        if let Some(v) = fields.get(&CheetahString::from_slice("a")) {
-            self.a = v.clone();
-        }
-        if let Some(v) = fields.get(&CheetahString::from_slice("b")) {
-            self.b = v.clone();
-        }
-        if let Some(v) = fields.get(&CheetahString::from_slice("c")) {
-            self.c = v.clone();
-        }
-
-        if let Some(v) = fields.get(&CheetahString::from_slice("d")) {
-            self.d = v.parse().unwrap();
-        }
-        if let Some(v) = fields.get(&CheetahString::from_slice("e")) {
-            self.e = v.parse().unwrap();
-        }
-        if let Some(v) = fields.get(&CheetahString::from_slice("f")) {
-            self.f = v.parse().unwrap();
-        }
-        if let Some(v) = fields.get(&CheetahString::from_slice("g")) {
-            self.g = v.parse().unwrap();
-        }
-
-        if let Some(v) = fields.get(&CheetahString::from_slice("h")) {
-            self.h = v.parse().unwrap();
-        }
+    fn decode_fast(&mut self, fields: &HashMap<CheetahString, CheetahString>) -> crate::Result<()> {
+        self.a = self.get_and_check_not_none(fields, &CheetahString::from_slice("a"))?; //producerGroup
+        self.b = self.get_and_check_not_none(fields, &CheetahString::from_slice("b"))?; //topic
+        self.c = self.get_and_check_not_none(fields, &CheetahString::from_slice("c"))?; //defaultTopic
+        self.d = self
+            .get_and_check_not_none(fields, &CheetahString::from_slice("d"))?
+            .parse()
+            .map_err(|_| RemotingCommandError("Parse field d error".to_string()))?; //defaultTopicQueueNums
+        self.e = self
+            .get_and_check_not_none(fields, &CheetahString::from_slice("e"))?
+            .parse()
+            .map_err(|_| RemotingCommandError("Parse field e error".to_string()))?; //queueId
+        self.f = self
+            .get_and_check_not_none(fields, &CheetahString::from_slice("f"))?
+            .parse()
+            .map_err(|_| RemotingCommandError("Parse field f error".to_string()))?; //sysFlag
+        self.g = self
+            .get_and_check_not_none(fields, &CheetahString::from_slice("g"))?
+            .parse()
+            .map_err(|_| RemotingCommandError("Parse field g error".to_string()))?; //bornTimestamp
+        self.h = self
+            .get_and_check_not_none(fields, &CheetahString::from_slice("h"))?
+            .parse()
+            .map_err(|_| RemotingCommandError("Parse field h error".to_string()))?; //flag
 
         if let Some(v) = fields.get(&CheetahString::from_slice("i")) {
             self.i = Some(v.clone());
@@ -182,20 +180,30 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
         }
 
         if let Some(v) = fields.get(&CheetahString::from_slice("k")) {
-            self.k = Some(v.parse().unwrap());
+            self.k = Some(
+                v.parse()
+                    .map_err(|_| RemotingCommandError("Parse field k error".to_string()))?,
+            );
         }
 
         if let Some(v) = fields.get(&CheetahString::from_slice("l")) {
-            self.l = Some(v.parse().unwrap());
+            self.l = Some(
+                v.parse()
+                    .map_err(|_| RemotingCommandError("Parse field l error".to_string()))?,
+            );
         }
 
         if let Some(v) = fields.get(&CheetahString::from_slice("m")) {
-            self.m = Some(v.parse().unwrap());
+            self.m = Some(
+                v.parse()
+                    .map_err(|_| RemotingCommandError("Parse field m error".to_string()))?,
+            );
         }
 
         if let Some(v) = fields.get(&CheetahString::from_slice("n")) {
             self.n = Some(v.clone());
         }
+        Ok(())
     }
 
     fn support_fast_codec(&self) -> bool {
@@ -436,5 +444,244 @@ impl TopicRequestHeaderTrait for SendMessageRequestHeaderV2 {
 
     fn set_queue_id(&mut self, queue_id: Option<i32>) {
         self.e = queue_id.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use cheetah_string::CheetahString;
+
+    use super::*;
+
+    #[test]
+    fn send_message_request_header_v2_serializes_correctly() {
+        let header = SendMessageRequestHeaderV2 {
+            a: CheetahString::from_static_str("test_producer_group"),
+            b: CheetahString::from_static_str("test_topic"),
+            c: CheetahString::from_static_str("test_default_topic"),
+            d: 8,
+            e: 1,
+            f: 0,
+            g: 1622547800000,
+            h: 0,
+            i: Some(CheetahString::from_static_str("test_properties")),
+            j: Some(3),
+            k: Some(true),
+            l: Some(5),
+            m: Some(false),
+            n: Some(CheetahString::from_static_str("test_broker_name")),
+            topic_request_header: None,
+        };
+        let map = header.to_map().unwrap();
+        assert_eq!(
+            map.get(&CheetahString::from_static_str("a")).unwrap(),
+            "test_producer_group"
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str("b")).unwrap(),
+            "test_topic"
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str("c")).unwrap(),
+            "test_default_topic"
+        );
+        assert_eq!(map.get(&CheetahString::from_static_str("d")).unwrap(), "8");
+        assert_eq!(map.get(&CheetahString::from_static_str("e")).unwrap(), "1");
+        assert_eq!(map.get(&CheetahString::from_static_str("f")).unwrap(), "0");
+        assert_eq!(
+            map.get(&CheetahString::from_static_str("g")).unwrap(),
+            "1622547800000"
+        );
+        assert_eq!(map.get(&CheetahString::from_static_str("h")).unwrap(), "0");
+        assert_eq!(
+            map.get(&CheetahString::from_static_str("i")).unwrap(),
+            "test_properties"
+        );
+        assert_eq!(map.get(&CheetahString::from_static_str("j")).unwrap(), "3");
+        assert_eq!(
+            map.get(&CheetahString::from_static_str("k")).unwrap(),
+            "true"
+        );
+        assert_eq!(map.get(&CheetahString::from_static_str("l")).unwrap(), "5");
+        assert_eq!(
+            map.get(&CheetahString::from_static_str("m")).unwrap(),
+            "false"
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str("n")).unwrap(),
+            "test_broker_name"
+        );
+    }
+
+    #[test]
+    fn send_message_request_header_v2_deserializes_correctly() {
+        let mut map = HashMap::new();
+        map.insert(
+            CheetahString::from_static_str("a"),
+            CheetahString::from_static_str("test_producer_group"),
+        );
+        map.insert(
+            CheetahString::from_static_str("b"),
+            CheetahString::from_static_str("test_topic"),
+        );
+        map.insert(
+            CheetahString::from_static_str("c"),
+            CheetahString::from_static_str("test_default_topic"),
+        );
+        map.insert(
+            CheetahString::from_static_str("d"),
+            CheetahString::from_static_str("8"),
+        );
+        map.insert(
+            CheetahString::from_static_str("e"),
+            CheetahString::from_static_str("1"),
+        );
+        map.insert(
+            CheetahString::from_static_str("f"),
+            CheetahString::from_static_str("0"),
+        );
+        map.insert(
+            CheetahString::from_static_str("g"),
+            CheetahString::from_static_str("1622547800000"),
+        );
+        map.insert(
+            CheetahString::from_static_str("h"),
+            CheetahString::from_static_str("0"),
+        );
+        map.insert(
+            CheetahString::from_static_str("i"),
+            CheetahString::from_static_str("test_properties"),
+        );
+        map.insert(
+            CheetahString::from_static_str("j"),
+            CheetahString::from_static_str("3"),
+        );
+        map.insert(
+            CheetahString::from_static_str("k"),
+            CheetahString::from_static_str("true"),
+        );
+        map.insert(
+            CheetahString::from_static_str("l"),
+            CheetahString::from_static_str("5"),
+        );
+        map.insert(
+            CheetahString::from_static_str("m"),
+            CheetahString::from_static_str("false"),
+        );
+        map.insert(
+            CheetahString::from_static_str("n"),
+            CheetahString::from_static_str("test_broker_name"),
+        );
+
+        let header = <SendMessageRequestHeaderV2 as FromMap>::from(&map).unwrap();
+        assert_eq!(header.a, "test_producer_group");
+        assert_eq!(header.b, "test_topic");
+        assert_eq!(header.c, "test_default_topic");
+        assert_eq!(header.d, 8);
+        assert_eq!(header.e, 1);
+        assert_eq!(header.f, 0);
+        assert_eq!(header.g, 1622547800000);
+        assert_eq!(header.h, 0);
+        assert_eq!(header.i.unwrap(), "test_properties");
+        assert_eq!(header.j.unwrap(), 3);
+        assert_eq!(header.k.unwrap(), true);
+        assert_eq!(header.l.unwrap(), 5);
+        assert_eq!(header.m.unwrap(), false);
+        assert_eq!(header.n.unwrap(), "test_broker_name");
+    }
+
+    #[test]
+    fn send_message_request_header_v2_handles_missing_optional_fields() {
+        let mut map = HashMap::new();
+        map.insert(
+            CheetahString::from_static_str("a"),
+            CheetahString::from_static_str("test_producer_group"),
+        );
+        map.insert(
+            CheetahString::from_static_str("b"),
+            CheetahString::from_static_str("test_topic"),
+        );
+        map.insert(
+            CheetahString::from_static_str("c"),
+            CheetahString::from_static_str("test_default_topic"),
+        );
+        map.insert(
+            CheetahString::from_static_str("d"),
+            CheetahString::from_static_str("8"),
+        );
+        map.insert(
+            CheetahString::from_static_str("e"),
+            CheetahString::from_static_str("1"),
+        );
+        map.insert(
+            CheetahString::from_static_str("f"),
+            CheetahString::from_static_str("0"),
+        );
+        map.insert(
+            CheetahString::from_static_str("g"),
+            CheetahString::from_static_str("1622547800000"),
+        );
+        map.insert(
+            CheetahString::from_static_str("h"),
+            CheetahString::from_static_str("0"),
+        );
+
+        let header = <SendMessageRequestHeaderV2 as FromMap>::from(&map).unwrap();
+        assert_eq!(header.a, "test_producer_group");
+        assert_eq!(header.b, "test_topic");
+        assert_eq!(header.c, "test_default_topic");
+        assert_eq!(header.d, 8);
+        assert_eq!(header.e, 1);
+        assert_eq!(header.f, 0);
+        assert_eq!(header.g, 1622547800000);
+        assert_eq!(header.h, 0);
+        assert!(header.i.is_none());
+        assert!(header.j.is_none());
+        assert!(header.k.is_none());
+        assert!(header.l.is_none());
+        assert!(header.m.is_none());
+        assert!(header.n.is_none());
+    }
+
+    #[test]
+    fn send_message_request_header_v2_handles_invalid_data() {
+        let mut map = HashMap::new();
+        map.insert(
+            CheetahString::from_static_str("a"),
+            CheetahString::from_static_str("test_producer_group"),
+        );
+        map.insert(
+            CheetahString::from_static_str("b"),
+            CheetahString::from_static_str("test_topic"),
+        );
+        map.insert(
+            CheetahString::from_static_str("c"),
+            CheetahString::from_static_str("test_default_topic"),
+        );
+        map.insert(
+            CheetahString::from_static_str("d"),
+            CheetahString::from_static_str("invalid"),
+        );
+        map.insert(
+            CheetahString::from_static_str("e"),
+            CheetahString::from_static_str("invalid"),
+        );
+        map.insert(
+            CheetahString::from_static_str("f"),
+            CheetahString::from_static_str("invalid"),
+        );
+        map.insert(
+            CheetahString::from_static_str("g"),
+            CheetahString::from_static_str("invalid"),
+        );
+        map.insert(
+            CheetahString::from_static_str("h"),
+            CheetahString::from_static_str("invalid"),
+        );
+
+        let result = <SendMessageRequestHeaderV2 as FromMap>::from(&map);
+        assert!(result.is_err());
     }
 }
