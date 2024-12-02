@@ -676,7 +676,11 @@ impl MQClientAPIImpl {
             HeartbeatRequestHeader::default(),
         )
         .set_language(self.client_config.language)
-        .set_body(heartbeat_data.encode());
+        .set_body(
+            heartbeat_data
+                .encode()
+                .expect("encode HeartbeatData failed"),
+        );
         let response = self
             .remoting_client
             .invoke_async(Some(addr), request, timeout_millis)
@@ -705,7 +709,7 @@ impl MQClientAPIImpl {
             consumer_group.to_string(),
             subscription_data.clone(),
         );
-        request.set_body_mut_ref(body.encode());
+        request.set_body_mut_ref(body.encode().expect("encode CheckClientRequestBody failed"));
         let response = self
             .remoting_client
             .invoke_async(
@@ -1084,7 +1088,11 @@ impl MQClientAPIImpl {
             RequestCode::UnlockBatchMq,
             UnlockBatchMqRequestHeader::default(),
         );
-        request.set_body_mut_ref(request_body.encode());
+        request.set_body_mut_ref(
+            request_body
+                .encode()
+                .expect("encode UnlockBatchRequestBody failed"),
+        );
         if oneway {
             self.remoting_client
                 .invoke_oneway(addr, request, timeout_millis)
@@ -1124,7 +1132,11 @@ impl MQClientAPIImpl {
             RequestCode::LockBatchMq,
             LockBatchMqRequestHeader::default(),
         );
-        request.set_body_mut_ref(request_body.encode());
+        request.set_body_mut_ref(
+            request_body
+                .encode()
+                .expect("encode LockBatchRequestBody failed"),
+        );
         let response = self
             .remoting_client
             .invoke_async(
@@ -1242,7 +1254,10 @@ impl MQClientAPIImpl {
             pop_share_queue_num,
         };
         let request = RemotingCommand::create_remoting_command(RequestCode::SetMessageRequestMode)
-            .set_body(body.encode());
+            .set_body(
+                body.encode()
+                    .expect("encode SetMessageRequestModeRequestBody failed"),
+            );
         let response = self
             .remoting_client
             .invoke_async(
@@ -1280,8 +1295,12 @@ impl MQClientAPIImpl {
             strategy_name,
             message_model,
         };
-        let request =
-            RemotingCommand::new_request(RequestCode::QueryAssignment, request_body.encode());
+        let request = RemotingCommand::new_request(
+            RequestCode::QueryAssignment,
+            request_body
+                .encode()
+                .expect("encode QueryAssignmentRequestBody failed"),
+        );
         let response = self
             .remoting_client
             .invoke_async(

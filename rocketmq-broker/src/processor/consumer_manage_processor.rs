@@ -133,7 +133,10 @@ where
                     };
                     return Some(
                         response
-                            .set_body(body.encode())
+                            .set_body(
+                                body.encode()
+                                    .expect("GetConsumerListByGroupResponseBody encode error"),
+                            )
                             .set_code(ResponseCode::Success),
                     );
                 } else {

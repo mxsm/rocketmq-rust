@@ -61,7 +61,7 @@ mod tests {
             is_without_sub: false,
         };
 
-        let serialized = original.encode();
+        let serialized = original.encode().expect("encode");
         let deserialized = SerdeJsonUtils::decode::<HeartbeatData>(serialized.as_slice()).unwrap();
 
         assert_eq!(original, deserialized);
@@ -77,7 +77,7 @@ mod tests {
             is_without_sub: true,
         };
 
-        let serialized = original.encode();
+        let serialized = original.encode().expect("encode");
         let deserialized = SerdeJsonUtils::decode::<HeartbeatData>(serialized.as_slice()).unwrap();
 
         assert_eq!(original, deserialized);
@@ -93,7 +93,7 @@ mod tests {
             is_without_sub: false,
         };
 
-        let serialized = original.encode();
+        let serialized = original.encode().expect("encode");
         let deserialized = SerdeJsonUtils::decode::<HeartbeatData>(serialized.as_slice()).unwrap();
 
         assert_eq!(original, deserialized);

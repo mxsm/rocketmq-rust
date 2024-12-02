@@ -168,7 +168,12 @@ impl QueryAssignmentProcessor {
         let body = QueryAssignmentResponseBody {
             message_queue_assignments: assignments,
         };
-        Some(RemotingCommand::create_response_command().set_body(body.encode()))
+        Some(
+            RemotingCommand::create_response_command().set_body(
+                body.encode()
+                    .expect("encode QueryAssignmentResponseBody failed"),
+            ),
+        )
     }
 
     async fn do_load_balance(

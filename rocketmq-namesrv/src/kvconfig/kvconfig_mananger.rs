@@ -175,7 +175,7 @@ impl KVConfigManager {
             let table = KVTable {
                 table: kv_table.clone(),
             };
-            table.encode()
+            table.encode().expect("encode failed")
         })
     }
 

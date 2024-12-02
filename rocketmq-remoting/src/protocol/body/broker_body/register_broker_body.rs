@@ -65,14 +65,16 @@ impl RegisterBrokerBody {
 
     pub fn encode(&self, compress: bool) -> Vec<u8> {
         if !compress {
-            return <Self as RemotingSerializable>::encode(self);
+            return <Self as RemotingSerializable>::encode(self)
+                .expect("Encode RegisterBrokerBody failed");
         }
         let mut bytes_mut = BytesMut::new();
         {
             let buffer = self
                 .topic_config_serialize_wrapper
                 .mapping_data_version
-                .encode();
+                .encode()
+                .expect("Encode DataVersion failed");
             let topic_config_table = self
                 .topic_config_serialize_wrapper
                 .topic_config_serialize_wrapper
@@ -97,7 +99,8 @@ impl RegisterBrokerBody {
                 .clone();
             bytes_mut.put_i32(topic_queue_mapping_info_map.len() as i32);
             for (_, queue_mapping) in topic_queue_mapping_info_map {
-                let queue_mapping_bytes = queue_mapping.encode();
+                let queue_mapping_bytes =
+                    queue_mapping.encode().expect("Encode queue mapping failed");
                 bytes_mut.put_i32(queue_mapping_bytes.len() as i32);
                 bytes_mut.put(queue_mapping_bytes.as_slice());
             }

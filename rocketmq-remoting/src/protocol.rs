@@ -361,26 +361,26 @@ impl Display for DataVersion {
 /// use with types that need to be transmitted over a network or stored in a format
 /// that can be easily shared or read.
 pub trait RemotingSerializable {
-    /// Serializes the object into a binary format.
+    /// Encodes the object into a vector of bytes.
     ///
     /// # Returns
-    /// A `Vec<u8>` containing the binary representation of the object.
-    fn encode(&self) -> Vec<u8>;
+    /// A `Result` containing a vector of bytes representing the encoded object,
+    /// or an error if encoding fails.
+    fn encode(&self) -> Result<Vec<u8>, rocketmq_common::error::Error>;
 
     /// Serializes the object into a JSON string.
     ///
     /// # Returns
-    /// A `String` containing the JSON representation of the object.
-    fn to_json(&self) -> String;
+    /// A `Result` containing a JSON string representing the object,
+    /// or an error if serialization fails.
+    fn to_json(&self) -> Result<String, rocketmq_common::error::Error>;
 
     /// Serializes the object into a pretty-printed JSON string.
     ///
-    /// This method is similar to `to_json` but adds whitespace to the output
-    /// to make it more readable.
-    ///
     /// # Returns
-    /// A `String` containing the pretty-printed JSON representation of the object.
-    fn to_json_pretty(&self) -> String;
+    /// A `Result` containing a pretty-printed JSON string representing the object,
+    /// or an error if serialization fails.
+    fn to_json_pretty(&self) -> Result<String, rocketmq_common::error::Error>;
 }
 
 /// Trait for deserializing objects in a remoting context.
@@ -414,16 +414,16 @@ pub trait RemotingDeserializable {
 pub trait JsonSerializable: Serialize + RemotingSerializable {}
 
 impl<T: Serialize> RemotingSerializable for T {
-    fn encode(&self) -> Vec<u8> {
-        SerdeJsonUtils::to_json_vec(self).unwrap()
+    fn encode(&self) -> Result<Vec<u8>, rocketmq_common::error::Error> {
+        SerdeJsonUtils::to_json_vec(self)
     }
 
-    fn to_json(&self) -> String {
-        SerdeJsonUtils::to_json(self).unwrap()
+    fn to_json(&self) -> Result<String, rocketmq_common::error::Error> {
+        SerdeJsonUtils::to_json(self)
     }
 
-    fn to_json_pretty(&self) -> String {
-        SerdeJsonUtils::to_json_pretty(self).unwrap()
+    fn to_json_pretty(&self) -> Result<String, rocketmq_common::error::Error> {
+        SerdeJsonUtils::to_json_pretty(self)
     }
 }
 

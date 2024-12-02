@@ -189,7 +189,7 @@ impl DefaultRequestProcessor {
             .route_info_manager
             .query_broker_topic_config(request_header.cluster_name, request_header.broker_addr)
         {
-            command = command.set_body(value.encode());
+            command = command.set_body(value.encode().expect("encode DataVersion failed"));
         }
         command
     }
@@ -310,11 +310,19 @@ impl DefaultRequestProcessor {
         let response_body = GetBrokerMemberGroupResponseBody {
             broker_member_group,
         };
-        RemotingCommand::create_response_command().set_body(response_body.encode())
+        RemotingCommand::create_response_command().set_body(
+            response_body
+                .encode()
+                .expect("encode GetBrokerMemberGroupResponseBody failed"),
+        )
     }
 
     fn get_broker_cluster_info(&self, _request: RemotingCommand) -> RemotingCommand {
-        let vec = self.route_info_manager.get_all_cluster_info().encode();
+        let vec = self
+            .route_info_manager
+            .get_all_cluster_info()
+            .encode()
+            .expect("encode ClusterInfoSerializeWrapper failed");
         RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::Success)
             .set_body(vec)
     }
@@ -344,7 +352,8 @@ impl DefaultRequestProcessor {
     fn get_all_topic_list_from_nameserver(&self, _request: RemotingCommand) -> RemotingCommand {
         if self.route_info_manager.namesrv_config.enable_all_topic_list {
             let topics = self.route_info_manager.get_all_topic_list();
-            return RemotingCommand::create_response_command().set_body(topics.encode());
+            return RemotingCommand::create_response_command()
+                .set_body(topics.encode().expect("encode TopicList failed"));
         }
         RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::SystemError)
             .set_remark(CheetahString::from_static_str("disable"))
@@ -405,18 +414,21 @@ impl DefaultRequestProcessor {
         let topics_by_cluster = self
             .route_info_manager
             .get_topics_by_cluster(&request_header.cluster);
-        RemotingCommand::create_response_command().set_body(topics_by_cluster.encode())
+        RemotingCommand::create_response_command()
+            .set_body(topics_by_cluster.encode().expect("encode TopicList failed"))
     }
 
     fn get_system_topic_list_from_ns(&self, _request: RemotingCommand) -> RemotingCommand {
         let topic_list = self.route_info_manager.get_system_topic_list();
-        RemotingCommand::create_response_command().set_body(topic_list.encode())
+        RemotingCommand::create_response_command()
+            .set_body(topic_list.encode().expect("encode TopicList failed"))
     }
 
     fn get_unit_topic_list(&self, _request: RemotingCommand) -> RemotingCommand {
         if self.route_info_manager.namesrv_config.enable_topic_list {
             let topic_list = self.route_info_manager.get_unit_topics();
-            return RemotingCommand::create_response_command().set_body(topic_list.encode());
+            return RemotingCommand::create_response_command()
+                .set_body(topic_list.encode().expect("encode TopicList failed"));
         }
         RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::SystemError)
             .set_remark("disable")
@@ -425,7 +437,8 @@ impl DefaultRequestProcessor {
     fn get_has_unit_sub_topic_list(&self, _request: RemotingCommand) -> RemotingCommand {
         if self.route_info_manager.namesrv_config.enable_topic_list {
             let topic_list = self.route_info_manager.get_has_unit_sub_topic_list();
-            return RemotingCommand::create_response_command().set_body(topic_list.encode());
+            return RemotingCommand::create_response_command()
+                .set_body(topic_list.encode().expect("encode TopicList failed"));
         }
         RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::SystemError)
             .set_remark("disable")
@@ -436,7 +449,8 @@ impl DefaultRequestProcessor {
             let topic_list = self
                 .route_info_manager
                 .get_has_unit_sub_un_unit_topic_list();
-            return RemotingCommand::create_response_command().set_body(topic_list.encode());
+            return RemotingCommand::create_response_command()
+                .set_body(topic_list.encode().expect("encode TopicList failed"));
         }
         RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::SystemError)
             .set_remark("disable")

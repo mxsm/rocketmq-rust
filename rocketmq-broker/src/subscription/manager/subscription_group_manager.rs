@@ -68,8 +68,14 @@ impl<MS> ConfigManager for SubscriptionGroupManager<MS> {
                 .subscription_group_wrapper
                 .lock()
                 .clone()
-                .to_json_pretty(),
-            false => self.subscription_group_wrapper.lock().clone().to_json(),
+                .to_json_pretty()
+                .expect("encode subscription group pretty failed"),
+            false => self
+                .subscription_group_wrapper
+                .lock()
+                .clone()
+                .to_json()
+                .expect("encode subscription group failed"),
         }
     }
 
