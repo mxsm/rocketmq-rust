@@ -62,7 +62,7 @@ impl MessageExtBrokerInner {
         self.version
     }
 
-    pub fn topic(&self) -> &str {
+    pub fn topic(&self) -> &CheetahString {
         self.message_ext_inner.topic()
     }
 
