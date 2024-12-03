@@ -251,9 +251,9 @@ impl MappedFile for DefaultMappedFile {
             };
         }
         let result = message_callback.do_append(
-            self.file_from_offset as i64,
+            self.file_from_offset as i64, // file name parsed as offset
             self,
-            (self.file_size - current_pos) as i32,
+            (self.file_size - current_pos) as i32, // remaining space
             message,
             put_message_context,
         );

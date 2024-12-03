@@ -128,12 +128,15 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         let mut queue_offset = msg_inner.queue_offset();
         //let message_num = CommitLog::get_message_num(msg_inner);
         let message_num = get_message_num(&self.topic_config_table, msg_inner);
+        // Transaction messages that require special handling
         match MessageSysFlag::get_transaction_value(msg_inner.sys_flag()) {
+            // Prepared and Rollback message is not consumed, will not enter the consume queue
             MessageSysFlag::TRANSACTION_PREPARED_TYPE
             | MessageSysFlag::TRANSACTION_ROLLBACK_TYPE => queue_offset = 0,
             _ => {}
         }
 
+        // Determines whether there is sufficient free space
         if (msg_len + END_FILE_MIN_BLANK_LENGTH) > max_blank {
             let bytes = self.msg_store_item_memory.mut_from_ref();
             bytes.clear();
@@ -144,6 +147,7 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
             return AppendMessageResult {
                 status: AppendMessageStatus::EndOfFile,
                 wrote_offset,
+                /* only wrote 8 bytes, but declare wrote maxBlank for compute write position */
                 wrote_bytes: max_blank,
                 store_timestamp: msg_inner.store_timestamp(),
                 logics_offset: queue_offset,

@@ -482,8 +482,7 @@ impl CommitLog {
         }
     }
 
-    pub async fn put_message(&mut self, msg: MessageExtBrokerInner) -> PutMessageResult {
-        let mut msg = msg;
+    pub async fn put_message(&mut self, mut msg: MessageExtBrokerInner) -> PutMessageResult {
         if !self.message_store_config.duplication_enable {
             msg.message_ext_inner.store_timestamp = time_utils::get_current_millis() as i64;
         }
@@ -492,8 +491,7 @@ impl CommitLog {
                 .message
                 .body
                 .as_ref()
-                .unwrap()
-                .as_ref(),
+                .unwrap_or(&Bytes::new()),
         );
         if !self.enabled_append_prop_crc {
             msg.delete_property(MessageConst::PROPERTY_CRC32);
@@ -523,6 +521,8 @@ impl CommitLog {
         let topic_queue_key = generate_key(&msg);
 
         let mut _unlock_mapped_file = None;
+
+        //get last mapped file from mapped file queue
         let mut mapped_file = self.mapped_file_queue.get_last_mapped_file();
         // current offset is physical offset
         let curr_offset = if let Some(ref mapped_file_inner) = mapped_file {
@@ -679,6 +679,7 @@ impl CommitLog {
     #[inline]
     fn assign_offset(&self, msg: &mut MessageExtBrokerInner) {
         let tran_type = MessageSysFlag::get_transaction_value(msg.sys_flag());
+        // if the message is not transaction message or transaction commit message
         if MessageSysFlag::TRANSACTION_NOT_TYPE == tran_type
             || MessageSysFlag::TRANSACTION_COMMIT_TYPE == tran_type
         {
@@ -899,7 +900,7 @@ impl CommitLog {
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
-                                     files"
+                                      files"
             );
             self.mapped_file_queue.set_flushed_where(0);
             self.mapped_file_queue.set_committed_where(0);
@@ -1079,7 +1080,7 @@ impl CommitLog {
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
-                                     files"
+                                      files"
             );
             self.mapped_file_queue.set_flushed_where(0);
             self.mapped_file_queue.set_committed_where(0);
