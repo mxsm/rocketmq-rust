@@ -120,7 +120,8 @@ where
                 return self
                     .send_message_processor
                     .process_request(channel, ctx, request_code, request)
-                    .await;
+                    .await
+                    .map_err(Into::into);
             }
 
             RequestCode::SendReplyMessage | RequestCode::SendReplyMessageV2 => {
