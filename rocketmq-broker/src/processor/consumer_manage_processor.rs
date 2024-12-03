@@ -224,10 +224,7 @@ where
             info!(
                 "Update consumer offset is rejected because of previous offset-reset. \
                  Group={},Topic={}, QueueId={}, Offset={}",
-                topic,
-                group,
-                queue_id,
-                offset
+                topic, group, queue_id, offset
             );
             return Some(response.set_remark("Offset has been previously reset"));
         }
