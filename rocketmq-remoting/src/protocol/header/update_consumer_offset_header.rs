@@ -14,32 +14,33 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
 use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::protocol::command_custom_header::CommandCustomHeader;
-use crate::protocol::command_custom_header::FromMap;
 use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use crate::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
 
 #[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodec)]
 pub struct UpdateConsumerOffsetResponseHeader {}
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateConsumerOffsetRequestHeader {
+    #[required]
     pub consumer_group: CheetahString,
+    #[required]
     pub topic: CheetahString,
-    pub queue_id: Option<i32>,
-    pub commit_offset: Option<i64>,
+    #[required]
+    pub queue_id: i32,
+    #[required]
+    pub commit_offset: i64,
     #[serde(flatten)]
     pub topic_request_header: Option<TopicRequestHeader>,
 }
-impl UpdateConsumerOffsetRequestHeader {
+/*impl UpdateConsumerOffsetRequestHeader {
     pub const CONSUMER_GROUP: &'static str = "consumerGroup";
     pub const TOPIC: &'static str = "topic";
     pub const QUEUE_ID: &'static str = "queueId";
@@ -111,7 +112,7 @@ impl FromMap for UpdateConsumerOffsetRequestHeader {
             topic_request_header: Some(<TopicRequestHeader as FromMap>::from(map)?),
         })
     }
-}
+}*/
 
 impl TopicRequestHeaderTrait for UpdateConsumerOffsetRequestHeader {
     fn set_lo(&mut self, lo: Option<bool>) {
@@ -213,10 +214,130 @@ impl TopicRequestHeaderTrait for UpdateConsumerOffsetRequestHeader {
     }
 
     fn queue_id(&self) -> Option<i32> {
-        self.queue_id
+        Some(self.queue_id)
     }
 
     fn set_queue_id(&mut self, queue_id: Option<i32>) {
-        self.queue_id = queue_id;
+        self.queue_id = queue_id.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use cheetah_string::CheetahString;
+
+    use super::*;
+    use crate::protocol::command_custom_header::CommandCustomHeader;
+    use crate::protocol::command_custom_header::FromMap;
+
+    #[test]
+    fn update_consumer_offset_request_header_serializes_correctly() {
+        let header = UpdateConsumerOffsetRequestHeader {
+            consumer_group: CheetahString::from_static_str("test_consumer_group"),
+            topic: CheetahString::from_static_str("test_topic"),
+            queue_id: 1,
+            commit_offset: 100,
+            topic_request_header: None,
+        };
+        let map = header.to_map().unwrap();
+        assert_eq!(
+            map.get(&CheetahString::from_static_str("consumerGroup"))
+                .unwrap(),
+            "test_consumer_group"
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str("topic")).unwrap(),
+            "test_topic"
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str("queueId")).unwrap(),
+            "1"
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str("commitOffset"))
+                .unwrap(),
+            "100"
+        );
+    }
+
+    #[test]
+    fn update_consumer_offset_request_header_deserializes_correctly() {
+        let mut map = HashMap::new();
+        map.insert(
+            CheetahString::from_static_str("consumerGroup"),
+            CheetahString::from_static_str("test_consumer_group"),
+        );
+        map.insert(
+            CheetahString::from_static_str("topic"),
+            CheetahString::from_static_str("test_topic"),
+        );
+        map.insert(
+            CheetahString::from_static_str("queueId"),
+            CheetahString::from_static_str("1"),
+        );
+        map.insert(
+            CheetahString::from_static_str("commitOffset"),
+            CheetahString::from_static_str("100"),
+        );
+
+        let header = <UpdateConsumerOffsetRequestHeader as FromMap>::from(&map).unwrap();
+        assert_eq!(header.consumer_group, "test_consumer_group");
+        assert_eq!(header.topic, "test_topic");
+        assert_eq!(header.queue_id, 1);
+        assert_eq!(header.commit_offset, 100);
+    }
+
+    #[test]
+    fn update_consumer_offset_request_header_handles_missing_optional_fields() {
+        let mut map = HashMap::new();
+        map.insert(
+            CheetahString::from_static_str("consumerGroup"),
+            CheetahString::from_static_str("test_consumer_group"),
+        );
+        map.insert(
+            CheetahString::from_static_str("topic"),
+            CheetahString::from_static_str("test_topic"),
+        );
+        map.insert(
+            CheetahString::from_static_str("queueId"),
+            CheetahString::from_static_str("1"),
+        );
+        map.insert(
+            CheetahString::from_static_str("commitOffset"),
+            CheetahString::from_static_str("100"),
+        );
+
+        let header = <UpdateConsumerOffsetRequestHeader as FromMap>::from(&map).unwrap();
+        assert_eq!(header.consumer_group, "test_consumer_group");
+        assert_eq!(header.topic, "test_topic");
+        assert_eq!(header.queue_id, 1);
+        assert_eq!(header.commit_offset, 100);
+        assert!(header.topic_request_header.is_some());
+    }
+
+    #[test]
+    fn update_consumer_offset_request_header_handles_invalid_data() {
+        let mut map = HashMap::new();
+        map.insert(
+            CheetahString::from_static_str("consumerGroup"),
+            CheetahString::from_static_str("test_consumer_group"),
+        );
+        map.insert(
+            CheetahString::from_static_str("topic"),
+            CheetahString::from_static_str("test_topic"),
+        );
+        map.insert(
+            CheetahString::from_static_str("queueId"),
+            CheetahString::from_static_str("invalid"),
+        );
+        map.insert(
+            CheetahString::from_static_str("commitOffset"),
+            CheetahString::from_static_str("invalid"),
+        );
+
+        let result = <UpdateConsumerOffsetRequestHeader as FromMap>::from(&map);
+        assert!(result.is_err());
     }
 }
