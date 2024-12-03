@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -252,16 +253,18 @@ impl FromMap for BrokerHeartbeatRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
 pub struct GetBrokerMemberGroupRequestHeader {
+    #[required]
     pub cluster_name: CheetahString,
+    #[required]
     pub broker_name: CheetahString,
 }
 
 impl GetBrokerMemberGroupRequestHeader {
-    const BROKER_NAME: &'static str = "brokerName";
-    const CLUSTER_NAME: &'static str = "clusterName";
+    /* const BROKER_NAME: &'static str = "brokerName";
+    const CLUSTER_NAME: &'static str = "clusterName";*/
 
     pub fn new(
         cluster_name: impl Into<CheetahString>,
@@ -275,7 +278,7 @@ impl GetBrokerMemberGroupRequestHeader {
     }
 }
 
-impl CommandCustomHeader for GetBrokerMemberGroupRequestHeader {
+/*impl CommandCustomHeader for GetBrokerMemberGroupRequestHeader {
     fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         Some(HashMap::from([
             (
@@ -306,5 +309,34 @@ impl FromMap for GetBrokerMemberGroupRequestHeader {
                 .cloned()
                 .unwrap_or_default(),
         })
+    }
+}*/
+
+#[cfg(test)]
+mod tests {
+    use cheetah_string::CheetahString;
+
+    use super::*;
+
+    #[test]
+    fn new_creates_instance_with_correct_values() {
+        let header = GetBrokerMemberGroupRequestHeader::new("testCluster", "testBroker");
+        assert_eq!(header.cluster_name, CheetahString::from("testCluster"));
+        assert_eq!(header.broker_name, CheetahString::from("testBroker"));
+    }
+
+    #[test]
+    fn new_creates_instance_with_empty_values() {
+        let header = GetBrokerMemberGroupRequestHeader::new("", "");
+        assert_eq!(header.cluster_name, CheetahString::from(""));
+        assert_eq!(header.broker_name, CheetahString::from(""));
+    }
+
+    #[test]
+    fn new_creates_instance_with_long_values() {
+        let long_string = "a".repeat(1000);
+        let header = GetBrokerMemberGroupRequestHeader::new(&long_string, &long_string);
+        assert_eq!(header.cluster_name, CheetahString::from(&long_string));
+        assert_eq!(header.broker_name, CheetahString::from(&long_string));
     }
 }
