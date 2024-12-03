@@ -202,32 +202,32 @@ where
             );
         }
 
-        if queue_id.is_none() {
-            return Some(
-                response
-                    .set_code(ResponseCode::SystemError)
-                    .set_remark(format!("QueueId is null, topic is {}", topic)),
-            );
-        }
-        if offset.is_none() {
-            return Some(
-                response
-                    .set_code(ResponseCode::SystemError)
-                    .set_remark(format!("Offset is null, topic is {}", topic)),
-            );
-        }
+        // if queue_id.is_none() {
+        //     return Some(
+        //         response
+        //             .set_code(ResponseCode::SystemError)
+        //             .set_remark(format!("QueueId is null, topic is {}", topic)),
+        //     );
+        // }
+        // if offset.is_none() {
+        //     return Some(
+        //         response
+        //             .set_code(ResponseCode::SystemError)
+        //             .set_remark(format!("Offset is null, topic is {}", topic)),
+        //     );
+        // }
         if self.broker_config.use_server_side_reset_offset
             && self
                 .consumer_offset_manager
-                .has_offset_reset(topic, group, queue_id.unwrap())
+                .has_offset_reset(topic, group, queue_id)
         {
             info!(
                 "Update consumer offset is rejected because of previous offset-reset. \
                  Group={},Topic={}, QueueId={}, Offset={}",
                 topic,
                 group,
-                queue_id.unwrap(),
-                offset.unwrap()
+                queue_id,
+                offset
             );
             return Some(response.set_remark("Offset has been previously reset"));
         }
@@ -235,8 +235,8 @@ where
             channel.remote_address(),
             group,
             topic,
-            queue_id.unwrap(),
-            offset.unwrap(),
+            queue_id,
+            offset,
         );
         Some(response)
     }

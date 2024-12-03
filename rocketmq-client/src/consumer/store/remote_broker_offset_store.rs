@@ -282,8 +282,8 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
             let request_header = UpdateConsumerOffsetRequestHeader {
                 consumer_group: self.group_name.clone(),
                 topic: mq.get_topic_cs().clone(),
-                queue_id: Some(mq.get_queue_id()),
-                commit_offset: Some(offset),
+                queue_id: mq.get_queue_id(),
+                commit_offset: offset,
                 topic_request_header: Some(TopicRequestHeader {
                     lo: None,
                     rpc: Some(RpcRequestHeader {
