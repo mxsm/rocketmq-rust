@@ -167,7 +167,7 @@ where
         if response.code() != -1 {
             return response;
         }
-        let mut queue_id_int = request_header.queue_id.unwrap_or(0);
+        let mut queue_id_int = request_header.queue_id;
         let topic_config = self
             .inner
             .topic_config_manager
@@ -371,7 +371,7 @@ where
             topic: request_header.topic.clone(),
             default_topic: request_header.default_topic.clone(),
             default_topic_queue_nums: request_header.default_topic_queue_nums,
-            queue_id: request_header.queue_id.unwrap_or(0),
+            queue_id: request_header.queue_id,
             sys_flag: request_header.sys_flag,
             born_timestamp: request_header.born_timestamp,
             flag: request_header.flag,

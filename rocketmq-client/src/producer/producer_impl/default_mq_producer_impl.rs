@@ -1067,7 +1067,7 @@ impl DefaultMQProducerImpl {
                 self.producer_config.create_topic_key().to_string(),
             ),
             default_topic_queue_nums: self.producer_config.default_topic_queue_nums() as i32,
-            queue_id: Some(mq.get_queue_id()),
+            queue_id: mq.get_queue_id(),
             sys_flag,
             born_timestamp: get_current_millis() as i64,
             flag: msg.get_flag(),

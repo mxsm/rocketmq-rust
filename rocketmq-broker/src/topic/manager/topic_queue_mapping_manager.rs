@@ -73,7 +73,7 @@ impl TopicQueueMappingManager {
             ));
         }
         let mapping_item = mapping_context.leader_item.as_ref().unwrap();
-        request_header.set_queue_id(Some(mapping_item.queue_id));
+        request_header.set_queue_id(mapping_item.queue_id);
         None
     }
 }
@@ -98,7 +98,7 @@ impl TopicQueueMappingManager {
         }
         let topic = request_header.topic();
 
-        let mut global_id: Option<i32> = request_header.queue_id();
+        let mut global_id = request_header.queue_id();
 
         let mutex_guard = self.topic_queue_mapping_table.lock();
         let tqmd = mutex_guard.get(topic.as_str());
@@ -123,51 +123,51 @@ impl TopicQueueMappingManager {
             self.broker_config.broker_name
         );
 
-        if global_id.is_none() {
-            return TopicQueueMappingContext {
-                topic: topic.clone(),
-                global_id: None,
-                mapping_detail: Some(mapping_detail.clone()),
-                mapping_item_list: vec![],
-                leader_item: None,
-                current_item: None,
-            };
-        }
+        // if global_id.is_none() {
+        //     return TopicQueueMappingContext {
+        //         topic: topic.clone(),
+        //         global_id: None,
+        //         mapping_detail: Some(mapping_detail.clone()),
+        //         mapping_item_list: vec![],
+        //         leader_item: None,
+        //         current_item: None,
+        //     };
+        // }
         // If not find mappingItem, it encounters some errors
-        if global_id.unwrap() < 0 && !select_one_when_miss {
+        if global_id < 0 && !select_one_when_miss {
             return TopicQueueMappingContext {
                 topic: topic.clone(),
-                global_id,
+                global_id: Some(global_id),
                 mapping_detail: Some(mapping_detail.clone()),
                 mapping_item_list: vec![],
                 leader_item: None,
                 current_item: None,
             };
         }
-        if let Some(ref mut global_id_value) = global_id {
-            if *global_id_value < 0 {
-                if let Some(hosted_queues) = &mapping_detail.hosted_queues {
-                    if !hosted_queues.is_empty() {
-                        // do not check
-                        *global_id_value = *hosted_queues.keys().next().unwrap_or(&-1);
-                    }
+        // if let Some(ref mut global_id_value) = global_id {
+        if global_id < 0 {
+            if let Some(hosted_queues) = &mapping_detail.hosted_queues {
+                if !hosted_queues.is_empty() {
+                    // do not check
+                    global_id = *hosted_queues.keys().next().unwrap_or(&-1);
                 }
             }
         }
-        if let Some(global_id_value) = global_id {
-            if global_id_value < 0 {
-                return TopicQueueMappingContext {
-                    topic: topic.clone(),
-                    global_id,
-                    mapping_detail: Some(mapping_detail.clone()),
-                    mapping_item_list: vec![],
-                    leader_item: None,
-                    current_item: None,
-                };
-            }
+        //}
+        // if let Some(global_id_value) = global_id {
+        if global_id < 0 {
+            return TopicQueueMappingContext {
+                topic: topic.clone(),
+                global_id: Some(global_id),
+                mapping_detail: Some(mapping_detail.clone()),
+                mapping_item_list: vec![],
+                leader_item: None,
+                current_item: None,
+            };
         }
+        // }
         let (leader_item, mapping_item_list) = if let Some(mapping_item_list) =
-            TopicQueueMappingDetail::get_mapping_info(mapping_detail, global_id.unwrap())
+            TopicQueueMappingDetail::get_mapping_info(mapping_detail, global_id)
         {
             if !mapping_item_list.is_empty() {
                 (
@@ -182,7 +182,7 @@ impl TopicQueueMappingManager {
         };
         TopicQueueMappingContext {
             topic: topic.clone(),
-            global_id,
+            global_id: Some(global_id),
             mapping_detail: Some(mapping_detail.clone()),
             mapping_item_list,
             leader_item,

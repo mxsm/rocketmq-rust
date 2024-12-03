@@ -42,7 +42,7 @@ pub struct SendMessageRequestHeader {
     pub default_topic_queue_nums: i32,
 
     #[required]
-    pub queue_id: Option<i32>,
+    pub queue_id: i32,
 
     #[required]
     pub sys_flag: i32,
@@ -353,11 +353,11 @@ impl TopicRequestHeaderTrait for SendMessageRequestHeader {
             .namespaced = Some(oneway);
     }
 
-    fn queue_id(&self) -> Option<i32> {
+    fn queue_id(&self) -> i32 {
         self.queue_id
     }
 
-    fn set_queue_id(&mut self, queue_id: Option<i32>) {
+    fn set_queue_id(&mut self, queue_id: i32) {
         self.queue_id = queue_id;
     }
 }
@@ -435,7 +435,7 @@ mod tests {
             topic: CheetahString::from_static_str("test_topic"),
             default_topic: CheetahString::from_static_str("test_default_topic"),
             default_topic_queue_nums: 8,
-            queue_id: Some(1),
+            queue_id: 1,
             sys_flag: 0,
             born_timestamp: 1622547800000,
             flag: 0,
@@ -570,7 +570,7 @@ mod tests {
         assert_eq!(header.topic, "test_topic");
         assert_eq!(header.default_topic, "test_default_topic");
         assert_eq!(header.default_topic_queue_nums, 8);
-        assert_eq!(header.queue_id.unwrap(), 1);
+        assert_eq!(header.queue_id, 1);
         assert_eq!(header.sys_flag, 0);
         assert_eq!(header.born_timestamp, 1622547800000);
         assert_eq!(header.flag, 0);
@@ -622,7 +622,7 @@ mod tests {
         assert_eq!(header.topic, "test_topic");
         assert_eq!(header.default_topic, "test_default_topic");
         assert_eq!(header.default_topic_queue_nums, 8);
-        assert!(header.queue_id.is_some());
+        //assert!(header.queue_id.is_some());
         assert_eq!(header.sys_flag, 0);
         assert_eq!(header.born_timestamp, 1622547800000);
         assert_eq!(header.flag, 0);
