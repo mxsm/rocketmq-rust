@@ -541,12 +541,12 @@ impl TopicRequestHeaderTrait for PullMessageRequestHeader {
             .oneway = Some(oneway);
     }
 
-    fn queue_id(&self) -> Option<i32> {
-        Some(self.queue_id)
+    fn queue_id(&self) -> i32 {
+        self.queue_id
     }
 
-    fn set_queue_id(&mut self, queue_id: Option<i32>) {
-        self.queue_id = queue_id.unwrap();
+    fn set_queue_id(&mut self, queue_id: i32) {
+        self.queue_id = queue_id;
     }
 }
 

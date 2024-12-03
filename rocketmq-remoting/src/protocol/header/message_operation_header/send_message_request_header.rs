@@ -42,7 +42,7 @@ pub struct SendMessageRequestHeader {
     pub default_topic_queue_nums: i32,
 
     #[required]
-    pub queue_id: Option<i32>,
+    pub queue_id: i32,
 
     #[required]
     pub sys_flag: i32,
@@ -353,11 +353,11 @@ impl TopicRequestHeaderTrait for SendMessageRequestHeader {
             .namespaced = Some(oneway);
     }
 
-    fn queue_id(&self) -> Option<i32> {
+    fn queue_id(&self) -> i32 {
         self.queue_id
     }
 
-    fn set_queue_id(&mut self, queue_id: Option<i32>) {
+    fn set_queue_id(&mut self, queue_id: i32) {
         self.queue_id = queue_id;
     }
 }

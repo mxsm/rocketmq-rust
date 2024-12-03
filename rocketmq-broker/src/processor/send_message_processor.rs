@@ -231,8 +231,8 @@ where
             .select_topic_config(request_header.topic())
             .unwrap();
         let mut queue_id = request_header.queue_id;
-        if queue_id.is_none() || queue_id.unwrap() < 0 {
-            queue_id = Some(self.inner.random_queue_id(topic_config.write_queue_nums) as i32);
+        if queue_id < 0 {
+            queue_id = self.inner.random_queue_id(topic_config.write_queue_nums) as i32;
         }
 
         if request_header.topic.len() > i8::MAX as usize {
@@ -260,7 +260,7 @@ where
         }
         let mut message_ext = MessageExtBrokerInner::default();
         message_ext.message_ext_inner.message.topic = request_header.topic().clone();
-        message_ext.message_ext_inner.queue_id = queue_id.unwrap();
+        message_ext.message_ext_inner.queue_id = queue_id;
         let mut sys_flag = request_header.sys_flag;
         if TopicFilterType::MultiTag == topic_config.topic_filter_type {
             sys_flag |= MessageSysFlag::MULTI_TAGS_FLAG;
@@ -377,7 +377,7 @@ where
                 transaction_id,
                 &mut send_message_context,
                 ctx,
-                queue_id.unwrap(),
+                queue_id,
                 start,
                 &mut mapping_context,
                 MessageType::NormalMsg,
@@ -402,7 +402,7 @@ where
                 transaction_id,
                 &mut send_message_context,
                 ctx,
-                queue_id.unwrap(),
+                queue_id,
                 start,
                 &mut mapping_context,
                 MessageType::NormalMsg,
@@ -437,13 +437,13 @@ where
             .select_topic_config(request_header.topic())
             .unwrap();
         let mut queue_id = request_header.queue_id;
-        if queue_id.is_none() || queue_id.unwrap() < 0 {
-            queue_id = Some(self.inner.random_queue_id(topic_config.write_queue_nums) as i32);
+        if queue_id < 0 {
+            queue_id = self.inner.random_queue_id(topic_config.write_queue_nums) as i32;
         }
 
         let mut message_ext = MessageExtBrokerInner::default();
         message_ext.message_ext_inner.message.topic = request_header.topic().clone();
-        message_ext.message_ext_inner.queue_id = *queue_id.as_ref().unwrap();
+        message_ext.message_ext_inner.queue_id = queue_id;
         let mut ori_props =
             MessageDecoder::string_to_message_properties(request_header.properties.as_ref());
         if !self.handle_retry_and_dlq(
@@ -572,7 +572,7 @@ where
                 transaction_id,
                 &mut send_message_context,
                 ctx,
-                queue_id.unwrap(),
+                queue_id,
                 start,
                 &mut mapping_context,
                 MessageType::NormalMsg,
@@ -598,7 +598,7 @@ where
                 transaction_id,
                 &mut send_message_context,
                 ctx,
-                queue_id.unwrap(),
+                queue_id,
                 start,
                 &mut mapping_context,
                 MessageType::NormalMsg,
@@ -1033,7 +1033,7 @@ impl<MS, TS> Inner<MS, TS> {
         send_message_context.broker_addr(CheetahString::from_string(
             self.broker_config.get_broker_addr(),
         ));
-        send_message_context.queue_id(request_header.queue_id);
+        send_message_context.queue_id(Some(request_header.queue_id));
         send_message_context.broker_region_id(CheetahString::from_string(
             self.broker_config.region_id().to_string(),
         ));
@@ -1160,7 +1160,7 @@ impl<MS, TS> Inner<MS, TS> {
             }
         }
 
-        let queue_id_int = request_header.queue_id.unwrap();
+        let queue_id_int = request_header.queue_id;
         let topic_config_inner = topic_config.as_ref().unwrap();
         let id_valid = topic_config_inner
             .write_queue_nums

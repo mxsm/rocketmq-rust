@@ -45,7 +45,7 @@ pub trait TopicRequestHeaderTrait: Sync + Send {
 
     fn set_oneway(&mut self, oneway: bool);
 
-    fn queue_id(&self) -> Option<i32>;
+    fn queue_id(&self) -> i32;
 
-    fn set_queue_id(&mut self, queue_id: Option<i32>);
+    fn set_queue_id(&mut self, queue_id: i32);
 }

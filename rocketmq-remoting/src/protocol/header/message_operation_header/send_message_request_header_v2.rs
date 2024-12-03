@@ -301,7 +301,7 @@ impl SendMessageRequestHeaderV2 {
             topic: this.b.clone(),
             default_topic: this.c.clone(),
             default_topic_queue_nums: this.d,
-            queue_id: Some(this.e),
+            queue_id: this.e,
             sys_flag: this.f,
             born_timestamp: this.g,
             flag: this.h,
@@ -322,7 +322,7 @@ impl SendMessageRequestHeaderV2 {
             b: v1.topic.clone(),
             c: v1.default_topic.clone(),
             d: v1.default_topic_queue_nums,
-            e: v1.queue_id.unwrap(),
+            e: v1.queue_id,
             f: v1.sys_flag,
             g: v1.born_timestamp,
             h: v1.flag,
@@ -438,12 +438,12 @@ impl TopicRequestHeaderTrait for SendMessageRequestHeaderV2 {
             .namespaced = Some(oneway);
     }
 
-    fn queue_id(&self) -> Option<i32> {
-        Some(self.e)
+    fn queue_id(&self) -> i32 {
+        self.e
     }
 
-    fn set_queue_id(&mut self, queue_id: Option<i32>) {
-        self.e = queue_id.unwrap();
+    fn set_queue_id(&mut self, queue_id: i32) {
+        self.e = queue_id;
     }
 }
 
