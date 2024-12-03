@@ -140,7 +140,7 @@ where
                     |ctx: &mut SendMessageContext, cmd: &mut RemotingCommand| {
                         inner.execute_send_message_hook_after(Some(cmd), ctx)
                     };
-                if request_header.batch.is_none() || !request_header.batch.unwrap() {
+                if !request_header.batch.unwrap_or(false) {
                     //handle single message
                     Ok(self
                         .send_message(
