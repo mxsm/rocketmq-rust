@@ -25,6 +25,7 @@ use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::utils::message_utils;
+use rocketmq_common::CRC32Utils::crc32;
 use rocketmq_common::MessageUtils::build_batch_message_id;
 use rocketmq_rust::SyncUnsafeCellWrapper;
 
@@ -88,11 +89,16 @@ impl DefaultAppendMessageCallback {
         message_store_config: Arc<MessageStoreConfig>,
         topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
     ) -> Self {
+        let crc32_reserved_length = if message_store_config.enabled_append_prop_crc {
+            CRC32_RESERVED_LEN
+        } else {
+            0
+        };
         Self {
             msg_store_item_memory: SyncUnsafeCellWrapper::new(bytes::BytesMut::with_capacity(
                 END_FILE_MIN_BLANK_LENGTH as usize,
             )),
-            crc32_reserved_length: CRC32_RESERVED_LEN,
+            crc32_reserved_length,
             message_store_config,
             topic_config_table,
         }
@@ -158,20 +164,33 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
             };
         }
 
-        let mut pos = 4 + 4 + 4 + 4 + 4;
-        pre_encode_buffer[pos..(pos + 8)].copy_from_slice(&queue_offset.to_be_bytes());
+        let mut pos = 4 // 1 TOTALSIZE
+            + 4// 2 MAGICCODE
+            + 4// 3 BODYCRC
+            + 4 // 4 QUEUEID
+            + 4; // 5 FLAG
+        pre_encode_buffer[pos..(pos + 8)].copy_from_slice(&queue_offset.to_be_bytes()); // 6 QUEUEOFFSET
         pos += 8;
-        pre_encode_buffer[pos..(pos + 8)].copy_from_slice(&wrote_offset.to_be_bytes());
+        pre_encode_buffer[pos..(pos + 8)].copy_from_slice(&wrote_offset.to_be_bytes()); // 7 PHYSICALOFFSET
         let ip_len = if msg_inner.sys_flag() & MessageSysFlag::BORNHOST_V6_FLAG == 0 {
             4 + 4
         } else {
             16 + 4
         };
+        // 8 SYSFLAG, 9 BORNTIMESTAMP, 10 BORNHOST
         pos += 8 + 4 + 8 + ip_len;
+
+        // 11 STORETIMESTAMP refresh store time stamp in lock
         pre_encode_buffer[pos..(pos + 8)]
             .copy_from_slice(&msg_inner.store_timestamp().to_be_bytes());
 
-        // msg_inner.encoded_buff = pre_encode_buffer;
+        if self.message_store_config.enabled_append_prop_crc {
+            // 18 CRC32
+            let check_size = msg_len - self.crc32_reserved_length;
+            let temp = pre_encode_buffer.split_to(check_size as usize);
+            let crc32 = crc32(temp.as_ref());
+        }
+
         let bytes = pre_encode_buffer.freeze();
         let instant = Instant::now();
         mapped_file.append_message_bytes_no_position_update(&bytes);

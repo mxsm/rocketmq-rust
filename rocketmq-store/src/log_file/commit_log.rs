@@ -483,9 +483,11 @@ impl CommitLog {
     }
 
     pub async fn put_message(&mut self, mut msg: MessageExtBrokerInner) -> PutMessageResult {
+        // Set the storage time
         if !self.message_store_config.duplication_enable {
             msg.message_ext_inner.store_timestamp = time_utils::get_current_millis() as i64;
         }
+        // Set the message body CRC (consider the most appropriate setting on the client)
         msg.message_ext_inner.body_crc = crc32(
             msg.message_ext_inner
                 .message
@@ -493,7 +495,8 @@ impl CommitLog {
                 .as_ref()
                 .unwrap_or(&Bytes::new()),
         );
-        if !self.enabled_append_prop_crc {
+        if self.enabled_append_prop_crc {
+            // delete crc32 properties if exist
             msg.delete_property(MessageConst::PROPERTY_CRC32);
         }
 
