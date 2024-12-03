@@ -362,17 +362,36 @@ impl TopicRequestHeaderTrait for SendMessageRequestHeader {
     }
 }
 
+/// Parses the request header from a `RemotingCommand` based on the `RequestCode`.
+///
+/// This function attempts to decode the command custom header from the provided `RemotingCommand`.
+/// If the `RequestCode` is `SendMessageV2` or `SendBatchMessage`, it tries to decode the header
+/// as `SendMessageRequestHeaderV2`. If successful, it converts the `V2` header to a `V1` header.
+/// Otherwise, it decodes the header directly as `SendMessageRequestHeader`.
+///
+/// # Arguments
+///
+/// * `request` - A reference to the `RemotingCommand` containing the command and its headers.
+/// * `request_code` - The `RequestCode` that indicates which version of the request header to
+///   expect.
+///
+/// # Returns
+///
+/// * `Ok(SendMessageRequestHeader)` if the header is successfully parsed and converted (if
+///   necessary).
+/// * `Err(crate::Error)` if there is an error in decoding the header.
 pub fn parse_request_header(
     request: &RemotingCommand,
     request_code: RequestCode,
 ) -> crate::Result<SendMessageRequestHeader> {
     let mut request_header_v2 = None;
     if RequestCode::SendMessageV2 == request_code || RequestCode::SendBatchMessage == request_code {
+        // Attempt to decode the command custom header as SendMessageRequestHeaderV2
         request_header_v2 = request
             .decode_command_custom_header::<SendMessageRequestHeaderV2>()
             .ok();
     }
-
+    // Match on the result of the V2 header decoding
     match request_header_v2 {
         Some(header) => {
             Ok(SendMessageRequestHeaderV2::create_send_message_request_header_v1(&header))
