@@ -227,8 +227,12 @@ impl ConfigManager for TopicQueueMappingManager {
             Some(self.data_version.lock().clone()),
         );
         match pretty_format {
-            true => wrapper.to_json_pretty(),
-            false => wrapper.to_json(),
+            true => wrapper
+                .to_json_pretty()
+                .expect("encode topic queue mapping pretty failed"),
+            false => wrapper
+                .to_json()
+                .expect("encode topic queue mapping failed"),
         }
     }
 

@@ -401,7 +401,9 @@ impl TopicRequestHandler {
             },
             ..Default::default()
         };
-        let content = topic_config_and_mapping_serialize_wrapper.to_json();
+        let content = topic_config_and_mapping_serialize_wrapper
+            .to_json()
+            .expect("encode failed");
         if !content.is_empty() {
             response.set_body_mut_ref(content);
         }
@@ -421,7 +423,7 @@ impl TopicRequestHandler {
             topic_list: topics.into_iter().map(|s| s.into()).collect(),
             broker_addr: None,
         };
-        response.set_body_mut_ref(topic_list.encode());
+        response.set_body_mut_ref(topic_list.encode().expect("encode TopicList failed"));
         Some(response)
     }
 
@@ -482,7 +484,11 @@ impl TopicRequestHandler {
             map.insert(message_queue, topic_offset);
         }
         topic_stats_table.set_offset_table(map);
-        response.set_body_mut_ref(topic_stats_table.encode());
+        response.set_body_mut_ref(
+            topic_stats_table
+                .encode()
+                .expect("encode TopicStatsTable failed"),
+        );
         Some(response)
     }
 
@@ -522,7 +528,11 @@ impl TopicRequestHandler {
         }
         let topic_config_and_queue_mapping =
             TopicConfigAndQueueMapping::new(topic_config.unwrap(), topic_queue_mapping_detail);
-        response.set_body_mut_ref(topic_config_and_queue_mapping.encode());
+        response.set_body_mut_ref(
+            topic_config_and_queue_mapping
+                .encode()
+                .expect("encode TopicConfigAndQueueMapping failed"),
+        );
         Some(response)
     }
 
@@ -545,7 +555,7 @@ impl TopicRequestHandler {
             .which_group_by_topic(topic);
         groups.extend(group_in_offset.clone());
         let group_list = GroupList { group_list: groups };
-        response.set_body_mut_ref(group_list.encode());
+        response.set_body_mut_ref(group_list.encode().expect("encode GroupList failed"));
         Some(response)
     }
 
@@ -572,7 +582,7 @@ impl TopicRequestHandler {
             topic_list: topics.into_iter().collect(),
             broker_addr: Some(broker_addr.into()),
         };
-        response.set_body_mut_ref(topic_list.encode());
+        response.set_body_mut_ref(topic_list.encode().expect("encode TopicList failed"));
         Some(response)
     }
 

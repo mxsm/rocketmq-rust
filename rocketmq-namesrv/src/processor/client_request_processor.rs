@@ -111,7 +111,9 @@ impl ClientRequestProcessor {
                 } else {
                     topic_route_data.encode()
                 };*/
-                let content = topic_route_data.encode();
+                let content = topic_route_data
+                    .encode()
+                    .expect("encode TopicRouteData failed");
                 RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::Success)
                     .set_body(content)
             }

@@ -77,7 +77,8 @@ impl BatchMqHandler {
                 addr_map.remove(&self.inner.broker_config.broker_identity.broker_id);
 
                 let count_down_latch = CountDownLatch::new(addr_map.len() as u32);
-                let request_body = Bytes::from(request_body.encode());
+                let request_body =
+                    Bytes::from(request_body.encode().expect("lockBatchMQ encode error"));
                 let mq_lock_map_arc = Arc::new(Mutex::new(mq_lock_map.clone()));
                 for (_, broker_addr) in addr_map {
                     let count_down_latch = count_down_latch.clone();
@@ -115,7 +116,10 @@ impl BatchMqHandler {
         let response_body = LockBatchResponseBody {
             lock_ok_mq_set: lock_ok_mqset,
         };
-        Some(RemotingCommand::create_response_command().set_body(response_body.encode()))
+        Some(
+            RemotingCommand::create_response_command()
+                .set_body(response_body.encode().expect("lockBatchMQ encode error")),
+        )
     }
 
     pub async fn unlock_batch_mq(
@@ -134,7 +138,8 @@ impl BatchMqHandler {
             );
         } else {
             request_body.only_this_broker = true;
-            let request_body = Bytes::from(request_body.encode());
+            let request_body =
+                Bytes::from(request_body.encode().expect("unlockBatchMQ encode error"));
             for broker_addr in self.inner.broker_member_group.broker_addrs.values() {
                 match self
                     .inner

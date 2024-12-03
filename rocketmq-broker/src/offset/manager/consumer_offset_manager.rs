@@ -213,9 +213,13 @@ impl ConfigManager for ConsumerOffsetManager {
 
     fn encode_pretty(&self, pretty_format: bool) -> String {
         if pretty_format {
-            self.consumer_offset_wrapper.to_json_pretty()
+            self.consumer_offset_wrapper
+                .to_json_pretty()
+                .expect("encode pretty failed")
         } else {
-            self.consumer_offset_wrapper.to_json()
+            self.consumer_offset_wrapper
+                .to_json()
+                .expect("encode failed")
         }
     }
 

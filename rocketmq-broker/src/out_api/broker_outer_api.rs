@@ -117,7 +117,9 @@ impl BrokerOuterAPI {
             queue_datas: vec![queue_data],
             ..Default::default()
         };
-        let topic_route_body = topic_route_data.encode();
+        let topic_route_body = topic_route_data
+            .encode()
+            .expect("encode topic route data failed");
 
         RemotingCommand::create_request_command(RequestCode::RegisterTopicInNamesrv, request_header)
             .set_body(topic_route_body)
@@ -362,7 +364,8 @@ impl BrokerOuterAPI {
                             .remark()
                             .cloned()
                             .unwrap_or(CheetahString::empty())
-                            .to_json(),
+                            .to_json()
+                            .expect("to json failed"),
                         "".to_string(),
                     ))
                 }

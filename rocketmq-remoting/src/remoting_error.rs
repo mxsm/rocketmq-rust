@@ -74,6 +74,9 @@ pub enum RemotingError {
 
     #[error("Channel recv Request failed: {0}")]
     ChannelRecvRequestFailed(String),
+
+    #[error("CommonError: {0}")]
+    CommonError(#[from] rocketmq_common::error::Error),
 }
 
 #[cfg(test)]

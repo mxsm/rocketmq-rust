@@ -566,10 +566,11 @@ impl ConfigManager for TopicConfigManager {
         let version = self.data_version().as_ref().clone();
         match pretty_format {
             true => TopicConfigSerializeWrapper::new(Some(topic_config_table), Some(version))
-                .to_json_pretty(),
-            false => {
-                TopicConfigSerializeWrapper::new(Some(topic_config_table), Some(version)).to_json()
-            }
+                .to_json_pretty()
+                .expect("Encode TopicConfigSerializeWrapper to json failed"),
+            false => TopicConfigSerializeWrapper::new(Some(topic_config_table), Some(version))
+                .to_json()
+                .expect("Encode TopicConfigSerializeWrapper to json failed"),
         }
     }
 

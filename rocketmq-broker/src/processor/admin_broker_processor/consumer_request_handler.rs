@@ -83,7 +83,9 @@ impl ConsumerRequestHandler {
                     connection.set_client_addr(channel.remote_address().to_string().into());
                     body_data.get_connection_set().insert(connection);
                 }
-                let body = body_data.encode();
+                let body = body_data
+                    .encode()
+                    .expect("consumer connection list encode failed");
                 response.set_body_mut_ref(body);
                 Some(response)
             }
@@ -213,7 +215,7 @@ impl ConsumerRequestHandler {
             let new_consume_tps = consume_stats.get_consume_tps() + consume_tps;
             consume_stats.set_consume_tps(new_consume_tps);
         }
-        let body = consume_stats.encode();
+        let body = consume_stats.encode().expect("consume stats encode failed");
         response.set_body_mut_ref(body);
         Some(response)
     }
