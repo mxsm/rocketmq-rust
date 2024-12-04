@@ -15,18 +15,16 @@
  * limitations under the License.
  */
 
-use std::collections::HashMap;
-
 use cheetah_string::CheetahString;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::protocol::command_custom_header::CommandCustomHeader;
-use crate::protocol::command_custom_header::FromMap;
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodec)]
 pub struct GetRouteInfoRequestHeader {
+    #[required]
     pub topic: CheetahString,
 
     #[serde(rename = "acceptStandardJsonOnly")]
@@ -37,9 +35,6 @@ pub struct GetRouteInfoRequestHeader {
 }
 
 impl GetRouteInfoRequestHeader {
-    const ACCEPT_STANDARD_JSON_ONLY: &'static str = "acceptStandardJsonOnly";
-    const TOPIC: &'static str = "topic";
-
     pub fn new(topic: impl Into<CheetahString>, accept_standard_json_only: Option<bool>) -> Self {
         GetRouteInfoRequestHeader {
             topic: topic.into(),
@@ -49,86 +44,58 @@ impl GetRouteInfoRequestHeader {
     }
 }
 
-impl FromMap for GetRouteInfoRequestHeader {
-    type Error = crate::remoting_error::RemotingError;
-
-    type Target = GetRouteInfoRequestHeader;
-
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
-        Ok(GetRouteInfoRequestHeader {
-            topic: map
-                .get(&CheetahString::from_static_str(
-                    GetRouteInfoRequestHeader::TOPIC,
-                ))
-                .cloned()
-                .unwrap_or_default(),
-            accept_standard_json_only: map
-                .get(&CheetahString::from_static_str(
-                    GetRouteInfoRequestHeader::ACCEPT_STANDARD_JSON_ONLY,
-                ))
-                .and_then(|s| s.parse::<bool>().ok()),
-            topic_request_header: Some(<TopicRequestHeader as FromMap>::from(map)?),
-        })
-    }
-}
-
-impl CommandCustomHeader for GetRouteInfoRequestHeader {
-    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
-        let mut map = HashMap::with_capacity(2);
-        map.insert(
-            CheetahString::from_static_str(Self::TOPIC),
-            self.topic.clone(),
-        );
-        match self.accept_standard_json_only {
-            None => {
-                map.insert(
-                    CheetahString::from_slice("acceptStandardJsonOnly"),
-                    CheetahString::from_slice("false"),
-                );
-            }
-            Some(val) => {
-                map.insert(
-                    CheetahString::from_slice("acceptStandardJsonOnly"),
-                    CheetahString::from_slice(if val { "true" } else { "false" }),
-                );
-            }
-        }
-        if let Some(topic_request_header) = &self.topic_request_header {
-            if let Some(topic_request_header_map) = topic_request_header.to_map() {
-                map.extend(topic_request_header_map);
-            }
-        }
-        Some(map)
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use cheetah_string::CheetahString;
 
-    use super::GetRouteInfoRequestHeader;
-    use crate::protocol::command_custom_header::CommandCustomHeader;
+    use super::*;
 
     #[test]
-    fn test_to_map_no_accept_standard_json_only() {
-        let request_header = GetRouteInfoRequestHeader {
-            topic: "test".into(),
-            accept_standard_json_only: None,
+    fn get_route_info_request_header_with_required_topic() {
+        let header = crate::protocol::header::client_request_header::GetRouteInfoRequestHeader {
+            topic: CheetahString::from("testTopic"),
+            accept_standard_json_only: Some(true),
             topic_request_header: None,
         };
+        assert_eq!(header.topic, CheetahString::from("testTopic"));
+        assert_eq!(header.accept_standard_json_only, Some(true));
+        assert!(header.topic_request_header.is_none());
+    }
 
-        let result: Option<HashMap<CheetahString, CheetahString>> = request_header.to_map();
-        assert_eq!(
-            result,
-            Some(HashMap::from([
-                (CheetahString::from("topic"), CheetahString::from("test")),
-                (
-                    CheetahString::from("acceptStandardJsonOnly"),
-                    CheetahString::from("false")
-                )
-            ]))
-        );
+    #[test]
+    fn get_route_info_request_header_with_optional_fields() {
+        let header = crate::protocol::header::client_request_header::GetRouteInfoRequestHeader {
+            topic: CheetahString::from("testTopic"),
+            accept_standard_json_only: None,
+            topic_request_header: Some(TopicRequestHeader::default()),
+        };
+        assert_eq!(header.topic, CheetahString::from("testTopic"));
+        assert!(header.accept_standard_json_only.is_none());
+        assert!(header.topic_request_header.is_some());
+    }
+
+    #[test]
+    fn get_route_info_request_header_with_empty_topic() {
+        let header = crate::protocol::header::client_request_header::GetRouteInfoRequestHeader {
+            topic: CheetahString::from(""),
+            accept_standard_json_only: Some(false),
+            topic_request_header: None,
+        };
+        assert_eq!(header.topic, CheetahString::from(""));
+        assert_eq!(header.accept_standard_json_only, Some(false));
+        assert!(header.topic_request_header.is_none());
+    }
+
+    #[test]
+    fn get_route_info_request_header_with_long_topic() {
+        let long_topic = "a".repeat(1000);
+        let header = crate::protocol::header::client_request_header::GetRouteInfoRequestHeader {
+            topic: CheetahString::from(&long_topic),
+            accept_standard_json_only: Some(true),
+            topic_request_header: None,
+        };
+        assert_eq!(header.topic, CheetahString::from(&long_topic));
+        assert_eq!(header.accept_standard_json_only, Some(true));
+        assert!(header.topic_request_header.is_none());
     }
 }
