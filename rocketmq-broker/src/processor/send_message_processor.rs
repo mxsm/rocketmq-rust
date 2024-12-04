@@ -992,7 +992,7 @@ where
 
     #[inline]
     pub fn has_consume_message_hook(&self) -> bool {
-        self.consume_message_hook_vec.is_empty()
+        !self.consume_message_hook_vec.is_empty()
     }
 
     pub(crate) fn execute_send_message_hook_before(&self, context: &SendMessageContext) {
