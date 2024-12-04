@@ -91,7 +91,6 @@ impl Default for SubscriptionGroupConfig {
 }
 
 impl SubscriptionGroupConfig {
-
     #[inline]
     pub fn group_name(&self) -> &str {
         &self.group_name
