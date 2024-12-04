@@ -101,7 +101,7 @@ thread_local! {
 fn encode_message_ext(
     message_ext: &MessageExtBrokerInner,
     message_store_config: &Arc<MessageStoreConfig>,
-) -> (Option<PutMessageResult>, BytesMut) {
+) -> (Option<PutMessageResult>, ArcMut<BytesMut>) {
     PUT_MESSAGE_THREAD_LOCAL.with(|thread_local| {
         if thread_local.encoder.borrow().is_none() {
             let encoder = MessageExtEncoder::new(Arc::clone(message_store_config));
@@ -903,7 +903,7 @@ impl CommitLog {
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
-                                      files"
+                                       files"
             );
             self.mapped_file_queue.set_flushed_where(0);
             self.mapped_file_queue.set_committed_where(0);
@@ -1083,7 +1083,7 @@ impl CommitLog {
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
-                                      files"
+                                       files"
             );
             self.mapped_file_queue.set_flushed_where(0);
             self.mapped_file_queue.set_committed_where(0);
