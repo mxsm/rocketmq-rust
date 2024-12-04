@@ -45,7 +45,7 @@ log = "0.4.22"
 
 memmap2 = "0.9.5"
 trait-variant.workspace = true
-sysinfo = "0.32.0"
+sysinfo = "0.33.0"
 once_cell = { workspace = true }
 cheetah-string = { workspace = true }
 [dev-dependencies]
