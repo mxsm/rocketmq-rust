@@ -179,8 +179,7 @@ impl SubscriptionGroupConfig {
 
     #[inline]
     pub fn set_consume_from_min_enable(&mut self, consume_from_min_enable: bool) {
-        self.co
-        nsume_from_min_enable = consume_from_min_enable;
+        self.consume_from_min_enable = consume_from_min_enable;
     }
 
     #[inline]
