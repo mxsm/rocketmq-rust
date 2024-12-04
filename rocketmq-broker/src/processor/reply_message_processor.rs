@@ -82,6 +82,7 @@ where
                 broker_config,
                 topic_config_manager,
                 send_message_hook_vec: ArcMut::new(Vec::new()),
+                consume_message_hook_vec: ArcMut::new(Vec::new()),
                 topic_queue_mapping_manager,
                 subscription_group_manager,
                 message_store,
@@ -90,6 +91,7 @@ where
                 broker_stats_manager,
                 producer_manager,
                 broker_to_client: Default::default(),
+                store_host,
             },
             store_host,
         }
