@@ -17,12 +17,14 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
+use std::fmt::Debug;
 use std::fmt::Display;
 use std::fmt::Formatter;
 use std::net::SocketAddr;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
+use rocketmq_rust::ArcMut;
 
 use crate::common::hasher::string_hasher::JavaStringHasher;
 use crate::common::message::message_ext::MessageExt;
@@ -32,12 +34,12 @@ use crate::common::message::MessageVersion;
 use crate::common::TopicFilterType;
 use crate::MessageUtils;
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct MessageExtBrokerInner {
     pub message_ext_inner: MessageExt,
     pub properties_string: CheetahString,
     pub tags_code: i64,
-    pub encoded_buff: Option<bytes::BytesMut>,
+    pub encoded_buff: Option<ArcMut<bytes::BytesMut>>,
     pub encode_completed: bool,
     pub version: MessageVersion,
 }
@@ -172,13 +174,42 @@ impl MessageExtBrokerInner {
 impl fmt::Display for MessageExtBrokerInner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let encoded_buff_str = match &self.encoded_buff {
-            Some(encoded_buff) => format!("Some({:?})", encoded_buff),
+            Some(encoded_buff) =>
+            /* format!("Some({:?})", encoded_buff) */
+            {
+                "****".to_string()
+            }
             None => "None".to_string(),
         };
 
         write!(
             f,
             "MessageExtBrokerInner {{ message_ext_inner: {}, properties_string: {}, tags_code: \
+             {}, encoded_buff: {}, encode_completed: {}, version: {} }}",
+            self.message_ext_inner,
+            self.properties_string,
+            self.tags_code,
+            encoded_buff_str,
+            self.encode_completed,
+            self.version
+        )
+    }
+}
+
+impl Debug for MessageExtBrokerInner {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let encoded_buff_str = match &self.encoded_buff {
+            Some(encoded_buff) =>
+            /* format!("Some({:?})", encoded_buff) */
+            {
+                "****".to_string()
+            }
+            None => "None".to_string(),
+        };
+
+        write!(
+            f,
+            "MessageExtBrokerInner {{ message_ext_inner: {:?}, properties_string: {}, tags_code: \
              {}, encoded_buff: {}, encode_completed: {}, version: {} }}",
             self.message_ext_inner,
             self.properties_string,

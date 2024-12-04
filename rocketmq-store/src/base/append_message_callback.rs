@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
+use bytes::Buf;
 use bytes::BufMut;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::config::TopicConfig;
@@ -26,6 +27,7 @@ use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBroker
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::utils::message_utils;
 use rocketmq_common::CRC32Utils::crc32;
+use rocketmq_common::MessageDecoder::create_crc32;
 use rocketmq_common::MessageUtils::build_batch_message_id;
 use rocketmq_rust::SyncUnsafeCellWrapper;
 
@@ -165,10 +167,10 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         }
 
         let mut pos = 4 // 1 TOTALSIZE
-            + 4// 2 MAGICCODE
-            + 4// 3 BODYCRC
-            + 4 // 4 QUEUEID
-            + 4; // 5 FLAG
+             + 4// 2 MAGICCODE
+             + 4// 3 BODYCRC
+             + 4 // 4 QUEUEID
+             + 4; // 5 FLAG
         pre_encode_buffer[pos..(pos + 8)].copy_from_slice(&queue_offset.to_be_bytes()); // 6 QUEUEOFFSET
         pos += 8;
         pre_encode_buffer[pos..(pos + 8)].copy_from_slice(&wrote_offset.to_be_bytes()); // 7 PHYSICALOFFSET
@@ -187,13 +189,16 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         if self.message_store_config.enabled_append_prop_crc {
             // 18 CRC32
             let check_size = msg_len - self.crc32_reserved_length;
-            let temp = pre_encode_buffer.split_to(check_size as usize);
-            let crc32 = crc32(temp.as_ref());
+            let crc32 = crc32(&pre_encode_buffer[..check_size as usize]);
+            create_crc32(
+                &mut pre_encode_buffer[check_size as usize..msg_len as usize],
+                crc32,
+            );
         }
 
-        let bytes = pre_encode_buffer.freeze();
+        //let bytes = pre_encode_buffer.freeze();
         let instant = Instant::now();
-        mapped_file.append_message_bytes_no_position_update(&bytes);
+        mapped_file.append_message_bytes_no_position_update_ref(pre_encode_buffer.chunk());
         AppendMessageResult {
             status: AppendMessageStatus::PutOk,
             wrote_offset,

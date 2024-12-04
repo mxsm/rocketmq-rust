@@ -338,12 +338,7 @@ impl MappedFile for DefaultMappedFile {
         false
     }
 
-    fn append_message_no_position_update(
-        &self,
-        data: &Bytes,
-        offset: usize,
-        length: usize,
-    ) -> bool {
+    fn append_message_no_position_update(&self, data: &[u8], offset: usize, length: usize) -> bool {
         let current_pos = self.wrote_position.load(Ordering::Relaxed) as usize;
 
         if current_pos + length <= self.file_size as usize {

@@ -200,6 +200,20 @@ pub trait MappedFile {
     /// # Returns
     /// `true` if the append operation was successful, `false` otherwise.
     fn append_message_bytes_no_position_update(&self, data: &bytes::Bytes) -> bool {
+        self.append_message_no_position_update(data.as_ref(), 0, data.len())
+    }
+
+    /// Appends a byte array to the mapped file without updating the write position.
+    ///
+    /// This method appends the given byte array to the mapped file without updating the internal
+    /// write position. It is useful for scenarios where the write position should remain unchanged.
+    ///
+    /// # Arguments
+    /// * `data` - A reference to the byte array to be appended.
+    ///
+    /// # Returns
+    /// `true` if the append operation was successful, `false` otherwise.
+    fn append_message_bytes_no_position_update_ref(&self, data: &[u8]) -> bool {
         self.append_message_no_position_update(data, 0, data.len())
     }
 
@@ -216,8 +230,7 @@ pub trait MappedFile {
     ///
     /// # Returns
     /// `true` if the append operation was successful, `false` otherwise.
-    fn append_message_no_position_update(&self, data: &Bytes, offset: usize, length: usize)
-        -> bool;
+    fn append_message_no_position_update(&self, data: &[u8], offset: usize, length: usize) -> bool;
 
     /// Appends a byte array to the mapped file without updating the write position.
     ///

@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 use std::collections::HashMap;
+use std::io::Write;
 use std::net::IpAddr;
 use std::net::Ipv4Addr;
 use std::net::Ipv6Addr;
@@ -35,6 +36,7 @@ use crate::common::message::message_client_ext::MessageClientExt;
 use crate::common::message::message_ext::MessageExt;
 use crate::common::message::message_id::MessageId;
 use crate::common::message::message_single::Message;
+use crate::common::message::MessageConst;
 use crate::common::message::MessageTrait;
 use crate::common::message::MessageVersion;
 use crate::common::sys_flag::message_sys_flag::MessageSysFlag;
@@ -404,11 +406,11 @@ pub fn encode_message(message: &Message) -> Bytes {
     let properties_length = properties_bytes.len();
 
     let store_size = 4 // 1 TOTALSIZE
-            + 4 // 2 MAGICCOD
-            + 4 // 3 BODYCRC
-            + 4 // 4 FLAG
-            + 4 + body_len // 4 BODY
-            + 2 + properties_length;
+             + 4 // 2 MAGICCOD
+             + 4 // 3 BODYCRC
+             + 4 // 4 FLAG
+             + 4 + body_len // 4 BODY
+             + 2 + properties_length;
 
     let mut bytes = BytesMut::with_capacity(store_size);
 
@@ -591,22 +593,22 @@ pub fn encode(message_ext: &MessageExt, need_compress: bool) -> Result<Bytes> {
         BytesMut::with_capacity(store_size as usize)
     } else {
         let store_size = 4 // 1 TOTALSIZE
-            + 4 // 2 MAGICCODE
-            + 4 // 3 BODYCRC
-            + 4 // 4 QUEUEID
-            + 4 // 5 FLAG
-            + 8 // 6 QUEUEOFFSET
-            + 8 // 7 PHYSICALOFFSET
-            + 4 // 8 SYSFLAG
-            + 8 // 9 BORNTIMESTAMP
-            + born_host_length // 10 BORNHOST
-            + 8 // 11 STORETIMESTAMP
-            + store_host_address_length // 12 STOREHOSTADDRESS
-            + 4 // 13 RECONSUMETIMES
-            + 8 // 14 Prepared Transaction Offset
-            + 4 + body_len // 14 BODY
-            + 1 + topic_len // 15 TOPIC
-            + 2 + properties_length; // 16 propertiesLength
+             + 4 // 2 MAGICCODE
+             + 4 // 3 BODYCRC
+             + 4 // 4 QUEUEID
+             + 4 // 5 FLAG
+             + 8 // 6 QUEUEOFFSET
+             + 8 // 7 PHYSICALOFFSET
+             + 4 // 8 SYSFLAG
+             + 8 // 9 BORNTIMESTAMP
+             + born_host_length // 10 BORNHOST
+             + 8 // 11 STORETIMESTAMP
+             + store_host_address_length // 12 STOREHOSTADDRESS
+             + 4 // 13 RECONSUMETIMES
+             + 8 // 14 Prepared Transaction Offset
+             + 4 + body_len // 14 BODY
+             + 1 + topic_len // 15 TOPIC
+             + 2 + properties_length; // 16 propertiesLength
         BytesMut::with_capacity(store_size)
     };
 
@@ -714,20 +716,20 @@ pub fn encode_uniquely(message_ext: &MessageExt, need_compress: bool) -> Result<
         BytesMut::with_capacity((store_size - 8) as usize)
     } else {
         let store_size = 4 // 1 TOTALSIZE
-            + 4 // 2 MAGICCODE
-            + 4 // 3 BODYCRC
-            + 4 // 4 QUEUEID
-            + 4 // 5 FLAG
-            + 8 // 6 QUEUEOFFSET
-            + 8 // 7 PHYSICALOFFSET
-            + 4 // 8 SYSFLAG
-            + 8 // 9 BORNTIMESTAMP
-            + born_host_length // 10 BORNHOST
-            + 4 // 11 RECONSUMETIMES
-            + 8 // 12 Prepared Transaction Offset
-            + 4 + body_len // 13 BODY
-            + 1 + topic_len // 14 TOPIC
-            + 2 + properties_length; // 15 propertiesLength
+             + 4 // 2 MAGICCODE
+             + 4 // 3 BODYCRC
+             + 4 // 4 QUEUEID
+             + 4 // 5 FLAG
+             + 8 // 6 QUEUEOFFSET
+             + 8 // 7 PHYSICALOFFSET
+             + 4 // 8 SYSFLAG
+             + 8 // 9 BORNTIMESTAMP
+             + born_host_length // 10 BORNHOST
+             + 4 // 11 RECONSUMETIMES
+             + 8 // 12 Prepared Transaction Offset
+             + 4 + body_len // 13 BODY
+             + 1 + topic_len // 14 TOPIC
+             + 2 + properties_length; // 15 propertiesLength
         BytesMut::with_capacity(store_size)
     };
 
@@ -790,6 +792,21 @@ pub fn encode_uniquely(message_ext: &MessageExt, need_compress: bool) -> Result<
     byte_buffer.put_slice(properties_bytes);
 
     Ok(byte_buffer.freeze())
+}
+
+pub fn create_crc32(mut input: &mut [u8], crc32: u32) {
+    input.put(MessageConst::PROPERTY_CRC32.as_bytes());
+    input.put_u8(NAME_VALUE_SEPARATOR as u8);
+    let mut crc32 = crc32;
+    for _ in 0..10 {
+        let mut b = b'0';
+        if crc32 > 0 {
+            b += (crc32 % 10) as u8;
+            crc32 /= 10;
+        }
+        input.put_u8(b);
+    }
+    input.put_u8(PROPERTY_SEPARATOR as u8);
 }
 
 #[cfg(test)]

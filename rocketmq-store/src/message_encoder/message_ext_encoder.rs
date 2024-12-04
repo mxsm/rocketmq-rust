@@ -26,6 +26,7 @@ use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::CRC32Utils::crc32;
 use rocketmq_common::MessageDecoder;
 use rocketmq_common::MessageDecoder::PROPERTY_SEPARATOR;
+use rocketmq_rust::ArcMut;
 use tracing::warn;
 
 use crate::base::message_result::PutMessageResult;
@@ -36,7 +37,7 @@ use crate::log_file::commit_log::CommitLog;
 use crate::log_file::commit_log::CRC32_RESERVED_LEN;
 
 pub struct MessageExtEncoder {
-    byte_buf: bytes::BytesMut,
+    byte_buf: ArcMut<bytes::BytesMut>,
     max_message_body_size: i32,
     max_message_size: i32,
     crc32_reserved_length: i32,
@@ -57,7 +58,7 @@ impl MessageExtEncoder {
             0
         };
         MessageExtEncoder {
-            byte_buf: bytes::BytesMut::with_capacity(max_message_size as usize),
+            byte_buf: ArcMut::new(BytesMut::with_capacity(max_message_size as usize)),
             max_message_body_size,
             max_message_size,
             crc32_reserved_length,
@@ -85,22 +86,22 @@ impl MessageExtEncoder {
         };
 
         4 + // TOTALSIZE
-            4 + // MAGICCODE
-            4 + // BODYCRC
-            4 + // QUEUEID
-            4 + // FLAG
-            8 + // QUEUEOFFSET
-            8 + // PHYSICALOFFSET
-            4 + // SYSFLAG
-            8 + // BORNTIMESTAMP
-            bornhost_length + // BORNHOST
-            8 + // STORETIMESTAMP
-            storehost_address_length + // STOREHOSTADDRESS
-            4 + // RECONSUMETIMES
-            8 + // Prepared Transaction Offset
-            4 + (body_length.max(0)) + // BODY
-            (message_version.get_topic_length_size() as i32) + topic_length + // TOPIC
-            2 + (properties_length.max(0)) // propertiesLength
+             4 + // MAGICCODE
+             4 + // BODYCRC
+             4 + // QUEUEID
+             4 + // FLAG
+             8 + // QUEUEOFFSET
+             8 + // PHYSICALOFFSET
+             4 + // SYSFLAG
+             8 + // BORNTIMESTAMP
+             bornhost_length + // BORNHOST
+             8 + // STORETIMESTAMP
+             storehost_address_length + // STOREHOSTADDRESS
+             4 + // RECONSUMETIMES
+             8 + // Prepared Transaction Offset
+             4 + (body_length.max(0)) + // BODY
+             (message_version.get_topic_length_size() as i32) + topic_length + // TOPIC
+             2 + (properties_length.max(0)) // propertiesLength
     }
 
     pub fn cal_msg_length_no_properties(
@@ -122,21 +123,21 @@ impl MessageExtEncoder {
         };
 
         4 + // TOTALSIZE
-            4 + // MAGICCODE
-            4 + // BODYCRC
-            4 + // QUEUEID
-            4 + // FLAG
-            8 + // QUEUEOFFSET
-            8 + // PHYSICALOFFSET
-            4 + // SYSFLAG
-            8 + // BORNTIMESTAMP
-            bornhost_length + // BORNHOST
-            8 + // STORETIMESTAMP
-            storehost_address_length + // STOREHOSTADDRESS
-            4 + // RECONSUMETIMES
-            8 + // Prepared Transaction Offset
-            4 + (body_length.max(0)) + // BODY
-            (message_version.get_topic_length_size() as i32) + topic_length // TOPIC
+             4 + // MAGICCODE
+             4 + // BODYCRC
+             4 + // QUEUEID
+             4 + // FLAG
+             8 + // QUEUEOFFSET
+             8 + // PHYSICALOFFSET
+             4 + // SYSFLAG
+             8 + // BORNTIMESTAMP
+             bornhost_length + // BORNHOST
+             8 + // STORETIMESTAMP
+             storehost_address_length + // STOREHOSTADDRESS
+             4 + // RECONSUMETIMES
+             8 + // Prepared Transaction Offset
+             4 + (body_length.max(0)) + // BODY
+             (message_version.get_topic_length_size() as i32) + topic_length // TOPIC
     }
 
     pub fn encode_without_properties(
@@ -526,7 +527,8 @@ impl MessageExtEncoder {
     }
 
     pub fn get_encoder_buffer(&mut self) -> bytes::Bytes {
-        self.byte_buf.copy_to_bytes(self.byte_buf.len())
+        let len = self.byte_buf.len();
+        self.byte_buf.copy_to_bytes(len)
     }
 
     pub fn get_max_message_body_size(&self) -> i32 {
@@ -543,8 +545,8 @@ impl MessageExtEncoder {
         self.byte_buf.resize(self.max_message_size as usize, 0);
     }
 
-    pub fn byte_buf(&mut self) -> bytes::BytesMut {
-        self.byte_buf.split()
+    pub fn byte_buf(&mut self) -> ArcMut<bytes::BytesMut> {
+        self.byte_buf.clone()
     }
 }
 

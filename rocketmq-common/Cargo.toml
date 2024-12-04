@@ -12,6 +12,8 @@ description = "Rust implementation of Apache rocketmq common"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+rocketmq-rust = { workspace = true }
+
 anyhow.workspace = true
 tokio.workspace = true
 tracing.workspace = true
