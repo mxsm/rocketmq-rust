@@ -6,9 +6,10 @@ edition.workspace = true
 homepage.workspace = true
 repository.workspace = true
 license.workspace = true
-keywords.workspace = true
-readme.workspace = true
-description.workspace = true
+keywords = ["rocketmq-rust", "async", "rocketmq-client", "futures"]
+categories = ["api-bindings", "asynchronous"]
+readme = "README.md"
+description = "Rust implementation of Apache rocketmq client"
 
 [dependencies]
 rocketmq-rust = { workspace = true }
