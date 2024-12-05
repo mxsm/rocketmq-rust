@@ -35,6 +35,8 @@ parking_lot.workspace = true
 
 clap = { version = "4.5.22", features = ["derive"] }
 cheetah-string = { workspace = true }
+thiserror = { workspace = true }
+
 [[bin]]
 name = "rocketmq-namesrv-rust"
 path = "src/bin/namesrv_bootstrap_server.rs"
