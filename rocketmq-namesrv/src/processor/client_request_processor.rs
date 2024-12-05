@@ -36,6 +36,7 @@ use tracing::warn;
 
 use crate::kvconfig::kvconfig_mananger::KVConfigManager;
 use crate::namesrv_error::NamesrvError::MQNamesrvError;
+use crate::namesrv_error::NamesrvRemotingErrorWithMessage;
 use crate::processor::NAMESPACE_ORDER_TOPIC_CONFIG;
 use crate::route::route_info_manager::RouteInfoManager;
 
@@ -68,7 +69,12 @@ impl ClientRequestProcessor {
     ) -> crate::Result<Option<RemotingCommand>> {
         let request_header = request
             .decode_command_custom_header::<GetRouteInfoRequestHeader>()
-            .map_err(crate::namesrv_error::NamesrvError::NamesrvRemotingError)?;
+            .map_err(|e| {
+                NamesrvRemotingErrorWithMessage::new(
+                    e,
+                    "decode GetRouteInfoRequestHeader fail".to_string(),
+                )
+            })?;
         let namesrv_ready = self.need_check_namesrv_ready.load(Ordering::Relaxed)
             && TimeUtils::get_current_millis() - self.startup_time_millis
                 >= Duration::from_secs(self.namesrv_config.wait_seconds_for_service as u64)

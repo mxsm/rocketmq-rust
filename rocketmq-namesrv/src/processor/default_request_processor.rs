@@ -59,6 +59,8 @@ use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use tracing::warn;
 
+use crate::namesrv_error::NamesrvError::MQNamesrvError;
+use crate::namesrv_error::NamesrvRemotingErrorWithMessage;
 use crate::processor::NAMESPACE_ORDER_TOPIC_CONFIG;
 use crate::route::route_info_manager::RouteInfoManager;
 use crate::KVConfigManager;
@@ -107,26 +109,31 @@ impl DefaultRequestProcessor {
             }
             RequestCode::UpdateNamesrvConfig => self.update_config(request),
             RequestCode::GetNamesrvConfig => self.get_config(request),
-            _ => RemotingCommand::create_response_command_with_code(
+            _ => Ok(RemotingCommand::create_response_command_with_code(
                 RemotingSysResponseCode::SystemError,
-            ),
-        };
+            )),
+        }?;
         Ok(Some(response))
     }
 }
 
 ///implementation put KV config
 impl DefaultRequestProcessor {
-    fn put_kv_config(&mut self, request: RemotingCommand) -> RemotingCommand {
+    fn put_kv_config(&mut self, request: RemotingCommand) -> crate::Result<RemotingCommand> {
         let request_header = request
             .decode_command_custom_header::<PutKVConfigRequestHeader>()
-            .expect("decode PutKVConfigRequestHeader failed");
+            .map_err(|e| {
+                NamesrvRemotingErrorWithMessage::new(
+                    e,
+                    "decode PutKVConfigRequestHeader fail".to_string(),
+                )
+            })?;
         //check namespace and key, need?
         if request_header.namespace.is_empty() || request_header.key.is_empty() {
-            return RemotingCommand::create_response_command_with_code(
+            return Ok(RemotingCommand::create_response_command_with_code(
                 RemotingSysResponseCode::SystemError,
             )
-            .set_remark(CheetahString::from_static_str("namespace or key is empty"));
+            .set_remark(CheetahString::from_static_str("namespace or key is empty")));
         }
 
         self.kvconfig_manager.put_kv_config(
@@ -134,43 +141,65 @@ impl DefaultRequestProcessor {
             request_header.key.clone(),
             request_header.value.clone(),
         );
-        RemotingCommand::create_response_command()
+        Ok(RemotingCommand::create_response_command())
     }
 
-    fn get_kv_config(&self, request: RemotingCommand) -> RemotingCommand {
+    fn get_kv_config(&self, request: RemotingCommand) -> crate::Result<RemotingCommand> {
         let request_header = request
             .decode_command_custom_header::<GetKVConfigRequestHeader>()
-            .expect("decode GetKVConfigRequestHeader failed");
+            .map_err(|e| {
+                NamesrvRemotingErrorWithMessage::new(
+                    e,
+                    "decode GetKVConfigRequestHeader fail".to_string(),
+                )
+            })?;
 
         let value = self
             .kvconfig_manager
             .get_kvconfig(&request_header.namespace, &request_header.key);
 
         if value.is_some() {
-            return RemotingCommand::create_response_command()
-                .set_command_custom_header(GetKVConfigResponseHeader::new(value));
+            return Ok(RemotingCommand::create_response_command()
+                .set_command_custom_header(GetKVConfigResponseHeader::new(value)));
         }
-        RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::SystemError)
+        Ok(
+            RemotingCommand::create_response_command_with_code(
+                RemotingSysResponseCode::SystemError,
+            )
             .set_remark(format!(
                 "No config item, Namespace: {} Key: {}",
                 request_header.namespace, request_header.key
-            ))
+            )),
+        )
     }
 
-    fn delete_kv_config(&mut self, request: RemotingCommand) -> RemotingCommand {
+    fn delete_kv_config(&mut self, request: RemotingCommand) -> crate::Result<RemotingCommand> {
         let request_header = request
             .decode_command_custom_header::<DeleteKVConfigRequestHeader>()
-            .expect("decode DeleteKVConfigRequestHeader failed");
+            .map_err(|e| {
+                NamesrvRemotingErrorWithMessage::new(
+                    e,
+                    "decode DeleteKVConfigRequestHeader fail".to_string(),
+                )
+            })?;
 
         self.kvconfig_manager
             .delete_kv_config(&request_header.namespace, &request_header.key);
-        RemotingCommand::create_response_command()
+        Ok(RemotingCommand::create_response_command())
     }
 
-    fn query_broker_topic_config(&mut self, request: RemotingCommand) -> RemotingCommand {
+    fn query_broker_topic_config(
+        &mut self,
+        request: RemotingCommand,
+    ) -> crate::Result<RemotingCommand> {
         let request_header = request
             .decode_command_custom_header::<QueryDataVersionRequestHeader>()
-            .expect("decode QueryDataVersionRequestHeader failed");
+            .map_err(|e| {
+                NamesrvRemotingErrorWithMessage::new(
+                    e,
+                    "decode QueryDataVersionRequestHeader fail".to_string(),
+                )
+            })?;
         let data_version = DataVersion::decode(request.get_body().expect("body is empty"))
             .expect("decode DataVersion failed");
         let changed = self.route_info_manager.is_broker_topic_config_changed(
@@ -191,7 +220,7 @@ impl DefaultRequestProcessor {
         {
             command = command.set_body(value.encode().expect("encode DataVersion failed"));
         }
-        command
+        Ok(command)
     }
 }
 
@@ -209,15 +238,20 @@ impl DefaultRequestProcessor {
         &mut self,
         remote_addr: SocketAddr,
         request: RemotingCommand,
-    ) -> RemotingCommand {
+    ) -> crate::Result<RemotingCommand> {
         let request_header = request
             .decode_command_custom_header::<RegisterBrokerRequestHeader>()
-            .expect("decode RegisterBrokerRequestHeader failed");
+            .map_err(|e| {
+                NamesrvRemotingErrorWithMessage::new(
+                    e,
+                    "decode RegisterBrokerRequestHeader fail".to_string(),
+                )
+            })?;
         if !check_sum_crc32(&request, &request_header) {
-            return RemotingCommand::create_response_command_with_code(
+            return Ok(RemotingCommand::create_response_command_with_code(
                 RemotingSysResponseCode::SystemError,
             )
-            .set_remark(CheetahString::from_static_str("crc32 not match"));
+            .set_remark(CheetahString::from_static_str("crc32 not match")));
         }
 
         let mut response_command = RemotingCommand::create_response_command();
@@ -250,9 +284,9 @@ impl DefaultRequestProcessor {
             remote_addr,
         );
         if result.is_none() {
-            return response_command
+            return Ok(response_command
                 .set_code(RemotingSysResponseCode::SystemError)
-                .set_remark(CheetahString::from_static_str("register broker failed"));
+                .set_remark(CheetahString::from_static_str("register broker failed")));
         }
         if self
             .kvconfig_manager
@@ -269,40 +303,64 @@ impl DefaultRequestProcessor {
             }
         }
         let register_broker_result = result.unwrap();
-        response_command
+        Ok(response_command
             .set_code(RemotingSysResponseCode::Success)
             .set_command_custom_header(RegisterBrokerResponseHeader::new(
                 Some(register_broker_result.ha_server_addr),
                 Some(register_broker_result.master_addr),
-            ))
+            )))
     }
 
-    fn process_unregister_broker(&mut self, request: RemotingCommand) -> RemotingCommand {
+    fn process_unregister_broker(
+        &mut self,
+        request: RemotingCommand,
+    ) -> crate::Result<RemotingCommand> {
         let request_header = request
             .decode_command_custom_header::<UnRegisterBrokerRequestHeader>()
-            .expect("decode UnRegisterBrokerRequestHeader failed");
+            .map_err(|e| {
+                NamesrvRemotingErrorWithMessage::new(
+                    e,
+                    "decode UnRegisterBrokerRequestHeader fail".to_string(),
+                )
+            })?;
         self.route_info_manager
             .un_register_broker(vec![request_header]);
-        RemotingCommand::create_response_command()
+        Ok(RemotingCommand::create_response_command())
     }
 }
 
 impl DefaultRequestProcessor {
-    fn process_broker_heartbeat(&mut self, request: RemotingCommand) -> RemotingCommand {
+    fn process_broker_heartbeat(
+        &mut self,
+        request: RemotingCommand,
+    ) -> crate::Result<RemotingCommand> {
         let request_header = request
             .decode_command_custom_header::<BrokerHeartbeatRequestHeader>()
-            .expect("decode BrokerHeartbeatRequestHeader failed");
+            .map_err(|e| {
+                NamesrvRemotingErrorWithMessage::new(
+                    e,
+                    "decode BrokerHeartbeatRequestHeader fail".to_string(),
+                )
+            })?;
         self.route_info_manager.update_broker_info_update_timestamp(
             request_header.cluster_name,
             request_header.broker_addr,
         );
-        RemotingCommand::create_response_command()
+        Ok(RemotingCommand::create_response_command())
     }
 
-    fn get_broker_member_group(&mut self, request: RemotingCommand) -> RemotingCommand {
+    fn get_broker_member_group(
+        &mut self,
+        request: RemotingCommand,
+    ) -> crate::Result<RemotingCommand> {
         let request_header = request
             .decode_command_custom_header::<GetBrokerMemberGroupRequestHeader>()
-            .expect("decode GetBrokerMemberGroupRequestHeader failed");
+            .map_err(|e| {
+                NamesrvRemotingErrorWithMessage::new(
+                    e,
+                    "decode GetBrokerMemberGroupRequestHeader fail".to_string(),
+                )
+            })?;
 
         let broker_member_group = self
             .route_info_manager
@@ -310,68 +368,113 @@ impl DefaultRequestProcessor {
         let response_body = GetBrokerMemberGroupResponseBody {
             broker_member_group,
         };
-        RemotingCommand::create_response_command().set_body(
-            response_body
-                .encode()
-                .expect("encode GetBrokerMemberGroupResponseBody failed"),
-        )
+        let body = response_body.encode().map_err(|e| {
+            MQNamesrvError(format!(
+                "encode GetBrokerMemberGroupResponseBody failed {:?}",
+                e
+            ))
+        })?;
+        Ok(RemotingCommand::create_response_command().set_body(body))
     }
 
-    fn get_broker_cluster_info(&self, _request: RemotingCommand) -> RemotingCommand {
+    fn get_broker_cluster_info(&self, _request: RemotingCommand) -> crate::Result<RemotingCommand> {
         let vec = self
             .route_info_manager
             .get_all_cluster_info()
             .encode()
-            .expect("encode ClusterInfoSerializeWrapper failed");
-        RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::Success)
-            .set_body(vec)
+            .map_err(|e| MQNamesrvError(format!("encode ClusterInfo failed {:?}", e)))?;
+        Ok(
+            RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::Success)
+                .set_body(vec),
+        )
     }
 
-    fn wipe_write_perm_of_broker(&mut self, request: RemotingCommand) -> RemotingCommand {
+    fn wipe_write_perm_of_broker(
+        &mut self,
+        request: RemotingCommand,
+    ) -> crate::Result<RemotingCommand> {
         let request_header = request
             .decode_command_custom_header::<WipeWritePermOfBrokerRequestHeader>()
-            .expect("decode WipeWritePermOfBrokerRequestHeader failed");
+            .map_err(|e| {
+                NamesrvRemotingErrorWithMessage::new(
+                    e,
+                    "decode WipeWritePermOfBrokerRequestHeader fail".to_string(),
+                )
+            })?;
         let wipe_topic_cnt = self
             .route_info_manager
             .wipe_write_perm_of_broker_by_lock(&request_header.broker_name);
-        RemotingCommand::create_response_command()
-            .set_command_custom_header(WipeWritePermOfBrokerResponseHeader::new(wipe_topic_cnt))
+        Ok(RemotingCommand::create_response_command()
+            .set_command_custom_header(WipeWritePermOfBrokerResponseHeader::new(wipe_topic_cnt)))
     }
 
-    fn add_write_perm_of_broker(&mut self, request: RemotingCommand) -> RemotingCommand {
+    fn add_write_perm_of_broker(
+        &mut self,
+        request: RemotingCommand,
+    ) -> crate::Result<RemotingCommand> {
         let request_header = request
             .decode_command_custom_header::<AddWritePermOfBrokerRequestHeader>()
-            .expect("decode AddWritePermOfBrokerRequestHeader failed");
+            .map_err(|e| {
+                NamesrvRemotingErrorWithMessage::new(
+                    e,
+                    "decode AddWritePermOfBrokerRequestHeader fail".to_string(),
+                )
+            })?;
         let add_topic_cnt = self
             .route_info_manager
             .add_write_perm_of_broker_by_lock(&request_header.broker_name);
-        RemotingCommand::create_response_command()
-            .set_command_custom_header(AddWritePermOfBrokerResponseHeader::new(add_topic_cnt))
+        Ok(RemotingCommand::create_response_command()
+            .set_command_custom_header(AddWritePermOfBrokerResponseHeader::new(add_topic_cnt)))
     }
 
-    fn get_all_topic_list_from_nameserver(&self, _request: RemotingCommand) -> RemotingCommand {
+    fn get_all_topic_list_from_nameserver(
+        &self,
+        _request: RemotingCommand,
+    ) -> crate::Result<RemotingCommand> {
         if self.route_info_manager.namesrv_config.enable_all_topic_list {
             let topics = self.route_info_manager.get_all_topic_list();
-            return RemotingCommand::create_response_command()
-                .set_body(topics.encode().expect("encode TopicList failed"));
+            let body = topics
+                .encode()
+                .map_err(|e| MQNamesrvError(format!("encode TopicList failed {:?}", e)))?;
+            return Ok(RemotingCommand::create_response_command().set_body(body));
         }
-        RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::SystemError)
-            .set_remark(CheetahString::from_static_str("disable"))
+        Ok(
+            RemotingCommand::create_response_command_with_code(
+                RemotingSysResponseCode::SystemError,
+            )
+            .set_remark(CheetahString::from_static_str("disable")),
+        )
     }
 
-    fn delete_topic_in_name_srv(&mut self, request: RemotingCommand) -> RemotingCommand {
+    fn delete_topic_in_name_srv(
+        &mut self,
+        request: RemotingCommand,
+    ) -> crate::Result<RemotingCommand> {
         let request_header = request
             .decode_command_custom_header::<DeleteTopicFromNamesrvRequestHeader>()
-            .expect("decode DeleteTopicFromNamesrvRequestHeader failed");
+            .map_err(|e| {
+                NamesrvRemotingErrorWithMessage::new(
+                    e,
+                    "decode DeleteTopicFromNamesrvRequestHeader fail".to_string(),
+                )
+            })?;
         self.route_info_manager
             .delete_topic(request_header.topic, request_header.cluster_name);
-        RemotingCommand::create_response_command()
+        Ok(RemotingCommand::create_response_command())
     }
 
-    fn register_topic_to_name_srv(&mut self, request: RemotingCommand) -> RemotingCommand {
+    fn register_topic_to_name_srv(
+        &mut self,
+        request: RemotingCommand,
+    ) -> crate::Result<RemotingCommand> {
         let request_header = request
             .decode_command_custom_header::<RegisterTopicRequestHeader>()
-            .expect("decode RegisterTopicRequestHeader failed");
+            .map_err(|e| {
+                NamesrvRemotingErrorWithMessage::new(
+                    e,
+                    "decode RegisterTopicRequestHeader fail".to_string(),
+                )
+            })?;
         if let Some(ref body) = request.body() {
             let topic_route_data = TopicRouteData::decode(body).unwrap_or_default();
             if !topic_route_data.queue_datas.is_empty() {
@@ -379,102 +482,142 @@ impl DefaultRequestProcessor {
                     .register_topic(request_header.topic, topic_route_data.queue_datas)
             }
         }
-        RemotingCommand::create_response_command()
+        Ok(RemotingCommand::create_response_command())
     }
 
-    fn get_kv_list_by_namespace(&self, request: RemotingCommand) -> RemotingCommand {
+    fn get_kv_list_by_namespace(&self, request: RemotingCommand) -> crate::Result<RemotingCommand> {
         let request_header = request
             .decode_command_custom_header::<GetKVListByNamespaceRequestHeader>()
-            .expect("decode GetKVListByNamespaceRequestHeader failed");
+            .map_err(|e| {
+                NamesrvRemotingErrorWithMessage::new(
+                    e,
+                    "decode GetKVListByNamespaceRequestHeader fail".to_string(),
+                )
+            })?;
         let value = self
             .kvconfig_manager
             .get_kv_list_by_namespace(&request_header.namespace);
         if let Some(value) = value {
-            return RemotingCommand::create_response_command().set_body(value);
+            return Ok(RemotingCommand::create_response_command().set_body(value));
         }
-        RemotingCommand::create_response_command_with_code(ResponseCode::QueryNotFound).set_remark(
-            format!(
-                "No config item, Namespace: {}",
-                request_header.namespace.as_str()
-            ),
+        Ok(
+            RemotingCommand::create_response_command_with_code(ResponseCode::QueryNotFound)
+                .set_remark(format!(
+                    "No config item, Namespace: {}",
+                    request_header.namespace.as_str()
+                )),
         )
     }
 
-    fn get_topics_by_cluster(&self, request: RemotingCommand) -> RemotingCommand {
+    fn get_topics_by_cluster(&self, request: RemotingCommand) -> crate::Result<RemotingCommand> {
         if !self.route_info_manager.namesrv_config.enable_topic_list {
-            return RemotingCommand::create_response_command_with_code(
+            return Ok(RemotingCommand::create_response_command_with_code(
                 RemotingSysResponseCode::SystemError,
             )
-            .set_remark(CheetahString::from_static_str("disable"));
+            .set_remark(CheetahString::from_static_str("disable")));
         }
 
         let request_header = request
             .decode_command_custom_header::<GetTopicsByClusterRequestHeader>()
-            .expect("decode GetTopicsByClusterRequestHeader failed");
+            .map_err(|e| {
+                NamesrvRemotingErrorWithMessage::new(
+                    e,
+                    "decode GetTopicsByClusterRequestHeader fail".to_string(),
+                )
+            })?;
         let topics_by_cluster = self
             .route_info_manager
             .get_topics_by_cluster(&request_header.cluster);
-        RemotingCommand::create_response_command()
-            .set_body(topics_by_cluster.encode().expect("encode TopicList failed"))
+        let body = topics_by_cluster
+            .encode()
+            .map_err(|e| MQNamesrvError(format!("encode TopicList failed {:?}", e)))?;
+        Ok(RemotingCommand::create_response_command().set_body(body))
     }
 
-    fn get_system_topic_list_from_ns(&self, _request: RemotingCommand) -> RemotingCommand {
+    fn get_system_topic_list_from_ns(
+        &self,
+        _request: RemotingCommand,
+    ) -> crate::Result<RemotingCommand> {
         let topic_list = self.route_info_manager.get_system_topic_list();
-        RemotingCommand::create_response_command()
-            .set_body(topic_list.encode().expect("encode TopicList failed"))
+        let body = topic_list
+            .encode()
+            .map_err(|e| MQNamesrvError(format!("encode TopicList failed {:?}", e)))?;
+        Ok(RemotingCommand::create_response_command().set_body(body))
     }
 
-    fn get_unit_topic_list(&self, _request: RemotingCommand) -> RemotingCommand {
+    fn get_unit_topic_list(&self, _request: RemotingCommand) -> crate::Result<RemotingCommand> {
         if self.route_info_manager.namesrv_config.enable_topic_list {
             let topic_list = self.route_info_manager.get_unit_topics();
-            return RemotingCommand::create_response_command()
-                .set_body(topic_list.encode().expect("encode TopicList failed"));
+            let body = topic_list
+                .encode()
+                .map_err(|e| MQNamesrvError(format!("encode TopicList failed {:?}", e)))?;
+            return Ok(RemotingCommand::create_response_command().set_body(body));
         }
-        RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::SystemError)
-            .set_remark("disable")
+        Ok(
+            RemotingCommand::create_response_command_with_code(
+                RemotingSysResponseCode::SystemError,
+            )
+            .set_remark("disable"),
+        )
     }
 
-    fn get_has_unit_sub_topic_list(&self, _request: RemotingCommand) -> RemotingCommand {
+    fn get_has_unit_sub_topic_list(
+        &self,
+        _request: RemotingCommand,
+    ) -> crate::Result<RemotingCommand> {
         if self.route_info_manager.namesrv_config.enable_topic_list {
             let topic_list = self.route_info_manager.get_has_unit_sub_topic_list();
-            return RemotingCommand::create_response_command()
-                .set_body(topic_list.encode().expect("encode TopicList failed"));
+            let body = topic_list
+                .encode()
+                .map_err(|e| MQNamesrvError(format!("encode TopicList failed {:?}", e)))?;
+            return Ok(RemotingCommand::create_response_command().set_body(body));
         }
-        RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::SystemError)
-            .set_remark("disable")
+        Ok(
+            RemotingCommand::create_response_command_with_code(
+                RemotingSysResponseCode::SystemError,
+            )
+            .set_remark("disable"),
+        )
     }
 
-    fn get_has_unit_sub_un_unit_topic_list(&self, _request: RemotingCommand) -> RemotingCommand {
+    fn get_has_unit_sub_un_unit_topic_list(
+        &self,
+        _request: RemotingCommand,
+    ) -> crate::Result<RemotingCommand> {
         if self.route_info_manager.namesrv_config.enable_topic_list {
             let topic_list = self
                 .route_info_manager
                 .get_has_unit_sub_un_unit_topic_list();
-            return RemotingCommand::create_response_command()
-                .set_body(topic_list.encode().expect("encode TopicList failed"));
+            return Ok(RemotingCommand::create_response_command()
+                .set_body(topic_list.encode().expect("encode TopicList failed")));
         }
-        RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::SystemError)
-            .set_remark("disable")
+        Ok(
+            RemotingCommand::create_response_command_with_code(
+                RemotingSysResponseCode::SystemError,
+            )
+            .set_remark("disable"),
+        )
     }
 
-    fn update_config(&mut self, request: RemotingCommand) -> RemotingCommand {
+    fn update_config(&mut self, request: RemotingCommand) -> crate::Result<RemotingCommand> {
         if let Some(body) = request.body() {
             let body_str = match str::from_utf8(body) {
                 Ok(s) => s,
                 Err(e) => {
-                    return RemotingCommand::create_response_command_with_code(
+                    return Ok(RemotingCommand::create_response_command_with_code(
                         RemotingSysResponseCode::SystemError,
                     )
-                    .set_remark(format!("UnsupportedEncodingException {:?}", e));
+                    .set_remark(format!("UnsupportedEncodingException {:?}", e)));
                 }
             };
 
             let properties = match string_to_properties(body_str) {
                 Some(props) => props,
                 None => {
-                    return RemotingCommand::create_response_command_with_code(
+                    return Ok(RemotingCommand::create_response_command_with_code(
                         RemotingSysResponseCode::SystemError,
                     )
-                    .set_remark("string_to_properties error".to_string());
+                    .set_remark("string_to_properties error".to_string()));
                 }
             };
             if validate_blacklist_config_exist(
@@ -484,28 +627,30 @@ impl DefaultRequestProcessor {
                     .get_namesrv_config()
                     .get_config_blacklist(),
             ) {
-                return RemotingCommand::create_response_command_with_code(
+                return Ok(RemotingCommand::create_response_command_with_code(
                     RemotingSysResponseCode::NoPermission,
                 )
-                .set_remark("Cannot update config in blacklist.".to_string());
+                .set_remark("Cannot update config in blacklist.".to_string()));
             }
 
             let result = self.kvconfig_manager.update_namesrv_config(properties);
             if let Err(e) = result {
-                return RemotingCommand::create_response_command_with_code(
+                return Ok(RemotingCommand::create_response_command_with_code(
                     RemotingSysResponseCode::SystemError,
                 )
-                .set_remark(format!("Update error {:?}", e));
+                .set_remark(format!("Update error {:?}", e)));
             }
         }
 
-        RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::Success)
-            .set_remark(CheetahString::empty())
+        Ok(
+            RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::Success)
+                .set_remark(CheetahString::empty()),
+        )
     }
 
-    fn get_config(&mut self, _request: RemotingCommand) -> RemotingCommand {
+    fn get_config(&mut self, _request: RemotingCommand) -> crate::Result<RemotingCommand> {
         let config = self.kvconfig_manager.get_namesrv_config();
-        match config.get_all_configs_format_string() {
+        let result = match config.get_all_configs_format_string() {
             Ok(content) => {
                 let response = RemotingCommand::create_response_command_with_code_remark(
                     RemotingSysResponseCode::Success,
@@ -517,7 +662,8 @@ impl DefaultRequestProcessor {
                 ResponseCode::SystemError,
                 format!("UnsupportedEncodingException {}", e),
             ),
-        }
+        };
+        Ok(result)
     }
 }
 
