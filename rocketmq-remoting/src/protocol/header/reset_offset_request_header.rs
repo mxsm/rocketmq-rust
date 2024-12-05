@@ -19,7 +19,7 @@ use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::rpc::rpc_request_header::RpcRequestHeader;
+use crate::rpc::topic_request_header::TopicRequestHeader;
 
 #[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
@@ -36,7 +36,7 @@ pub struct ResetOffsetRequestHeader {
     pub is_force: bool,
 
     #[serde(flatten)]
-    pub rpc_request_header: Option<RpcRequestHeader>,
+    pub topic_request_header: Option<TopicRequestHeader>,
 }
 
 impl Default for ResetOffsetRequestHeader {
@@ -48,7 +48,7 @@ impl Default for ResetOffsetRequestHeader {
             offset: None,
             timestamp: 0,
             is_force: false,
-            rpc_request_header: None,
+            topic_request_header: None,
         }
     }
 }
@@ -68,7 +68,7 @@ mod tests {
             offset: Some(100),
             timestamp: 1234567890,
             is_force: true,
-            rpc_request_header: None,
+            topic_request_header: None,
         };
         let serialized = serde_json::to_string(&header).unwrap();
         let expected = r#"{"topic":"test_topic","group":"test_group","queueId":1,"offset":100,"timestamp":1234567890,"isForce":true}"#;
