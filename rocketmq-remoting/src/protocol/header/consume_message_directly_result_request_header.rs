@@ -19,7 +19,7 @@ use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::rpc::rpc_request_header::RpcRequestHeader;
+use crate::rpc::topic_request_header::TopicRequestHeader;
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
@@ -33,7 +33,7 @@ pub struct ConsumeMessageDirectlyResultRequestHeader {
     pub topic_sys_flag: Option<i32>,
     pub group_sys_flag: Option<i32>,
     #[serde(flatten)]
-    pub rpc_request_header: Option<RpcRequestHeader>,
+    pub topic_request_header: Option<TopicRequestHeader>,
 }
 
 #[cfg(test)]
@@ -52,7 +52,7 @@ mod tests {
             topic: Some(CheetahString::from_static_str("topic")),
             topic_sys_flag: Some(1),
             group_sys_flag: Some(2),
-            rpc_request_header: None,
+            topic_request_header: None,
         };
         let serialized = serde_json::to_string(&header).unwrap();
         let expected = r#"{"consumerGroup":"test_group","clientId":"client_id","msgId":"msg_id","brokerName":"broker_name","topic":"topic","topicSysFlag":1,"groupSysFlag":2}"#;
