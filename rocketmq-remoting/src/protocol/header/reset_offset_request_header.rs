@@ -19,6 +19,8 @@ use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::rpc::rpc_request_header::RpcRequestHeader;
+
 #[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
 pub struct ResetOffsetRequestHeader {
@@ -32,6 +34,9 @@ pub struct ResetOffsetRequestHeader {
     pub timestamp: i64,
     #[required]
     pub is_force: bool,
+
+    #[serde(flatten)]
+    pub rpc_request_header: Option<RpcRequestHeader>,
 }
 
 impl Default for ResetOffsetRequestHeader {
@@ -43,6 +48,7 @@ impl Default for ResetOffsetRequestHeader {
             offset: None,
             timestamp: 0,
             is_force: false,
+            rpc_request_header: None,
         }
     }
 }
