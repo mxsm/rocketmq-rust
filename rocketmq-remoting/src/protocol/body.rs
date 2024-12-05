@@ -36,6 +36,7 @@ pub mod process_queue_info;
 pub mod producer_connection;
 pub mod query_assignment_request_body;
 pub mod query_assignment_response_body;
+pub mod queue_time_span;
 pub mod request;
 pub mod response;
 pub mod set_message_request_mode_request_body;
