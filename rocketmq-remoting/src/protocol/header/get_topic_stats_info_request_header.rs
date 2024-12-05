@@ -23,7 +23,7 @@ use crate::protocol::header::namesrv::topic_operation_header::TopicRequestHeader
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
-pub struct QueryConsumeTimeSpanRequestHeader {
+pub struct GetTopicStatsInfoRequestHeader {
     #[required]
     pub topic: CheetahString,
 
@@ -38,8 +38,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn query_consume_time_span_request_header_serializes_correctly() {
-        let header = QueryConsumeTimeSpanRequestHeader {
+    fn get_topic_stats_info_request_header_serializes_correctly() {
+        let header = GetTopicStatsInfoRequestHeader {
             topic: CheetahString::from_static_str("test_topic"),
             topic_request_header: None,
         };
@@ -49,25 +49,25 @@ mod tests {
     }
 
     #[test]
-    fn query_consume_time_span_request_header_deserializes_correctly() {
+    fn get_topic_stats_info_request_header_deserializes_correctly() {
         let data = r#"{"topic":"test_topic"}"#;
-        let header: QueryConsumeTimeSpanRequestHeader = serde_json::from_str(data).unwrap();
+        let header: GetTopicStatsInfoRequestHeader = serde_json::from_str(data).unwrap();
         assert_eq!(header.topic, CheetahString::from_static_str("test_topic"));
         assert!(!header.topic_request_header.is_none());
     }
 
     #[test]
-    fn query_consume_time_span_request_header_handles_missing_optional_fields() {
+    fn get_topic_stats_info_request_header_handles_missing_optional_fields() {
         let data = r#"{"topic":"test_topic"}"#;
-        let header: QueryConsumeTimeSpanRequestHeader = serde_json::from_str(data).unwrap();
+        let header: GetTopicStatsInfoRequestHeader = serde_json::from_str(data).unwrap();
         assert_eq!(header.topic, CheetahString::from_static_str("test_topic"));
         assert!(!header.topic_request_header.is_none());
     }
 
     #[test]
-    fn query_consume_time_span_request_header_handles_invalid_data() {
+    fn get_topic_stats_info_request_header_handles_invalid_data() {
         let data = r#"{"topic":12345}"#;
-        let result: Result<QueryConsumeTimeSpanRequestHeader, _> = serde_json::from_str(data);
+        let result: Result<GetTopicStatsInfoRequestHeader, _> = serde_json::from_str(data);
         assert!(result.is_err());
     }
 }
