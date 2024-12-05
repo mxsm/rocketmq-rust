@@ -19,7 +19,7 @@ use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::rpc::rpc_request_header::RpcRequestHeader;
+use crate::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
@@ -31,7 +31,7 @@ pub struct QueryConsumeTimeSpanRequestHeader {
     pub group: CheetahString,
 
     #[serde(flatten)]
-    pub rpc_request_header: Option<RpcRequestHeader>,
+    pub topic_request_header: Option<TopicRequestHeader>,
 }
 
 #[cfg(test)]
@@ -45,7 +45,7 @@ mod tests {
         let header = QueryConsumeTimeSpanRequestHeader {
             topic: CheetahString::from_static_str("test_topic"),
             group: CheetahString::from_static_str("test_group"),
-            rpc_request_header: None,
+            topic_request_header: None,
         };
         let serialized = serde_json::to_string(&header).unwrap();
         let expected = r#"{"topic":"test_topic","group":"test_group"}"#;
@@ -58,7 +58,7 @@ mod tests {
         let header: QueryConsumeTimeSpanRequestHeader = serde_json::from_str(data).unwrap();
         assert_eq!(header.topic, CheetahString::from_static_str("test_topic"));
         assert_eq!(header.group, CheetahString::from_static_str("test_group"));
-        assert!(!header.rpc_request_header.is_none());
+        assert!(!header.topic_request_header.is_none());
     }
 
     #[test]
@@ -67,7 +67,7 @@ mod tests {
         let header: QueryConsumeTimeSpanRequestHeader = serde_json::from_str(data).unwrap();
         assert_eq!(header.topic, CheetahString::from_static_str("test_topic"));
         assert_eq!(header.group, CheetahString::from_static_str("test_group"));
-        assert!(!header.rpc_request_header.is_none());
+        assert!(!header.topic_request_header.is_none());
     }
 
     #[test]
