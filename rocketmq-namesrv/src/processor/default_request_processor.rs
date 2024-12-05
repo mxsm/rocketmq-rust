@@ -75,7 +75,7 @@ impl DefaultRequestProcessor {
         _ctx: ConnectionHandlerContext,
         request_code: RequestCode,
         request: RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> crate::Result<Option<RemotingCommand>> {
         let response = match request_code {
             RequestCode::PutKvConfig => self.put_kv_config(request),
             RequestCode::GetKvConfig => self.get_kv_config(request),
@@ -111,7 +111,7 @@ impl DefaultRequestProcessor {
                 RemotingSysResponseCode::SystemError,
             ),
         };
-        Some(response)
+        Ok(Some(response))
     }
 }
 
