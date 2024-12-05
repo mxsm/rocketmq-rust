@@ -47,16 +47,17 @@ impl RequestProcessor for NameServerRequestProcessor {
     ) -> Result<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         info!("Name server Received request code: {:?}", request_code);
-        let result = match request_code {
-            RequestCode::GetRouteinfoByTopic => {
-                self.client_request_processor
-                    .process_request(channel, ctx, request_code, request)
-            }
-            _ => {
-                self.default_request_processor
-                    .process_request(channel, ctx, request_code, request)
-            }
-        };
-        Ok(result)
+        match request_code {
+            RequestCode::GetRouteinfoByTopic => self
+                .client_request_processor
+                .process_request(channel, ctx, request_code, request)
+                .map_err(Into::into),
+            _ => Ok(self.default_request_processor.process_request(
+                channel,
+                ctx,
+                request_code,
+                request,
+            )),
+        }
     }
 }

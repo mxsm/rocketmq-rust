@@ -35,6 +35,7 @@ use rocketmq_rust::ArcMut;
 use tracing::warn;
 
 use crate::kvconfig::kvconfig_mananger::KVConfigManager;
+use crate::namesrv_error::NamesrvError::MQNamesrvError;
 use crate::processor::NAMESPACE_ORDER_TOPIC_CONFIG;
 use crate::route::route_info_manager::RouteInfoManager;
 
@@ -61,10 +62,13 @@ impl ClientRequestProcessor {
         }
     }
 
-    fn get_route_info_by_topic(&self, request: RemotingCommand) -> RemotingCommand {
+    fn get_route_info_by_topic(
+        &self,
+        request: RemotingCommand,
+    ) -> crate::Result<Option<RemotingCommand>> {
         let request_header = request
             .decode_command_custom_header::<GetRouteInfoRequestHeader>()
-            .expect("GetRouteInfoRequestHeader failed");
+            .map_err(crate::namesrv_error::NamesrvError::NamesrvRemotingError)?;
         let namesrv_ready = self.need_check_namesrv_ready.load(Ordering::Relaxed)
             && TimeUtils::get_current_millis() - self.startup_time_millis
                 >= Duration::from_secs(self.namesrv_config.wait_seconds_for_service as u64)
@@ -74,21 +78,25 @@ impl ClientRequestProcessor {
                 "name remoting_server not ready. request code {} ",
                 request.code()
             );
-            return RemotingCommand::create_response_command_with_code(
-                RemotingSysResponseCode::SystemError,
-            )
-            .set_remark("name remoting_server not ready");
+            return Ok(Some(
+                RemotingCommand::create_response_command_with_code(
+                    RemotingSysResponseCode::SystemError,
+                )
+                .set_remark("name remoting_server not ready"),
+            ));
         }
         match self
             .route_info_manager
             .pickup_topic_route_data(request_header.topic.as_ref())
         {
-            None => RemotingCommand::create_response_command_with_code(ResponseCode::TopicNotExist)
-                .set_remark(format!(
-                    "No topic route info in name remoting_server for the topic:{}{}",
-                    request_header.topic,
-                    FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
-                )),
+            None => Ok(Some(
+                RemotingCommand::create_response_command_with_code(ResponseCode::TopicNotExist)
+                    .set_remark(format!(
+                        "No topic route info in name remoting_server for the topic:{}{}",
+                        request_header.topic,
+                        FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
+                    )),
+            )),
             Some(mut topic_route_data) => {
                 if self.need_check_namesrv_ready.load(Ordering::Acquire) {
                     self.need_check_namesrv_ready
@@ -113,9 +121,11 @@ impl ClientRequestProcessor {
                 };*/
                 let content = topic_route_data
                     .encode()
-                    .expect("encode TopicRouteData failed");
-                RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::Success)
-                    .set_body(content)
+                    .map_err(|_| MQNamesrvError("encode TopicRouteData failed".to_string()))?;
+                Ok(Some(
+                    RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+                        .set_body(content),
+                ))
             }
         }
     }
@@ -128,7 +138,7 @@ impl ClientRequestProcessor {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: RemotingCommand,
-    ) -> Option<RemotingCommand> {
-        Some(self.get_route_info_by_topic(request))
+    ) -> crate::Result<Option<RemotingCommand>> {
+        self.get_route_info_by_topic(request)
     }
 }
