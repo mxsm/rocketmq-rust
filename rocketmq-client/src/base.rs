@@ -17,5 +17,6 @@
 pub mod access_channel;
 pub mod client_config;
 pub mod mq_admin;
+pub mod mq_client_admin;
 pub mod query_result;
 pub mod validators;
