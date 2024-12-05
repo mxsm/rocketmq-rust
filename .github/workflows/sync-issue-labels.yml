@@ -39,7 +39,9 @@ jobs:
                 issue_number: issueNumber,
               });
             
-              const issueLabels = issueResponse.data.labels.map(label => label.name);
+              const issueLabels = issueResponse.data.labels
+                .map(label => label.name)
+                .filter(label => label !== 'good first issue' && label !== 'help wanted');
             
               if (issueLabels.length === 0) {
                 console.log(`No labels found on Issue #${issueNumber}`);
