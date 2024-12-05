@@ -35,6 +35,7 @@ pub mod get_max_offset_response_header;
 pub mod get_min_offset_request_header;
 pub mod get_min_offset_response_header;
 pub mod get_topic_config_request_header;
+pub mod get_topic_stats_info_request_header;
 pub mod get_topic_stats_request_header;
 pub mod heartbeat_request_header;
 pub mod lock_batch_mq_request_header;
