@@ -68,6 +68,7 @@ mod tests {
             offset: Some(100),
             timestamp: 1234567890,
             is_force: true,
+            rpc_request_header: None,
         };
         let serialized = serde_json::to_string(&header).unwrap();
         let expected = r#"{"topic":"test_topic","group":"test_group","queueId":1,"offset":100,"timestamp":1234567890,"isForce":true}"#;
