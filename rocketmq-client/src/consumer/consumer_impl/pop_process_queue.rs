@@ -92,7 +92,7 @@ impl PopProcessQueue {
 
     pub(crate) fn is_pull_expired(&self) -> bool {
         let current_time = get_current_millis();
-        (current_time - self.last_pop_timestamp) > *PULL_MAX_IDLE_TIME
+        current_time.saturating_sub(self.last_pop_timestamp) > *PULL_MAX_IDLE_TIME
     }
 }
 
