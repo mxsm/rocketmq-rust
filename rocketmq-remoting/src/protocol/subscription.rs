@@ -17,6 +17,7 @@
 
 pub mod customized_retry_policy;
 pub mod exponential_retry_policy;
+pub mod group_forbidden;
 pub mod group_retry_policy;
 pub mod group_retry_policy_type;
 pub mod retry_policy;
