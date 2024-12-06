@@ -43,12 +43,16 @@ pub trait RebalanceLocal {
         pq: &ProcessQueue,
     ) -> bool;
 
-    fn remove_unnecessary_pop_message_queue(&self, mq: MessageQueue, pq: ProcessQueue) -> bool;
+    fn remove_unnecessary_pop_message_queue(
+        &mut self,
+        mq: &MessageQueue,
+        pq: &PopProcessQueue,
+    ) -> bool;
 
     fn remove_unnecessary_pop_message_queue_pop(
-        &self,
-        _mq: MessageQueue,
-        _pq: PopProcessQueue,
+        &mut self,
+        _mq: &MessageQueue,
+        _pq: &PopProcessQueue,
     ) -> bool {
         true
     }
@@ -65,7 +69,7 @@ pub trait RebalanceLocal {
 
     async fn dispatch_pull_request(&self, pull_request_list: Vec<PullRequest>, delay: u64);
 
-    fn dispatch_pop_pull_request(&self, pull_request_list: Vec<PopRequest>, delay: u64);
+    async fn dispatch_pop_pull_request(&self, pull_request_list: Vec<PopRequest>, delay: u64);
 
     fn create_process_queue(&self) -> ProcessQueue;
 

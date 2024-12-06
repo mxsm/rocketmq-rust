@@ -68,8 +68,8 @@ impl PopProcessQueue {
         self.dropped
     }
 
-    pub(crate) fn set_dropped(&mut self, dropped: bool) {
-        self.dropped = dropped;
+    pub(crate) fn set_dropped(&self, dropped: bool) {
+        //self.dropped = dropped;
     }
 
     pub(crate) fn fill_pop_process_queue_info(&self, info: &mut PopProcessQueueInfo) {
