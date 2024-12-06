@@ -17,6 +17,7 @@
 use std::hash::Hash;
 use std::hash::Hasher;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 
@@ -25,8 +26,8 @@ use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
 
 #[derive(Clone)]
 pub struct PopRequest {
-    topic: String,
-    consumer_group: String,
+    topic: CheetahString,
+    consumer_group: CheetahString,
     message_queue: MessageQueue,
     pop_process_queue: PopProcessQueue,
     locked_first: bool,
@@ -35,8 +36,8 @@ pub struct PopRequest {
 
 impl PopRequest {
     pub fn new(
-        topic: String,
-        consumer_group: String,
+        topic: CheetahString,
+        consumer_group: CheetahString,
         message_queue: MessageQueue,
         pop_process_queue: PopProcessQueue,
         init_mode: i32,
@@ -63,7 +64,7 @@ impl PopRequest {
         &self.consumer_group
     }
 
-    pub fn set_consumer_group(&mut self, consumer_group: String) {
+    pub fn set_consumer_group(&mut self, consumer_group: CheetahString) {
         self.consumer_group = consumer_group;
     }
 
@@ -79,7 +80,7 @@ impl PopRequest {
         &self.topic
     }
 
-    pub fn set_topic(&mut self, topic: String) {
+    pub fn set_topic(&mut self, topic: CheetahString) {
         self.topic = topic;
     }
 

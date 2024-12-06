@@ -243,7 +243,11 @@ impl Rebalance for RebalancePushImpl {
         }
     }
 
-    fn remove_unnecessary_pop_message_queue(&self, mq: MessageQueue, pq: ProcessQueue) -> bool {
+    fn remove_unnecessary_pop_message_queue(
+        &mut self,
+        mq: &MessageQueue,
+        pq: &PopProcessQueue,
+    ) -> bool {
         todo!()
     }
 
@@ -414,7 +418,7 @@ impl Rebalance for RebalancePushImpl {
         }
     }
 
-    fn dispatch_pop_pull_request(&self, pull_request_list: Vec<PopRequest>, delay: u64) {
+    async fn dispatch_pop_pull_request(&self, pull_request_list: Vec<PopRequest>, delay: u64) {
         todo!()
     }
 

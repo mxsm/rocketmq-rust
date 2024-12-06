@@ -81,6 +81,7 @@ impl RequestProcessor for ClientRemotingProcessor {
             RequestCode::ConsumeMessageDirectly => {
                 unimplemented!("ConsumeMessageDirectly")
             }
+            //RPC message handle code
             RequestCode::PushReplyMessageToClient => self.receive_reply_message(ctx, request).await,
             RequestCode::NotifyConsumerIdsChanged => {
                 self.notify_consumer_ids_changed(channel, ctx, request)
