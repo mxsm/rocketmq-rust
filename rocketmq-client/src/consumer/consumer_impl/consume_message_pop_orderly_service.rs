@@ -16,6 +16,7 @@
  */
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_client_ext::MessageClientExt;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
@@ -54,8 +55,8 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
 
     async fn consume_message_directly(
         &self,
-        msg: &MessageExt,
-        broker_name: &str,
+        msg: MessageExt,
+        broker_name: Option<CheetahString>,
     ) -> ConsumeMessageDirectlyResult {
         todo!()
     }
