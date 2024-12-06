@@ -410,8 +410,25 @@ impl Rebalance for RebalancePushImpl {
         }
     }
 
-    async fn dispatch_pop_pull_request(&self, pull_request_list: Vec<PopRequest>, delay: u64) {
-        todo!()
+    async fn dispatch_pop_pull_request(&self, pop_request_list: Vec<PopRequest>, delay: u64) {
+        let mqpush_consumer_impl = self
+            .default_mqpush_consumer_impl
+            .as_ref()
+            .unwrap()
+            .upgrade();
+        if mqpush_consumer_impl.is_none() {
+            return;
+        }
+        let mut mqpush_consumer_impl = mqpush_consumer_impl.unwrap();
+        for pop_request in pop_request_list {
+            if delay == 0 {
+                mqpush_consumer_impl
+                    .execute_pop_request_immediately(pop_request)
+                    .await;
+            } else {
+                mqpush_consumer_impl.execute_pop_request_later(pop_request, delay);
+            }
+        }
     }
 
     #[inline]
@@ -419,6 +436,7 @@ impl Rebalance for RebalancePushImpl {
         ProcessQueue::new()
     }
 
+    #[inline]
     fn create_pop_process_queue(&self) -> PopProcessQueue {
         PopProcessQueue::new()
     }

@@ -700,6 +700,22 @@ impl DefaultMQPushConsumerImpl {
             .execute_pull_request_later(pull_request, time_delay);
     }
 
+    pub async fn execute_pop_request_immediately(&mut self, pop_request: PopRequest) {
+        self.client_instance
+            .as_mut()
+            .unwrap()
+            .pull_message_service
+            .execute_pop_pull_request_immediately(pop_request)
+            .await;
+    }
+    pub fn execute_pop_request_later(&mut self, pop_request: PopRequest, time_delay: u64) {
+        self.client_instance
+            .as_mut()
+            .unwrap()
+            .pull_message_service
+            .execute_pop_pull_request_later(pop_request, time_delay);
+    }
+
     pub(crate) async fn pop_message(&mut self, pop_request: PopRequest) {
         unimplemented!("popMessage");
     }
