@@ -38,6 +38,7 @@ use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
 use rocketmq_common::common::FAQUrl;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_remoting::protocol::body::consumer_running_info::ConsumerRunningInfo;
 use rocketmq_remoting::protocol::filter::filter_api::FilterAPI;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
@@ -714,6 +715,29 @@ impl DefaultMQPushConsumerImpl {
             .unwrap()
             .pull_message_service
             .execute_pop_pull_request_later(pop_request, time_delay);
+    }
+
+    pub(crate) async fn consume_message_directly(
+        &self,
+        msg: MessageExt,
+        broker_name: Option<CheetahString>,
+    ) -> Option<ConsumeMessageDirectlyResult> {
+        if let Some(consume_message_service) = self.consume_message_service.as_ref() {
+            Some(
+                consume_message_service
+                    .consume_message_directly(msg, broker_name)
+                    .await,
+            )
+        } else if let Some(consume_message_pop_service) = self.consume_message_pop_service.as_ref()
+        {
+            Some(
+                consume_message_pop_service
+                    .consume_message_directly(msg, broker_name)
+                    .await,
+            )
+        } else {
+            None
+        }
     }
 
     pub(crate) async fn pop_message(&mut self, pop_request: PopRequest) {

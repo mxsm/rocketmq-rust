@@ -16,6 +16,7 @@
  */
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_client_ext::MessageClientExt;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
@@ -89,8 +90,8 @@ where
 
     pub async fn consume_message_directly(
         &self,
-        msg: &MessageExt,
-        broker_name: &str,
+        msg: MessageExt,
+        broker_name: Option<CheetahString>,
     ) -> ConsumeMessageDirectlyResult {
         todo!()
     }
@@ -206,10 +207,10 @@ where
         todo!()
     }
 
-    async fn consume_message_directly(
+    pub(crate) async fn consume_message_directly(
         &self,
-        msg: &MessageExt,
-        broker_name: &str,
+        msg: MessageExt,
+        broker_name: Option<CheetahString>,
     ) -> ConsumeMessageDirectlyResult {
         todo!()
     }
@@ -249,8 +250,8 @@ pub trait ConsumeMessageServiceTrait {
 
     async fn consume_message_directly(
         &self,
-        msg: &MessageExt,
-        broker_name: &str,
+        msg: MessageExt,
+        broker_name: Option<CheetahString>,
     ) -> ConsumeMessageDirectlyResult;
 
     async fn submit_consume_request(

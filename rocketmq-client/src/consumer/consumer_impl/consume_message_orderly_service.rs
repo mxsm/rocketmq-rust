@@ -437,8 +437,8 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
 
     async fn consume_message_directly(
         &self,
-        msg: &MessageExt,
-        broker_name: &str,
+        msg: MessageExt,
+        broker_name: Option<CheetahString>,
     ) -> ConsumeMessageDirectlyResult {
         todo!()
     }

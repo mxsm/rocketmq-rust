@@ -19,6 +19,7 @@ use std::net::SocketAddr;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::compression::compressor_factory::CompressorFactory;
+use rocketmq_common::common::message::message_decoder;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
@@ -30,10 +31,13 @@ use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
+use rocketmq_remoting::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader;
 use rocketmq_remoting::protocol::header::notify_consumer_ids_changed_request_header::NotifyConsumerIdsChangedRequestHeader;
 use rocketmq_remoting::protocol::header::reply_message_request_header::ReplyMessageRequestHeader;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_remoting::protocol::RemotingSerializable;
+use rocketmq_remoting::remoting_error::RemotingError::RemotingCommandError;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_remoting::Result;
@@ -79,7 +83,7 @@ impl RequestProcessor for ClientRemotingProcessor {
                 unimplemented!("GetConsumerRunningInfo")
             }
             RequestCode::ConsumeMessageDirectly => {
-                unimplemented!("ConsumeMessageDirectly")
+                self.consume_message_directly(channel, ctx, request).await
             }
             //RPC message handle code
             RequestCode::PushReplyMessageToClient => self.receive_reply_message(ctx, request).await,
@@ -271,5 +275,53 @@ impl ClientRemotingProcessor {
             warn!("checkTransactionState, decode message failed");
         };
         Ok(None)
+    }
+
+    async fn consume_message_directly(
+        &mut self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        mut request: RemotingCommand,
+    ) -> Result<Option<RemotingCommand>> {
+        let request_header =
+            request.decode_command_custom_header::<ConsumeMessageDirectlyResultRequestHeader>()?;
+        let body = request
+            .get_body_mut()
+            .ok_or(RemotingCommandError("body is empty".to_string()))?;
+        let msg = message_decoder::decode(body, true, true, false, false, false)
+            .ok_or(RemotingCommandError("decode message failed".to_string()))?;
+
+        if let Some(client_instance) = self.client_instance.upgrade() {
+            let result = client_instance
+                .consume_message_directly(
+                    msg,
+                    &request_header.consumer_group,
+                    request_header.broker_name.clone(),
+                )
+                .await;
+            if let Some(result) = result {
+                let body = result
+                    .encode()
+                    .map_err(|_| RemotingCommandError("encode result failed".to_string()))?;
+                Ok(Some(
+                    RemotingCommand::create_response_command().set_body(body),
+                ))
+            } else {
+                warn!("consumeMessageDirectly, consume message failed");
+                Ok(Some(
+                    RemotingCommand::create_response_command_with_code(ResponseCode::SystemError)
+                        .set_remark(format!(
+                            "The Consumer Group <{}> not exist in this consumer",
+                            request_header.consumer_group
+                        )),
+                ))
+            }
+        } else {
+            warn!("consumeMessageDirectly, client_instance is empty");
+            Ok(Some(
+                RemotingCommand::create_response_command_with_code(ResponseCode::SystemError)
+                    .set_remark("client_instance is empty"),
+            ))
+        }
     }
 }

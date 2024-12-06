@@ -19,7 +19,9 @@ use std::collections::HashSet;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
+use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_remoting::protocol::body::consumer_running_info::ConsumerRunningInfo;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
@@ -126,6 +128,21 @@ impl MQConsumerInnerImpl {
                     .await;
             }
         }
+    }
+
+    pub(crate) async fn consume_message_directly(
+        &self,
+        msg: MessageExt,
+        broker_name: Option<CheetahString>,
+    ) -> Option<ConsumeMessageDirectlyResult> {
+        if let Some(ref default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl {
+            if let Some(default_mqpush_consumer_impl) = default_mqpush_consumer_impl.upgrade() {
+                return default_mqpush_consumer_impl
+                    .consume_message_directly(msg, broker_name)
+                    .await;
+            }
+        }
+        None
     }
 }
 

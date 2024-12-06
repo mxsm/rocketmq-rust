@@ -27,11 +27,13 @@ use rand::seq::SliceRandom;
 use rocketmq_common::common::base::service_state::ServiceState;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
+use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::base::connection_net_event::ConnectionNetEvent;
+use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_remoting::protocol::heartbeat::consumer_data::ConsumerData;
 use rocketmq_remoting::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
@@ -1181,6 +1183,23 @@ impl MQClientInstance {
         } else {
             Ok(None)
         }
+    }
+
+    pub async fn consume_message_directly(
+        &self,
+        message: MessageExt,
+        consumer_group: &CheetahString,
+        broker_name: Option<CheetahString>,
+    ) -> Option<ConsumeMessageDirectlyResult> {
+        let consumer_table = self.consumer_table.read().await;
+        let consumer_inner = consumer_table.get(consumer_group);
+        if let Some(consumer) = consumer_inner {
+            consumer
+                .consume_message_directly(message, broker_name)
+                .await;
+        }
+
+        None
     }
 }
 
