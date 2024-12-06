@@ -45,12 +45,6 @@ pub trait RebalanceLocal {
 
     fn remove_unnecessary_pop_message_queue(
         &mut self,
-        mq: &MessageQueue,
-        pq: &PopProcessQueue,
-    ) -> bool;
-
-    fn remove_unnecessary_pop_message_queue_pop(
-        &mut self,
         _mq: &MessageQueue,
         _pq: &PopProcessQueue,
     ) -> bool {

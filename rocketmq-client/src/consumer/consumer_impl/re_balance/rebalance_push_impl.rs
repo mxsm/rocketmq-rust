@@ -243,14 +243,6 @@ impl Rebalance for RebalancePushImpl {
         }
     }
 
-    fn remove_unnecessary_pop_message_queue(
-        &mut self,
-        mq: &MessageQueue,
-        pq: &PopProcessQueue,
-    ) -> bool {
-        todo!()
-    }
-
     fn consume_type(&self) -> ConsumeType {
         ConsumeType::ConsumePassively
     }
