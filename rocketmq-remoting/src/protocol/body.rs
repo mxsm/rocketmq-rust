@@ -23,6 +23,7 @@ pub mod get_consumer_listby_group_response_body;
 pub mod consumer_connection;
 
 pub mod acl_info;
+pub mod broker_item;
 pub mod check_client_request_body;
 pub mod check_rocksdb_cqwrite_progress_response_body;
 pub mod cluster_acl_version_info;
