@@ -27,6 +27,7 @@ use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_remoting::protocol::body::cm_result::CMResult;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_runtime::RocketMQRuntime;
@@ -272,10 +273,51 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
 
     async fn consume_message_directly(
         &self,
-        msg: MessageExt,
+        mut msg: MessageExt,
         broker_name: Option<CheetahString>,
     ) -> ConsumeMessageDirectlyResult {
-        todo!()
+        info!("consumeMessageDirectly receive new message: {}", msg);
+        msg.broker_name = broker_name.unwrap_or_default();
+        let mq =
+            MessageQueue::from_parts(msg.topic().clone(), msg.broker_name.clone(), msg.queue_id());
+        let mut msgs = vec![ArcMut::new(MessageClientExt::new(msg))];
+        let context = ConsumeConcurrentlyContext::new(mq);
+        self.default_mqpush_consumer_impl
+            .as_ref()
+            .unwrap()
+            .upgrade()
+            .unwrap()
+            .reset_retry_and_namespace(msgs.as_mut_slice(), self.consumer_group.as_str());
+
+        let begin_timestamp = Instant::now();
+
+        let status = self.message_listener.consume_message(
+            &msgs
+                .iter()
+                .map(|msg| &msg.message_ext_inner)
+                .collect::<Vec<&MessageExt>>(),
+            &context,
+        );
+        let mut result = ConsumeMessageDirectlyResult::default();
+        result.set_order(false);
+        result.set_auto_commit(true);
+        match status {
+            Ok(status) => match status {
+                ConsumeConcurrentlyStatus::ConsumeSuccess => {
+                    result.set_consume_result(CMResult::CRSuccess);
+                }
+                ConsumeConcurrentlyStatus::ReconsumeLater => {
+                    result.set_consume_result(CMResult::CRLater);
+                }
+            },
+            Err(e) => {
+                result.set_consume_result(CMResult::CRThrowException);
+                result.set_remark(CheetahString::from_string(e.to_string()))
+            }
+        }
+        result.set_spent_time_mills(begin_timestamp.elapsed().as_millis() as u64);
+        info!("consumeMessageDirectly Result: {}", result);
+        result
     }
 
     async fn submit_consume_request(
