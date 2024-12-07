@@ -17,6 +17,7 @@
 pub mod allocate_message_queue_averagely;
 pub mod allocate_message_queue_averagely_by_circle;
 pub mod allocate_message_queue_by_machine_room;
+pub mod allocate_message_queue_by_machine_room_nearby;
 
 use std::collections::HashSet;
 
