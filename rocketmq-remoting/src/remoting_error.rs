@@ -77,6 +77,9 @@ pub enum RemotingError {
 
     #[error("CommonError: {0}")]
     CommonError(#[from] rocketmq_common::error::Error),
+
+    #[error("{0}")]
+    IllegalArgument(String),
 }
 
 #[cfg(test)]

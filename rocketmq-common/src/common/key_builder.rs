@@ -17,10 +17,10 @@
 use crate::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
 use crate::common::pop_ack_constants::PopAckConstants;
 
-const POP_ORDER_REVIVE_QUEUE: i32 = 999;
-const POP_RETRY_SEPARATOR_V1: char = '_';
-const POP_RETRY_SEPARATOR_V2: char = '+';
-const POP_RETRY_REGEX_SEPARATOR_V2: &str = "\\+";
+pub const POP_ORDER_REVIVE_QUEUE: i32 = 999;
+pub const POP_RETRY_SEPARATOR_V1: char = '_';
+pub const POP_RETRY_SEPARATOR_V2: char = '+';
+pub const POP_RETRY_REGEX_SEPARATOR_V2: &str = "\\+";
 
 pub struct KeyBuilder;
 
