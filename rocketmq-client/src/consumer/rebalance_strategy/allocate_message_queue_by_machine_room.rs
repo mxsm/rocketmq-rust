@@ -28,7 +28,7 @@ pub struct AllocateMessageQueueByMachineRoom {
 
 impl AllocateMessageQueueByMachineRoom {
     #[inline]
-    fn new(consumer_idcs: HashSet<CheetahString>) -> Self {
+    pub fn new(consumer_idcs: HashSet<CheetahString>) -> Self {
         Self { consumer_idcs }
     }
 }
@@ -67,12 +67,19 @@ impl AllocateMessageQueueStrategy for AllocateMessageQueueByMachineRoom {
         let start_index = mod_size * current_index;
         let end_index = start_index + mod_size;
 
-        for i in start_index..end_index {
-            result.push(premq_all[i].clone());
-        }
+        result.extend(
+            premq_all
+                .iter()
+                .skip(start_index)
+                .take(end_index - start_index)
+                .cloned(),
+        );
 
         if rem > current_index {
-            result.push(premq_all[current_index + mod_size * cid_all.len()].clone());
+            let extra_index = current_index + mod_size * cid_all.len();
+            if extra_index < premq_all.len() {
+                result.push(premq_all[extra_index].clone());
+            }
         }
 
         Ok(result)
