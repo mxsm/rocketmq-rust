@@ -21,7 +21,7 @@ use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
-use rocketmq_rust::WeakArcMut;
+use rocketmq_rust::ArcMut;
 use tracing::warn;
 
 use crate::client_error::MQClientError;
@@ -42,7 +42,7 @@ pub trait PullCallbackLocal: Sync {
 }
 
 pub(crate) struct DefaultPullCallback {
-    pub(crate) push_consumer_impl: WeakArcMut<DefaultMQPushConsumerImpl>,
+    pub(crate) push_consumer_impl: ArcMut<DefaultMQPushConsumerImpl>,
     pub(crate) message_queue_inner: Option<MessageQueue>,
     pub(crate) subscription_data: Option<SubscriptionData>,
     pub(crate) pull_request: Option<PullRequest>,
@@ -50,12 +50,12 @@ pub(crate) struct DefaultPullCallback {
 
 impl PullCallback for DefaultPullCallback {
     async fn on_success(&mut self, mut pull_result_ext: PullResultExt) {
-        let push_consumer_impl = self.push_consumer_impl.upgrade();
+        /*let push_consumer_impl = self.push_consumer_impl.upgrade();
         if push_consumer_impl.is_none() {
             warn!("push_consumer_impl is None");
             return;
-        }
-        let mut push_consumer_impl = push_consumer_impl.unwrap();
+        }*/
+        let mut push_consumer_impl = self.push_consumer_impl.clone();
 
         let message_queue_inner = self.message_queue_inner.take().unwrap();
         let subscription_data = self.subscription_data.take().unwrap();
@@ -163,12 +163,7 @@ impl PullCallback for DefaultPullCallback {
     }
 
     fn on_exception(&mut self, err: Box<dyn std::error::Error + Send>) {
-        let push_consumer_impl = self.push_consumer_impl.upgrade();
-        if push_consumer_impl.is_none() {
-            warn!("push_consumer_impl is None");
-            return;
-        }
-        let mut push_consumer_impl = push_consumer_impl.unwrap();
+        let mut push_consumer_impl = self.push_consumer_impl.clone();
 
         let message_queue_inner = self.message_queue_inner.take().unwrap();
         let pull_request = self.pull_request.take().unwrap();

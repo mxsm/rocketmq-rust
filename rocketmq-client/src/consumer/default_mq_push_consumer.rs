@@ -664,7 +664,7 @@ impl DefaultMQPushConsumer {
             consumer_config.clone(),
             consumer_config.rpc_hook.clone(),
         ));
-        let wrapper = ArcMut::downgrade(&default_mqpush_consumer_impl);
+        let wrapper = default_mqpush_consumer_impl.clone();
         default_mqpush_consumer_impl.set_default_mqpush_consumer_impl(wrapper);
         DefaultMQPushConsumer {
             client_config,

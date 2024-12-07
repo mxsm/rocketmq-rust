@@ -47,7 +47,6 @@ use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_rust::ArcMut;
-use rocketmq_rust::WeakArcMut;
 use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 use tracing::error;
@@ -134,7 +133,7 @@ pub struct DefaultMQPushConsumerImpl {
     queue_flow_control_times: u64,
     queue_max_span_flow_control_times: u64,
     pop_delay_level: Arc<[i32; 16]>,
-    default_mqpush_consumer_impl: Option<WeakArcMut<DefaultMQPushConsumerImpl>>,
+    default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
 }
 
 impl DefaultMQPushConsumerImpl {
@@ -175,7 +174,7 @@ impl DefaultMQPushConsumerImpl {
 
     pub fn set_default_mqpush_consumer_impl(
         &mut self,
-        default_mqpush_consumer_impl: WeakArcMut<DefaultMQPushConsumerImpl>,
+        default_mqpush_consumer_impl: ArcMut<DefaultMQPushConsumerImpl>,
     ) {
         self.rebalance_impl
             .set_default_mqpush_consumer_impl(default_mqpush_consumer_impl.clone());

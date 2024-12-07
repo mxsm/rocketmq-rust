@@ -121,7 +121,6 @@ impl Display for PopProcessQueue {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
 
     #[test]

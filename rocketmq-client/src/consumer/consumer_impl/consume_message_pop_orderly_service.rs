@@ -22,7 +22,6 @@ use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_rust::ArcMut;
-use rocketmq_rust::WeakArcMut;
 
 use crate::consumer::consumer_impl::consume_message_service::ConsumeMessageServiceTrait;
 use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
@@ -31,7 +30,7 @@ use crate::consumer::consumer_impl::process_queue::ProcessQueue;
 pub struct ConsumeMessagePopOrderlyService;
 
 impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
-    fn start(&mut self, this: WeakArcMut<Self>) {}
+    fn start(&mut self, this: ArcMut<Self>) {}
 
     async fn shutdown(&mut self, await_terminate_millis: u64) {
         todo!()
@@ -63,7 +62,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
 
     async fn submit_consume_request(
         &self,
-        this: WeakArcMut<Self>,
+        this: ArcMut<Self>,
         msgs: Vec<ArcMut<MessageClientExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,

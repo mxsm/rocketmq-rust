@@ -56,15 +56,13 @@ where
         if let Some(consume_message_concurrently_service) =
             &mut self.consume_message_concurrently_service
         {
-            let consume_message_concurrently_service_weak =
-                ArcMut::downgrade(consume_message_concurrently_service);
-            consume_message_concurrently_service.start(consume_message_concurrently_service_weak);
+            let this = consume_message_concurrently_service.clone();
+            consume_message_concurrently_service.start(this);
         }
 
         if let Some(consume_message_orderly_service) = &mut self.consume_message_orderly_service {
-            let consume_message_pop_concurrently_service_weak =
-                ArcMut::downgrade(consume_message_orderly_service);
-            consume_message_orderly_service.start(consume_message_pop_concurrently_service_weak);
+            let this = consume_message_orderly_service.clone();
+            consume_message_orderly_service.start(this);
         }
     }
 
@@ -106,9 +104,10 @@ where
         if let Some(consume_message_concurrently_service) =
             &self.consume_message_concurrently_service
         {
+            let this = consume_message_concurrently_service.clone();
             consume_message_concurrently_service
                 .submit_consume_request(
-                    ArcMut::downgrade(consume_message_concurrently_service),
+                    this,
                     msgs,
                     process_queue,
                     message_queue,
@@ -117,9 +116,10 @@ where
                 .await;
         } else if let Some(consume_message_orderly_service) = &self.consume_message_orderly_service
         {
+            let this = consume_message_orderly_service.clone();
             consume_message_orderly_service
                 .submit_consume_request(
-                    ArcMut::downgrade(consume_message_orderly_service),
+                    this,
                     msgs,
                     process_queue,
                     message_queue,
@@ -172,18 +172,15 @@ where
         if let Some(consume_message_pop_concurrently_service) =
             &mut self.consume_message_pop_concurrently_service
         {
-            let consume_message_pop_concurrently_service_weak =
-                ArcMut::downgrade(consume_message_pop_concurrently_service);
-            consume_message_pop_concurrently_service
-                .start(consume_message_pop_concurrently_service_weak);
+            let this = consume_message_pop_concurrently_service.clone();
+            consume_message_pop_concurrently_service.start(this);
         }
 
         if let Some(consume_message_pop_orderly_service) =
             &mut self.consume_message_pop_orderly_service
         {
-            let consume_message_pop_orderly_service_weak =
-                ArcMut::downgrade(consume_message_pop_orderly_service);
-            consume_message_pop_orderly_service.start(consume_message_pop_orderly_service_weak);
+            let this = consume_message_pop_orderly_service.clone();
+            consume_message_pop_orderly_service.start(this);
         }
     }
 
@@ -236,7 +233,7 @@ where
 }
 
 pub trait ConsumeMessageServiceTrait {
-    fn start(&mut self, this: WeakArcMut<Self>);
+    fn start(&mut self, this: ArcMut<Self>);
 
     async fn shutdown(&mut self, await_terminate_millis: u64);
 
@@ -256,7 +253,7 @@ pub trait ConsumeMessageServiceTrait {
 
     async fn submit_consume_request(
         &self,
-        this: WeakArcMut<Self>,
+        this: ArcMut<Self>,
         msgs: Vec<ArcMut<MessageClientExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,

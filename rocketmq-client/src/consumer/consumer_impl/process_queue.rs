@@ -32,7 +32,6 @@ use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::protocol::body::process_queue_info::ProcessQueueInfo;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::RocketMQTokioRwLock;
-use rocketmq_rust::WeakArcMut;
 use tokio::sync::RwLock;
 
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
@@ -132,16 +131,13 @@ impl ProcessQueue {
 
     pub(crate) async fn clean_expired_msg(
         &self,
-        push_consumer: Option<WeakArcMut<DefaultMQPushConsumerImpl>>,
+        push_consumer: Option<ArcMut<DefaultMQPushConsumerImpl>>,
     ) {
         if push_consumer.is_none() {
             return;
         }
-        let push_consumer = push_consumer.unwrap().upgrade();
-        if push_consumer.is_none() {
-            return;
-        }
         let mut push_consumer = push_consumer.unwrap();
+
         if push_consumer.is_consume_orderly() {
             return;
         }
