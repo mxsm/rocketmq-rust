@@ -1,8 +1,13 @@
 use crate::protocol::body::broker_item::BrokerStatsItem;
 
+#[derive(Debug, Clone)]
+/// Represents broker statistics over different time periods (minute, hour, day)
 pub struct BrokerStatsData {
+    /// Statistics for the last minute
     stats_minute: BrokerStatsItem,
+    /// Statistics for the last hour
     stats_hour: BrokerStatsItem,
+    /// Statistics for the last day
     stats_day: BrokerStatsItem,
 }
 
