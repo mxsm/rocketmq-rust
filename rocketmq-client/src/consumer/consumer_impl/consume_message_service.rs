@@ -232,25 +232,67 @@ where
     }
 }
 
+/// Trait defining the behavior of a message consumption service.
 pub trait ConsumeMessageServiceTrait {
+    /// Starts the message consumption service.
+    ///
+    /// # Arguments
+    ///
+    /// * `this` - An `ArcMut` reference to the service instance.
     fn start(&mut self, this: ArcMut<Self>);
 
+    /// Shuts down the message consumption service.
+    ///
+    /// # Arguments
+    ///
+    /// * `await_terminate_millis` - The number of milliseconds to wait for termination.
     async fn shutdown(&mut self, await_terminate_millis: u64);
 
+    /// Updates the core pool size of the service.
+    ///
+    /// # Arguments
+    ///
+    /// * `core_pool_size` - The new core pool size.
     fn update_core_pool_size(&self, core_pool_size: usize);
 
+    /// Increases the core pool size of the service by one.
     fn inc_core_pool_size(&self);
 
+    /// Decreases the core pool size of the service by one.
     fn dec_core_pool_size(&self);
 
+    /// Gets the current core pool size of the service.
+    ///
+    /// # Returns
+    ///
+    /// The current core pool size.
     fn get_core_pool_size(&self) -> usize;
 
+    /// Consumes a message directly.
+    ///
+    /// # Arguments
+    ///
+    /// * `msg` - The message to be consumed.
+    /// * `broker_name` - An optional broker name.
+    ///
+    /// # Returns
+    ///
+    /// A `ConsumeMessageDirectlyResult` indicating the result of the consumption.
     async fn consume_message_directly(
         &self,
         msg: MessageExt,
         broker_name: Option<CheetahString>,
     ) -> ConsumeMessageDirectlyResult;
 
+    /// Submits a consume request.
+    ///
+    /// # Arguments
+    ///
+    /// * `this` - An `ArcMut` reference to the service instance.
+    /// * `msgs` - A vector of messages to be consumed.
+    /// * `process_queue` - The process queue.
+    /// * `message_queue` - The message queue.
+    /// * `dispatch_to_consume` - A boolean indicating whether to dispatch to consume.
     async fn submit_consume_request(
         &self,
         this: ArcMut<Self>,
@@ -260,6 +302,13 @@ pub trait ConsumeMessageServiceTrait {
         dispatch_to_consume: bool,
     );
 
+    /// Submits a pop consume request.
+    ///
+    /// # Arguments
+    ///
+    /// * `msgs` - A vector of messages to be consumed.
+    /// * `process_queue` - The pop process queue.
+    /// * `message_queue` - The message queue.
     async fn submit_pop_consume_request(
         &self,
         msgs: Vec<MessageExt>,
