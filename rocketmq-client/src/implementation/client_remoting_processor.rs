@@ -41,7 +41,7 @@ use rocketmq_remoting::remoting_error::RemotingError::RemotingCommandError;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_remoting::Result;
-use rocketmq_rust::WeakArcMut;
+use rocketmq_rust::ArcMut;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -51,11 +51,11 @@ use crate::producer::request_future_holder::REQUEST_FUTURE_HOLDER;
 
 #[derive(Clone)]
 pub struct ClientRemotingProcessor {
-    pub(crate) client_instance: WeakArcMut<MQClientInstance>,
+    pub(crate) client_instance: ArcMut<MQClientInstance>,
 }
 
 impl ClientRemotingProcessor {
-    pub fn new(client_instance: WeakArcMut<MQClientInstance>) -> Self {
+    pub fn new(client_instance: ArcMut<MQClientInstance>) -> Self {
         Self { client_instance }
     }
 }
@@ -212,9 +212,9 @@ impl ClientRemotingProcessor {
             channel.remote_address(),
             request_header.consumer_group
         );
-        if let Some(client_instance) = self.client_instance.upgrade() {
-            client_instance.re_balance_immediately();
-        }
+
+        self.client_instance.re_balance_immediately();
+
         Ok(None)
     }
 
@@ -236,40 +236,38 @@ impl ClientRemotingProcessor {
             false,
         );
         if let Some(mut message_ext) = message_ext {
-            if let Some(mut client_instance) = self.client_instance.upgrade() {
-                if let Some(ref namespace) = client_instance.client_config.get_namespace() {
-                    let topic = NamespaceUtil::without_namespace_with_namespace(
-                        message_ext.get_topic(),
-                        client_instance
-                            .client_config
-                            .get_namespace()
-                            .unwrap_or_default()
-                            .as_str(),
-                    );
-                    message_ext.set_topic(CheetahString::from_string(topic));
+            if let Some(ref namespace) = self.client_instance.client_config.get_namespace() {
+                let topic = NamespaceUtil::without_namespace_with_namespace(
+                    message_ext.get_topic(),
+                    self.client_instance
+                        .client_config
+                        .get_namespace()
+                        .unwrap_or_default()
+                        .as_str(),
+                );
+                message_ext.set_topic(CheetahString::from_string(topic));
+            }
+            let transaction_id = message_ext.get_property(&CheetahString::from_static_str(
+                MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
+            ));
+            if let Some(transaction_id) = transaction_id {
+                if !transaction_id.is_empty() {
+                    message_ext.set_transaction_id(transaction_id);
                 }
-                let transaction_id = message_ext.get_property(&CheetahString::from_static_str(
-                    MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
-                ));
-                if let Some(transaction_id) = transaction_id {
-                    if !transaction_id.is_empty() {
-                        message_ext.set_transaction_id(transaction_id);
-                    }
-                }
-                let group = message_ext.get_property(&CheetahString::from_static_str(
-                    MessageConst::PROPERTY_PRODUCER_GROUP,
-                ));
-                if let Some(group) = group {
-                    let producer = client_instance.select_producer(&group).await;
-                    if let Some(producer) = producer {
-                        let addr = CheetahString::from_string(channel.remote_address().to_string());
-                        producer.check_transaction_state(&addr, message_ext, request_header);
-                    } else {
-                        warn!("checkTransactionState, pick producer group failed");
-                    }
+            }
+            let group = message_ext.get_property(&CheetahString::from_static_str(
+                MessageConst::PROPERTY_PRODUCER_GROUP,
+            ));
+            if let Some(group) = group {
+                let producer = self.client_instance.select_producer(&group).await;
+                if let Some(producer) = producer {
+                    let addr = CheetahString::from_string(channel.remote_address().to_string());
+                    producer.check_transaction_state(&addr, message_ext, request_header);
                 } else {
                     warn!("checkTransactionState, pick producer group failed");
                 }
+            } else {
+                warn!("checkTransactionState, pick producer group failed");
             }
         } else {
             warn!("checkTransactionState, decode message failed");
@@ -291,36 +289,29 @@ impl ClientRemotingProcessor {
         let msg = message_decoder::decode(body, true, true, false, false, false)
             .ok_or(RemotingCommandError("decode message failed".to_string()))?;
 
-        if let Some(client_instance) = self.client_instance.upgrade() {
-            let result = client_instance
-                .consume_message_directly(
-                    msg,
-                    &request_header.consumer_group,
-                    request_header.broker_name.clone(),
-                )
-                .await;
-            if let Some(result) = result {
-                let body = result
-                    .encode()
-                    .map_err(|_| RemotingCommandError("encode result failed".to_string()))?;
-                Ok(Some(
-                    RemotingCommand::create_response_command().set_body(body),
-                ))
-            } else {
-                warn!("consumeMessageDirectly, consume message failed");
-                Ok(Some(
-                    RemotingCommand::create_response_command_with_code(ResponseCode::SystemError)
-                        .set_remark(format!(
-                            "The Consumer Group <{}> not exist in this consumer",
-                            request_header.consumer_group
-                        )),
-                ))
-            }
+        let result = self
+            .client_instance
+            .consume_message_directly(
+                msg,
+                &request_header.consumer_group,
+                request_header.broker_name.clone(),
+            )
+            .await;
+        if let Some(result) = result {
+            let body = result
+                .encode()
+                .map_err(|_| RemotingCommandError("encode result failed".to_string()))?;
+            Ok(Some(
+                RemotingCommand::create_response_command().set_body(body),
+            ))
         } else {
-            warn!("consumeMessageDirectly, client_instance is empty");
+            warn!("consumeMessageDirectly, consume message failed");
             Ok(Some(
                 RemotingCommand::create_response_command_with_code(ResponseCode::SystemError)
-                    .set_remark("client_instance is empty"),
+                    .set_remark(format!(
+                        "The Consumer Group <{}> not exist in this consumer",
+                        request_header.consumer_group
+                    )),
             ))
         }
     }

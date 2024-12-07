@@ -231,7 +231,7 @@ impl MQClientInstance {
 
         let mq_client_api_impl = ArcMut::new(MQClientAPIImpl::new(
             Arc::new(TokioClientConfig::default()),
-            ClientRemotingProcessor::new(weak_instance.clone()),
+            ClientRemotingProcessor::new(instance.clone()),
             rpc_hook,
             client_config.clone(),
             Some(tx),
