@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 
+pub mod broker_stats_data;
 pub mod customized_retry_policy;
 pub mod exponential_retry_policy;
 pub mod group_forbidden;
