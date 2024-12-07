@@ -64,7 +64,7 @@ pub struct RebalancePushImpl {
     pub(crate) client_config: ClientConfig,
     pub(crate) consumer_config: ArcMut<ConsumerConfig>,
     pub(crate) rebalance_impl_inner: RebalanceImpl<RebalancePushImpl>,
-    pub(crate) default_mqpush_consumer_impl: Option<WeakArcMut<DefaultMQPushConsumerImpl>>,
+    pub(crate) default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
 }
 
 impl RebalancePushImpl {
@@ -85,7 +85,7 @@ impl RebalancePushImpl {
 
     pub fn set_default_mqpush_consumer_impl(
         &mut self,
-        default_mqpush_consumer_impl: WeakArcMut<DefaultMQPushConsumerImpl>,
+        default_mqpush_consumer_impl: ArcMut<DefaultMQPushConsumerImpl>,
     ) {
         self.default_mqpush_consumer_impl = Some(default_mqpush_consumer_impl);
     }
@@ -129,33 +129,29 @@ impl RebalancePushImpl {
         mq: &MessageQueue,
         pq: &ProcessQueue,
     ) -> bool {
-        if let Some(mut default_mqpush_consumer_impl) = self
-            .default_mqpush_consumer_impl
-            .as_ref()
-            .unwrap()
-            .upgrade()
-        {
-            let force_unlock = pq.is_dropped()
-                && (get_current_millis() > pq.get_last_lock_timestamp() + *UNLOCK_DELAY_TIME_MILLS);
-            let consume_lock = pq
-                .consume_lock
-                .try_write_timeout(Duration::from_millis(500))
-                .await;
-            if force_unlock || consume_lock.is_some() {
-                let offset_store = default_mqpush_consumer_impl.offset_store.as_mut().unwrap();
-                offset_store.persist(mq).await;
-                offset_store.remove_offset(mq).await;
-                pq.set_locked(true);
-                self.unlock(mq, true).await;
-                return true;
-            } else {
-                pq.inc_try_unlock_times();
-                warn!(
-                    "Failed to acquire consume_lock for {}, incrementing try_unlock_times.",
-                    mq
-                );
-            }
+        let default_mqpush_consumer_impl = self.default_mqpush_consumer_impl.as_mut().unwrap();
+
+        let force_unlock = pq.is_dropped()
+            && (get_current_millis() > pq.get_last_lock_timestamp() + *UNLOCK_DELAY_TIME_MILLS);
+        let consume_lock = pq
+            .consume_lock
+            .try_write_timeout(Duration::from_millis(500))
+            .await;
+        if force_unlock || consume_lock.is_some() {
+            let offset_store = default_mqpush_consumer_impl.offset_store.as_mut().unwrap();
+            offset_store.persist(mq).await;
+            offset_store.remove_offset(mq).await;
+            pq.set_locked(true);
+            self.unlock(mq, true).await;
+            return true;
+        } else {
+            pq.inc_try_unlock_times();
+            warn!(
+                "Failed to acquire consume_lock for {}, incrementing try_unlock_times.",
+                mq
+            );
         }
+
         false
     }
 }
@@ -221,15 +217,8 @@ impl Rebalance for RebalancePushImpl {
         mq: &MessageQueue,
         pq: &ProcessQueue,
     ) -> bool {
-        let default_mqpush_consumer_impl = self
-            .default_mqpush_consumer_impl
-            .as_ref()
-            .unwrap()
-            .upgrade();
-        if default_mqpush_consumer_impl.is_none() {
-            return false;
-        }
-        let mut default_mqpush_consumer_impl = default_mqpush_consumer_impl.unwrap();
+        let mut default_mqpush_consumer_impl =
+            self.default_mqpush_consumer_impl.as_ref().unwrap().clone();
         let consume_orderly = default_mqpush_consumer_impl.is_consume_orderly();
         let offset_store = default_mqpush_consumer_impl.offset_store.as_mut().unwrap();
 
@@ -248,29 +237,21 @@ impl Rebalance for RebalancePushImpl {
     }
 
     async fn remove_dirty_offset(&mut self, mq: &MessageQueue) {
-        if let Some(mut default_mqpush_consumer_impl) = self
+        let offset_store = self
             .default_mqpush_consumer_impl
-            .as_ref()
+            .as_mut()
             .unwrap()
-            .upgrade()
-        {
-            let offset_store = default_mqpush_consumer_impl.offset_store.as_mut().unwrap();
-            offset_store.remove_offset(mq).await;
-        }
+            .offset_store
+            .as_mut()
+            .unwrap();
+        offset_store.remove_offset(mq).await;
     }
 
     #[allow(deprecated)]
     async fn compute_pull_from_where_with_exception(&mut self, mq: &MessageQueue) -> Result<i64> {
         let consume_from_where = self.consumer_config.consume_from_where;
-        let default_mqpush_consumer_impl = self
-            .default_mqpush_consumer_impl
-            .as_ref()
-            .unwrap()
-            .upgrade();
-        if default_mqpush_consumer_impl.is_none() {
-            return mq_client_err!("default_mqpush_consumer_impl is none");
-        }
-        let mut default_mqpush_consumer_impl = default_mqpush_consumer_impl.unwrap();
+        let mut default_mqpush_consumer_impl =
+            self.default_mqpush_consumer_impl.as_ref().unwrap().clone();
         let offset_store = default_mqpush_consumer_impl.offset_store.as_mut().unwrap();
 
         let result = match consume_from_where {
@@ -394,11 +375,7 @@ impl Rebalance for RebalancePushImpl {
             .default_mqpush_consumer_impl
             .as_ref()
             .unwrap()
-            .upgrade();
-        if mqpush_consumer_impl.is_none() {
-            return;
-        }
-        let mut mqpush_consumer_impl = mqpush_consumer_impl.unwrap();
+            .mut_from_ref();
         for pull_request in pull_request_list {
             if delay == 0 {
                 mqpush_consumer_impl
@@ -415,11 +392,7 @@ impl Rebalance for RebalancePushImpl {
             .default_mqpush_consumer_impl
             .as_ref()
             .unwrap()
-            .upgrade();
-        if mqpush_consumer_impl.is_none() {
-            return;
-        }
-        let mut mqpush_consumer_impl = mqpush_consumer_impl.unwrap();
+            .mut_from_ref();
         for pop_request in pop_request_list {
             if delay == 0 {
                 mqpush_consumer_impl
@@ -516,16 +489,11 @@ impl Rebalance for RebalancePushImpl {
     fn client_rebalance(&mut self, topic: &str) -> bool {
         self.consumer_config.client_rebalance
             || self.rebalance_impl_inner.message_model.unwrap() == MessageModel::Broadcasting
-            || if let Some(default_mqpush_consumer_impl) = self
+            || self
                 .default_mqpush_consumer_impl
                 .as_ref()
                 .unwrap()
-                .upgrade()
-            {
-                default_mqpush_consumer_impl.is_consume_orderly()
-            } else {
-                false
-            }
+                .is_consume_orderly()
     }
 
     fn destroy(&mut self) {

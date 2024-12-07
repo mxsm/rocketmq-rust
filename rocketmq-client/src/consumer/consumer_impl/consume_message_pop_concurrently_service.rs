@@ -58,7 +58,7 @@ impl ConsumeMessagePopConcurrentlyService {
 }
 
 impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
-    fn start(&mut self, this: WeakArcMut<Self>) {
+    fn start(&mut self, this: ArcMut<Self>) {
         //todo!()
     }
 
@@ -92,7 +92,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
 
     async fn submit_consume_request(
         &self,
-        this: WeakArcMut<Self>,
+        this: ArcMut<Self>,
         msgs: Vec<ArcMut<MessageClientExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,

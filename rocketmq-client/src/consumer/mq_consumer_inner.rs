@@ -26,7 +26,7 @@ use rocketmq_remoting::protocol::body::consumer_running_info::ConsumerRunningInf
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
-use rocketmq_rust::WeakArcMut;
+use rocketmq_rust::ArcMut;
 
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
 use crate::consumer::consumer_impl::pop_request::PopRequest;
@@ -108,25 +108,21 @@ impl<T: MQConsumerInner> MQConsumerInnerAny for T {
 
 #[derive(Clone)]
 pub struct MQConsumerInnerImpl {
-    pub(crate) default_mqpush_consumer_impl: Option<WeakArcMut<DefaultMQPushConsumerImpl>>,
+    pub(crate) default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
 }
 
 impl MQConsumerInnerImpl {
     pub(crate) async fn pop_message(&mut self, pop_request: PopRequest) {
-        if let Some(ref default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl {
-            if let Some(mut default_mqpush_consumer_impl) = default_mqpush_consumer_impl.upgrade() {
-                default_mqpush_consumer_impl.pop_message(pop_request).await;
-            }
+        if let Some(ref mut default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl {
+            default_mqpush_consumer_impl.pop_message(pop_request).await;
         }
     }
 
     pub(crate) async fn pull_message(&mut self, pull_request: PullRequest) {
-        if let Some(ref default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl {
-            if let Some(mut default_mqpush_consumer_impl) = default_mqpush_consumer_impl.upgrade() {
-                default_mqpush_consumer_impl
-                    .pull_message(pull_request)
-                    .await;
-            }
+        if let Some(ref mut default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl {
+            default_mqpush_consumer_impl
+                .pull_message(pull_request)
+                .await;
         }
     }
 
@@ -136,11 +132,9 @@ impl MQConsumerInnerImpl {
         broker_name: Option<CheetahString>,
     ) -> Option<ConsumeMessageDirectlyResult> {
         if let Some(ref default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl {
-            if let Some(default_mqpush_consumer_impl) = default_mqpush_consumer_impl.upgrade() {
-                return default_mqpush_consumer_impl
-                    .consume_message_directly(msg, broker_name)
-                    .await;
-            }
+            return default_mqpush_consumer_impl
+                .consume_message_directly(msg, broker_name)
+                .await;
         }
         None
     }
@@ -149,75 +143,57 @@ impl MQConsumerInnerImpl {
 impl MQConsumerInner for MQConsumerInnerImpl {
     fn group_name(&self) -> CheetahString {
         if let Some(ref default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl {
-            if let Some(default_mqpush_consumer_impl) = default_mqpush_consumer_impl.upgrade() {
-                return MQConsumerInner::group_name(default_mqpush_consumer_impl.as_ref());
-            }
+            return MQConsumerInner::group_name(default_mqpush_consumer_impl.as_ref());
         }
         panic!("default_mqpush_consumer_impl is None");
     }
 
     fn message_model(&self) -> MessageModel {
         if let Some(ref default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl {
-            if let Some(default_mqpush_consumer_impl) = default_mqpush_consumer_impl.upgrade() {
-                return MQConsumerInner::message_model(default_mqpush_consumer_impl.as_ref());
-            }
+            return MQConsumerInner::message_model(default_mqpush_consumer_impl.as_ref());
         }
         panic!("default_mqpush_consumer_impl is None");
     }
 
     fn consume_type(&self) -> ConsumeType {
         if let Some(ref default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl {
-            if let Some(default_mqpush_consumer_impl) = default_mqpush_consumer_impl.upgrade() {
-                return MQConsumerInner::consume_type(default_mqpush_consumer_impl.as_ref());
-            }
+            return MQConsumerInner::consume_type(default_mqpush_consumer_impl.as_ref());
         }
         panic!("default_mqpush_consumer_impl is None");
     }
 
     fn consume_from_where(&self) -> ConsumeFromWhere {
         if let Some(ref default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl {
-            if let Some(default_mqpush_consumer_impl) = default_mqpush_consumer_impl.upgrade() {
-                return MQConsumerInner::consume_from_where(default_mqpush_consumer_impl.as_ref());
-            }
+            return MQConsumerInner::consume_from_where(default_mqpush_consumer_impl.as_ref());
         }
         panic!("default_mqpush_consumer_impl is None");
     }
 
     fn subscriptions(&self) -> HashSet<SubscriptionData> {
         if let Some(ref default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl {
-            if let Some(default_mqpush_consumer_impl) = default_mqpush_consumer_impl.upgrade() {
-                return MQConsumerInner::subscriptions(default_mqpush_consumer_impl.as_ref());
-            }
+            return MQConsumerInner::subscriptions(default_mqpush_consumer_impl.as_ref());
         }
         panic!("default_mqpush_consumer_impl is None");
     }
 
     fn do_rebalance(&self) {
         if let Some(ref default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl {
-            if let Some(default_mqpush_consumer_impl) = default_mqpush_consumer_impl.upgrade() {
-                return MQConsumerInner::do_rebalance(default_mqpush_consumer_impl.as_ref());
-            }
+            return MQConsumerInner::do_rebalance(default_mqpush_consumer_impl.as_ref());
         }
         panic!("default_mqpush_consumer_impl is None");
     }
 
     async fn try_rebalance(&self) -> Result<bool> {
         if let Some(ref default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl {
-            if let Some(default_mqpush_consumer_impl) = default_mqpush_consumer_impl.upgrade() {
-                return MQConsumerInner::try_rebalance(default_mqpush_consumer_impl.as_ref()).await;
-            }
+            return MQConsumerInner::try_rebalance(default_mqpush_consumer_impl.as_ref()).await;
         }
         panic!("default_mqpush_consumer_impl is None");
     }
 
     async fn persist_consumer_offset(&self) {
         if let Some(ref default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl {
-            if let Some(default_mqpush_consumer_impl) = default_mqpush_consumer_impl.upgrade() {
-                return MQConsumerInner::persist_consumer_offset(
-                    default_mqpush_consumer_impl.as_ref(),
-                )
+            return MQConsumerInner::persist_consumer_offset(default_mqpush_consumer_impl.as_ref())
                 .await;
-            }
         }
         panic!("default_mqpush_consumer_impl is None");
     }
@@ -228,47 +204,37 @@ impl MQConsumerInner for MQConsumerInnerImpl {
         info: &HashSet<MessageQueue>,
     ) {
         if let Some(ref default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl {
-            if let Some(mut default_mqpush_consumer_impl) = default_mqpush_consumer_impl.upgrade() {
-                return MQConsumerInner::update_topic_subscribe_info(
-                    default_mqpush_consumer_impl.as_mut(),
-                    topic,
-                    info,
-                )
-                .await;
-            }
+            return MQConsumerInner::update_topic_subscribe_info(
+                default_mqpush_consumer_impl.mut_from_ref(),
+                topic,
+                info,
+            )
+            .await;
         }
         panic!("default_mqpush_consumer_impl is None");
     }
 
     async fn is_subscribe_topic_need_update(&self, topic: &str) -> bool {
         if let Some(ref default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl {
-            if let Some(default_mqpush_consumer_impl) = default_mqpush_consumer_impl.upgrade() {
-                return MQConsumerInner::is_subscribe_topic_need_update(
-                    default_mqpush_consumer_impl.as_ref(),
-                    topic,
-                )
-                .await;
-            }
+            return MQConsumerInner::is_subscribe_topic_need_update(
+                default_mqpush_consumer_impl.as_ref(),
+                topic,
+            )
+            .await;
         }
         panic!("default_mqpush_consumer_impl is None");
     }
 
     fn is_unit_mode(&self) -> bool {
         if let Some(ref default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl {
-            if let Some(default_mqpush_consumer_impl) = default_mqpush_consumer_impl.upgrade() {
-                return MQConsumerInner::is_unit_mode(default_mqpush_consumer_impl.as_ref());
-            }
+            return MQConsumerInner::is_unit_mode(default_mqpush_consumer_impl.as_ref());
         }
         panic!("default_mqpush_consumer_impl is None");
     }
 
     fn consumer_running_info(&self) -> ConsumerRunningInfo {
         if let Some(ref default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl {
-            if let Some(default_mqpush_consumer_impl) = default_mqpush_consumer_impl.upgrade() {
-                return MQConsumerInner::consumer_running_info(
-                    default_mqpush_consumer_impl.as_ref(),
-                );
-            }
+            return MQConsumerInner::consumer_running_info(default_mqpush_consumer_impl.as_ref());
         }
         panic!("default_mqpush_consumer_impl is None");
     }
