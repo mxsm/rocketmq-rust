@@ -339,7 +339,8 @@ impl ExtraInfoUtil {
             }
 
             let key = format!("{}@{}", parts[0], parts[1]);
-            let offset = parts[2].parse::<i64>().unwrap();
+            let offset = parts[2].parse::<i64>()
+                .map_err(|_| IllegalArgument("Invalid start offset value".to_string()))?;
             start_offset_map.insert(key, offset);
         }
 
