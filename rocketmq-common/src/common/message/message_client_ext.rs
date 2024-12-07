@@ -32,6 +32,12 @@ pub struct MessageClientExt {
 }
 
 impl MessageClientExt {
+    pub fn new(message: MessageExt) -> Self {
+        Self {
+            message_ext_inner: message,
+        }
+    }
+
     pub fn get_offset_msg_id(&self) -> &str {
         self.message_ext_inner.msg_id()
     }
