@@ -95,7 +95,7 @@ const CONSUMER_TIMEOUT_MILLIS_WHEN_SUSPEND: u64 = 1000 * 30;
 const MAX_POP_INVISIBLE_TIME: u64 = 300000;
 const MIN_POP_INVISIBLE_TIME: u64 = 5000;
 const ASYNC_TIMEOUT: u64 = 3000;
-const DO_NOT_UPDATE_TOPIC_SUBSCRIBE_INFO_WHEN_SUBSCRIPTION_CHANGED: bool = false;
+//const DO_NOT_UPDATE_TOPIC_SUBSCRIBE_INFO_WHEN_SUBSCRIPTION_CHANGED: bool = false;
 const _1MB: u64 = 1024 * 1024;
 
 pub struct DefaultMQPushConsumerImpl {
@@ -429,9 +429,9 @@ impl DefaultMQPushConsumerImpl {
     }
 
     async fn update_topic_subscribe_info_when_subscription_changed(&mut self) {
-        if DO_NOT_UPDATE_TOPIC_SUBSCRIBE_INFO_WHEN_SUBSCRIPTION_CHANGED {
-            return;
-        }
+        // if DO_NOT_UPDATE_TOPIC_SUBSCRIBE_INFO_WHEN_SUBSCRIPTION_CHANGED {
+        //     return;
+        // }
         let sub_table = self.rebalance_impl.get_subscription_inner();
         let sub_table_inner = sub_table.read().await;
         let keys = sub_table_inner.keys().clone();
