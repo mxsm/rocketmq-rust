@@ -14,6 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use rocketmq_remoting::code::request_code::RequestCode;
+use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 
@@ -21,11 +23,13 @@ use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerCon
 pub struct PollingInfoProcessor {}
 
 impl PollingInfoProcessor {
-    fn process_request(
-        &self,
+    pub async fn process_request(
+        &mut self,
+        _channel: Channel,
         _ctx: ConnectionHandlerContext,
+        _request_code: RequestCode,
         _request: RemotingCommand,
-    ) -> RemotingCommand {
+    ) -> crate::Result<Option<RemotingCommand>> {
         todo!()
     }
 }
