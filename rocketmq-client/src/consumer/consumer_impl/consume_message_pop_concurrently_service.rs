@@ -15,14 +15,16 @@
  * limitations under the License.
  */
 use std::sync::Arc;
+use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_client_ext::MessageClientExt;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_remoting::protocol::body::cm_result::CMResult;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_rust::ArcMut;
-use rocketmq_rust::WeakArcMut;
+use tracing::info;
 
 use crate::base::client_config::ClientConfig;
 use crate::consumer::consumer_impl::consume_message_service::ConsumeMessageServiceTrait;
@@ -30,10 +32,12 @@ use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPush
 use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
 use crate::consumer::consumer_impl::process_queue::ProcessQueue;
 use crate::consumer::default_mq_push_consumer::ConsumerConfig;
+use crate::consumer::listener::consume_concurrently_context::ConsumeConcurrentlyContext;
+use crate::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
 use crate::consumer::listener::message_listener_concurrently::ArcBoxMessageListenerConcurrently;
 
 pub struct ConsumeMessagePopConcurrentlyService {
-    pub(crate) default_mqpush_consumer_impl: Option<WeakArcMut<DefaultMQPushConsumerImpl>>,
+    pub(crate) default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
     pub(crate) client_config: ArcMut<ClientConfig>,
     pub(crate) consumer_config: ArcMut<ConsumerConfig>,
     pub(crate) consumer_group: CheetahString,
@@ -46,9 +50,10 @@ impl ConsumeMessagePopConcurrentlyService {
         consumer_config: ArcMut<ConsumerConfig>,
         consumer_group: CheetahString,
         message_listener: ArcBoxMessageListenerConcurrently,
+        default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
     ) -> Self {
         Self {
-            default_mqpush_consumer_impl: None,
+            default_mqpush_consumer_impl,
             client_config,
             consumer_config,
             consumer_group,
@@ -87,7 +92,50 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
         msg: MessageExt,
         broker_name: Option<CheetahString>,
     ) -> ConsumeMessageDirectlyResult {
-        todo!()
+        info!("consumeMessageDirectly receive new message: {}", msg);
+
+        let mq = MessageQueue::from_parts(
+            msg.topic().clone(),
+            broker_name.unwrap_or_default(),
+            msg.queue_id(),
+        );
+        let mut msgs = vec![ArcMut::new(MessageClientExt::new(msg))];
+        let context = ConsumeConcurrentlyContext::new(mq);
+        self.default_mqpush_consumer_impl
+            .as_ref()
+            .unwrap()
+            .mut_from_ref()
+            .reset_retry_and_namespace(msgs.as_mut_slice(), self.consumer_group.as_str());
+
+        let begin_timestamp = Instant::now();
+
+        let status = self.message_listener.consume_message(
+            &msgs
+                .iter()
+                .map(|msg| &msg.message_ext_inner)
+                .collect::<Vec<&MessageExt>>(),
+            &context,
+        );
+        let mut result = ConsumeMessageDirectlyResult::default();
+        result.set_order(false);
+        result.set_auto_commit(true);
+        match status {
+            Ok(status) => match status {
+                ConsumeConcurrentlyStatus::ConsumeSuccess => {
+                    result.set_consume_result(CMResult::CRSuccess);
+                }
+                ConsumeConcurrentlyStatus::ReconsumeLater => {
+                    result.set_consume_result(CMResult::CRLater);
+                }
+            },
+            Err(e) => {
+                result.set_consume_result(CMResult::CRThrowException);
+                result.set_remark(CheetahString::from_string(e.to_string()))
+            }
+        }
+        result.set_spent_time_mills(begin_timestamp.elapsed().as_millis() as u64);
+        info!("consumeMessageDirectly Result: {}", result);
+        result
     }
 
     async fn submit_consume_request(
