@@ -25,7 +25,7 @@ impl AckMessageProcessor {
         &self,
         _ctx: ConnectionHandlerContext,
         _request: RemotingCommand,
-    ) -> RemotingCommand {
-        todo!()
+    ) -> crate::Result<Option<RemotingCommand>> {
+        unimplemented!("AckMessageProcessor process_request")
     }
 }
