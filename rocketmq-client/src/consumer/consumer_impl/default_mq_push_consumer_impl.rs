@@ -288,6 +288,7 @@ impl DefaultMQPushConsumerImpl {
                                 self.consumer_config.clone(),
                                 self.consumer_config.consumer_group.clone(),
                                 listener.expect("listener is None"),
+                                self.default_mqpush_consumer_impl.clone(),
                             ));
 
                         self.consume_message_pop_service =
