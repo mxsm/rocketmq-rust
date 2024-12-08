@@ -44,4 +44,4 @@ pub trait AckCallback {
 ///
 /// The function must be `Send` and `Sync` to ensure it can be safely used
 /// across threads.
-pub type AckCallbackFn = Box<dyn Fn(Option<AckResult>, Option<Box<dyn Error>>) + Send + Sync>;
+pub type AckCallbackFn = Box<dyn Fn(AckResult) -> Result<(), Box<dyn Error>> + Send + Sync>;
