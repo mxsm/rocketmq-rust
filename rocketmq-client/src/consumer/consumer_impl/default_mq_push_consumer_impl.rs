@@ -57,6 +57,7 @@ use crate::base::client_config::ClientConfig;
 use crate::base::validators::Validators;
 use crate::client_error::ClientErr;
 use crate::client_error::MQClientError;
+use crate::consumer::ack_callback::AckCallback;
 use crate::consumer::consumer_impl::consume_message_concurrently_service::ConsumeMessageConcurrentlyService;
 use crate::consumer::consumer_impl::consume_message_orderly_service::ConsumeMessageOrderlyService;
 use crate::consumer::consumer_impl::consume_message_pop_concurrently_service::ConsumeMessagePopConcurrentlyService;
@@ -132,7 +133,7 @@ pub struct DefaultMQPushConsumerImpl {
     >,
     queue_flow_control_times: u64,
     queue_max_span_flow_control_times: u64,
-    pop_delay_level: Arc<[i32; 16]>,
+    pub(crate) pop_delay_level: Arc<[i32; 16]>,
     default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
 }
 
@@ -1219,6 +1220,17 @@ impl DefaultMQPushConsumerImpl {
 
     pub(crate) async fn ack_async(&mut self, message: &MessageExt, consumer_group: &CheetahString) {
         unimplemented!("ackAsync");
+    }
+
+    pub(crate) async fn change_pop_invisible_time_async(
+        &mut self,
+        topic: &CheetahString,
+        consumer_group: &CheetahString,
+        extra_info: &CheetahString,
+        invisible_time: u64,
+        callback: impl AckCallback,
+    ) -> crate::Result<()> {
+        unimplemented!("changePopInvisibleTimeAsync");
     }
 }
 
