@@ -272,7 +272,7 @@ impl PullAPIWrapper {
         let broker_id = self.recalculate_pull_from_which_node(mq);
         let mut find_broker_result = self
             .client_instance
-            .find_broker_address_in_subscribe(broker_name.as_str(), broker_id, false)
+            .find_broker_address_in_subscribe(&broker_name, broker_id, false)
             .await;
 
         if find_broker_result.is_none() {
@@ -286,11 +286,7 @@ impl PullAPIWrapper {
             let broker_id_again = self.recalculate_pull_from_which_node(mq);
             find_broker_result = self
                 .client_instance
-                .find_broker_address_in_subscribe(
-                    broker_name_again.as_str(),
-                    broker_id_again,
-                    false,
-                )
+                .find_broker_address_in_subscribe(&broker_name_again, broker_id_again, false)
                 .await;
         }
 
