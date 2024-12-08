@@ -53,6 +53,7 @@ use rocketmq_remoting::protocol::header::change_invisible_time_response_header::
 use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_remoting::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
 use rocketmq_remoting::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
+use rocketmq_remoting::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_remoting::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
 use rocketmq_remoting::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader;
 use rocketmq_remoting::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader;
@@ -1345,6 +1346,9 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
         ack_callback: impl AckCallback,
     ) -> crate::Result<()> {
+        let offset = request_header.offset;
+        let topic = request_header.topic.clone();
+        let queue_id = request_header.queue_id;
         let request = RemotingCommand::create_request_command(
             RequestCode::ChangeMessageInvisibleTime,
             request_header,
@@ -1355,15 +1359,27 @@ impl MQClientAPIImpl {
             .await
         {
             Ok(response) => {
-                let header = response
+                let response_header = response
                     .decode_command_custom_header::<ChangeInvisibleTimeResponseHeader>()
                     .map_err(RemotingError)?;
                 let ack_result = if ResponseCode::from(response.code()) == ResponseCode::Success {
                     AckResult {
                         status: AckStatus::Ok,
-                        pop_time: header.pop_time as i64,
-                        // extra_info: ExtraInfoUtil::build_extra_info(request),
-                        ..Default::default()
+                        pop_time: response_header.pop_time as i64,
+                        extra_info: CheetahString::from_string(format!(
+                            "{}{}{}",
+                            ExtraInfoUtil::build_extra_info(
+                                offset,
+                                response_header.pop_time as i64,
+                                response_header.invisible_time,
+                                response_header.revive_qid,
+                                &topic,
+                                broker_name,
+                                queue_id,
+                            ),
+                            MessageConst::KEY_SEPARATOR,
+                            offset
+                        )),
                     }
                 } else {
                     AckResult {
