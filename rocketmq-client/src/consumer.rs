@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+pub(crate) mod ack_result;
 pub(crate) mod ack_status;
 pub mod allocate_message_queue_strategy;
 pub(crate) mod consumer_impl;
