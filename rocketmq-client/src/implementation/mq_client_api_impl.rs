@@ -48,6 +48,8 @@ use rocketmq_remoting::protocol::body::request::lock_batch_request_body::LockBat
 use rocketmq_remoting::protocol::body::response::lock_batch_response_body::LockBatchResponseBody;
 use rocketmq_remoting::protocol::body::set_message_request_mode_request_body::SetMessageRequestModeRequestBody;
 use rocketmq_remoting::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
+use rocketmq_remoting::protocol::header::change_invisible_time_request_header::ChangeInvisibleTimeRequestHeader;
+use rocketmq_remoting::protocol::header::change_invisible_time_response_header::ChangeInvisibleTimeResponseHeader;
 use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_remoting::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
 use rocketmq_remoting::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
@@ -88,6 +90,10 @@ use crate::client_broker_err;
 use crate::client_error::MQBrokerErr;
 use crate::client_error::MQClientError;
 use crate::client_error::MQClientError::MQClientBrokerError;
+use crate::client_error::MQClientError::RemotingError;
+use crate::consumer::ack_callback::AckCallback;
+use crate::consumer::ack_result::AckResult;
+use crate::consumer::ack_status::AckStatus;
 use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
 use crate::consumer::pull_callback::PullCallback;
 use crate::consumer::pull_result::PullResult;
@@ -1329,5 +1335,48 @@ impl MQClientAPIImpl {
             response.remark().map_or("".to_string(), |s| s.to_string()),
             addr.to_string()
         )
+    }
+
+    pub async fn change_invisible_time_async(
+        &self,
+        broker_name: &CheetahString,
+        addr: &CheetahString,
+        request_header: ChangeInvisibleTimeRequestHeader,
+        timeout_millis: u64,
+        ack_callback: impl AckCallback,
+    ) -> crate::Result<()> {
+        let request = RemotingCommand::create_request_command(
+            RequestCode::ChangeMessageInvisibleTime,
+            request_header,
+        );
+        match self
+            .remoting_client
+            .invoke_async(Some(addr), request, timeout_millis)
+            .await
+        {
+            Ok(response) => {
+                let header = response
+                    .decode_command_custom_header::<ChangeInvisibleTimeResponseHeader>()
+                    .map_err(RemotingError)?;
+                let ack_result = if ResponseCode::from(response.code()) == ResponseCode::Success {
+                    AckResult {
+                        status: AckStatus::Ok,
+                        pop_time: header.pop_time as i64,
+                        // extra_info: ExtraInfoUtil::build_extra_info(request),
+                        ..Default::default()
+                    }
+                } else {
+                    AckResult {
+                        status: AckStatus::NotExist,
+                        ..Default::default()
+                    }
+                };
+                ack_callback.on_success(ack_result);
+            }
+            Err(e) => {
+                ack_callback.on_exception(Box::new(e));
+            }
+        };
+        Ok(())
     }
 }
