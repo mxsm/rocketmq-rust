@@ -41,10 +41,14 @@ use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_remoting::protocol::body::consumer_running_info::ConsumerRunningInfo;
 use rocketmq_remoting::protocol::filter::filter_api::FilterAPI;
+use rocketmq_remoting::protocol::header::change_invisible_time_request_header::ChangeInvisibleTimeRequestHeader;
+use rocketmq_remoting::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
+use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
+use rocketmq_remoting::rpc::topic_request_header::TopicRequestHeader;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_rust::ArcMut;
 use tokio::runtime::Handle;
@@ -1230,7 +1234,77 @@ impl DefaultMQPushConsumerImpl {
         invisible_time: u64,
         callback: impl AckCallback,
     ) -> crate::Result<()> {
-        unimplemented!("changePopInvisibleTimeAsync");
+        let extra_info_strs = ExtraInfoUtil::split(extra_info)?;
+        let broker_name =
+            CheetahString::from_string(ExtraInfoUtil::get_broker_name(extra_info_strs.as_slice())?);
+        let queue_id = ExtraInfoUtil::get_queue_id(extra_info_strs.as_slice())?;
+        let des_broker_name = if !broker_name.is_empty()
+            && broker_name.starts_with(mix_all::LOGICAL_QUEUE_MOCK_BROKER_PREFIX)
+        {
+            let queue = self
+                .client_config
+                .queue_with_namespace(MessageQueue::from_parts(
+                    topic,
+                    broker_name.clone(),
+                    queue_id,
+                ));
+            self.client_instance
+                .as_mut()
+                .unwrap()
+                .get_broker_name_from_message_queue(&queue)
+                .await
+        } else {
+            broker_name.clone()
+        };
+        let client_instance = self.client_instance.as_mut().unwrap();
+        let mut find_broker_result = client_instance
+            .find_broker_address_in_subscribe(&des_broker_name, mix_all::MASTER_ID, true)
+            .await;
+        if find_broker_result.is_none() {
+            client_instance
+                .update_topic_route_info_from_name_server_default(topic, false, None)
+                .await;
+            find_broker_result = client_instance
+                .find_broker_address_in_subscribe(&des_broker_name, mix_all::MASTER_ID, true)
+                .await;
+        }
+
+        if find_broker_result.is_none() {
+            return mq_client_err!(format!(
+                "The broker[{}] not exist",
+                des_broker_name.as_str()
+            ));
+        }
+        let request_header = ChangeInvisibleTimeRequestHeader {
+            consumer_group: consumer_group.clone(),
+            topic: CheetahString::from_string(ExtraInfoUtil::get_real_topic(
+                extra_info_strs.as_slice(),
+                topic,
+                consumer_group,
+            )?),
+            queue_id,
+            extra_info: extra_info.clone(),
+            offset: ExtraInfoUtil::get_queue_offset(extra_info_strs.as_slice())?,
+            invisible_time: invisible_time as i64,
+            topic_request_header: Some(TopicRequestHeader {
+                rpc_request_header: Some(RpcRequestHeader {
+                    broker_name: Some(broker_name.clone()),
+                    ..Default::default()
+                }),
+                lo: None,
+            }),
+        };
+        let find_broker_result = find_broker_result.unwrap();
+        client_instance
+            .get_mq_client_api_impl()
+            .change_invisible_time_async(
+                &broker_name,
+                &find_broker_result.broker_addr,
+                request_header,
+                ASYNC_TIMEOUT,
+                callback,
+            )
+            .await
     }
 }
 
