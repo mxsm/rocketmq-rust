@@ -16,6 +16,7 @@
  */
 pub mod broker;
 pub mod change_invisible_time_request_header;
+mod change_invisible_time_response_header;
 pub mod check_transaction_state_request_header;
 pub mod client_request_header;
 pub mod consume_message_directly_result_request_header;
