@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::error::Error;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -21,16 +22,21 @@ use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_client_ext::MessageClientExt;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_common::common::message::MessageConst;
+use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::protocol::body::cm_result::CMResult;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_rust::ArcMut;
+use tracing::error;
 use tracing::info;
 use tracing::warn;
 
 use crate::base::client_config::ClientConfig;
+use crate::consumer::ack_callback::AckCallback;
+use crate::consumer::ack_result::AckResult;
 use crate::consumer::consumer_impl::consume_message_service::ConsumeMessageServiceTrait;
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
 use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
@@ -214,27 +220,112 @@ impl ConsumeMessagePopConcurrentlyService {
 
             // More than maxReconsumeTimes
             if msg.message_ext_inner.reconsume_times >= self.consumer_config.max_reconsume_times {
-                self.check_need_ack_or_delay(&msg.message_ext_inner);
+                self.check_need_ack_or_delay(&msg.message_ext_inner).await;
                 continue;
             }
 
             let delay_level = context.delay_level_when_next_consume;
             let consumer_group = &self.consumer_group.clone();
-            self.change_pop_invisible_time(&msg.message_ext_inner, consumer_group, delay_level);
+            self.change_pop_invisible_time(&msg.message_ext_inner, consumer_group, delay_level)
+                .await;
         }
     }
 
-    fn check_need_ack_or_delay(&mut self, message: &MessageExt) {
-        unimplemented!("ConsumeMessagePopConcurrentlyService.check_need_ack_or_delay")
+    async fn check_need_ack_or_delay(&mut self, message: &MessageExt) {
+        let delay_level_table = self
+            .default_mqpush_consumer_impl
+            .as_ref()
+            .unwrap()
+            .pop_delay_level
+            .as_ref();
+        let delay_time = delay_level_table[delay_level_table.len() - 1] * 1000 * 2;
+        let msg_delay_time = get_current_millis() - message.born_timestamp as u64;
+        if msg_delay_time > delay_time as u64 {
+            warn!(
+                "Consume too many times, ack message async. message {}",
+                message
+            );
+            self.default_mqpush_consumer_impl
+                .as_mut()
+                .unwrap()
+                .ack_async(message, &self.consumer_group)
+                .await;
+        } else {
+            let mut delay_level = (delay_level_table.len() as i32) - 1;
+            while delay_level >= 0 {
+                if msg_delay_time >= (delay_level_table[delay_level as usize] * 1000) as u64 {
+                    delay_level += 1;
+                    break;
+                }
+                delay_level -= 1;
+            }
+            let keys = message.get_keys().unwrap_or_default();
+            let consumer_group = self.consumer_group.clone();
+            self.change_pop_invisible_time(message, &consumer_group, delay_level)
+                .await;
+            warn!(
+                "Consume too many times, but delay time {} not enough. changePopInvisibleTime to \
+                 delayLevel {} . message key:{}",
+                msg_delay_time, delay_level, keys
+            )
+        }
     }
 
-    fn change_pop_invisible_time(
+    async fn change_pop_invisible_time(
         &mut self,
         message: &MessageExt,
         consumer_group: &CheetahString,
-        delay_level: i32,
+        mut delay_level: i32,
     ) {
-        unimplemented!("ConsumeMessagePopConcurrentlyService.check_need_commit")
+        if delay_level == 0 {
+            delay_level = message.reconsume_times;
+        }
+        let delay_level_table = self
+            .default_mqpush_consumer_impl
+            .as_ref()
+            .unwrap()
+            .pop_delay_level
+            .as_ref();
+        let delay_second = if delay_level as usize > delay_level_table.len() {
+            delay_level_table[delay_level_table.len() - 1]
+        } else {
+            delay_level_table[delay_level as usize]
+        };
+        let extra_info = message.get_property(&CheetahString::from_static_str(
+            MessageConst::PROPERTY_POP_CK,
+        ));
+
+        struct DefaultAckCallback;
+
+        impl AckCallback for DefaultAckCallback {
+            fn on_success(&self, ack_result: AckResult) {
+                //nothing to do
+            }
+
+            fn on_exception(&self, e: Box<dyn Error>) {
+                error!("changePopInvisibleTime exception: {}", e);
+            }
+        }
+
+        let result = self
+            .default_mqpush_consumer_impl
+            .as_mut()
+            .unwrap()
+            .change_pop_invisible_time_async(
+                message.get_topic(),
+                consumer_group,
+                &extra_info.unwrap_or_default(),
+                (delay_second * 1000) as u64,
+                DefaultAckCallback,
+            )
+            .await;
+
+        if let Err(e) = result {
+            error!(
+                "changePopInvisibleTimeAsync fail, group:{} msg:{} errorInfo:{}",
+                consumer_group, message, e
+            );
+        }
     }
 }
 
