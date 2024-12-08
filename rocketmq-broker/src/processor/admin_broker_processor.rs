@@ -44,6 +44,8 @@ use crate::processor::pop_inflight_message_counter::PopInflightMessageCounter;
 use crate::schedule::schedule_message_service::ScheduleMessageService;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
+use rocketmq_remoting::protocol::admin::broker_operator_result::BrokerOperatorResult;
+use rocketmq_remoting::protocol::admin::rollback_stats::RollbackStats;
 
 mod batch_mq_handler;
 mod broker_config_request_handler;
