@@ -18,7 +18,7 @@ use cheetah_string::CheetahString;
 
 use crate::consumer::ack_status::AckStatus;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct AckResult {
     pub(crate) status: AckStatus,
     pub(crate) extra_info: CheetahString,
