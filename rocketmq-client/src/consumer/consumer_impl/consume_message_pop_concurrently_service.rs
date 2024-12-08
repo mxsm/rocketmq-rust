@@ -70,7 +70,7 @@ impl ConsumeMessagePopConcurrentlyService {
 
 impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
     fn start(&mut self, this: ArcMut<Self>) {
-        //todo!()
+        // nothing to do need
     }
 
     async fn shutdown(&mut self, await_terminate_millis: u64) {
@@ -175,7 +175,66 @@ impl ConsumeMessagePopConcurrentlyService {
         context: &ConsumeConcurrentlyContext,
         consume_request: &mut ConsumeRequest,
     ) {
-        unimplemented!("ConsumeMessagePopConcurrentlyService.process_consume_result")
+        if consume_request.msgs.is_empty() {
+            return;
+        }
+        let mut ack_index = context.ack_index;
+        match status {
+            ConsumeConcurrentlyStatus::ConsumeSuccess => {
+                if ack_index >= consume_request.msgs.len() as i32 {
+                    ack_index = consume_request.msgs.len() as i32 - 1;
+                }
+                /*int ok = ackIndex + 1;
+                int failed = consumeRequest.getMsgs().size() - ok;
+                this.getConsumerStatsManager().incConsumeOKTPS(consumerGroup, topic, ok);
+                this.getConsumerStatsManager().incConsumeFailedTPS(consumerGroup, topic, failed);*/
+            }
+            ConsumeConcurrentlyStatus::ReconsumeLater => {
+                //this.getConsumerStatsManager().incConsumeFailedTPS(consumerGroup, topic, failed);
+                // Java code
+                ack_index = -1;
+            }
+        }
+
+        //ack if consume success
+        for i in 0..ack_index {
+            let msg = &consume_request.msgs[i as usize];
+            self.default_mqpush_consumer_impl
+                .as_mut()
+                .unwrap()
+                .ack_async(&msg.message_ext_inner, &self.consumer_group)
+                .await;
+            consume_request.process_queue.ack();
+        }
+
+        //consume later if consume fail
+        for i in (ack_index + 1) as usize..consume_request.msgs.len() {
+            let msg = &consume_request.msgs[i];
+            consume_request.process_queue.ack();
+
+            // More than maxReconsumeTimes
+            if msg.message_ext_inner.reconsume_times >= self.consumer_config.max_reconsume_times {
+                self.check_need_ack_or_delay(&msg.message_ext_inner);
+                continue;
+            }
+
+            let delay_level = context.delay_level_when_next_consume;
+            let consumer_group = &self.consumer_group.clone();
+            self.change_pop_invisible_time(&msg.message_ext_inner, consumer_group, delay_level);
+        }
+    }
+
+    fn check_need_ack_or_delay(&mut self, message: &MessageExt) {
+        unimplemented!("ConsumeMessagePopConcurrentlyService.check_need_ack_or_delay")
+    }
+
+    fn change_pop_invisible_time(
+        &mut self,
+        message: &MessageExt,
+        consumer_group: &CheetahString,
+        delay_level: i32,
+    ) {
+        unimplemented!("ConsumeMessagePopConcurrentlyService.check_need_commit")
     }
 }
 
