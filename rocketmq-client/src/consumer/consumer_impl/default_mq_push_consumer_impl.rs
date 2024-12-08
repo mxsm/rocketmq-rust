@@ -1216,6 +1216,10 @@ impl DefaultMQPushConsumerImpl {
             self.consumer_config.max_reconsume_times
         }
     }
+
+    pub(crate) async fn ack_async(&mut self, message: &MessageExt, consumer_group: &CheetahString) {
+        unimplemented!("ackAsync");
+    }
 }
 
 impl MQConsumerInner for DefaultMQPushConsumerImpl {
