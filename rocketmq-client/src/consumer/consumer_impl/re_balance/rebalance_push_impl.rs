@@ -441,7 +441,7 @@ impl Rebalance for RebalancePushImpl {
         };
         let broker_name = client.get_broker_name_from_message_queue(mq).await;
         let find_broker_result = client
-            .find_broker_address_in_subscribe(broker_name.as_str(), mix_all::MASTER_ID, true)
+            .find_broker_address_in_subscribe(&broker_name, mix_all::MASTER_ID, true)
             .await;
         if let Some(find_broker_result) = find_broker_result {
             let mut request_body = UnlockBatchRequestBody {

@@ -62,7 +62,7 @@ impl RemoteBrokerOffsetStore {
         let mut find_broker_result = self
             .client_instance
             .mut_from_ref()
-            .find_broker_address_in_subscribe(broker_name.as_str(), mix_all::MASTER_ID, true)
+            .find_broker_address_in_subscribe(&broker_name, mix_all::MASTER_ID, true)
             .await;
 
         if find_broker_result.is_none() {
@@ -77,7 +77,7 @@ impl RemoteBrokerOffsetStore {
             find_broker_result = self
                 .client_instance
                 .mut_from_ref()
-                .find_broker_address_in_subscribe(broker_name.as_str(), mix_all::MASTER_ID, false)
+                .find_broker_address_in_subscribe(&broker_name, mix_all::MASTER_ID, false)
                 .await;
         }
         if let Some(find_broker_result) = find_broker_result {
@@ -261,7 +261,7 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
             .await;
         let mut find_broker_result = self
             .client_instance
-            .find_broker_address_in_subscribe(broker_name.as_str(), mix_all::MASTER_ID, false)
+            .find_broker_address_in_subscribe(&broker_name, mix_all::MASTER_ID, false)
             .await;
 
         if find_broker_result.is_none() {
@@ -274,7 +274,7 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
                 .await;
             find_broker_result = self
                 .client_instance
-                .find_broker_address_in_subscribe(broker_name.as_str(), mix_all::MASTER_ID, false)
+                .find_broker_address_in_subscribe(&broker_name, mix_all::MASTER_ID, false)
                 .await;
         }
 

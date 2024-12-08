@@ -1035,7 +1035,7 @@ impl MQClientInstance {
 
     pub async fn find_broker_address_in_subscribe(
         &mut self,
-        broker_name: &str,
+        broker_name: &CheetahString,
         broker_id: u64,
         only_this_broker: bool,
     ) -> Option<FindBrokerResult> {
