@@ -104,6 +104,7 @@ pub struct PutMessageResult {
 }
 
 impl PutMessageResult {
+    #[inline]
     pub fn new(
         put_message_status: PutMessageStatus,
         append_message_result: Option<AppendMessageResult>,
@@ -116,6 +117,7 @@ impl PutMessageResult {
         }
     }
 
+    #[inline]
     pub fn new_append_result(
         put_message_status: PutMessageStatus,
         append_message_result: Option<AppendMessageResult>,
@@ -127,6 +129,7 @@ impl PutMessageResult {
         }
     }
 
+    #[inline]
     pub fn new_default(put_message_status: PutMessageStatus) -> Self {
         Self {
             put_message_status,
@@ -135,22 +138,27 @@ impl PutMessageResult {
         }
     }
 
+    #[inline]
     pub fn put_message_status(&self) -> PutMessageStatus {
         self.put_message_status
     }
 
+    #[inline]
     pub fn append_message_result(&self) -> Option<&AppendMessageResult> {
         self.append_message_result.as_ref()
     }
 
+    #[inline]
     pub fn remote_put(&self) -> bool {
         self.remote_put
     }
 
+    #[inline]
     pub fn set_put_message_status(&mut self, put_message_status: PutMessageStatus) {
         self.put_message_status = put_message_status;
     }
 
+    #[inline]
     pub fn set_append_message_result(
         &mut self,
         append_message_result: Option<AppendMessageResult>,
@@ -158,9 +166,11 @@ impl PutMessageResult {
         self.append_message_result = append_message_result;
     }
 
+    #[inline]
     pub fn set_remote_put(&mut self, remote_put: bool) {
         self.remote_put = remote_put;
     }
+
 
     #[inline]
     pub fn is_ok(&self) -> bool {
