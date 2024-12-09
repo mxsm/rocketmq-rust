@@ -21,6 +21,7 @@ use rocketmq_client_rust::producer::send_result::SendResult;
 use rocketmq_client_rust::producer::send_status::SendStatus;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all;
 use rocketmq_runtime::RocketMQRuntime;
@@ -28,8 +29,10 @@ use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::log_file::MessageStore;
+use tracing::warn;
 
 use crate::topic::manager::topic_route_info_manager::TopicRouteInfoManager;
+use crate::transaction::queue::transactional_message_util::TransactionalMessageUtil;
 
 const SEND_TIMEOUT: u64 = 3_000;
 const DEFAULT_PULL_TIMEOUT_MILLIS: u64 = 10_000;
@@ -104,9 +107,53 @@ where
 
     pub async fn put_message_to_remote_broker(
         &mut self,
-        _message_ext: MessageExtBrokerInner,
-        _broker_name_to_send: Option<CheetahString>,
+        message_ext: MessageExtBrokerInner,
+        broker_name_to_send: Option<CheetahString>,
     ) -> Option<SendResult> {
+        if broker_name_to_send.is_some()
+            && self.broker_config.broker_identity.broker_name.as_str()
+                == broker_name_to_send.as_ref().unwrap().as_str()
+        {
+            return None;
+        }
+        let is_trans_half_message =
+            TransactionalMessageUtil::build_half_topic() == message_ext.get_topic();
+        let message_to_put = if is_trans_half_message {
+            TransactionalMessageUtil::build_transactional_message_from_half_message(
+                &message_ext.message_ext_inner,
+            )
+        } else {
+            message_ext
+        };
+        let topic_publish_info = self
+            .topic_route_info_manager
+            .try_to_find_topic_publish_info(message_to_put.get_topic())
+            .await;
+        if !topic_publish_info.as_ref().is_some_and(|value| value.ok()) {
+            warn!(
+                "putMessageToRemoteBroker: no route info of topic {} when escaping message, \
+                 msgId={}",
+                message_to_put.get_topic(),
+                message_to_put.message_ext_inner.msg_id
+            );
+            return None;
+        }
+        let topic_publish_info = topic_publish_info.unwrap();
+        let mq_selected = if !broker_name_to_send
+            .as_ref()
+            .is_some_and(|value| !value.is_empty())
+        {
+            //topic_publish_info.select_one_message_queue(&[],self.broker_config.broker_identity.
+            // broker_name)
+
+            unimplemented!("EscapeBridge putMessageToRemoteBroker")
+        } else {
+            MessageQueue::from_parts(
+                message_to_put.get_topic(),
+                broker_name_to_send.unwrap(),
+                message_to_put.queue_id(),
+            )
+        };
         unimplemented!("EscapeBridge putMessageToRemoteBroker")
     }
 }
