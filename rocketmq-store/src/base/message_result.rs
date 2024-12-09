@@ -171,7 +171,6 @@ impl PutMessageResult {
         self.remote_put = remote_put;
     }
 
-
     #[inline]
     pub fn is_ok(&self) -> bool {
         if self.remote_put {
