@@ -17,9 +17,17 @@
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
+use rocketmq_client_rust::producer::send_result::SendResult;
+use rocketmq_client_rust::producer::send_status::SendStatus;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_common::common::message::MessageTrait;
+use rocketmq_common::common::mix_all;
 use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_rust::ArcMut;
+use rocketmq_store::base::message_result::PutMessageResult;
+use rocketmq_store::base::message_status_enum::PutMessageStatus;
+use rocketmq_store::log_file::MessageStore;
 
 use crate::topic::manager::topic_route_info_manager::TopicRouteInfoManager;
 
@@ -71,4 +79,119 @@ pub(crate) struct EscapeBridge<MS> {
     message_store: ArcMut<MS>,
     broker_config: Arc<BrokerConfig>,
     topic_route_info_manager: Arc<TopicRouteInfoManager>,
+}
+
+impl<MS> EscapeBridge<MS>
+where
+    MS: MessageStore,
+{
+    pub async fn put_message(
+        &mut self,
+        mut message_ext: MessageExtBrokerInner,
+    ) -> PutMessageResult {
+        if self.broker_config.broker_identity.broker_id == mix_all::MASTER_ID {
+            self.message_store.put_message(message_ext).await
+        } else if self.broker_config.enable_slave_acting_master
+            && self.broker_config.enable_remote_escape
+        {
+            message_ext.set_wait_store_msg_ok(false);
+            let send_result = self.put_message_to_remote_broker(message_ext, None).await;
+            transform_send_result2put_result(send_result)
+        } else {
+            PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable)
+        }
+    }
+
+    pub async fn put_message_to_remote_broker(
+        &mut self,
+        _message_ext: MessageExtBrokerInner,
+        _broker_name_to_send: Option<CheetahString>,
+    ) -> Option<SendResult> {
+        unimplemented!("EscapeBridge putMessageToRemoteBroker")
+    }
+}
+
+#[inline]
+fn transform_send_result2put_result(send_result: Option<SendResult>) -> PutMessageResult {
+    match send_result {
+        None => PutMessageResult::new(PutMessageStatus::PutToRemoteBrokerFail, None, true),
+        Some(result) => match result.send_status {
+            SendStatus::SendOk => PutMessageResult::new(PutMessageStatus::PutOk, None, true),
+            SendStatus::FlushDiskTimeout => {
+                PutMessageResult::new(PutMessageStatus::FlushDiskTimeout, None, true)
+            }
+            SendStatus::FlushSlaveTimeout => {
+                PutMessageResult::new(PutMessageStatus::FlushSlaveTimeout, None, true)
+            }
+            SendStatus::SlaveNotAvailable => {
+                PutMessageResult::new(PutMessageStatus::SlaveNotAvailable, None, true)
+            }
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rocketmq_client_rust::producer::send_result::SendResult;
+    use rocketmq_client_rust::producer::send_status::SendStatus;
+
+    use super::*;
+
+    #[test]
+    fn transform_send_result2put_result_handles_none() {
+        let result = transform_send_result2put_result(None);
+        assert_eq!(
+            result.put_message_status(),
+            PutMessageStatus::PutToRemoteBrokerFail
+        );
+    }
+
+    #[test]
+    fn transform_send_result2put_result_handles_send_ok() {
+        let send_result = SendResult {
+            send_status: SendStatus::SendOk,
+            ..Default::default()
+        };
+        let result = transform_send_result2put_result(Some(send_result));
+        assert_eq!(result.put_message_status(), PutMessageStatus::PutOk);
+    }
+
+    #[test]
+    fn transform_send_result2put_result_handles_flush_disk_timeout() {
+        let send_result = SendResult {
+            send_status: SendStatus::FlushDiskTimeout,
+            ..Default::default()
+        };
+        let result = transform_send_result2put_result(Some(send_result));
+        assert_eq!(
+            result.put_message_status(),
+            PutMessageStatus::FlushDiskTimeout
+        );
+    }
+
+    #[test]
+    fn transform_send_result2put_result_handles_flush_slave_timeout() {
+        let send_result = SendResult {
+            send_status: SendStatus::FlushSlaveTimeout,
+            ..Default::default()
+        };
+        let result = transform_send_result2put_result(Some(send_result));
+        assert_eq!(
+            result.put_message_status(),
+            PutMessageStatus::FlushSlaveTimeout
+        );
+    }
+
+    #[test]
+    fn transform_send_result2put_result_handles_slave_not_available() {
+        let send_result = SendResult {
+            send_status: SendStatus::SlaveNotAvailable,
+            ..Default::default()
+        };
+        let result = transform_send_result2put_result(Some(send_result));
+        assert_eq!(
+            result.put_message_status(),
+            PutMessageStatus::SlaveNotAvailable
+        );
+    }
 }
