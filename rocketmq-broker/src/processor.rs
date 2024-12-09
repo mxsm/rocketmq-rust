@@ -66,7 +66,7 @@ pub struct BrokerRequestProcessor<MS, TS> {
     pub(crate) peek_message_processor: ArcMut<PeekMessageProcessor>,
     pub(crate) pop_message_processor: ArcMut<PopMessageProcessor>,
     pub(crate) ack_message_processor: ArcMut<AckMessageProcessor>,
-    pub(crate) change_invisible_time_processor: ArcMut<ChangeInvisibleTimeProcessor>,
+    pub(crate) change_invisible_time_processor: ArcMut<ChangeInvisibleTimeProcessor<MS>>,
     pub(crate) notification_processor: ArcMut<NotificationProcessor>,
     pub(crate) polling_info_processor: ArcMut<PollingInfoProcessor>,
     pub(crate) reply_message_processor: ArcMut<ReplyMessageProcessor<MS, TS>>,
@@ -168,6 +168,13 @@ where
                     .await
             }
 
+            RequestCode::ChangeMessageInvisibleTime => {
+                return self
+                    .change_invisible_time_processor
+                    .process_request(channel, ctx, request_code, request)
+                    .await
+                    .map_err(Into::into);
+            }
             _ => {
                 self.admin_broker_processor
                     .process_request(channel, ctx, request_code, request)

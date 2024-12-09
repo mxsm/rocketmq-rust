@@ -66,6 +66,7 @@ use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
 use crate::offset::manager::consumer_order_info_manager::ConsumerOrderInfoManager;
 use crate::out_api::broker_outer_api::BrokerOuterAPI;
 use crate::processor::admin_broker_processor::AdminBrokerProcessor;
+use crate::processor::change_invisible_time_processor::ChangeInvisibleTimeProcessor;
 use crate::processor::client_manage_processor::ClientManageProcessor;
 use crate::processor::consumer_manage_processor::ConsumerManageProcessor;
 use crate::processor::default_pull_message_result_handler::DefaultPullMessageResultHandler;
@@ -532,7 +533,14 @@ impl BrokerRuntime {
             peek_message_processor: Default::default(),
             pop_message_processor: Default::default(),
             ack_message_processor: Default::default(),
-            change_invisible_time_processor: Default::default(),
+            change_invisible_time_processor: ArcMut::new(ChangeInvisibleTimeProcessor::new(
+                self.broker_config.clone(),
+                self.topic_config_manager.clone(),
+                self.message_store.clone().unwrap(),
+                Arc::new(self.consumer_offset_manager.clone()),
+                self.consumer_order_info_manager.clone(),
+                self.broker_stats_manager.clone(),
+            )),
             notification_processor: Default::default(),
             polling_info_processor: Default::default(),
             reply_message_processor: ArcMut::new(reply_message_processor),
