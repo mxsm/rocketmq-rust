@@ -34,6 +34,7 @@ pub(crate) mod broker_runtime;
 pub(crate) mod client;
 pub(crate) mod coldctr;
 pub(crate) mod controller;
+pub(crate) mod failover;
 pub(crate) mod filter;
 pub(crate) mod hook;
 pub(crate) mod load_balance;
