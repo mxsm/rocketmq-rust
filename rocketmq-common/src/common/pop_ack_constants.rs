@@ -32,11 +32,55 @@ impl PopAckConstants {
     pub const BATCH_ACK_TAG: &'static str = "bAck";
     pub const SPLIT: &'static str = "@";
 
+    #[inline]
     pub fn build_cluster_revive_topic(cluster_name: &str) -> String {
         format!("{}{}", PopAckConstants::REVIVE_TOPIC, cluster_name)
     }
 
+    #[inline]
     pub fn is_start_with_revive_prefix(topic_name: &str) -> bool {
         topic_name.starts_with(PopAckConstants::REVIVE_TOPIC)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_cluster_revive_topic_appends_correctly() {
+        let cluster_name = "test_cluster";
+        let expected = "rmq_sys_REVIVE_LOG_test_cluster";
+        assert_eq!(
+            PopAckConstants::build_cluster_revive_topic(cluster_name),
+            expected
+        );
+    }
+
+    #[test]
+    fn is_start_with_revive_prefix_returns_true_for_valid_prefix() {
+        let topic_name = "rmq_sys_REVIVE_LOG_test";
+        assert!(PopAckConstants::is_start_with_revive_prefix(topic_name));
+    }
+
+    #[test]
+    fn is_start_with_revive_prefix_returns_false_for_invalid_prefix() {
+        let topic_name = "invalid_prefix_test";
+        assert!(!PopAckConstants::is_start_with_revive_prefix(topic_name));
+    }
+
+    #[test]
+    fn constants_have_correct_values() {
+        assert_eq!(PopAckConstants::ACK_TIME_INTERVAL, 1000);
+        assert_eq!(PopAckConstants::SECOND, 1000);
+        assert_eq!(PopAckConstants::LOCK_TIME, 5000);
+        assert_eq!(PopAckConstants::RETRY_QUEUE_NUM, 1);
+        assert_eq!(PopAckConstants::REVIVE_GROUP, "CID_RMQ_SYS_REVIVE_GROUP");
+        assert_eq!(PopAckConstants::LOCAL_HOST, "127.0.0.1");
+        assert_eq!(PopAckConstants::REVIVE_TOPIC, "rmq_sys_REVIVE_LOG_");
+        assert_eq!(PopAckConstants::CK_TAG, "ck");
+        assert_eq!(PopAckConstants::ACK_TAG, "ack");
+        assert_eq!(PopAckConstants::BATCH_ACK_TAG, "bAck");
+        assert_eq!(PopAckConstants::SPLIT, "@");
     }
 }
