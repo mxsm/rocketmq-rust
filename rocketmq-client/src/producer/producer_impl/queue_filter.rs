@@ -31,3 +31,63 @@ pub trait QueueFilter: Send + Sync + 'static {
     /// A boolean value indicating whether the message queue meets the filter criteria.
     fn filter(&self, mq: &MessageQueue) -> bool;
 }
+
+/// Implements the `QueueFilter` trait for any type `F` that implements the `Fn(&MessageQueue) ->
+/// bool` function signature, and also satisfies the `Send`, `Sync`, and `'static` bounds.
+///
+/// This allows any closure or function that matches the required signature to be used as a
+/// `QueueFilter`.
+impl<F> QueueFilter for F
+where
+    F: Fn(&MessageQueue) -> bool + Send + Sync + 'static,
+{
+    /// Filters a message queue using the provided closure or function.
+    ///
+    /// # Arguments
+    /// * `mq` - A reference to the `MessageQueue` to be filtered.
+    ///
+    /// # Returns
+    /// A boolean value indicating whether the message queue meets the filter criteria.
+    fn filter(&self, mq: &MessageQueue) -> bool {
+        self(mq)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rocketmq_common::common::message::message_queue::MessageQueue;
+
+    use super::*;
+
+    #[test]
+    fn queue_filter_closure_returns_true() {
+        let filter = |mq: &MessageQueue| mq.get_topic() == "test_topic";
+        let mq = MessageQueue::from_parts("test_topic", "broker", 1);
+        assert!(filter.filter(&mq));
+    }
+
+    #[test]
+    fn queue_filter_closure_returns_false() {
+        let filter = |mq: &MessageQueue| mq.get_topic() == "test_topic";
+        let mq = MessageQueue::from_parts("other_topic", "broker", 1);
+        assert!(!filter.filter(&mq));
+    }
+
+    #[test]
+    fn queue_filter_function_returns_true() {
+        fn filter_fn(mq: &MessageQueue) -> bool {
+            mq.get_queue_id() == 1
+        }
+        let mq = MessageQueue::from_parts("test_topic", "broker", 1);
+        assert!(filter_fn.filter(&mq));
+    }
+
+    #[test]
+    fn queue_filter_function_returns_false() {
+        fn filter_fn(mq: &MessageQueue) -> bool {
+            mq.get_queue_id() == 1
+        }
+        let mq = MessageQueue::from_parts("test_topic", "broker", 2);
+        assert!(!filter_fn.filter(&mq));
+    }
+}
