@@ -338,6 +338,31 @@ impl SendMessageRequestHeaderV2 {
             topic_request_header: v1.topic_request_header.clone(),
         }
     }
+
+    pub fn create_send_message_request_header_v2_with_move(
+        v1: SendMessageRequestHeader,
+    ) -> SendMessageRequestHeaderV2 {
+        SendMessageRequestHeaderV2 {
+            a: v1.producer_group,
+            b: v1.topic,
+            c: v1.default_topic,
+            d: v1.default_topic_queue_nums,
+            e: v1.queue_id,
+            f: v1.sys_flag,
+            g: v1.born_timestamp,
+            h: v1.flag,
+            i: v1.properties,
+            j: v1.reconsume_times,
+            k: v1.unit_mode,
+            l: v1.max_reconsume_times,
+            m: v1.batch,
+            n: v1
+                .topic_request_header
+                .as_ref()
+                .and_then(|v| v.get_broker_name().cloned()),
+            topic_request_header: v1.topic_request_header,
+        }
+    }
 }
 
 impl TopicRequestHeaderTrait for SendMessageRequestHeaderV2 {
