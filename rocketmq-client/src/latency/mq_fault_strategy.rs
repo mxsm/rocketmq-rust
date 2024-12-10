@@ -99,23 +99,23 @@ impl MQFaultStrategy {
             }
             let broker_filter = THREAD_BROKER_FILTER.with_borrow(|f| f.clone());
             let filter = &[self.available_filter.as_ref(), &broker_filter];
-            let mut mq = tp_info.select_one_message_queue(filter);
+            let mut mq = tp_info.select_one_message_queue_filters(filter);
             if mq.is_some() {
                 return mq;
             }
             let filter = &[self.reachable_filter.as_ref(), &broker_filter];
-            mq = tp_info.select_one_message_queue(filter);
+            mq = tp_info.select_one_message_queue_filters(filter);
             if mq.is_some() {
                 return mq;
             }
-            return tp_info.select_one_message_queue(&[]);
+            return tp_info.select_one_message_queue_filters(&[]);
         }
         let broker_filter = THREAD_BROKER_FILTER.with_borrow(|f| f.clone());
-        let mq = tp_info.select_one_message_queue(&[&broker_filter]);
+        let mq = tp_info.select_one_message_queue_filters(&[&broker_filter]);
         if mq.is_some() {
             return mq;
         }
-        tp_info.select_one_message_queue(&[])
+        tp_info.select_one_message_queue_filters(&[])
     }
 
     pub fn get_latency_max(&self) -> &'static [u64] {
