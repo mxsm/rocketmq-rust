@@ -20,8 +20,10 @@ use std::sync::Weak;
 
 use cheetah_string::CheetahString;
 use dns_lookup::lookup_host;
+use rocketmq_client_rust::producer::send_result::SendResult;
 use rocketmq_common::common::broker::broker_config::BrokerIdentity;
 use rocketmq_common::common::config::TopicConfig;
+use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::utils::crc32_utils;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
@@ -451,6 +453,16 @@ impl BrokerOuterAPI {
                 .to_string(),
             "".to_string(),
         ))
+    }
+
+    pub async fn send_message_to_specific_broker(
+        &self,
+        _broker_addr: &CheetahString,
+        _msg: MessageExt,
+        _group: CheetahString,
+        _timeout_millis: u64,
+    ) -> Result<SendResult> {
+        unimplemented!("sendMessageToSpecificBroker")
     }
 }
 
