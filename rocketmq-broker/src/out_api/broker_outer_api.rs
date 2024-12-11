@@ -24,9 +24,12 @@ use rocketmq_client_rust::producer::send_result::SendResult;
 use rocketmq_client_rust::producer::send_status::SendStatus;
 use rocketmq_common::common::broker::broker_config::BrokerIdentity;
 use rocketmq_common::common::config::TopicConfig;
+use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
+use rocketmq_common::common::mix_all;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::utils::crc32_utils;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
@@ -43,6 +46,7 @@ use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequ
 use rocketmq_remoting::protocol::header::lock_batch_mq_request_header::LockBatchMqRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
+use rocketmq_remoting::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
 use rocketmq_remoting::protocol::header::namesrv::register_broker_header::RegisterBrokerRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::register_broker_header::RegisterBrokerResponseHeader;
 use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::RegisterTopicRequestHeader;
@@ -464,71 +468,28 @@ impl BrokerOuterAPI {
     pub async fn send_message_to_specific_broker(
         &self,
         broker_addr: &CheetahString,
+        broker_name: &CheetahString,
         msg: MessageExt,
         group: CheetahString,
         timeout_millis: u64,
     ) -> Result<SendResult> {
+        let uniq_msg_id = MessageClientIDSetter::get_uniq_id(&msg);
+        let queue_id = msg.queue_id;
+        let topic = msg.get_topic().clone();
         let request = build_send_message_request(msg, group);
-        self.remoting_client
+        let response = self
+            .remoting_client
             .invoke_async(Some(broker_addr), request, timeout_millis)
-            .await;
-        unimplemented!("sendMessageToSpecificBroker")
+            .await?;
+
+        process_send_response(
+            broker_name,
+            uniq_msg_id.unwrap_or_default(),
+            queue_id,
+            topic,
+            &response,
+        )
     }
-}
-
-pub fn process_send_response(
-    broker_name: &str,
-    msg: &Message,
-    response: &RemotingCommand,
-) -> Result<SendResult> {
-    let mut send_status: Option<SendStatus> = None;
-
-    ResponseCode::from(response.code)
-    // Match the response code to the corresponding SendStatus
-    match response.code {
-        0 => send_status = Some(SendStatus::FlushDiskTimeout),
-        1 => send_status = Some(SendStatus::FlushSlaveTimeout),
-        2 => send_status = Some(SendStatus::SlaveNotAvailable),
-        3 => send_status = Some(SendStatus::SendOk),
-        _ => (),
-    }
-
-    // If send_status is not None, process the response
-    if let Some(status) = send_status {
-        let response_header: SendMessageResponseHeader = response.decode_command_custom_header();
-
-        let topic = msg.get_topic().to_string();
-        let message_queue =
-            MessageQueue::new(topic, broker_name.to_string(), response_header.queue_id);
-
-        let uniq_msg_id = "uniq-msg-id".to_string(); // Assuming unique ID is retrieved
-        let send_result = SendResult::new(
-            status,
-            uniq_msg_id,
-            response_header.msg_id,
-            message_queue,
-            response_header.queue_offset,
-        );
-
-        let mut send_result = send_result;
-        if let Some(region_id) = response.ext_fields.get("msg_region") {
-            send_result.set_region_id(region_id.clone());
-        }
-
-        if let Some(trace_on) = response.ext_fields.get("trace_switch") {
-            send_result.set_trace_on(trace_on == "true");
-        }
-
-        // Set transaction id if present in the response header
-        if let Some(transaction_id) = response_header.transaction_id {
-            send_result.set_transaction_id(transaction_id);
-        }
-
-        return Ok(send_result);
-    }
-
-    // If send_status is None, we throw an error
-    Err(format!("Broker Error: {}", response.remark))
 }
 
 fn dns_lookup_address_by_domain(domain: &str) -> Vec<CheetahString> {
@@ -573,22 +534,98 @@ fn build_send_message_request_header_v2(
     msg: MessageExt,
     group: CheetahString,
 ) -> SendMessageRequestHeaderV2 {
-    let mut header = SendMessageRequestHeader::default();
-    header.producer_group = group;
-    header.topic = msg.get_topic().clone();
-    header.default_topic =
-        CheetahString::from_static_str(TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC);
-    header.default_topic_queue_nums = 8;
-    header.queue_id = msg.queue_id;
-    header.sys_flag = msg.sys_flag;
-    header.born_timestamp = msg.born_timestamp;
-    header.flag = msg.get_flag();
-    header.properties = Some(MessageDecoder::message_properties_to_string(
-        msg.get_properties(),
-    ));
-    header.reconsume_times = Some(msg.reconsume_times);
-    header.batch = Some(false);
+    let header = SendMessageRequestHeader {
+        producer_group: group,
+        topic: msg.get_topic().clone(),
+        default_topic: CheetahString::from_static_str(TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC),
+        default_topic_queue_nums: 8,
+        queue_id: msg.queue_id,
+        sys_flag: msg.sys_flag,
+        born_timestamp: msg.born_timestamp,
+        flag: msg.get_flag(),
+        properties: Some(MessageDecoder::message_properties_to_string(
+            msg.get_properties(),
+        )),
+        reconsume_times: Some(msg.reconsume_times),
+        batch: Some(false),
+        ..Default::default()
+    };
     SendMessageRequestHeaderV2::create_send_message_request_header_v2_with_move(header)
+}
+
+pub fn process_send_response(
+    broker_name: &CheetahString,
+    uniq_msg_id: CheetahString,
+    queue_id: i32,
+    topic: CheetahString,
+    response: &RemotingCommand,
+) -> Result<SendResult> {
+    let mut send_status: Option<SendStatus> = None;
+
+    // Match the response code to the corresponding SendStatus
+    match ResponseCode::from(response.code()) {
+        ResponseCode::FlushDiskTimeout => send_status = Some(SendStatus::FlushDiskTimeout),
+        ResponseCode::FlushSlaveTimeout => send_status = Some(SendStatus::FlushSlaveTimeout),
+        ResponseCode::SlaveNotAvailable => send_status = Some(SendStatus::SlaveNotAvailable),
+        ResponseCode::Success => send_status = Some(SendStatus::SendOk),
+        _ => (),
+    };
+
+    // If send_status is not None, process the response
+    if let Some(status) = send_status {
+        let response_header = response
+            .decode_command_custom_header::<SendMessageResponseHeader>()
+            .map_err(BrokerRemotingError)?;
+
+        let message_queue = MessageQueue::from_parts(topic, broker_name, queue_id);
+
+        let mut send_result = SendResult::new(
+            status,
+            Some(uniq_msg_id),
+            Some(response_header.msg_id().to_string()),
+            Some(message_queue),
+            response_header.queue_id() as u64,
+        );
+
+        send_result.set_transaction_id(
+            response_header
+                .transaction_id()
+                .map_or("".to_string(), |s| s.to_string()),
+        );
+        if let Some(region_id) =
+            response
+                .get_ext_fields()
+                .unwrap()
+                .get(&CheetahString::from_static_str(
+                    MessageConst::PROPERTY_MSG_REGION,
+                ))
+        {
+            send_result.set_region_id(region_id.to_string());
+        } else {
+            send_result.set_region_id(mix_all::DEFAULT_TRACE_REGION_ID.to_string());
+        }
+
+        if let Some(trace_on) =
+            response
+                .get_ext_fields()
+                .unwrap()
+                .get(&CheetahString::from_static_str(
+                    MessageConst::PROPERTY_MSG_REGION,
+                ))
+        {
+            send_result.set_trace_on(trace_on == "true");
+        } else {
+            send_result.set_trace_on(false);
+        }
+        return Ok(send_result);
+    }
+
+    // If send_status is None, we throw an error
+    Err(BrokerError::MQBrokerError(
+        response.code(),
+        "".to_string(),
+        response.remark().map_or("".to_string(), |s| s.to_string()),
+    ))
 }
 
 #[cfg(test)]
