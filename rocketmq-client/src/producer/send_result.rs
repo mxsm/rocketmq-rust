@@ -93,52 +93,64 @@ impl SendResult {
         }
     }
 
+    #[inline]
     pub fn is_trace_on(&self) -> bool {
         self.trace_on
     }
 
+    #[inline]
     pub fn set_trace_on(&mut self, trace_on: bool) {
         self.trace_on = trace_on;
     }
 
+    #[inline]
     pub fn set_region_id(&mut self, region_id: String) {
         self.region_id = Some(region_id);
     }
 
+    #[inline]
     pub fn set_msg_id(&mut self, msg_id: CheetahString) {
         self.msg_id = Some(msg_id);
     }
 
+    #[inline]
     pub fn set_send_status(&mut self, send_status: SendStatus) {
         self.send_status = send_status;
     }
 
+    #[inline]
     pub fn set_message_queue(&mut self, message_queue: MessageQueue) {
         self.message_queue = Some(message_queue);
     }
 
+    #[inline]
     pub fn set_queue_offset(&mut self, queue_offset: u64) {
         self.queue_offset = queue_offset;
     }
 
+    #[inline]
     pub fn set_transaction_id(&mut self, transaction_id: String) {
         self.transaction_id = Some(transaction_id);
     }
 
+    #[inline]
     pub fn set_offset_msg_id(&mut self, offset_msg_id: String) {
         self.offset_msg_id = Some(offset_msg_id);
     }
 
+    #[inline]
     pub fn set_raw_resp_body(&mut self, body: Vec<u8>) {
         self.raw_resp_body = Some(body);
     }
 
+    #[inline]
     pub fn get_raw_resp_body(&self) -> Option<&[u8]> {
         self.raw_resp_body.as_deref()
     }
 }
 
 impl std::fmt::Display for SendResult {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(
             f,
