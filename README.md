@@ -7,7 +7,7 @@ a reimplementation of the Apache RocketMQ message middleware in the Rust languag
 developers with a high-performance and reliable message queue service, making full use of the features of the Rust
 language.
 
-![](resources/rocketmq-rust.jpg)
+![](resources/Rocketmq-rust.png)
 
 ### RocketMQ-Rust Features
 
