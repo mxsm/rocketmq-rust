@@ -56,6 +56,7 @@ use crate::client::manager::consumer_manager::ConsumerManager;
 use crate::client::manager::producer_manager::ProducerManager;
 use crate::client::net::broker_to_client::Broker2Client;
 use crate::client::rebalance::rebalance_lock_manager::RebalanceLockManager;
+use crate::failover::escape_bridge::EscapeBridge;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
 use crate::hook::batch_check_before_put_message::BatchCheckBeforePutMessageHook;
 use crate::hook::check_before_put_message::CheckBeforePutMessageHook;
@@ -109,7 +110,7 @@ pub(crate) struct BrokerRuntime {
     schedule_message_service: ScheduleMessageService,
     timer_message_store: Option<TimerMessageStore>,
 
-    broker_out_api: Arc<BrokerOuterAPI>,
+    broker_outer_api: Arc<BrokerOuterAPI>,
 
     broker_runtime: Option<RocketMQRuntime>,
     producer_manager: Arc<ProducerManager>,
@@ -136,6 +137,8 @@ pub(crate) struct BrokerRuntime {
     transactional_message_check_service: Option<Arc<TransactionalMessageCheckService>>,
     transaction_metrics_flush_service: Option<Arc<TransactionMetricsFlushService>>,
     topic_route_info_manager: Arc<TopicRouteInfoManager>,
+    #[cfg(feature = "local_file_store")]
+    escape_bridge: ArcMut<EscapeBridge<DefaultMessageStore>>,
 }
 
 impl Clone for BrokerRuntime {
@@ -154,7 +157,7 @@ impl Clone for BrokerRuntime {
             broker_stats: self.broker_stats.clone(),
             schedule_message_service: self.schedule_message_service.clone(),
             timer_message_store: self.timer_message_store.clone(),
-            broker_out_api: self.broker_out_api.clone(),
+            broker_outer_api: self.broker_outer_api.clone(),
             broker_runtime: None,
             producer_manager: self.producer_manager.clone(),
             consumer_manager: self.consumer_manager.clone(),
@@ -175,6 +178,7 @@ impl Clone for BrokerRuntime {
             transactional_message_check_service: None,
             transaction_metrics_flush_service: None,
             topic_route_info_manager: self.topic_route_info_manager.clone(),
+            escape_bridge: self.escape_bridge.clone(),
         }
     }
 }
@@ -226,6 +230,15 @@ impl BrokerRuntime {
             broker_config.broker_identity.broker_id,
             broker_config.get_broker_addr().into(),
         );
+        let topic_route_info_manager = Arc::new(TopicRouteInfoManager::new(
+            broker_outer_api.clone(),
+            broker_config.clone(),
+        ));
+        let escape_bridge = ArcMut::new(EscapeBridge::new(
+            broker_config.clone(),
+            topic_route_info_manager.clone(),
+            broker_outer_api.clone(),
+        ));
         Self {
             broker_config: broker_config.clone(),
             message_store_config,
@@ -243,7 +256,7 @@ impl BrokerRuntime {
             broker_stats: None,
             schedule_message_service: Default::default(),
             timer_message_store: None,
-            broker_out_api: broker_outer_api.clone(),
+            broker_outer_api,
             broker_runtime: Some(runtime),
             producer_manager,
             consumer_manager,
@@ -263,10 +276,8 @@ impl BrokerRuntime {
             transactional_message_check_listener: None,
             transactional_message_check_service: None,
             transaction_metrics_flush_service: None,
-            topic_route_info_manager: Arc::new(TopicRouteInfoManager::new(
-                broker_outer_api,
-                broker_config,
-            )),
+            topic_route_info_manager,
+            escape_bridge,
         }
     }
 
@@ -279,7 +290,7 @@ impl BrokerRuntime {
     }
 
     pub fn shutdown(&mut self) {
-        self.broker_out_api.shutdown();
+        self.broker_outer_api.shutdown();
         if let Some(message_store) = &mut self.message_store {
             message_store.shutdown()
         }
@@ -476,7 +487,7 @@ impl BrokerRuntime {
             Arc::new(self.consumer_offset_manager.clone()),
             Arc::new(BroadcastOffsetManager::default()),
             message_store.clone(),
-            self.broker_out_api.clone(),
+            self.broker_outer_api.clone(),
         ));
 
         let consumer_manage_processor = ConsumerManageProcessor::new(
@@ -521,7 +532,7 @@ impl BrokerRuntime {
             self.schedule_message_service.clone(),
             self.broker_stats.clone(),
             self.consumer_manager.clone(),
-            self.broker_out_api.clone(),
+            self.broker_outer_api.clone(),
             self.broker_stats_manager.clone(),
             self.rebalance_lock_manager.clone(),
             self.broker_member_group.clone(),
@@ -756,17 +767,19 @@ impl BrokerRuntime {
         }
 
         self.topic_route_info_manager.start();
+
+        self.escape_bridge.start(self.message_store.clone());
     }
 
     async fn update_namesrv_addr(&mut self) {
         if self.broker_config.fetch_name_srv_addr_by_dns_lookup {
             if let Some(namesrv_addr) = &self.broker_config.namesrv_addr {
-                self.broker_out_api
+                self.broker_outer_api
                     .update_name_server_address_list_by_dns_lookup(namesrv_addr.clone())
                     .await;
             }
         } else if let Some(namesrv_addr) = &self.broker_config.namesrv_addr {
-            self.broker_out_api
+            self.broker_outer_api
                 .update_name_server_address_list(namesrv_addr.clone())
                 .await;
         }
@@ -784,7 +797,7 @@ impl BrokerRuntime {
             self.is_isolated.store(true, Ordering::Release);
         }
 
-        self.broker_out_api.start().await;
+        self.broker_outer_api.start().await;
         self.start_basic_service();
 
         if !self.is_isolated.load(Ordering::Acquire)
@@ -846,7 +859,7 @@ impl BrokerRuntime {
             self.start_service_without_condition();
         }
 
-        let broker_out_api = self.broker_out_api.clone();
+        let broker_out_api = self.broker_outer_api.clone();
         self.broker_runtime
             .as_ref()
             .unwrap()
@@ -993,8 +1006,8 @@ impl BrokerRuntime {
             self.broker_config.broker_ip1, self.server_config.listen_port
         ));
         let broker_id = self.broker_config.broker_identity.broker_id;
-        let weak = Arc::downgrade(&self.broker_out_api);
-        self.broker_out_api
+        let weak = Arc::downgrade(&self.broker_outer_api);
+        self.broker_outer_api
             .register_broker_all(
                 cluster_name,
                 broker_addr.clone(),

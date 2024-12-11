@@ -81,11 +81,49 @@ const DEFAULT_PULL_TIMEOUT_MILLIS: u64 = 10_000;
 pub(crate) struct EscapeBridge<MS> {
     inner_producer_group_name: CheetahString,
     inner_consumer_group_name: CheetahString,
-    escape_bridge_runtime: RocketMQRuntime,
-    message_store: ArcMut<MS>,
+    escape_bridge_runtime: Option<RocketMQRuntime>,
+    message_store: Option<ArcMut<MS>>,
     broker_config: Arc<BrokerConfig>,
     topic_route_info_manager: Arc<TopicRouteInfoManager>,
     broker_outer_api: Arc<BrokerOuterAPI>,
+}
+
+impl<MS> EscapeBridge<MS> {
+    pub fn new(
+        broker_config: Arc<BrokerConfig>,
+        topic_route_info_manager: Arc<TopicRouteInfoManager>,
+        broker_outer_api: Arc<BrokerOuterAPI>,
+    ) -> Self {
+        let inner_producer_group_name = CheetahString::from_string(format!(
+            "InnerProducerGroup_{}_{}",
+            broker_config.broker_name, broker_config.broker_identity.broker_id
+        ));
+        let inner_consumer_group_name = CheetahString::from_string(format!(
+            "InnerConsumerGroup_{}_{}",
+            broker_config.broker_name, broker_config.broker_identity.broker_id
+        ));
+
+        Self {
+            inner_producer_group_name,
+            inner_consumer_group_name,
+            escape_bridge_runtime: None,
+            message_store: None,
+            broker_config,
+            topic_route_info_manager,
+            broker_outer_api,
+        }
+    }
+
+    pub fn start(&mut self, message_store: Option<ArcMut<MS>>) {
+        if self.broker_config.enable_slave_acting_master && self.broker_config.enable_remote_escape
+        {
+            self.escape_bridge_runtime = Some(RocketMQRuntime::new_multi(
+                num_cpus::get(),
+                "AsyncEscapeBridgeExecutor",
+            ));
+            self.message_store = message_store;
+        }
+    }
 }
 
 impl<MS> EscapeBridge<MS>
@@ -97,7 +135,11 @@ where
         mut message_ext: MessageExtBrokerInner,
     ) -> PutMessageResult {
         if self.broker_config.broker_identity.broker_id == mix_all::MASTER_ID {
-            self.message_store.put_message(message_ext).await
+            self.message_store
+                .as_mut()
+                .unwrap()
+                .put_message(message_ext)
+                .await
         } else if self.broker_config.enable_slave_acting_master
             && self.broker_config.enable_remote_escape
         {
@@ -177,7 +219,7 @@ where
             .find_broker_address_in_publish(broker_name_to_send.as_ref());
         if broker_addr_to_send.is_none() {
             warn!(
-                "putMessageToRemoteBroker failed, remote broker not found. Topic: {}, MsgId: {}, \
+                "putMessageToRemoteBroker failed, remote broker not found. Topic: {}, MsgId:  {}, \
                  Broker: {}",
                 message_to_put.get_topic(),
                 message_to_put.message_ext_inner.msg_id,
@@ -223,7 +265,11 @@ where
         mut message_ext: MessageExtBrokerInner,
     ) -> PutMessageResult {
         if self.broker_config.broker_identity.broker_id == mix_all::MASTER_ID {
-            self.message_store.put_message(message_ext).await
+            self.message_store
+                .as_mut()
+                .unwrap()
+                .put_message(message_ext)
+                .await
         } else if self.broker_config.enable_slave_acting_master
             && self.broker_config.enable_remote_escape
         {
@@ -268,7 +314,11 @@ where
         mut message_ext: MessageExtBrokerInner,
     ) -> PutMessageResult {
         if self.broker_config.broker_identity.broker_id == mix_all::MASTER_ID {
-            self.message_store.put_message(message_ext).await
+            self.message_store
+                .as_mut()
+                .unwrap()
+                .put_message(message_ext)
+                .await
         } else if self.broker_config.enable_slave_acting_master
             && self.broker_config.enable_remote_escape
         {
