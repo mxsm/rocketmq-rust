@@ -67,75 +67,93 @@ impl Display for MessageClientExt {
 }
 
 impl MessageTrait for MessageClientExt {
+    #[inline]
     fn put_property(&mut self, key: CheetahString, value: CheetahString) {
         self.message_ext_inner.put_property(key, value);
     }
 
+    #[inline]
     fn clear_property(&mut self, name: &str) {
         self.message_ext_inner.clear_property(name);
     }
 
+    #[inline]
     fn get_property(&self, name: &CheetahString) -> Option<CheetahString> {
         self.message_ext_inner.get_property(name)
     }
 
+    #[inline]
     fn get_topic(&self) -> &CheetahString {
         self.message_ext_inner.get_topic()
     }
 
+    #[inline]
     fn set_topic(&mut self, topic: CheetahString) {
         self.message_ext_inner.set_topic(topic);
     }
 
+    #[inline]
     fn get_flag(&self) -> i32 {
         self.message_ext_inner.get_flag()
     }
 
+    #[inline]
     fn set_flag(&mut self, flag: i32) {
         self.message_ext_inner.set_flag(flag);
     }
 
+    #[inline]
     fn get_body(&self) -> Option<&Bytes> {
         self.message_ext_inner.get_body()
     }
 
+    #[inline]
     fn set_body(&mut self, body: Bytes) {
         self.message_ext_inner.set_body(body);
     }
 
+    #[inline]
     fn get_properties(&self) -> &HashMap<CheetahString, CheetahString> {
         self.message_ext_inner.get_properties()
     }
 
+    #[inline]
     fn set_properties(&mut self, properties: HashMap<CheetahString, CheetahString>) {
         self.message_ext_inner.set_properties(properties);
     }
 
+    #[inline]
     fn get_transaction_id(&self) -> Option<&CheetahString> {
         self.message_ext_inner.get_transaction_id()
     }
 
+    #[inline]
     fn set_transaction_id(&mut self, transaction_id: CheetahString) {
         self.message_ext_inner.set_transaction_id(transaction_id);
     }
 
+    #[inline]
     fn get_compressed_body_mut(&mut self) -> &mut Option<Bytes> {
         self.message_ext_inner.get_compressed_body_mut()
     }
 
+    #[inline]
     fn get_compressed_body(&self) -> Option<&Bytes> {
         self.message_ext_inner.get_compressed_body()
     }
 
+    #[inline]
     fn set_compressed_body_mut(&mut self, compressed_body: Bytes) {
         self.message_ext_inner
             .set_compressed_body_mut(compressed_body);
     }
 
+    #[inline]
     fn as_any(&self) -> &dyn Any {
         self
     }
 
+    #[inline]
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
