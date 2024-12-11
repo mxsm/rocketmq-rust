@@ -150,7 +150,6 @@ impl SendResult {
 }
 
 impl std::fmt::Display for SendResult {
-
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(
