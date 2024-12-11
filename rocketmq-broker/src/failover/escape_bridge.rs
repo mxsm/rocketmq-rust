@@ -189,6 +189,7 @@ where
             .broker_outer_api
             .send_message_to_specific_broker(
                 broker_addr_to_send.as_ref().unwrap(),
+                broker_name_to_send.as_ref().unwrap(),
                 message_to_put.message_ext_inner,
                 producer_group,
                 SEND_TIMEOUT,
