@@ -42,6 +42,7 @@ use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::log_file::MessageStore;
 use rocketmq_store::pop::ack_msg::AckMsg;
+use rocketmq_store::pop::pop_check_point::PopCheckPoint;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use tracing::error;
 use tracing::info;
@@ -203,10 +204,12 @@ where
             .append_check_point(
                 &request_header,
                 revive_qid,
+                request_header.queue_id,
+                request_header.offset,
                 now,
                 CheetahString::from_string(ExtraInfoUtil::get_broker_name(extra_info.as_slice())?),
             )
-            .await;
+            .await?;
         match ck_result.put_message_status() {
             PutMessageStatus::PutOk
             | PutMessageStatus::FlushDiskTimeout
@@ -313,12 +316,62 @@ where
 
     async fn append_check_point(
         &mut self,
-        _request_header: &ChangeInvisibleTimeRequestHeader,
-        _revive_qid: i32,
-        _pop_time: u64,
-        _broker_name: CheetahString,
-    ) -> PutMessageResult {
-        unimplemented!("ChangeInvisibleTimeProcessor append_check_point")
+        request_header: &ChangeInvisibleTimeRequestHeader,
+        revive_qid: i32,
+        queue_id: i32,
+        offset: i64,
+        pop_time: u64,
+        broker_name: CheetahString,
+    ) -> crate::Result<PutMessageResult> {
+        let mut ck = PopCheckPoint {
+            bit_map: 0,
+            num: 1,
+            pop_time: pop_time as i64,
+            invisible_time: request_header.invisible_time,
+            start_offset: offset,
+            cid: request_header.consumer_group.clone(),
+            topic: request_header.topic.clone(),
+            queue_id,
+            broker_name: Some(broker_name),
+            ..Default::default()
+        };
+
+        ck.add_diff(0);
+
+        let mut inner = MessageExtBrokerInner::default();
+        inner.set_topic(self.revive_topic.clone());
+        inner.set_body(Bytes::from(ck.encode()?));
+        inner.message_ext_inner.queue_id = revive_qid;
+        inner.set_tags(CheetahString::from_static_str(PopAckConstants::ACK_TAG));
+        inner.message_ext_inner.born_timestamp = get_current_millis() as i64;
+        inner.message_ext_inner.born_host = self.store_host;
+        inner.message_ext_inner.store_host = self.store_host;
+        let deliver_time_ms = ck.get_revive_time() - PopAckConstants::ACK_TIME_INTERVAL;
+        inner.set_delay_time_ms(deliver_time_ms as u64);
+        inner.message_ext_inner.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
+            CheetahString::from(PopMessageProcessor::gen_ck_unique_id(&ck)),
+        );
+        inner.properties_string =
+            message_decoder::message_properties_to_string(inner.get_properties());
+        let put_message_result = self
+            .escape_bridge
+            .put_message_to_specific_queue(inner)
+            .await;
+        if self.broker_config.enable_pop_log {
+            info!(
+                "change Invisible , appendCheckPoint, topic {}, queueId {},reviveId {}, cid {}, \
+                 startOffset {}, rt {}, result {}",
+                request_header.topic,
+                queue_id,
+                revive_qid,
+                request_header.consumer_group,
+                offset,
+                ck.get_revive_time(),
+                put_message_result.put_message_status()
+            )
+        }
+        Ok(put_message_result)
     }
 
     async fn process_change_invisible_time_for_order(
