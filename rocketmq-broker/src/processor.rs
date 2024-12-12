@@ -53,6 +53,7 @@ pub(crate) mod peek_message_processor;
 pub(crate) mod polling_info_processor;
 pub(crate) mod pop_inflight_message_counter;
 pub(crate) mod pop_message_processor;
+pub(crate) mod processor_service;
 pub(crate) mod pull_message_processor;
 pub(crate) mod pull_message_result_handler;
 pub(crate) mod query_assignment_processor;
