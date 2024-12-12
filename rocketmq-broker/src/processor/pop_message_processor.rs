@@ -110,7 +110,7 @@ struct TimedLock {
 impl TimedLock {
     pub fn new() -> Self {
         TimedLock {
-            lock: AtomicBool::new(true),
+            lock: AtomicBool::new(false),
             lock_time: AtomicU64::new(get_current_millis()),
         }
     }
@@ -118,7 +118,7 @@ impl TimedLock {
     pub fn try_lock(&self) -> bool {
         match self
             .lock
-            .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
         {
             Ok(_) => {
                 self.lock_time
@@ -130,11 +130,11 @@ impl TimedLock {
     }
 
     pub fn unlock(&self) {
-        self.lock.store(true, Ordering::Release);
+        self.lock.store(false, Ordering::Release);
     }
 
     pub fn is_locked(&self) -> bool {
-        !self.lock.load(Ordering::Acquire)
+        self.lock.load(Ordering::Acquire)
     }
 
     pub fn get_lock_time(&self) -> u64 {
