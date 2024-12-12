@@ -142,15 +142,15 @@ mod tests {
     #[test]
     fn gen_ck_unique_id_formats_correctly() {
         let ck = PopCheckPoint {
-            topic: String::from("test_topic"),
+            topic: CheetahString::from("test_topic"),
             queue_id: 1,
             start_offset: 456,
-            cid: String::from("test_cid"),
+            cid: CheetahString::from("test_cid"),
             revive_offset: 0,
             pop_time: 789,
             invisible_time: 0,
             bit_map: 0,
-            broker_name: Some(String::from("test_broker")),
+            broker_name: Some(CheetahString::from("test_broker")),
             num: 0,
             queue_offset_diff: vec![],
             re_put_times: None,

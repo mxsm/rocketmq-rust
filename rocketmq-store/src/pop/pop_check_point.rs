@@ -17,10 +17,11 @@
 use std::cmp::Ordering;
 use std::fmt::Display;
 
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct PopCheckPoint {
     #[serde(rename = "so")]
     pub start_offset: i64,
@@ -35,17 +36,17 @@ pub struct PopCheckPoint {
     #[serde(rename = "q")]
     pub queue_id: i32,
     #[serde(rename = "t")]
-    pub topic: String,
+    pub topic: CheetahString,
     #[serde(rename = "c")]
-    pub cid: String,
+    pub cid: CheetahString,
     #[serde(rename = "ro")]
     pub revive_offset: i64,
     #[serde(rename = "d")]
     pub queue_offset_diff: Vec<i32>,
     #[serde(rename = "bn")]
-    pub broker_name: Option<String>,
+    pub broker_name: Option<CheetahString>,
     #[serde(rename = "rp")]
-    pub re_put_times: Option<String>,
+    pub re_put_times: Option<CheetahString>,
 }
 
 impl PopCheckPoint {
@@ -71,9 +72,12 @@ impl PopCheckPoint {
         }
 
         // new version of checkpoint
-        self.queue_offset_diff[(ack_offset - self.start_offset) as usize]
+        let index = (ack_offset - self.start_offset) as usize;
+        if index >= self.queue_offset_diff.len() {
+            return -1;
+        }
+        self.queue_offset_diff[index]
     }
-
     pub fn ack_offset_by_index(&self, index: u8) -> i64 {
         // old version of checkpoint
         if self.queue_offset_diff.is_empty() {
@@ -146,8 +150,8 @@ mod tests {
             bit_map: 0,
             num: 0,
             queue_id: 0,
-            topic: String::from(""),
-            cid: String::from(""),
+            topic: CheetahString::from(""),
+            cid: CheetahString::from(""),
             revive_offset: 0,
             queue_offset_diff: vec![],
             broker_name: None,
@@ -166,8 +170,8 @@ mod tests {
             bit_map: 0,
             num: 5,
             queue_id: 0,
-            topic: String::from(""),
-            cid: String::from(""),
+            topic: CheetahString::from(""),
+            cid: CheetahString::from(""),
             revive_offset: 0,
             queue_offset_diff: vec![0, 1, 2, 3, 4],
             broker_name: None,
@@ -185,8 +189,8 @@ mod tests {
             bit_map: 0,
             num: 5,
             queue_id: 0,
-            topic: String::from(""),
-            cid: String::from(""),
+            topic: CheetahString::from(""),
+            cid: CheetahString::from(""),
             revive_offset: 0,
             queue_offset_diff: vec![0, 1, 2, 3, 4],
             broker_name: None,
@@ -204,8 +208,8 @@ mod tests {
             bit_map: 0,
             num: 5,
             queue_id: 0,
-            topic: String::from(""),
-            cid: String::from(""),
+            topic: CheetahString::from(""),
+            cid: CheetahString::from(""),
             revive_offset: 0,
             queue_offset_diff: vec![0, 1, 2, 3, 4],
             broker_name: None,
@@ -223,12 +227,12 @@ mod tests {
             bit_map: 0,
             num: 0,
             queue_id: 0,
-            topic: String::from(""),
-            cid: String::from(""),
+            topic: CheetahString::from(""),
+            cid: CheetahString::from(""),
             revive_offset: 0,
             queue_offset_diff: vec![],
             broker_name: None,
-            re_put_times: Some(String::from("5")),
+            re_put_times: Some(CheetahString::from("5")),
         };
         assert_eq!(checkpoint.parse_re_put_times(), 5);
     }
@@ -242,12 +246,12 @@ mod tests {
             bit_map: 0,
             num: 0,
             queue_id: 0,
-            topic: String::from(""),
-            cid: String::from(""),
+            topic: CheetahString::from(""),
+            cid: CheetahString::from(""),
             revive_offset: 0,
             queue_offset_diff: vec![],
             broker_name: None,
-            re_put_times: Some(String::from("invalid")),
+            re_put_times: Some(CheetahString::from("invalid")),
         };
         assert_eq!(checkpoint.parse_re_put_times(), i32::MAX);
     }
@@ -261,8 +265,8 @@ mod tests {
             bit_map: 0,
             num: 0,
             queue_id: 0,
-            topic: String::from(""),
-            cid: String::from(""),
+            topic: CheetahString::from(""),
+            cid: CheetahString::from(""),
             revive_offset: 0,
             queue_offset_diff: vec![],
             broker_name: None,
@@ -280,8 +284,8 @@ mod tests {
             bit_map: 0,
             num: 0,
             queue_id: 0,
-            topic: String::from(""),
-            cid: String::from(""),
+            topic: CheetahString::from(""),
+            cid: CheetahString::from(""),
             revive_offset: 0,
             queue_offset_diff: vec![],
             broker_name: None,
@@ -303,8 +307,8 @@ mod tests {
             bit_map: 0,
             num: 0,
             queue_id: 0,
-            topic: String::from(""),
-            cid: String::from(""),
+            topic: CheetahString::from(""),
+            cid: CheetahString::from(""),
             revive_offset: 0,
             queue_offset_diff: vec![],
             broker_name: None,
@@ -326,8 +330,8 @@ mod tests {
             bit_map: 0,
             num: 0,
             queue_id: 0,
-            topic: String::from(""),
-            cid: String::from(""),
+            topic: CheetahString::from(""),
+            cid: CheetahString::from(""),
             revive_offset: 0,
             queue_offset_diff: vec![],
             broker_name: None,
@@ -349,12 +353,12 @@ mod tests {
             bit_map: 40,
             num: 50,
             queue_id: 60,
-            topic: String::from("test_topic"),
-            cid: String::from("test_cid"),
+            topic: CheetahString::from("test_topic"),
+            cid: CheetahString::from("test_cid"),
             revive_offset: 70,
             queue_offset_diff: vec![1, 2, 3],
-            broker_name: Some(String::from("test_broker")),
-            re_put_times: Some(String::from("test_reput")),
+            broker_name: Some(CheetahString::from("test_broker")),
+            re_put_times: Some(CheetahString::from("test_reput")),
         };
         let serialized = serde_json::to_string(&p).unwrap();
         let deserialized: PopCheckPoint = serde_json::from_str(&serialized).unwrap();
@@ -364,17 +368,17 @@ mod tests {
     #[test]
     fn pop_check_point_deserialization_handles_missing_optional_fields() {
         let data = r#"{
-            "so": 10,
-            "pt": 20,
-            "it": 30,
-            "bm": 40,
-            "n": 50,
-            "q": 60,
-            "t": "test_topic",
-            "c": "test_cid",
-            "ro": 70,
-            "d": [1, 2, 3]
-        }"#;
+             "so": 10,
+             "pt": 20,
+             "it": 30,
+             "bm": 40,
+             "n": 50,
+             "q": 60,
+             "t": "test_topic",
+             "c": "test_cid",
+             "ro": 70,
+             "d": [1, 2, 3]
+         }"#;
         let deserialized: PopCheckPoint = serde_json::from_str(data).unwrap();
         assert_eq!(deserialized.broker_name, None);
         assert_eq!(deserialized.re_put_times, None);
@@ -389,12 +393,12 @@ mod tests {
             bit_map: 40,
             num: 50,
             queue_id: 60,
-            topic: String::from("test_topic"),
-            cid: String::from("test_cid"),
+            topic: CheetahString::from("test_topic"),
+            cid: CheetahString::from("test_cid"),
             revive_offset: 70,
             queue_offset_diff: vec![1, 2, 3],
-            broker_name: Some(String::from("test_broker")),
-            re_put_times: Some(String::from("test_reput")),
+            broker_name: Some(CheetahString::from("test_broker")),
+            re_put_times: Some(CheetahString::from("test_reput")),
         };
         let display = format!("{}", p);
         let expected = "PopCheckPoint [start_offset=10, pop_time=20, invisible_time=30, \
