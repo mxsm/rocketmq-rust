@@ -21,7 +21,7 @@ use serde::Serialize;
 
 use crate::pop::ack_msg::AckMsg;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct BatchAckMsg {
     #[serde(flatten)]
     pub ack_msg: AckMsg,

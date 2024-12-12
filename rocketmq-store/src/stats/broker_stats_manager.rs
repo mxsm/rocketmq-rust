@@ -503,6 +503,8 @@ impl BrokerStatsManager {
             None => 0.0,
         }
     }
+
+    pub fn inc_broker_ack_nums(&self, inc_value: i32) {}
 }
 
 pub fn build_stats_key(topic: Option<&str>, group: Option<&str>) -> String {
