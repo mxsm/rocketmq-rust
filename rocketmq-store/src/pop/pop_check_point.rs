@@ -77,7 +77,7 @@ impl PopCheckPoint {
             return -1;
         }
         self.queue_offset_diff[index]
-
+    }
     pub fn ack_offset_by_index(&self, index: u8) -> i64 {
         // old version of checkpoint
         if self.queue_offset_diff.is_empty() {
