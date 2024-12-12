@@ -20,7 +20,7 @@ use rocketmq_store::pop::ack_msg::AckMsg;
 pub(crate) struct PopBufferMergeService;
 
 impl PopBufferMergeService {
-    pub fn add_ack(&mut self, _revive_qid: i32, _ack_msg: AckMsg) {
+    pub fn add_ack(&mut self, _revive_qid: i32, _ack_msg: &AckMsg) -> bool {
         unimplemented!("Not implemented yet");
     }
 }

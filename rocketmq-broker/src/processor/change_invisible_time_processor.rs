@@ -14,10 +14,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::net::SocketAddr;
 use std::sync::Arc;
 
+use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_common::common::message::message_decoder;
+use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_common::common::message::MessageConst;
+use rocketmq_common::common::message::MessageTrait;
+use rocketmq_common::common::pop_ack_constants::PopAckConstants;
 use rocketmq_common::common::FAQUrl;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::code::request_code::RequestCode;
@@ -27,18 +34,23 @@ use rocketmq_remoting::protocol::header::change_invisible_time_request_header::C
 use rocketmq_remoting::protocol::header::change_invisible_time_response_header::ChangeInvisibleTimeResponseHeader;
 use rocketmq_remoting::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::remoting_error::RemotingError::RemotingCommandError;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::log_file::MessageStore;
+use rocketmq_store::pop::ack_msg::AckMsg;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use tracing::error;
 use tracing::info;
 
+use crate::failover::escape_bridge::EscapeBridge;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
 use crate::offset::manager::consumer_order_info_manager::ConsumerOrderInfoManager;
+use crate::processor::pop_message_processor::PopMessageProcessor;
+use crate::processor::processor_service::pop_buffer_merge_service::PopBufferMergeService;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
 pub struct ChangeInvisibleTimeProcessor<MS> {
@@ -48,6 +60,10 @@ pub struct ChangeInvisibleTimeProcessor<MS> {
     consumer_offset_manager: Arc<ConsumerOffsetManager>,
     consumer_order_info_manager: Arc<ConsumerOrderInfoManager>,
     broker_stats_manager: Arc<BrokerStatsManager>,
+    pop_buffer_merge_service: ArcMut<PopBufferMergeService>,
+    escape_bridge: ArcMut<EscapeBridge<MS>>,
+    revive_topic: CheetahString,
+    store_host: SocketAddr,
 }
 
 impl<MS> ChangeInvisibleTimeProcessor<MS> {
@@ -58,7 +74,15 @@ impl<MS> ChangeInvisibleTimeProcessor<MS> {
         consumer_offset_manager: Arc<ConsumerOffsetManager>,
         consumer_order_info_manager: Arc<ConsumerOrderInfoManager>,
         broker_stats_manager: Arc<BrokerStatsManager>,
+        pop_buffer_merge_service: ArcMut<PopBufferMergeService>,
+        escape_bridge: ArcMut<EscapeBridge<MS>>,
     ) -> Self {
+        let revive_topic = PopAckConstants::build_cluster_revive_topic(
+            broker_config.broker_identity.broker_cluster_name.as_str(),
+        );
+        let store_host = format!("{}:{}", broker_config.broker_ip1, broker_config.listen_port)
+            .parse::<SocketAddr>()
+            .unwrap();
         ChangeInvisibleTimeProcessor {
             broker_config,
             topic_config_manager,
@@ -66,6 +90,10 @@ impl<MS> ChangeInvisibleTimeProcessor<MS> {
             consumer_offset_manager,
             consumer_order_info_manager,
             broker_stats_manager,
+            pop_buffer_merge_service,
+            escape_bridge,
+            revive_topic: CheetahString::from_string(revive_topic),
+            store_host,
         }
     }
 }
@@ -221,10 +249,66 @@ where
 
     async fn ack_origin(
         &mut self,
-        _request_header: &ChangeInvisibleTimeRequestHeader,
-        _extra_info: &[String],
+        request_header: &ChangeInvisibleTimeRequestHeader,
+        extra_info: &[String],
     ) -> crate::Result<()> {
-        unimplemented!("ChangeInvisibleTimeProcessor ack_origin")
+        let ack_msg = AckMsg {
+            ack_offset: request_header.offset,
+            start_offset: ExtraInfoUtil::get_ck_queue_offset(extra_info)?,
+            consumer_group: request_header.consumer_group.clone(),
+            topic: request_header.topic.clone(),
+            queue_id: request_header.queue_id,
+            pop_time: ExtraInfoUtil::get_pop_time(extra_info)?,
+            broker_name: CheetahString::from_string(ExtraInfoUtil::get_broker_name(extra_info)?),
+        };
+
+        let rq_id = ExtraInfoUtil::get_revive_qid(extra_info)?;
+        self.broker_stats_manager.inc_broker_ack_nums(1);
+        self.broker_stats_manager.inc_group_ack_nums(
+            request_header.consumer_group.as_str(),
+            request_header.topic.as_str(),
+            1,
+        );
+        if self.pop_buffer_merge_service.add_ack(rq_id, &ack_msg) {
+            return Ok(());
+        }
+        let mut inner = MessageExtBrokerInner::default();
+        inner.set_topic(self.revive_topic.clone());
+        inner.set_body(Bytes::from(ack_msg.encode()?));
+        inner.message_ext_inner.queue_id = rq_id;
+        inner.set_tags(CheetahString::from_static_str(PopAckConstants::ACK_TAG));
+        inner.message_ext_inner.born_timestamp = get_current_millis() as i64;
+        inner.message_ext_inner.born_host = self.store_host;
+        inner.message_ext_inner.store_host = self.store_host;
+        let deliver_time_ms = ExtraInfoUtil::get_pop_time(extra_info)?
+            + ExtraInfoUtil::get_invisible_time(extra_info)?;
+        inner.set_delay_time_ms(deliver_time_ms as u64);
+        inner.message_ext_inner.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
+            CheetahString::from(PopMessageProcessor::gen_ack_unique_id(&ack_msg)),
+        );
+        inner.properties_string =
+            message_decoder::message_properties_to_string(inner.get_properties());
+        let result = self
+            .escape_bridge
+            .put_message_to_specific_queue(inner)
+            .await;
+        match result.put_message_status() {
+            PutMessageStatus::PutOk
+            | PutMessageStatus::FlushDiskTimeout
+            | PutMessageStatus::FlushSlaveTimeout
+            | PutMessageStatus::SlaveNotAvailable
+            | PutMessageStatus::ServiceNotAvailable => {}
+            _ => {
+                error!(
+                    "change Invisible, put ack msg error: {}",
+                    result.put_message_status()
+                );
+            }
+        }
+        //PopMetricsManager.incPopReviveAckPutCount(ackMsg,
+        // putMessageResult.getPutMessageStatus());
+        Ok(())
     }
 
     async fn append_check_point(

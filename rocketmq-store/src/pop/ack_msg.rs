@@ -20,7 +20,7 @@ use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct AckMsg {
     #[serde(rename = "ao", alias = "ackOffset")]
     pub ack_offset: i64,
