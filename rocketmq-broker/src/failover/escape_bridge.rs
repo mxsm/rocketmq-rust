@@ -31,6 +31,7 @@ use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::log_file::MessageStore;
+use tracing::error;
 use tracing::warn;
 
 use crate::out_api::broker_outer_api::BrokerOuterAPI;
@@ -144,9 +145,19 @@ where
             && self.broker_config.enable_remote_escape
         {
             message_ext.set_wait_store_msg_ok(false);
-            let send_result = self.put_message_to_remote_broker(message_ext, None).await;
-            transform_send_result2put_result(send_result)
+            match self.put_message_to_remote_broker(message_ext, None).await {
+                Ok(send_result) => transform_send_result2put_result(send_result),
+                Err(e) => {
+                    error!("sendMessageInFailover to remote failed, {}", e);
+                    PutMessageResult::new(PutMessageStatus::PutToRemoteBrokerFail, None, true)
+                }
+            }
         } else {
+            warn!(
+                "Put message failed, enableSlaveActingMaster={}, enableRemoteEscape={}.",
+                self.broker_config.enable_slave_acting_master,
+                self.broker_config.enable_remote_escape
+            );
             PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable)
         }
     }
@@ -155,12 +166,16 @@ where
         &mut self,
         message_ext: MessageExtBrokerInner,
         mut broker_name_to_send: Option<CheetahString>,
-    ) -> Option<SendResult> {
-        if broker_name_to_send.is_some()
-            && self.broker_config.broker_identity.broker_name.as_str()
-                == broker_name_to_send.as_ref().unwrap().as_str()
+    ) -> crate::Result<Option<SendResult>> {
+        let broker_name = self.broker_config.broker_identity.broker_name.as_str();
+        if broker_name.is_empty()
+            || broker_name
+                == broker_name_to_send
+                    .as_ref()
+                    .map_or("", |value| value.as_str())
         {
-            return None;
+            // not remote broker
+            return Ok(None);
         }
         let is_trans_half_message =
             TransactionalMessageUtil::build_half_topic() == message_ext.get_topic();
@@ -182,7 +197,7 @@ where
                 message_to_put.get_topic(),
                 message_to_put.message_ext_inner.msg_id
             );
-            return None;
+            return Ok(None);
         }
         let topic_publish_info = topic_publish_info.unwrap();
         let _mq_selected = if !broker_name_to_send
@@ -204,7 +219,7 @@ where
                     message_to_put.message_ext_inner.msg_id,
                     mq.get_broker_name()
                 );
-                return None;
+                return Ok(None);
             }
             mq
         } else {
@@ -225,7 +240,7 @@ where
                 message_to_put.message_ext_inner.msg_id,
                 broker_name_to_send.as_ref().unwrap()
             );
-            return None;
+            return Ok(None);
         }
         let producer_group = self.get_producer_group(&message_to_put);
         let result = self
@@ -237,17 +252,11 @@ where
                 producer_group,
                 SEND_TIMEOUT,
             )
-            .await;
-        match result {
-            Ok(value) => {
-                if value.send_status == SendStatus::SendOk {
-                    Some(value)
-                } else {
-                    None
-                }
-            }
-            Err(_) => None,
+            .await?;
+        if result.send_status == SendStatus::SendOk {
+            return Ok(Some(result));
         }
+        Ok(None)
     }
 
     fn get_producer_group(&self, message_ext: &MessageExtBrokerInner) -> CheetahString {
@@ -328,7 +337,7 @@ where
                 .try_to_find_topic_publish_info(message_ext.get_topic())
                 .await;
             if topic_publish_info.is_none() {
-                return PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable);
+                return PutMessageResult::new(PutMessageStatus::PutToRemoteBrokerFail, None, true);
             }
             let topic_publish_info = topic_publish_info.unwrap();
 
@@ -350,7 +359,7 @@ where
                 .topic_route_info_manager
                 .find_broker_address_in_publish(Some(broker_name_to_send));
             let producer_group = self.get_producer_group(&message_ext);
-            let result = self
+            match self
                 .broker_outer_api
                 .send_message_to_specific_broker(
                     broker_addr_to_send.as_ref().unwrap(),
@@ -359,9 +368,20 @@ where
                     producer_group,
                     SEND_TIMEOUT,
                 )
-                .await;
-            transform_send_result2put_result(result.ok())
+                .await
+            {
+                Ok(result) => transform_send_result2put_result(Some(result)),
+                Err(e) => {
+                    error!("sendMessageInFailover to remote failed, {}", e);
+                    PutMessageResult::new(PutMessageStatus::PutToRemoteBrokerFail, None, true)
+                }
+            }
         } else {
+            warn!(
+                "Put message failed, enableSlaveActingMaster={}, enableRemoteEscape={}.",
+                self.broker_config.enable_slave_acting_master,
+                self.broker_config.enable_remote_escape
+            );
             PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable)
         }
     }
@@ -390,9 +410,10 @@ fn transform_send_result2put_result(send_result: Option<SendResult>) -> PutMessa
 mod tests {
     use rocketmq_client_rust::producer::send_result::SendResult;
     use rocketmq_client_rust::producer::send_status::SendStatus;
+    use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+    use rocketmq_common::common::message::MessageConst;
 
     use super::*;
-
     #[test]
     fn transform_send_result2put_result_handles_none() {
         let result = transform_send_result2put_result(None);
