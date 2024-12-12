@@ -98,6 +98,10 @@ impl PopCheckPoint {
         }
         i32::MAX
     }
+
+    pub fn get_revive_time(&self) -> i64 {
+        self.pop_time + self.invisible_time
+    }
 }
 
 impl Ord for PopCheckPoint {

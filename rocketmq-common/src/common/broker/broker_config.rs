@@ -179,6 +179,7 @@ pub struct BrokerConfig {
     pub load_balance_poll_name_server_interval: u64,
     pub server_load_balancer_enable: bool,
     pub enable_remote_escape: bool,
+    pub enable_pop_log: bool,
 }
 
 impl Default for BrokerConfig {
@@ -266,6 +267,7 @@ impl Default for BrokerConfig {
             load_balance_poll_name_server_interval: 30_000,
             server_load_balancer_enable: true,
             enable_remote_escape: false,
+            enable_pop_log: false,
         }
     }
 }
