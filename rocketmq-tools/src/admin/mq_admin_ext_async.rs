@@ -37,6 +37,8 @@ use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+use rocketmq_remoting::protocol::admin::broker_operator_result::BrokerOperatorResult;
+use rocketmq_remoting::protocol::admin::rollback_stats::RollbackStats;
 
 use crate::admin::common::admin_tool_result::AdminToolResult;
 use crate::Result;
@@ -220,11 +222,11 @@ pub trait MQAdminExtLocal: Sync {
         topic: CheetahString,
     ) -> Result<()>;
 
-    /*async fn delete_topic_in_broker_concurrent(
+    async fn delete_topic_in_broker_concurrent(
         &self,
         addrs: HashSet<CheetahString>,
         topic: CheetahString,
-    ) -> AdminToolResult<BrokerOperatorResult>;*/
+    ) -> AdminToolResult<BrokerOperatorResult>;
 
     async fn delete_topic_in_name_server(
         &self,
@@ -249,13 +251,13 @@ pub trait MQAdminExtLocal: Sync {
 
     async fn delete_kv_config(&self, namespace: CheetahString, key: CheetahString) -> Result<()>;
 
-    /*async fn reset_offset_by_timestamp_old(
+    async fn reset_offset_by_timestamp_old(
         &self,
         consumer_group: CheetahString,
         topic: CheetahString,
         timestamp: u64,
         force: bool,
-    ) -> Result<Vec<RollbackStats>>;*/
+    ) -> Result<Vec<RollbackStats>>;
 
     async fn reset_offset_by_timestamp(
         &self,
@@ -273,12 +275,12 @@ pub trait MQAdminExtLocal: Sync {
         timestamp: u64,
     ) -> Result<()>;
 
-    /*async fn reset_offset_new_concurrent(
+    async fn reset_offset_new_concurrent(
         &self,
         group: CheetahString,
         topic: CheetahString,
         timestamp: u64,
-    ) -> AdminToolResult<BrokerOperatorResult>;*/
+    ) -> AdminToolResult<BrokerOperatorResult>;
 
     async fn get_consume_status(
         &self,
