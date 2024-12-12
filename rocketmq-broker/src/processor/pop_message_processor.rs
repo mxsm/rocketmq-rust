@@ -14,7 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+
 use rocketmq_common::common::pop_ack_constants::PopAckConstants;
+use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
@@ -97,6 +102,46 @@ impl PopMessageProcessor {
     }
 }
 
+struct TimedLock {
+    lock: AtomicBool,
+    lock_time: AtomicU64,
+}
+
+impl TimedLock {
+    pub fn new() -> Self {
+        TimedLock {
+            lock: AtomicBool::new(true),
+            lock_time: AtomicU64::new(get_current_millis()),
+        }
+    }
+
+    pub fn try_lock(&self) -> bool {
+        match self
+            .lock
+            .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
+        {
+            Ok(_) => {
+                self.lock_time
+                    .store(get_current_millis(), Ordering::Relaxed);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    pub fn unlock(&self) {
+        self.lock.store(true, Ordering::Release);
+    }
+
+    pub fn is_locked(&self) -> bool {
+        !self.lock.load(Ordering::Acquire)
+    }
+
+    pub fn get_lock_time(&self) -> u64 {
+        self.lock_time.load(Ordering::Relaxed)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use cheetah_string::CheetahString;
@@ -158,5 +203,42 @@ mod tests {
         let result = PopMessageProcessor::gen_ck_unique_id(&ck);
         let expected = "test_topic@1@456@test_cid@789@test_broker@ck";
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn new_timed_lock_is_unlocked() {
+        let lock = TimedLock::new();
+        assert!(!lock.is_locked());
+    }
+
+    #[test]
+    fn try_lock_locks_successfully() {
+        let lock = TimedLock::new();
+        assert!(lock.try_lock());
+        assert!(lock.is_locked());
+    }
+
+    #[test]
+    fn try_lock_fails_when_already_locked() {
+        let lock = TimedLock::new();
+        lock.try_lock();
+        assert!(!lock.try_lock());
+    }
+
+    #[test]
+    fn unlock_unlocks_successfully() {
+        let lock = TimedLock::new();
+        lock.try_lock();
+        lock.unlock();
+        assert!(!lock.is_locked());
+    }
+
+    #[test]
+    fn get_lock_time_returns_correct_time() {
+        let lock = TimedLock::new();
+        let initial_time = lock.get_lock_time();
+        lock.try_lock();
+        let lock_time = lock.get_lock_time();
+        assert!(lock_time >= initial_time);
     }
 }
