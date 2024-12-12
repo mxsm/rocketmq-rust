@@ -347,7 +347,12 @@ where
         inner.message_ext_inner.born_host = self.store_host;
         inner.message_ext_inner.store_host = self.store_host;
         let deliver_time_ms = ck.get_revive_time() - PopAckConstants::ACK_TIME_INTERVAL;
-        inner.set_delay_time_ms(deliver_time_ms as u64);
+        let deliver_time_ms = if deliver_time_ms > 0 {
+            deliver_time_ms as u64
+        } else {
+            0
+        };
+        inner.set_delay_time_ms(deliver_time_ms);
         inner.message_ext_inner.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
             CheetahString::from(PopMessageProcessor::gen_ck_unique_id(&ck)),
