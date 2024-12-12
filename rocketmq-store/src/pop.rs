@@ -16,4 +16,5 @@
  */
 
 pub mod ack_msg;
+pub mod batch_ack_msg;
 pub mod pop_check_point;
