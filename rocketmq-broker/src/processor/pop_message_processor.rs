@@ -207,13 +207,10 @@ impl QueueLockManager {
         }
     }
 
-    pub async fn clean_unused_locks(&self, used_expire_millis: u64) -> i32 {
+    pub async fn clean_unused_locks(&self, used_expire_millis: u64) -> usize {
         let mut cache = self.expired_local_cache.lock().await;
-        let mut count = 0;
-        cache.retain(|_, lock| {
-            count += 1;
-            get_current_millis() - lock.get_lock_time() <= used_expire_millis
-        });
+        let count = cache.len();
+        cache.retain(|_, lock| get_current_millis() - lock.get_lock_time() <= used_expire_millis);
         count
     }
 
@@ -383,9 +380,9 @@ mod tests {
         let queue_id = 1;
         manager.try_lock(&topic, &consumer_group, queue_id).await;
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-        let remaining_count = manager.clean_unused_locks(5).await;
-        assert_eq!(remaining_count, 0);
-        let remaining_count = manager.clean_unused_locks(15).await;
-        assert_eq!(remaining_count, 0);
+        let removed_count = manager.clean_unused_locks(5).await;
+        assert_eq!(removed_count, 1);
+        let removed_count = manager.clean_unused_locks(15).await;
+        assert_eq!(removed_count, 0);
     }
 }
