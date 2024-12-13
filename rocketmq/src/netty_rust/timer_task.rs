@@ -14,7 +14,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::sync::Arc;
 
-///convert from netty [Timeout](https://github.com/netty/netty/blob/4.1/common/src/main/java/io/netty/util/TimerTask.java)
+use crate::netty_rust::timeout::Timeout;
+
+///convert from netty [TimerTask](https://github.com/netty/netty/blob/4.1/common/src/main/java/io/netty/util/TimerTask.java)
 #[allow(dead_code)]
-pub trait TimerTask {}
+pub trait TimerTask {
+    /// Executes the timer task.
+    ///
+    /// # Arguments
+    ///
+    /// * `timeout` - An `Arc` containing a reference to a `Timeout` object.
+    fn run(&self, timeout: Arc<dyn Timeout>);
+}
