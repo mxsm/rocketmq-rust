@@ -24,9 +24,13 @@ use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config_manager::ConfigManager;
 use serde::Deserialize;
 use serde::Serialize;
+use tracing::warn;
 
 use crate::broker_path_config_helper::get_consumer_order_info_path;
 use crate::offset::manager::consumer_order_info_lock_manager::ConsumerOrderInfoLockManager;
+
+const TOPIC_GROUP_SEPARATOR: &str = "@";
+const CLEAN_SPAN_FROM_LAST: u64 = 24 * 3600 * 1000;
 
 #[derive(Default)]
 pub(crate) struct ConsumerOrderInfoManager {
@@ -82,15 +86,62 @@ impl ConfigManager for ConsumerOrderInfoManager {
 impl ConsumerOrderInfoManager {
     pub fn update_next_visible_time(
         &self,
+        topic: &CheetahString,
+        group: &CheetahString,
+        queue_id: i32,
+        queue_offset: u64,
+        pop_time: u64,
+        next_visible_time: u64,
+    ) {
+        let key = build_key(topic, group);
+        let mut table = self.consumer_order_info_wrapper.lock();
+        let qs = table.table.get_mut(&key);
+        if qs.is_none() {
+            warn!(
+                "orderInfo of queueId is null. key: {}, queueOffset: {}, queueId: {}",
+                key, queue_offset, queue_id
+            );
+            return;
+        }
+        let qs = qs.unwrap();
+        let order_info = qs.get_mut(&queue_id);
+        if order_info.is_none() {
+            warn!(
+                "orderInfo of queueId is null. key: {}, queueOffset: {}, queueId: {}",
+                key, queue_offset, queue_id
+            );
+            return;
+        }
+        let order_info = order_info.unwrap();
+        if pop_time != order_info.pop_time {
+            warn!(
+                "popTime is not equal to orderInfo saved. key: {}, queueOffset: {}, orderInfo: \
+                 {}, popTime: {}",
+                key, queue_offset, queue_id, pop_time,
+            );
+            return;
+        }
+        order_info
+            .offset_next_visible_time
+            .insert(queue_offset, next_visible_time);
+        self.update_lock_free_timestamp(topic, group, queue_id, order_info);
+    }
+
+    fn update_lock_free_timestamp(
+        &self,
         _topic: &CheetahString,
         _group: &CheetahString,
         _queue_id: i32,
-        _queue_offset: u64,
-        _pop_time: u64,
-        _next_visible_time: u64,
+        _order_info: &OrderInfo,
     ) {
-        unimplemented!(" ")
+        unimplemented!("")
     }
+}
+
+#[inline]
+#[must_use]
+fn build_key(topic: &CheetahString, group: &CheetahString) -> String {
+    format!("{}{}{}", topic, TOPIC_GROUP_SEPARATOR, group)
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
