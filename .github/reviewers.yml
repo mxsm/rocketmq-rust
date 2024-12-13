@@ -7,8 +7,8 @@ reviewers:
   groups:
     repository-owners:
       - mxsm # username
-      - TeslaRustor # username
-      - SpaceXCN # username
+      - RocketmqRustBot # username
+      - rocketmq-rust-bot # username
   
   per_author:
     engineers:
