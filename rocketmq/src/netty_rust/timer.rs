@@ -21,7 +21,7 @@ use std::time::Duration;
 use crate::netty_rust::timeout::Timeout;
 use crate::netty_rust::timer_task::TimerTask;
 
-///convert from netty [Timeout](https://github.com/netty/netty/blob/4.1/common/src/main/java/io/netty/util/Timer.java)
+/// convert from netty [Timer](https://github.com/netty/netty/blob/4.1/common/src/main/java/io/netty/util/Timer.java)
 /// A trait representing a timer that can schedule and manage timed tasks.
 #[allow(dead_code)]
 pub trait Timer: Send + Sync {
