@@ -383,9 +383,9 @@ mod tests {
         let queue_id = 1;
         manager.try_lock(&topic, &consumer_group, queue_id).await;
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-        let removed_count = manager.clean_unused_locks(5).await;
-        assert_eq!(removed_count, 1);
-        let removed_count = manager.clean_unused_locks(15).await;
-        assert_eq!(removed_count, 0);
+        let remaining_count = manager.clean_unused_locks(5).await;
+        assert_eq!(remaining_count, 0);
+        let remaining_count = manager.clean_unused_locks(15).await;
+        assert_eq!(remaining_count, 0);
     }
 }
