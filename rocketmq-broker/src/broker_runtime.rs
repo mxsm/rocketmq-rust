@@ -72,6 +72,7 @@ use crate::processor::client_manage_processor::ClientManageProcessor;
 use crate::processor::consumer_manage_processor::ConsumerManageProcessor;
 use crate::processor::default_pull_message_result_handler::DefaultPullMessageResultHandler;
 use crate::processor::end_transaction_processor::EndTransactionProcessor;
+use crate::processor::pop_message_processor::PopMessageProcessor;
 use crate::processor::processor_service::pop_buffer_merge_service::PopBufferMergeService;
 use crate::processor::pull_message_processor::PullMessageProcessor;
 use crate::processor::pull_message_result_handler::PullMessageResultHandler;
@@ -538,12 +539,12 @@ impl BrokerRuntime {
             self.rebalance_lock_manager.clone(),
             self.broker_member_group.clone(),
         );
-
+        let pop_message_processor = ArcMut::new(PopMessageProcessor::default());
         BrokerRequestProcessor {
             send_message_processor: ArcMut::new(send_message_processor),
             pull_message_processor,
             peek_message_processor: Default::default(),
-            pop_message_processor: Default::default(),
+            pop_message_processor: pop_message_processor.clone(),
             ack_message_processor: Default::default(),
             change_invisible_time_processor: ArcMut::new(ChangeInvisibleTimeProcessor::new(
                 self.broker_config.clone(),
@@ -554,6 +555,7 @@ impl BrokerRuntime {
                 self.broker_stats_manager.clone(),
                 ArcMut::new(PopBufferMergeService),
                 self.escape_bridge.clone(),
+                pop_message_processor,
             )),
             notification_processor: Default::default(),
             polling_info_processor: Default::default(),
