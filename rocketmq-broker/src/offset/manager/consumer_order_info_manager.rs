@@ -321,6 +321,9 @@ impl OrderInfo {
     ///
     /// `true` if the offset is not acknowledged, `false` otherwise.
     pub fn is_not_ack(&self, offset_index: usize) -> bool {
+        if offset_index >= 64 {
+            return false;
+        }
         (self.commit_offset_bit & (1 << offset_index)) == 0
     }
 
@@ -343,11 +346,8 @@ impl OrderInfo {
             return;
         }
         let mut pre_queue_offset_set = HashSet::new();
-        for &offset in &pre_offset_list {
-            pre_queue_offset_set.insert(Self::get_queue_offset_from_list(
-                &pre_offset_list,
-                offset as usize,
-            ));
+        for (index, _) in pre_offset_list.iter().enumerate() {
+            pre_queue_offset_set.insert(Self::get_queue_offset_from_list(&pre_offset_list, index));
         }
         for i in 0..self.offset_list.len() {
             let queue_offset = self.get_queue_offset(i);
