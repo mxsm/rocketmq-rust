@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config_manager::ConfigManager;
 use serde::Deserialize;
@@ -75,6 +76,20 @@ impl ConfigManager for ConsumerOrderInfoManager {
                     .recover(self.consumer_order_info_wrapper.lock().deref());
             }
         }
+    }
+}
+
+impl ConsumerOrderInfoManager {
+    pub fn update_next_visible_time(
+        &self,
+        _topic: &CheetahString,
+        _group: &CheetahString,
+        _queue_id: i32,
+        _queue_offset: u64,
+        _pop_time: u64,
+        _next_visible_time: u64,
+    ) {
+        unimplemented!(" ")
     }
 }
 

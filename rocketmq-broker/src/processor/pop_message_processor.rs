@@ -46,6 +46,10 @@ impl PopMessageProcessor {
     ) -> crate::Result<Option<RemotingCommand>> {
         unimplemented!("PopMessageProcessor process_request")
     }
+
+    pub fn queue_lock_manager(&self) -> &QueueLockManager {
+        unimplemented!("PopMessageProcessor QueueLockManager")
+    }
 }
 
 impl PopMessageProcessor {

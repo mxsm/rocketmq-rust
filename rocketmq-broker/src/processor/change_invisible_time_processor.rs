@@ -65,6 +65,7 @@ pub struct ChangeInvisibleTimeProcessor<MS> {
     escape_bridge: ArcMut<EscapeBridge<MS>>,
     revive_topic: CheetahString,
     store_host: SocketAddr,
+    pop_message_processor: ArcMut<PopMessageProcessor>,
 }
 
 impl<MS> ChangeInvisibleTimeProcessor<MS> {
@@ -77,6 +78,7 @@ impl<MS> ChangeInvisibleTimeProcessor<MS> {
         broker_stats_manager: Arc<BrokerStatsManager>,
         pop_buffer_merge_service: ArcMut<PopBufferMergeService>,
         escape_bridge: ArcMut<EscapeBridge<MS>>,
+        pop_message_processor: ArcMut<PopMessageProcessor>,
     ) -> Self {
         let revive_topic = PopAckConstants::build_cluster_revive_topic(
             broker_config.broker_identity.broker_cluster_name.as_str(),
@@ -95,6 +97,7 @@ impl<MS> ChangeInvisibleTimeProcessor<MS> {
             escape_bridge,
             revive_topic: CheetahString::from_string(revive_topic),
             store_host,
+            pop_message_processor,
         }
     }
 }
@@ -381,9 +384,61 @@ where
 
     async fn process_change_invisible_time_for_order(
         &mut self,
-        _request_header: &ChangeInvisibleTimeRequestHeader,
-        _extra_info: &[String],
+        request_header: &ChangeInvisibleTimeRequestHeader,
+        extra_info: &[String],
     ) -> crate::Result<Option<RemotingCommand>> {
-        unimplemented!("ChangeInvisibleTimeProcessor process_change_invisible_time_for_order")
+        let pop_time = ExtraInfoUtil::get_pop_time(extra_info)?;
+        let old_offset = self.consumer_offset_manager.query_offset(
+            &request_header.consumer_group,
+            &request_header.topic,
+            request_header.queue_id,
+        );
+        if old_offset > request_header.offset {
+            return Ok(Some(RemotingCommand::create_response_command()));
+        }
+        while !self
+            .pop_message_processor
+            .queue_lock_manager()
+            .try_lock(
+                &request_header.consumer_group,
+                &request_header.topic,
+                request_header.queue_id,
+            )
+            .await
+        {}
+        let old_offset = self.consumer_offset_manager.query_offset(
+            &request_header.consumer_group,
+            &request_header.topic,
+            request_header.queue_id,
+        );
+        if old_offset > request_header.offset {
+            return Ok(Some(RemotingCommand::create_response_command()));
+        }
+        let next_visible_time = get_current_millis() + request_header.invisible_time as u64;
+        self.consumer_order_info_manager.update_next_visible_time(
+            &request_header.topic,
+            &request_header.consumer_group,
+            request_header.queue_id,
+            request_header.offset as u64,
+            pop_time as u64,
+            next_visible_time,
+        );
+        let revive_qid = ExtraInfoUtil::get_revive_qid(extra_info)?;
+        let response_header = ChangeInvisibleTimeResponseHeader {
+            pop_time: pop_time as u64,
+            revive_qid,
+            invisible_time: (next_visible_time as i64) - pop_time,
+        };
+        self.pop_message_processor
+            .queue_lock_manager()
+            .unlock(
+                &request_header.consumer_group,
+                &request_header.topic,
+                request_header.queue_id,
+            )
+            .await;
+        Ok(Some(RemotingCommand::create_response_command_with_header(
+            response_header,
+        )))
     }
 }
