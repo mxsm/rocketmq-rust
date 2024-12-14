@@ -38,7 +38,7 @@ pub const TOPIC_MAX_LENGTH: usize = 127;
 
 pub(crate) struct SubscriptionGroupManager<MS> {
     pub(crate) broker_config: Arc<BrokerConfig>,
-    subscription_group_wrapper: Arc<parking_lot::Mutex<SubscriptionGroupWrapper>>,
+    pub(crate) subscription_group_wrapper: Arc<parking_lot::Mutex<SubscriptionGroupWrapper>>,
     pub(crate) message_store: Option<MS>,
 }
 
@@ -54,6 +54,10 @@ impl<MS> SubscriptionGroupManager<MS> {
             )),
             message_store,
         }
+    }
+
+    pub fn subscription_group_wrapper(&self) -> &Arc<parking_lot::Mutex<SubscriptionGroupWrapper>> {
+        &self.subscription_group_wrapper
     }
 }
 
@@ -199,7 +203,7 @@ where
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct SubscriptionGroupWrapper {
+pub(crate) struct SubscriptionGroupWrapper {
     subscription_group_table: HashMap<CheetahString, SubscriptionGroupConfig>,
     forbidden_table: HashMap<CheetahString, HashMap<CheetahString, i32>>,
     data_version: DataVersion,
