@@ -200,7 +200,7 @@ impl<MS> ConsumerOrderInfoManager<MS> {
         pop_time: u64,
         next_visible_time: u64,
     ) {
-        let key = build_key(topic, group);
+        let key = CheetahString::from_string(build_key(topic, group));
         let mut table = self.consumer_order_info_wrapper.lock();
         let qs = table.table.get_mut(&key);
         if qs.is_none() {
@@ -251,7 +251,7 @@ fn build_key(topic: &CheetahString, group: &CheetahString) -> String {
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub(crate) struct ConsumerOrderInfoWrapper {
-    table: HashMap<String /* topic@group */, HashMap<i32, OrderInfo>>,
+    table: HashMap<CheetahString /* topic@group */, HashMap<i32, OrderInfo>>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
