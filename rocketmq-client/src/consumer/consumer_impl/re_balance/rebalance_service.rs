@@ -46,6 +46,35 @@ static MIN_INTERVAL: Lazy<Duration> = Lazy::new(|| {
         })
 });
 
+///`RebalanceService` is a crucial struct in Apache RocketMQ-Rust, responsible for coordinating
+/// load balancing among the consumers of a message queue. Its primary function is to ensure that
+/// consumer instances can reasonably distribute message queues among multiple consumers, achieving
+/// efficient message processing and balanced load. Specifically, the role of `RebalanceService`
+/// includes the following aspects:
+///
+/// 1. **Consumer Load Balancing** When consumers in a consumer group start, stop, or fail,
+///    `RebalanceService` dynamically adjusts the message queue distribution between consumers to
+///    ensure each consumer processes a reasonable number of queues, avoiding situations where some
+///    consumers are overburdened or underutilized.
+/// 2. **Queue Allocation and Revocation** `RebalanceService` triggers reallocation of consumer
+///    queues periodically or when certain events occur. It decides which queues should be processed
+///    by which consumers based on the number of consumers, the state of consumer instances, and the
+///    number of message queues.
+/// 3. **Consumer Failure Recovery** If a consumer instance fails or goes offline,
+///    `RebalanceService` triggers a rebalancing operation, redistributing the queues it was
+///    responsible for to other online consumers, ensuring that messages are not lost and the load
+///    is evenly distributed.
+/// 4. **Consumer Rejoining** When a new consumer joins the consumer group, `RebalanceService`
+///    initiates a rebalancing process, adding the new consumer to the queue allocation and
+///    adjusting the queues for each consumer to ensure the load is balanced across the entire
+///    consumer group.
+/// 5. **Listening for Queue State Changes** `RebalanceService` listens for changes in the state of
+///    consumers and queues in RocketMQ, adjusting queue allocations based on these changes.
+///
+/// This service is integral to ensuring that the consumers in a RocketMQ cluster maintain high
+/// availability, optimal resource utilization, and fault tolerance while processing messages
+/// efficiently.
+
 #[derive(Clone)]
 pub struct RebalanceService {
     notify: Arc<Notify>,
