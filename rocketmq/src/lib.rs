@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 #![feature(sync_unsafe_cell)]
+#![allow(dead_code)]
 
 mod arc_mut;
 mod blocking_queue;
