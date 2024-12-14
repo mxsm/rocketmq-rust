@@ -35,6 +35,7 @@ pub struct PopRequest {
 }
 
 impl PopRequest {
+    #[inline]
     pub fn new(
         topic: CheetahString,
         consumer_group: CheetahString,
@@ -52,62 +53,76 @@ impl PopRequest {
         }
     }
 
+    #[inline]
     pub fn is_locked_first(&self) -> bool {
         self.locked_first
     }
 
+    #[inline]
     pub fn set_locked_first(&mut self, locked_first: bool) {
         self.locked_first = locked_first;
     }
 
+    #[inline]
     pub fn get_consumer_group(&self) -> &str {
         &self.consumer_group
     }
 
+    #[inline]
     pub fn set_consumer_group(&mut self, consumer_group: CheetahString) {
         self.consumer_group = consumer_group;
     }
 
+    #[inline]
     pub fn get_message_queue(&self) -> &MessageQueue {
         &self.message_queue
     }
 
+    #[inline]
     pub fn set_message_queue(&mut self, message_queue: MessageQueue) {
         self.message_queue = message_queue;
     }
 
+    #[inline]
     pub fn get_topic(&self) -> &str {
         &self.topic
     }
 
+    #[inline]
     pub fn set_topic(&mut self, topic: CheetahString) {
         self.topic = topic;
     }
 
+    #[inline]
     pub fn get_pop_process_queue(&self) -> &PopProcessQueue {
         &self.pop_process_queue
     }
 
+    #[inline]
     pub fn set_pop_process_queue(&mut self, pop_process_queue: PopProcessQueue) {
         self.pop_process_queue = pop_process_queue;
     }
 
+    #[inline]
     pub fn get_init_mode(&self) -> i32 {
         self.init_mode
     }
 
+    #[inline]
     pub fn set_init_mode(&mut self, init_mode: i32) {
         self.init_mode = init_mode;
     }
 }
 
 impl MessageRequest for PopRequest {
+    #[inline]
     fn get_message_request_mode(&self) -> MessageRequestMode {
         MessageRequestMode::Pop
     }
 }
 
 impl Hash for PopRequest {
+    #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.topic.hash(state);
         self.consumer_group.hash(state);
@@ -116,6 +131,7 @@ impl Hash for PopRequest {
 }
 
 impl PartialEq for PopRequest {
+    #[inline]
     fn eq(&self, other: &Self) -> bool {
         self.topic == other.topic
             && self.consumer_group == other.consumer_group
@@ -126,6 +142,7 @@ impl PartialEq for PopRequest {
 impl Eq for PopRequest {}
 
 impl std::fmt::Display for PopRequest {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
