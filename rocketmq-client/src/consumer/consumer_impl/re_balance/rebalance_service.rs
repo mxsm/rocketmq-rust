@@ -100,7 +100,7 @@ impl RebalanceService {
             info!(">>>>>>>>>RebalanceService started<<<<<<<<<");
             loop {
                 select! {
-                    _ = notify.notified() => {}
+                    _ = notify.notified() => {} // wakeup
                     _ = shutdown.recv() => {info!("RebalanceService shutdown");}
                     _ = tokio::time::sleep(real_wait_interval) => {}
                 }
@@ -111,6 +111,7 @@ impl RebalanceService {
                 if interval < min_interval {
                     real_wait_interval = min_interval - interval;
                 } else {
+                    // Rebalance operation, the core of RebalanceService
                     let balanced = instance.do_rebalance().await;
                     real_wait_interval = if balanced {
                         *WAIT_INTERVAL

@@ -352,7 +352,10 @@ impl DefaultMQPushConsumerImpl {
                     .register_consumer(
                         self.consumer_config.consumer_group.as_ref(),
                         MQConsumerInnerImpl {
-                            default_mqpush_consumer_impl: self.default_mqpush_consumer_impl.clone(),
+                            default_mqpush_consumer_impl: self
+                                .default_mqpush_consumer_impl
+                                .clone()
+                                .expect("default_mqpush_consumer_impl is None"),
                         },
                     )
                     .await;
