@@ -248,15 +248,40 @@ where
         topic_broker_rebalance.retain(|topic, _| sub_table.contains_key(topic));
     }
 
+    /// Retrieves the rebalance result from the broker for a given topic.
+    ///
+    /// This function queries the broker for message queue assignments for the specified topic.
+    /// If the assignments are successfully retrieved, it updates the message queue assignments
+    /// and notifies the sub-rebalance implementation of any changes.
+    ///
+    /// # Arguments
+    ///
+    /// * `topic` - A reference to a `CheetahString` representing the topic to query.
+    /// * `is_order` - A boolean indicating whether the message queues should be ordered.
+    ///
+    /// # Returns
+    ///
+    /// A `bool` indicating whether the rebalance result matches the current working message queue.
+    ///
+    /// # Errors
+    ///
+    /// This function logs errors if the allocation strategy is not set or if the query assignment
+    /// fails.
     async fn get_rebalance_result_from_broker(
         &mut self,
         topic: &CheetahString,
         is_order: bool,
     ) -> bool {
-        let strategy_name = self
-            .allocate_message_queue_strategy
-            .as_ref()
-            .map_or("", |strategy| strategy.get_name());
+        let strategy_name = match self.allocate_message_queue_strategy.as_ref() {
+            None => {
+                error!(
+                    "get_rebalance_result_from_broker error: allocate_message_queue_strategy is \
+                     None."
+                );
+                return false;
+            }
+            Some(strategy) => strategy.get_name(),
+        };
         let message_queue_assignments = self
             .client_instance
             .as_mut()
@@ -285,7 +310,10 @@ where
                 (mq_set, assignments_inner)
             }
             Err(e) => {
-                error!("getRebalanceResultFromBroker error {}.", e);
+                error!(
+                    "allocate message queue exception. strategy name: {}, {}.",
+                    strategy_name, e
+                );
                 return false;
             }
         };
