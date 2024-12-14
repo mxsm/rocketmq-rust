@@ -372,19 +372,19 @@ impl Rebalance for RebalancePushImpl {
     }
 
     async fn dispatch_pull_request(&self, pull_request_list: Vec<PullRequest>, delay: u64) {
-        let mqpush_consumer_impl = self
-            .default_mqpush_consumer_impl
-            .as_ref()
-            .unwrap()
-            .mut_from_ref();
-        for pull_request in pull_request_list {
-            if delay == 0 {
-                mqpush_consumer_impl
-                    .execute_pull_request_immediately(pull_request)
-                    .await;
-            } else {
-                mqpush_consumer_impl.execute_pull_request_later(pull_request, delay);
+        if let Some(mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref() {
+            let mqpush_consumer_impl = mqpush_consumer_impl.mut_from_ref();
+            for pull_request in pull_request_list {
+                if delay == 0 {
+                    mqpush_consumer_impl
+                        .execute_pull_request_immediately(pull_request)
+                        .await;
+                } else {
+                    mqpush_consumer_impl.execute_pull_request_later(pull_request, delay);
+                }
             }
+        } else {
+            error!("mqpush_consumer_impl is not initialized");
         }
     }
 
