@@ -35,6 +35,7 @@ use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::WeakArcMut;
 use tokio::sync::RwLock;
+use tracing::error;
 use tracing::info;
 use tracing::warn;
 
@@ -388,19 +389,19 @@ impl Rebalance for RebalancePushImpl {
     }
 
     async fn dispatch_pop_pull_request(&self, pop_request_list: Vec<PopRequest>, delay: u64) {
-        let mqpush_consumer_impl = self
-            .default_mqpush_consumer_impl
-            .as_ref()
-            .unwrap()
-            .mut_from_ref();
-        for pop_request in pop_request_list {
-            if delay == 0 {
-                mqpush_consumer_impl
-                    .execute_pop_request_immediately(pop_request)
-                    .await;
-            } else {
-                mqpush_consumer_impl.execute_pop_request_later(pop_request, delay);
+        if let Some(mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref() {
+            let mqpush_consumer_impl = mqpush_consumer_impl.mut_from_ref();
+            for pop_request in pop_request_list {
+                if delay == 0 {
+                    mqpush_consumer_impl
+                        .execute_pop_request_immediately(pop_request)
+                        .await;
+                } else {
+                    mqpush_consumer_impl.execute_pop_request_later(pop_request, delay);
+                }
             }
+        } else {
+            error!("mqpush_consumer_impl is not initialized");
         }
     }
 
