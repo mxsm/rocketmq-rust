@@ -114,7 +114,6 @@ impl PopRequest {
     }
 }
 
-
 impl MessageRequest for PopRequest {
     #[inline]
     fn get_message_request_mode(&self) -> MessageRequestMode {
