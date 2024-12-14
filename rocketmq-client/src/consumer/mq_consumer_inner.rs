@@ -136,38 +136,47 @@ impl MQConsumerInnerImpl {
 }
 
 impl MQConsumerInner for MQConsumerInnerImpl {
+    #[inline]
     fn group_name(&self) -> CheetahString {
         MQConsumerInner::group_name(self.default_mqpush_consumer_impl.as_ref())
     }
 
+    #[inline]
     fn message_model(&self) -> MessageModel {
         MQConsumerInner::message_model(self.default_mqpush_consumer_impl.as_ref())
     }
 
+    #[inline]
     fn consume_type(&self) -> ConsumeType {
         MQConsumerInner::consume_type(self.default_mqpush_consumer_impl.as_ref())
     }
 
+    #[inline]
     fn consume_from_where(&self) -> ConsumeFromWhere {
         MQConsumerInner::consume_from_where(self.default_mqpush_consumer_impl.as_ref())
     }
 
+    #[inline]
     fn subscriptions(&self) -> HashSet<SubscriptionData> {
         MQConsumerInner::subscriptions(self.default_mqpush_consumer_impl.as_ref())
     }
 
+    #[inline]
     fn do_rebalance(&self) {
         MQConsumerInner::do_rebalance(self.default_mqpush_consumer_impl.as_ref())
     }
 
+    #[inline]
     async fn try_rebalance(&self) -> Result<bool> {
         MQConsumerInner::try_rebalance(self.default_mqpush_consumer_impl.as_ref()).await
     }
 
+    #[inline]
     async fn persist_consumer_offset(&self) {
         MQConsumerInner::persist_consumer_offset(self.default_mqpush_consumer_impl.as_ref()).await
     }
 
+    #[inline]
     async fn update_topic_subscribe_info(
         &self,
         topic: CheetahString,
@@ -181,6 +190,7 @@ impl MQConsumerInner for MQConsumerInnerImpl {
         .await
     }
 
+    #[inline]
     async fn is_subscribe_topic_need_update(&self, topic: &str) -> bool {
         MQConsumerInner::is_subscribe_topic_need_update(
             self.default_mqpush_consumer_impl.as_ref(),
@@ -189,10 +199,12 @@ impl MQConsumerInner for MQConsumerInnerImpl {
         .await
     }
 
+    #[inline]
     fn is_unit_mode(&self) -> bool {
         MQConsumerInner::is_unit_mode(self.default_mqpush_consumer_impl.as_ref())
     }
 
+    #[inline]
     fn consumer_running_info(&self) -> ConsumerRunningInfo {
         MQConsumerInner::consumer_running_info(self.default_mqpush_consumer_impl.as_ref())
     }
