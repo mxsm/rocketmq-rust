@@ -273,7 +273,10 @@ where
         is_order: bool,
     ) -> bool {
         let strategy_name = match self.allocate_message_queue_strategy.as_ref() {
-            None => return false,
+            None => {
+                error!("get_rebalance_result_from_broker error: allocate_message_queue_strategy is None.");
+                return false;
+            }
             Some(strategy) => strategy.get_name(),
         };
         let message_queue_assignments = self
