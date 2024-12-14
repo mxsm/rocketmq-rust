@@ -103,7 +103,7 @@ pub(crate) struct BrokerRuntime {
     #[cfg(feature = "local_file_store")]
     subscription_group_manager: Arc<SubscriptionGroupManager<DefaultMessageStore>>,
     consumer_filter_manager: Arc<ConsumerFilterManager>,
-    consumer_order_info_manager: Arc<ConsumerOrderInfoManager>,
+    consumer_order_info_manager: Arc<ConsumerOrderInfoManager<DefaultMessageStore>>,
     #[cfg(feature = "local_file_store")]
     message_store: Option<ArcMut<DefaultMessageStore>>,
     #[cfg(feature = "local_file_store")]
@@ -154,7 +154,7 @@ impl Clone for BrokerRuntime {
             consumer_offset_manager: self.consumer_offset_manager.clone(),
             subscription_group_manager: self.subscription_group_manager.clone(),
             consumer_filter_manager: Arc::new(Default::default()),
-            consumer_order_info_manager: Arc::new(Default::default()),
+            consumer_order_info_manager: self.consumer_order_info_manager.clone(),
             message_store: self.message_store.clone(),
             broker_stats: self.broker_stats.clone(),
             schedule_message_service: self.schedule_message_service.clone(),
@@ -241,6 +241,13 @@ impl BrokerRuntime {
             topic_route_info_manager.clone(),
             broker_outer_api.clone(),
         ));
+        let subscription_group_manager =
+            Arc::new(SubscriptionGroupManager::new(broker_config.clone(), None));
+        let consumer_order_info_manager = Arc::new(ConsumerOrderInfoManager::new(
+            broker_config.clone(),
+            Arc::new(topic_config_manager.clone()),
+            subscription_group_manager.clone(),
+        ));
         Self {
             broker_config: broker_config.clone(),
             message_store_config,
@@ -248,12 +255,9 @@ impl BrokerRuntime {
             topic_config_manager,
             topic_queue_mapping_manager,
             consumer_offset_manager: ConsumerOffsetManager::new(broker_config.clone(), None),
-            subscription_group_manager: Arc::new(SubscriptionGroupManager::new(
-                broker_config.clone(),
-                None,
-            )),
+            subscription_group_manager,
             consumer_filter_manager: Arc::new(Default::default()),
-            consumer_order_info_manager: Arc::new(Default::default()),
+            consumer_order_info_manager,
             message_store: None,
             broker_stats: None,
             schedule_message_service: Default::default(),

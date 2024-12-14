@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fmt::Display;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -27,24 +28,46 @@ use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::TimeUtils::get_current_millis;
 use serde::Deserialize;
 use serde::Serialize;
+use tracing::info;
 use tracing::warn;
 
 use crate::broker_path_config_helper::get_consumer_order_info_path;
 use crate::offset::manager::consumer_order_info_lock_manager::ConsumerOrderInfoLockManager;
+use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
+use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
 const TOPIC_GROUP_SEPARATOR: &str = "@";
 const CLEAN_SPAN_FROM_LAST: u64 = 24 * 3600 * 1000;
 
-#[derive(Default)]
-pub(crate) struct ConsumerOrderInfoManager {
+pub(crate) struct ConsumerOrderInfoManager<MS> {
     pub(crate) broker_config: Arc<BrokerConfig>,
     pub(crate) consumer_order_info_wrapper: parking_lot::Mutex<ConsumerOrderInfoWrapper>,
     pub(crate) consumer_order_info_lock_manager: Option<ConsumerOrderInfoLockManager>,
+    pub(crate) topic_config_manager: Arc<TopicConfigManager>,
+    pub(crate) subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
+}
+
+impl<MS> ConsumerOrderInfoManager<MS> {
+    pub fn new(
+        broker_config: Arc<BrokerConfig>,
+        topic_config_manager: Arc<TopicConfigManager>,
+        subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
+    ) -> ConsumerOrderInfoManager<MS> {
+        Self {
+            broker_config,
+            consumer_order_info_wrapper: parking_lot::Mutex::new(
+                ConsumerOrderInfoWrapper::default(),
+            ),
+            consumer_order_info_lock_manager: None,
+            topic_config_manager,
+            subscription_group_manager,
+        }
+    }
 }
 
 //Fully implemented will be removed
 #[allow(unused_variables)]
-impl ConfigManager for ConsumerOrderInfoManager {
+impl<MS> ConfigManager for ConsumerOrderInfoManager<MS> {
     fn config_file_path(&self) -> String {
         get_consumer_order_info_path(self.broker_config.store_path_root_dir.as_str())
     }
@@ -81,8 +104,92 @@ impl ConfigManager for ConsumerOrderInfoManager {
     }
 }
 
-impl ConsumerOrderInfoManager {
-    fn auto_clean(&self) {}
+impl<MS> ConsumerOrderInfoManager<MS> {
+    pub fn auto_clean(&self) {
+        let mut consumer_order_info_wrapper = self.consumer_order_info_wrapper.lock();
+        let table = &mut consumer_order_info_wrapper.table;
+
+        // Iterate through the `table` entries (topic@group -> queueId -> OrderInfo)
+        let mut keys_to_remove = Vec::new(); // Temporary storage for keys to remove
+
+        for (topic_at_group, qs) in table.iter_mut() {
+            let arrays: Vec<&str> = topic_at_group.split('@').collect();
+            if arrays.len() != 2 {
+                continue;
+            }
+            let topic = arrays[0];
+            let group = arrays[1];
+
+            let topic_config = self
+                .topic_config_manager
+                .select_topic_config(&CheetahString::from(topic));
+            if topic_config.is_none() {
+                info!(
+                    "Topic not exist, Clean order info, {}:{:?}",
+                    topic_at_group, qs
+                );
+                keys_to_remove.push(topic_at_group.clone());
+                continue;
+            }
+            let subscription_group_wrapper = self
+                .subscription_group_manager
+                .subscription_group_wrapper()
+                .lock();
+            let subscription_group_config = subscription_group_wrapper
+                .subscription_group_table()
+                .get(&CheetahString::from(group));
+            if subscription_group_config.is_none() {
+                info!(
+                    "Group not exist, Clean order info, {}:{:?}",
+                    topic_at_group, qs
+                );
+                keys_to_remove.push(topic_at_group.clone());
+                continue;
+            }
+
+            if qs.is_empty() {
+                info!(
+                    "Order table is empty, Clean order info, {}:{:?}",
+                    topic_at_group, qs
+                );
+                keys_to_remove.push(topic_at_group.clone());
+                continue;
+            }
+            let topic_config = topic_config.unwrap();
+            // Clean individual queues in the current topic@group
+            let mut queues_to_remove = Vec::new();
+            for (queue_id, order_info) in qs.iter_mut() {
+                if *queue_id == topic_config.read_queue_nums as i32 {
+                    queues_to_remove.push(*queue_id);
+                    info!(
+                        "Queue not exist, Clean order info, {}:{}, {}",
+                        topic_at_group, order_info, topic_config
+                    );
+                    continue;
+                }
+            }
+
+            // Remove stale or invalid queues
+            for queue_id in queues_to_remove {
+                qs.remove(&queue_id);
+                info!(
+                    "Removed queue {} for topic@group {}",
+                    queue_id, topic_at_group
+                );
+            }
+
+            // If all queues are removed, mark topic@group for removal
+            if qs.is_empty() {
+                keys_to_remove.push(topic_at_group.clone());
+            }
+        }
+
+        // Now, remove all topics/groups from the table that need to be cleaned
+        for key in keys_to_remove {
+            table.remove(&key);
+            info!("Removed topic@group {}", key);
+        }
+    }
 
     pub fn update_next_visible_time(
         &self,
@@ -165,6 +272,25 @@ pub(crate) struct OrderInfo {
     commit_offset_bit: u64,
     #[serde(rename = "a")]
     attempt_id: String,
+}
+
+impl Display for OrderInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "OrderInfo {{ popTime: {}, invisibleTime: {:?}, offsetList: {:?}, \
+             offsetNextVisibleTime: {:?}, offsetConsumedCount: {:?}, lastConsumeTimestamp: {}, \
+             commitOffsetBit: {}, attemptId: {} }}",
+            self.pop_time,
+            self.invisible_time,
+            self.offset_list,
+            self.offset_next_visible_time,
+            self.offset_consumed_count,
+            self.last_consume_timestamp,
+            self.commit_offset_bit,
+            self.attempt_id
+        )
+    }
 }
 
 impl OrderInfo {

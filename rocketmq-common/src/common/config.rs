@@ -16,6 +16,7 @@
  */
 
 use std::collections::HashMap;
+use std::fmt::Display;
 
 use cheetah_string::CheetahString;
 use serde::Deserialize;
@@ -37,6 +38,24 @@ pub struct TopicConfig {
     pub topic_sys_flag: u32,
     pub order: bool,
     pub attributes: HashMap<CheetahString, CheetahString>,
+}
+
+impl Display for TopicConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "TopicConfig {{ topic_name: {:?}, read_queue_nums: {}, write_queue_nums: {}, perm: \
+             {}, topic_filter_type: {}, topic_sys_flag: {}, order: {}, attributes: {:?} }}",
+            self.topic_name,
+            self.read_queue_nums,
+            self.write_queue_nums,
+            self.perm,
+            self.topic_filter_type,
+            self.topic_sys_flag,
+            self.order,
+            self.attributes
+        )
+    }
 }
 
 impl Default for TopicConfig {
