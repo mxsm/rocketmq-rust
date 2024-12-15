@@ -219,10 +219,10 @@ where
         message_queue: MessageQueue,
         dispatch_to_consume: bool,
     ) {
-        unimplemented!("submit_consume_request")
+        unimplemented!("ConsumeMessagePopServiceGeneral not support submit_consume_request")
     }
 
-    async fn submit_pop_consume_request(
+    pub async fn submit_pop_consume_request(
         &self,
         msgs: Vec<MessageExt>,
         process_queue: &PopProcessQueue,

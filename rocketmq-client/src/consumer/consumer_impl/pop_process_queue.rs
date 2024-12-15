@@ -16,8 +16,10 @@
  */
 use std::fmt::Display;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::sync::atomic::Ordering::Acquire;
 use std::sync::Arc;
 
 use rocketmq_common::TimeUtils::get_current_millis;
@@ -27,7 +29,7 @@ use crate::consumer::consumer_impl::PULL_MAX_IDLE_TIME;
 
 #[derive(Clone)]
 pub(crate) struct PopProcessQueue {
-    last_pop_timestamp: u64,
+    last_pop_timestamp: Arc<AtomicU64>,
     wait_ack_counter: Arc<AtomicUsize>,
     dropped: Arc<AtomicBool>,
 }
@@ -35,7 +37,7 @@ pub(crate) struct PopProcessQueue {
 impl Default for PopProcessQueue {
     fn default() -> Self {
         PopProcessQueue {
-            last_pop_timestamp: get_current_millis(),
+            last_pop_timestamp: Arc::new(AtomicU64::new(get_current_millis())),
             wait_ack_counter: Arc::new(AtomicUsize::new(0)),
             dropped: Arc::new(AtomicBool::new(false)),
         }
@@ -45,21 +47,18 @@ impl Default for PopProcessQueue {
 impl PopProcessQueue {
     #[inline]
     pub(crate) fn new() -> Self {
-        PopProcessQueue {
-            last_pop_timestamp: get_current_millis(),
-            wait_ack_counter: Arc::new(AtomicUsize::new(0)),
-            dropped: Arc::new(AtomicBool::new(false)),
-        }
+        PopProcessQueue::default()
     }
 
     #[inline]
     pub(crate) fn get_last_pop_timestamp(&self) -> u64 {
-        self.last_pop_timestamp
+        self.last_pop_timestamp.load(Ordering::Relaxed)
     }
 
     #[inline]
-    pub(crate) fn set_last_pop_timestamp(&mut self, last_pop_timestamp: u64) {
-        self.last_pop_timestamp = last_pop_timestamp;
+    pub(crate) fn set_last_pop_timestamp(&self, last_pop_timestamp: u64) {
+        self.last_pop_timestamp
+            .store(last_pop_timestamp, Ordering::Release);
     }
 
     #[inline]
@@ -102,7 +101,7 @@ impl PopProcessQueue {
     #[inline]
     pub(crate) fn is_pull_expired(&self) -> bool {
         let current_time = get_current_millis();
-        current_time.saturating_sub(self.last_pop_timestamp) > *PULL_MAX_IDLE_TIME
+        current_time.saturating_sub(self.last_pop_timestamp.load(Acquire)) > *PULL_MAX_IDLE_TIME
     }
 }
 
@@ -111,7 +110,7 @@ impl Display for PopProcessQueue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "PopProcessQueue [last_pop_timestamp={}, wait_ack_counter={}, dropped={}]",
+            "PopProcessQueue [last_pop_timestamp={:?}, wait_ack_counter={}, dropped={}]",
             self.last_pop_timestamp,
             self.wait_ack_counter.load(Ordering::Relaxed),
             self.dropped.load(Ordering::Relaxed)

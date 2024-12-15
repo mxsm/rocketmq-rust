@@ -37,6 +37,7 @@ use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
 use rocketmq_rust::ArcMut;
 
 use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
+use crate::consumer::pop_callback::PopCallback;
 use crate::consumer::pull_callback::PullCallback;
 use crate::consumer::pull_status::PullStatus;
 use crate::factory::mq_client_instance::MQClientInstance;
@@ -384,6 +385,26 @@ impl PullAPIWrapper {
             "Find Filter Server Failed, Broker Addr: {},topic:{}",
             broker_addr, topic
         ))
+    }
+
+    pub async fn pop_async<PC>(
+        &mut self,
+        mq: &MessageQueue,
+        invisible_time: u64,
+        max_nums: u32,
+        consumer_group: CheetahString,
+        timeout: u64,
+        pop_callback: PC,
+        poll: bool,
+        init_mode: i32,
+        order: bool,
+        expression_type: CheetahString,
+        expression: CheetahString,
+    ) -> Result<()>
+    where
+        PC: PopCallback + 'static,
+    {
+        unimplemented!()
     }
 }
 
