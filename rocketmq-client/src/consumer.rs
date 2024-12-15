@@ -29,6 +29,7 @@ pub mod message_selector;
 pub mod mq_consumer;
 pub(crate) mod mq_consumer_inner;
 pub mod mq_push_consumer;
+pub(crate) mod pop_result;
 pub(crate) mod pop_status;
 pub(crate) mod pull_callback;
 pub mod pull_result;
