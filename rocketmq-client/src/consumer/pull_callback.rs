@@ -163,11 +163,9 @@ impl PullCallback for DefaultPullCallback {
     }
 
     fn on_exception(&mut self, err: Box<dyn std::error::Error + Send>) {
-        let mut push_consumer_impl = self.push_consumer_impl.clone();
-
         let message_queue_inner = self.message_queue_inner.take().unwrap();
         let pull_request = self.pull_request.take().unwrap();
-        let topic = message_queue_inner.get_topic().to_string();
+        let topic = message_queue_inner.get_topic();
         if !topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
             if let Some(er) = err.downcast_ref::<MQClientError>() {
                 match er {
@@ -177,26 +175,26 @@ impl PullCallback for DefaultPullCallback {
                         {
                             warn!(
                                 "the subscription is not latest, group={}",
-                                push_consumer_impl.consumer_config.consumer_group,
+                                self.push_consumer_impl.consumer_config.consumer_group,
                             );
                         } else {
                             warn!(
                                 "execute the pull request exception, group={}",
-                                push_consumer_impl.consumer_config.consumer_group
+                                self.push_consumer_impl.consumer_config.consumer_group
                             );
                         }
                     }
                     _ => {
                         warn!(
                             "execute the pull request exception, group={}",
-                            push_consumer_impl.consumer_config.consumer_group
+                            self.push_consumer_impl.consumer_config.consumer_group
                         );
                     }
                 }
             } else {
                 warn!(
                     "execute the pull request exception, group={}",
-                    push_consumer_impl.consumer_config.consumer_group
+                    self.push_consumer_impl.consumer_config.consumer_group
                 );
             }
         }
@@ -207,15 +205,16 @@ impl PullCallback for DefaultPullCallback {
                     {
                         PULL_TIME_DELAY_MILLS_WHEN_BROKER_FLOW_CONTROL
                     } else {
-                        push_consumer_impl.pull_time_delay_mills_when_exception
+                        self.push_consumer_impl.pull_time_delay_mills_when_exception
                     }
                 }
-                _ => push_consumer_impl.pull_time_delay_mills_when_exception,
+                _ => self.push_consumer_impl.pull_time_delay_mills_when_exception,
             }
         } else {
-            push_consumer_impl.pull_time_delay_mills_when_exception
+            self.push_consumer_impl.pull_time_delay_mills_when_exception
         };
 
-        push_consumer_impl.execute_pull_request_later(pull_request, time_delay);
+        self.push_consumer_impl
+            .execute_pull_request_later(pull_request, time_delay);
     }
 }
