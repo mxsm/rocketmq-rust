@@ -77,6 +77,8 @@ use crate::consumer::default_mq_push_consumer::ConsumerConfig;
 use crate::consumer::listener::message_listener::MessageListener;
 use crate::consumer::mq_consumer_inner::MQConsumerInner;
 use crate::consumer::mq_consumer_inner::MQConsumerInnerImpl;
+use crate::consumer::pop_callback::DefaultPopCallback;
+use crate::consumer::pop_result::PopResult;
 use crate::consumer::pull_callback::DefaultPullCallback;
 use crate::consumer::store::local_file_offset_store::LocalFileOffsetStore;
 use crate::consumer::store::offset_store::OffsetStore;
@@ -127,7 +129,7 @@ pub struct DefaultMQPushConsumerImpl {
             >,
         >,
     >,
-    consume_message_pop_service: Option<
+    pub(crate) consume_message_pop_service: Option<
         ArcMut<
             ConsumeMessagePopServiceGeneral<
                 ConsumeMessagePopConcurrentlyService,
@@ -755,7 +757,95 @@ impl DefaultMQPushConsumerImpl {
     }
 
     pub(crate) async fn pop_message(&mut self, pop_request: PopRequest) {
-        unimplemented!("popMessage");
+        let process_queue = pop_request.get_pop_process_queue();
+        if process_queue.is_dropped() {
+            info!("the pop request[{}] is dropped.", pop_request);
+            return;
+        }
+        process_queue.set_last_pop_timestamp(get_current_millis());
+
+        if let Err(e) = self.make_sure_state_ok() {
+            warn!("pop_message exception, consumer state not ok {}", e);
+            self.execute_pop_request_later(pop_request, self.pull_time_delay_mills_when_exception);
+            return;
+        }
+
+        if self.pause.load(Ordering::Acquire) {
+            warn!(
+                "consumer was paused, execute pull request later. instanceName={}, group={}",
+                self.client_config.instance_name, self.consumer_config.consumer_group
+            );
+            self.execute_pop_request_later(pop_request, PULL_TIME_DELAY_MILLS_WHEN_SUSPEND);
+            return;
+        }
+
+        if process_queue.get_wai_ack_msg_count()
+            > self.consumer_config.pop_threshold_for_queue as usize
+        {
+            self.execute_pop_request_later(
+                pop_request,
+                PULL_TIME_DELAY_MILLS_WHEN_CACHE_FLOW_CONTROL,
+            );
+            return;
+        }
+
+        let subscription_data = self
+            .rebalance_impl
+            .get_subscription_inner()
+            .read()
+            .await
+            .get(pop_request.get_message_queue().get_topic_cs())
+            .cloned();
+        if subscription_data.is_none() {
+            self.execute_pop_request_later(pop_request, self.pull_time_delay_mills_when_exception);
+            warn!("find the consumer's subscription failed");
+            return;
+        }
+        let subscription_data = subscription_data.unwrap();
+        let expression_type = subscription_data.expression_type.clone();
+        let sub_string = subscription_data.sub_string.clone();
+        let mut invisible_time = self.consumer_config.pop_invisible_time;
+        if !(MIN_POP_INVISIBLE_TIME..=MAX_POP_INVISIBLE_TIME).contains(&invisible_time) {
+            invisible_time = 60_000;
+        }
+        let mq = pop_request.get_message_queue().clone();
+        let consumer_group = pop_request.get_consumer_group().clone();
+        let init_mode = pop_request.get_init_mode();
+        let this = self.default_mqpush_consumer_impl.clone().unwrap();
+
+        match self
+            .pull_api_wrapper
+            .as_mut()
+            .unwrap()
+            .pop_async(
+                pop_request.get_message_queue(),
+                invisible_time,
+                self.consumer_config.pop_batch_nums,
+                consumer_group,
+                BROKER_SUSPEND_MAX_TIME_MILLIS,
+                DefaultPopCallback {
+                    push_consumer_impl: this,
+                    message_queue_inner: Some(mq),
+                    subscription_data: Some(subscription_data),
+                    pop_request: Some(pop_request.clone()),
+                },
+                true,
+                init_mode,
+                false,
+                expression_type,
+                sub_string,
+            )
+            .await
+        {
+            Ok(_) => {}
+            Err(err) => {
+                error!("popAsync error: {}", err);
+                self.execute_pop_request_later(
+                    pop_request,
+                    self.pull_time_delay_mills_when_exception,
+                );
+            }
+        }
     }
 
     pub(crate) async fn pull_message(&mut self, mut pull_request: PullRequest) {
@@ -1020,6 +1110,15 @@ impl DefaultMQPushConsumerImpl {
         }
     }
 
+    pub(crate) fn process_pop_result(
+        &mut self,
+        pop_result: &PopResult,
+        subscription_data: &SubscriptionData,
+    ) -> PopResult {
+        unimplemented!("processPopResult")
+    }
+
+    #[inline]
     fn make_sure_state_ok(&self) -> Result<()> {
         if *self.service_state != ServiceState::Running {
             return mq_client_err!(format!(

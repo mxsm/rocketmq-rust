@@ -64,7 +64,7 @@ impl PopRequest {
     }
 
     #[inline]
-    pub fn get_consumer_group(&self) -> &str {
+    pub fn get_consumer_group(&self) -> &CheetahString {
         &self.consumer_group
     }
 
