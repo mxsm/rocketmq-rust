@@ -46,7 +46,7 @@ pub trait PopCallbackInner {
 /// as a `PopCallback`.
 impl<F, Fut> PopCallback for F
 where
-    F: Fn(PopResult) -> Fut + Send + Sync,
+    F: Fn(Option<PopResult>, Option<Box<dyn std::error::Error>>) -> Fut + Send + Sync,
     Fut: Future<Output = ()> + Send,
 {
     /// Calls the function with the pop result when the pop operation is successful.
@@ -55,7 +55,7 @@ where
     ///
     /// * `pop_result` - The result of the pop operation.
     async fn on_success(&self, pop_result: PopResult) {
-        (*self)(pop_result).await;
+        (*self)(Some(pop_result), None).await;
     }
 
     /// Does nothing when the pop operation encounters an error.
@@ -63,14 +63,22 @@ where
     /// # Arguments
     ///
     /// * `e` - The error encountered during the pop operation.
-    fn on_error(&self, e: Box<dyn std::error::Error>) {}
+    fn on_error(&self, e: Box<dyn std::error::Error>) {
+        (*self)(None, Some(e));
+    }
 }
 
 /// Type alias for a callback function that handles the result of a pop operation.
 ///
 /// This type alias defines a callback function that takes a `PopResult` and returns a boxed future.
-pub type PopCallbackFn =
-    Arc<dyn Fn(PopResult) -> Pin<Box<dyn Future<Output = ()> + Send + Sync>> + Send + Sync>;
+pub type PopCallbackFn = Arc<
+    dyn Fn(
+            Option<PopResult>,
+            Option<Box<dyn std::error::Error>>,
+        ) -> Pin<Box<dyn Future<Output = ()> + Send + Sync>>
+        + Send
+        + Sync,
+>;
 
 #[cfg(test)]
 mod tests {
