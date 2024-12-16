@@ -98,6 +98,7 @@ use crate::consumer::ack_result::AckResult;
 use crate::consumer::ack_status::AckStatus;
 use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
 use crate::consumer::pop_callback::PopCallback;
+use crate::consumer::pop_result::PopResult;
 use crate::consumer::pull_callback::PullCallback;
 use crate::consumer::pull_result::PullResult;
 use crate::consumer::pull_status::PullStatus;
@@ -1404,11 +1405,45 @@ impl MQClientAPIImpl {
         addr: &CheetahString,
         request_header: PopMessageRequestHeader,
         timeout_millis: u64,
-        ack_callback: PC,
+        mut pop_callback: PC,
     ) -> Result<()>
     where
         PC: PopCallback + 'static,
     {
+        let topic = request_header.topic.clone();
+        let order = request_header.order.unwrap_or_default();
+        let request =
+            RemotingCommand::create_request_command(RequestCode::PopMessage, request_header);
+        match self
+            .remoting_client
+            .invoke_async(Some(addr), request, timeout_millis)
+            .await
+        {
+            Ok(response) => {
+                let result = self.process_pop_response(broker_name, response, &topic, order);
+                match result {
+                    Ok(pop_result) => {
+                        pop_callback.on_success(pop_result).await;
+                    }
+                    Err(e) => {
+                        pop_callback.on_error(Box::new(e));
+                    }
+                }
+            }
+            Err(e) => {
+                pop_callback.on_error(Box::new(e));
+            }
+        }
+        Ok(())
+    }
+
+    fn process_pop_response(
+        &self,
+        broker_name: &CheetahString,
+        response: RemotingCommand,
+        topic: &CheetahString,
+        is_order: bool,
+    ) -> Result<PopResult> {
         unimplemented!()
     }
 }
