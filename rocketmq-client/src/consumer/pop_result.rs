@@ -20,6 +20,7 @@ use rocketmq_common::common::message::message_ext::MessageExt;
 
 use crate::consumer::pop_status::PopStatus;
 
+#[derive(Default, Clone)]
 pub struct PopResult {
     pub msg_found_list: Vec<MessageExt>,
     pub pop_status: PopStatus,

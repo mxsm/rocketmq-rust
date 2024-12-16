@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
@@ -35,6 +36,7 @@ use rocketmq_common::common::namesrv::name_server_update_callback::NameServerUpd
 use rocketmq_common::common::namesrv::top_addressing::TopAddressing;
 use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
 use rocketmq_common::common::topic::TopicValidator;
+use rocketmq_common::MessageDecoder;
 use rocketmq_remoting::base::connection_net_event::ConnectionNetEvent;
 use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
@@ -63,6 +65,7 @@ use rocketmq_remoting::protocol::header::message_operation_header::send_message_
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
 use rocketmq_remoting::protocol::header::pop_message_request_header::PopMessageRequestHeader;
+use rocketmq_remoting::protocol::header::pop_message_response_header::PopMessageResponseHeader;
 use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
 use rocketmq_remoting::protocol::header::pull_message_response_header::PullMessageResponseHeader;
 use rocketmq_remoting::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
@@ -99,6 +102,7 @@ use crate::consumer::ack_status::AckStatus;
 use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
 use crate::consumer::pop_callback::PopCallback;
 use crate::consumer::pop_result::PopResult;
+use crate::consumer::pop_status::PopStatus;
 use crate::consumer::pull_callback::PullCallback;
 use crate::consumer::pull_result::PullResult;
 use crate::consumer::pull_status::PullStatus;
@@ -1440,10 +1444,301 @@ impl MQClientAPIImpl {
     fn process_pop_response(
         &self,
         broker_name: &CheetahString,
-        response: RemotingCommand,
+        mut response: RemotingCommand,
         topic: &CheetahString,
         is_order: bool,
     ) -> Result<PopResult> {
-        unimplemented!()
+        let response_code = ResponseCode::from(response.code());
+        let (pop_status, msg_found_list) = match response_code {
+            ResponseCode::Success => {
+                let messages = MessageDecoder::decodes_batch(
+                    response.get_body_mut().unwrap(),
+                    self.client_config.decode_read_body,
+                    self.client_config.decode_decompress_body,
+                );
+                (PopStatus::Found, messages)
+            }
+            ResponseCode::PollingFull => (PopStatus::PollingFull, vec![]),
+            ResponseCode::PollingTimeout | ResponseCode::PullNotFound => {
+                (PopStatus::PollingNotFound, vec![])
+            }
+            _ => {
+                return client_broker_err!(
+                    response.code(),
+                    response.remark().cloned().unwrap_or_default()
+                )
+            }
+        };
+        let mut pop_result = PopResult {
+            pop_status,
+            msg_found_list,
+            ..Default::default()
+        };
+        let response_header = response
+            .decode_command_custom_header::<PopMessageResponseHeader>()
+            .map_err(RemotingError)?;
+        pop_result.rest_num = response_header.rest_num;
+        if pop_result.pop_status != PopStatus::Found {
+            return Ok(pop_result);
+        }
+        // it is a pop command if pop time greater than 0, we should set the check point info to
+        // extraInfo field
+        pop_result.invisible_time = response_header.invisible_time;
+        pop_result.pop_time = response_header.pop_time;
+        let start_offset_info = ExtraInfoUtil::parse_start_offset_info(
+            response_header
+                .start_offset_info
+                .as_ref()
+                .unwrap_or(&CheetahString::from_slice("")),
+        )
+        .map_err(RemotingError)?;
+        let msg_offset_info = ExtraInfoUtil::parse_msg_offset_info(
+            response_header
+                .msg_offset_info
+                .as_ref()
+                .unwrap_or(&CheetahString::from_slice("")),
+        )
+        .map_err(RemotingError)?;
+        let order_count_info = ExtraInfoUtil::parse_order_count_info(
+            response_header
+                .order_count_info
+                .as_ref()
+                .unwrap_or(&CheetahString::from_slice("")),
+        )
+        .map_err(RemotingError)?;
+        let sort_map = build_queue_offset_sorted_map(topic.as_str(), &pop_result.msg_found_list);
+        let mut map = HashMap::with_capacity(5);
+        for message in &mut pop_result.msg_found_list {
+            if start_offset_info.is_empty() {
+                let key = CheetahString::from_string(format!(
+                    "{}{}",
+                    message.get_topic(),
+                    message.queue_id() as i64
+                ));
+                if !map.contains_key(&key) {
+                    let extra_info = ExtraInfoUtil::build_extra_info(
+                        message.queue_offset(),
+                        response_header.pop_time as i64,
+                        response_header.invisible_time as i64,
+                        response_header.revive_qid as i32,
+                        message.get_topic(),
+                        broker_name,
+                        message.queue_id(),
+                    );
+                    map.insert(key.clone(), CheetahString::from_string(extra_info));
+                }
+                message.put_property(
+                    CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK),
+                    CheetahString::from_string(format!(
+                        "{}{}{}",
+                        map.get(&key).cloned().unwrap_or_default(),
+                        MessageConst::KEY_SEPARATOR,
+                        message.queue_offset()
+                    )),
+                );
+            } else {
+                let ck = message.get_property(&CheetahString::from_static_str(
+                    MessageConst::PROPERTY_POP_CK,
+                ));
+                if ck.is_none() {
+                    let dispatch = message
+                        .get_property(&CheetahString::from_static_str(
+                            MessageConst::PROPERTY_INNER_MULTI_DISPATCH,
+                        ))
+                        .unwrap_or_default();
+                    let (queue_offset_key, queue_id_key) =
+                        if mix_all::is_lmq(Some(topic.as_str())) && !dispatch.is_empty() {
+                            let queues: Vec<&str> = dispatch
+                                .split(mix_all::MULTI_DISPATCH_QUEUE_SPLITTER)
+                                .collect();
+                            let data = message
+                                .get_property(&CheetahString::from_static_str(
+                                    MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET,
+                                ))
+                                .unwrap_or_default();
+                            let queue_offsets: Vec<&str> =
+                                data.split(mix_all::MULTI_DISPATCH_QUEUE_SPLITTER).collect();
+                            let offset = queue_offsets
+                                [queues.iter().position(|&q| q == topic).unwrap()]
+                            .parse::<i64>()
+                            .unwrap();
+                            let queue_id_key = ExtraInfoUtil::get_start_offset_info_map_key(
+                                topic.as_str(),
+                                mix_all::LMQ_QUEUE_ID as i64,
+                            );
+                            let queue_offset_key = ExtraInfoUtil::get_queue_offset_map_key(
+                                topic.as_str(),
+                                mix_all::LMQ_QUEUE_ID as i64,
+                                offset,
+                            );
+                            let index = sort_map
+                                .get(&queue_id_key)
+                                .unwrap()
+                                .iter()
+                                .position(|&q| q == offset as u64)
+                                .unwrap_or_default();
+
+                            let msg_queue_offset = sort_map
+                                .get(&queue_offset_key)
+                                .unwrap()
+                                .get(index)
+                                .cloned()
+                                .unwrap_or_default();
+                            if msg_queue_offset as i64 != offset {
+                                warn!(
+                                    "Queue offset[{}] of msg is strange, not equal to the stored \
+                                     in msg, {:?}",
+                                    msg_queue_offset, message
+                                );
+                            }
+                            let extra_info = ExtraInfoUtil::build_extra_info(
+                                message.queue_offset(),
+                                response_header.pop_time as i64,
+                                response_header.invisible_time as i64,
+                                response_header.revive_qid as i32,
+                                message.get_topic(),
+                                broker_name,
+                                msg_queue_offset as i32,
+                            );
+                            message.put_property(
+                                CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK),
+                                CheetahString::from_string(extra_info),
+                            );
+                            (queue_offset_key, queue_id_key)
+                        } else {
+                            let queue_id_key = ExtraInfoUtil::get_start_offset_info_map_key(
+                                message.get_topic(),
+                                message.queue_id() as i64,
+                            );
+                            let queue_offset_key = ExtraInfoUtil::get_queue_offset_map_key(
+                                message.get_topic(),
+                                message.queue_id() as i64,
+                                message.queue_offset(),
+                            );
+                            let queue_offset = message.queue_offset();
+                            let index = sort_map
+                                .get(&queue_id_key)
+                                .unwrap()
+                                .iter()
+                                .position(|&q| q == queue_offset as u64)
+                                .unwrap_or_default();
+
+                            let msg_queue_offset = sort_map
+                                .get(&queue_offset_key)
+                                .unwrap()
+                                .get(index)
+                                .cloned()
+                                .unwrap_or_default();
+                            if msg_queue_offset as i64 != queue_offset {
+                                warn!(
+                                    "Queue offset[{}] of msg is strange, not equal to the stored \
+                                     in msg, {:?}",
+                                    msg_queue_offset, message
+                                );
+                            }
+                            let extra_info = ExtraInfoUtil::build_extra_info(
+                                message.queue_offset(),
+                                response_header.pop_time as i64,
+                                response_header.invisible_time as i64,
+                                response_header.revive_qid as i32,
+                                message.get_topic(),
+                                broker_name,
+                                msg_queue_offset as i32,
+                            );
+                            message.put_property(
+                                CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK),
+                                CheetahString::from_string(extra_info),
+                            );
+                            (queue_offset_key, queue_id_key)
+                        };
+                    if is_order && !order_count_info.is_empty() {
+                        let mut count = order_count_info.get(&queue_offset_key);
+                        if count.is_none() {
+                            count = order_count_info.get(&queue_id_key);
+                        }
+                        if let Some(ct) = count {
+                            message.set_reconsume_times(*ct);
+                        }
+                    }
+                }
+            }
+            message.put_property(
+                CheetahString::from_static_str(MessageConst::PROPERTY_FIRST_POP_TIME),
+                CheetahString::from(response_header.pop_time.to_string()),
+            );
+            message.broker_name = broker_name.clone();
+            message.set_topic(
+                NamespaceUtil::without_namespace_with_namespace(
+                    topic.as_str(),
+                    self.client_config
+                        .namespace
+                        .clone()
+                        .unwrap_or_default()
+                        .as_str(),
+                )
+                .into(),
+            )
+        }
+        Ok(pop_result)
     }
+}
+
+fn build_queue_offset_sorted_map(
+    topic: &str,
+    msg_found_list: &[MessageExt],
+) -> HashMap<String, Vec<u64>> {
+    let mut sort_map: HashMap<String, Vec<u64>> = HashMap::with_capacity(16);
+    for message_ext in msg_found_list {
+        let key: String;
+        let dispatch = message_ext
+            .get_property(&CheetahString::from_static_str(
+                MessageConst::PROPERTY_INNER_MULTI_DISPATCH,
+            ))
+            .unwrap_or_default();
+        if mix_all::is_lmq(Some(topic))
+            && message_ext.reconsume_times() == 0
+            && !dispatch.is_empty()
+        {
+            // process LMQ
+            let queues: Vec<&str> = dispatch
+                .split(mix_all::MULTI_DISPATCH_QUEUE_SPLITTER)
+                .collect();
+            let data = message_ext
+                .get_property(&CheetahString::from_static_str(
+                    MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET,
+                ))
+                .unwrap_or_default();
+            let queue_offsets: Vec<&str> =
+                data.split(mix_all::MULTI_DISPATCH_QUEUE_SPLITTER).collect();
+            // LMQ topic has only 1 queue, which queue id is 0
+            key = ExtraInfoUtil::get_start_offset_info_map_key(topic, mix_all::LMQ_QUEUE_ID as i64);
+            sort_map
+                .entry(key)
+                .or_insert_with(|| Vec::with_capacity(4))
+                .push(
+                    queue_offsets[queues.iter().position(|&q| q == topic).unwrap()]
+                        .parse()
+                        .unwrap(),
+                );
+            continue;
+        }
+        // Value of POP_CK is used to determine whether it is a pop retry,
+        // cause topic could be rewritten by broker.
+        key = ExtraInfoUtil::get_start_offset_info_map_key_with_pop_ck(
+            message_ext.get_topic(),
+            message_ext
+                .get_property(&CheetahString::from_static_str(
+                    MessageConst::PROPERTY_POP_CK,
+                ))
+                .clone()
+                .unwrap_or_default()
+                .as_str(),
+            message_ext.queue_id() as i64,
+        );
+        sort_map
+            .entry(key)
+            .or_insert_with(|| Vec::with_capacity(4))
+            .push(message_ext.queue_offset() as u64);
+    }
+    sort_map
 }
