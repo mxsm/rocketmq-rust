@@ -46,6 +46,7 @@ pub mod message_operation_header;
 pub mod namesrv;
 pub mod notify_consumer_ids_changed_request_header;
 pub mod pop_message_request_header;
+pub mod pop_message_response_header;
 pub mod pull_message_request_header;
 pub mod pull_message_response_header;
 pub mod query_consume_time_span_request_header;
