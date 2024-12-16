@@ -62,6 +62,7 @@ use rocketmq_remoting::protocol::header::lock_batch_mq_request_header::LockBatch
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
+use rocketmq_remoting::protocol::header::pop_message_request_header::PopMessageRequestHeader;
 use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
 use rocketmq_remoting::protocol::header::pull_message_response_header::PullMessageResponseHeader;
 use rocketmq_remoting::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
@@ -96,6 +97,7 @@ use crate::consumer::ack_callback::AckCallback;
 use crate::consumer::ack_result::AckResult;
 use crate::consumer::ack_status::AckStatus;
 use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
+use crate::consumer::pop_callback::PopCallback;
 use crate::consumer::pull_callback::PullCallback;
 use crate::consumer::pull_result::PullResult;
 use crate::consumer::pull_status::PullStatus;
@@ -1394,5 +1396,19 @@ impl MQClientAPIImpl {
             }
         };
         Ok(())
+    }
+
+    pub async fn pop_message_async<PC>(
+        &self,
+        broker_name: &CheetahString,
+        addr: &CheetahString,
+        request_header: PopMessageRequestHeader,
+        timeout_millis: u64,
+        ack_callback: PC,
+    ) -> Result<()>
+    where
+        PC: PopCallback + 'static,
+    {
+        unimplemented!()
     }
 }
