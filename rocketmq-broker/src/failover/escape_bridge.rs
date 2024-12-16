@@ -410,8 +410,9 @@ fn transform_send_result2put_result(send_result: Option<SendResult>) -> PutMessa
 mod tests {
     use rocketmq_client_rust::producer::send_result::SendResult;
     use rocketmq_client_rust::producer::send_status::SendStatus;
+
     use super::*;
-    
+
     #[test]
     fn transform_send_result2put_result_handles_none() {
         let result = transform_send_result2put_result(None);
