@@ -79,6 +79,7 @@ use crate::consumer::mq_consumer_inner::MQConsumerInner;
 use crate::consumer::mq_consumer_inner::MQConsumerInnerImpl;
 use crate::consumer::pop_callback::DefaultPopCallback;
 use crate::consumer::pop_result::PopResult;
+use crate::consumer::pop_status::PopStatus;
 use crate::consumer::pull_callback::DefaultPullCallback;
 use crate::consumer::store::local_file_offset_store::LocalFileOffsetStore;
 use crate::consumer::store::offset_store::OffsetStore;
@@ -87,6 +88,7 @@ use crate::consumer::store::remote_broker_offset_store::RemoteBrokerOffsetStore;
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::hook::consume_message_context::ConsumeMessageContext;
 use crate::hook::consume_message_hook::ConsumeMessageHook;
+use crate::hook::filter_message_context::FilterMessageContext;
 use crate::hook::filter_message_hook::FilterMessageHook;
 use crate::implementation::communication_mode::CommunicationMode;
 use crate::implementation::mq_client_manager::MQClientManager;
@@ -1110,12 +1112,54 @@ impl DefaultMQPushConsumerImpl {
         }
     }
 
-    pub(crate) fn process_pop_result(
+    pub(crate) async fn process_pop_result(
         &mut self,
-        pop_result: &PopResult,
+        mut pop_result: PopResult,
         subscription_data: &SubscriptionData,
     ) -> PopResult {
-        unimplemented!("processPopResult")
+        if pop_result.pop_status == PopStatus::Found {
+            let msg_vec = pop_result.msg_found_list.take().unwrap_or_default();
+            let msg_list_filter_again =
+                if !subscription_data.tags_set.is_empty() && !subscription_data.class_filter_mode {
+                    let mut msg_vec_again = Vec::with_capacity(msg_vec.len());
+                    for msg in msg_vec {
+                        if let Some(ref tag) = msg.get_tags() {
+                            if subscription_data.tags_set.contains(tag.as_str()) {
+                                msg_vec_again.push(msg);
+                            }
+                        }
+                    }
+                    msg_vec_again
+                } else {
+                    msg_vec
+                };
+            let msg_list_filter_again = msg_list_filter_again
+                .into_iter()
+                .map(MessageClientExt::new)
+                .collect::<Vec<_>>();
+            if !self.filter_message_hook_list.is_empty() {
+                let context = FilterMessageContext {
+                    unit_mode: self.consumer_config.unit_mode,
+                    msg_list: &msg_list_filter_again,
+                    ..Default::default()
+                };
+                for hook in self.filter_message_hook_list.iter() {
+                    hook.filter_message(&context);
+                }
+            }
+            let mut final_msg_list = Vec::with_capacity(msg_list_filter_again.len());
+            for msg in msg_list_filter_again {
+                if msg.message_ext_inner.reconsume_times > self.get_max_reconsume_times() {
+                    let consumer_group = self.consumer_config.consumer_group().clone();
+                    self.ack_async(&msg.message_ext_inner, &consumer_group)
+                        .await;
+                } else {
+                    final_msg_list.push(msg.message_ext_inner);
+                }
+            }
+            pop_result.msg_found_list = Some(final_msg_list);
+        }
+        pop_result
     }
 
     #[inline]
