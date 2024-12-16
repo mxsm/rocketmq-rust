@@ -1471,7 +1471,7 @@ impl MQClientAPIImpl {
         };
         let mut pop_result = PopResult {
             pop_status,
-            msg_found_list,
+            msg_found_list: Some(msg_found_list),
             ..Default::default()
         };
         let response_header = response
@@ -1506,9 +1506,16 @@ impl MQClientAPIImpl {
                 .unwrap_or(&CheetahString::from_slice("")),
         )
         .map_err(RemotingError)?;
-        let sort_map = build_queue_offset_sorted_map(topic.as_str(), &pop_result.msg_found_list);
+        let sort_map = build_queue_offset_sorted_map(
+            topic.as_str(),
+            pop_result.msg_found_list.as_ref().map_or(&[], |v| v),
+        );
         let mut map = HashMap::with_capacity(5);
-        for message in &mut pop_result.msg_found_list {
+        for message in pop_result
+            .msg_found_list
+            .as_mut()
+            .map_or(&mut vec![], |v| v)
+        {
             if start_offset_info.is_empty() {
                 let key = CheetahString::from_string(format!(
                     "{}{}",

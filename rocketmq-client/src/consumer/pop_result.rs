@@ -22,7 +22,7 @@ use crate::consumer::pop_status::PopStatus;
 
 #[derive(Default, Clone)]
 pub struct PopResult {
-    pub msg_found_list: Vec<MessageExt>,
+    pub msg_found_list: Option<Vec<MessageExt>>,
     pub pop_status: PopStatus,
     pub pop_time: u64,
     pub invisible_time: u64,
@@ -35,7 +35,7 @@ impl Display for PopResult {
             f,
             "PopResult [msg_found_list={}, pop_status={}, pop_time={}, invisible_time={}, \
              rest_num={}]",
-            self.msg_found_list.len(),
+            self.msg_found_list.as_ref().map_or(0, |value| value.len()),
             self.pop_status,
             self.pop_time,
             self.invisible_time,
@@ -58,7 +58,7 @@ mod tests {
     #[test]
     fn display_pop_result_with_empty_msg_list() {
         let pop_result = PopResult {
-            msg_found_list: vec![],
+            msg_found_list: Some(vec![]),
             pop_status: PopStatus::Found,
             pop_time: 123456789,
             invisible_time: 1000,
@@ -74,7 +74,7 @@ mod tests {
     #[test]
     fn display_pop_result_with_non_empty_msg_list() {
         let pop_result = PopResult {
-            msg_found_list: vec![create_message_ext(), create_message_ext()],
+            msg_found_list: Some(vec![create_message_ext(), create_message_ext()]),
             pop_status: PopStatus::NoNewMsg,
             pop_time: 987654321,
             invisible_time: 2000,
@@ -90,7 +90,7 @@ mod tests {
     #[test]
     fn display_pop_result_with_polling_full_status() {
         let pop_result = PopResult {
-            msg_found_list: vec![create_message_ext()],
+            msg_found_list: Some(vec![create_message_ext()]),
             pop_status: PopStatus::PollingFull,
             pop_time: 111111111,
             invisible_time: 3000,
@@ -106,7 +106,7 @@ mod tests {
     #[test]
     fn display_pop_result_with_polling_not_found_status() {
         let pop_result = PopResult {
-            msg_found_list: vec![],
+            msg_found_list: Some(vec![]),
             pop_status: PopStatus::PollingNotFound,
             pop_time: 222222222,
             invisible_time: 4000,

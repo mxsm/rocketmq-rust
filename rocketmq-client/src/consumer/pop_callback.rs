@@ -103,10 +103,16 @@ impl PopCallback for DefaultPopCallback {
         let subscription_data = self.subscription_data.take().unwrap();
         let pop_request = self.pop_request.take().unwrap();
 
-        push_consumer_impl.process_pop_result(&pop_result, &subscription_data);
+        let pop_result = push_consumer_impl
+            .process_pop_result(pop_result, &subscription_data)
+            .await;
         match pop_result.pop_status {
             PopStatus::Found => {
-                if pop_result.msg_found_list.is_empty() {
+                if pop_result
+                    .msg_found_list
+                    .as_ref()
+                    .map_or(true, |value| value.is_empty())
+                {
                     push_consumer_impl
                         .execute_pop_request_immediately(pop_request)
                         .await;
@@ -116,7 +122,7 @@ impl PopCallback for DefaultPopCallback {
                         .as_mut()
                         .unwrap()
                         .submit_pop_consume_request(
-                            pop_result.msg_found_list,
+                            pop_result.msg_found_list.unwrap_or_default(),
                             pop_request.get_pop_process_queue(),
                             pop_request.get_message_queue(),
                         )
