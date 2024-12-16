@@ -25,19 +25,19 @@ use serde::Serialize;
 pub struct PopMessageResponseHeader {
     #[serde(rename = "popTime")]
     #[required]
-    pub pop_time: i64,
+    pub pop_time: u64,
 
     #[serde(rename = "invisibleTime")]
     #[required]
-    pub invisible_time: i64,
+    pub invisible_time: u64,
 
     #[serde(rename = "reviveQid")]
     #[required]
-    pub revive_qid: i32,
+    pub revive_qid: u32,
 
     #[serde(rename = "restNum")]
     #[required]
-    pub rest_num: i64,
+    pub rest_num: u64,
 
     #[serde(rename = "startOffsetInfo", skip_serializing_if = "Option::is_none")]
     pub start_offset_info: Option<CheetahString>,
