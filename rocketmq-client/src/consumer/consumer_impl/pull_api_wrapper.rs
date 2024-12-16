@@ -30,7 +30,9 @@ use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
 use rocketmq_common::MessageAccessor::MessageAccessor;
+use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
+use rocketmq_remoting::protocol::header::pop_message_request_header::PopMessageRequestHeader;
 use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
@@ -404,7 +406,62 @@ impl PullAPIWrapper {
     where
         PC: PopCallback + 'static,
     {
-        unimplemented!()
+        let mut find_broker_result = self
+            .client_instance
+            .find_broker_address_in_subscribe(mq.get_broker_name(), mix_all::MASTER_ID, true)
+            .await;
+        if find_broker_result.is_none() {
+            self.client_instance
+                .update_topic_route_info_from_name_server_topic(mq.get_topic_cs())
+                .await;
+            find_broker_result = self
+                .client_instance
+                .find_broker_address_in_subscribe(mq.get_broker_name(), mix_all::MASTER_ID, true)
+                .await;
+        }
+        if let Some(find_broker_result) = find_broker_result {
+            let mut request_header = PopMessageRequestHeader {
+                consumer_group,
+                topic: mq.get_topic_cs().clone(),
+                queue_id: mq.get_queue_id(),
+                max_msg_nums: max_nums,
+                invisible_time,
+                init_mode,
+                exp_type: Some(expression_type),
+                exp: Some(expression),
+                order: Some(order),
+                topic_request_header: Some(TopicRequestHeader {
+                    lo: None,
+                    rpc: Some(RpcRequestHeader {
+                        namespace: None,
+                        namespaced: None,
+                        broker_name: Some(CheetahString::from_string(
+                            mq.get_broker_name().to_string(),
+                        )),
+                        oneway: None,
+                    }),
+                }),
+                ..Default::default()
+            };
+            if poll {
+                request_header.poll_time = timeout;
+                request_header.born_time = get_current_millis();
+            }
+            self.client_instance
+                .mq_client_api_impl
+                .as_mut()
+                .unwrap()
+                .pop_message_async(
+                    mq.get_broker_name(),
+                    &find_broker_result.broker_addr,
+                    request_header,
+                    timeout,
+                    pop_callback,
+                )
+                .await
+        } else {
+            mq_client_err!(format!("The broker[{}] not exist", mq.get_broker_name(),))
+        }
     }
 }
 
