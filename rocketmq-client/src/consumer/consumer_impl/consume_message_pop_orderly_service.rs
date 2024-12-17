@@ -14,6 +14,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::collections::HashSet;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -26,6 +29,7 @@ use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeM
 use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_rust::ArcMut;
 use tracing::info;
+use tracing::warn;
 
 use crate::base::client_config::ClientConfig;
 use crate::consumer::consumer_impl::consume_message_service::ConsumeMessageServiceTrait;
@@ -36,6 +40,7 @@ use crate::consumer::default_mq_push_consumer::ConsumerConfig;
 use crate::consumer::listener::consume_orderly_context::ConsumeOrderlyContext;
 use crate::consumer::listener::consume_orderly_status::ConsumeOrderlyStatus;
 use crate::consumer::listener::message_listener_orderly::ArcBoxMessageListenerOrderly;
+use crate::consumer::message_queue_lock::MessageQueueLock;
 
 pub struct ConsumeMessagePopOrderlyService {
     pub(crate) default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
@@ -44,6 +49,9 @@ pub struct ConsumeMessagePopOrderlyService {
     pub(crate) consumer_group: CheetahString,
     pub(crate) message_listener: ArcBoxMessageListenerOrderly,
     pub(crate) consume_runtime: RocketMQRuntime,
+    pub(self) consume_request_set: HashSet<ConsumeRequest>,
+    pub(crate) message_queue_lock: MessageQueueLock,
+    pub(crate) consume_request_lock: MessageQueueLock,
 }
 
 impl ConsumeMessagePopOrderlyService {
@@ -66,6 +74,32 @@ impl ConsumeMessagePopOrderlyService {
                 consume_thread as usize,
                 consumer_group_tag.as_str(),
             ),
+            consume_request_set: Default::default(),
+            message_queue_lock: Default::default(),
+            consume_request_lock: Default::default(),
+        }
+    }
+
+    fn remove_consume_request(&mut self, request: &ConsumeRequest) {
+        self.consume_request_set.remove(request);
+    }
+
+    async fn submit_consume_request(
+        &mut self,
+        this: ArcMut<Self>,
+        mut request: ConsumeRequest,
+        force: bool,
+    ) {
+        let lock = self
+            .consume_request_lock
+            .fetch_lock_object_with_sharding_key(&request.message_queue, request.sharding_key_index)
+            .await;
+        let _lock = lock.lock().await;
+        let is_new_req = self.consume_request_set.insert(request.clone());
+        if is_new_req || force {
+            self.consume_runtime.get_handle().spawn(async move {
+                request.run(this).await;
+            });
         }
     }
 }
@@ -142,7 +176,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
         message_queue: MessageQueue,
         dispatch_to_consume: bool,
     ) {
-        todo!()
+        unimplemented!("ConsumeMessagePopOrderlyService not support submit_consume_request")
     }
 
     async fn submit_pop_consume_request(
@@ -152,6 +186,59 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
         process_queue: &PopProcessQueue,
         message_queue: &MessageQueue,
     ) {
-        todo!()
+        ConsumeRequest::new(Arc::new(process_queue.clone()), message_queue.clone());
+    }
+}
+
+#[derive(Clone)]
+struct ConsumeRequest {
+    process_queue: Arc<PopProcessQueue>,
+    message_queue: MessageQueue,
+    sharding_key_index: i32,
+}
+
+impl ConsumeRequest {
+    pub fn new(process_queue: Arc<PopProcessQueue>, message_queue: MessageQueue) -> Self {
+        Self {
+            process_queue,
+            message_queue,
+            sharding_key_index: 0,
+        }
+    }
+
+    pub async fn run(
+        &mut self,
+        mut consume_message_pop_orderly_service: ArcMut<ConsumeMessagePopOrderlyService>,
+    ) {
+        if self.process_queue.is_dropped() {
+            warn!(
+                "run, message queue not be able to consume, because it's dropped. {}",
+                self.message_queue
+            );
+            consume_message_pop_orderly_service.remove_consume_request(self);
+            return;
+        }
+        let _ = consume_message_pop_orderly_service
+            .message_queue_lock
+            .fetch_lock_object_with_sharding_key(&self.message_queue, self.sharding_key_index)
+            .await;
+    }
+}
+
+impl PartialEq for ConsumeRequest {
+    fn eq(&self, other: &Self) -> bool {
+        self.sharding_key_index == other.sharding_key_index
+            && Arc::ptr_eq(&self.process_queue, &other.process_queue)
+            || (self.message_queue.eq(&other.message_queue))
+    }
+}
+
+impl Eq for ConsumeRequest {}
+
+impl Hash for ConsumeRequest {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.sharding_key_index.hash(state);
+        self.process_queue.as_ref().hash(state);
+        self.message_queue.hash(state);
     }
 }
