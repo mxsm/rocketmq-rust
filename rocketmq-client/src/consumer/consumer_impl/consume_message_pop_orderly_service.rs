@@ -163,6 +163,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
 
     async fn submit_pop_consume_request(
         &self,
+        this: ArcMut<Self>,
         msgs: Vec<MessageExt>,
         process_queue: &PopProcessQueue,
         message_queue: &MessageQueue,
