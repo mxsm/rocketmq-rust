@@ -91,7 +91,7 @@ where
         msg: MessageExt,
         broker_name: Option<CheetahString>,
     ) -> ConsumeMessageDirectlyResult {
-        todo!()
+        unimplemented!("ConsumeMessageServiceGeneral not support consume_message_directly")
     }
 
     pub async fn submit_consume_request(
@@ -228,7 +228,21 @@ where
         process_queue: &PopProcessQueue,
         message_queue: &MessageQueue,
     ) {
-        todo!()
+        if let Some(consume_message_pop_concurrently_service) =
+            &self.consume_message_pop_concurrently_service
+        {
+            let this = consume_message_pop_concurrently_service.clone();
+            consume_message_pop_concurrently_service
+                .submit_pop_consume_request(msgs, process_queue, message_queue)
+                .await;
+        } else if let Some(consume_message_pop_orderly_service) =
+            &self.consume_message_pop_orderly_service
+        {
+            let this = consume_message_pop_orderly_service.clone();
+            consume_message_pop_orderly_service
+                .submit_pop_consume_request(msgs, process_queue, message_queue)
+                .await;
+        }
     }
 }
 
