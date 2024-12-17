@@ -51,8 +51,7 @@ trait-variant.workspace = true
 uuid = { workspace = true }
 cheetah-string = { workspace = true }
 
-bit-vec = { version = "0.8.0", features = ["serde"] }
-serde_with = "3.11.0"
+bitvec = "1.0.1"
 
 [dev-dependencies]
 bytes = "1.9.0"
