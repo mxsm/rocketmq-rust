@@ -267,20 +267,22 @@ pub trait ConsumeMessageServiceTrait {
     /// # Arguments
     ///
     /// * `core_pool_size` - The new core pool size.
-    fn update_core_pool_size(&self, core_pool_size: usize);
+    fn update_core_pool_size(&self, core_pool_size: usize) {}
 
     /// Increases the core pool size of the service by one.
-    fn inc_core_pool_size(&self);
+    fn inc_core_pool_size(&self) {}
 
     /// Decreases the core pool size of the service by one.
-    fn dec_core_pool_size(&self);
+    fn dec_core_pool_size(&self) {}
 
     /// Gets the current core pool size of the service.
     ///
     /// # Returns
     ///
     /// The current core pool size.
-    fn get_core_pool_size(&self) -> usize;
+    fn get_core_pool_size(&self) -> usize {
+        num_cpus::get()
+    }
 
     /// Consumes a message directly.
     ///
