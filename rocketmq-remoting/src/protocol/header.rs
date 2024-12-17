@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+pub mod ack_message_request_header;
 pub mod broker;
 pub mod change_invisible_time_request_header;
 pub mod change_invisible_time_response_header;
