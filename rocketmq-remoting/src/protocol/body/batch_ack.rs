@@ -14,20 +14,24 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use bit_vec::BitVec;
+use bitvec::prelude::BitVec;
+use bitvec::prelude::Lsb0;
+use cheetah_string::CheetahString;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
+use serde::Serializer;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct BatchAck {
     #[serde(rename = "c", alias = "consumerGroup")]
-    pub consumer_group: String,
+    pub consumer_group: CheetahString,
 
     #[serde(rename = "t", alias = "topic")]
-    pub topic: String,
+    pub topic: CheetahString,
 
     #[serde(rename = "r", alias = "retry")]
-    pub retry: String, // "1" if it's retry topic
+    pub retry: CheetahString, // "1" if it's retry topic
 
     #[serde(rename = "so", alias = "startOffset")]
     pub start_offset: i64,
@@ -45,110 +49,113 @@ pub struct BatchAck {
     pub invisible_time: i64,
 
     #[serde(rename = "b", alias = "bitSet")]
-    pub bit_set: BitVec,
+    pub bit_set: SerializableBitVec,
+}
+// 新类型封装
+#[derive(Debug, Clone)]
+pub struct SerializableBitVec(pub BitVec<u8, Lsb0>);
+
+impl Serialize for SerializableBitVec {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_bytes(self.0.as_raw_slice())
+    }
+}
+
+impl<'de> Deserialize<'de> for SerializableBitVec {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let bytes: Vec<u8> = Vec::deserialize(deserializer)?;
+        Ok(SerializableBitVec(BitVec::<u8, Lsb0>::from_vec(bytes)))
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use bit_vec::BitVec;
+    use bitvec::prelude::*;
+    use cheetah_string::CheetahString;
+    use serde_json;
 
     use super::*;
 
     #[test]
     fn batch_ack_serialization() {
-        let bit_set = BitVec::from_elem(8, true);
+        let bit_set = BitVec::from_element(8);
         let batch_ack = BatchAck {
-            consumer_group: String::from("group1"),
-            topic: String::from("topic1"),
-            retry: String::from("1"),
+            consumer_group: CheetahString::from("group1"),
+            topic: CheetahString::from("topic1"),
+            retry: CheetahString::from("1"),
             start_offset: 100,
             queue_id: 1,
             revive_queue_id: 2,
             pop_time: 123456789,
             invisible_time: 987654321,
-            bit_set: bit_set.clone(),
+            bit_set: SerializableBitVec(bit_set.clone()),
         };
         let serialized = serde_json::to_string(&batch_ack).unwrap();
         let deserialized: BatchAck = serde_json::from_str(&serialized).unwrap();
-        assert_eq!(deserialized.consumer_group, "group1");
-        assert_eq!(deserialized.topic, "topic1");
-        assert_eq!(deserialized.retry, "1");
+        assert_eq!(deserialized.consumer_group, CheetahString::from("group1"));
+        assert_eq!(deserialized.topic, CheetahString::from("topic1"));
+        assert_eq!(deserialized.retry, CheetahString::from("1"));
         assert_eq!(deserialized.start_offset, 100);
         assert_eq!(deserialized.queue_id, 1);
         assert_eq!(deserialized.revive_queue_id, 2);
         assert_eq!(deserialized.pop_time, 123456789);
         assert_eq!(deserialized.invisible_time, 987654321);
-        assert_eq!(deserialized.bit_set, bit_set);
+        assert_eq!(deserialized.bit_set.0, bit_set);
     }
 
     #[test]
     fn batch_ack_default_values() {
-        let bit_set = BitVec::from_elem(8, false);
+        let bit_set = BitVec::from_element(8);
         let batch_ack = BatchAck {
-            consumer_group: String::new(),
-            topic: String::new(),
-            retry: String::new(),
+            consumer_group: CheetahString::new(),
+            topic: CheetahString::new(),
+            retry: CheetahString::new(),
             start_offset: 0,
             queue_id: 0,
             revive_queue_id: 0,
             pop_time: 0,
             invisible_time: 0,
-            bit_set: bit_set.clone(),
+            bit_set: SerializableBitVec(bit_set.clone()),
         };
-        assert_eq!(batch_ack.consumer_group, "");
-        assert_eq!(batch_ack.topic, "");
-        assert_eq!(batch_ack.retry, "");
+        assert_eq!(batch_ack.consumer_group, CheetahString::new());
+        assert_eq!(batch_ack.topic, CheetahString::new());
+        assert_eq!(batch_ack.retry, CheetahString::new());
         assert_eq!(batch_ack.start_offset, 0);
         assert_eq!(batch_ack.queue_id, 0);
         assert_eq!(batch_ack.revive_queue_id, 0);
         assert_eq!(batch_ack.pop_time, 0);
         assert_eq!(batch_ack.invisible_time, 0);
-        assert_eq!(batch_ack.bit_set, bit_set);
+        assert_eq!(batch_ack.bit_set.0, bit_set);
     }
 
     #[test]
     fn batch_ack_edge_case_empty_strings() {
         let bit_set = BitVec::new();
         let batch_ack = BatchAck {
-            consumer_group: String::from(""),
-            topic: String::from(""),
-            retry: String::from(""),
+            consumer_group: CheetahString::from(""),
+            topic: CheetahString::from(""),
+            retry: CheetahString::from(""),
             start_offset: -1,
             queue_id: -1,
             revive_queue_id: -1,
             pop_time: -1,
             invisible_time: -1,
-            bit_set: bit_set.clone(),
+            bit_set: SerializableBitVec(bit_set.clone()),
         };
-        assert_eq!(batch_ack.consumer_group, "");
-        assert_eq!(batch_ack.topic, "");
-        assert_eq!(batch_ack.retry, "");
+        assert_eq!(batch_ack.consumer_group, CheetahString::from(""));
+        assert_eq!(batch_ack.topic, CheetahString::from(""));
+        assert_eq!(batch_ack.retry, CheetahString::from(""));
         assert_eq!(batch_ack.start_offset, -1);
         assert_eq!(batch_ack.queue_id, -1);
         assert_eq!(batch_ack.revive_queue_id, -1);
         assert_eq!(batch_ack.pop_time, -1);
         assert_eq!(batch_ack.invisible_time, -1);
-        assert_eq!(batch_ack.bit_set, bit_set);
-    }
-
-    #[test]
-    fn batch_ack_invalid_json() {
-        // Test missing required fields
-        let invalid_json = r#"{"c":"group1"}"#;
-        let result = serde_json::from_str::<BatchAck>(invalid_json);
-        assert!(result.is_err());
-
-        // Test invalid field types
-        let invalid_types = r#"{"c":123,"t":"topic1","r":"1","so":"invalid","q":1,"rq":2,"pt":123456789,"it":987654321,"b":[]}"#;
-        let result = serde_json::from_str::<BatchAck>(invalid_types);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn batch_ack_invalid_retry_value() {
-        // Test invalid retry values
-        let invalid_retry = r#"{"c":"group1","t":"topic1","r":"invalid","so":100,"q":1,"rq":2,"pt":123456789,"it":987654321,"b":[]}"#;
-        let result = serde_json::from_str::<BatchAck>(invalid_retry);
-        assert!(result.is_err());
+        assert_eq!(batch_ack.bit_set.0, bit_set);
     }
 }

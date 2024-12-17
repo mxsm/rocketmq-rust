@@ -20,7 +20,7 @@ use serde::Serialize;
 
 use crate::protocol::body::batch_ack::BatchAck;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BatchAckMessageRequestBody {
     pub broker_name: CheetahString,
@@ -29,32 +29,37 @@ pub struct BatchAckMessageRequestBody {
 
 #[cfg(test)]
 mod tests {
-    use bit_vec::BitVec;
+    use bitvec::prelude::*;
     use cheetah_string::CheetahString;
+    use serde_json;
 
     use super::*;
+    use crate::protocol::body::batch_ack::SerializableBitVec;
 
     #[test]
     fn batch_ack_message_request_body_serialization() {
         let body = BatchAckMessageRequestBody {
             broker_name: CheetahString::from("broker1"),
             acks: vec![BatchAck {
-                consumer_group: String::from("group1"),
-                topic: String::from("topic1"),
-                retry: String::from("1"),
+                consumer_group: CheetahString::from("group1"),
+                topic: CheetahString::from("topic1"),
+                retry: CheetahString::from("1"),
                 start_offset: 100,
                 queue_id: 1,
                 revive_queue_id: 2,
                 pop_time: 123456789,
                 invisible_time: 987654321,
-                bit_set: BitVec::from_elem(8, true),
+                bit_set: SerializableBitVec(BitVec::from_element(8)),
             }],
         };
         let serialized = serde_json::to_string(&body).unwrap();
         let deserialized: BatchAckMessageRequestBody = serde_json::from_str(&serialized).unwrap();
         assert_eq!(deserialized.broker_name, CheetahString::from("broker1"));
         assert_eq!(deserialized.acks.len(), 1);
-        assert_eq!(deserialized.acks[0].consumer_group, "group1");
+        assert_eq!(
+            deserialized.acks[0].consumer_group,
+            CheetahString::from("group1")
+        );
     }
 
     #[test]
@@ -72,19 +77,19 @@ mod tests {
         let body = BatchAckMessageRequestBody {
             broker_name: CheetahString::from(""),
             acks: vec![BatchAck {
-                consumer_group: String::from(""),
-                topic: String::from(""),
-                retry: String::from(""),
+                consumer_group: CheetahString::from(""),
+                topic: CheetahString::from(""),
+                retry: CheetahString::from(""),
                 start_offset: -1,
                 queue_id: -1,
                 revive_queue_id: -1,
                 pop_time: -1,
                 invisible_time: -1,
-                bit_set: BitVec::new(),
+                bit_set: SerializableBitVec(BitVec::new()),
             }],
         };
         assert_eq!(body.broker_name, CheetahString::from(""));
         assert_eq!(body.acks.len(), 1);
-        assert_eq!(body.acks[0].consumer_group, "");
+        assert_eq!(body.acks[0].consumer_group, CheetahString::from(""));
     }
 }
