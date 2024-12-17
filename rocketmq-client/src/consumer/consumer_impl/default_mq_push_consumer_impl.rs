@@ -41,6 +41,7 @@ use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_remoting::protocol::body::consumer_running_info::ConsumerRunningInfo;
 use rocketmq_remoting::protocol::filter::filter_api::FilterAPI;
+use rocketmq_remoting::protocol::header::ack_message_request_header::AckMessageRequestHeader;
 use rocketmq_remoting::protocol::header::change_invisible_time_request_header::ChangeInvisibleTimeRequestHeader;
 use rocketmq_remoting::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
@@ -1369,6 +1370,86 @@ impl DefaultMQPushConsumerImpl {
     }
 
     pub(crate) async fn ack_async(&mut self, message: &MessageExt, consumer_group: &CheetahString) {
+        let extra_info = message
+            .get_property(&CheetahString::from_static_str(
+                MessageConst::PROPERTY_POP_CK,
+            ))
+            .unwrap_or_default();
+        let extra_info_strs = ExtraInfoUtil::split(extra_info.as_str());
+        if extra_info_strs.is_err() {
+            error!("ackAsync error: {}", extra_info_strs.unwrap_err());
+            return;
+        }
+        let extra_info_strs = extra_info_strs.unwrap();
+        let queue_id = ExtraInfoUtil::get_queue_id(extra_info_strs.as_slice());
+        if queue_id.is_err() {
+            error!("ackAsync error: {}", queue_id.unwrap_err());
+            return;
+        }
+        let queue_id = queue_id.unwrap();
+        let queue_offset = ExtraInfoUtil::get_queue_offset(extra_info_strs.as_slice());
+        if queue_offset.is_err() {
+            error!("ackAsync error: {}", queue_offset.unwrap_err());
+            return;
+        }
+        let queue_offset = queue_offset.unwrap();
+        let broker_name = CheetahString::from(
+            ExtraInfoUtil::get_broker_name(extra_info_strs.as_slice()).unwrap_or_default(),
+        );
+        let topic = message.get_topic();
+
+        let client_instance = self.client_instance.as_mut().unwrap();
+        let des_broker_name = if !broker_name.is_empty()
+            && broker_name.starts_with(mix_all::LOGICAL_QUEUE_MOCK_BROKER_PREFIX)
+        {
+            let mq = self
+                .client_config
+                .queue_with_namespace(MessageQueue::from_parts(
+                    topic,
+                    broker_name.clone(),
+                    queue_id,
+                ));
+            client_instance
+                .get_broker_name_from_message_queue(&mq)
+                .await
+        } else {
+            broker_name.clone()
+        };
+
+        let mut find_broker_result = client_instance
+            .find_broker_address_in_subscribe(&des_broker_name, mix_all::MASTER_ID, true)
+            .await;
+        if find_broker_result.is_none() {
+            client_instance
+                .update_topic_route_info_from_name_server_topic(topic)
+                .await;
+            find_broker_result = client_instance
+                .find_broker_address_in_subscribe(&des_broker_name, mix_all::MASTER_ID, true)
+                .await;
+        }
+        if find_broker_result.is_none() {
+            error!("The broker[{}] not exist", des_broker_name);
+            return;
+        }
+
+        let request_header = AckMessageRequestHeader {
+            consumer_group: consumer_group.clone(),
+            topic: CheetahString::from_string(
+                ExtraInfoUtil::get_real_topic(extra_info_strs.as_slice(), topic, consumer_group)
+                    .unwrap_or_default(),
+            ),
+            queue_id,
+            extra_info,
+            offset: queue_offset,
+            topic_request_header: Some(TopicRequestHeader {
+                rpc_request_header: Some(RpcRequestHeader {
+                    broker_name: Some(broker_name.clone()),
+                    ..Default::default()
+                }),
+                lo: None,
+            }),
+        };
+        //client_instance.mq_client_api_impl.as_mut().unwrap()
         unimplemented!("ackAsync");
     }
 
