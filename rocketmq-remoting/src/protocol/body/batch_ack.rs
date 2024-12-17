@@ -130,4 +130,25 @@ mod tests {
         assert_eq!(batch_ack.invisible_time, -1);
         assert_eq!(batch_ack.bit_set, bit_set);
     }
+
+    #[test]
+    fn batch_ack_invalid_json() {
+        // Test missing required fields
+        let invalid_json = r#"{"c":"group1"}"#;
+        let result = serde_json::from_str::<BatchAck>(invalid_json);
+        assert!(result.is_err());
+
+        // Test invalid field types
+        let invalid_types = r#"{"c":123,"t":"topic1","r":"1","so":"invalid","q":1,"rq":2,"pt":123456789,"it":987654321,"b":[]}"#;
+        let result = serde_json::from_str::<BatchAck>(invalid_types);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn batch_ack_invalid_retry_value() {
+        // Test invalid retry values
+        let invalid_retry = r#"{"c":"group1","t":"topic1","r":"invalid","so":100,"q":1,"rq":2,"pt":123456789,"it":987654321,"b":[]}"#;
+        let result = serde_json::from_str::<BatchAck>(invalid_retry);
+        assert!(result.is_err());
+    }
 }
