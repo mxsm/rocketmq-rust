@@ -15,11 +15,13 @@
  * limitations under the License.
  */
 use std::fmt::Display;
+use std::hash::Hash;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::atomic::Ordering::Acquire;
+use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 
 use rocketmq_common::TimeUtils::get_current_millis;
@@ -32,6 +34,15 @@ pub(crate) struct PopProcessQueue {
     last_pop_timestamp: Arc<AtomicU64>,
     wait_ack_counter: Arc<AtomicUsize>,
     dropped: Arc<AtomicBool>,
+}
+
+impl Hash for PopProcessQueue {
+    #[inline]
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.last_pop_timestamp.load(Relaxed).hash(state);
+        self.wait_ack_counter.load(Relaxed).hash(state);
+        self.dropped.load(Relaxed).hash(state);
+    }
 }
 
 impl Default for PopProcessQueue {
