@@ -233,14 +233,14 @@ where
         {
             let this = consume_message_pop_concurrently_service.clone();
             consume_message_pop_concurrently_service
-                .submit_pop_consume_request(msgs, process_queue, message_queue)
+                .submit_pop_consume_request(this, msgs, process_queue, message_queue)
                 .await;
         } else if let Some(consume_message_pop_orderly_service) =
             &self.consume_message_pop_orderly_service
         {
             let this = consume_message_pop_orderly_service.clone();
             consume_message_pop_orderly_service
-                .submit_pop_consume_request(msgs, process_queue, message_queue)
+                .submit_pop_consume_request(this, msgs, process_queue, message_queue)
                 .await;
         }
     }
@@ -325,6 +325,7 @@ pub trait ConsumeMessageServiceTrait {
     /// * `message_queue` - The message queue.
     async fn submit_pop_consume_request(
         &self,
+        this: ArcMut<Self>,
         msgs: Vec<MessageExt>,
         process_queue: &PopProcessQueue,
         message_queue: &MessageQueue,

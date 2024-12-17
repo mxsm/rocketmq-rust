@@ -29,6 +29,7 @@ use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::protocol::body::cm_result::CMResult;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
+use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_rust::ArcMut;
 use tracing::error;
 use tracing::info;
@@ -54,6 +55,7 @@ pub struct ConsumeMessagePopConcurrentlyService {
     pub(crate) consumer_config: ArcMut<ConsumerConfig>,
     pub(crate) consumer_group: CheetahString,
     pub(crate) message_listener: ArcBoxMessageListenerConcurrently,
+    pub(crate) pop_consume_runtime: RocketMQRuntime,
 }
 
 impl ConsumeMessagePopConcurrentlyService {
@@ -64,12 +66,18 @@ impl ConsumeMessagePopConcurrentlyService {
         message_listener: ArcBoxMessageListenerConcurrently,
         default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
     ) -> Self {
+        let consume_thread = consumer_config.consume_thread_max;
+        let consumer_group_tag = format!("{}_{}", "PopConsumeMessageThread_", consumer_group);
         Self {
             default_mqpush_consumer_impl,
             client_config,
             consumer_config,
             consumer_group,
             message_listener,
+            pop_consume_runtime: RocketMQRuntime::new_multi(
+                consume_thread as usize,
+                consumer_group_tag.as_str(),
+            ),
         }
     }
 }
@@ -165,11 +173,39 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
 
     async fn submit_pop_consume_request(
         &self,
+        this: ArcMut<Self>,
         msgs: Vec<MessageExt>,
         process_queue: &PopProcessQueue,
         message_queue: &MessageQueue,
     ) {
-        todo!()
+        let consume_batch_size = self.consumer_config.consume_message_batch_max_size;
+        let msgs = msgs
+            .into_iter()
+            .map(|msg| ArcMut::new(MessageClientExt::new(msg)))
+            .collect::<Vec<ArcMut<MessageClientExt>>>();
+        if msgs.len() < consume_batch_size as usize {
+            let mut request =
+                ConsumeRequest::new(msgs, Arc::new(process_queue.clone()), message_queue.clone());
+            self.pop_consume_runtime.get_handle().spawn(async move {
+                request.run(this).await;
+            });
+        } else {
+            msgs.chunks(consume_batch_size as usize)
+                .map(|t| t.to_vec())
+                .for_each(|msgs| {
+                    let mut consume_request = ConsumeRequest::new(
+                        msgs,
+                        Arc::new(process_queue.clone()),
+                        message_queue.clone(),
+                    );
+                    let pop_consume_message_concurrently_service = this.clone();
+                    self.pop_consume_runtime.get_handle().spawn(async move {
+                        consume_request
+                            .run(pop_consume_message_concurrently_service)
+                            .await
+                    });
+                });
+        }
     }
 }
 
@@ -331,6 +367,7 @@ impl ConsumeMessagePopConcurrentlyService {
 
 struct ConsumeRequest {
     msgs: Vec<ArcMut<MessageClientExt>>,
+    //msgs: Vec<MessageExt>,
     process_queue: Arc<PopProcessQueue>,
     message_queue: MessageQueue,
     pop_time: u64,
@@ -345,8 +382,6 @@ impl ConsumeRequest {
         msgs: Vec<ArcMut<MessageClientExt>>,
         process_queue: Arc<PopProcessQueue>,
         message_queue: MessageQueue,
-        pop_time: u64,
-        invisible_time: u64,
     ) -> Self {
         unimplemented!()
     }
