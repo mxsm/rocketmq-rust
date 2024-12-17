@@ -77,22 +77,6 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
         todo!()
     }
 
-    fn update_core_pool_size(&self, core_pool_size: usize) {
-        todo!()
-    }
-
-    fn inc_core_pool_size(&self) {
-        todo!()
-    }
-
-    fn dec_core_pool_size(&self) {
-        todo!()
-    }
-
-    fn get_core_pool_size(&self) -> usize {
-        todo!()
-    }
-
     #[allow(deprecated)]
     async fn consume_message_directly(
         &self,
