@@ -490,7 +490,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
         process_queue: &PopProcessQueue,
         message_queue: &MessageQueue,
     ) {
-        todo!()
+        unimplemented!("ConsumeMessageConcurrentlyService not support submit_pop_consume_request");
     }
 }
 
