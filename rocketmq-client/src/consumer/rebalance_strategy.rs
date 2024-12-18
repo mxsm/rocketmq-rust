@@ -59,3 +59,63 @@ pub fn check(
     }
     Ok(true)
 }
+
+#[cfg(test)]
+mod tests {
+    use cheetah_string::CheetahString;
+    use rocketmq_common::common::message::message_queue::MessageQueue;
+
+    use super::*;
+
+    #[test]
+    fn check_with_valid_inputs() {
+        let consumer_group = CheetahString::from("test_group");
+        let current_cid = CheetahString::from("cid_1");
+        let mq_all = vec![MessageQueue::from_parts("test_topic", "broker_a", 0)];
+        let cid_all = vec![CheetahString::from("cid_1"), CheetahString::from("cid_2")];
+        let result = check(&consumer_group, &current_cid, &mq_all, &cid_all);
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[test]
+    fn check_with_empty_current_cid() {
+        let consumer_group = CheetahString::from("test_group");
+        let current_cid = CheetahString::new();
+        let mq_all = vec![MessageQueue::from_parts("test_topic", "broker_a", 0)];
+        let cid_all = vec![CheetahString::from("cid_1"), CheetahString::from("cid_2")];
+        let result = check(&consumer_group, &current_cid, &mq_all, &cid_all);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn check_with_empty_mq_all() {
+        let consumer_group = CheetahString::from("test_group");
+        let current_cid = CheetahString::from("cid_1");
+        let mq_all: Vec<MessageQueue> = vec![];
+        let cid_all = vec![CheetahString::from("cid_1"), CheetahString::from("cid_2")];
+        let result = check(&consumer_group, &current_cid, &mq_all, &cid_all);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn check_with_empty_cid_all() {
+        let consumer_group = CheetahString::from("test_group");
+        let current_cid = CheetahString::from("cid_1");
+        let mq_all = vec![MessageQueue::from_parts("test_topic", "broker_a", 0)];
+        let cid_all: Vec<CheetahString> = vec![];
+        let result = check(&consumer_group, &current_cid, &mq_all, &cid_all);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn check_with_current_cid_not_in_cid_all() {
+        let consumer_group = CheetahString::from("test_group");
+        let current_cid = CheetahString::from("cid_3");
+        let mq_all = vec![MessageQueue::from_parts("test_topic", "broker_a", 0)];
+        let cid_all = vec![CheetahString::from("cid_1"), CheetahString::from("cid_2")];
+        let result = check(&consumer_group, &current_cid, &mq_all, &cid_all);
+        assert!(result.is_ok());
+        assert!(!result.unwrap());
+    }
+}
