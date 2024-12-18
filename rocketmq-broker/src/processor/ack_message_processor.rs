@@ -14,28 +14,43 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#![allow(unused_variables)]
 
+use bytes::Bytes;
 use cheetah_string::CheetahString;
+use rocketmq_common::common::key_builder::POP_ORDER_REVIVE_QUEUE;
+use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_common::common::message::MessageConst;
+use rocketmq_common::common::message::MessageTrait;
+use rocketmq_common::common::pop_ack_constants::PopAckConstants;
 use rocketmq_common::common::FAQUrl;
+use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::body::batch_ack::BatchAck;
 use rocketmq_remoting::protocol::body::batch_ack_message_request_body::BatchAckMessageRequestBody;
 use rocketmq_remoting::protocol::header::ack_message_request_header::AckMessageRequestHeader;
+use rocketmq_remoting::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingDeserializable;
+use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::log_file::MessageStore;
+use rocketmq_store::pop::ack_msg::AckMsg;
+use rocketmq_store::pop::batch_ack_msg::BatchAckMsg;
 
 use crate::broker_error::BrokerError::BrokerCommonError;
 use crate::broker_error::BrokerError::BrokerRemotingError;
+use crate::processor::pop_message_processor::PopMessageProcessor;
+use crate::processor::processor_service::pop_buffer_merge_service::PopBufferMergeService;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
 pub struct AckMessageProcessor<MS> {
     topic_config_manager: TopicConfigManager,
     message_store: ArcMut<MS>,
+    pop_buffer_merge_service: ArcMut<PopBufferMergeService>,
 }
 
 impl<MS> AckMessageProcessor<MS>
@@ -49,6 +64,8 @@ where
         AckMessageProcessor {
             topic_config_manager,
             message_store,
+            /* need to implement PopBufferMergeService */
+            pop_buffer_merge_service: ArcMut::new(PopBufferMergeService),
         }
     }
 
@@ -175,12 +192,194 @@ where
 
     fn append_ack(
         &mut self,
-        _request_header: Option<AckMessageRequestHeader>,
-        _response: &mut RemotingCommand,
-        _batch_ack: Option<BatchAck>,
-        _channel: &Channel,
-        _broker_name: Option<&CheetahString>,
+        request_header: Option<AckMessageRequestHeader>,
+        response: &mut RemotingCommand,
+        batch_ack: Option<BatchAck>,
+        channel: &Channel,
+        broker_name: Option<&CheetahString>,
     ) {
-        unimplemented!("AckMessageProcessor appendAck")
+        let is_batch_ack = request_header.is_none();
+        //handle single ack
+        let (
+            consume_group,
+            topic,
+            qid,
+            r_qid,
+            start_offset,
+            ack_offset,
+            pop_time,
+            invisible_time,
+            ack_count,
+            mut ack_msg,
+            broker_name,
+        ) = if let Some(request_header) = request_header {
+            let extra_info =
+                ExtraInfoUtil::split(request_header.extra_info.as_str()).unwrap_or_default();
+            let broker_name =
+                ExtraInfoUtil::get_broker_name(extra_info.as_slice()).unwrap_or_default();
+            let consume_group = request_header.consumer_group.clone();
+            let topic = request_header.topic.clone();
+            let qid = request_header.queue_id;
+            let r_qid = ExtraInfoUtil::get_revive_qid(extra_info.as_slice()).unwrap_or_default();
+            let start_offset =
+                ExtraInfoUtil::get_ck_queue_offset(extra_info.as_slice()).unwrap_or_default();
+            let ack_offset = request_header.offset;
+            let pop_time = ExtraInfoUtil::get_pop_time(extra_info.as_slice()).unwrap_or_default();
+            let invisible_time =
+                ExtraInfoUtil::get_invisible_time(extra_info.as_slice()).unwrap_or_default();
+            if r_qid == POP_ORDER_REVIVE_QUEUE {
+                self.ack_orderly(
+                    topic,
+                    consume_group,
+                    qid,
+                    ack_offset,
+                    pop_time,
+                    invisible_time,
+                    channel,
+                    response,
+                );
+                return;
+            }
+            let ack = AckMsg::default();
+            let ack_count = 1;
+            (
+                consume_group,
+                topic,
+                qid,
+                r_qid,
+                start_offset,
+                ack_offset,
+                pop_time,
+                invisible_time,
+                ack_count,
+                ack,
+                CheetahString::from(broker_name),
+            )
+        } else {
+            //handle batch ack
+            let batch_ack = batch_ack.unwrap();
+            let consume_group = batch_ack.consumer_group.clone();
+            let topic = CheetahString::from(
+                ExtraInfoUtil::get_real_topic_with_retry(
+                    batch_ack.topic.as_str(),
+                    batch_ack.consumer_group.as_str(),
+                    batch_ack.retry.as_str(),
+                )
+                .unwrap_or_default(),
+            );
+            let qid = batch_ack.queue_id;
+            let r_qid = batch_ack.revive_queue_id;
+            let start_offset = batch_ack.start_offset;
+            let akc_offset = -1;
+            let pop_time = batch_ack.pop_time;
+            let invisible_time = batch_ack.invisible_time;
+            let min_offset = self.message_store.get_min_offset_in_queue(&topic, qid);
+            let max_offset = self.message_store.get_max_offset_in_queue(&topic, qid);
+            if min_offset == -1 || max_offset == -1 {
+                //error!("Illegal topic or queue found when batch ack {:?}", batch_ack);
+                return;
+            }
+
+            let batch_ack_msg = BatchAckMsg::default();
+            //need to ack orderly
+            /*            let bit_set = &batch_ack.bit_set.0;
+            let mut i = bit_set.iter().next();
+            while let Some(bit) = i {
+                let x = bit.;
+                if bit.deref() == u32::MAX {
+                    break;
+                }
+                let offset = start_offset + bit as u64;
+                if offset < min_offset || offset > max_offset {
+                    i = bit_set.iter().next();
+                    continue;
+                }
+                if r_qid == POP_ORDER_REVIVE_QUEUE {
+                    self.ack_orderly(
+                        topic.clone(),
+                        consume_group.clone(),
+                        qid,
+                        offset,
+                        pop_time,
+                        invisible_time,
+                        channel,
+                        response,
+                    );
+                } else {
+                    batch_ack_msg.ack_offset_list.push(offset);
+                }
+                i = bit_set.iter().next();
+            }*/
+            if r_qid == POP_ORDER_REVIVE_QUEUE || batch_ack_msg.ack_offset_list.is_empty() {
+                return;
+            }
+            let ack_count = batch_ack_msg.ack_offset_list.len();
+            let ack = batch_ack_msg.ack_msg;
+            (
+                consume_group,
+                topic,
+                qid,
+                r_qid,
+                start_offset,
+                -1,
+                pop_time,
+                invisible_time,
+                ack_count,
+                ack,
+                broker_name.unwrap().clone(),
+            )
+        };
+
+        //this.brokerController.getBrokerStatsManager().incBrokerAckNums(ackCount);
+        //this.brokerController.getBrokerStatsManager().incGroupAckNums(consumeGroup,topic,
+        // ackCount);
+        ack_msg.consumer_group = consume_group;
+        ack_msg.topic = topic.clone();
+        ack_msg.queue_id = qid;
+        ack_msg.start_offset = start_offset;
+        ack_msg.ack_offset = ack_offset;
+        ack_msg.pop_time = pop_time;
+        ack_msg.broker_name = broker_name;
+        if self.pop_buffer_merge_service.add_ack(r_qid, &ack_msg) {
+            return;
+        }
+        let mut inner = MessageExtBrokerInner::default();
+        inner.set_topic(topic);
+        inner.set_body(Bytes::from(ack_msg.encode().unwrap()));
+        inner.message_ext_inner.queue_id = qid;
+        if is_batch_ack {
+            /*inner.set_tags(CheetahString::from_static_str(
+                PopAckConstants::BATCH_ACK_TAG,
+            ));
+            inner.put_property(
+                CheetahString::from_static_str(
+                    MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
+                ),
+                CheetahString::from(PopMessageProcessor::gen_batch_ack_unique_id()),
+            );*/
+        } else {
+            inner.set_tags(CheetahString::from_static_str(PopAckConstants::ACK_TAG));
+            inner.put_property(
+                CheetahString::from_static_str(
+                    MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
+                ),
+                CheetahString::from(PopMessageProcessor::gen_ack_unique_id(&ack_msg)),
+            );
+        }
+        inner.message_ext_inner.born_timestamp = get_current_millis() as i64;
+    }
+
+    fn ack_orderly(
+        &mut self,
+        topic: CheetahString,
+        consume_group: CheetahString,
+        q_id: i32,
+        ack_offset: i64,
+        pop_time: i64,
+        invisible_time: i64,
+        channel: &Channel,
+        response: &mut RemotingCommand,
+    ) {
+        unimplemented!("ack_orderly")
     }
 }
