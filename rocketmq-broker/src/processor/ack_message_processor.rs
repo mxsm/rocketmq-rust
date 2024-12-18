@@ -21,12 +21,15 @@ use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::body::batch_ack::BatchAck;
+use rocketmq_remoting::protocol::body::batch_ack_message_request_body::BatchAckMessageRequestBody;
 use rocketmq_remoting::protocol::header::ack_message_request_header::AckMessageRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::log_file::MessageStore;
 
+use crate::broker_error::BrokerError::BrokerCommonError;
 use crate::broker_error::BrokerError::BrokerRemotingError;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
@@ -138,26 +141,46 @@ where
                 ),
             ));
         }
-        self.append_ack(Some(request_header), None, channel, None)
+        let mut response = RemotingCommand::create_response_command();
+        self.append_ack(Some(request_header), &mut response, None, &channel, None);
+        Ok(Some(response))
     }
 
     fn process_batch_ack(
         &mut self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
-        _request: RemotingCommand,
+        request: RemotingCommand,
         _broker_allow_suspend: bool,
     ) -> crate::Result<Option<RemotingCommand>> {
-        unimplemented!("AckMessageProcessor process_ack")
+        if request.get_body().is_none() {
+            return Ok(Some(RemotingCommand::create_response_command_with_code(
+                ResponseCode::NoMessage,
+            )));
+        }
+        let req_body = BatchAckMessageRequestBody::decode(request.get_body().unwrap())
+            .map_err(BrokerCommonError)?;
+        if req_body.acks.is_empty() {
+            return Ok(Some(RemotingCommand::create_response_command_with_code(
+                ResponseCode::NoMessage,
+            )));
+        }
+        let mut response = RemotingCommand::create_response_command();
+        let broker_name = &req_body.broker_name;
+        for ack in req_body.acks {
+            self.append_ack(None, &mut response, Some(ack), &_channel, Some(broker_name));
+        }
+        Ok(Some(response))
     }
 
     fn append_ack(
         &mut self,
         _request_header: Option<AckMessageRequestHeader>,
+        _response: &mut RemotingCommand,
         _batch_ack: Option<BatchAck>,
-        _channel: Channel,
-        _broker_name: Option<CheetahString>,
-    ) -> crate::Result<Option<RemotingCommand>> {
+        _channel: &Channel,
+        _broker_name: Option<&CheetahString>,
+    ) {
         unimplemented!("AckMessageProcessor appendAck")
     }
 }
