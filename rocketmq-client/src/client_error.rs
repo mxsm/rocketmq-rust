@@ -41,6 +41,9 @@ pub enum MQClientError {
 
     #[error("{0}")]
     IllegalArgumentError(String),
+
+    #[error("{0}")]
+    CommonError(#[from] rocketmq_common::error::Error),
 }
 
 #[derive(Error, Debug)]
