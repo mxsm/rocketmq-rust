@@ -16,6 +16,7 @@
  */
 
 use std::collections::HashSet;
+use std::error::Error;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -63,6 +64,7 @@ use crate::base::validators::Validators;
 use crate::client_error::ClientErr;
 use crate::client_error::MQClientError;
 use crate::consumer::ack_callback::AckCallback;
+use crate::consumer::ack_result::AckResult;
 use crate::consumer::consumer_impl::consume_message_concurrently_service::ConsumeMessageConcurrentlyService;
 use crate::consumer::consumer_impl::consume_message_orderly_service::ConsumeMessageOrderlyService;
 use crate::consumer::consumer_impl::consume_message_pop_concurrently_service::ConsumeMessagePopConcurrentlyService;
@@ -1431,7 +1433,7 @@ impl DefaultMQPushConsumerImpl {
             error!("The broker[{}] not exist", des_broker_name);
             return;
         }
-
+        let find_broker_result = find_broker_result.unwrap();
         let request_header = AckMessageRequestHeader {
             consumer_group: consumer_group.clone(),
             topic: CheetahString::from_string(
@@ -1449,8 +1451,29 @@ impl DefaultMQPushConsumerImpl {
                 lo: None,
             }),
         };
-        //client_instance.mq_client_api_impl.as_mut().unwrap()
-        unimplemented!("ackAsync");
+        struct DefaultAckCallback;
+        impl AckCallback for DefaultAckCallback {
+            fn on_success(&self, _ack_result: AckResult) {}
+
+            fn on_exception(&self, _e: Box<dyn Error>) {}
+        }
+        match client_instance
+            .mq_client_api_impl
+            .as_mut()
+            .unwrap()
+            .ack_message_async(
+                &find_broker_result.broker_addr,
+                request_header,
+                ASYNC_TIMEOUT,
+                DefaultAckCallback,
+            )
+            .await
+        {
+            Ok(_) => {}
+            Err(e) => {
+                error!("ackAsync error: {}", e);
+            }
+        }
     }
 
     pub(crate) async fn change_pop_invisible_time_async(
