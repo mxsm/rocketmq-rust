@@ -18,3 +18,20 @@
 pub mod ack_msg;
 pub mod batch_ack_msg;
 pub mod pop_check_point;
+
+/// A trait representing an acknowledgment message that can be converted to and from `Any`.
+pub trait AckMessage {
+    /// Converts the acknowledgment message to a reference of type `Any`.
+    ///
+    /// # Returns
+    ///
+    /// A reference to the acknowledgment message as `Any`.
+    fn as_any(&self) -> &dyn std::any::Any;
+
+    /// Converts the acknowledgment message to a mutable reference of type `Any`.
+    ///
+    /// # Returns
+    ///
+    /// A mutable reference to the acknowledgment message as `Any`.
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+}
