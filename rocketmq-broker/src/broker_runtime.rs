@@ -66,6 +66,7 @@ use crate::offset::manager::broadcast_offset_manager::BroadcastOffsetManager;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
 use crate::offset::manager::consumer_order_info_manager::ConsumerOrderInfoManager;
 use crate::out_api::broker_outer_api::BrokerOuterAPI;
+use crate::processor::ack_message_processor::AckMessageProcessor;
 use crate::processor::admin_broker_processor::AdminBrokerProcessor;
 use crate::processor::change_invisible_time_processor::ChangeInvisibleTimeProcessor;
 use crate::processor::client_manage_processor::ClientManageProcessor;
@@ -544,12 +545,16 @@ impl BrokerRuntime {
             self.broker_member_group.clone(),
         );
         let pop_message_processor = ArcMut::new(PopMessageProcessor::default());
+        let ack_message_processor = ArcMut::new(AckMessageProcessor::new(
+            self.topic_config_manager.clone(),
+            self.message_store.as_ref().unwrap().clone(),
+        ));
         BrokerRequestProcessor {
             send_message_processor: ArcMut::new(send_message_processor),
             pull_message_processor,
             peek_message_processor: Default::default(),
             pop_message_processor: pop_message_processor.clone(),
-            ack_message_processor: Default::default(),
+            ack_message_processor,
             change_invisible_time_processor: ArcMut::new(ChangeInvisibleTimeProcessor::new(
                 self.broker_config.clone(),
                 self.topic_config_manager.clone(),
