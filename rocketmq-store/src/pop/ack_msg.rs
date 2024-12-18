@@ -20,6 +20,8 @@ use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::pop::AckMessage;
+
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct AckMsg {
     #[serde(rename = "ao", alias = "ackOffset")]
@@ -42,6 +44,16 @@ pub struct AckMsg {
 
     #[serde(rename = "bn", alias = "brokerName")]
     pub broker_name: CheetahString,
+}
+
+impl AckMessage for AckMsg {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
 }
 
 impl Display for AckMsg {

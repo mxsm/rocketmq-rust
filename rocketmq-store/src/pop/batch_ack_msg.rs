@@ -20,6 +20,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::pop::ack_msg::AckMsg;
+use crate::pop::AckMessage;
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct BatchAckMsg {
@@ -28,6 +29,16 @@ pub struct BatchAckMsg {
 
     #[serde(rename = "aol", alias = "ackOffsetList")]
     pub ack_offset_list: Vec<i64>,
+}
+
+impl AckMessage for BatchAckMsg {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
 }
 
 impl Display for BatchAckMsg {
