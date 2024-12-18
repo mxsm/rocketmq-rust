@@ -51,7 +51,7 @@ pub struct BatchAck {
     #[serde(rename = "b", alias = "bitSet")]
     pub bit_set: SerializableBitVec,
 }
-// 新类型封装
+
 #[derive(Debug, Clone)]
 pub struct SerializableBitVec(pub BitVec<u8, Lsb0>);
 
