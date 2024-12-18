@@ -52,15 +52,15 @@ pub struct BatchAck {
     pub bit_set: SerializableBitVec,
 }
 
-#[derive(Debug, Clone)]
-pub struct SerializableBitVec(pub BitVec<u8, Lsb0>);
+pub struct SerializableBitVec(pub BitVec<u64, Lsb0>);
 
 impl Serialize for SerializableBitVec {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        serializer.serialize_bytes(self.0.as_raw_slice())
+        let slice = bytemuck::cast_slice(self.0.as_raw_slice());
+        serializer.serialize_bytes(slice)
     }
 }
 
@@ -70,7 +70,8 @@ impl<'de> Deserialize<'de> for SerializableBitVec {
         D: Deserializer<'de>,
     {
         let bytes: Vec<u8> = Vec::deserialize(deserializer)?;
-        Ok(SerializableBitVec(BitVec::<u8, Lsb0>::from_vec(bytes)))
+        let inner: &[u64] = bytemuck::cast_slice(bytes.as_slice());
+        Ok(SerializableBitVec(BitVec::<u64, Lsb0>::from_slice(inner)))
     }
 }
 
@@ -84,7 +85,7 @@ mod tests {
 
     #[test]
     fn batch_ack_serialization() {
-        let bit_set = BitVec::from_element(8);
+        let bit_set = BitVec::from_vec(vec![0u64; 8]);
         let batch_ack = BatchAck {
             consumer_group: CheetahString::from("group1"),
             topic: CheetahString::from("topic1"),
