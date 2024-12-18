@@ -1196,8 +1196,8 @@ impl MQClientInstance {
                             &broker_addr,
                             topic.clone(),
                             consumer_group.clone(),
-                            strategy_name.clone(),
                             client_id,
+                            strategy_name.clone(),
                             message_model,
                             timeout,
                         )
