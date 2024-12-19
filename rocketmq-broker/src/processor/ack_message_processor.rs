@@ -76,10 +76,8 @@ where
         escape_bridge: ArcMut<EscapeBridge<MS>>,
         broker_config: Arc<BrokerConfig>,
         pop_inflight_message_counter: Arc<PopInflightMessageCounter>,
+        store_host: SocketAddr,
     ) -> AckMessageProcessor<MS> {
-        let store_host = format!("{}:{}", broker_config.broker_ip1, broker_config.listen_port)
-            .parse::<SocketAddr>()
-            .unwrap();
         AckMessageProcessor {
             topic_config_manager,
             message_store,
