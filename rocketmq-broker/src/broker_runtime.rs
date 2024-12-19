@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -95,6 +96,7 @@ use crate::transaction::transaction_metrics_flush_service::TransactionMetricsFlu
 use crate::transaction::transactional_message_check_service::TransactionalMessageCheckService;
 
 pub(crate) struct BrokerRuntime {
+    store_host: SocketAddr,
     broker_config: Arc<BrokerConfig>,
     message_store_config: Arc<MessageStoreConfig>,
     server_config: Arc<ServerConfig>,
@@ -147,6 +149,7 @@ pub(crate) struct BrokerRuntime {
 impl Clone for BrokerRuntime {
     fn clone(&self) -> Self {
         Self {
+            store_host: self.store_host,
             broker_config: self.broker_config.clone(),
             message_store_config: self.message_store_config.clone(),
             server_config: self.server_config.clone(),
@@ -192,6 +195,9 @@ impl BrokerRuntime {
         message_store_config: MessageStoreConfig,
         server_config: ServerConfig,
     ) -> Self {
+        let store_host = format!("{}:{}", broker_config.broker_ip1, broker_config.listen_port)
+            .parse::<SocketAddr>()
+            .expect("parse store_host failed");
         let broker_config = Arc::new(broker_config);
         let runtime = RocketMQRuntime::new_multi(10, "broker-thread");
         let broker_outer_api =
@@ -250,6 +256,7 @@ impl BrokerRuntime {
             subscription_group_manager.clone(),
         ));
         Self {
+            store_host,
             broker_config: broker_config.clone(),
             message_store_config,
             server_config,
