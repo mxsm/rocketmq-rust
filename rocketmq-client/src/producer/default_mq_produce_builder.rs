@@ -84,11 +84,13 @@ impl DefaultMQProducerBuilder {
         }
     }
 
+    #[inline]
     pub fn client_config(mut self, client_config: ClientConfig) -> Self {
         self.client_config = Some(client_config);
         self
     }
 
+    #[inline]
     pub fn default_mqproducer_impl(
         mut self,
         default_mqproducer_impl: DefaultMQProducerImpl,
@@ -97,21 +99,25 @@ impl DefaultMQProducerBuilder {
         self
     }
 
+    #[inline]
     pub fn retry_response_codes(mut self, retry_response_codes: HashSet<i32>) -> Self {
         self.retry_response_codes = Some(retry_response_codes);
         self
     }
 
+    #[inline]
     pub fn producer_group(mut self, producer_group: impl Into<CheetahString>) -> Self {
         self.producer_group = Some(producer_group.into());
         self
     }
 
+    #[inline]
     pub fn topics(mut self, topics: Vec<CheetahString>) -> Self {
         self.topics = Some(topics);
         self
     }
 
+    #[inline]
     pub fn name_server_addr(mut self, name_server_addr: impl Into<CheetahString>) -> Self {
         if let Some(client_config) = self.client_config.as_mut() {
             client_config.namesrv_addr = Some(name_server_addr.into());
@@ -122,31 +128,37 @@ impl DefaultMQProducerBuilder {
         self
     }
 
+    #[inline]
     pub fn create_topic_key(mut self, create_topic_key: impl Into<CheetahString>) -> Self {
         self.create_topic_key = Some(create_topic_key.into());
         self
     }
 
+    #[inline]
     pub fn default_topic_queue_nums(mut self, default_topic_queue_nums: u32) -> Self {
         self.default_topic_queue_nums = Some(default_topic_queue_nums);
         self
     }
 
+    #[inline]
     pub fn send_msg_timeout(mut self, send_msg_timeout: u32) -> Self {
         self.send_msg_timeout = Some(send_msg_timeout);
         self
     }
 
+    #[inline]
     pub fn compress_msg_body_over_howmuch(mut self, compress_msg_body_over_howmuch: u32) -> Self {
         self.compress_msg_body_over_howmuch = Some(compress_msg_body_over_howmuch);
         self
     }
 
+    #[inline]
     pub fn retry_times_when_send_failed(mut self, retry_times_when_send_failed: u32) -> Self {
         self.retry_times_when_send_failed = Some(retry_times_when_send_failed);
         self
     }
 
+    #[inline]
     pub fn retry_times_when_send_async_failed(
         mut self,
         retry_times_when_send_async_failed: u32,
@@ -155,6 +167,7 @@ impl DefaultMQProducerBuilder {
         self
     }
 
+    #[inline]
     pub fn retry_another_broker_when_not_store_ok(
         mut self,
         retry_another_broker_when_not_store_ok: bool,
@@ -163,11 +176,13 @@ impl DefaultMQProducerBuilder {
         self
     }
 
+    #[inline]
     pub fn max_message_size(mut self, max_message_size: u32) -> Self {
         self.max_message_size = Some(max_message_size);
         self
     }
 
+    #[inline]
     pub fn trace_dispatcher(
         mut self,
         trace_dispatcher: Arc<Box<dyn TraceDispatcher + Send + Sync>>,
@@ -176,16 +191,19 @@ impl DefaultMQProducerBuilder {
         self
     }
 
+    #[inline]
     pub fn auto_batch(mut self, auto_batch: bool) -> Self {
         self.auto_batch = Some(auto_batch);
         self
     }
 
+    #[inline]
     pub fn produce_accumulator(mut self, produce_accumulator: ProduceAccumulator) -> Self {
         self.produce_accumulator = Some(produce_accumulator);
         self
     }
 
+    #[inline]
     pub fn enable_backpressure_for_async_mode(
         mut self,
         enable_backpressure_for_async_mode: bool,
@@ -194,6 +212,7 @@ impl DefaultMQProducerBuilder {
         self
     }
 
+    #[inline]
     pub fn back_pressure_for_async_send_num(
         mut self,
         back_pressure_for_async_send_num: u32,
@@ -202,6 +221,7 @@ impl DefaultMQProducerBuilder {
         self
     }
 
+    #[inline]
     pub fn back_pressure_for_async_send_size(
         mut self,
         back_pressure_for_async_send_size: u32,
@@ -210,21 +230,25 @@ impl DefaultMQProducerBuilder {
         self
     }
 
+    #[inline]
     pub fn rpc_hook(mut self, rpc_hook: Box<dyn RPCHook>) -> Self {
         self.rpc_hook = Some(Arc::new(rpc_hook));
         self
     }
 
+    #[inline]
     pub fn compress_level(mut self, compress_level: i32) -> Self {
         self.compress_level = Some(compress_level);
         self
     }
 
+    #[inline]
     pub fn compress_type(mut self, compress_type: CompressionType) -> Self {
         self.compress_type = Some(compress_type);
         self
     }
 
+    #[inline]
     pub fn compressor(mut self, compressor: Arc<Box<dyn Compressor + Send + Sync>>) -> Self {
         self.compressor = Some(compressor);
         self
