@@ -163,6 +163,7 @@ impl Message {
         message
     }
 
+    #[inline]
     pub fn set_tags(&mut self, tags: CheetahString) {
         self.properties.insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_TAGS),
@@ -170,6 +171,7 @@ impl Message {
         );
     }
 
+    #[inline]
     pub fn set_keys(&mut self, keys: CheetahString) {
         self.properties.insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_KEYS),
@@ -177,42 +179,52 @@ impl Message {
         );
     }
 
+    #[inline]
     pub fn clear_property(&mut self, name: impl Into<CheetahString>) {
         self.properties.remove(name.into().as_str());
     }
 
+    #[inline]
     pub fn set_properties(&mut self, properties: HashMap<CheetahString, CheetahString>) {
         self.properties = properties;
     }
 
+    #[inline]
     pub fn get_property(&self, key: &CheetahString) -> Option<CheetahString> {
         self.properties.get(key).cloned()
     }
 
+    #[inline]
     pub fn body(&self) -> Option<bytes::Bytes> {
         self.body.as_ref().cloned()
     }
 
+    #[inline]
     pub fn flag(&self) -> i32 {
         self.flag
     }
 
+    #[inline]
     pub fn topic(&self) -> &CheetahString {
         &self.topic
     }
 
+    #[inline]
     pub fn properties(&self) -> &HashMap<CheetahString, CheetahString> {
         &self.properties
     }
 
+    #[inline]
     pub fn transaction_id(&self) -> Option<&str> {
         self.transaction_id.as_deref()
     }
 
+    #[inline]
     pub fn get_tags(&self) -> Option<CheetahString> {
         self.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_TAGS))
     }
 
+    #[inline]
     pub fn is_wait_store_msg_ok(&self) -> bool {
         match self.get_property(&CheetahString::from_static_str(
             MessageConst::PROPERTY_WAIT_STORE_MSG_OK,
@@ -222,6 +234,7 @@ impl Message {
         }
     }
 
+    #[inline]
     pub fn get_delay_time_level(&self) -> i32 {
         match self.properties.get(MessageConst::PROPERTY_DELAY_TIME_LEVEL) {
             Some(t) => t.parse::<i32>().unwrap_or(0),
@@ -229,6 +242,7 @@ impl Message {
         }
     }
 
+    #[inline]
     pub fn set_delay_time_level(&mut self, level: i32) {
         self.properties.insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_DELAY_TIME_LEVEL),
@@ -236,14 +250,17 @@ impl Message {
         );
     }
 
+    #[inline]
     pub fn get_user_property(&self, name: impl Into<CheetahString>) -> Option<CheetahString> {
         self.properties.get(name.into().as_str()).cloned()
     }
 
+    #[inline]
     pub fn as_any(&self) -> &dyn Any {
         self
     }
 
+    #[inline]
     pub fn set_instance_id(&mut self, instance_id: impl Into<CheetahString>) {
         self.properties.insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_INSTANCE_ID),
@@ -292,22 +309,27 @@ impl Display for Message {
 
 #[allow(unused_variables)]
 impl MessageTrait for Message {
+    #[inline]
     fn put_property(&mut self, key: CheetahString, value: CheetahString) {
         self.properties.insert(key, value);
     }
 
+    #[inline]
     fn clear_property(&mut self, name: &str) {
         self.properties.remove(name);
     }
 
+    #[inline]
     fn get_property(&self, name: &CheetahString) -> Option<CheetahString> {
         self.properties.get(name).cloned()
     }
 
+    #[inline]
     fn get_topic(&self) -> &CheetahString {
         &self.topic
     }
 
+    #[inline]
     fn set_topic(&mut self, topic: CheetahString) {
         self.topic = topic;
     }
@@ -332,10 +354,12 @@ impl MessageTrait for Message {
         self.body = Some(body);
     }
 
+    #[inline]
     fn get_properties(&self) -> &HashMap<CheetahString, CheetahString> {
         &self.properties
     }
 
+    #[inline]
     fn set_properties(&mut self, properties: HashMap<CheetahString, CheetahString>) {
         self.properties = properties;
     }
@@ -345,26 +369,32 @@ impl MessageTrait for Message {
         self.transaction_id.as_ref()
     }
 
+    #[inline]
     fn set_transaction_id(&mut self, transaction_id: CheetahString) {
         self.transaction_id = Some(transaction_id);
     }
 
+    #[inline]
     fn get_compressed_body_mut(&mut self) -> &mut Option<Bytes> {
         &mut self.compressed_body
     }
 
+    #[inline]
     fn get_compressed_body(&self) -> Option<&Bytes> {
         self.compressed_body.as_ref()
     }
 
+    #[inline]
     fn set_compressed_body_mut(&mut self, compressed_body: Bytes) {
         self.compressed_body = Some(compressed_body);
     }
 
+    #[inline]
     fn as_any(&self) -> &dyn Any {
         self
     }
 
+    #[inline]
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
