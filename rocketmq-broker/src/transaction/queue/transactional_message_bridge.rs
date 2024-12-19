@@ -75,10 +75,8 @@ where
         consumer_offset_manager: ConsumerOffsetManager,
         broker_config: Arc<BrokerConfig>,
         topic_config_manager: TopicConfigManager,
+        store_host: SocketAddr,
     ) -> Self {
-        let store_host = format!("{}:{}", broker_config.broker_ip1, broker_config.listen_port)
-            .parse::<SocketAddr>()
-            .expect("parse store host failed");
         Self {
             op_queue_map: Arc::new(Mutex::new(HashMap::new())),
             message_store,

@@ -473,6 +473,7 @@ impl BrokerRuntime {
             self.transactional_message_service.as_ref().unwrap().clone(),
             self.rebalance_lock_manager.clone(),
             self.broker_stats_manager.clone(),
+            self.store_host,
         );
         let reply_message_processor = ReplyMessageProcessor::new(
             self.topic_queue_mapping_manager.clone(),
@@ -484,6 +485,7 @@ impl BrokerRuntime {
             self.broker_stats_manager.clone(),
             Some(self.producer_manager.clone()),
             self.transactional_message_service.as_ref().unwrap().clone(),
+            self.store_host,
         );
         let mut pull_message_result_handler =
             ArcMut::new(Box::new(DefaultPullMessageResultHandler::new(
@@ -566,6 +568,7 @@ impl BrokerRuntime {
             self.escape_bridge.clone(),
             self.broker_config.clone(),
             self.pop_inflight_message_counter.clone(),
+            self.store_host,
         ));
         BrokerRequestProcessor {
             send_message_processor: ArcMut::new(send_message_processor),
@@ -749,7 +752,8 @@ impl BrokerRuntime {
                     self.broker_stats_manager.clone(),
                     self.consumer_offset_manager.clone(),
                     self.broker_config.clone(),
-                     self.topic_config_manager.clone()
+                    self.topic_config_manager.clone(),
+                    self.store_host
                 );
                 let service = DefaultTransactionalMessageService::new(bridge);
                 self.transactional_message_service = Some(ArcMut::new(service));

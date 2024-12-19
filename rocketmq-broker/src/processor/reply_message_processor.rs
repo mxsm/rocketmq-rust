@@ -73,10 +73,8 @@ where
         broker_stats_manager: Arc<BrokerStatsManager>,
         producer_manager: Option<Arc<ProducerManager>>,
         transactional_message_service: ArcMut<TS>,
+        store_host: SocketAddr,
     ) -> Self {
-        let store_host = format!("{}:{}", broker_config.broker_ip1, broker_config.listen_port)
-            .parse::<SocketAddr>()
-            .unwrap();
         Self {
             inner: Inner {
                 broker_config,

@@ -193,10 +193,8 @@ where
         transactional_message_service: ArcMut<TS>,
         rebalance_lock_manager: Arc<RebalanceLockManager>,
         broker_stats_manager: Arc<BrokerStatsManager>,
+        store_host: SocketAddr,
     ) -> Self {
-        let store_host = format!("{}:{}", broker_config.broker_ip1, broker_config.listen_port)
-            .parse::<SocketAddr>()
-            .unwrap();
         Self {
             inner: ArcMut::new(Inner {
                 broker_config,
