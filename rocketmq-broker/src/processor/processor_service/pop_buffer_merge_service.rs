@@ -15,12 +15,12 @@
  * limitations under the License.
  */
 
-use rocketmq_store::pop::ack_msg::AckMsg;
+use rocketmq_store::pop::AckMessage;
 
 pub(crate) struct PopBufferMergeService;
 
 impl PopBufferMergeService {
-    pub fn add_ack(&mut self, _revive_qid: i32, _ack_msg: &AckMsg) -> bool {
+    pub fn add_ack(&mut self, _revive_qid: i32, _ack_msg: &dyn AckMessage) -> bool {
         unimplemented!("Not implemented yet");
     }
 }
