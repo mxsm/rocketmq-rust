@@ -1003,7 +1003,7 @@ impl MQClientAPIImpl {
                 next_begin_offset: response_header.next_begin_offset as u64,
                 min_offset: response_header.min_offset as u64,
                 max_offset: response_header.max_offset as u64,
-                msg_found_list: vec![],
+                msg_found_list: Some(vec![]),
             },
             suggest_which_broker_id: response_header.suggest_which_broker_id,
             message_binary: response.take_body(),

@@ -77,26 +77,39 @@ impl PullCallback for DefaultPullCallback {
                 /*let pull_rt = get_current_millis() - begin_timestamp.elapsed().as_millis() as u64;
                 self.client_instance.as_mut().unwrap().*/
                 let mut first_msg_offset = i64::MAX;
-                if pull_result_ext.pull_result.msg_found_list.is_empty() {
+                if pull_result_ext
+                    .pull_result
+                    .msg_found_list
+                    .as_ref()
+                    .map_or(true, |v| v.is_empty())
+                {
                     push_consumer_impl
                         .execute_pull_request_immediately(pull_request)
                         .await;
                 } else {
                     first_msg_offset = pull_result_ext
                         .pull_result
-                        .msg_found_list()
+                        .msg_found_list
+                        .as_ref()
+                        .unwrap()
                         .first()
                         .unwrap()
                         .message_ext_inner
                         .queue_offset;
                     let vec = pull_result_ext.pull_result.msg_found_list.clone();
-                    let dispatch_to_consume = pull_request.process_queue.put_message(vec).await;
+                    let dispatch_to_consume = pull_request
+                        .process_queue
+                        .put_message(vec.unwrap_or_default())
+                        .await;
                     push_consumer_impl
                         .consume_message_service
                         .as_mut()
                         .unwrap()
                         .submit_consume_request(
-                            pull_result_ext.pull_result.msg_found_list,
+                            pull_result_ext
+                                .pull_result
+                                .msg_found_list
+                                .unwrap_or_default(),
                             pull_request.get_process_queue().clone(),
                             pull_request.get_message_queue().clone(),
                             dispatch_to_consume,
