@@ -14,20 +14,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 
-pub struct RunningFlags {
-    flag_bits: AtomicU32,
-}
+// Bit flags to represent different states
+const NOT_READABLE_BIT: i32 = 1;
+const NOT_WRITEABLE_BIT: i32 = 1 << 1;
+const WRITE_LOGICS_QUEUE_ERROR_BIT: i32 = 1 << 2;
+const WRITE_INDEX_FILE_ERROR_BIT: i32 = 1 << 3;
+const DISK_FULL_BIT: i32 = 1 << 4;
+const FENCED_BIT: i32 = 1 << 5;
+const LOGIC_DISK_FULL_BIT: i32 = 1 << 6;
 
-const NOT_READABLE_BIT: u32 = 1;
-const NOT_WRITEABLE_BIT: u32 = 1 << 1;
-const WRITE_LOGICS_QUEUE_ERROR_BIT: u32 = 1 << 2;
-const WRITE_INDEX_FILE_ERROR_BIT: u32 = 1 << 3;
-const DISK_FULL_BIT: u32 = 1 << 4;
-const FENCED_BIT: u32 = 1 << 5;
-const LOGIC_DISK_FULL_BIT: u32 = 1 << 6;
+/// `RunningFlags` is a structure to manage various states using bit flags.
+/// The state is represented by an `AtomicI32` to ensure thread safety.
+pub struct RunningFlags {
+    flag_bits: AtomicI32,
+}
 
 impl Default for RunningFlags {
     fn default() -> Self {
@@ -36,126 +39,162 @@ impl Default for RunningFlags {
 }
 
 impl RunningFlags {
+    /// Creates a new instance of `RunningFlags` with all flags set to 0.
     pub fn new() -> Self {
-        Self {
-            flag_bits: AtomicU32::new(0),
+        RunningFlags {
+            flag_bits: AtomicI32::new(0),
         }
     }
 
-    pub fn get_flag_bits(&self) -> u32 {
-        self.flag_bits.load(Ordering::Acquire)
+    /// Returns the current value of the flag bits.
+    pub fn get_flag_bits(&self) -> i32 {
+        self.flag_bits.load(Ordering::SeqCst)
     }
 
+    /// Checks if the state is readable and makes it readable if it is not.
+    /// Returns the previous state of readability.
     pub fn get_and_make_readable(&self) -> bool {
         let result = self.is_readable();
         if !result {
             self.flag_bits
-                .fetch_and(!(NOT_READABLE_BIT), Ordering::AcqRel);
+                .fetch_and(!NOT_READABLE_BIT, Ordering::SeqCst);
         }
         result
     }
 
+    /// Returns true if the state is readable.
     pub fn is_readable(&self) -> bool {
-        self.flag_bits.load(Ordering::Acquire) & NOT_READABLE_BIT == 0
+        (self.flag_bits.load(Ordering::SeqCst) & NOT_READABLE_BIT) == 0
     }
 
+    /// Returns true if the state is fenced.
     pub fn is_fenced(&self) -> bool {
-        self.flag_bits.load(Ordering::Acquire) & FENCED_BIT != 0
+        (self.flag_bits.load(Ordering::SeqCst) & FENCED_BIT) != 0
     }
 
+    /// Checks if the state is readable and makes it not readable if it is.
+    /// Returns the previous state of readability.
     pub fn get_and_make_not_readable(&self) -> bool {
         let result = self.is_readable();
         if result {
-            self.flag_bits.fetch_or(NOT_READABLE_BIT, Ordering::AcqRel);
+            self.flag_bits.fetch_or(NOT_READABLE_BIT, Ordering::SeqCst);
         }
         result
     }
 
+    /// Clears the logics queue error flag.
     pub fn clear_logics_queue_error(&self) {
         self.flag_bits
-            .fetch_and(!(WRITE_LOGICS_QUEUE_ERROR_BIT), Ordering::AcqRel);
+            .fetch_and(!WRITE_LOGICS_QUEUE_ERROR_BIT, Ordering::SeqCst);
     }
 
+    /// Checks if the state is writeable and makes it writeable if it is not.
+    /// Returns the previous state of writeability.
     pub fn get_and_make_writeable(&self) -> bool {
         let result = self.is_writeable();
         if !result {
             self.flag_bits
-                .fetch_and(!(NOT_WRITEABLE_BIT), Ordering::AcqRel);
+                .fetch_and(!NOT_WRITEABLE_BIT, Ordering::SeqCst);
         }
         result
     }
 
+    /// Returns true if the state is writeable.
     pub fn is_writeable(&self) -> bool {
-        let flags = self.flag_bits.load(Ordering::Acquire);
-        flags & 0b0011110 == 0
+        (self.flag_bits.load(Ordering::SeqCst)
+            & (NOT_WRITEABLE_BIT
+                | WRITE_LOGICS_QUEUE_ERROR_BIT
+                | DISK_FULL_BIT
+                | WRITE_INDEX_FILE_ERROR_BIT
+                | FENCED_BIT
+                | LOGIC_DISK_FULL_BIT))
+            == 0
     }
 
+    /// Returns true if the consume queue is writeable.
+    /// Ignores the disk full bit.
     pub fn is_cq_writeable(&self) -> bool {
-        let flags = self.flag_bits.load(Ordering::Acquire);
-        flags & 0b0011100 == 0
+        (self.flag_bits.load(Ordering::SeqCst)
+            & (NOT_WRITEABLE_BIT
+                | WRITE_LOGICS_QUEUE_ERROR_BIT
+                | WRITE_INDEX_FILE_ERROR_BIT
+                | LOGIC_DISK_FULL_BIT))
+            == 0
     }
 
+    /// Checks if the state is writeable and makes it not writeable if it is.
+    /// Returns the previous state of writeability.
     pub fn get_and_make_not_writeable(&self) -> bool {
         let result = self.is_writeable();
         if result {
-            self.flag_bits.fetch_or(NOT_WRITEABLE_BIT, Ordering::AcqRel);
+            self.flag_bits.fetch_or(NOT_WRITEABLE_BIT, Ordering::SeqCst);
         }
         result
     }
 
+    /// Sets the logics queue error flag.
     pub fn make_logics_queue_error(&self) {
         self.flag_bits
-            .fetch_or(WRITE_LOGICS_QUEUE_ERROR_BIT, Ordering::AcqRel);
+            .fetch_or(WRITE_LOGICS_QUEUE_ERROR_BIT, Ordering::SeqCst);
     }
 
+    /// Sets or clears the fenced flag based on the input parameter.
     pub fn make_fenced(&self, fenced: bool) {
         if fenced {
-            self.flag_bits.fetch_or(FENCED_BIT, Ordering::AcqRel);
+            self.flag_bits.fetch_or(FENCED_BIT, Ordering::SeqCst);
         } else {
-            self.flag_bits.fetch_and(!(FENCED_BIT), Ordering::AcqRel);
+            self.flag_bits.fetch_and(!FENCED_BIT, Ordering::SeqCst);
         }
     }
 
+    /// Returns true if the logics queue error flag is set.
     pub fn is_logics_queue_error(&self) -> bool {
-        let flags = self.flag_bits.load(Ordering::Acquire);
-        flags & WRITE_LOGICS_QUEUE_ERROR_BIT != 0
+        (self.flag_bits.load(Ordering::SeqCst) & WRITE_LOGICS_QUEUE_ERROR_BIT)
+            == WRITE_LOGICS_QUEUE_ERROR_BIT
     }
 
+    /// Sets the index file error flag.
     pub fn make_index_file_error(&self) {
         self.flag_bits
-            .fetch_or(WRITE_INDEX_FILE_ERROR_BIT, Ordering::AcqRel);
+            .fetch_or(WRITE_INDEX_FILE_ERROR_BIT, Ordering::SeqCst);
     }
 
+    /// Returns true if the index file error flag is set.
     pub fn is_index_file_error(&self) -> bool {
-        let flags = self.flag_bits.load(Ordering::Acquire);
-        flags & WRITE_INDEX_FILE_ERROR_BIT != 0
+        (self.flag_bits.load(Ordering::SeqCst) & WRITE_INDEX_FILE_ERROR_BIT)
+            == WRITE_INDEX_FILE_ERROR_BIT
     }
 
+    /// Sets the disk full flag and returns true if the disk was not full before.
     pub fn get_and_make_disk_full(&self) -> bool {
-        let result = (self.flag_bits.fetch_and(!(DISK_FULL_BIT), Ordering::AcqRel)) == 0;
-        self.flag_bits.fetch_or(DISK_FULL_BIT, Ordering::AcqRel);
+        let result = (self.flag_bits.load(Ordering::SeqCst) & DISK_FULL_BIT) != DISK_FULL_BIT;
+        self.flag_bits.fetch_or(DISK_FULL_BIT, Ordering::SeqCst);
         result
     }
 
+    /// Clears the disk full flag and returns true if the disk was full before.
     pub fn get_and_make_disk_ok(&self) -> bool {
-        (self.flag_bits.fetch_and(!(DISK_FULL_BIT), Ordering::AcqRel)) == 0
-    }
-
-    pub fn get_and_make_logic_disk_full(&self) -> bool {
-        let result = (self
-            .flag_bits
-            .fetch_and(!(LOGIC_DISK_FULL_BIT), Ordering::AcqRel))
-            == 0;
-        self.flag_bits
-            .fetch_or(LOGIC_DISK_FULL_BIT, Ordering::AcqRel);
+        let result = (self.flag_bits.load(Ordering::SeqCst) & DISK_FULL_BIT) != DISK_FULL_BIT;
+        self.flag_bits.fetch_and(!DISK_FULL_BIT, Ordering::SeqCst);
         result
     }
 
+    /// Sets the logic disk full flag and returns true if the logic disk was not full before.
+    pub fn get_and_make_logic_disk_full(&self) -> bool {
+        let result =
+            (self.flag_bits.load(Ordering::SeqCst) & LOGIC_DISK_FULL_BIT) != LOGIC_DISK_FULL_BIT;
+        self.flag_bits
+            .fetch_or(LOGIC_DISK_FULL_BIT, Ordering::SeqCst);
+        result
+    }
+
+    /// Clears the logic disk full flag and returns true if the logic disk was full before.
     pub fn get_and_make_logic_disk_ok(&self) -> bool {
-        (self
-            .flag_bits
-            .fetch_and(!(LOGIC_DISK_FULL_BIT), Ordering::AcqRel))
-            == 0
+        let result =
+            (self.flag_bits.load(Ordering::SeqCst) & LOGIC_DISK_FULL_BIT) != LOGIC_DISK_FULL_BIT;
+        self.flag_bits
+            .fetch_and(!LOGIC_DISK_FULL_BIT, Ordering::SeqCst);
+        result
     }
 }
 
