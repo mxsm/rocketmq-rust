@@ -23,7 +23,13 @@ jobs:
             // Get PR creator's username
             const prCreator = context.payload.pull_request.user.login;
             
-            const commentBody = `🔊@${prCreator} 🚀Thanks for your contribution 🎉. CodeRabbit(AI) will review your code first 🔥`;
+            const commentBody = `
+            🔊@${prCreator} 
+            🚀Thanks for your contribution🎉！
+            💡CodeRabbit(AI) will review your code first🔥！
+
+            > Note💥🚨:The code review suggestions from CodeRabbit are to be used as a reference only, and the PR submitter can decide whether to make changes based on their own judgment. Ultimately, the project management personnel will conduct the final code review.
+            `;
             github.rest.issues.createComment({
               owner,
               repo,
