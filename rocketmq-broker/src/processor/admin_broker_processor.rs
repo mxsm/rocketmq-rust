@@ -75,6 +75,7 @@ impl AdminBrokerProcessor {
         broker_stats_manager: Arc<BrokerStatsManager>,
         rebalance_lock_manager: Arc<RebalanceLockManager>,
         broker_member_group: Arc<BrokerMemberGroup>,
+        pop_inflight_message_counter: Arc<PopInflightMessageCounter>,
     ) -> Self {
         let inner = Inner {
             broker_config,
@@ -84,7 +85,7 @@ impl AdminBrokerProcessor {
             consumer_offset_manager,
             topic_queue_mapping_manager,
             default_message_store,
-            pop_inflight_message_counter: Arc::new(PopInflightMessageCounter),
+            pop_inflight_message_counter,
             schedule_message_service,
             broker_stats,
             consume_manager,

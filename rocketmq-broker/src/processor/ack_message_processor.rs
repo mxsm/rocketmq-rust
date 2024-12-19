@@ -52,6 +52,7 @@ use tracing::error;
 use crate::broker_error::BrokerError::BrokerCommonError;
 use crate::broker_error::BrokerError::BrokerRemotingError;
 use crate::failover::escape_bridge::EscapeBridge;
+use crate::processor::pop_inflight_message_counter::PopInflightMessageCounter;
 use crate::processor::pop_message_processor::PopMessageProcessor;
 use crate::processor::processor_service::pop_buffer_merge_service::PopBufferMergeService;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
@@ -62,6 +63,7 @@ pub struct AckMessageProcessor<MS> {
     pop_buffer_merge_service: ArcMut<PopBufferMergeService>,
     escape_bridge: ArcMut<EscapeBridge<MS>>,
     store_host: SocketAddr,
+    pop_inflight_message_counter: Arc<PopInflightMessageCounter>,
 }
 
 impl<MS> AckMessageProcessor<MS>
@@ -73,6 +75,7 @@ where
         message_store: ArcMut<MS>,
         escape_bridge: ArcMut<EscapeBridge<MS>>,
         broker_config: Arc<BrokerConfig>,
+        pop_inflight_message_counter: Arc<PopInflightMessageCounter>,
     ) -> AckMessageProcessor<MS> {
         let store_host = format!("{}:{}", broker_config.broker_ip1, broker_config.listen_port)
             .parse::<SocketAddr>()
@@ -84,6 +87,7 @@ where
             pop_buffer_merge_service: ArcMut::new(PopBufferMergeService),
             escape_bridge,
             store_host,
+            pop_inflight_message_counter,
         }
     }
 
@@ -353,7 +357,7 @@ where
         //this.brokerController.getBrokerStatsManager().incBrokerAckNums(ackCount);
         //this.brokerController.getBrokerStatsManager().incGroupAckNums(consumeGroup,topic,
         // ackCount);
-        ack_msg.set_consumer_group(consume_group);
+        ack_msg.set_consumer_group(consume_group.clone());
         ack_msg.set_topic(topic.clone());
         ack_msg.set_queue_id(qid);
         ack_msg.set_start_offset(start_offset);
@@ -367,7 +371,7 @@ where
             return;
         }
         let mut inner = MessageExtBrokerInner::default();
-        inner.set_topic(topic);
+        inner.set_topic(topic.clone());
         inner.message_ext_inner.queue_id = qid;
         if let Some(batch_ack) = ack_msg.as_any().downcast_ref::<BatchAckMsg>() {
             inner.set_body(Bytes::from(batch_ack.encode().unwrap()));
@@ -417,6 +421,14 @@ where
                 );
             }
         }
+        self.pop_inflight_message_counter
+            .decrement_in_flight_message_num(
+                &topic,
+                &consume_group,
+                pop_time,
+                qid,
+                ack_count as i64,
+            );
     }
 
     fn ack_orderly(
