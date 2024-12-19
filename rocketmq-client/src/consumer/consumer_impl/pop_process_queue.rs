@@ -143,7 +143,7 @@ mod tests {
 
     #[test]
     fn pop_process_queue_updates_last_pop_timestamp() {
-        let mut queue = PopProcessQueue::new();
+        let queue = PopProcessQueue::new();
         let new_timestamp = queue.get_last_pop_timestamp() + 1000;
         queue.set_last_pop_timestamp(new_timestamp);
         assert_eq!(queue.get_last_pop_timestamp(), new_timestamp);
@@ -181,7 +181,7 @@ mod tests {
 
     #[test]
     fn pop_process_queue_detects_pull_expired() {
-        let mut queue = PopProcessQueue::new();
+        let queue = PopProcessQueue::new();
         queue.set_last_pop_timestamp(queue.get_last_pop_timestamp() - *PULL_MAX_IDLE_TIME - 1);
         assert!(queue.is_pull_expired());
     }
