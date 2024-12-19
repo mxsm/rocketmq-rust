@@ -548,6 +548,8 @@ impl BrokerRuntime {
         let ack_message_processor = ArcMut::new(AckMessageProcessor::new(
             self.topic_config_manager.clone(),
             self.message_store.as_ref().unwrap().clone(),
+            self.escape_bridge.clone(),
+            self.broker_config.clone(),
         ));
         BrokerRequestProcessor {
             send_message_processor: ArcMut::new(send_message_processor),

@@ -27,9 +27,9 @@ use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_store::pop::ack_msg::AckMsg;
 use rocketmq_store::pop::batch_ack_msg::BatchAckMsg;
 use rocketmq_store::pop::pop_check_point::PopCheckPoint;
+use rocketmq_store::pop::AckMessage;
 use tokio::sync::Mutex;
 use tracing::info;
 
@@ -53,20 +53,20 @@ impl PopMessageProcessor {
 }
 
 impl PopMessageProcessor {
-    pub fn gen_ack_unique_id(ack_msg: &AckMsg) -> String {
+    pub fn gen_ack_unique_id(ack_msg: &dyn AckMessage) -> String {
         format!(
             "{}{}{}{}{}{}{}{}{}{}{}{}{}",
-            ack_msg.topic,
+            ack_msg.topic(),
             PopAckConstants::SPLIT,
-            ack_msg.queue_id,
+            ack_msg.queue_id(),
             PopAckConstants::SPLIT,
-            ack_msg.ack_offset,
+            ack_msg.ack_offset(),
             PopAckConstants::SPLIT,
-            ack_msg.consumer_group,
+            ack_msg.consumer_group(),
             PopAckConstants::SPLIT,
-            ack_msg.pop_time,
+            ack_msg.pop_time(),
             PopAckConstants::SPLIT,
-            ack_msg.broker_name,
+            ack_msg.broker_name(),
             PopAckConstants::SPLIT,
             PopAckConstants::ACK_TAG
         )
@@ -232,6 +232,7 @@ impl QueueLockManager {
 #[cfg(test)]
 mod tests {
     use cheetah_string::CheetahString;
+    use rocketmq_store::pop::ack_msg::AckMsg;
 
     use super::*;
 
