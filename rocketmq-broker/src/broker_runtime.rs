@@ -74,6 +74,7 @@ use crate::processor::client_manage_processor::ClientManageProcessor;
 use crate::processor::consumer_manage_processor::ConsumerManageProcessor;
 use crate::processor::default_pull_message_result_handler::DefaultPullMessageResultHandler;
 use crate::processor::end_transaction_processor::EndTransactionProcessor;
+use crate::processor::pop_inflight_message_counter::PopInflightMessageCounter;
 use crate::processor::pop_message_processor::PopMessageProcessor;
 use crate::processor::processor_service::pop_buffer_merge_service::PopBufferMergeService;
 use crate::processor::pull_message_processor::PullMessageProcessor;
@@ -144,6 +145,7 @@ pub(crate) struct BrokerRuntime {
     topic_route_info_manager: Arc<TopicRouteInfoManager>,
     #[cfg(feature = "local_file_store")]
     escape_bridge: ArcMut<EscapeBridge<DefaultMessageStore>>,
+    pop_inflight_message_counter: Arc<PopInflightMessageCounter>,
 }
 
 impl Clone for BrokerRuntime {
@@ -185,6 +187,7 @@ impl Clone for BrokerRuntime {
             transaction_metrics_flush_service: None,
             topic_route_info_manager: self.topic_route_info_manager.clone(),
             escape_bridge: self.escape_bridge.clone(),
+            pop_inflight_message_counter: self.pop_inflight_message_counter.clone(),
         }
     }
 }
@@ -255,6 +258,9 @@ impl BrokerRuntime {
             Arc::new(topic_config_manager.clone()),
             subscription_group_manager.clone(),
         ));
+        let should_start_time = Arc::new(AtomicU64::new(0));
+        let pop_inflight_message_counter =
+            Arc::new(PopInflightMessageCounter::new(should_start_time.clone()));
         Self {
             store_host,
             broker_config: broker_config.clone(),
@@ -281,7 +287,7 @@ impl BrokerRuntime {
             broker_stats_manager,
             topic_queue_mapping_clean_service: None,
             update_master_haserver_addr_periodically: false,
-            should_start_time: Arc::new(AtomicU64::new(0)),
+            should_start_time,
             is_isolated: Arc::new(AtomicBool::new(false)),
             pull_request_hold_service: None,
             rebalance_lock_manager: Arc::new(Default::default()),
@@ -292,6 +298,7 @@ impl BrokerRuntime {
             transaction_metrics_flush_service: None,
             topic_route_info_manager,
             escape_bridge,
+            pop_inflight_message_counter,
         }
     }
 
@@ -550,6 +557,7 @@ impl BrokerRuntime {
             self.broker_stats_manager.clone(),
             self.rebalance_lock_manager.clone(),
             self.broker_member_group.clone(),
+            self.pop_inflight_message_counter.clone(),
         );
         let pop_message_processor = ArcMut::new(PopMessageProcessor::default());
         let ack_message_processor = ArcMut::new(AckMessageProcessor::new(
@@ -557,6 +565,7 @@ impl BrokerRuntime {
             self.message_store.as_ref().unwrap().clone(),
             self.escape_bridge.clone(),
             self.broker_config.clone(),
+            self.pop_inflight_message_counter.clone(),
         ));
         BrokerRequestProcessor {
             send_message_processor: ArcMut::new(send_message_processor),
