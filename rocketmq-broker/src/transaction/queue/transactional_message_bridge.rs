@@ -212,11 +212,13 @@ where
                 next_begin_offset: get_message_result.next_begin_offset() as u64,
                 min_offset: get_message_result.min_offset() as u64,
                 max_offset: get_message_result.max_offset() as u64,
-                msg_found_list: msg_found_list
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(ArcMut::new)
-                    .collect(),
+                msg_found_list: Some(
+                    msg_found_list
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(ArcMut::new)
+                        .collect(),
+                ),
             })
         } else {
             error!(

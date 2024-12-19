@@ -200,11 +200,12 @@ impl PullAPIWrapper {
                     msg.message_ext_inner.queue_offset += offset_delta;
                 }
             }
-
-            pull_result_ext.pull_result.msg_found_list = msg_list_filter_again
-                .into_iter()
-                .map(ArcMut::new)
-                .collect::<Vec<_>>();
+            pull_result_ext.pull_result.msg_found_list = Some(
+                msg_list_filter_again
+                    .into_iter()
+                    .map(ArcMut::new)
+                    .collect::<Vec<_>>(),
+            );
         }
     }
 
