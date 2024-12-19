@@ -16,6 +16,7 @@
  */
 use std::fmt::Display;
 
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -32,6 +33,61 @@ pub struct BatchAckMsg {
 }
 
 impl AckMessage for BatchAckMsg {
+    fn ack_offset(&self) -> i64 {
+        self.ack_msg.ack_offset
+    }
+
+    fn set_ack_offset(&mut self, ack_offset: i64) {
+        self.ack_msg.ack_offset = ack_offset;
+    }
+
+    fn start_offset(&self) -> i64 {
+        self.ack_msg.start_offset
+    }
+
+    fn set_start_offset(&mut self, start_offset: i64) {
+        self.ack_msg.start_offset = start_offset;
+    }
+
+    fn consumer_group(&self) -> &CheetahString {
+        &self.ack_msg.consumer_group
+    }
+
+    fn set_consumer_group(&mut self, consumer_group: CheetahString) {
+        self.ack_msg.consumer_group = consumer_group;
+    }
+
+    fn topic(&self) -> &CheetahString {
+        &self.ack_msg.topic
+    }
+
+    fn set_topic(&mut self, topic: CheetahString) {
+        self.ack_msg.topic = topic;
+    }
+
+    fn queue_id(&self) -> i32 {
+        self.ack_msg.queue_id
+    }
+
+    fn set_queue_id(&mut self, queue_id: i32) {
+        self.ack_msg.queue_id = queue_id;
+    }
+
+    fn pop_time(&self) -> i64 {
+        self.ack_msg.pop_time
+    }
+
+    fn set_pop_time(&mut self, pop_time: i64) {
+        self.ack_msg.pop_time = pop_time;
+    }
+
+    fn broker_name(&self) -> &CheetahString {
+        &self.ack_msg.broker_name
+    }
+
+    fn set_broker_name(&mut self, broker_name: CheetahString) {
+        self.ack_msg.broker_name = broker_name;
+    }
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
