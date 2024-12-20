@@ -156,16 +156,31 @@ where
     /// This function logs errors if the allocation strategy is not set or if the query assignment
     /// fails.
     async fn try_query_assignment(&mut self, topic: &CheetahString) -> bool {
-        let topic_client_rebalance = self.topic_client_rebalance.read().await;
-        if topic_client_rebalance.contains_key(topic) {
-            return false;
+        let client_instance = match self.client_instance.as_mut() {
+            Some(instance) => instance,
+            None => {
+                error!("tryQueryAssignment error, client_instance is None.");
+                return false;
+            }
+        };
+
+        // Check topic_client_rebalance
+        {
+            let topic_client_rebalance = self.topic_client_rebalance.read().await;
+            if topic_client_rebalance.contains_key(topic) {
+                return false;
+            }
         }
-        drop(topic_client_rebalance);
-        let topic_broker_rebalance = self.topic_broker_rebalance.read().await;
-        if topic_broker_rebalance.contains_key(topic) {
-            return true;
+
+        // Check topic_broker_rebalance
+        {
+            let topic_broker_rebalance = self.topic_broker_rebalance.read().await;
+            if topic_broker_rebalance.contains_key(topic) {
+                return true;
+            }
         }
-        drop(topic_broker_rebalance);
+
+        // Get strategy name
         let strategy_name = if let Some(strategy) = &self.allocate_message_queue_strategy {
             CheetahString::from_static_str(strategy.get_name())
         } else {
@@ -173,17 +188,17 @@ where
             return false;
         };
 
+        // Retry query assignment
         for retry_times in 1..=TIMEOUT_CHECK_TIMES {
-            match self
-                .client_instance
-                .as_mut()
-                .unwrap()
+            let timeout =
+                QUERY_ASSIGNMENT_TIMEOUT / (TIMEOUT_CHECK_TIMES as u64) * (retry_times as u64);
+            match client_instance
                 .query_assignment(
                     topic,
                     self.consumer_group.as_ref().unwrap(),
                     &strategy_name,
                     self.message_model.unwrap(),
-                    QUERY_ASSIGNMENT_TIMEOUT / (TIMEOUT_CHECK_TIMES as u64) * (retry_times as u64),
+                    timeout,
                 )
                 .await
             {
@@ -193,7 +208,9 @@ where
                     return true;
                 }
                 Err(e) => match e {
-                    MQClientError::RequestTimeoutError(_) => {}
+                    MQClientError::RequestTimeoutError(_) => {
+                        // Continue to retry on timeout errors
+                    }
                     _ => {
                         error!("tryQueryAssignment error {}.", e);
                         let mut topic_client_rebalance = self.topic_client_rebalance.write().await;
@@ -203,10 +220,10 @@ where
                 },
             }
         }
-        self.topic_client_rebalance
-            .write()
-            .await
-            .insert(topic.clone(), topic.clone());
+
+        // Insert into topic_client_rebalance after all retries
+        let mut topic_client_rebalance = self.topic_client_rebalance.write().await;
+        topic_client_rebalance.insert(topic.clone(), topic.clone());
         false
     }
 
