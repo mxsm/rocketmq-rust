@@ -569,6 +569,9 @@ impl BrokerRuntime {
             self.broker_config.clone(),
             self.pop_inflight_message_counter.clone(),
             self.store_host,
+            Arc::new(self.consumer_offset_manager.clone()),
+            pop_message_processor.clone(),
+            self.consumer_order_info_manager.clone(),
         ));
         BrokerRequestProcessor {
             send_message_processor: ArcMut::new(send_message_processor),

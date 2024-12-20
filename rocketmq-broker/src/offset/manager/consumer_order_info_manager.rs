@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#![allow(unused_variables)]
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -240,6 +241,28 @@ impl<MS> ConsumerOrderInfoManager<MS> {
         _order_info: &OrderInfo,
     ) {
         unimplemented!("")
+    }
+
+    pub fn commit_and_next(
+        &self,
+        topic: &CheetahString,
+        group: &CheetahString,
+        queue_id: i32,
+        queue_offset: u64,
+        pop_time: u64,
+    ) -> i64 {
+        unimplemented!()
+    }
+
+    pub fn check_block(
+        &self,
+        attempt_id: &CheetahString,
+        topic: &CheetahString,
+        group: &CheetahString,
+        queue_id: i32,
+        invisible_time: u64,
+    ) -> bool {
+        unimplemented!()
     }
 }
 

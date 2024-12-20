@@ -50,6 +50,19 @@ impl PopMessageProcessor {
     pub fn queue_lock_manager(&self) -> &QueueLockManager {
         unimplemented!("PopMessageProcessor QueueLockManager")
     }
+
+    pub fn notify_message_arriving(
+        &self,
+        topic: &CheetahString,
+        queue_id: i32,
+        cid: &CheetahString,
+    ) {
+        info!(
+            "notifyMessageArriving topic={} queueId={} cid={}",
+            topic, queue_id, cid
+        );
+        unimplemented!("PopMessageProcessor notify_message_arriving")
+    }
 }
 
 impl PopMessageProcessor {
