@@ -91,7 +91,22 @@ where
         msg: MessageExt,
         broker_name: Option<CheetahString>,
     ) -> ConsumeMessageDirectlyResult {
-        unimplemented!("ConsumeMessageServiceGeneral not support consume_message_directly")
+        if let Some(consume_message_concurrently_service) =
+            &self.consume_message_concurrently_service
+        {
+            let this = consume_message_concurrently_service.clone();
+            consume_message_concurrently_service
+                .consume_message_directly(msg, broker_name)
+                .await
+        } else if let Some(consume_message_orderly_service) = &self.consume_message_orderly_service
+        {
+            let this = consume_message_orderly_service.clone();
+            consume_message_orderly_service
+                .consume_message_directly(msg, broker_name)
+                .await
+        } else {
+            unimplemented!("ConsumeMessageServiceGeneral not support consume_message_directly")
+        }
     }
 
     pub async fn submit_consume_request(
@@ -209,7 +224,23 @@ where
         msg: MessageExt,
         broker_name: Option<CheetahString>,
     ) -> ConsumeMessageDirectlyResult {
-        todo!()
+        if let Some(consume_message_pop_concurrently_service) =
+            &self.consume_message_pop_concurrently_service
+        {
+            let this = consume_message_pop_concurrently_service.clone();
+            consume_message_pop_concurrently_service
+                .consume_message_directly(msg, broker_name)
+                .await
+        } else if let Some(consume_message_pop_orderly_service) =
+            &self.consume_message_pop_orderly_service
+        {
+            let this = consume_message_pop_orderly_service.clone();
+            consume_message_pop_orderly_service
+                .consume_message_directly(msg, broker_name)
+                .await
+        } else {
+            unimplemented!("ConsumeMessagePopServiceGeneral not support consume_message_directly")
+        }
     }
 
     pub async fn submit_consume_request(
