@@ -93,11 +93,11 @@ mod tests {
             keys: CheetahString::from("keys"),
             store_host: CheetahString::from("127.0.0.1"),
             client_host: CheetahString::from("127.0.0.1"),
-            cost_time: 123456789,
+            cost_time: 1734784743,
             msg_type: Some(MessageType::NormalMsg),
             offset_msg_id: CheetahString::from("offset_msg_id"),
-            time_stamp: 123456789,
-            born_time: 123456789,
+            time_stamp: 1734784743,
+            born_time: 1734784743,
             topic: CheetahString::from("topic"),
             group_name: CheetahString::from("group"),
             status: CheetahString::from("status"),
@@ -107,14 +107,14 @@ mod tests {
         assert_eq!(trace_view.keys, CheetahString::from("keys"));
         assert_eq!(trace_view.store_host, CheetahString::from("127.0.0.1"));
         assert_eq!(trace_view.client_host, CheetahString::from("127.0.0.1"));
-        assert_eq!(trace_view.cost_time, 123456789);
+        assert_eq!(trace_view.cost_time, 1734784743);
         assert_eq!(trace_view.msg_type, Some(MessageType::NormalMsg));
         assert_eq!(
             trace_view.offset_msg_id,
             CheetahString::from("offset_msg_id")
         );
-        assert_eq!(trace_view.time_stamp, 123456789);
-        assert_eq!(trace_view.born_time, 123456789);
+        assert_eq!(trace_view.time_stamp, 1734784743);
+        assert_eq!(trace_view.born_time, 1734784743);
         assert_eq!(trace_view.topic, CheetahString::from("topic"));
         assert_eq!(trace_view.group_name, CheetahString::from("group"));
         assert_eq!(trace_view.status, CheetahString::from("status"));
