@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::message::message_client_ext::MessageClientExt;
+use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_rust::ArcMut;
 
@@ -27,7 +27,7 @@ use crate::base::access_channel::AccessChannel;
 #[derive(Default)]
 pub struct ConsumeMessageContext<'a> {
     pub consumer_group: CheetahString,
-    pub msg_list: &'a [ArcMut<MessageClientExt>],
+    pub msg_list: &'a [ArcMut<MessageExt>],
     pub mq: Option<MessageQueue>,
     pub success: bool,
     pub status: CheetahString,

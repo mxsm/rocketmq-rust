@@ -27,7 +27,6 @@ use cheetah_string::CheetahString;
 use rocketmq_common::common::base::service_state::ServiceState;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_common::common::key_builder::KeyBuilder;
-use rocketmq_common::common::message::message_client_ext::MessageClientExt;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_single::Message;
@@ -1136,10 +1135,6 @@ impl DefaultMQPushConsumerImpl {
                 } else {
                     msg_vec
                 };
-            let msg_list_filter_again = msg_list_filter_again
-                .into_iter()
-                .map(MessageClientExt::new)
-                .collect::<Vec<_>>();
             if !self.filter_message_hook_list.is_empty() {
                 let context = FilterMessageContext {
                     unit_mode: self.consumer_config.unit_mode,
@@ -1152,12 +1147,11 @@ impl DefaultMQPushConsumerImpl {
             }
             let mut final_msg_list = Vec::with_capacity(msg_list_filter_again.len());
             for msg in msg_list_filter_again {
-                if msg.message_ext_inner.reconsume_times > self.get_max_reconsume_times() {
+                if msg.reconsume_times > self.get_max_reconsume_times() {
                     let consumer_group = self.consumer_config.consumer_group().clone();
-                    self.ack_async(&msg.message_ext_inner, &consumer_group)
-                        .await;
+                    self.ack_async(&msg, &consumer_group).await;
                 } else {
-                    final_msg_list.push(msg.message_ext_inner);
+                    final_msg_list.push(msg);
                 }
             }
             pop_result.msg_found_list = Some(final_msg_list);
@@ -1191,7 +1185,7 @@ impl DefaultMQPushConsumerImpl {
         }
     }
 
-    pub fn try_reset_pop_retry_topic(msgs: &mut [ArcMut<MessageClientExt>], consumer_group: &str) {
+    pub fn try_reset_pop_retry_topic(msgs: &mut [ArcMut<MessageExt>], consumer_group: &str) {
         let pop_retry_prefix = format!(
             "{}{}_{}",
             mix_all::RETRY_GROUP_TOPIC_PREFIX,
@@ -1211,7 +1205,7 @@ impl DefaultMQPushConsumerImpl {
 
     pub fn reset_retry_and_namespace(
         &mut self,
-        msgs: &mut [ArcMut<MessageClientExt>],
+        msgs: &mut [ArcMut<MessageExt>],
         consumer_group: &str,
     ) {
         let group_topic = mix_all::get_retry_topic(consumer_group);

@@ -21,7 +21,6 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::message::message_client_ext::MessageClientExt;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_remoting::protocol::body::cm_result::CMResult;
@@ -123,7 +122,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
             broker_name.unwrap_or_default(),
             msg.queue_id(),
         );
-        let mut msgs = vec![ArcMut::new(MessageClientExt::new(msg))];
+        let mut msgs = vec![ArcMut::new(msg)];
         let mut context = ConsumeOrderlyContext::new(mq);
         self.default_mqpush_consumer_impl
             .as_ref()
@@ -136,7 +135,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
         let status = self.message_listener.consume_message(
             &msgs
                 .iter()
-                .map(|msg| &msg.message_ext_inner)
+                .map(|msg| msg.as_ref())
                 .collect::<Vec<&MessageExt>>(),
             &mut context,
         );
@@ -171,7 +170,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
     async fn submit_consume_request(
         &self,
         this: ArcMut<Self>,
-        msgs: Vec<ArcMut<MessageClientExt>>,
+        msgs: Vec<ArcMut<MessageExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
         dispatch_to_consume: bool,

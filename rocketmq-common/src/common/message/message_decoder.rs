@@ -471,30 +471,28 @@ pub fn decodes_batch_client(
     messages
 }
 
-pub fn decode_message_client(mut message_ext: MessageExt, vec_: &mut Vec<MessageClientExt>) {
+pub fn decode_messages_from(mut message_ext: MessageExt, vec_: &mut Vec<MessageExt>) {
     let messages = decode_messages(message_ext.message.body.as_mut().unwrap());
     for message in messages {
-        let mut message_client_ext = MessageClientExt {
-            message_ext_inner: MessageExt {
-                message,
-                ..MessageExt::default()
-            },
+        let mut message_ext_inner = MessageExt {
+            message,
+            ..MessageExt::default()
         };
-        message_client_ext.set_topic(message_ext.get_topic().to_owned());
-        message_client_ext.message_ext_inner.queue_offset = message_ext.queue_offset;
-        message_client_ext.message_ext_inner.queue_id = message_ext.queue_id;
-        message_client_ext.set_flag(message_ext.get_flag());
+        message_ext_inner.set_topic(message_ext.get_topic().to_owned());
+        message_ext_inner.queue_offset = message_ext.queue_offset;
+        message_ext_inner.queue_id = message_ext.queue_id;
+        message_ext_inner.set_flag(message_ext.get_flag());
         //MessageAccessor::set_properties(&mut
         // message_client_ext,message.get_properties().clone()); messageClientExt.
         // setBody(message.getBody())
-        message_client_ext.message_ext_inner.store_host = message_ext.store_host;
-        message_client_ext.message_ext_inner.born_host = message_ext.born_host;
-        message_client_ext.message_ext_inner.store_timestamp = message_ext.store_timestamp;
-        message_client_ext.message_ext_inner.born_timestamp = message_ext.born_timestamp;
-        message_client_ext.message_ext_inner.sys_flag = message_ext.sys_flag;
-        message_client_ext.message_ext_inner.commit_log_offset = message_ext.commit_log_offset;
-        message_client_ext.set_wait_store_msg_ok(message_ext.is_wait_store_msg_ok());
-        vec_.push(message_client_ext);
+        message_ext_inner.store_host = message_ext.store_host;
+        message_ext_inner.born_host = message_ext.born_host;
+        message_ext_inner.store_timestamp = message_ext.store_timestamp;
+        message_ext_inner.born_timestamp = message_ext.born_timestamp;
+        message_ext_inner.sys_flag = message_ext.sys_flag;
+        message_ext_inner.commit_log_offset = message_ext.commit_log_offset;
+        message_ext_inner.set_wait_store_msg_ok(message_ext.is_wait_store_msg_ok());
+        vec_.push(message_ext_inner);
     }
 }
 

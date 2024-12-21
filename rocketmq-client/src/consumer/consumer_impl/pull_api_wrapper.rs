@@ -107,7 +107,7 @@ impl PullAPIWrapper {
         self.update_pull_from_which_node(message_queue, pull_result_ext.suggest_which_broker_id);
         if PullStatus::Found == pull_result_ext.pull_result.pull_status {
             let mut message_binary = pull_result_ext.message_binary.take().unwrap_or_default();
-            let mut msg_vec = message_decoder::decodes_batch_client(
+            let mut msg_vec = message_decoder::decodes_batch(
                 &mut message_binary,
                 self.client_instance.client_config.decode_read_body,
                 self.client_instance.client_config.decode_decompress_body,
@@ -115,13 +115,9 @@ impl PullAPIWrapper {
 
             let mut need_decode_inner_message = false;
             for msg in &msg_vec {
-                if MessageSysFlag::check(
-                    msg.message_ext_inner.sys_flag,
-                    MessageSysFlag::INNER_BATCH_FLAG,
-                ) && MessageSysFlag::check(
-                    msg.message_ext_inner.sys_flag,
-                    MessageSysFlag::NEED_UNWRAP_FLAG,
-                ) {
+                if MessageSysFlag::check(msg.sys_flag, MessageSysFlag::INNER_BATCH_FLAG)
+                    && MessageSysFlag::check(msg.sys_flag, MessageSysFlag::NEED_UNWRAP_FLAG)
+                {
                     need_decode_inner_message = true;
                     break;
                 }
@@ -129,17 +125,10 @@ impl PullAPIWrapper {
             if need_decode_inner_message {
                 let mut inner_msg_vec = Vec::with_capacity(msg_vec.len());
                 for msg in msg_vec {
-                    if MessageSysFlag::check(
-                        msg.message_ext_inner.sys_flag,
-                        MessageSysFlag::INNER_BATCH_FLAG,
-                    ) && MessageSysFlag::check(
-                        msg.message_ext_inner.sys_flag,
-                        MessageSysFlag::NEED_UNWRAP_FLAG,
-                    ) {
-                        message_decoder::decode_message_client(
-                            msg.message_ext_inner,
-                            &mut inner_msg_vec,
-                        );
+                    if MessageSysFlag::check(msg.sys_flag, MessageSysFlag::INNER_BATCH_FLAG)
+                        && MessageSysFlag::check(msg.sys_flag, MessageSysFlag::NEED_UNWRAP_FLAG)
+                    {
+                        message_decoder::decode_messages_from(msg, &mut inner_msg_vec);
                     } else {
                         inner_msg_vec.push(msg);
                     }
@@ -193,11 +182,11 @@ impl PullAPIWrapper {
                     CheetahString::from_static_str(MessageConst::PROPERTY_MAX_OFFSET),
                     CheetahString::from_string(pull_result_ext.pull_result.max_offset.to_string()),
                 );
-                msg.message_ext_inner.broker_name =
+                msg.broker_name =
                     CheetahString::from_string(message_queue.get_broker_name().to_string());
-                msg.message_ext_inner.queue_id = message_queue.get_queue_id();
+                msg.queue_id = message_queue.get_queue_id();
                 if let Some(offset_delta) = pull_result_ext.offset_delta {
-                    msg.message_ext_inner.queue_offset += offset_delta;
+                    msg.queue_offset += offset_delta;
                 }
             }
             pull_result_ext.pull_result.msg_found_list = Some(

@@ -103,7 +103,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
             broker_name.unwrap_or_default(),
             msg.queue_id(),
         );
-        let mut msgs = vec![ArcMut::new(MessageClientExt::new(msg))];
+        let mut msgs = vec![ArcMut::new(msg)];
         let context = ConsumeConcurrentlyContext::new(mq);
         self.default_mqpush_consumer_impl
             .as_ref()
@@ -116,7 +116,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
         let status = self.message_listener.consume_message(
             &msgs
                 .iter()
-                .map(|msg| &msg.message_ext_inner)
+                .map(|msg| msg.as_ref())
                 .collect::<Vec<&MessageExt>>(),
             &context,
         );
@@ -145,7 +145,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
     async fn submit_consume_request(
         &self,
         this: ArcMut<Self>,
-        msgs: Vec<ArcMut<MessageClientExt>>,
+        msgs: Vec<ArcMut<MessageExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
         dispatch_to_consume: bool,
@@ -228,7 +228,7 @@ impl ConsumeMessagePopConcurrentlyService {
             self.default_mqpush_consumer_impl
                 .as_mut()
                 .unwrap()
-                .ack_async(&msg.message_ext_inner, &self.consumer_group)
+                .ack_async(msg.as_ref(), &self.consumer_group)
                 .await;
             consume_request.process_queue.ack();
         }
@@ -239,14 +239,14 @@ impl ConsumeMessagePopConcurrentlyService {
             consume_request.process_queue.ack();
 
             // More than maxReconsumeTimes
-            if msg.message_ext_inner.reconsume_times >= self.consumer_config.max_reconsume_times {
-                self.check_need_ack_or_delay(&msg.message_ext_inner).await;
+            if msg.reconsume_times >= self.consumer_config.max_reconsume_times {
+                self.check_need_ack_or_delay(msg).await;
                 continue;
             }
 
             let delay_level = context.delay_level_when_next_consume;
             let consumer_group = &self.consumer_group.clone();
-            self.change_pop_invisible_time(&msg.message_ext_inner, consumer_group, delay_level)
+            self.change_pop_invisible_time(msg, consumer_group, delay_level)
                 .await;
         }
     }
@@ -350,7 +350,7 @@ impl ConsumeMessagePopConcurrentlyService {
 }
 
 struct ConsumeRequest {
-    msgs: Vec<ArcMut<MessageClientExt>>,
+    msgs: Vec<ArcMut<MessageExt>>,
     //msgs: Vec<MessageExt>,
     process_queue: Arc<PopProcessQueue>,
     message_queue: MessageQueue,
@@ -418,7 +418,7 @@ impl ConsumeRequest {
         if !self.msgs.is_empty() {
             for msg in self.msgs.iter_mut() {
                 MessageAccessor::set_consume_start_time_stamp(
-                    &mut msg.message_ext_inner,
+                    msg.as_mut(),
                     CheetahString::from_string(get_current_millis().to_string()),
                 );
             }
@@ -445,7 +445,7 @@ impl ConsumeRequest {
         let vec = self
             .msgs
             .iter()
-            .map(|msg| &msg.message_ext_inner)
+            .map(|msg| msg.as_ref())
             .collect::<Vec<&MessageExt>>();
         match self.message_listener.consume_message(&vec, &context) {
             Ok(value) => {

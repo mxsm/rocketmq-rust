@@ -16,13 +16,13 @@
  */
 use std::fmt;
 
-use rocketmq_common::common::message::message_client_ext::MessageClientExt;
+use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 
 #[derive(Default)]
 pub struct FilterMessageContext<'a> {
     pub(crate) consumer_group: Option<String>,
-    pub(crate) msg_list: &'a [MessageClientExt],
+    pub(crate) msg_list: &'a [MessageExt],
     pub(crate) mq: Option<&'a MessageQueue>,
     pub(crate) arg: Option<Box<dyn std::any::Any>>,
     pub(crate) unit_mode: bool,
@@ -31,7 +31,7 @@ pub struct FilterMessageContext<'a> {
 impl<'a> FilterMessageContext<'a> {
     pub fn new(
         consumer_group: Option<String>,
-        msg_list: &'a [MessageClientExt],
+        msg_list: &'a [MessageExt],
         mq: Option<&'a MessageQueue>,
         arg: Option<Box<dyn std::any::Any>>,
         unit_mode: bool,
@@ -49,7 +49,7 @@ impl<'a> FilterMessageContext<'a> {
         &self.consumer_group
     }
 
-    pub fn msg_list(&self) -> &'a [MessageClientExt] {
+    pub fn msg_list(&self) -> &'a [MessageExt] {
         self.msg_list
     }
 
@@ -69,7 +69,7 @@ impl<'a> FilterMessageContext<'a> {
         self.consumer_group = consumer_group;
     }
 
-    pub fn set_msg_list(&mut self, msg_list: &'a [MessageClientExt]) {
+    pub fn set_msg_list(&mut self, msg_list: &'a [MessageExt]) {
         self.msg_list = msg_list;
     }
 
