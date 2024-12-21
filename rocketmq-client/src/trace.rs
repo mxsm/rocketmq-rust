@@ -21,3 +21,4 @@ pub mod trace_constants;
 pub mod trace_context;
 pub mod trace_dispatcher;
 pub mod trace_type;
+pub mod trace_view;
