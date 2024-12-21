@@ -94,7 +94,6 @@ impl PullCallback for DefaultPullCallback {
                         .unwrap()
                         .first()
                         .unwrap()
-                        .message_ext_inner
                         .queue_offset;
                     let vec = pull_result_ext.pull_result.msg_found_list.clone();
                     let dispatch_to_consume = pull_request

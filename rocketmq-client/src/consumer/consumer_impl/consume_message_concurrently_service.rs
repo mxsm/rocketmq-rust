@@ -20,7 +20,6 @@ use std::time::Duration;
 use std::time::Instant;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::message::message_client_ext::MessageClientExt;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::MessageTrait;
@@ -131,23 +130,17 @@ impl ConsumeMessageConcurrentlyService {
                 let mut msg_back_success = Vec::with_capacity(len);
                 let failed_msgs = consume_request.msgs.split_off((ack_index + 1) as usize);
                 for mut msg in failed_msgs {
-                    if !consume_request
-                        .process_queue
-                        .contains_message(&msg.message_ext_inner)
-                        .await
-                    {
+                    if !consume_request.process_queue.contains_message(&msg).await {
                         /*info!("Message is not found in its process queue; skip send-back-procedure, topic={}, "
                             + "brokerName={}, queueId={}, queueOffset={}", msg.get_topic(), msg.get_broker_name(),
                         msg.getQueueId(), msg.getQueueOffset());*/
                         continue;
                     }
 
-                    let result = self
-                        .send_message_back(&mut msg.message_ext_inner, context)
-                        .await;
+                    let result = self.send_message_back(&mut msg, context).await;
                     if !result {
-                        let reconsume_times = msg.message_ext_inner.reconsume_times() + 1;
-                        msg.message_ext_inner.set_reconsume_times(reconsume_times);
+                        let reconsume_times = msg.reconsume_times() + 1;
+                        msg.set_reconsume_times(reconsume_times);
                         msg_back_failed.push(msg);
                     } else {
                         msg_back_success.push(msg);
@@ -181,7 +174,7 @@ impl ConsumeMessageConcurrentlyService {
 
     fn submit_consume_request_later(
         &self,
-        msgs: Vec<ArcMut<MessageClientExt>>,
+        msgs: Vec<ArcMut<MessageExt>>,
         this: ArcMut<Self>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
@@ -244,7 +237,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
         msg.broker_name = broker_name.unwrap_or_default();
         let mq =
             MessageQueue::from_parts(msg.topic().clone(), msg.broker_name.clone(), msg.queue_id());
-        let mut msgs = vec![ArcMut::new(MessageClientExt::new(msg))];
+        let mut msgs = vec![ArcMut::new(msg)];
         let context = ConsumeConcurrentlyContext::new(mq);
         self.default_mqpush_consumer_impl
             .as_ref()
@@ -257,7 +250,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
         let status = self.message_listener.consume_message(
             &msgs
                 .iter()
-                .map(|msg| &msg.message_ext_inner)
+                .map(|msg| msg.as_ref())
                 .collect::<Vec<&MessageExt>>(),
             &context,
         );
@@ -286,7 +279,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
     async fn submit_consume_request(
         &self,
         this: ArcMut<Self>,
-        msgs: Vec<ArcMut<MessageClientExt>>,
+        msgs: Vec<ArcMut<MessageExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
         dispatch_to_consume: bool,
@@ -341,7 +334,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
 }
 
 struct ConsumeRequest {
-    msgs: Vec<ArcMut<MessageClientExt>>,
+    msgs: Vec<ArcMut<MessageExt>>,
     message_listener: ArcBoxMessageListenerConcurrently,
     process_queue: Arc<ProcessQueue>,
     message_queue: MessageQueue,
@@ -388,7 +381,7 @@ impl ConsumeRequest {
         if !self.msgs.is_empty() {
             for msg in self.msgs.iter_mut() {
                 MessageAccessor::set_consume_start_time_stamp(
-                    &mut msg.message_ext_inner,
+                    msg.as_mut(),
                     CheetahString::from_string(get_current_millis().to_string()),
                 );
             }
@@ -413,7 +406,7 @@ impl ConsumeRequest {
             let vec = self
                 .msgs
                 .iter()
-                .map(|msg| &msg.message_ext_inner)
+                .map(|msg| msg.as_ref())
                 .collect::<Vec<&MessageExt>>();
             match self.message_listener.consume_message(&vec, &context) {
                 Ok(value) => {

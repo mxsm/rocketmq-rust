@@ -23,7 +23,6 @@ use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use once_cell::sync::Lazy;
-use rocketmq_common::common::message::message_client_ext::MessageClientExt;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
@@ -54,12 +53,12 @@ pub static REBALANCE_LOCK_INTERVAL: Lazy<u64> = Lazy::new(|| {
 #[derive(Clone)]
 pub(crate) struct ProcessQueue {
     pub(crate) tree_map_lock: Arc<RwLock<()>>,
-    pub(crate) msg_tree_map: Arc<RwLock<std::collections::BTreeMap<i64, ArcMut<MessageClientExt>>>>,
+    pub(crate) msg_tree_map: Arc<RwLock<std::collections::BTreeMap<i64, ArcMut<MessageExt>>>>,
     pub(crate) msg_count: Arc<AtomicU64>,
     pub(crate) msg_size: Arc<AtomicU64>,
     pub(crate) consume_lock: Arc<RocketMQTokioRwLock<()>>,
     pub(crate) consuming_msg_orderly_tree_map:
-        Arc<RwLock<std::collections::BTreeMap<i64, ArcMut<MessageClientExt>>>>,
+        Arc<RwLock<std::collections::BTreeMap<i64, ArcMut<MessageExt>>>>,
     pub(crate) try_unlock_times: Arc<AtomicI64>,
     pub(crate) queue_offset_max: Arc<AtomicU64>,
     pub(crate) dropped: Arc<AtomicBool>,
@@ -169,7 +168,7 @@ impl ProcessQueue {
             }
 
             let mut msg = msg.unwrap();
-            let msg_inner = &mut msg.as_mut().message_ext_inner;
+            let msg_inner = msg.as_mut();
             msg_inner.set_topic(
                 push_consumer
                     .client_config
@@ -180,7 +179,7 @@ impl ProcessQueue {
                 .await;
             let msg_tree_map = self.msg_tree_map.write().await;
             if !msg_tree_map.is_empty()
-                && msg.message_ext_inner.queue_offset == *msg_tree_map.first_key_value().unwrap().0
+                && msg.queue_offset == *msg_tree_map.first_key_value().unwrap().0
             {
                 drop(msg_tree_map);
                 self.remove_message(&[msg]).await;
@@ -188,7 +187,7 @@ impl ProcessQueue {
         }
     }
 
-    pub(crate) async fn put_message(&self, messages: Vec<ArcMut<MessageClientExt>>) -> bool {
+    pub(crate) async fn put_message(&self, messages: Vec<ArcMut<MessageExt>>) -> bool {
         let mut dispatch_to_consume = false;
         let mut msg_tree_map = self.msg_tree_map.write().await;
         let mut valid_msg_cnt = 0;
@@ -198,7 +197,7 @@ impl ProcessQueue {
             if let Some(property) = message_ext.get_property(&CheetahString::from_static_str(
                 MessageConst::PROPERTY_MAX_OFFSET,
             )) {
-                property.parse::<i64>().unwrap() - message_ext.message_ext_inner.queue_offset
+                property.parse::<i64>().unwrap() - message_ext.queue_offset
             } else {
                 0
             }
@@ -208,16 +207,16 @@ impl ProcessQueue {
 
         for message in messages {
             if msg_tree_map
-                .insert(message.message_ext_inner.queue_offset, message.clone())
+                .insert(message.queue_offset, message.clone())
                 .is_none()
             {
                 valid_msg_cnt += 1;
                 self.queue_offset_max.store(
-                    message.message_ext_inner.queue_offset as u64,
+                    message.queue_offset as u64,
                     std::sync::atomic::Ordering::Release,
                 );
                 self.msg_size.fetch_add(
-                    message.message_ext_inner.body().as_ref().unwrap().len() as u64,
+                    message.body().as_ref().unwrap().len() as u64,
                     Ordering::AcqRel,
                 );
             }
@@ -244,7 +243,7 @@ impl ProcessQueue {
         (last.0 - first.0) as u64
     }
 
-    pub(crate) async fn remove_message(&self, messages: &[ArcMut<MessageClientExt>]) -> i64 {
+    pub(crate) async fn remove_message(&self, messages: &[ArcMut<MessageExt>]) -> i64 {
         let mut result = -1;
         let mut msg_tree_map = self.msg_tree_map.write().await;
         if msg_tree_map.is_empty() {
@@ -253,11 +252,11 @@ impl ProcessQueue {
         result = self.queue_offset_max.load(Ordering::Acquire) as i64 + 1;
         let mut removed_cnt = 0;
         for message in messages {
-            let prev = msg_tree_map.remove(&message.message_ext_inner.queue_offset);
+            let prev = msg_tree_map.remove(&message.queue_offset);
             if let Some(prev) = prev {
                 removed_cnt += 1;
                 self.msg_size.fetch_sub(
-                    message.message_ext_inner.body().as_ref().unwrap().len() as u64,
+                    message.body().as_ref().unwrap().len() as u64,
                     Ordering::AcqRel,
                 );
             }
@@ -298,7 +297,7 @@ impl ProcessQueue {
         } else {
             for message in consuming_msg_orderly_tree_map.values() {
                 self.msg_size.fetch_sub(
-                    message.message_ext_inner.body().as_ref().unwrap().len() as u64,
+                    message.body().as_ref().unwrap().len() as u64,
                     Ordering::AcqRel,
                 );
             }
@@ -307,19 +306,16 @@ impl ProcessQueue {
         offset
     }
 
-    pub(crate) async fn make_message_to_consume_again(
-        &self,
-        messages: &[ArcMut<MessageClientExt>],
-    ) {
+    pub(crate) async fn make_message_to_consume_again(&self, messages: &[ArcMut<MessageExt>]) {
         let mut consuming_msg_orderly_tree_map = self.consuming_msg_orderly_tree_map.write().await;
         let mut msg_tree_map = self.msg_tree_map.write().await;
         for message in messages {
-            consuming_msg_orderly_tree_map.remove(&message.message_ext_inner.queue_offset);
-            msg_tree_map.insert(message.message_ext_inner.queue_offset, message.clone());
+            consuming_msg_orderly_tree_map.remove(&message.queue_offset);
+            msg_tree_map.insert(message.queue_offset, message.clone());
         }
     }
 
-    pub(crate) async fn take_messages(&self, batch_size: u32) -> Vec<ArcMut<MessageClientExt>> {
+    pub(crate) async fn take_messages(&self, batch_size: u32) -> Vec<ArcMut<MessageExt>> {
         let mut messages = Vec::with_capacity(batch_size as usize);
         let now = Instant::now();
         let mut msg_tree_map = self.msg_tree_map.write().await;

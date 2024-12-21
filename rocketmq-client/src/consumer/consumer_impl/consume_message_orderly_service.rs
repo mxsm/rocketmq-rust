@@ -21,7 +21,6 @@ use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use once_cell::sync::Lazy;
-use rocketmq_common::common::message::message_client_ext::MessageClientExt;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_single::Message;
@@ -258,23 +257,23 @@ impl ConsumeMessageOrderlyService {
         result.is_ok()
     }
 
-    async fn check_reconsume_times(&mut self, msgs: &mut [ArcMut<MessageClientExt>]) -> bool {
+    async fn check_reconsume_times(&mut self, msgs: &mut [ArcMut<MessageExt>]) -> bool {
         let mut suspend = false;
         if !msgs.is_empty() {
             for msg in msgs {
-                let reconsume_times = msg.message_ext_inner.reconsume_times;
+                let reconsume_times = msg.reconsume_times;
                 if reconsume_times >= self.get_max_reconsume_times() {
                     MessageAccessor::set_reconsume_time(
-                        &mut msg.message_ext_inner,
+                        msg.as_mut(),
                         CheetahString::from_string(reconsume_times.to_string()),
                     );
-                    if !self.send_message_back(&msg.message_ext_inner).await {
+                    if !self.send_message_back(msg).await {
                         suspend = true;
-                        msg.message_ext_inner.reconsume_times = reconsume_times + 1;
+                        msg.reconsume_times = reconsume_times + 1;
                     }
                 } else {
                     suspend = true;
-                    msg.message_ext_inner.reconsume_times = reconsume_times + 1;
+                    msg.reconsume_times = reconsume_times + 1;
                 }
             }
         }
@@ -284,7 +283,7 @@ impl ConsumeMessageOrderlyService {
     #[allow(deprecated)]
     async fn process_consume_result(
         &mut self,
-        mut msgs: Vec<ArcMut<MessageClientExt>>,
+        mut msgs: Vec<ArcMut<MessageExt>>,
         this: ArcMut<Self>,
         status: ConsumeOrderlyStatus,
         context: &ConsumeOrderlyContext,
@@ -400,7 +399,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
             broker_name.unwrap_or_default(),
             msg.queue_id(),
         );
-        let mut msgs = vec![ArcMut::new(MessageClientExt::new(msg))];
+        let mut msgs = vec![ArcMut::new(msg)];
         let mut context = ConsumeOrderlyContext::new(mq);
         self.default_mqpush_consumer_impl
             .as_ref()
@@ -413,7 +412,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
         let status = self.message_listener.consume_message(
             &msgs
                 .iter()
-                .map(|msg| &msg.message_ext_inner)
+                .map(|msg| msg.as_ref())
                 .collect::<Vec<&MessageExt>>(),
             &mut context,
         );
@@ -448,7 +447,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
     async fn submit_consume_request(
         &self,
         this: ArcMut<Self>,
-        msgs: Vec<ArcMut<MessageClientExt>>,
+        msgs: Vec<ArcMut<MessageExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
         dispatch_to_consume: bool,
@@ -611,7 +610,7 @@ impl ConsumeRequest {
                 }
                 let vec = msgs
                     .iter()
-                    .map(|msg| &msg.message_ext_inner)
+                    .map(|msg| msg.as_ref())
                     .collect::<Vec<&MessageExt>>();
 
                 match consume_message_orderly_service_inner

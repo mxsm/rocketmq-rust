@@ -26,7 +26,6 @@ use rocketmq_client_rust::consumer::pull_status::PullStatus;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::constant::PermName;
-use rocketmq_common::common::message::message_client_ext::MessageClientExt;
 use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
 use rocketmq_common::common::message::message_decoder;
 use rocketmq_common::common::message::message_ext::MessageExt;
@@ -227,13 +226,13 @@ where
         }
     }
 
-    fn decode_msg_list(get_message_result: &GetMessageResult) -> Vec<MessageClientExt> {
+    fn decode_msg_list(get_message_result: &GetMessageResult) -> Vec<MessageExt> {
         let mut found_list = Vec::new();
         for bb in get_message_result.message_mapped_list() {
             let data = &bb.mapped_file.as_ref().unwrap().get_mapped_file()
                 [bb.start_offset as usize..(bb.start_offset + bb.size as u64) as usize];
             let mut bytes = Bytes::copy_from_slice(data);
-            let msg_ext = message_decoder::decode_client(&mut bytes, true, false, false, false);
+            let msg_ext = message_decoder::decode(&mut bytes, true, false, false, false, false);
             if let Some(msg_ext) = msg_ext {
                 found_list.push(msg_ext);
             }
