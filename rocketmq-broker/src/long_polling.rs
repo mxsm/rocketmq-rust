@@ -18,5 +18,6 @@
 pub(crate) mod long_polling_service;
 pub(crate) mod many_pull_request;
 pub(crate) mod notify_message_arriving_listener;
-mod polling_header;
+pub(crate) mod polling_header;
+pub(crate) mod polling_result;
 pub(crate) mod pull_request;
