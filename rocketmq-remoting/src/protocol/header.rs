@@ -45,6 +45,7 @@ pub mod heartbeat_request_header;
 pub mod lock_batch_mq_request_header;
 pub mod message_operation_header;
 pub mod namesrv;
+pub mod notification_request_header;
 pub mod notify_consumer_ids_changed_request_header;
 pub mod pop_message_request_header;
 pub mod pop_message_response_header;
