@@ -180,6 +180,7 @@ pub struct BrokerConfig {
     pub server_load_balancer_enable: bool,
     pub enable_remote_escape: bool,
     pub enable_pop_log: bool,
+    pub enable_retry_topic_v2: bool,
 }
 
 impl Default for BrokerConfig {
@@ -268,6 +269,7 @@ impl Default for BrokerConfig {
             server_load_balancer_enable: true,
             enable_remote_escape: false,
             enable_pop_log: false,
+            enable_retry_topic_v2: false,
         }
     }
 }

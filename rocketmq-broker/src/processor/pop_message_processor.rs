@@ -14,6 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#![allow(unused_variables)]
+
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
@@ -21,29 +23,360 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_common::common::constant::PermName;
+use rocketmq_common::common::filter::expression_type::ExpressionType;
+use rocketmq_common::common::key_builder::KeyBuilder;
 use rocketmq_common::common::pop_ack_constants::PopAckConstants;
+use rocketmq_common::common::FAQUrl;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::code::request_code::RequestCode;
+use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
+use rocketmq_remoting::protocol::filter::filter_api::FilterAPI;
+use rocketmq_remoting::protocol::header::pop_message_request_header::PopMessageRequestHeader;
+use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
+use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
+use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_rust::ArcMut;
+use rocketmq_store::config::message_store_config::MessageStoreConfig;
+use rocketmq_store::filter::MessageFilter;
+use rocketmq_store::log_file::MessageStore;
 use rocketmq_store::pop::batch_ack_msg::BatchAckMsg;
 use rocketmq_store::pop::pop_check_point::PopCheckPoint;
 use rocketmq_store::pop::AckMessage;
 use tokio::sync::Mutex;
 use tracing::info;
+use tracing::warn;
 
-#[derive(Default)]
-pub struct PopMessageProcessor {}
+use crate::broker_error::BrokerError;
+use crate::client::manager::consumer_manager::ConsumerManager;
+use crate::filter::expression_message_filter::ExpressionMessageFilter;
+use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
+use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
+use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
-impl PopMessageProcessor {
+const BORN_TIME: &str = "bornTime";
+
+pub struct PopMessageProcessor<MS> {
+    consumer_manager: Arc<ConsumerManager>,
+    broker_config: Arc<BrokerConfig>,
+    message_store: ArcMut<MS>,
+    message_store_config: Arc<MessageStoreConfig>,
+    topic_config_manager: Arc<TopicConfigManager>,
+    subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
+    consumer_filter_manager: Arc<ConsumerFilterManager>,
+}
+
+impl<MS> PopMessageProcessor<MS> {
+    pub fn new(
+        consumer_manager: Arc<ConsumerManager>,
+        broker_config: Arc<BrokerConfig>,
+        message_store: ArcMut<MS>,
+        message_store_config: Arc<MessageStoreConfig>,
+        topic_config_manager: Arc<TopicConfigManager>,
+        subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
+        consumer_filter_manager: Arc<ConsumerFilterManager>,
+    ) -> Self {
+        PopMessageProcessor {
+            consumer_manager,
+            broker_config,
+            message_store,
+            message_store_config,
+            topic_config_manager,
+            subscription_group_manager,
+            consumer_filter_manager,
+        }
+    }
+}
+
+impl<MS> PopMessageProcessor<MS>
+where
+    MS: MessageStore,
+{
     pub async fn process_request(
         &mut self,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
-        _request_code: RequestCode,
-        _request: RemotingCommand,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request_code: RequestCode,
+        mut request: RemotingCommand,
     ) -> crate::Result<Option<RemotingCommand>> {
+        let begin_time_mills = get_current_millis();
+        request.add_ext_field_if_not_exist(
+            CheetahString::from_static_str(BORN_TIME),
+            begin_time_mills.to_string(),
+        );
+        //need optimize
+        let old = request
+            .get_ext_fields()
+            .map_or(CheetahString::empty(), |fields| {
+                fields.get(BORN_TIME).cloned().unwrap_or_default()
+            });
+        if "0" == old {
+            request.add_ext_field(
+                CheetahString::from_static_str(BORN_TIME),
+                begin_time_mills.to_string(),
+            );
+        }
+        let request_header = request
+            .decode_command_custom_header::<PopMessageRequestHeader>()
+            .map_err(BrokerError::BrokerRemotingError)?;
+
+        self.consumer_manager.compensate_basic_consumer_info(
+            &request_header.consumer_group,
+            ConsumeType::ConsumePop,
+            MessageModel::Clustering,
+        );
+
+        if request_header.is_timeout_too_much() {
+            return Ok(Some(
+                RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::PollingTimeout,
+                    format!(
+                        "the broker[{}] pop message is timeout too much",
+                        self.broker_config.broker_ip1
+                    ),
+                ),
+            ));
+        }
+
+        if !PermName::is_readable(self.broker_config.broker_permission) {
+            return Ok(Some(
+                RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::NoPermission,
+                    format!(
+                        "the broker[{}] pop message is forbidden",
+                        self.broker_config.broker_ip1
+                    ),
+                ),
+            ));
+        }
+
+        if request_header.max_msg_nums > 32 {
+            return Ok(Some(
+                RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::SystemError,
+                    format!(
+                        "the broker[{}] pop message's num is greater than 32",
+                        self.broker_config.broker_ip1
+                    ),
+                ),
+            ));
+        }
+
+        if !self.message_store_config.timer_wheel_enable {
+            return Ok(Some(
+                RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::SystemError,
+                    format!(
+                        "the broker[{}] pop message is forbidden because timerWheelEnable is false",
+                        self.broker_config.broker_ip1
+                    ),
+                ),
+            ));
+        }
+        let topic_config = self
+            .topic_config_manager
+            .select_topic_config(&request_header.topic);
+        if topic_config.is_none() {
+            return Ok(Some(
+                RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::TopicNotExist,
+                    format!(
+                        "topic[{}] not exist, apply first please! {}",
+                        request_header.topic,
+                        FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
+                    ),
+                ),
+            ));
+        }
+        let topic_config = topic_config.unwrap();
+        if !PermName::is_readable(topic_config.perm) {
+            return Ok(Some(
+                RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::NoPermission,
+                    format!(
+                        "the topic[{}] peeking message is forbidden",
+                        request_header.topic
+                    ),
+                ),
+            ));
+        }
+        if request_header.queue_id >= topic_config.read_queue_nums as i32 {
+            return Ok(Some(
+                RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::SystemError,
+                    format!(
+                        "the queueId[{}] is illegal, topic[{}]  topicConfig readQueueNums[{}] \
+                         consumer[{}]",
+                        request_header.queue_id,
+                        request_header.topic,
+                        topic_config.read_queue_nums,
+                        channel.remote_address()
+                    ),
+                ),
+            ));
+        }
+        let subscription_group_config = self
+            .subscription_group_manager
+            .find_subscription_group_config(&request_header.consumer_group);
+        if subscription_group_config.is_none() {
+            return Ok(Some(
+                RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::SubscriptionGroupNotExist,
+                    format!(
+                        "the consumer group[{}] not online, apply first please! {}",
+                        request_header.consumer_group,
+                        FAQUrl::suggest_todo(FAQUrl::SUBSCRIPTION_GROUP_NOT_EXIST)
+                    ),
+                ),
+            ));
+        }
+        let subscription_group_config = subscription_group_config.unwrap();
+        if !subscription_group_config.consume_enable() {
+            return Ok(Some(
+                RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::NoPermission,
+                    format!(
+                        "the consumer group[{}], not permitted to consume",
+                        request_header.consumer_group
+                    ),
+                ),
+            ));
+        }
+
+        let exp = request_header.exp.as_ref();
+
+        let (subscription_data, message_filter) = if exp.is_some() && !exp.unwrap().is_empty() {
+            let subscription_data = match FilterAPI::build(
+                &request_header.topic,
+                &request_header.exp.clone().unwrap_or_default(),
+                request_header.exp_type.clone(),
+            ) {
+                Ok(value) => value,
+                Err(_) => {
+                    return Ok(Some(
+                        RemotingCommand::create_response_command_with_code_remark(
+                            ResponseCode::SubscriptionParseFailed,
+                            "parse the consumer's subscription failed",
+                        ),
+                    ));
+                }
+            };
+            self.consumer_manager.compensate_subscribe_data(
+                &request_header.consumer_group,
+                &request_header.topic,
+                &subscription_data,
+            );
+            let retry_topic = CheetahString::from_string(KeyBuilder::build_pop_retry_topic(
+                &request_header.topic,
+                &request_header.consumer_group,
+                self.broker_config.enable_retry_topic_v2,
+            ));
+            let retry_subscription_data = match FilterAPI::build(
+                &retry_topic,
+                &CheetahString::from_static_str(SubscriptionData::SUB_ALL),
+                request_header.exp_type.clone(),
+            ) {
+                Ok(value) => value,
+                Err(_) => {
+                    return Ok(Some(
+                        RemotingCommand::create_response_command_with_code_remark(
+                            ResponseCode::SubscriptionParseFailed,
+                            "parse the consumer's subscription failed",
+                        ),
+                    ));
+                }
+            };
+            self.consumer_manager.compensate_subscribe_data(
+                &request_header.consumer_group,
+                &retry_topic,
+                &retry_subscription_data,
+            );
+            let message_filter =
+                if !ExpressionType::is_tag_type(Some(subscription_data.expression_type.as_str())) {
+                    let consumer_filter_data = ConsumerFilterManager::build(
+                        request_header.consumer_group.clone(),
+                        request_header.topic.clone(),
+                        request_header.exp.clone(),
+                        request_header.exp_type.clone(),
+                        get_current_millis(),
+                    );
+                    if consumer_filter_data.is_none() {
+                        warn!(
+                            "Parse the consumer's subscription[{:?}] failed, group: {}",
+                            request_header.exp, request_header.consumer_group
+                        );
+                        return Ok(Some(
+                            RemotingCommand::create_response_command_with_code_remark(
+                                ResponseCode::SubscriptionParseFailed,
+                                "parse the consumer's subscription failed",
+                            ),
+                        ));
+                    }
+                    let consumer_filter_data = consumer_filter_data.unwrap();
+                    let message_filter: Box<dyn MessageFilter> =
+                        Box::new(ExpressionMessageFilter::new(
+                            Some(subscription_data.clone()),
+                            Some(consumer_filter_data.clone()),
+                            self.consumer_filter_manager.clone(),
+                        ));
+                    Some(message_filter)
+                } else {
+                    None
+                };
+            (subscription_data, message_filter)
+        } else {
+            let subscription_data = match FilterAPI::build(
+                &request_header.topic,
+                &request_header.exp.clone().unwrap_or_default(),
+                request_header.exp_type.clone(),
+            ) {
+                Ok(value) => value,
+                Err(_) => {
+                    return Ok(Some(
+                        RemotingCommand::create_response_command_with_code_remark(
+                            ResponseCode::SubscriptionParseFailed,
+                            "parse the consumer's subscription failed",
+                        ),
+                    ));
+                }
+            };
+            self.consumer_manager.compensate_subscribe_data(
+                &request_header.consumer_group,
+                &request_header.topic,
+                &subscription_data,
+            );
+            let retry_topic = CheetahString::from_string(KeyBuilder::build_pop_retry_topic(
+                &request_header.topic,
+                &request_header.consumer_group,
+                self.broker_config.enable_retry_topic_v2,
+            ));
+            let retry_subscription_data = match FilterAPI::build(
+                &retry_topic,
+                &CheetahString::from_static_str(SubscriptionData::SUB_ALL),
+                request_header.exp_type.clone(),
+            ) {
+                Ok(value) => value,
+                Err(_) => {
+                    return Ok(Some(
+                        RemotingCommand::create_response_command_with_code_remark(
+                            ResponseCode::SubscriptionParseFailed,
+                            "parse the consumer's subscription failed",
+                        ),
+                    ));
+                }
+            };
+            self.consumer_manager.compensate_subscribe_data(
+                &request_header.consumer_group,
+                &retry_topic,
+                &retry_subscription_data,
+            );
+            (subscription_data, None)
+        };
+
         unimplemented!("PopMessageProcessor process_request")
     }
 
@@ -65,7 +398,7 @@ impl PopMessageProcessor {
     }
 }
 
-impl PopMessageProcessor {
+impl<MS> PopMessageProcessor<MS> {
     pub fn gen_ack_unique_id(ack_msg: &dyn AckMessage) -> String {
         format!(
             "{}{}{}{}{}{}{}{}{}{}{}{}{}",
@@ -245,6 +578,7 @@ impl QueueLockManager {
 #[cfg(test)]
 mod tests {
     use cheetah_string::CheetahString;
+    use rocketmq_store::message_store::default_message_store::DefaultMessageStore;
     use rocketmq_store::pop::ack_msg::AckMsg;
 
     use super::*;
@@ -260,7 +594,7 @@ mod tests {
             pop_time: 789,
             broker_name: CheetahString::from_static_str("test_broker"),
         };
-        let result = PopMessageProcessor::gen_ack_unique_id(&ack_msg);
+        let result = PopMessageProcessor::<DefaultMessageStore>::gen_ack_unique_id(&ack_msg);
         let expected = "test_topic@1@123@test_group@789@test_broker@ack";
         assert_eq!(result, expected);
     }
@@ -280,7 +614,8 @@ mod tests {
             ack_msg,
             ack_offset_list: vec![1, 2, 3],
         };
-        let result = PopMessageProcessor::gen_batch_ack_unique_id(&batch_ack_msg);
+        let result =
+            PopMessageProcessor::<DefaultMessageStore>::gen_batch_ack_unique_id(&batch_ack_msg);
         let expected = "test_topic@1@[1, 2, 3]@test_group@789@bAck";
         assert_eq!(result, expected);
     }
@@ -301,7 +636,7 @@ mod tests {
             queue_offset_diff: vec![],
             re_put_times: None,
         };
-        let result = PopMessageProcessor::gen_ck_unique_id(&ck);
+        let result = PopMessageProcessor::<DefaultMessageStore>::gen_ck_unique_id(&ck);
         let expected = "test_topic@1@456@test_cid@789@test_broker@ck";
         assert_eq!(result, expected);
     }

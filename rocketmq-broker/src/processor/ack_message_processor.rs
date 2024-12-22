@@ -69,7 +69,7 @@ pub struct AckMessageProcessor<MS> {
     pop_inflight_message_counter: Arc<PopInflightMessageCounter>,
     consumer_offset_manager: Arc<ConsumerOffsetManager>,
     consumer_order_info_manager: Arc<ConsumerOrderInfoManager<MS>>,
-    pop_message_processor: ArcMut<PopMessageProcessor>,
+    pop_message_processor: ArcMut<PopMessageProcessor<MS>>,
 }
 
 impl<MS> AckMessageProcessor<MS>
@@ -84,7 +84,7 @@ where
         pop_inflight_message_counter: Arc<PopInflightMessageCounter>,
         store_host: SocketAddr,
         consumer_offset_manager: Arc<ConsumerOffsetManager>,
-        pop_message_processor: ArcMut<PopMessageProcessor>,
+        pop_message_processor: ArcMut<PopMessageProcessor<MS>>,
         consumer_order_info_manager: Arc<ConsumerOrderInfoManager<MS>>,
     ) -> AckMessageProcessor<MS> {
         AckMessageProcessor {
@@ -394,7 +394,9 @@ where
                 CheetahString::from_static_str(
                     MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
                 ),
-                CheetahString::from(PopMessageProcessor::gen_batch_ack_unique_id(batch_ack)),
+                CheetahString::from(PopMessageProcessor::<MS>::gen_batch_ack_unique_id(
+                    batch_ack,
+                )),
             );
         } else if let Some(ack_msg) = ack_msg.as_any().downcast_ref::<AckMsg>() {
             inner.set_body(Bytes::from(ack_msg.encode().unwrap()));
@@ -403,7 +405,7 @@ where
                 CheetahString::from_static_str(
                     MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
                 ),
-                CheetahString::from(PopMessageProcessor::gen_ack_unique_id(
+                CheetahString::from(PopMessageProcessor::<MS>::gen_ack_unique_id(
                     ack_msg as &dyn AckMessage,
                 )),
             );
@@ -413,7 +415,9 @@ where
         inner.set_delay_time_ms((pop_time + invisible_time) as u64);
         inner.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
-            CheetahString::from(PopMessageProcessor::gen_ack_unique_id(ack_msg.as_ref())),
+            CheetahString::from(PopMessageProcessor::<MS>::gen_ack_unique_id(
+                ack_msg.as_ref(),
+            )),
         );
         inner.properties_string =
             message_decoder::message_properties_to_string(inner.get_properties());

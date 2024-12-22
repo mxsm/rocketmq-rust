@@ -561,7 +561,15 @@ impl BrokerRuntime {
             self.broker_member_group.clone(),
             self.pop_inflight_message_counter.clone(),
         );
-        let pop_message_processor = ArcMut::new(PopMessageProcessor::default());
+        let pop_message_processor = ArcMut::new(PopMessageProcessor::new(
+            self.consumer_manager.clone(),
+            self.broker_config.clone(),
+            self.message_store.clone().unwrap(),
+            self.message_store_config.clone(),
+            Arc::new(self.topic_config_manager.clone()),
+            self.subscription_group_manager.clone(),
+            self.consumer_filter_manager.clone(),
+        ));
         let ack_message_processor = ArcMut::new(AckMessageProcessor::new(
             self.topic_config_manager.clone(),
             self.message_store.as_ref().unwrap().clone(),
