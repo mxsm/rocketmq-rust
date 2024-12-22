@@ -181,6 +181,10 @@ pub struct BrokerConfig {
     pub enable_remote_escape: bool,
     pub enable_pop_log: bool,
     pub enable_retry_topic_v2: bool,
+    // read message from pop retry topic v1, for the compatibility, will be removed in the future
+    // version
+    pub retrieve_message_from_pop_retry_topic_v1: bool,
+    pub pop_from_retry_probability: i32,
 }
 
 impl Default for BrokerConfig {
@@ -270,6 +274,8 @@ impl Default for BrokerConfig {
             enable_remote_escape: false,
             enable_pop_log: false,
             enable_retry_topic_v2: false,
+            retrieve_message_from_pop_retry_topic_v1: true,
+            pop_from_retry_probability: 20,
         }
     }
 }

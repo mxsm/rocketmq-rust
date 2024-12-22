@@ -18,15 +18,20 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
+use rand::thread_rng;
+use rand::Rng;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
 use rocketmq_common::common::key_builder::KeyBuilder;
+use rocketmq_common::common::key_builder::POP_ORDER_REVIVE_QUEUE;
 use rocketmq_common::common::pop_ack_constants::PopAckConstants;
 use rocketmq_common::common::FAQUrl;
 use rocketmq_common::TimeUtils::get_current_millis;
@@ -35,12 +40,15 @@ use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::filter::filter_api::FilterAPI;
 use rocketmq_remoting::protocol::header::pop_message_request_header::PopMessageRequestHeader;
+use rocketmq_remoting::protocol::header::pop_message_response_header::PopMessageResponseHeader;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_rust::ArcMut;
+use rocketmq_store::base::get_message_result::GetMessageResult;
+use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::filter::MessageFilter;
 use rocketmq_store::log_file::MessageStore;
@@ -55,6 +63,10 @@ use crate::broker_error::BrokerError;
 use crate::client::manager::consumer_manager::ConsumerManager;
 use crate::filter::expression_message_filter::ExpressionMessageFilter;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
+use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingService;
+use crate::long_polling::polling_header::PollingHeader;
+use crate::long_polling::polling_result::PollingResult;
+use crate::processor::processor_service::pop_buffer_merge_service::PopBufferMergeService;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
@@ -68,6 +80,9 @@ pub struct PopMessageProcessor<MS> {
     topic_config_manager: Arc<TopicConfigManager>,
     subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
     consumer_filter_manager: Arc<ConsumerFilterManager>,
+    ck_message_number: AtomicI64,
+    pop_long_polling_service: ArcMut<PopLongPollingService>,
+    pop_buffer_merge_service: ArcMut<PopBufferMergeService>,
 }
 
 impl<MS> PopMessageProcessor<MS> {
@@ -88,6 +103,9 @@ impl<MS> PopMessageProcessor<MS> {
             topic_config_manager,
             subscription_group_manager,
             consumer_filter_manager,
+            ck_message_number: Default::default(),
+            pop_long_polling_service: ArcMut::new(PopLongPollingService),
+            pop_buffer_merge_service: ArcMut::new(PopBufferMergeService),
         }
     }
 }
@@ -377,7 +395,270 @@ where
             (subscription_data, None)
         };
 
-        unimplemented!("PopMessageProcessor process_request")
+        let randomq = thread_rng().gen_range(0..100);
+        let revive_qid = if request_header.order.unwrap_or(false) {
+            POP_ORDER_REVIVE_QUEUE
+        } else {
+            (self.ck_message_number.fetch_add(1, Ordering::AcqRel)
+                % self.broker_config.revive_queue_num as i64)
+                .abs() as i32
+        };
+        let mut get_message_result =
+            GetMessageResult::new_result_size(request_header.max_msg_nums as usize);
+        let need_retry = randomq < self.broker_config.pop_from_retry_probability;
+        let mut need_retry_v1 = false;
+        if self.broker_config.enable_retry_topic_v2
+            && self.broker_config.retrieve_message_from_pop_retry_topic_v1
+        {
+            need_retry_v1 = randomq % 2 == 0;
+        }
+        let mut start_offset_info = String::with_capacity(64);
+        let mut msg_offset_info = String::with_capacity(64);
+        let mut order_count_info = String::with_capacity(64);
+        let pop_time = get_current_millis();
+
+        let message_filter = Arc::new(message_filter);
+        if need_retry && !request_header.order.unwrap_or(false) {
+            if need_retry_v1 {
+                let retry_topic = CheetahString::from_string(KeyBuilder::build_pop_retry_topic_v1(
+                    &request_header.topic,
+                    &request_header.consumer_group,
+                ));
+
+                self.pop_msg_from_topic_by_name(
+                    &retry_topic,
+                    true,
+                    &mut get_message_result,
+                    &request_header,
+                    revive_qid,
+                    channel.clone(),
+                    pop_time,
+                    message_filter.clone(),
+                    &mut start_offset_info,
+                    &mut msg_offset_info,
+                    &mut order_count_info,
+                    randomq,
+                )
+            } else {
+                let retry_topic = CheetahString::from_string(KeyBuilder::build_pop_retry_topic(
+                    &request_header.topic,
+                    &request_header.consumer_group,
+                    self.broker_config.enable_retry_topic_v2,
+                ));
+                self.pop_msg_from_topic_by_name(
+                    &retry_topic,
+                    true,
+                    &mut get_message_result,
+                    &request_header,
+                    revive_qid,
+                    channel.clone(),
+                    pop_time,
+                    message_filter.clone(),
+                    &mut start_offset_info,
+                    &mut msg_offset_info,
+                    &mut order_count_info,
+                    randomq,
+                )
+            };
+        }
+        let mut rest_num = if request_header.queue_id < 0 {
+            self.pop_msg_from_topic(
+                &topic_config,
+                false,
+                &mut get_message_result,
+                &request_header,
+                revive_qid,
+                channel.clone(),
+                pop_time,
+                message_filter.clone(),
+                &mut start_offset_info,
+                &mut msg_offset_info,
+                &mut order_count_info,
+                randomq,
+            )
+        } else {
+            self.pop_msg_from_topic(
+                &topic_config,
+                false,
+                &mut get_message_result,
+                &request_header,
+                request_header.queue_id,
+                channel.clone(),
+                pop_time,
+                message_filter.clone(),
+                &mut start_offset_info,
+                &mut msg_offset_info,
+                &mut order_count_info,
+                randomq,
+            )
+        };
+        if !need_retry
+            && get_message_result.message_mapped_list().len() < request_header.max_msg_nums as usize
+            && !request_header.order.unwrap_or(false)
+        {
+            rest_num = if need_retry_v1 {
+                let retry_topic = CheetahString::from_string(KeyBuilder::build_pop_retry_topic_v1(
+                    &request_header.topic,
+                    &request_header.consumer_group,
+                ));
+
+                self.pop_msg_from_topic_by_name(
+                    &retry_topic,
+                    true,
+                    &mut get_message_result,
+                    &request_header,
+                    revive_qid,
+                    channel.clone(),
+                    pop_time,
+                    message_filter.clone(),
+                    &mut start_offset_info,
+                    &mut msg_offset_info,
+                    &mut order_count_info,
+                    randomq,
+                )
+            } else {
+                let retry_topic = CheetahString::from_string(KeyBuilder::build_pop_retry_topic(
+                    &request_header.topic,
+                    &request_header.consumer_group,
+                    self.broker_config.enable_retry_topic_v2,
+                ));
+                self.pop_msg_from_topic_by_name(
+                    &retry_topic,
+                    true,
+                    &mut get_message_result,
+                    &request_header,
+                    revive_qid,
+                    channel.clone(),
+                    pop_time,
+                    message_filter.clone(),
+                    &mut start_offset_info,
+                    &mut msg_offset_info,
+                    &mut order_count_info,
+                    randomq,
+                )
+            };
+        }
+        let mut final_response = RemotingCommand::create_response_command();
+        if get_message_result.message_mapped_list().is_empty() {
+            get_message_result.set_status(Some(GetMessageStatus::Found));
+            if rest_num > 0 {
+                //
+                self.pop_long_polling_service.notify_message_arriving(
+                    &request_header.topic,
+                    request_header.queue_id,
+                    &request_header.consumer_group,
+                    None,
+                    0,
+                    None,
+                    None,
+                );
+            }
+        } else {
+            let polling_result = self.pop_long_polling_service.polling(
+                ctx.clone(),
+                request,
+                PollingHeader::new_from_pop_message_request_header(&request_header),
+                subscription_data,
+                message_filter,
+            );
+            match polling_result {
+                PollingResult::PollingSuc => {
+                    if rest_num > 0 {
+                        self.pop_long_polling_service.notify_message_arriving(
+                            &request_header.topic,
+                            request_header.queue_id,
+                            &request_header.consumer_group,
+                            None,
+                            0,
+                            None,
+                            None,
+                        );
+                    }
+                    return Ok(None);
+                }
+                PollingResult::PollingFull => {
+                    final_response.set_code_ref(ResponseCode::PollingFull);
+                }
+                PollingResult::PollingTimeout => {
+                    final_response.set_code_ref(ResponseCode::PollingTimeout);
+                }
+                PollingResult::NotPolling => {}
+            }
+            get_message_result.set_status(Some(GetMessageStatus::NoMessageInQueue));
+        }
+        let response_header = PopMessageResponseHeader {
+            pop_time,
+            invisible_time: request_header.invisible_time,
+            revive_qid: revive_qid as u32,
+            rest_num: rest_num as u64,
+            start_offset_info: Some(CheetahString::from_string(start_offset_info)),
+            msg_offset_info: Some(CheetahString::from_string(msg_offset_info)),
+            order_count_info: Some(CheetahString::from_string(order_count_info)),
+        };
+        final_response.set_remark_mut(get_message_result.status().unwrap().to_string());
+
+        match ResponseCode::from(final_response.code()) {
+            ResponseCode::Success => Ok(Some(final_response)),
+            _ => Ok(Some(final_response)),
+        }
+    }
+
+    fn pop_msg_from_topic(
+        &self,
+        topic_config: &TopicConfig,
+        is_retry: bool,
+        get_message_result: &mut GetMessageResult,
+        request_header: &PopMessageRequestHeader,
+        revive_qid: i32,
+        channel: Channel,
+        pop_time: u64,
+        message_filter: Arc<Option<Box<dyn MessageFilter>>>,
+        start_offset_info: &mut str,
+        msg_offset_info: &mut str,
+        order_count_info: &mut str,
+        random_q: i32,
+        //get_message_future: Pin<Box<dyn Future<Output = i64>>>,
+    ) -> i64 {
+        unimplemented!("PopMessageProcessor pop_msg_from_topic")
+    }
+
+    fn pop_msg_from_topic_by_name(
+        &self,
+        topic: &CheetahString,
+        is_retry: bool,
+        get_message_result: &mut GetMessageResult,
+        request_header: &PopMessageRequestHeader,
+        revive_qid: i32,
+        channel: Channel,
+        pop_time: u64,
+        message_filter: Arc<Option<Box<dyn MessageFilter>>>,
+        start_offset_info: &mut str,
+        msg_offset_info: &mut str,
+        order_count_info: &mut str,
+        random_q: i32,
+        //get_message_future: Pin<Box<dyn Future<Output = i64>>>,
+    ) -> i64 {
+        unimplemented!("PopMessageProcessor pop_msg_from_topic_by_name")
+    }
+
+    async fn pop_msg_from_queue(
+        &self,
+        topic_name: &str,
+        attempt_id: &str,
+        is_retry: bool,
+        get_message_result: Arc<GetMessageResult>,
+        request_header: Arc<PopMessageRequestHeader>,
+        queue_id: i32,
+        rest_num: i64,
+        revive_qid: i32,
+        channel: Arc<()>,
+        pop_time: u64,
+        message_filter: Arc<ExpressionMessageFilter>,
+        start_offset_info: Arc<String>,
+        msg_offset_info: Arc<String>,
+        order_count_info: Arc<String>,
+    ) -> i64 {
+        unimplemented!("PopMessageProcessor pop_msg_from_queue")
     }
 
     pub fn queue_lock_manager(&self) -> &QueueLockManager {
