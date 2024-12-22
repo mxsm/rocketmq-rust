@@ -24,7 +24,7 @@ use serde::Serialize;
 
 use crate::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
 
-#[derive(Debug, Serialize, Deserialize, RequestHeaderCodec)]
+#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
 pub struct PopMessageRequestHeader {
     #[required]
