@@ -729,6 +729,17 @@ impl RemotingCommand {
     pub fn create_new_request_id() -> i32 {
         requestId.fetch_add(1, Ordering::AcqRel)
     }
+
+    #[inline]
+    pub fn add_ext_field_if_not_exist(
+        &mut self,
+        key: impl Into<CheetahString>,
+        value: impl Into<CheetahString>,
+    ) {
+        if let Some(ref mut ext) = self.ext_fields {
+            ext.entry(key.into()).or_insert(value.into());
+        }
+    }
 }
 
 pub fn parse_header_length(size: i32) -> usize {

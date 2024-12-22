@@ -65,7 +65,7 @@ pub struct ChangeInvisibleTimeProcessor<MS> {
     escape_bridge: ArcMut<EscapeBridge<MS>>,
     revive_topic: CheetahString,
     store_host: SocketAddr,
-    pop_message_processor: ArcMut<PopMessageProcessor>,
+    pop_message_processor: ArcMut<PopMessageProcessor<MS>>,
 }
 
 impl<MS> ChangeInvisibleTimeProcessor<MS> {
@@ -78,7 +78,7 @@ impl<MS> ChangeInvisibleTimeProcessor<MS> {
         broker_stats_manager: Arc<BrokerStatsManager>,
         pop_buffer_merge_service: ArcMut<PopBufferMergeService>,
         escape_bridge: ArcMut<EscapeBridge<MS>>,
-        pop_message_processor: ArcMut<PopMessageProcessor>,
+        pop_message_processor: ArcMut<PopMessageProcessor<MS>>,
     ) -> Self {
         let revive_topic = PopAckConstants::build_cluster_revive_topic(
             broker_config.broker_identity.broker_cluster_name.as_str(),
@@ -291,7 +291,7 @@ where
         inner.set_delay_time_ms(deliver_time_ms as u64);
         inner.message_ext_inner.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
-            CheetahString::from(PopMessageProcessor::gen_ack_unique_id(&ack_msg)),
+            CheetahString::from(PopMessageProcessor::<MS>::gen_ack_unique_id(&ack_msg)),
         );
         inner.properties_string =
             message_decoder::message_properties_to_string(inner.get_properties());
@@ -358,7 +358,7 @@ where
         inner.set_delay_time_ms(deliver_time_ms);
         inner.message_ext_inner.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
-            CheetahString::from(PopMessageProcessor::gen_ck_unique_id(&ck)),
+            CheetahString::from(PopMessageProcessor::<MS>::gen_ck_unique_id(&ck)),
         );
         inner.properties_string =
             message_decoder::message_properties_to_string(inner.get_properties());
