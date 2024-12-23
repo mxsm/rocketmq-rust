@@ -12,7 +12,8 @@ members = [
     "rocketmq-remoting",
     "rocketmq-runtime",
     "rocketmq-store",
-    "rocketmq-tools"]
+    "rocketmq-tools",
+    "rocketmq-tui"]
 resolver = "2"
 
 [workspace.package]
