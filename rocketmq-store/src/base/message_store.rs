@@ -16,6 +16,7 @@
  */
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::error::Error;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -50,6 +51,7 @@ use crate::stats::broker_stats_manager::BrokerStatsManager;
 use crate::store::running_flags::RunningFlags;
 use crate::timer::timer_message_store::TimerMessageStore;
 
+#[trait_variant::make(MessageStoreRefactor: Send)]
 pub trait MessageStoreInner {
     /// Loads the message store.
     ///
@@ -57,7 +59,7 @@ pub trait MessageStoreInner {
     ///
     /// * `true` if the message store was loaded successfully.
     /// * `false` otherwise.
-    fn load(&self) -> bool;
+    async fn load(&mut self) -> bool;
 
     /// Starts the message store.
     ///
@@ -65,7 +67,7 @@ pub trait MessageStoreInner {
     ///
     /// * `Ok(())` if the message store started successfully.
     /// * `Err` containing a boxed error if the message store failed to start.
-    fn start(&self) -> Result<(), Box<dyn std::error::Error>>;
+    fn start(&mut self) -> Result<(), Box<dyn Error>>;
 
     /// Shuts down the message store.
     fn shutdown(&self);
@@ -82,12 +84,7 @@ pub trait MessageStoreInner {
     /// # Returns
     ///
     /// A `Future` that resolves to a `PutMessageResult`.
-    fn async_put_message(
-        &self,
-        msg: MessageExtBrokerInner,
-    ) -> Pin<Box<dyn Future<Output = PutMessageResult>>> {
-        Box::pin(async { self.put_message(msg) })
-    }
+    async fn async_put_message(&self, msg: MessageExtBrokerInner) -> PutMessageResult;
 
     /// Asynchronously puts a batch of messages into the message store.
     ///
@@ -98,12 +95,7 @@ pub trait MessageStoreInner {
     /// # Returns
     ///
     /// A `Future` that resolves to a `PutMessageResult`.
-    fn async_put_messages(
-        &self,
-        message_ext_batch: MessageExtBatch,
-    ) -> Pin<Box<dyn Future<Output = PutMessageResult>>> {
-        Box::pin(async { self.put_messages(message_ext_batch) })
-    }
+    async fn async_put_messages(&self, message_ext_batch: MessageExtBatch) -> PutMessageResult;
 
     /// Puts a single message into the message store.
     ///
@@ -114,7 +106,7 @@ pub trait MessageStoreInner {
     /// # Returns
     ///
     /// A `PutMessageResult` indicating the result of the operation.
-    fn put_message(&self, msg: MessageExtBrokerInner) -> PutMessageResult;
+    async fn put_message(&self, msg: MessageExtBrokerInner) -> PutMessageResult;
 
     /// Puts a batch of messages into the message store.
     ///
@@ -125,7 +117,7 @@ pub trait MessageStoreInner {
     /// # Returns
     ///
     /// A `PutMessageResult` indicating the result of the operation.
-    fn put_messages(&self, message_ext_batch: MessageExtBatch) -> PutMessageResult;
+    async fn put_messages(&self, message_ext_batch: MessageExtBatch) -> PutMessageResult;
 
     /// Retrieves messages from the store using a message filter.
     ///
@@ -626,8 +618,8 @@ pub trait MessageStoreInner {
     ///
     /// # Returns
     ///
-    /// The current time as an `i64`.
-    fn now(&self) -> i64;
+    /// The current time as an `u64`.
+    fn now(&self) -> u64;
 
     /// Deletes the specified topics.
     ///
@@ -755,7 +747,7 @@ pub trait MessageStoreInner {
     /// # Arguments
     ///
     /// * `phy_offset` - The physical offset to set as the confirm offset.
-    fn set_confirm_offset(&self, phy_offset: i64);
+    fn set_confirm_offset(&mut self, phy_offset: i64);
 
     /// Checks if the OS page cache is busy.
     ///
@@ -830,11 +822,11 @@ pub trait MessageStoreInner {
     /// * `msg` - The message that was appended.
     /// * `result` - The result of the append operation.
     /// * `commit_log_file` - The commit log file.
-    fn on_commit_log_append(
+    fn on_commit_log_append<MF: MappedFile>(
         &self,
         msg: &MessageExtBrokerInner,
         result: &AppendMessageResult,
-        commit_log_file: Arc<Box<dyn MappedFile>>,
+        commit_log_file: Arc<MF>,
     );
 
     /// Handles the event when a commit log is dispatched.
@@ -850,11 +842,11 @@ pub trait MessageStoreInner {
     /// # Returns
     ///
     /// `Ok(())` if the dispatch was successful, `Err` containing a string if the dispatch failed.
-    fn on_commit_log_dispatch(
+    fn on_commit_log_dispatch<MF: MappedFile>(
         &self,
         dispatch_request: &DispatchRequest,
         do_dispatch: bool,
-        commit_log_file: Arc<dyn MappedFile>,
+        commit_log_file: Arc<MF>,
         is_recover: bool,
         is_file_end: bool,
     ) -> Result<(), String>;
@@ -937,7 +929,7 @@ pub trait MessageStoreInner {
     /// # Arguments
     ///
     /// * `unlock_mapped_file` - The mapped file to unlock.
-    fn unlock_mapped_file(&self, unlock_mapped_file: Arc<dyn MappedFile>);
+    fn unlock_mapped_file<MF: MappedFile>(&self, unlock_mapped_file: Arc<MF>);
 
     //fn get_perf_counter(&self) -> &PerfCounter::Ticks;
 
@@ -989,7 +981,7 @@ pub trait MessageStoreInner {
     ///
     /// An `Option` containing a boxed `MessageStoreInner` if the master store is in process, `None`
     /// otherwise.
-    fn get_master_store_in_process(&self) -> Option<Box<dyn MessageStoreInner>>;
+    fn get_master_store_in_process<MS: MessageStoreRefactor>(&self) -> Option<Arc<MS>>;
 
     /// Sets the master store in process.
     ///
@@ -997,7 +989,10 @@ pub trait MessageStoreInner {
     ///
     /// * `master_store_in_process` - A boxed `MessageStoreInner` representing the master store in
     ///   process.
-    fn set_master_store_in_process(&mut self, master_store_in_process: Box<dyn MessageStoreInner>);
+    fn set_master_store_in_process<MS: MessageStoreRefactor>(
+        &mut self,
+        master_store_in_process: MS,
+    );
 
     //fn get_data(&self, offset: i64, size: usize, byte_buffer: &mut ByteBuffer) -> bool;
 
