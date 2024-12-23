@@ -23,6 +23,8 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use bytes::Bytes;
+use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use rand::thread_rng;
 use rand::Rng;
@@ -597,7 +599,17 @@ where
         final_response.set_remark_mut(get_message_result.status().unwrap().to_string());
 
         match ResponseCode::from(final_response.code()) {
-            ResponseCode::Success => Ok(Some(final_response)),
+            ResponseCode::Success => {
+                if let Some(bytes) = self.read_get_message_result(
+                    &get_message_result,
+                    &request_header.consumer_group,
+                    &request_header.topic,
+                    request_header.queue_id,
+                ) {
+                    final_response.set_body_mut_ref(bytes);
+                }
+                Ok(Some(final_response))
+            }
             _ => Ok(Some(final_response)),
         }
     }
@@ -675,6 +687,23 @@ where
             topic, queue_id, cid
         );
         unimplemented!("PopMessageProcessor notify_message_arriving")
+    }
+
+    fn read_get_message_result(
+        &self,
+        get_message_result: &GetMessageResult,
+        _group: &str,
+        _topic: &str,
+        _queue_id: i32,
+    ) -> Option<Bytes> {
+        let mut bytes_mut =
+            BytesMut::with_capacity(get_message_result.buffer_total_size() as usize);
+        for msg in get_message_result.message_mapped_list() {
+            let data = &msg.mapped_file.as_ref().unwrap().get_mapped_file()
+                [msg.start_offset as usize..(msg.start_offset + msg.size as u64) as usize];
+            bytes_mut.extend_from_slice(data);
+        }
+        Some(bytes_mut.freeze())
     }
 }
 
