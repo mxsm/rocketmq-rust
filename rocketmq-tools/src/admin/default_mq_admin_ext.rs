@@ -526,7 +526,16 @@ impl MQAdminExt for DefaultMQAdminExt {
         pop_work_group_size: i32,
         timeout_millis: u64,
     ) -> crate::Result<()> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .set_message_request_mode(
+                broker_addr,
+                topic,
+                consumer_group,
+                mode,
+                pop_work_group_size,
+                timeout_millis,
+            )
+            .await
     }
 
     async fn reset_offset_by_queue_id(
