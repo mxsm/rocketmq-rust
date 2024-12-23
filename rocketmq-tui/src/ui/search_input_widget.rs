@@ -14,21 +14,4 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#![allow(dead_code)]
-#![allow(unused_mut)]
-#![allow(unused_variables)]
-
-mod rocketmq_tui_app;
-mod ui;
-
-use rocketmq_rust::rocketmq;
-
-use crate::rocketmq_tui_app::RocketmqTuiApp;
-
-#[rocketmq::main]
-async fn main() -> anyhow::Result<()> {
-    let terminal = ratatui::try_init()?;
-    let result = RocketmqTuiApp::default().run(terminal).await;
-    ratatui::try_restore()?;
-    result
-}
+pub(crate) struct SearchInputWidget;

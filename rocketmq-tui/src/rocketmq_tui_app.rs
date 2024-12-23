@@ -14,21 +14,29 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#![allow(dead_code)]
-#![allow(unused_mut)]
-#![allow(unused_variables)]
+use ratatui::DefaultTerminal;
 
-mod rocketmq_tui_app;
-mod ui;
+#[derive(Default)]
+pub struct RocketmqTuiApp {
+    should_quit: bool,
+}
 
-use rocketmq_rust::rocketmq;
+impl RocketmqTuiApp {
+    pub fn new() -> Self {
+        Self { should_quit: false }
+    }
 
-use crate::rocketmq_tui_app::RocketmqTuiApp;
+    pub fn should_quit(&self) -> bool {
+        self.should_quit
+    }
 
-#[rocketmq::main]
-async fn main() -> anyhow::Result<()> {
-    let terminal = ratatui::try_init()?;
-    let result = RocketmqTuiApp::default().run(terminal).await;
-    ratatui::try_restore()?;
-    result
+    pub fn quit(&mut self) {
+        self.should_quit = true;
+    }
+}
+
+impl RocketmqTuiApp {
+    pub async fn run(mut self, mut terminal: DefaultTerminal) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
