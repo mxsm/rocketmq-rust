@@ -126,12 +126,11 @@ where
             CheetahString::from_static_str(BORN_TIME),
             begin_time_mills.to_string(),
         );
-        //need optimize
+
         let old = request
             .get_ext_fields()
-            .map_or(CheetahString::empty(), |fields| {
-                fields.get(BORN_TIME).cloned().unwrap_or_default()
-            });
+            .and_then(|fields| fields.get(BORN_TIME).cloned())
+            .unwrap_or_default();
         if "0" == old {
             request.add_ext_field(
                 CheetahString::from_static_str(BORN_TIME),
