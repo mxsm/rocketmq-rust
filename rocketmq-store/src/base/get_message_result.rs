@@ -69,6 +69,7 @@ impl fmt::Display for GetMessageResult {
 }
 
 impl GetMessageResult {
+    #[inline]
     pub fn new() -> Self {
         GetMessageResult {
             message_mapped_list: Vec::with_capacity(100),
@@ -78,6 +79,7 @@ impl GetMessageResult {
         }
     }
 
+    #[inline]
     pub fn new_result_size(result_size: usize) -> Self {
         GetMessageResult {
             message_mapped_list: Vec::with_capacity(result_size),
@@ -89,77 +91,122 @@ impl GetMessageResult {
 }
 
 impl GetMessageResult {
+    #[inline]
     pub fn status(&self) -> Option<GetMessageStatus> {
         self.status
     }
+
+    #[inline]
     pub fn next_begin_offset(&self) -> i64 {
         self.next_begin_offset
     }
+
+    #[inline]
     pub fn min_offset(&self) -> i64 {
         self.min_offset
     }
+
+    #[inline]
     pub fn max_offset(&self) -> i64 {
         self.max_offset
     }
+
+    #[inline]
     pub fn buffer_total_size(&self) -> i32 {
         self.buffer_total_size
     }
+
+    #[inline]
     pub fn message_count(&self) -> i32 {
         self.message_count
     }
+
+    #[inline]
     pub fn suggest_pulling_from_slave(&self) -> bool {
         self.suggest_pulling_from_slave
     }
+
+    #[inline]
     pub fn msg_count4_commercial(&self) -> i32 {
         self.msg_count4_commercial
     }
+
+    #[inline]
     pub fn commercial_size_per_msg(&self) -> i32 {
         self.commercial_size_per_msg
     }
+
+    #[inline]
     pub fn cold_data_sum(&self) -> i64 {
         self.cold_data_sum
     }
 
+    #[inline]
     pub fn set_message_mapped_list(&mut self, message_mapped_list: Vec<SelectMappedBufferResult>) {
         self.message_mapped_list = message_mapped_list;
     }
-    /*    pub fn set_message_buffer_list(&mut self, message_buffer_list: Vec<Bytes>) {
+
+    /*
+    #[inline]
+    pub fn set_message_buffer_list(&mut self, message_buffer_list: Vec<Bytes>) {
         self.message_buffer_list = message_buffer_list;
     }*/
+
+    #[inline]
     pub fn set_message_queue_offset(&mut self, message_queue_offset: Vec<u64>) {
         self.message_queue_offset = message_queue_offset;
     }
+
+    #[inline]
     pub fn set_status(&mut self, status: Option<GetMessageStatus>) {
         self.status = status;
     }
+
+    #[inline]
     pub fn set_next_begin_offset(&mut self, next_begin_offset: i64) {
         self.next_begin_offset = next_begin_offset;
     }
+
+    #[inline]
     pub fn set_min_offset(&mut self, min_offset: i64) {
         self.min_offset = min_offset;
     }
+
+    #[inline]
     pub fn set_max_offset(&mut self, max_offset: i64) {
         self.max_offset = max_offset;
     }
+
+    #[inline]
     pub fn set_buffer_total_size(&mut self, buffer_total_size: i32) {
         self.buffer_total_size = buffer_total_size;
     }
+
+    #[inline]
     pub fn set_message_count(&mut self, message_count: i32) {
         self.message_count = message_count;
     }
+    #[inline]
     pub fn set_suggest_pulling_from_slave(&mut self, suggest_pulling_from_slave: bool) {
         self.suggest_pulling_from_slave = suggest_pulling_from_slave;
     }
+
+    #[inline]
     pub fn set_msg_count4_commercial(&mut self, msg_count4_commercial: i32) {
         self.msg_count4_commercial = msg_count4_commercial;
     }
+
+    #[inline]
     pub fn set_commercial_size_per_msg(&mut self, commercial_size_per_msg: i32) {
         self.commercial_size_per_msg = commercial_size_per_msg;
     }
+
+    #[inline]
     pub fn set_cold_data_sum(&mut self, cold_data_sum: i64) {
         self.cold_data_sum = cold_data_sum;
     }
 
+    #[inline]
     pub fn add_message(
         &mut self,
         maped_buffer: SelectMappedBufferResult,
@@ -174,6 +221,7 @@ impl GetMessageResult {
         self.message_mapped_list.push(maped_buffer);
     }
 
+    #[inline]
     pub fn message_mapped_list(&self) -> &[SelectMappedBufferResult] {
         self.message_mapped_list.as_slice()
     }
