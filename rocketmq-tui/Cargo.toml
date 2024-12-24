@@ -13,10 +13,10 @@ description = "A RocketMQ Rust terminal command management tool implemented base
 
 [dependencies]
 rocketmq-rust = { workspace = true }
-
-ratatui = "0.29.0"
-crossterm = "0.28.1"
+ratatui = { version = "0.29.0" }
+crossterm = { version = "0.28.1", features = ["event-stream"] }
 
 tokio.workspace = true
+tokio-stream = { workspace = true }
 
 anyhow = { workspace = true }
