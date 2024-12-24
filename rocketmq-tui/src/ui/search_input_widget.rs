@@ -14,4 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::widgets::Widget;
+
 pub(crate) struct SearchInputWidget;
+
+impl Widget for &mut SearchInputWidget {
+    fn render(self, area: Rect, buf: &mut Buffer) {}
+}

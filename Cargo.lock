@@ -547,6 +547,7 @@ checksum = "829d955a0bb380ef178a640b91779e3987da38c9aea133b20614cfed8cdea9c6"
 dependencies = [
  "bitflags 2.4.1",
  "crossterm_winapi",
+ "futures-core",
  "mio",
  "parking_lot",
  "rustix",
@@ -2263,6 +2264,7 @@ dependencies = [
  "ratatui",
  "rocketmq-rust",
  "tokio",
+ "tokio-stream",
 ]
 
 [[package]]
