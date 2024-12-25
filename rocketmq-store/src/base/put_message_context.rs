@@ -22,6 +22,7 @@ pub struct PutMessageContext {
 }
 
 impl PutMessageContext {
+    #[inline]
     pub fn new(topic_queue_table_key: String) -> Self {
         PutMessageContext {
             topic_queue_table_key,
@@ -30,30 +31,37 @@ impl PutMessageContext {
         }
     }
 
+    #[inline]
     pub fn get_topic_queue_table_key(&self) -> &str {
         &self.topic_queue_table_key
     }
 
+    #[inline]
     pub fn get_phy_pos(&self) -> &[i64] {
         &self.phy_pos
     }
 
+    #[inline]
     pub fn set_phy_pos(&mut self, phy_pos: Vec<i64>) {
         self.phy_pos = phy_pos;
     }
 
+    #[inline]
     pub fn get_phy_pos_mut(&mut self) -> &mut [i64] {
         &mut self.phy_pos
     }
 
+    #[inline]
     pub fn get_batch_size(&self) -> i32 {
         self.batch_size
     }
 
+    #[inline]
     pub fn set_batch_size(&mut self, batch_size: i32) {
         self.batch_size = batch_size;
     }
 
+    #[inline]
     pub fn set_topic_queue_table_key(&mut self, topic_queue_table_key: String) {
         self.topic_queue_table_key = topic_queue_table_key;
     }
