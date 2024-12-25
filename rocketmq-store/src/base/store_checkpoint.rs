@@ -39,6 +39,7 @@ pub struct StoreCheckpoint {
 }
 
 impl StoreCheckpoint {
+    #[inline]
     pub fn new<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
         ensure_dir_ok(path.as_ref().parent().unwrap().to_str().unwrap());
         let file = OpenOptions::new()
@@ -87,6 +88,7 @@ impl StoreCheckpoint {
         }
     }
 
+    #[inline]
     pub fn flush(&self) -> std::io::Result<()> {
         let mut buffer = &mut self.mmap.lock()[..8];
         buffer.write_all(
@@ -123,55 +125,67 @@ impl StoreCheckpoint {
         Ok(())
     }
 
+    #[inline]
     pub fn shutdown(&self) -> std::io::Result<()> {
         self.flush()
     }
 
+    #[inline]
     pub fn set_physic_msg_timestamp(&self, physic_msg_timestamp: u64) {
         self.physic_msg_timestamp
             .store(physic_msg_timestamp, Ordering::Relaxed);
     }
 
+    #[inline]
     pub fn set_logics_msg_timestamp(&self, logics_msg_timestamp: u64) {
         self.logics_msg_timestamp
             .store(logics_msg_timestamp, Ordering::Relaxed);
     }
 
+    #[inline]
     pub fn set_index_msg_timestamp(&self, index_msg_timestamp: u64) {
         self.index_msg_timestamp
             .store(index_msg_timestamp, Ordering::Relaxed);
     }
 
+    #[inline]
     pub fn set_master_flushed_offset(&self, master_flushed_offset: u64) {
         self.master_flushed_offset
             .store(master_flushed_offset, Ordering::Relaxed);
     }
 
+    #[inline]
     pub fn set_confirm_phy_offset(&self, confirm_phy_offset: u64) {
         self.confirm_phy_offset
             .store(confirm_phy_offset, Ordering::Relaxed);
     }
 
+    #[inline]
     pub fn physic_msg_timestamp(&self) -> u64 {
         self.physic_msg_timestamp.load(Ordering::Relaxed)
     }
 
+    #[inline]
     pub fn logics_msg_timestamp(&self) -> u64 {
         self.logics_msg_timestamp.load(Ordering::Relaxed)
     }
 
+    #[inline]
     pub fn index_msg_timestamp(&self) -> u64 {
         self.index_msg_timestamp.load(Ordering::Relaxed)
     }
 
+    #[inline]
     pub fn master_flushed_offset(&self) -> u64 {
         self.master_flushed_offset.load(Ordering::Relaxed)
     }
 
+    #[inline]
     pub fn confirm_phy_offset(&self) -> u64 {
         self.confirm_phy_offset.load(Ordering::Relaxed)
     }
 
+    #[inline]
     pub fn get_min_timestamp(&self) -> u64 {
         let min = self
             .physic_msg_timestamp
@@ -181,6 +195,7 @@ impl StoreCheckpoint {
         min.max(0) as u64
     }
 
+    #[inline]
     pub fn get_min_timestamp_index(&self) -> u64 {
         self.get_min_timestamp()
             .min(self.index_msg_timestamp.load(Ordering::Relaxed))
