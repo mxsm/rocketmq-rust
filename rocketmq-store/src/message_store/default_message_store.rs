@@ -794,7 +794,7 @@ impl MessageStore for DefaultMessageStore {
         offset: i64,
         max_msg_nums: i32,
         max_total_msg_size: i32,
-        message_filter: Option<&dyn MessageFilter>,
+        message_filter: Option<Arc<Box<dyn MessageFilter>>>,
     ) -> Option<GetMessageResult> {
         if self.shutdown.load(Ordering::Relaxed) {
             warn!("message store has shutdown, so getMessage is forbidden");
@@ -931,7 +931,7 @@ impl MessageStore for DefaultMessageStore {
                                 continue;
                             }
 
-                            if let Some(filter) = message_filter {
+                            if let Some(filter) = message_filter.as_ref() {
                                 if !filter.is_matched_by_consume_queue(
                                     cq_unit.get_valid_tags_code_as_long(),
                                     cq_unit.cq_ext_unit.as_ref(),
@@ -962,10 +962,14 @@ impl MessageStore for DefaultMessageStore {
                             }
 
                             if message_filter.is_some()
-                                && !message_filter.as_ref().unwrap().is_matched_by_commit_log(
-                                    Some(select_result.as_ref().unwrap().get_buffer()),
-                                    None,
-                                )
+                                && !message_filter
+                                    .as_ref()
+                                    .as_ref()
+                                    .unwrap()
+                                    .is_matched_by_commit_log(
+                                        Some(select_result.as_ref().unwrap().get_buffer()),
+                                        None,
+                                    )
                             {
                                 if get_result_ref.buffer_total_size() == 0 {
                                     status = GetMessageStatus::NoMatchedMessage;

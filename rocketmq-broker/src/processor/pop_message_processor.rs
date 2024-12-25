@@ -34,6 +34,7 @@ use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
 use rocketmq_common::common::key_builder::KeyBuilder;
 use rocketmq_common::common::key_builder::POP_ORDER_REVIVE_QUEUE;
+use rocketmq_common::common::message::message_decoder;
 use rocketmq_common::common::pop_ack_constants::PopAckConstants;
 use rocketmq_common::common::FAQUrl;
 use rocketmq_common::TimeUtils::get_current_millis;
@@ -41,6 +42,7 @@ use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::filter::filter_api::FilterAPI;
+use rocketmq_remoting::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_remoting::protocol::header::pop_message_request_header::PopMessageRequestHeader;
 use rocketmq_remoting::protocol::header::pop_message_response_header::PopMessageResponseHeader;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
@@ -68,6 +70,9 @@ use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
 use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingService;
 use crate::long_polling::polling_header::PollingHeader;
 use crate::long_polling::polling_result::PollingResult;
+use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
+use crate::offset::manager::consumer_order_info_manager::ConsumerOrderInfoManager;
+use crate::processor::pop_inflight_message_counter::PopInflightMessageCounter;
 use crate::processor::processor_service::pop_buffer_merge_service::PopBufferMergeService;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
@@ -76,6 +81,8 @@ const BORN_TIME: &str = "bornTime";
 
 pub struct PopMessageProcessor<MS> {
     consumer_manager: Arc<ConsumerManager>,
+    consumer_offset_manager: Arc<ConsumerOffsetManager>,
+    consumer_order_info_manager: Arc<ConsumerOrderInfoManager<MS>>,
     broker_config: Arc<BrokerConfig>,
     message_store: ArcMut<MS>,
     message_store_config: Arc<MessageStoreConfig>,
@@ -85,20 +92,26 @@ pub struct PopMessageProcessor<MS> {
     ck_message_number: AtomicI64,
     pop_long_polling_service: ArcMut<PopLongPollingService>,
     pop_buffer_merge_service: ArcMut<PopBufferMergeService>,
+    pop_inflight_message_counter: Arc<PopInflightMessageCounter>,
 }
 
 impl<MS> PopMessageProcessor<MS> {
     pub fn new(
         consumer_manager: Arc<ConsumerManager>,
+        consumer_offset_manager: Arc<ConsumerOffsetManager>,
+        consumer_order_info_manager: Arc<ConsumerOrderInfoManager<MS>>,
         broker_config: Arc<BrokerConfig>,
         message_store: ArcMut<MS>,
         message_store_config: Arc<MessageStoreConfig>,
         topic_config_manager: Arc<TopicConfigManager>,
         subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
         consumer_filter_manager: Arc<ConsumerFilterManager>,
+        pop_inflight_message_counter: Arc<PopInflightMessageCounter>,
     ) -> Self {
         PopMessageProcessor {
+            consumer_offset_manager,
             consumer_manager,
+            consumer_order_info_manager,
             broker_config,
             message_store,
             message_store_config,
@@ -108,6 +121,7 @@ impl<MS> PopMessageProcessor<MS> {
             ck_message_number: Default::default(),
             pop_long_polling_service: ArcMut::new(PopLongPollingService),
             pop_buffer_merge_service: ArcMut::new(PopBufferMergeService),
+            pop_inflight_message_counter,
         }
     }
 }
@@ -404,8 +418,9 @@ where
                 % self.broker_config.revive_queue_num as i64)
                 .abs() as i32
         };
-        let mut get_message_result =
-            GetMessageResult::new_result_size(request_header.max_msg_nums as usize);
+        let mut get_message_result = ArcMut::new(GetMessageResult::new_result_size(
+            request_header.max_msg_nums as usize,
+        ));
         let need_retry = randomq < self.broker_config.pop_from_retry_probability;
         let mut need_retry_v1 = false;
         if self.broker_config.enable_retry_topic_v2
@@ -418,7 +433,7 @@ where
         let mut order_count_info = String::with_capacity(64);
         let pop_time = get_current_millis();
 
-        let message_filter = Arc::new(message_filter);
+        let message_filter = message_filter.map(Arc::new);
         if need_retry && !request_header.order.unwrap_or(false) {
             if need_retry_v1 {
                 let retry_topic = CheetahString::from_string(KeyBuilder::build_pop_retry_topic_v1(
@@ -429,7 +444,7 @@ where
                 self.pop_msg_from_topic_by_name(
                     &retry_topic,
                     true,
-                    &mut get_message_result,
+                    get_message_result.clone(),
                     &request_header,
                     revive_qid,
                     channel.clone(),
@@ -439,7 +454,9 @@ where
                     &mut msg_offset_info,
                     &mut order_count_info,
                     randomq,
+                    0,
                 )
+                .await
             } else {
                 let retry_topic = CheetahString::from_string(KeyBuilder::build_pop_retry_topic(
                     &request_header.topic,
@@ -449,7 +466,7 @@ where
                 self.pop_msg_from_topic_by_name(
                     &retry_topic,
                     true,
-                    &mut get_message_result,
+                    get_message_result.clone(),
                     &request_header,
                     revive_qid,
                     channel.clone(),
@@ -459,14 +476,16 @@ where
                     &mut msg_offset_info,
                     &mut order_count_info,
                     randomq,
+                    0,
                 )
+                .await
             };
         }
         let mut rest_num = if request_header.queue_id < 0 {
             self.pop_msg_from_topic(
                 &topic_config,
                 false,
-                &mut get_message_result,
+                get_message_result.clone(),
                 &request_header,
                 revive_qid,
                 channel.clone(),
@@ -476,12 +495,14 @@ where
                 &mut msg_offset_info,
                 &mut order_count_info,
                 randomq,
+                0,
             )
+            .await
         } else {
             self.pop_msg_from_topic(
                 &topic_config,
                 false,
-                &mut get_message_result,
+                get_message_result.clone(),
                 &request_header,
                 request_header.queue_id,
                 channel.clone(),
@@ -491,7 +512,9 @@ where
                 &mut msg_offset_info,
                 &mut order_count_info,
                 randomq,
+                0,
             )
+            .await
         };
         if !need_retry
             && get_message_result.message_mapped_list().len() < request_header.max_msg_nums as usize
@@ -506,7 +529,7 @@ where
                 self.pop_msg_from_topic_by_name(
                     &retry_topic,
                     true,
-                    &mut get_message_result,
+                    get_message_result.clone(),
                     &request_header,
                     revive_qid,
                     channel.clone(),
@@ -516,7 +539,9 @@ where
                     &mut msg_offset_info,
                     &mut order_count_info,
                     randomq,
+                    rest_num,
                 )
+                .await
             } else {
                 let retry_topic = CheetahString::from_string(KeyBuilder::build_pop_retry_topic(
                     &request_header.topic,
@@ -526,7 +551,7 @@ where
                 self.pop_msg_from_topic_by_name(
                     &retry_topic,
                     true,
-                    &mut get_message_result,
+                    get_message_result.clone(),
                     &request_header,
                     revive_qid,
                     channel.clone(),
@@ -536,7 +561,9 @@ where
                     &mut msg_offset_info,
                     &mut order_count_info,
                     randomq,
+                    rest_num,
                 )
+                .await
             };
         }
         let mut final_response = RemotingCommand::create_response_command();
@@ -614,62 +641,368 @@ where
         }
     }
 
-    fn pop_msg_from_topic(
+    async fn pop_msg_from_topic(
         &self,
         topic_config: &TopicConfig,
         is_retry: bool,
-        get_message_result: &mut GetMessageResult,
+        get_message_result: ArcMut<GetMessageResult>,
         request_header: &PopMessageRequestHeader,
         revive_qid: i32,
         channel: Channel,
         pop_time: u64,
-        message_filter: Arc<Option<Box<dyn MessageFilter>>>,
-        start_offset_info: &mut str,
-        msg_offset_info: &mut str,
+        message_filter: Option<Arc<Box<dyn MessageFilter>>>,
+        start_offset_info: &mut String,
+        msg_offset_info: &mut String,
         order_count_info: &mut str,
         random_q: i32,
-        //get_message_future: Pin<Box<dyn Future<Output = i64>>>,
+        mut rest_num: i64,
     ) -> i64 {
-        unimplemented!("PopMessageProcessor pop_msg_from_topic")
+        for index in 0..topic_config.read_queue_nums {
+            let queue_id = (random_q + index as i32) % topic_config.read_queue_nums as i32;
+            rest_num = self
+                .pop_msg_from_queue(
+                    &topic_config.topic_name.clone().unwrap_or_default(),
+                    &request_header.consumer_group,
+                    is_retry,
+                    get_message_result.clone(),
+                    request_header,
+                    queue_id,
+                    rest_num,
+                    revive_qid,
+                    channel.clone(),
+                    pop_time,
+                    message_filter.clone(),
+                    start_offset_info,
+                    msg_offset_info,
+                    order_count_info,
+                )
+                .await;
+        }
+        rest_num
     }
 
-    fn pop_msg_from_topic_by_name(
+    async fn pop_msg_from_topic_by_name(
         &self,
         topic: &CheetahString,
         is_retry: bool,
-        get_message_result: &mut GetMessageResult,
+        get_message_result: ArcMut<GetMessageResult>,
         request_header: &PopMessageRequestHeader,
         revive_qid: i32,
         channel: Channel,
         pop_time: u64,
-        message_filter: Arc<Option<Box<dyn MessageFilter>>>,
-        start_offset_info: &mut str,
-        msg_offset_info: &mut str,
+        message_filter: Option<Arc<Box<dyn MessageFilter>>>,
+        start_offset_info: &mut String,
+        msg_offset_info: &mut String,
         order_count_info: &mut str,
         random_q: i32,
-        //get_message_future: Pin<Box<dyn Future<Output = i64>>>,
+        rest_num: i64,
     ) -> i64 {
-        unimplemented!("PopMessageProcessor pop_msg_from_topic_by_name")
+        let topic_config = self.topic_config_manager.select_topic_config(topic);
+        if topic_config.is_none() {
+            return rest_num;
+        }
+        self.pop_msg_from_topic(
+            &topic_config.unwrap(),
+            is_retry,
+            get_message_result,
+            request_header,
+            revive_qid,
+            channel,
+            pop_time,
+            message_filter,
+            start_offset_info,
+            msg_offset_info,
+            order_count_info,
+            random_q,
+            rest_num,
+        )
+        .await
     }
 
     async fn pop_msg_from_queue(
         &self,
-        topic_name: &str,
-        attempt_id: &str,
+        topic: &CheetahString,
+        attempt_id: &CheetahString,
         is_retry: bool,
-        get_message_result: Arc<GetMessageResult>,
-        request_header: Arc<PopMessageRequestHeader>,
+        get_message_result: ArcMut<GetMessageResult>,
+        request_header: &PopMessageRequestHeader,
         queue_id: i32,
         rest_num: i64,
         revive_qid: i32,
-        channel: Arc<()>,
+        channel: Channel,
         pop_time: u64,
-        message_filter: Arc<ExpressionMessageFilter>,
-        start_offset_info: Arc<String>,
-        msg_offset_info: Arc<String>,
-        order_count_info: Arc<String>,
+        message_filter: Option<Arc<Box<dyn MessageFilter>>>,
+        start_offset_info: &mut String,
+        msg_offset_info: &mut String,
+        order_count_info: &mut str,
     ) -> i64 {
-        unimplemented!("PopMessageProcessor pop_msg_from_queue")
+        let lock_key = CheetahString::from_string(format!(
+            "{}{}{}{}{}",
+            topic,
+            PopAckConstants::SPLIT,
+            request_header.consumer_group,
+            PopAckConstants::SPLIT,
+            queue_id
+        ));
+        let offset = self.get_pop_offset(
+            topic,
+            &request_header.consumer_group,
+            queue_id,
+            request_header.init_mode,
+            false,
+            &lock_key,
+            false,
+        );
+        if !self
+            .queue_lock_manager()
+            .try_lock_with_key(lock_key.clone())
+            .await
+        {
+            return self.message_store.get_max_offset_in_queue(topic, queue_id) - offset + rest_num;
+        }
+        self.queue_lock_manager()
+            .unlock_with_key(lock_key.clone())
+            .await;
+        if !self.is_pop_should_stop(topic, &request_header.consumer_group, queue_id) {
+            return self.message_store.get_max_offset_in_queue(topic, queue_id) - offset + rest_num;
+        }
+        let offset = self.get_pop_offset(
+            topic,
+            &request_header.consumer_group,
+            queue_id,
+            request_header.init_mode,
+            true,
+            &lock_key,
+            true,
+        );
+        if request_header.order.unwrap_or(false) {
+            if self.consumer_order_info_manager.check_block(
+                attempt_id,
+                topic,
+                &request_header.consumer_group,
+                queue_id,
+                request_header.invisible_time,
+            ) {
+                return rest_num;
+            }
+            self.pop_inflight_message_counter
+                .clear_in_flight_message_num(topic, &request_header.consumer_group, queue_id);
+        }
+
+        if get_message_result.message_mapped_list().len() >= request_header.max_msg_nums as usize {
+            return self.message_store.get_max_offset_in_queue(topic, queue_id) - offset + rest_num;
+        }
+        let get_message_result_inner = self
+            .message_store
+            .get_message(
+                &request_header.consumer_group,
+                topic,
+                queue_id,
+                offset,
+                request_header.max_msg_nums as i32
+                    - get_message_result.message_mapped_list().len() as i32,
+                1024 * 1024,
+                message_filter.clone(),
+            )
+            .await;
+        let atomic_rest_num = AtomicI64::new(rest_num);
+        let atomic_offset = AtomicI64::new(offset);
+        let final_offset = offset;
+        let is_order = request_header.order.unwrap_or(false);
+        match get_message_result_inner {
+            None => {
+                let num = self.message_store.get_max_offset_in_queue(topic, queue_id)
+                    - atomic_offset.load(Ordering::Acquire)
+                    + atomic_rest_num.load(Ordering::Acquire);
+                atomic_rest_num.store(num, Ordering::Release);
+            }
+            Some(result) => {
+                let result_inner = if result.status().is_none() {
+                    result
+                } else {
+                    match result.status().as_ref().unwrap() {
+                        GetMessageStatus::OffsetFoundNull
+                        | GetMessageStatus::OffsetOverflowBadly
+                        | GetMessageStatus::OffsetTooSmall => {
+                            self.consumer_offset_manager.commit_offset(
+                                channel.remote_address(),
+                                &request_header.consumer_group,
+                                topic,
+                                queue_id,
+                                result.next_begin_offset(),
+                            );
+                            atomic_offset.store(result.next_begin_offset(), Ordering::Release);
+                            let get_message_result_in = self
+                                .message_store
+                                .get_message(
+                                    &request_header.consumer_group,
+                                    topic,
+                                    queue_id,
+                                    offset,
+                                    request_header.max_msg_nums as i32
+                                        - get_message_result.message_mapped_list().len() as i32,
+                                    1024 * 1024,
+                                    message_filter,
+                                )
+                                .await;
+                            match get_message_result_in {
+                                None => {
+                                    let num =
+                                        self.message_store.get_max_offset_in_queue(topic, queue_id)
+                                            - atomic_offset.load(Ordering::Acquire)
+                                            + atomic_rest_num.load(Ordering::Acquire);
+                                    return num;
+                                }
+                                Some(value) => value,
+                            }
+                        }
+                        _ => result,
+                    }
+                };
+                if !result_inner.message_mapped_list().is_empty() {
+                    if is_order {
+                        self.consumer_order_info_manager.update(
+                            request_header.attempt_id.clone().unwrap_or_default(),
+                            is_retry,
+                            topic,
+                            &request_header.consumer_group,
+                            queue_id,
+                            pop_time,
+                            request_header.invisible_time,
+                            result_inner.message_queue_offset().clone(),
+                            order_count_info,
+                        );
+                        self.consumer_offset_manager.commit_offset(
+                            channel.remote_address(),
+                            &request_header.consumer_group,
+                            topic,
+                            queue_id,
+                            final_offset,
+                        );
+                    } else if !self.append_check_point(
+                        request_header,
+                        topic,
+                        revive_qid,
+                        queue_id,
+                        final_offset,
+                        &result_inner,
+                        pop_time as i64,
+                        self.broker_config.broker_name.as_str(),
+                    ) {
+                        return atomic_rest_num.load(Ordering::Acquire)
+                            + result_inner.message_count() as i64;
+                    }
+
+                    ExtraInfoUtil::build_start_offset_info(
+                        start_offset_info,
+                        topic,
+                        queue_id,
+                        final_offset,
+                    );
+                    ExtraInfoUtil::build_msg_offset_info(
+                        msg_offset_info,
+                        topic,
+                        queue_id,
+                        result_inner.message_queue_offset().clone(),
+                    );
+                } else {
+                    unimplemented!()
+                }
+
+                atomic_rest_num.fetch_add(
+                    result_inner.max_offset() - result_inner.next_begin_offset(),
+                    Ordering::AcqRel,
+                );
+                let broker_name = self.broker_config.broker_name.as_str();
+                for msg in result_inner.message_mapped_list() {
+                    if self.broker_config.pop_response_return_actual_retry_topic || !is_retry {
+                        //get_message_result.message_mapped_list().push(msg.clone());
+                    } else {
+                        let mut bytes = msg.get_bytes().unwrap_or_default();
+                        let message_ext_list =
+                            message_decoder::decodes_batch(&mut bytes, true, false);
+                        unimplemented!("PopMessageProcessor pop_msg_from_queue")
+                    }
+                }
+                self.pop_inflight_message_counter
+                    .increment_in_flight_message_num(
+                        topic,
+                        &request_header.consumer_group,
+                        queue_id,
+                        result_inner.message_count() as i64,
+                    );
+            }
+        }
+        self.queue_lock_manager().unlock_with_key(lock_key).await;
+        atomic_rest_num.load(Ordering::Acquire)
+    }
+    fn append_check_point(
+        &self,
+        request_header: &PopMessageRequestHeader,
+        topic: &str,
+        revive_qid: i32,
+        queue_id: i32,
+        offset: i64,
+        get_message_tmp_result: &GetMessageResult,
+        pop_time: i64,
+        broker_name: &str,
+    ) -> bool {
+        unimplemented!()
+    }
+
+    fn is_pop_should_stop(
+        &self,
+        topic: &CheetahString,
+        group: &CheetahString,
+        queue_id: i32,
+    ) -> bool {
+        unimplemented!("PopMessageProcessor is_pop_should_stop")
+    }
+
+    fn get_pop_offset(
+        &self,
+        topic: &CheetahString,
+        group: &CheetahString,
+        queue_id: i32,
+        init_mode: i32,
+        init: bool,
+        lock_key: &CheetahString,
+        check_reset_offset: bool,
+    ) -> i64 {
+        let mut offset = self
+            .consumer_offset_manager
+            .query_offset(group, topic, queue_id);
+        if offset < 0 {
+            offset = self.get_init_offset(topic, group, queue_id, init_mode, init);
+        }
+
+        if check_reset_offset {
+            if let Some(reset_offset) = self.reset_pop_offset(topic, group, queue_id) {
+                return reset_offset;
+            }
+        }
+
+        let buffer_offset = self.pop_buffer_merge_service.get_latest_offset(lock_key);
+        if buffer_offset < 0 {
+            offset
+        } else {
+            std::cmp::max(buffer_offset, offset)
+        }
+    }
+
+    fn get_init_offset(
+        &self,
+        topic: &str,
+        group: &str,
+        queue_id: i32,
+        init_mode: i32,
+        init: bool,
+    ) -> i64 {
+        unimplemented!("PopMessageProcessor get_init_offset")
+    }
+
+    fn reset_pop_offset(&self, topic: &str, group: &str, queue_id: i32) -> Option<i64> {
+        unimplemented!("PopMessageProcessor reset_pop_offset")
     }
 
     pub fn queue_lock_manager(&self) -> &QueueLockManager {

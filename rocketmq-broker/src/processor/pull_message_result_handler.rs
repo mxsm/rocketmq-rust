@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 use std::any::Any;
+use std::sync::Arc;
 
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
@@ -67,7 +68,7 @@ pub trait PullMessageResultHandler: Sync + Send + Any + 'static {
         subscription_data: SubscriptionData,
         subscription_group_config: SubscriptionGroupConfig,
         broker_allow_suspend: bool,
-        message_filter: Box<dyn MessageFilter>,
+        message_filter: Arc<Box<dyn MessageFilter>>,
         response: RemotingCommand,
         mapping_context: TopicQueueMappingContext,
         begin_time_mills: u64,
