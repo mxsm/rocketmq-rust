@@ -246,7 +246,7 @@ pub trait RocketMQMessageStore: Sync + 'static {
         offset: i64,
         max_msg_nums: i32,
         max_total_msg_size: i32,
-        message_filter: Option<&dyn MessageFilter>,
+        message_filter: Option<Arc<Box<dyn MessageFilter>>>,
     ) -> Option<GetMessageResult>;
 
     /// Check if messages are in memory by consume offset.

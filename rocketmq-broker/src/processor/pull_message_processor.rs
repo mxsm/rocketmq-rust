@@ -680,14 +680,15 @@ where
             );
         }
 
-        let message_filter: Box<dyn MessageFilter> = if self.broker_config.filter_support_retry {
-            Box::new(ExpressionForRetryMessageFilter)
+        let message_filter: Arc<Box<dyn MessageFilter>> = if self.broker_config.filter_support_retry
+        {
+            Arc::new(Box::new(ExpressionForRetryMessageFilter))
         } else {
-            Box::new(ExpressionMessageFilter::new(
+            Arc::new(Box::new(ExpressionMessageFilter::new(
                 Some(subscription_data.clone()),
                 consumer_filter_data,
                 self.consumer_filter_manager.clone(),
-            ))
+            )))
         };
 
         //ColdDataFlow not implement
@@ -740,7 +741,7 @@ where
                         request_header.queue_offset,
                         request_header.max_msg_nums,
                         MAX_PULL_MSG_SIZE,
-                        Some(message_filter.as_ref()),
+                        Some(message_filter.clone()),
                     )
                     .await;
                 if result.is_none() {

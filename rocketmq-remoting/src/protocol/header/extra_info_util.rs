@@ -284,7 +284,7 @@ impl ExtraInfoUtil {
         string_builder: &mut String,
         topic: &str,
         queue_id: i32,
-        msg_offsets: Vec<i64>,
+        msg_offsets: Vec<u64>,
     ) {
         let retry = ExtraInfoUtil::get_retry(topic);
         if !string_builder.is_empty() {

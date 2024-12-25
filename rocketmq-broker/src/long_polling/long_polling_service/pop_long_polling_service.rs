@@ -50,7 +50,7 @@ impl PopLongPollingService {
         remoting_command: RemotingCommand,
         request_header: PollingHeader,
         subscription_data: SubscriptionData,
-        message_filter: Arc<Option<Box<dyn MessageFilter>>>,
+        message_filter: Option<Arc<Box<dyn MessageFilter>>>,
     ) -> PollingResult {
         unimplemented!("PopLongPollingService::polling")
     }

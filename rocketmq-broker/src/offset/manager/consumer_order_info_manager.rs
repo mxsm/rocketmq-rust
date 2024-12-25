@@ -264,6 +264,21 @@ impl<MS> ConsumerOrderInfoManager<MS> {
     ) -> bool {
         unimplemented!()
     }
+
+    pub fn update(
+        &self,
+        attempt_id: CheetahString,
+        is_retry: bool,
+        topic: &CheetahString,
+        group: &CheetahString,
+        queue_id: i32,
+        pop_time: u64,
+        invisible_time: u64,
+        msg_queue_offset_list: Vec<u64>,
+        order_info_builder: &str,
+    ) -> bool {
+        unimplemented!()
+    }
 }
 
 #[inline]

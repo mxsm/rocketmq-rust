@@ -119,7 +119,7 @@ impl PullMessageResultHandler for DefaultPullMessageResultHandler {
         subscription_data: SubscriptionData,
         subscription_group_config: SubscriptionGroupConfig,
         broker_allow_suspend: bool,
-        message_filter: Box<dyn MessageFilter>,
+        message_filter: Arc<Box<dyn MessageFilter>>,
         mut response: RemotingCommand,
         mut mapping_context: TopicQueueMappingContext,
         _begin_time_mills: u64,
@@ -234,7 +234,7 @@ impl PullMessageResultHandler for DefaultPullMessageResultHandler {
                         get_current_millis(),
                         offset,
                         subscription_data,
-                        Arc::new(message_filter),
+                        message_filter,
                     );
                     self.pull_request_hold_service
                         .as_ref()
