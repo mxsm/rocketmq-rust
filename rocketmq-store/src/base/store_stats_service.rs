@@ -470,7 +470,7 @@ impl StoreStatsService {
         let map = self.put_message_topic_size_total.read();
         map.values().map(|v| v.load(Ordering::Relaxed) as u64).sum()
     }
-    
+
     #[inline]
     pub fn get_put_message_times_total(&self) -> u64 {
         let map = self.put_message_topic_times_total.read();
