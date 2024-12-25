@@ -87,6 +87,7 @@ pub struct StoreStatsService {
 }
 
 impl StoreStatsService {
+    #[inline]
     pub fn new(broker_identity: Option<BrokerIdentity>) -> Self {
         Self {
             buckets: BTreeMap::new(),
@@ -117,22 +118,27 @@ impl StoreStatsService {
 }
 
 impl StoreStatsService {
+    #[inline]
     pub fn get_message_times_total_found(&self) -> &AtomicUsize {
         &self.get_message_times_total_found
     }
 
+    #[inline]
     pub fn get_message_times_total_miss(&self) -> &AtomicUsize {
         &self.get_message_times_total_miss
     }
 
+    #[inline]
     pub fn get_message_transferred_msg_count(&self) -> &AtomicUsize {
         &self.get_message_transferred_msg_count
     }
 
+    #[inline]
     pub fn get_put_message_failed_times(&self) -> &AtomicUsize {
         &self.put_message_failed_times
     }
 
+    #[inline]
     fn reset_put_message_time_buckets(&mut self) {
         let mut next_buckets: BTreeMap<u64, AtomicUsize> = BTreeMap::new();
         let index = AtomicUsize::new(0);
@@ -154,6 +160,7 @@ impl StoreStatsService {
         self.buckets = next_buckets;
     }
 
+    #[inline]
     fn reset_put_message_distribute_time(&self) {
         for i in 0..13 {
             self.put_message_distribute_time[i].store(0, Ordering::SeqCst);
@@ -161,10 +168,12 @@ impl StoreStatsService {
         }
     }
 
+    #[inline]
     pub fn set_put_message_entire_time_max(&self, _value: u64) {}
 
     // Add more methods as needed for functionality
 
+    #[inline]
     pub fn get_runtime_info(&self) -> HashMap<String, String> {
         let mut result = HashMap::new();
         let total_times = self.get_put_message_times_total();
@@ -228,6 +237,7 @@ impl StoreStatsService {
         result
     }
 
+    #[inline]
     pub fn find_put_message_entire_time_px(&self, px: f64) -> f64 {
         let last_buckets = &self.last_buckets;
         let start = Instant::now();
@@ -270,6 +280,7 @@ impl StoreStatsService {
         result
     }
 
+    #[inline]
     pub fn get_get_transferred_tps(&self) -> String {
         format!(
             "{} {} {}",
@@ -279,6 +290,7 @@ impl StoreStatsService {
         )
     }
 
+    #[inline]
     pub fn get_get_transferred_tps_time(&self, time: usize) -> String {
         let mut result = String::new();
         let _guard = self.sampling_lock.lock();
@@ -298,6 +310,7 @@ impl StoreStatsService {
         result
     }
 
+    #[inline]
     pub fn get_get_total_tps(&self) -> String {
         format!(
             "{} {} {}",
@@ -307,6 +320,7 @@ impl StoreStatsService {
         )
     }
 
+    #[inline]
     pub fn get_get_total_tps_time(&self, time: usize) -> String {
         let _guard = self.sampling_lock.lock();
         let mut found = 0.0;
@@ -344,6 +358,7 @@ impl StoreStatsService {
         format!("{}", found + miss)
     }
 
+    #[inline]
     pub fn get_get_miss_tps(&self) -> String {
         format!(
             "{} {} {}",
@@ -353,6 +368,7 @@ impl StoreStatsService {
         )
     }
 
+    #[inline]
     pub fn get_get_miss_tps_time(&self, time: usize) -> String {
         let mut result = String::new();
         let _guard = self.sampling_lock.lock();
@@ -372,6 +388,7 @@ impl StoreStatsService {
         result
     }
 
+    #[inline]
     pub fn get_get_found_tps(&self) -> String {
         format!(
             "{} {} {}",
@@ -381,6 +398,7 @@ impl StoreStatsService {
         )
     }
 
+    #[inline]
     pub fn get_get_found_tps_time(&self, time: usize) -> String {
         let mut result = String::new();
         let _guard = self.sampling_lock.lock();
@@ -400,6 +418,7 @@ impl StoreStatsService {
         result
     }
 
+    #[inline]
     pub fn get_put_tps(&self) -> String {
         format!(
             "{} {} {}",
@@ -409,6 +428,7 @@ impl StoreStatsService {
         )
     }
 
+    #[inline]
     pub fn get_put_tps_time(&self, time: usize) -> String {
         let mut result = String::new();
         let _guard = self.sampling_lock.lock();
@@ -426,10 +446,12 @@ impl StoreStatsService {
         result
     }
 
+    #[inline]
     pub fn get_put_message_distribute_time_string_info(&self, total: u64) -> String {
         self.put_message_distribute_time_to_string()
     }
 
+    #[inline]
     pub fn put_message_distribute_time_to_string(&self) -> String {
         let times = &self.last_put_message_distribute_time;
         let mut result = String::new();
@@ -443,15 +465,19 @@ impl StoreStatsService {
         result
     }
 
+    #[inline]
     pub fn get_put_message_size_total(&self) -> u64 {
         let map = self.put_message_topic_size_total.read();
         map.values().map(|v| v.load(Ordering::Relaxed) as u64).sum()
     }
+    
+    #[inline]
     pub fn get_put_message_times_total(&self) -> u64 {
         let map = self.put_message_topic_times_total.read();
         map.values().map(|v| v.load(Ordering::Relaxed) as u64).sum()
     }
 
+    #[inline]
     pub fn get_format_runtime(&self) -> String {
         let boot_time = self.message_store_boot_timestamp;
         let time = SystemClock::now() - boot_time as u128;
