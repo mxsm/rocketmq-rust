@@ -53,6 +53,7 @@ pub struct MappedFileQueue {
 }
 
 impl MappedFileQueue {
+    #[inline]
     pub fn new(
         store_path: String,
         mapped_file_size: u64,
@@ -71,6 +72,7 @@ impl MappedFileQueue {
 }
 
 impl MappedFileQueue {
+    #[inline]
     pub fn load(&mut self) -> bool {
         //list dir files
         let dir = Path::new(&self.store_path);
@@ -84,6 +86,7 @@ impl MappedFileQueue {
         true
     }
 
+    #[inline]
     pub fn commit(&self, commit_least_pages: i32) -> bool {
         let mut result = true;
         let committed_where = self.get_committed_where();
@@ -98,14 +101,17 @@ impl MappedFileQueue {
         result
     }
 
+    #[inline]
     pub fn get_committed_where(&self) -> i64 {
         self.committed_where.load(Ordering::Acquire) as i64
     }
 
+    #[inline]
     pub fn check_self(&self) {
         println!("mapped_file_queue check self unimplemented")
     }
 
+    #[inline]
     pub fn do_load(&mut self, files: Vec<std::path::PathBuf>) -> bool {
         // Ascending order sorting
         let mut files = files;
@@ -160,6 +166,7 @@ impl MappedFileQueue {
         true
     }
 
+    #[inline]
     pub fn get_last_mapped_file(&self) -> Option<Arc<DefaultMappedFile>> {
         if self.mapped_files.read().is_empty() {
             return None;
@@ -167,6 +174,7 @@ impl MappedFileQueue {
         self.mapped_files.read().last().cloned()
     }
 
+    #[inline]
     pub fn get_first_mapped_file(&self) -> Option<Arc<DefaultMappedFile>> {
         if self.mapped_files.read().is_empty() {
             return None;
@@ -174,6 +182,7 @@ impl MappedFileQueue {
         self.mapped_files.read().first().cloned()
     }
 
+    #[inline]
     pub fn get_last_mapped_file_mut_start_offset(
         &mut self,
         start_offset: u64,
@@ -198,6 +207,7 @@ impl MappedFileQueue {
         mapped_file_last
     }
 
+    #[inline]
     pub fn try_create_mapped_file(&mut self, create_offset: u64) -> Option<Arc<DefaultMappedFile>> {
         let next_file_path =
             PathBuf::from(self.store_path.clone()).join(offset_to_file_name(create_offset));
@@ -206,6 +216,7 @@ impl MappedFileQueue {
         self.do_create_mapped_file(next_file_path, next_next_file_path)
     }
 
+    #[inline]
     fn do_create_mapped_file(
         &mut self,
         next_file_path: PathBuf,
@@ -229,24 +240,29 @@ impl MappedFileQueue {
         Some(inner)
     }
 
+    #[inline]
     pub fn get_mapped_files(&self) -> Arc<RwLock<Vec<Arc<DefaultMappedFile>>>> {
         self.mapped_files.clone()
     }
 
+    #[inline]
     pub fn get_mapped_files_size(&self) -> usize {
         self.mapped_files.read().len()
     }
 
+    #[inline]
     pub fn set_flushed_where(&self, flushed_where: i64) {
         self.flushed_where
             .store(flushed_where as u64, Ordering::SeqCst);
     }
 
+    #[inline]
     pub fn set_committed_where(&self, committed_where: i64) {
         self.committed_where
             .store(committed_where as u64, Ordering::SeqCst);
     }
 
+    #[inline]
     pub fn truncate_dirty_files(&mut self, offset: i64) {
         let mut will_remove_files = Vec::new();
         for mapped_file in self.mapped_files.read().iter() {
@@ -266,6 +282,7 @@ impl MappedFileQueue {
         }
     }
 
+    #[inline]
     pub fn get_max_offset(&self) -> i64 {
         match self.get_last_mapped_file() {
             None => 0,
@@ -273,6 +290,7 @@ impl MappedFileQueue {
         }
     }
 
+    #[inline]
     pub fn delete_last_mapped_file(&mut self) {
         if let Some(last_mapped_file) = self.get_last_mapped_file() {
             last_mapped_file.destroy(1000);
@@ -286,6 +304,7 @@ impl MappedFileQueue {
         }
     }
 
+    #[inline]
     pub(crate) fn delete_expired_file(&mut self, files: Vec<Arc<DefaultMappedFile>>) {
         let mut files = files;
         let read_guard = self.mapped_files.read();
@@ -295,6 +314,7 @@ impl MappedFileQueue {
         }
     }
 
+    #[inline]
     pub fn destroy(&mut self) {
         for mapped_file in self.mapped_files.read().iter() {
             mapped_file.destroy(1000 * 3);
@@ -307,6 +327,7 @@ impl MappedFileQueue {
         }
     }
 
+    #[inline]
     pub fn find_mapped_file_by_offset(
         &self,
         offset: i64,
@@ -356,19 +377,23 @@ impl MappedFileQueue {
         }
     }
 
+    #[inline]
     pub fn get_flushed_where(&self) -> i64 {
         self.flushed_where.load(Ordering::Acquire) as i64
     }
 
+    #[inline]
     pub fn set_store_timestamp(&self, store_timestamp: u64) {
         self.store_timestamp
             .store(store_timestamp, Ordering::Release);
     }
 
+    #[inline]
     pub fn get_store_timestamp(&self) -> u64 {
         self.store_timestamp.load(Ordering::Acquire)
     }
 
+    #[inline]
     pub fn flush(&self, flush_least_pages: i32) -> bool {
         let mut result = true;
         let flushed_where = self.get_flushed_where();
@@ -387,13 +412,16 @@ impl MappedFileQueue {
         result
     }
 
+    #[inline]
     pub fn remain_how_many_data_to_commit(&self) -> i64 {
         self.get_max_wrote_position() - self.get_committed_where()
     }
 
+    #[inline]
     pub fn remain_how_many_data_to_flush(&self) -> i64 {
         self.get_max_offset() - self.get_flushed_where()
     }
+    #[inline]
     fn get_max_wrote_position(&self) -> i64 {
         let mapped_file = self.get_last_mapped_file();
         match mapped_file {
