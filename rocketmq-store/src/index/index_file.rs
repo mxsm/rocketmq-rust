@@ -60,6 +60,7 @@ impl PartialEq for IndexFile {
 }
 
 impl IndexFile {
+    #[inline]
     pub fn new(
         file_name: &str,
         hash_slot_num: usize,
@@ -95,22 +96,27 @@ impl IndexFile {
         index_file
     }
 
+    #[inline]
     pub fn get_file_name(&self) -> &CheetahString {
         self.mapped_file.get_file_name()
     }
 
+    #[inline]
     pub fn get_file_size(&self) -> usize {
         self.file_total_size
     }
 
+    #[inline]
     pub fn load(&self) {
         self.index_header.load();
     }
 
+    #[inline]
     pub fn shutdown(&self) {
         self.flush();
     }
 
+    #[inline]
     pub fn flush(&self) {
         let begin_time = std::time::Instant::now();
         if self.mapped_file.hold() {
@@ -124,14 +130,17 @@ impl IndexFile {
         }
     }
 
+    #[inline]
     pub fn is_write_full(&self) -> bool {
         self.index_header.get_index_count() >= self.index_num as i32
     }
 
+    #[inline]
     pub fn destroy(&self, interval_forcibly: i64) -> bool {
         self.mapped_file.destroy(interval_forcibly)
     }
 
+    #[inline]
     pub fn put_key(&self, key: &str, phy_offset: i64, store_timestamp: i64) -> bool {
         if self.index_header.get_index_count() < self.index_num as i32 {
             let key_hash = self.index_key_hash_method(key);
@@ -210,6 +219,7 @@ impl IndexFile {
         }
     }
 
+    #[inline]
     pub fn index_key_hash_method(&self, key: &str) -> i32 {
         let key_hash = JavaStringHasher::new().hash_str(key);
         let key_hash_positive = key_hash.abs();
@@ -220,18 +230,22 @@ impl IndexFile {
         }
     }
 
+    #[inline]
     pub fn get_begin_timestamp(&self) -> i64 {
         self.index_header.get_begin_timestamp()
     }
 
+    #[inline]
     pub fn get_end_timestamp(&self) -> i64 {
         self.index_header.get_end_timestamp()
     }
 
+    #[inline]
     pub fn get_end_phy_offset(&self) -> i64 {
         self.index_header.get_end_phy_offset()
     }
 
+    #[inline]
     pub fn is_time_matched(&self, begin: i64, end: i64) -> bool {
         let begin_timestamp = self.index_header.get_begin_timestamp();
         let end_timestamp = self.index_header.get_end_timestamp();
@@ -240,6 +254,7 @@ impl IndexFile {
             || end >= begin_timestamp && end <= end_timestamp
     }
 
+    #[inline]
     pub fn select_phy_offset(
         &self,
         phy_offsets: &mut Vec<i64>,
