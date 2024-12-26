@@ -45,6 +45,7 @@ pub struct IndexHeader {
 }
 
 impl IndexHeader {
+    #[inline]
     pub fn new(mapped_file: Arc<DefaultMappedFile>) -> Self {
         Self {
             mapped_file,
@@ -57,6 +58,7 @@ impl IndexHeader {
         }
     }
 
+    #[inline]
     pub fn load(&self) {
         let mut buffer = self.mapped_file.get_bytes(0, INDEX_HEADER_SIZE).unwrap();
         self.begin_timestamp
@@ -74,6 +76,7 @@ impl IndexHeader {
         }
     }
 
+    #[inline]
     pub fn update_byte_buffer(&self) {
         self.mapped_file.put_slice(
             &self.begin_timestamp.load(Ordering::SeqCst).to_be_bytes(),
@@ -102,10 +105,12 @@ impl IndexHeader {
         );
     }
 
+    #[inline]
     pub fn get_begin_timestamp(&self) -> i64 {
         self.begin_timestamp.load(Ordering::SeqCst)
     }
 
+    #[inline]
     pub fn set_begin_timestamp(&self, begin_timestamp: i64) {
         self.begin_timestamp
             .store(begin_timestamp, Ordering::SeqCst);
@@ -116,10 +121,12 @@ impl IndexHeader {
         );
     }
 
+    #[inline]
     pub fn get_end_timestamp(&self) -> i64 {
         self.end_timestamp.load(Ordering::SeqCst)
     }
 
+    #[inline]
     pub fn set_end_timestamp(&self, end_timestamp: i64) {
         self.end_timestamp.store(end_timestamp, Ordering::SeqCst);
         self.mapped_file.append_message_offset_length(
@@ -129,10 +136,12 @@ impl IndexHeader {
         );
     }
 
+    #[inline]
     pub fn get_begin_phy_offset(&self) -> i64 {
         self.begin_phy_offset.load(Ordering::SeqCst)
     }
 
+    #[inline]
     pub fn set_begin_phy_offset(&self, begin_phy_offset: i64) {
         self.begin_phy_offset
             .store(begin_phy_offset, Ordering::SeqCst);
@@ -143,10 +152,12 @@ impl IndexHeader {
         );
     }
 
+    #[inline]
     pub fn get_end_phy_offset(&self) -> i64 {
         self.end_phy_offset.load(Ordering::SeqCst)
     }
 
+    #[inline]
     pub fn set_end_phy_offset(&self, end_phy_offset: i64) {
         self.end_phy_offset.store(end_phy_offset, Ordering::SeqCst);
         self.mapped_file.append_message_offset_length(
@@ -156,10 +167,12 @@ impl IndexHeader {
         );
     }
 
+    #[inline]
     pub fn get_hash_slot_count(&self) -> i32 {
         self.hash_slot_count.load(Ordering::SeqCst)
     }
 
+    #[inline]
     pub fn inc_hash_slot_count(&self) {
         self.hash_slot_count.fetch_add(1, Ordering::SeqCst);
         self.mapped_file.append_message_offset_length(
@@ -169,10 +182,12 @@ impl IndexHeader {
         );
     }
 
+    #[inline]
     pub fn get_index_count(&self) -> i32 {
         self.index_count.load(Ordering::SeqCst)
     }
 
+    #[inline]
     pub fn inc_index_count(&self) {
         self.index_count.fetch_add(1, Ordering::SeqCst);
         self.mapped_file.append_message_offset_length(
