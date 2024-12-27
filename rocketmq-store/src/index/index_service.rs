@@ -50,6 +50,7 @@ pub struct IndexService {
 }
 
 impl IndexService {
+    #[inline]
     pub fn new(
         message_store_config: Arc<MessageStoreConfig>,
         store_checkpoint: Arc<StoreCheckpoint>,
@@ -64,6 +65,7 @@ impl IndexService {
         }
     }
 
+    #[inline]
     pub fn load(&mut self, last_exit_ok: bool) -> bool {
         let dir = Path::new(&self.store_path);
         if let Ok(ls) = fs::read_dir(dir) {
@@ -96,6 +98,7 @@ impl IndexService {
         true
     }
 
+    #[inline]
     pub fn get_total_size(&self) -> u64 {
         if self.index_file_list.read().is_empty() {
             0
@@ -105,6 +108,7 @@ impl IndexService {
         }
     }
 
+    #[inline]
     pub fn delete_expired_file(&self, offset: u64) {
         let mut index_file_list_lock = self.index_file_list.write();
         if index_file_list_lock.is_empty() {
@@ -123,6 +127,7 @@ impl IndexService {
         }
     }
 
+    #[inline]
     pub fn destroy(&self) {
         let mut index_file_list_lock = self.index_file_list.write();
         for index_file in index_file_list_lock.iter() {
@@ -131,6 +136,7 @@ impl IndexService {
         index_file_list_lock.clear();
     }
 
+    #[inline]
     pub fn query_offset(
         &self,
         topic: &str,
@@ -184,6 +190,7 @@ impl IndexService {
         )
     }
 
+    #[inline]
     pub fn build_index(&self, dispatch_request: &DispatchRequest) {
         let index_file = self.retry_get_and_create_index_file();
         match index_file {
@@ -247,6 +254,7 @@ impl IndexService {
         }
     }
 
+    #[inline]
     fn put_key(
         &self,
         mut index_file: Arc<IndexFile>,
@@ -273,6 +281,7 @@ impl IndexService {
         Some(index_file)
     }
 
+    #[inline]
     fn retry_get_and_create_index_file(&self) -> Option<Arc<IndexFile>> {
         let mut index_file = None;
 
@@ -293,6 +302,7 @@ impl IndexService {
         index_file
     }
 
+    #[inline]
     pub fn get_and_create_last_index_file(&self) -> Option<Arc<IndexFile>> {
         let mut index_file = None;
         let mut prev_index_file = None;
@@ -345,6 +355,7 @@ impl IndexService {
         index_file
     }
 
+    #[inline]
     pub fn flush(&self, index_file: Option<Arc<IndexFile>>) {
         match index_file {
             None => {}
@@ -364,6 +375,7 @@ impl IndexService {
     }
 }
 
+#[inline]
 fn build_key(topic: &str, key: &str) -> String {
     let mut keys = String::new();
     keys.push_str(topic);
