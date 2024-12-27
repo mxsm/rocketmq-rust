@@ -47,72 +47,89 @@ pub struct AckMsg {
 }
 
 impl AckMessage for AckMsg {
+    #[inline]
     fn ack_offset(&self) -> i64 {
         self.ack_offset
     }
 
+    #[inline]
     fn set_ack_offset(&mut self, ack_offset: i64) {
         self.ack_offset = ack_offset;
     }
 
+    #[inline]
     fn start_offset(&self) -> i64 {
         self.start_offset
     }
 
+    #[inline]
     fn set_start_offset(&mut self, start_offset: i64) {
         self.start_offset = start_offset;
     }
 
+    #[inline]
     fn consumer_group(&self) -> &CheetahString {
         &self.consumer_group
     }
 
+    #[inline]
     fn set_consumer_group(&mut self, consumer_group: CheetahString) {
         self.consumer_group = consumer_group;
     }
 
+    #[inline]
     fn topic(&self) -> &CheetahString {
         &self.topic
     }
 
+    #[inline]
     fn set_topic(&mut self, topic: CheetahString) {
         self.topic = topic;
     }
 
+    #[inline]
     fn queue_id(&self) -> i32 {
         self.queue_id
     }
 
+    #[inline]
     fn set_queue_id(&mut self, queue_id: i32) {
         self.queue_id = queue_id;
     }
 
+    #[inline]
     fn pop_time(&self) -> i64 {
         self.pop_time
     }
 
+    #[inline]
     fn set_pop_time(&mut self, pop_time: i64) {
         self.pop_time = pop_time;
     }
 
+    #[inline]
     fn broker_name(&self) -> &CheetahString {
         &self.broker_name
     }
 
+    #[inline]
     fn set_broker_name(&mut self, broker_name: CheetahString) {
         self.broker_name = broker_name;
     }
 
+    #[inline]
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
 
+    #[inline]
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }
 }
 
 impl Display for AckMsg {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
