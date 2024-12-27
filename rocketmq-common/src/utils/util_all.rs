@@ -204,7 +204,7 @@ pub fn string_to_bytes(hex_string: impl Into<String>) -> Option<Vec<u8>> {
 
     for i in 0..length {
         let pos = i * 2;
-        let byte = char_to_byte(hex_string.chars().nth(pos)?) << 4
+        let byte = (char_to_byte(hex_string.chars().nth(pos)?) << 4)
             | char_to_byte(hex_string.chars().nth(pos + 1)?);
 
         bytes.push(byte);
