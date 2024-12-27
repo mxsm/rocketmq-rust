@@ -148,13 +148,18 @@ impl DefaultMappedFile {
 
     #[inline]
     fn get_file_from_offset(file_name: &CheetahString) -> u64 {
-        let file_from_offset = PathBuf::from(file_name.as_str())
-            .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .parse::<u64>()
-            .unwrap();
+        let file_str = PathBuf::from(file_name.as_str())
+       .file_name()
+       .unwrap_or_else(|| {
+            panic!("No file_name found in path: {}", file_name)
+        })
+        .to_str()
+        .unwrap_or_else(|| {
+            panic!("Invalid UTF-8 in filename: {}", file_name)
+        });
+    let file_from_offset = file_str.parse::<u64>().unwrap_or_else(|_| {
+        panic!("File name not numeric: {}", file_str)
+    });
         file_from_offset
     }
 
