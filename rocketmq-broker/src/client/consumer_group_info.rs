@@ -14,11 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::collections::HashMap;
+
 use std::collections::HashSet;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
+use dashmap::DashMap;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
@@ -36,8 +37,8 @@ use crate::client::client_channel_info::ClientChannelInfo;
 #[derive(Debug, Clone)]
 pub struct ConsumerGroupInfo {
     group_name: CheetahString,
-    subscription_table: Arc<RwLock<HashMap<CheetahString, SubscriptionData>>>,
-    channel_info_table: Arc<RwLock<HashMap<Channel, ClientChannelInfo>>>,
+    subscription_table: Arc<DashMap<CheetahString, SubscriptionData>>,
+    channel_info_table: Arc<DashMap<Channel, ClientChannelInfo>>,
     consume_type: Arc<RwLock<ConsumeType>>,
     message_model: Arc<RwLock<MessageModel>>,
     consume_from_where: Arc<RwLock<ConsumeFromWhere>>,
@@ -53,8 +54,8 @@ impl ConsumerGroupInfo {
     ) -> Self {
         ConsumerGroupInfo {
             group_name: group_name.into(),
-            subscription_table: Arc::new(RwLock::new(HashMap::new())),
-            channel_info_table: Arc::new(RwLock::new(HashMap::new())),
+            subscription_table: Arc::new(DashMap::new()),
+            channel_info_table: Arc::new(DashMap::new()),
             consume_type: Arc::new(RwLock::new(consume_type)),
             message_model: Arc::new(RwLock::new(message_model)),
             consume_from_where: Arc::new(RwLock::new(consume_from_where)),
@@ -65,8 +66,8 @@ impl ConsumerGroupInfo {
     pub fn with_group_name(group_name: impl Into<CheetahString>) -> Self {
         ConsumerGroupInfo {
             group_name: group_name.into(),
-            subscription_table: Arc::new(RwLock::new(HashMap::new())),
-            channel_info_table: Arc::new(RwLock::new(HashMap::new())),
+            subscription_table: Arc::new(DashMap::new()),
+            channel_info_table: Arc::new(DashMap::new()),
             consume_type: Arc::new(RwLock::new(ConsumeType::ConsumePassively)),
             message_model: Arc::new(RwLock::new(MessageModel::Clustering)),
             consume_from_where: Arc::new(RwLock::new(ConsumeFromWhere::ConsumeFromLastOffset)),
@@ -75,8 +76,7 @@ impl ConsumerGroupInfo {
     }
 
     pub fn find_channel_by_client_id(&self, client_id: &str) -> Option<ClientChannelInfo> {
-        let channel_info_table = self.channel_info_table.read();
-        for (_, client_channel_info) in channel_info_table.iter() {
+        for client_channel_info in self.channel_info_table.iter() {
             if client_channel_info.client_id() == client_id {
                 return Some(client_channel_info.clone());
             }
@@ -84,35 +84,37 @@ impl ConsumerGroupInfo {
         None
     }
 
-    pub fn get_subscription_table(&self) -> Arc<RwLock<HashMap<CheetahString, SubscriptionData>>> {
+    pub fn get_subscription_table(&self) -> Arc<DashMap<CheetahString, SubscriptionData>> {
         Arc::clone(&self.subscription_table)
     }
 
     pub fn find_channel_by_channel(&self, channel: &Channel) -> Option<ClientChannelInfo> {
-        let channel_info_table = self.channel_info_table.read();
-        channel_info_table.get(channel).cloned()
+        self.channel_info_table
+            .get(channel)
+            .map(|item| item.value().clone())
     }
 
-    pub fn get_channel_info_table(&self) -> Arc<RwLock<HashMap<Channel, ClientChannelInfo>>> {
+    pub fn get_channel_info_table(&self) -> Arc<DashMap<Channel, ClientChannelInfo>> {
         Arc::clone(&self.channel_info_table)
     }
 
     pub fn get_all_channels(&self) -> Vec<Channel> {
-        let channel_info_table = self.channel_info_table.read();
-        channel_info_table.keys().cloned().collect()
+        self.channel_info_table
+            .iter()
+            .map(|item| item.key().clone())
+            .collect::<Vec<Channel>>()
     }
 
     pub fn get_all_client_ids(&self) -> Vec<CheetahString> {
-        let channel_info_table = self.channel_info_table.read();
-        channel_info_table
-            .values()
-            .map(|info| info.client_id().clone())
+        self.channel_info_table
+            .iter()
+            .map(|info| info.value().client_id().clone())
             .collect()
     }
 
     pub fn unregister_channel(&self, client_channel_info: &ClientChannelInfo) -> bool {
-        let mut channel_info_table = self.channel_info_table.write();
-        if channel_info_table
+        if self
+            .channel_info_table
             .remove(client_channel_info.channel())
             .is_some()
         {
@@ -128,8 +130,7 @@ impl ConsumerGroupInfo {
     }
 
     pub fn handle_channel_close_event(&self, channel: &Channel) -> Option<ClientChannelInfo> {
-        let mut channel_info_table = self.channel_info_table.write();
-        if let Some(info) = channel_info_table.remove(channel) {
+        if let Some((_, info)) = self.channel_info_table.remove(channel) {
             warn!(
                 "NETTY EVENT: remove not active channel [{:?}] from ConsumerGroupInfo \
                  groupChannelTable, consumer group: {}",
@@ -166,8 +167,7 @@ impl ConsumerGroupInfo {
             *consume_from_where_lock = consume_from_where;
         }
 
-        let mut channel_info_table = self.channel_info_table.write();
-        if let Some(info_old) = channel_info_table.get_mut(info_new.channel()) {
+        if let Some(mut info_old) = self.channel_info_table.get_mut(info_new.channel()) {
             if info_old.client_id() != info_new.client_id() {
                 error!(
                     "ConsumerGroupInfo: consumer channel exists in broker, but clientId is not \
@@ -180,7 +180,8 @@ impl ConsumerGroupInfo {
             }
             info_old.set_last_update_timestamp(get_current_millis());
         } else {
-            channel_info_table.insert(info_new.channel().clone(), info_new.clone());
+            self.channel_info_table
+                .insert(info_new.channel().clone(), info_new.clone());
             info!(
                 "New consumer connected, group: {} channel: {:?}",
                 self.group_name,
@@ -198,9 +199,8 @@ impl ConsumerGroupInfo {
         let mut updated = false;
         let mut topic_set = HashSet::new();
 
-        let mut subscription_table = self.subscription_table.write();
         for sub in sub_list.iter() {
-            if let Some(old) = subscription_table.get(sub.topic.as_str()) {
+            if let Some(old) = self.subscription_table.get(sub.topic.as_str()) {
                 if sub.sub_version > old.sub_version {
                     if *self.consume_type.read() == ConsumeType::ConsumePassively {
                         info!(
@@ -208,10 +208,12 @@ impl ConsumerGroupInfo {
                             self.group_name, old, sub
                         );
                     }
-                    subscription_table.insert(sub.topic.clone(), sub.clone());
+                    self.subscription_table
+                        .insert(sub.topic.clone(), sub.clone());
                 }
             } else {
-                subscription_table.insert(sub.topic.clone(), sub.clone());
+                self.subscription_table
+                    .insert(sub.topic.clone(), sub.clone());
                 info!(
                     "Subscription changed, add new topic, group: {} {}",
                     self.group_name, sub.topic
@@ -221,7 +223,7 @@ impl ConsumerGroupInfo {
             topic_set.insert(sub.topic.clone());
         }
 
-        subscription_table.retain(|old_topic, _| {
+        self.subscription_table.retain(|old_topic, _| {
             if !topic_set.contains(old_topic) {
                 warn!(
                     "Subscription changed, group: {} remove topic {}",
@@ -240,13 +242,16 @@ impl ConsumerGroupInfo {
     }
 
     pub fn get_subscribe_topics(&self) -> HashSet<CheetahString> {
-        let subscription_table = self.subscription_table.read();
-        subscription_table.keys().cloned().collect()
+        self.subscription_table
+            .iter()
+            .map(|item| item.key().clone())
+            .collect()
     }
 
     pub fn find_subscription_data(&self, topic: &CheetahString) -> Option<SubscriptionData> {
-        let subscription_table = self.subscription_table.read();
-        subscription_table.get(topic).cloned()
+        self.subscription_table
+            .get(topic)
+            .map(|item| item.value().clone())
     }
 
     pub fn get_consume_type(&self) -> ConsumeType {
