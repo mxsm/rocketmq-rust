@@ -788,7 +788,6 @@ impl DefaultMappedFile {
     }
 }
 
-#[inline]
 pub struct ReferenceResource {
     ref_count: AtomicI64,
     available: AtomicBool,
