@@ -16,7 +16,6 @@
  */
 use std::net::SocketAddr;
 
-use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::compression::compressor_factory::CompressorFactory;
 use rocketmq_common::common::message::message_decoder;
@@ -147,8 +146,7 @@ impl ClientRemotingProcessor {
         if (sys_flag & MessageSysFlag::COMPRESSED_FLAG) == MessageSysFlag::COMPRESSED_FLAG {
             let de_result =
                 CompressorFactory::get_compressor(MessageSysFlag::get_compression_type(sys_flag))
-                    .decompress(body.unwrap())
-                    .map(Bytes::from);
+                    .decompress(body.unwrap());
             if let Ok(decompressed) = de_result {
                 msg.message.body = Some(decompressed);
             } else {

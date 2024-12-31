@@ -528,7 +528,7 @@ impl RemotingCommand {
     }
 
     pub fn mark_serialize_type(header_length: i32, protocol_type: SerializeType) -> i32 {
-        (protocol_type.get_code() as i32) << 24 | (header_length & 0x00FFFFFF)
+        ((protocol_type.get_code() as i32) << 24) | (header_length & 0x00FFFFFF)
     }
 
     pub fn code(&self) -> i32 {
