@@ -76,30 +76,35 @@ pub struct DefaultMappedFile {
 }
 
 impl AsRef<DefaultMappedFile> for DefaultMappedFile {
+    #[inline]
     fn as_ref(&self) -> &DefaultMappedFile {
         self
     }
 }
 
 impl AsMut<DefaultMappedFile> for DefaultMappedFile {
+    #[inline]
     fn as_mut(&mut self) -> &mut DefaultMappedFile {
         self
     }
 }
 
 impl PartialEq for DefaultMappedFile {
+    #[inline]
     fn eq(&self, other: &Self) -> bool {
         ptr::eq(self as *const Self, other as *const Self)
     }
 }
 
 impl Default for DefaultMappedFile {
+    #[inline]
     fn default() -> Self {
         Self::new(CheetahString::new(), 0)
     }
 }
 
 impl DefaultMappedFile {
+    #[inline]
     pub fn new(file_name: CheetahString, file_size: u64) -> Self {
         let file_from_offset = Self::get_file_from_offset(&file_name);
         let path_buf = PathBuf::from(file_name.as_str());
@@ -141,6 +146,7 @@ impl DefaultMappedFile {
         }
     }
 
+    #[inline]
     fn get_file_from_offset(file_name: &CheetahString) -> u64 {
         let file_from_offset = PathBuf::from(file_name.as_str())
             .file_name()
@@ -152,6 +158,7 @@ impl DefaultMappedFile {
         file_from_offset
     }
 
+    #[inline]
     fn build_file(file_name: &CheetahString, file_size: u64) -> File {
         let path = PathBuf::from(file_name.as_str());
         let file = OpenOptions::new()
@@ -166,6 +173,7 @@ impl DefaultMappedFile {
         file
     }
 
+    #[inline]
     pub fn new_with_transient_store_pool(
         file_name: CheetahString,
         file_size: u64,
@@ -213,26 +221,32 @@ impl DefaultMappedFile {
 
 #[allow(unused_variables)]
 impl MappedFile for DefaultMappedFile {
+    #[inline]
     fn get_file_name(&self) -> &CheetahString {
         &self.file_name
     }
 
+    #[inline]
     fn rename_to(&mut self, file_name: &str) -> bool {
         todo!()
     }
 
+    #[inline]
     fn get_file_size(&self) -> u64 {
         self.file_size
     }
 
+    #[inline]
     fn is_full(&self) -> bool {
         self.file_size == self.wrote_position.load(Ordering::Relaxed) as u64
     }
 
+    #[inline]
     fn is_available(&self) -> bool {
         self.reference_resource.available.load(Ordering::Relaxed)
     }
 
+    #[inline]
     fn append_message<AMC: AppendMessageCallback>(
         &self,
         message: &mut MessageExtBrokerInner,
@@ -264,6 +278,7 @@ impl MappedFile for DefaultMappedFile {
         result
     }
 
+    #[inline]
     fn append_messages<AMC: AppendMessageCallback>(
         &self,
         message: &mut MessageExtBatch,
@@ -299,6 +314,7 @@ impl MappedFile for DefaultMappedFile {
         result
     }
 
+    #[inline]
     fn append_message_compaction(
         &mut self,
         byte_buffer_msg: &mut Bytes,
@@ -307,6 +323,7 @@ impl MappedFile for DefaultMappedFile {
         todo!()
     }
 
+    #[inline]
     fn get_bytes(&self, pos: usize, size: usize) -> Option<bytes::Bytes> {
         if pos + size > self.file_size as usize {
             return None;
@@ -316,6 +333,7 @@ impl MappedFile for DefaultMappedFile {
         ))
     }
 
+    #[inline]
     fn append_message_offset_length(&self, data: &Bytes, offset: usize, length: usize) -> bool {
         let current_pos = self.wrote_position.load(Ordering::Relaxed) as usize;
 
@@ -338,6 +356,7 @@ impl MappedFile for DefaultMappedFile {
         false
     }
 
+    #[inline]
     fn append_message_no_position_update(&self, data: &[u8], offset: usize, length: usize) -> bool {
         let current_pos = self.wrote_position.load(Ordering::Relaxed) as usize;
 
@@ -358,6 +377,7 @@ impl MappedFile for DefaultMappedFile {
         false
     }
 
+    #[inline]
     fn append_message_offset_no_position_update(
         &self,
         data: &[u8],
@@ -383,6 +403,7 @@ impl MappedFile for DefaultMappedFile {
         false
     }
 
+    #[inline]
     fn write_bytes_segment(&self, data: &[u8], start: usize, offset: usize, length: usize) -> bool {
         if start + length <= self.file_size as usize {
             let mut mapped_file = &mut self.get_mapped_file_mut()[start..start + length];
@@ -405,6 +426,7 @@ impl MappedFile for DefaultMappedFile {
         false
     }
 
+    #[inline]
     fn put_slice(&self, data: &[u8], index: usize) -> bool {
         let length = data.len();
         let end_index = index + length;
@@ -419,10 +441,12 @@ impl MappedFile for DefaultMappedFile {
         false
     }
 
+    #[inline]
     fn get_file_from_offset(&self) -> u64 {
         self.file_from_offset
     }
 
+    #[inline]
     fn flush(&self, flush_least_pages: i32) -> i32 {
         if self.is_able_to_flush(flush_least_pages) {
             if self.reference_resource.hold() {
@@ -447,10 +471,12 @@ impl MappedFile for DefaultMappedFile {
         self.get_flushed_position()
     }
 
+    #[inline]
     fn commit(&self, commit_least_pages: i32) -> i32 {
         0
     }
 
+    #[inline]
     fn select_mapped_buffer_size(
         self: Arc<Self>,
         pos: i32,
@@ -480,6 +506,7 @@ impl MappedFile for DefaultMappedFile {
         }
     }
 
+    #[inline]
     fn select_mapped_buffer(self: Arc<Self>, pos: i32) -> Option<SelectMappedBufferResult> {
         let read_position = self.get_read_position();
         if pos < read_position && read_position > 0 && self.hold() {
@@ -494,22 +521,27 @@ impl MappedFile for DefaultMappedFile {
         }
     }
 
+    #[inline]
     fn get_mapped_byte_buffer(&self) -> Bytes {
         todo!()
     }
 
+    #[inline]
     fn slice_byte_buffer(&self) -> Bytes {
         todo!()
     }
 
+    #[inline]
     fn get_store_timestamp(&self) -> i64 {
         self.store_timestamp.load(Ordering::Relaxed)
     }
 
+    #[inline]
     fn get_last_modified_timestamp(&self) -> i64 {
         todo!()
     }
 
+    #[inline]
     fn get_data(&self, pos: usize, size: usize) -> Option<bytes::Bytes> {
         let read_position = self.get_read_position();
         let read_end_position = pos + size;
@@ -534,10 +566,12 @@ impl MappedFile for DefaultMappedFile {
         }
     }
 
+    #[inline]
     fn destroy(&self, interval_forcibly: i64) -> bool {
         true
     }
 
+    #[inline]
     fn shutdown(&self, interval_forcibly: i64) {
         if self.reference_resource.available.load(Ordering::Relaxed) {
             self.reference_resource
@@ -570,6 +604,7 @@ impl MappedFile for DefaultMappedFile {
         }
     }
 
+    #[inline]
     fn release(&self) {
         let value = self
             .reference_resource
@@ -584,36 +619,44 @@ impl MappedFile for DefaultMappedFile {
             .store(self.cleanup(value), Ordering::SeqCst);
     }
 
+    #[inline]
     fn hold(&self) -> bool {
         self.reference_resource.hold()
     }
 
+    #[inline]
     fn is_first_create_in_queue(&self) -> bool {
         self.first_create_in_queue
     }
 
+    #[inline]
     fn set_first_create_in_queue(&mut self, first_create_in_queue: bool) {
         self.first_create_in_queue = first_create_in_queue
     }
 
+    #[inline]
     fn get_flushed_position(&self) -> i32 {
         self.flushed_position.load(Ordering::Relaxed)
     }
 
+    #[inline]
     fn set_flushed_position(&self, flushed_position: i32) {
         self.flushed_position
             .store(flushed_position, Ordering::SeqCst)
     }
 
+    #[inline]
     fn get_wrote_position(&self) -> i32 {
         self.wrote_position
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    #[inline]
     fn set_wrote_position(&self, wrote_position: i32) {
         self.wrote_position.store(wrote_position, Ordering::SeqCst)
     }
 
+    #[inline]
     fn get_read_position(&self) -> i32 {
         match self.transient_store_pool {
             None => self.wrote_position.load(Ordering::Acquire),
@@ -624,59 +667,73 @@ impl MappedFile for DefaultMappedFile {
         }
     }
 
+    #[inline]
     fn set_committed_position(&self, committed_position: i32) {
         self.committed_position
             .store(committed_position, Ordering::SeqCst)
     }
 
+    #[inline]
     fn get_committed_position(&self) -> i32 {
         self.committed_position.load(Ordering::Relaxed)
     }
 
+    #[inline]
     fn mlock(&self) {
         todo!()
     }
 
+    #[inline]
     fn munlock(&self) {
         todo!()
     }
 
+    #[inline]
     fn warm_mapped_file(&self, flush_disk_type: FlushDiskType, pages: usize) {
         todo!()
     }
 
+    #[inline]
     fn swap_map(&self) -> bool {
         todo!()
     }
 
+    #[inline]
     fn clean_swaped_map(&self, force: bool) {
         todo!()
     }
 
+    #[inline]
     fn get_recent_swap_map_time(&self) -> i64 {
         todo!()
     }
 
+    #[inline]
     fn get_mapped_byte_buffer_access_count_since_last_swap(&self) -> i64 {
         todo!()
     }
 
+    #[inline]
     fn get_file(&self) -> &File {
         todo!()
     }
 
+    #[inline]
     fn rename_to_delete(&self) {
         todo!()
     }
 
+    #[inline]
     fn move_to_parent(&self) -> std::io::Result<()> {
         todo!()
     }
 
+    #[inline]
     fn get_last_flush_time(&self) -> i64 {
         todo!()
     }
 
+    #[inline]
     fn is_loaded(&self, position: i64, size: usize) -> bool {
         true
     }
@@ -684,14 +741,17 @@ impl MappedFile for DefaultMappedFile {
 
 #[allow(unused_variables)]
 impl DefaultMappedFile {
+    #[inline]
     pub fn get_mapped_file_mut(&self) -> &mut MmapMut {
         self.mmapped_file.mut_from_ref()
     }
 
+    #[inline]
     pub fn get_mapped_file(&self) -> &MmapMut {
         self.mmapped_file.as_ref()
     }
 
+    #[inline]
     fn is_able_to_flush(&self, flush_least_pages: i32) -> bool {
         if self.is_full() {
             return true;
@@ -704,6 +764,7 @@ impl DefaultMappedFile {
         write > flush
     }
 
+    #[inline]
     fn cleanup(&self, current_ref: i64) -> bool {
         if self.is_available() {
             error!(
@@ -727,6 +788,7 @@ impl DefaultMappedFile {
     }
 }
 
+#[inline]
 pub struct ReferenceResource {
     ref_count: AtomicI64,
     available: AtomicBool,
@@ -735,6 +797,7 @@ pub struct ReferenceResource {
 }
 
 impl ReferenceResource {
+    #[inline]
     pub fn new() -> Self {
         Self {
             ref_count: AtomicI64::new(1),
@@ -744,6 +807,7 @@ impl ReferenceResource {
         }
     }
 
+    #[inline]
     pub fn hold(&self) -> bool {
         if self.is_available() {
             if self.ref_count.fetch_add(1, Ordering::Relaxed) + 1 > 0 {
@@ -755,20 +819,24 @@ impl ReferenceResource {
         false
     }
 
+    #[inline]
     pub fn is_available(&self) -> bool {
         self.available.load(Ordering::Relaxed)
     }
 
+    #[inline]
     pub fn get_ref_count(&self) -> i64 {
         self.ref_count.load(Ordering::Relaxed)
     }
 
+    #[inline]
     pub fn is_cleanup_over(&self) -> bool {
         self.ref_count.load(Ordering::Relaxed) <= 0 && self.cleanup_over.load(Ordering::Relaxed)
     }
 }
 
 impl Default for ReferenceResource {
+    #[inline]
     fn default() -> Self {
         Self::new()
     }
