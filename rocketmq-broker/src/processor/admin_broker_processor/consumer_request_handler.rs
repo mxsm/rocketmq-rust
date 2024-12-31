@@ -69,18 +69,19 @@ impl ConsumerRequestHandler {
                 body_data.set_consume_from_where(consumer_group_info.get_consume_from_where());
                 body_data.set_consume_type(consumer_group_info.get_consume_type());
                 body_data.set_message_model(consumer_group_info.get_message_model());
-                let subscription_table =
-                    consumer_group_info.get_subscription_table().read().clone();
-                body_data
-                    .get_subscription_table()
-                    .extend(subscription_table);
+                let subscription_table_consumer = consumer_group_info.get_subscription_table();
+                let subscription_table = body_data.get_subscription_table();
+                for key_value in subscription_table_consumer.iter() {
+                    subscription_table.insert(key_value.key().clone(), key_value.clone());
+                }
 
-                for (channel, info) in consumer_group_info.get_channel_info_table().read().iter() {
+                for channel_info in consumer_group_info.get_channel_info_table().iter() {
                     let mut connection = Connection::new();
-                    connection.set_client_id(info.client_id().clone());
-                    connection.set_language(info.language());
-                    connection.set_version(info.version());
-                    connection.set_client_addr(channel.remote_address().to_string().into());
+                    connection.set_client_id(channel_info.client_id().clone());
+                    connection.set_language(channel_info.language());
+                    connection.set_version(channel_info.version());
+                    connection
+                        .set_client_addr(channel_info.key().remote_address().to_string().into());
                     body_data.get_connection_set().insert(connection);
                 }
                 let body = body_data

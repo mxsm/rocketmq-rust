@@ -113,7 +113,7 @@ impl ConsumerManager {
 
     pub fn find_subscription_data_count(&self, group: &CheetahString) -> usize {
         if let Some(consumer_group_info) = self.get_consumer_group_info(group) {
-            return consumer_group_info.get_subscription_table().read().len();
+            return consumer_group_info.get_subscription_table().len();
         }
         0
     }
@@ -150,7 +150,6 @@ impl ConsumerManager {
             .or_insert_with(|| ConsumerGroupInfo::with_group_name(group.clone()));
         consumer_group_info
             .get_subscription_table()
-            .write()
             .insert(topic.into(), subscription_data.clone());
     }
 
