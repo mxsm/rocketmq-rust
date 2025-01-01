@@ -13,5 +13,5 @@ jobs:
     steps:
       - uses: hmarr/auto-approve-action@v4
         with:
-          github-token: ${{ secrets.BOT_TOKE }}
+          github-token: ${{ secrets.BOT_TOKEN }}
           review-message: "LGTM"
