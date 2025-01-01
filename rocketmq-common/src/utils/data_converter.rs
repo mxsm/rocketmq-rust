@@ -36,6 +36,7 @@ impl DataConverter {
     }
 
     pub fn get_bit(value: i32, index: usize) -> bool {
+        assert!(index < 32, "Bit index out of range. Must be < 32.");
         (value & (1 << index)) != 0
     }
 }
