@@ -517,7 +517,7 @@ where
                     q_id,
                 ) {
                     self.consumer_offset_manager.commit_offset(
-                        channel.remote_address(),
+                        channel.remote_address().to_string().into(),
                         &consume_group,
                         &topic,
                         q_id,

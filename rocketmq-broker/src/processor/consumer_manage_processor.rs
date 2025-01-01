@@ -229,7 +229,7 @@ where
             return Some(response.set_remark("Offset has been previously reset"));
         }
         self.consumer_offset_manager.commit_offset(
-            channel.remote_address(),
+            channel.remote_address().to_string().into(),
             group,
             topic,
             queue_id,

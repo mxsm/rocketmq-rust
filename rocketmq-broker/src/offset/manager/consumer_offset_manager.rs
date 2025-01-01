@@ -108,7 +108,7 @@ impl ConsumerOffsetManager {
 
     pub fn commit_offset(
         &self,
-        client_host: SocketAddr,
+        client_host: CheetahString,
         group: &CheetahString,
         topic: &CheetahString,
         queue_id: i32,

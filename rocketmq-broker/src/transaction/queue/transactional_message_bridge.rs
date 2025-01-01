@@ -121,7 +121,7 @@ where
 
     pub fn update_consume_offset(&self, mq: &MessageQueue, offset: i64) {
         self.consumer_offset_manager.commit_offset(
-            self.store_host,
+            self.store_host.to_string().into(),
             &CheetahString::from_static_str(TransactionalMessageUtil::build_consumer_group()),
             mq.get_topic_cs(),
             mq.get_queue_id(),

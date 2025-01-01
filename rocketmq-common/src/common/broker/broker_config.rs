@@ -186,6 +186,7 @@ pub struct BrokerConfig {
     pub retrieve_message_from_pop_retry_topic_v1: bool,
     pub pop_from_retry_probability: i32,
     pub pop_response_return_actual_retry_topic: bool,
+    pub init_pop_offset_by_check_msg_in_mem: bool,
 }
 
 impl Default for BrokerConfig {
@@ -278,6 +279,7 @@ impl Default for BrokerConfig {
             retrieve_message_from_pop_retry_topic_v1: true,
             pop_from_retry_probability: 20,
             pop_response_return_actual_retry_topic: false,
+            init_pop_offset_by_check_msg_in_mem: true,
         }
     }
 }
