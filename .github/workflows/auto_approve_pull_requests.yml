@@ -79,8 +79,8 @@ jobs:
             }
 
             // Poll for status checks until they complete
-            const maxRetries = 10;
-            const retryInterval = 30 * 1000; // 30 seconds
+            const maxRetries = 720;
+            const retryInterval = 5 * 1000; // 10 seconds
             for (let i = 0; i < maxRetries; i++) {
               const allChecksPassed = await checkRequiredStatusChecks();
               if (allChecksPassed) {
