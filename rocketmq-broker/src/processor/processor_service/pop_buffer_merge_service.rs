@@ -27,4 +27,8 @@ impl PopBufferMergeService {
     pub fn get_latest_offset(&self, _lock_key: &str) -> i64 {
         unimplemented!("Not implemented yet");
     }
+
+    pub fn clear_offset_queue(&self, _lock_key: &str) {
+        unimplemented!("Not implemented yet");
+    }
 }
