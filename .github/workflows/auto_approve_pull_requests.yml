@@ -1,0 +1,17 @@
+name: Auto Approve Pull Requests
+
+on:
+  pull_request_target:
+    types: [ synchronize, opened, reopened ]
+
+jobs:
+  auto-approve:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    if: github.actor == 'rocketmq-rust-bot'
+    steps:
+      - uses: hmarr/auto-approve-action@v4
+        with:
+          github-token: ${{ secrets.BOT_TOKE }}
+          review-message: "LGTM"
