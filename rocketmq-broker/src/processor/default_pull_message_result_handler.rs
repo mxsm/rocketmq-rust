@@ -537,7 +537,7 @@ impl DefaultPullMessageResultHandler {
         store_offset_enable = store_offset_enable && has_commit_offset_flag;
         if store_offset_enable {
             self.consumer_offset_manager.commit_offset(
-                client_address,
+                client_address.to_string().into(),
                 request_header.consumer_group.as_ref(),
                 request_header.topic.as_ref(),
                 request_header.queue_id,

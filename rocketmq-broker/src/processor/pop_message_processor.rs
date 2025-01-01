@@ -30,11 +30,13 @@ use rand::thread_rng;
 use rand::Rng;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config::TopicConfig;
+use rocketmq_common::common::constant::consume_init_mode::ConsumeInitMode;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
 use rocketmq_common::common::key_builder::KeyBuilder;
 use rocketmq_common::common::key_builder::POP_ORDER_REVIVE_QUEUE;
 use rocketmq_common::common::message::message_decoder;
+use rocketmq_common::common::mix_all;
 use rocketmq_common::common::pop_ack_constants::PopAckConstants;
 use rocketmq_common::common::FAQUrl;
 use rocketmq_common::TimeUtils::get_current_millis;
@@ -827,7 +829,7 @@ where
                         | GetMessageStatus::OffsetOverflowBadly
                         | GetMessageStatus::OffsetTooSmall => {
                             self.consumer_offset_manager.commit_offset(
-                                channel.remote_address(),
+                                channel.remote_address().to_string().into(),
                                 &request_header.consumer_group,
                                 topic,
                                 queue_id,
@@ -875,7 +877,7 @@ where
                             order_count_info,
                         );
                         self.consumer_offset_manager.commit_offset(
-                            channel.remote_address(),
+                            channel.remote_address().to_string().into(),
                             &request_header.consumer_group,
                             topic,
                             queue_id,
@@ -994,13 +996,41 @@ where
 
     fn get_init_offset(
         &self,
-        topic: &str,
-        group: &str,
+        topic: &CheetahString,
+        group: &CheetahString,
         queue_id: i32,
         init_mode: i32,
         init: bool,
     ) -> i64 {
-        unimplemented!("PopMessageProcessor get_init_offset")
+        let mut offset;
+        if init_mode == ConsumeInitMode::MIN || topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX)
+        {
+            offset = self.message_store.get_min_offset_in_queue(topic, queue_id);
+        } else if self.broker_config.init_pop_offset_by_check_msg_in_mem
+            && self.message_store.get_min_offset_in_queue(topic, queue_id) <= 0
+            && self
+                .message_store
+                .check_in_mem_by_consume_offset(topic, queue_id, 0, 1)
+        {
+            offset = 0;
+        } else {
+            offset = self.message_store.get_max_offset_in_queue(topic, queue_id) - 1;
+            if offset < 0 {
+                offset = 0;
+            }
+        }
+
+        // whichever initMode
+        if init {
+            self.consumer_offset_manager.commit_offset(
+                "getPopOffset".into(),
+                group,
+                topic,
+                queue_id,
+                offset,
+            )
+        }
+        offset
     }
 
     fn reset_pop_offset(&self, topic: &str, group: &str, queue_id: i32) -> Option<i64> {
