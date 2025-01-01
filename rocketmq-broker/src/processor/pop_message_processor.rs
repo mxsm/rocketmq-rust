@@ -1028,13 +1028,42 @@ where
                 topic,
                 queue_id,
                 offset,
-            )
+            );
         }
         offset
     }
 
-    fn reset_pop_offset(&self, topic: &str, group: &str, queue_id: i32) -> Option<i64> {
-        unimplemented!("PopMessageProcessor reset_pop_offset")
+    fn reset_pop_offset(
+        &self,
+        topic: &CheetahString,
+        group: &CheetahString,
+        queue_id: i32,
+    ) -> Option<i64> {
+        let lock_key = format!(
+            "{}{}{}{}{}",
+            topic,
+            PopAckConstants::SPLIT,
+            group,
+            PopAckConstants::SPLIT,
+            queue_id
+        );
+        let reset_offset = self
+            .consumer_offset_manager
+            .query_then_erase_reset_offset(group, topic, queue_id);
+        if reset_offset.is_some() {
+            self.consumer_order_info_manager
+                .clear_block(topic, group, queue_id);
+            self.pop_buffer_merge_service
+                .clear_offset_queue(lock_key.as_ref());
+            self.consumer_offset_manager.commit_offset(
+                "ResetPopOffset".into(),
+                group,
+                topic,
+                queue_id,
+                *reset_offset.as_ref().unwrap(),
+            )
+        }
+        reset_offset
     }
 
     pub fn queue_lock_manager(&self) -> &QueueLockManager {

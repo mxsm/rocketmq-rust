@@ -106,6 +106,10 @@ impl<MS> ConfigManager for ConsumerOrderInfoManager<MS> {
 }
 
 impl<MS> ConsumerOrderInfoManager<MS> {
+    pub fn clear_block(&self, topic: &CheetahString, group: &CheetahString, queue_id: i32) {
+        unimplemented!()
+    }
+
     pub fn auto_clean(&self) {
         let mut consumer_order_info_wrapper = self.consumer_order_info_wrapper.lock();
         let table = &mut consumer_order_info_wrapper.table;
