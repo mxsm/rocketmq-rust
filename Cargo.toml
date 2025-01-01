@@ -37,18 +37,12 @@ rocketmq-rust = { version = "0.4.0", path = "./rocketmq" }
 rocketmq-filter = { version = "0.4.0", path = "./rocketmq-filter" }
 rocketmq-store = { version = "0.4.0", path = "./rocketmq-store", default-features = true }
 rocketmq-remoting = { version = "0.4.0", path = "./rocketmq-remoting" }
-rocketmq-cli = { version = "0.4.0", path = "./rocketmq-cli" }
-rocketmq-namesrv = { version = "0.4.0", path = "./rocketmq-namesrv" }
-rocketmq-broker = { version = "0.4.0", path = "./rocketmq-broker" }
 rocketmq-client-rust = { version = "0.4.0", path = "./rocketmq-client" }
-rocketmq-tools = { version = "0.4.0", path = "./rocketmq-tools" }
 
 tokio = { version = "1.42", features = ["full"] }
 tokio-util = { version = "0.7.13", features = ["full"] }
 tokio-stream = { version = "0.1.17", features = ["full"] }
 
-log = "0.4.22"
-env_logger = "0.11.5"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 
