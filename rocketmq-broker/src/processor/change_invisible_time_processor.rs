@@ -51,7 +51,6 @@ use crate::failover::escape_bridge::EscapeBridge;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
 use crate::offset::manager::consumer_order_info_manager::ConsumerOrderInfoManager;
 use crate::processor::pop_message_processor::PopMessageProcessor;
-use crate::processor::processor_service::pop_buffer_merge_service::PopBufferMergeService;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
 pub struct ChangeInvisibleTimeProcessor<MS> {
@@ -61,7 +60,6 @@ pub struct ChangeInvisibleTimeProcessor<MS> {
     consumer_offset_manager: Arc<ConsumerOffsetManager>,
     consumer_order_info_manager: Arc<ConsumerOrderInfoManager<MS>>,
     broker_stats_manager: Arc<BrokerStatsManager>,
-    pop_buffer_merge_service: ArcMut<PopBufferMergeService>,
     escape_bridge: ArcMut<EscapeBridge<MS>>,
     revive_topic: CheetahString,
     store_host: SocketAddr,
@@ -76,7 +74,6 @@ impl<MS> ChangeInvisibleTimeProcessor<MS> {
         consumer_offset_manager: Arc<ConsumerOffsetManager>,
         consumer_order_info_manager: Arc<ConsumerOrderInfoManager<MS>>,
         broker_stats_manager: Arc<BrokerStatsManager>,
-        pop_buffer_merge_service: ArcMut<PopBufferMergeService>,
         escape_bridge: ArcMut<EscapeBridge<MS>>,
         pop_message_processor: ArcMut<PopMessageProcessor<MS>>,
     ) -> Self {
@@ -93,7 +90,6 @@ impl<MS> ChangeInvisibleTimeProcessor<MS> {
             consumer_offset_manager,
             consumer_order_info_manager,
             broker_stats_manager,
-            pop_buffer_merge_service,
             escape_bridge,
             revive_topic: CheetahString::from_string(revive_topic),
             store_host,
@@ -275,7 +271,11 @@ where
             request_header.topic.as_str(),
             1,
         );
-        if self.pop_buffer_merge_service.add_ack(rq_id, &ack_msg) {
+        if self
+            .pop_message_processor
+            .pop_buffer_merge_service_mut()
+            .add_ack(rq_id, &ack_msg)
+        {
             return Ok(());
         }
         let mut inner = MessageExtBrokerInner::default();

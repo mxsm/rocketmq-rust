@@ -21,12 +21,53 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
+use dashmap::DashMap;
 use rocketmq_common::common::pop_ack_constants::PopAckConstants;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_store::pop::pop_check_point::PopCheckPoint;
 use rocketmq_store::pop::AckMessage;
 
-pub(crate) struct PopBufferMergeService;
+use crate::processor::pop_message_processor::QueueLockManager;
+
+pub(crate) struct PopBufferMergeService {
+    buffer: DashMap<CheetahString /* mergeKey */, PopCheckPointWrapper>,
+    commit_offsets:
+        DashMap<CheetahString /* topic@cid@queueId */, QueueWithTime<PopCheckPointWrapper>>,
+    serving: AtomicBool,
+    counter: AtomicI32,
+    scan_times: i32,
+    revive_topic: CheetahString,
+    queue_lock_manager: QueueLockManager,
+    interval: u64,
+    minute5: u64,
+    count_of_minute1: u64,
+    count_of_second1: u64,
+    count_of_second30: u64,
+    batch_ack_index_list: Vec<u8>,
+    master: AtomicBool,
+}
+
+impl PopBufferMergeService {
+    pub fn new(revive_topic: CheetahString, queue_lock_manager: QueueLockManager) -> Self {
+        let interval = 5;
+        Self {
+            buffer: DashMap::with_capacity(1024 * 16),
+            commit_offsets: DashMap::with_capacity(1024),
+            serving: AtomicBool::new(true),
+            counter: AtomicI32::new(0),
+            scan_times: 0,
+            revive_topic,
+            queue_lock_manager,
+            interval,
+            minute5: 5 * 60 * 1000,
+            count_of_minute1: 60 * 1000 / interval,
+            count_of_second1: 1000 / interval,
+            count_of_second30: 30 * 1000 / interval,
+            batch_ack_index_list: Vec::with_capacity(32),
+            master: AtomicBool::new(false),
+        }
+    }
+}
 
 impl PopBufferMergeService {
     pub fn add_ack(&mut self, _revive_qid: i32, _ack_msg: &dyn AckMessage) -> bool {

@@ -76,7 +76,6 @@ use crate::processor::default_pull_message_result_handler::DefaultPullMessageRes
 use crate::processor::end_transaction_processor::EndTransactionProcessor;
 use crate::processor::pop_inflight_message_counter::PopInflightMessageCounter;
 use crate::processor::pop_message_processor::PopMessageProcessor;
-use crate::processor::processor_service::pop_buffer_merge_service::PopBufferMergeService;
 use crate::processor::pull_message_processor::PullMessageProcessor;
 use crate::processor::pull_message_result_handler::PullMessageResultHandler;
 use crate::processor::query_assignment_processor::QueryAssignmentProcessor;
@@ -597,7 +596,6 @@ impl BrokerRuntime {
                 Arc::new(self.consumer_offset_manager.clone()),
                 self.consumer_order_info_manager.clone(),
                 self.broker_stats_manager.clone(),
-                ArcMut::new(PopBufferMergeService),
                 self.escape_bridge.clone(),
                 pop_message_processor,
             )),
