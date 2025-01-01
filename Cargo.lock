@@ -2246,6 +2246,8 @@ dependencies = [
  "crossterm",
  "ratatui",
  "rocketmq-rust",
+ "serde",
+ "strum",
  "tokio",
  "tokio-stream",
 ]
