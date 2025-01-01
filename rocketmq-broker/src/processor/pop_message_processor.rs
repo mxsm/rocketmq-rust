@@ -96,6 +96,7 @@ pub struct PopMessageProcessor<MS> {
     pop_buffer_merge_service: ArcMut<PopBufferMergeService>,
     pop_inflight_message_counter: Arc<PopInflightMessageCounter>,
     queue_lock_manager: QueueLockManager,
+    revive_topic: CheetahString,
 }
 
 impl<MS> PopMessageProcessor<MS> {
@@ -111,6 +112,10 @@ impl<MS> PopMessageProcessor<MS> {
         consumer_filter_manager: Arc<ConsumerFilterManager>,
         pop_inflight_message_counter: Arc<PopInflightMessageCounter>,
     ) -> Self {
+        let revive_topic = CheetahString::from_string(PopAckConstants::build_cluster_revive_topic(
+            broker_config.broker_identity.broker_cluster_name.as_str(),
+        ));
+        let queue_lock_manager = QueueLockManager::new();
         PopMessageProcessor {
             consumer_offset_manager,
             consumer_manager,
@@ -123,9 +128,13 @@ impl<MS> PopMessageProcessor<MS> {
             consumer_filter_manager,
             ck_message_number: Default::default(),
             pop_long_polling_service: ArcMut::new(PopLongPollingService),
-            pop_buffer_merge_service: ArcMut::new(PopBufferMergeService),
+            pop_buffer_merge_service: ArcMut::new(PopBufferMergeService::new(
+                revive_topic.clone(),
+                queue_lock_manager.clone(),
+            )),
             pop_inflight_message_counter,
-            queue_lock_manager: QueueLockManager::new(),
+            queue_lock_manager,
+            revive_topic,
         }
     }
 }
@@ -1160,6 +1169,14 @@ impl<MS> PopMessageProcessor<MS> {
             PopAckConstants::CK_TAG
         )
     }
+
+    pub fn pop_buffer_merge_service(&self) -> &ArcMut<PopBufferMergeService> {
+        &self.pop_buffer_merge_service
+    }
+
+    pub fn pop_buffer_merge_service_mut(&mut self) -> &mut ArcMut<PopBufferMergeService> {
+        &mut self.pop_buffer_merge_service
+    }
 }
 
 struct TimedLock {
@@ -1202,6 +1219,7 @@ impl TimedLock {
     }
 }
 
+#[derive(Clone)]
 pub struct QueueLockManager {
     expired_local_cache: Arc<Mutex<HashMap<CheetahString, TimedLock>>>,
 }

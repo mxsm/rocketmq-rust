@@ -57,13 +57,11 @@ use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
 use crate::offset::manager::consumer_order_info_manager::ConsumerOrderInfoManager;
 use crate::processor::pop_inflight_message_counter::PopInflightMessageCounter;
 use crate::processor::pop_message_processor::PopMessageProcessor;
-use crate::processor::processor_service::pop_buffer_merge_service::PopBufferMergeService;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
 pub struct AckMessageProcessor<MS> {
     topic_config_manager: TopicConfigManager,
     message_store: ArcMut<MS>,
-    pop_buffer_merge_service: ArcMut<PopBufferMergeService>,
     escape_bridge: ArcMut<EscapeBridge<MS>>,
     store_host: SocketAddr,
     pop_inflight_message_counter: Arc<PopInflightMessageCounter>,
@@ -90,8 +88,6 @@ where
         AckMessageProcessor {
             topic_config_manager,
             message_store,
-            /* need to implement PopBufferMergeService */
-            pop_buffer_merge_service: ArcMut::new(PopBufferMergeService),
             escape_bridge,
             store_host,
             pop_inflight_message_counter,
@@ -377,7 +373,8 @@ where
         ack_msg.set_pop_time(pop_time);
         ack_msg.set_broker_name(broker_name);
         if self
-            .pop_buffer_merge_service
+            .pop_message_processor
+            .pop_buffer_merge_service_mut()
             .add_ack(r_qid, ack_msg.as_ref())
         {
             return;
