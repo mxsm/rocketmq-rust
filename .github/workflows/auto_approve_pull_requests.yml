@@ -9,9 +9,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
-    if: github.actor == 'rocketmq-rust-bot'
     steps:
       - uses: hmarr/auto-approve-action@v4
         with:
-          github-token: ${{ secrets.BOT_TOKE }}
+          github-token: ${{ secrets.BOT_TOKEN }}
           review-message: "LGTM"
