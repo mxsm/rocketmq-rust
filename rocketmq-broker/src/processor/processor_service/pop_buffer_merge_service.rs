@@ -14,13 +14,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+use std::collections::VecDeque;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::pop_ack_constants::PopAckConstants;
+use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_store::pop::pop_check_point::PopCheckPoint;
 use rocketmq_store::pop::AckMessage;
 
@@ -40,6 +42,36 @@ impl PopBufferMergeService {
     }
 }
 
+pub struct QueueWithTime<T> {
+    queue: VecDeque<T>,
+    time: u64,
+}
+
+impl<T> QueueWithTime<T> {
+    pub fn new() -> Self {
+        Self {
+            queue: VecDeque::new(),
+            time: get_current_millis(),
+        }
+    }
+
+    pub fn set_time(&mut self, pop_time: u64) {
+        self.time = pop_time;
+    }
+
+    pub fn get_time(&self) -> u64 {
+        self.time
+    }
+
+    pub fn get_queue(&self) -> &VecDeque<T> {
+        &self.queue
+    }
+
+    pub fn get_queue_mut(&mut self) -> &mut VecDeque<T> {
+        &mut self.queue
+    }
+}
+
 pub struct PopCheckPointWrapper {
     revive_queue_id: i32,
     // -1: not stored, >=0: stored, Long.MAX: storing.
@@ -50,8 +82,8 @@ pub struct PopCheckPointWrapper {
     // bit for stored buffer ak
     to_store_bits: AtomicI32,
     next_begin_offset: i64,
-    lock_key: String,
-    merge_key: String,
+    lock_key: CheetahString,
+    merge_key: CheetahString,
     just_offset: bool,
     ck_stored: AtomicBool,
 }
@@ -87,8 +119,8 @@ impl PopCheckPointWrapper {
             bits: AtomicI32::new(0),
             to_store_bits: AtomicI32::new(0),
             next_begin_offset,
-            lock_key,
-            merge_key,
+            lock_key: CheetahString::from(lock_key),
+            merge_key: CheetahString::from(merge_key),
             just_offset: false,
             ck_stored: AtomicBool::new(false),
         }
@@ -125,8 +157,8 @@ impl PopCheckPointWrapper {
             bits: AtomicI32::new(0),
             to_store_bits: AtomicI32::new(0),
             next_begin_offset,
-            lock_key,
-            merge_key,
+            lock_key: CheetahString::from(lock_key),
+            merge_key: CheetahString::from(merge_key),
             just_offset,
             ck_stored: AtomicBool::new(false),
         }
@@ -250,5 +282,26 @@ mod tests {
         let wrapper = PopCheckPointWrapper::new(1, 100, ck, 200);
         let display = format!("{}", wrapper);
         assert!(display.contains("CkWrap{rq=1, rqo=100"));
+    }
+
+    #[test]
+    fn queue_with_time_initializes_correctly() {
+        let queue_with_time: QueueWithTime<i32> = QueueWithTime::new();
+        assert!(queue_with_time.get_queue().is_empty());
+        assert!(queue_with_time.get_time() > 0);
+    }
+
+    #[test]
+    fn set_time_updates_time() {
+        let mut queue_with_time: QueueWithTime<i32> = QueueWithTime::new();
+        queue_with_time.set_time(123456789);
+        assert_eq!(queue_with_time.get_time(), 123456789);
+    }
+
+    #[test]
+    fn get_queue_mut_returns_mutable_reference() {
+        let mut queue_with_time: QueueWithTime<i32> = QueueWithTime::new();
+        queue_with_time.get_queue_mut().push_back(1);
+        assert_eq!(queue_with_time.get_queue().len(), 1);
     }
 }
