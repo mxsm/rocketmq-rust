@@ -95,6 +95,7 @@ pub struct PopMessageProcessor<MS> {
     pop_long_polling_service: ArcMut<PopLongPollingService>,
     pop_buffer_merge_service: ArcMut<PopBufferMergeService>,
     pop_inflight_message_counter: Arc<PopInflightMessageCounter>,
+    queue_lock_manager: QueueLockManager,
 }
 
 impl<MS> PopMessageProcessor<MS> {
@@ -124,6 +125,7 @@ impl<MS> PopMessageProcessor<MS> {
             pop_long_polling_service: ArcMut::new(PopLongPollingService),
             pop_buffer_merge_service: ArcMut::new(PopBufferMergeService),
             pop_inflight_message_counter,
+            queue_lock_manager: QueueLockManager::new(),
         }
     }
 }
@@ -1067,7 +1069,7 @@ where
     }
 
     pub fn queue_lock_manager(&self) -> &QueueLockManager {
-        unimplemented!("PopMessageProcessor QueueLockManager")
+        &self.queue_lock_manager
     }
 
     pub fn notify_message_arriving(
