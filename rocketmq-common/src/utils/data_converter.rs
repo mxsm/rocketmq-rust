@@ -28,6 +28,7 @@ impl DataConverter {
     }
 
     pub fn set_bit(value: i32, index: usize, flag: bool) -> i32 {
+        assert!(index < 32, "Bit index out of range. Must be < 32.");
         if flag {
             value | (1 << index)
         } else {
