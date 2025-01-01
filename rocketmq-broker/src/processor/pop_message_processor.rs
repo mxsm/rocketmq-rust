@@ -1050,7 +1050,7 @@ where
         let reset_offset = self
             .consumer_offset_manager
             .query_then_erase_reset_offset(group, topic, queue_id);
-        if reset_offset.is_some() {
+        if let Some(value) = &reset_offset {
             self.consumer_order_info_manager
                 .clear_block(topic, group, queue_id);
             self.pop_buffer_merge_service
@@ -1060,7 +1060,7 @@ where
                 group,
                 topic,
                 queue_id,
-                *reset_offset.as_ref().unwrap(),
+                *value,
             )
         }
         reset_offset
