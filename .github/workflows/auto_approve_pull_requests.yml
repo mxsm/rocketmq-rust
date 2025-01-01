@@ -30,9 +30,9 @@ jobs:
             const { owner, repo } = context.repo;
             const pr = context.payload.pull_request || context.payload.check_suite.pull_requests[0];
             const sha = pr.head.sha;
-
+            
             console.log(`Processing PR #${pr.number}, HEAD SHA: ${sha}`);
-
+            
             // Get required status checks for the base branch
             const { data: branch } = await github.rest.repos.getBranch({
               owner,
@@ -43,38 +43,54 @@ jobs:
             const requiredChecks = branch.protection?.required_status_checks?.contexts || [];
             console.log('Required status checks:', requiredChecks);
 
-            // Fetch status check runs for the PR head SHA
-            const { data: checks } = await github.rest.checks.listForRef({
-              owner,
-              repo,
-              ref: sha,
-              per_page: 100,
-            });
+            // Function to check the status of required checks
+            async function checkRequiredStatusChecks() {
+              const { data: checks } = await github.rest.checks.listForRef({
+                owner,
+                repo,
+                ref: sha,
+                per_page: 100,
+              });
 
-            console.log('Found status checks:', checks.check_runs.length);
+              console.log('Found status checks:', checks.check_runs.length);
 
-            // Filter out non-required checks
-            const requiredCheckRuns = checks.check_runs.filter(check => requiredChecks.includes(check.name));
-            console.log('Required status checks found:', requiredCheckRuns.length);
+              // Filter out non-required checks
+              const requiredCheckRuns = checks.check_runs.filter(check => requiredChecks.includes(check.name));
+              console.log('Required status checks found:', requiredCheckRuns.length);
 
-            // Check for any failed or pending required checks
-            const failedChecks = requiredCheckRuns.filter(check => check.status === 'completed' && check.conclusion !== 'success');
-            const pendingChecks = requiredCheckRuns.filter(check => check.status !== 'completed');
+              // Check for any failed or pending required checks
+              const failedChecks = requiredCheckRuns.filter(check => check.status === 'completed' && check.conclusion !== 'success');
+              const pendingChecks = requiredCheckRuns.filter(check => check.status !== 'completed');
 
-            if (failedChecks.length > 0) {
-              const failedNames = failedChecks.map(f => f.name).join(', ');
-              console.log(`Failed checks: ${failedNames}`);
-              throw new Error('Some required status checks have failed');
+              if (failedChecks.length > 0) {
+                const failedNames = failedChecks.map(f => f.name).join(', ');
+                console.log(`Failed checks: ${failedNames}`);
+                throw new Error('Some required status checks have failed');
+              }
+
+              if (pendingChecks.length > 0) {
+                const pendingNames = pendingChecks.map(p => p.name).join(', ');
+                console.log(`Pending checks: ${pendingNames}`);
+                return false; // Still pending
+              }
+
+              console.log('All required status checks have passed successfully');
+              return true; // All checks passed
             }
 
-            if (pendingChecks.length > 0) {
-              const pendingNames = pendingChecks.map(p => p.name).join(', ');
-              console.log(`Pending checks: ${pendingNames}`);
-              throw new Error('Some required status checks are still in progress');
+            // Poll for status checks until they complete
+            const maxRetries = 10;
+            const retryInterval = 30 * 1000; // 30 seconds
+            for (let i = 0; i < maxRetries; i++) {
+              const allChecksPassed = await checkRequiredStatusChecks();
+              if (allChecksPassed) {
+                return true;
+              }
+              console.log(`Retrying in ${retryInterval / 1000} seconds... (${i + 1}/${maxRetries})`);
+              await new Promise(resolve => setTimeout(resolve, retryInterval));
             }
 
-            console.log('All required status checks have passed successfully');
-            return true;
+            throw new Error('Timeout waiting for required status checks to complete');
 
       - name: Auto approve PR
         if: steps.check-status.outputs.result == 'true'
