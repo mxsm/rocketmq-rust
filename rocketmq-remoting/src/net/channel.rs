@@ -153,12 +153,11 @@ impl Channel {
 }
 
 impl Channel {
-
     #[inline]
     pub fn set_local_address(&mut self, local_address: SocketAddr) {
         self.local_address = local_address;
     }
-    
+
     #[inline]
     pub fn set_remote_address(&mut self, remote_address: SocketAddr) {
         self.remote_address = remote_address;
