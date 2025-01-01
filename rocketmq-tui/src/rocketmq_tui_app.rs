@@ -28,14 +28,20 @@ use ratatui::DefaultTerminal;
 use ratatui::Frame;
 use tokio_stream::StreamExt;
 
+use crate::ui::search_input_widget::SearchInputWidget;
+
 #[derive(Default)]
 pub struct RocketmqTuiApp {
     should_quit: bool,
+    search_input: SearchInputWidget,
 }
 
 impl RocketmqTuiApp {
     pub fn new() -> Self {
-        Self { should_quit: false }
+        Self {
+            should_quit: false,
+            search_input: Default::default(),
+        }
     }
 
     pub fn should_quit(&self) -> bool {
@@ -115,12 +121,7 @@ impl RocketmqTuiApp {
         let command_args = middle_right_chunks[1];
         let execute_command_result = middle_right_chunks[2];
 
-        frame.render_widget(
-            Block::default()
-                .borders(ratatui::widgets::Borders::ALL)
-                .title("Search"),
-            search,
-        );
+        frame.render_widget(&self.search_input, search);
         frame.render_widget(
             Block::default()
                 .borders(ratatui::widgets::Borders::ALL)
