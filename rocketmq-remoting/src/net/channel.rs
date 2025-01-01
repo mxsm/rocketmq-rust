@@ -153,37 +153,53 @@ impl Channel {
 }
 
 impl Channel {
+
+    #[inline]
     pub fn set_local_address(&mut self, local_address: SocketAddr) {
         self.local_address = local_address;
     }
+    
+    #[inline]
     pub fn set_remote_address(&mut self, remote_address: SocketAddr) {
         self.remote_address = remote_address;
     }
+
+    #[inline]
     pub fn set_channel_id(&mut self, channel_id: String) {
         self.channel_id = channel_id;
     }
 
+    #[inline]
     pub fn local_address(&self) -> SocketAddr {
         self.local_address
     }
+
+    #[inline]
     pub fn remote_address(&self) -> SocketAddr {
         self.remote_address
     }
+
+    #[inline]
     pub fn channel_id(&self) -> &str {
         self.channel_id.as_str()
     }
 
+    #[inline]
     pub fn connection(&self) -> ArcMut<Connection> {
         self.connection.clone()
     }
+
+    #[inline]
     pub fn connection_ref(&self) -> &Connection {
         self.connection.as_ref()
     }
 
+    #[inline]
     pub fn connection_mut(&mut self) -> &mut Connection {
         self.connection.as_mut()
     }
 
+    #[inline]
     pub fn connection_mut_from_ref(&self) -> &mut Connection {
         self.connection.mut_from_ref()
     }
