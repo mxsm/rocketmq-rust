@@ -20,3 +20,5 @@ tokio.workspace = true
 tokio-stream = { workspace = true }
 
 anyhow = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+strum = { workspace = true, features = ["derive"] }
