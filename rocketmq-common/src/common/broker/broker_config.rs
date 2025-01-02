@@ -23,6 +23,7 @@ use lazy_static::lazy_static;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::common::broker::broker_role::BrokerRole;
 use crate::common::constant::PermName;
 use crate::common::message::message_enum::MessageRequestMode;
 use crate::common::mix_all;
@@ -189,6 +190,7 @@ pub struct BrokerConfig {
     pub init_pop_offset_by_check_msg_in_mem: bool,
     pub enable_pop_buffer_merge: bool,
     pub pop_ck_stay_buffer_time_out: u64,
+    pub broker_role: BrokerRole,
 }
 
 impl Default for BrokerConfig {
@@ -284,6 +286,7 @@ impl Default for BrokerConfig {
             init_pop_offset_by_check_msg_in_mem: true,
             enable_pop_buffer_merge: false,
             pop_ck_stay_buffer_time_out: 3_000,
+            broker_role: BrokerRole::AsyncMaster,
         }
     }
 }

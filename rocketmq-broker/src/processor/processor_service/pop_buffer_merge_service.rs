@@ -23,13 +23,17 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::common::key_builder::KeyBuilder;
 use rocketmq_common::common::pop_ack_constants::PopAckConstants;
 use rocketmq_common::utils::data_converter::DataConverter;
 use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_rust::ArcMut;
 use rocketmq_store::pop::batch_ack_msg::BatchAckMsg;
 use rocketmq_store::pop::pop_check_point::PopCheckPoint;
 use rocketmq_store::pop::AckMessage;
+use tokio::select;
+use tokio::sync::Notify;
 use tracing::error;
 use tracing::warn;
 
@@ -41,7 +45,7 @@ pub(crate) struct PopBufferMergeService {
         DashMap<CheetahString /* topic@cid@queueId */, QueueWithTime<PopCheckPointWrapper>>,
     serving: AtomicBool,
     counter: AtomicI32,
-    scan_times: i32,
+    scan_times: u64,
     revive_topic: CheetahString,
     queue_lock_manager: QueueLockManager,
     interval: u64,
@@ -52,6 +56,7 @@ pub(crate) struct PopBufferMergeService {
     batch_ack_index_list: Vec<u8>,
     master: AtomicBool,
     broker_config: Arc<BrokerConfig>,
+    shutdown: Arc<Notify>,
 }
 
 impl PopBufferMergeService {
@@ -77,6 +82,7 @@ impl PopBufferMergeService {
             batch_ack_index_list: Vec::with_capacity(32),
             master: AtomicBool::new(false),
             broker_config,
+            shutdown: Arc::new(Notify::new()),
         }
     }
 }
@@ -214,6 +220,67 @@ impl PopBufferMergeService {
                 }
             }
         }
+    }
+
+    fn is_should_running(&self) -> bool {
+        if self.broker_config.enable_slave_acting_master {
+            return true;
+        }
+        self.master.store(
+            self.broker_config.broker_role != BrokerRole::Slave,
+            Ordering::Release,
+        );
+        self.master.load(Ordering::Acquire)
+    }
+
+    fn scan(&self) {
+        unimplemented!("scan")
+    }
+    fn scan_garbage(&self) {
+        unimplemented!("scan_garbage")
+    }
+
+    pub fn get_offset_total_size(&self) -> usize {
+        unimplemented!("getOffsetTotalSize")
+    }
+
+    pub fn start(this: ArcMut<Self>) {
+        tokio::spawn(async move {
+            let interval = this.interval * 200 * 5;
+
+            loop {
+                select! {
+                    _ = this.shutdown.notified() => {
+                        break;
+                    }
+                    _ = async {
+                if !this.is_should_running() {
+                    //slave
+                    tokio::time::sleep(tokio::time::Duration::from_millis(interval)).await;
+                    this.buffer.clear();
+                    this.commit_offsets.clear();
+                    return;
+                }
+                this.scan();
+                if this.scan_times % this.count_of_second30 == 0 {
+                    this.scan_garbage();
+                }
+                tokio::time::sleep(tokio::time::Duration::from_millis(this.interval)).await;
+                if !this.serving.load(Ordering::Acquire) && this.buffer.is_empty()  && this.get_offset_total_size() == 0 {
+                    this.serving.store(true,Ordering::Release);
+                }}
+                     =>{}
+                }
+            }
+            this.serving.store(false, Ordering::Release);
+            tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
+            if !this.is_should_running() {
+                return;
+            }
+            while !this.buffer.is_empty() || this.get_offset_total_size() > 0 {
+                this.scan();
+            }
+        });
     }
 }
 
