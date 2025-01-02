@@ -19,6 +19,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
@@ -35,6 +36,7 @@ use rocketmq_store::pop::AckMessage;
 use tokio::select;
 use tokio::sync::Notify;
 use tracing::error;
+use tracing::info;
 use tracing::warn;
 
 use crate::processor::pop_message_processor::QueueLockManager;
@@ -233,8 +235,76 @@ impl PopBufferMergeService {
         self.master.load(Ordering::Acquire)
     }
 
-    fn scan(&self) {
-        unimplemented!("scan")
+    fn scan(&mut self) {
+        let start_time = Instant::now();
+        let mut count = 0;
+        let mut count_ck = 0;
+        self.buffer.retain(|key, point_wrapper| {
+            // just process offset(already stored at pull thread), or buffer ck(not stored and ack
+            // finish)
+            if point_wrapper.is_just_offset() && point_wrapper.is_ck_stored()
+                || is_ck_done(point_wrapper)
+                || is_ck_done_for_finish(point_wrapper) && point_wrapper.is_ck_stored()
+            {
+                self.counter.fetch_sub(1, Ordering::AcqRel);
+                return false;
+            }
+
+            let point = point_wrapper.get_ck();
+            let now = get_current_millis();
+            let mut remove_ck = !self.serving.load(Ordering::Acquire);
+            if point.get_revive_time() as u64 - now < self.broker_config.pop_ck_stay_buffer_time_out
+            {
+                remove_ck = true;
+            }
+
+            if now - point.get_revive_time() as u64 > self.broker_config.pop_ck_stay_buffer_time_out
+            {
+                remove_ck = true;
+            }
+
+            if is_ck_done(point_wrapper) {
+            } else if point_wrapper.is_just_offset() {
+            } else if remove_ck {
+            }
+            true
+        });
+        let offset_buffer_size = self.scan_commit_offset();
+
+        let eclipse = start_time.elapsed().as_millis() as u64;
+        if eclipse > self.broker_config.pop_ck_stay_buffer_time_out - 1000 {
+            /*            info!(
+                "[PopBuffer]scan stop, because eclipse too long, PopBufferEclipse={}, \
+                 PopBufferToStoreAck={}, PopBufferToStoreCk={}, PopBufferSize={}, \
+                 PopBufferOffsetSize={}",
+                eclipse,
+                count,
+                count_ck,
+                *self.counter.lock().unwrap(),
+                offset_buffer_size
+            );*/
+            self.serving.store(false, Ordering::Release);
+        } else {
+            if self.scan_times % self.count_of_second1 == 0 {
+                info!(
+                    "[PopBuffer]scan, PopBufferEclipse={}, PopBufferToStoreAck={}, \
+                     PopBufferToStoreCk={}, PopBufferSize={}, PopBufferOffsetSize={}",
+                    eclipse,
+                    count,
+                    count_ck,
+                    self.counter.load(Ordering::Acquire),
+                    offset_buffer_size
+                );
+            }
+        }
+
+        self.scan_times += 1;
+
+        if self.scan_times >= self.count_of_minute1 {
+            self.counter
+                .store(self.buffer.len() as i32, Ordering::Release);
+            self.scan_times = 0;
+        }
     }
     fn scan_garbage(&self) {
         unimplemented!("scan_garbage")
@@ -254,22 +324,23 @@ impl PopBufferMergeService {
                         break;
                     }
                     _ = async {
-                if !this.is_should_running() {
-                    //slave
-                    tokio::time::sleep(tokio::time::Duration::from_millis(interval)).await;
-                    this.buffer.clear();
-                    this.commit_offsets.clear();
-                    return;
-                }
-                this.scan();
-                if this.scan_times % this.count_of_second30 == 0 {
-                    this.scan_garbage();
-                }
-                tokio::time::sleep(tokio::time::Duration::from_millis(this.interval)).await;
-                if !this.serving.load(Ordering::Acquire) && this.buffer.is_empty()  && this.get_offset_total_size() == 0 {
-                    this.serving.store(true,Ordering::Release);
-                }}
-                     =>{}
+                        if !this.is_should_running() {
+                            //slave
+                            tokio::time::sleep(tokio::time::Duration::from_millis(interval)).await;
+                            this.buffer.clear();
+                            this.commit_offsets.clear();
+                            return;
+                        }
+                        this.mut_from_ref().scan();
+                        if this.scan_times % this.count_of_second30 == 0 {
+                            this.scan_garbage();
+                        }
+                        tokio::time::sleep(tokio::time::Duration::from_millis(this.interval)).await;
+                        if !this.serving.load(Ordering::Acquire) && this.buffer.is_empty()  && this.get_offset_total_size() == 0 {
+                            this.serving.store(true,Ordering::Release);
+                        }
+                    } =>{}
+
                 }
             }
             this.serving.store(false, Ordering::Release);
@@ -278,10 +349,59 @@ impl PopBufferMergeService {
                 return;
             }
             while !this.buffer.is_empty() || this.get_offset_total_size() > 0 {
-                this.scan();
+                this.mut_from_ref().scan();
             }
         });
     }
+
+    fn scan_commit_offset(&self) -> i32 {
+        // Implement the logic to scan commit offset
+        unimplemented!()
+    }
+
+    fn is_ck_done_for_finish(&self, point_wrapper: &PopCheckPointWrapper) -> bool {
+        // Implement the logic to check if the checkpoint is done for finish
+        unimplemented!()
+    }
+
+    fn put_ck_to_store(&self, point_wrapper: &mut PopCheckPointWrapper, flag: bool) {
+        // Implement the logic to put checkpoint to store
+        unimplemented!()
+    }
+
+    fn put_batch_ack_to_store(
+        &self,
+        point_wrapper: &PopCheckPointWrapper,
+        index_list: &[u8],
+    ) -> bool {
+        // Implement the logic to put batch ack to store
+        unimplemented!()
+    }
+
+    fn put_ack_to_store(&self, point_wrapper: &PopCheckPointWrapper, index: u8) -> bool {
+        // Implement the logic to put ack to store
+        unimplemented!()
+    }
+}
+
+fn is_ck_done(point_wrapper: &PopCheckPointWrapper) -> bool {
+    let num = point_wrapper.ck.num;
+    for i in 0..num {
+        if !DataConverter::get_bit(point_wrapper.get_bits().load(Ordering::Relaxed), i as usize) {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_ck_done_for_finish(point_wrapper: &PopCheckPointWrapper) -> bool {
+    let num = point_wrapper.ck.num;
+    for i in 0..num {
+        if !DataConverter::get_bit(point_wrapper.get_bits().load(Ordering::Relaxed), i as usize) {
+            return false;
+        }
+    }
+    true
 }
 
 pub struct QueueWithTime<T> {
