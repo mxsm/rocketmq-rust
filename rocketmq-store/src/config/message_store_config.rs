@@ -20,10 +20,10 @@ use std::path::PathBuf;
 
 use cheetah_string::CheetahString;
 use lazy_static::lazy_static;
+use rocketmq_common::common::broker::broker_role::BrokerRole;
 use serde::Deserialize;
 
 use crate::base::store_enum::StoreType;
-use crate::config::broker_role::BrokerRole;
 use crate::config::flush_disk_type::FlushDiskType;
 use crate::queue::single_consume_queue::CQ_STORE_UNIT_SIZE;
 
