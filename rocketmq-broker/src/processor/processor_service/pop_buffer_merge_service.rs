@@ -195,8 +195,8 @@ impl PopBufferMergeService {
         )))
     }
 
-    pub fn clear_offset_queue(&self, _lock_key: &str) {
-        unimplemented!("Not implemented yet");
+    pub fn clear_offset_queue(&self, lock_key: &CheetahString) {
+        self.commit_offsets.remove(lock_key);
     }
 
     fn mark_bit_cas(set_bits: &AtomicI32, index: usize) {
