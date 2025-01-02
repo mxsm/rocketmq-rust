@@ -18,6 +18,7 @@ use std::fmt;
 
 use serde::Deserialize;
 use serde::Deserializer;
+use serde::Serialize;
 
 #[derive(Debug, Copy, Clone, Default, Eq, PartialEq)]
 pub enum BrokerRole {
@@ -68,5 +69,70 @@ impl<'de> Deserialize<'de> for BrokerRole {
         }
 
         deserializer.deserialize_str(BrokerRoleVisitor)
+    }
+}
+
+impl Serialize for BrokerRole {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.get_broker_role())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json;
+
+    use super::*;
+
+    #[test]
+    fn broker_role_async_master_serialization() {
+        let role = BrokerRole::AsyncMaster;
+        let serialized = serde_json::to_string(&role).unwrap();
+        assert_eq!(serialized, "\"ASYNC_MASTER\"");
+    }
+
+    #[test]
+    fn broker_role_sync_master_serialization() {
+        let role = BrokerRole::SyncMaster;
+        let serialized = serde_json::to_string(&role).unwrap();
+        assert_eq!(serialized, "\"SYNC_MASTER\"");
+    }
+
+    #[test]
+    fn broker_role_slave_serialization() {
+        let role = BrokerRole::Slave;
+        let serialized = serde_json::to_string(&role).unwrap();
+        assert_eq!(serialized, "\"SLAVE\"");
+    }
+
+    #[test]
+    fn broker_role_async_master_deserialization() {
+        let json = "\"ASYNC_MASTER\"";
+        let deserialized: BrokerRole = serde_json::from_str(json).unwrap();
+        assert_eq!(deserialized, BrokerRole::AsyncMaster);
+    }
+
+    #[test]
+    fn broker_role_sync_master_deserialization() {
+        let json = "\"SYNC_MASTER\"";
+        let deserialized: BrokerRole = serde_json::from_str(json).unwrap();
+        assert_eq!(deserialized, BrokerRole::SyncMaster);
+    }
+
+    #[test]
+    fn broker_role_slave_deserialization() {
+        let json = "\"SLAVE\"";
+        let deserialized: BrokerRole = serde_json::from_str(json).unwrap();
+        assert_eq!(deserialized, BrokerRole::Slave);
+    }
+
+    #[test]
+    fn broker_role_invalid_deserialization() {
+        let json = "\"INVALID_ROLE\"";
+        let deserialized: Result<BrokerRole, _> = serde_json::from_str(json);
+        assert!(deserialized.is_err());
     }
 }
