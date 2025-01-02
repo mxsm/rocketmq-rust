@@ -22,6 +22,7 @@ use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all::MASTER_ID;
 use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
@@ -42,7 +43,6 @@ use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerCon
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
-use rocketmq_store::config::broker_role::BrokerRole;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::filter::MessageFilter;
 use rocketmq_store::message_store::default_message_store::DefaultMessageStore;

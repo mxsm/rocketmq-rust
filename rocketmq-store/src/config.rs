@@ -15,7 +15,6 @@
  * limitations under the License.
  */
 
-pub mod broker_role;
 pub mod flush_disk_type;
 pub mod message_store_config;
 pub(crate) mod store_path_config_helper;

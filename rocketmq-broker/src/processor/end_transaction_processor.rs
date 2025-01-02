@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::common::message::message_decoder;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
@@ -36,7 +37,6 @@ use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
-use rocketmq_store::config::broker_role::BrokerRole;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::log_file::MessageStore;
 use tracing::warn;

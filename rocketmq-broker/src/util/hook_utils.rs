@@ -21,6 +21,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
+use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
@@ -33,7 +34,6 @@ use rocketmq_common::MessageDecoder::message_properties_to_string;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
-use rocketmq_store::config::broker_role::BrokerRole;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::log_file::MessageStore;
 use rocketmq_store::timer::timer_message_store;
