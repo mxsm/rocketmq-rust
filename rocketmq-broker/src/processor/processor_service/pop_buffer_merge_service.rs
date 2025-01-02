@@ -23,6 +23,7 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_common::common::key_builder::KeyBuilder;
 use rocketmq_common::common::pop_ack_constants::PopAckConstants;
 use rocketmq_common::utils::data_converter::DataConverter;
 use rocketmq_common::TimeUtils::get_current_millis;
@@ -167,8 +168,31 @@ impl PopBufferMergeService {
         true
     }
 
-    pub fn get_latest_offset(&self, _lock_key: &str) -> i64 {
-        unimplemented!("Not implemented yet");
+    #[inline]
+    pub fn get_latest_offset(&self, lock_key: &CheetahString) -> i64 {
+        let queue = self.commit_offsets.get(lock_key);
+        if let Some(queue) = queue {
+            let queue = queue.value();
+            let queue = queue.get_queue();
+            if queue.is_empty() {
+                return -1;
+            }
+            let point = queue.back().unwrap();
+            point.get_next_begin_offset()
+        } else {
+            -1
+        }
+    }
+
+    pub fn get_latest_offset_full(
+        &self,
+        topic: &CheetahString,
+        group: &CheetahString,
+        queue_id: i32,
+    ) -> i64 {
+        self.get_latest_offset(&CheetahString::from_string(KeyBuilder::build_polling_key(
+            topic, group, queue_id,
+        )))
     }
 
     pub fn clear_offset_queue(&self, _lock_key: &str) {
