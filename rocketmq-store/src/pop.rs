@@ -21,7 +21,7 @@ pub mod batch_ack_msg;
 pub mod pop_check_point;
 
 /// A trait representing an acknowledgment message that can be converted to and from `Any`.
-pub trait AckMessage {
+pub trait AckMessage: std::fmt::Display {
     fn ack_offset(&self) -> i64;
     fn set_ack_offset(&mut self, ack_offset: i64);
 
