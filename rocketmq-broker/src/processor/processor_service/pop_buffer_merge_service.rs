@@ -22,10 +22,15 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::pop_ack_constants::PopAckConstants;
+use rocketmq_common::utils::data_converter::DataConverter;
 use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_store::pop::batch_ack_msg::BatchAckMsg;
 use rocketmq_store::pop::pop_check_point::PopCheckPoint;
 use rocketmq_store::pop::AckMessage;
+use tracing::error;
+use tracing::warn;
 
 use crate::processor::pop_message_processor::QueueLockManager;
 
@@ -45,10 +50,15 @@ pub(crate) struct PopBufferMergeService {
     count_of_second30: u64,
     batch_ack_index_list: Vec<u8>,
     master: AtomicBool,
+    broker_config: Arc<BrokerConfig>,
 }
 
 impl PopBufferMergeService {
-    pub fn new(revive_topic: CheetahString, queue_lock_manager: QueueLockManager) -> Self {
+    pub fn new(
+        revive_topic: CheetahString,
+        queue_lock_manager: QueueLockManager,
+        broker_config: Arc<BrokerConfig>,
+    ) -> Self {
         let interval = 5;
         Self {
             buffer: DashMap::with_capacity(1024 * 16),
@@ -65,13 +75,96 @@ impl PopBufferMergeService {
             count_of_second30: 30 * 1000 / interval,
             batch_ack_index_list: Vec::with_capacity(32),
             master: AtomicBool::new(false),
+            broker_config,
         }
     }
 }
 
 impl PopBufferMergeService {
-    pub fn add_ack(&mut self, _revive_qid: i32, _ack_msg: &dyn AckMessage) -> bool {
-        unimplemented!("Not implemented yet");
+    pub fn add_ack(&mut self, revive_qid: i32, ack_msg: &dyn AckMessage) -> bool {
+        if !self.broker_config.enable_pop_buffer_merge {
+            return false;
+        }
+        if !self.serving.load(Ordering::Acquire) {
+            return false;
+        }
+        let point_wrapper = match self.buffer.get(&CheetahString::from_string(format!(
+            "{}{}{}{}{}{}",
+            ack_msg.topic(),
+            ack_msg.consumer_group(),
+            ack_msg.queue_id(),
+            ack_msg.start_offset(),
+            ack_msg.pop_time(),
+            ack_msg.broker_name()
+        ))) {
+            Some(wrapper) => wrapper,
+            None => {
+                if self.broker_config.enable_pop_log {
+                    warn!(
+                        "[PopBuffer]add ack fail, rqId={}, no ck, {}",
+                        revive_qid, ack_msg
+                    );
+                }
+                return false;
+            }
+        };
+        if point_wrapper.is_just_offset() {
+            return false;
+        }
+        let point = point_wrapper.get_ck();
+        let now = get_current_millis();
+        if (point.get_revive_time() as u64 - now)
+            < self.broker_config.pop_ck_stay_buffer_time_out + 1500
+        {
+            if self.broker_config.enable_pop_log {
+                warn!(
+                    "[PopBuffer]add ack fail, rqId={}, almost timeout for revive, {}, {}, {}",
+                    revive_qid,
+                    point_wrapper.value(),
+                    ack_msg,
+                    now
+                );
+            }
+            return false;
+        }
+        if now - point.pop_time as u64 > self.broker_config.pop_ck_stay_buffer_time_out - 1500 {
+            if self.broker_config.enable_pop_log {
+                warn!(
+                    "[PopBuffer]add ack fail, rqId={}, timeout for revive, {}, {}, {}",
+                    revive_qid,
+                    point_wrapper.value(),
+                    ack_msg,
+                    now
+                );
+            }
+            return false;
+        }
+
+        if let Some(batch_ack_msg) = ack_msg.as_any().downcast_ref::<BatchAckMsg>() {
+            for ack_offset in &batch_ack_msg.ack_offset_list {
+                let index_of_ack = point.index_of_ack(*ack_offset);
+                if index_of_ack > -1 {
+                    Self::mark_bit_cas(point_wrapper.get_bits(), index_of_ack as usize);
+                } else {
+                    error!(
+                        "[PopBuffer]Invalid index of ack, reviveQid={}, {}, {}",
+                        revive_qid, ack_msg, point
+                    );
+                }
+            }
+        } else {
+            let index_of_ack = point.index_of_ack(ack_msg.ack_offset());
+            if index_of_ack > -1 {
+                Self::mark_bit_cas(point_wrapper.get_bits(), index_of_ack as usize);
+            } else {
+                error!(
+                    "[PopBuffer]Invalid index of ack, reviveQid={}, {}, {}",
+                    revive_qid, ack_msg, point
+                );
+                return true;
+            }
+        }
+        true
     }
 
     pub fn get_latest_offset(&self, _lock_key: &str) -> i64 {
@@ -80,6 +173,23 @@ impl PopBufferMergeService {
 
     pub fn clear_offset_queue(&self, _lock_key: &str) {
         unimplemented!("Not implemented yet");
+    }
+
+    fn mark_bit_cas(set_bits: &AtomicI32, index: usize) {
+        loop {
+            let bits = set_bits.load(Ordering::Relaxed);
+            if DataConverter::get_bit(bits, index) {
+                break;
+            }
+            let new_bits = DataConverter::set_bit(bits, index, true);
+            if let Ok(value) =
+                set_bits.compare_exchange(bits, new_bits, Ordering::Acquire, Ordering::Relaxed)
+            {
+                if value == bits {
+                    break;
+                }
+            }
+        }
     }
 }
 
@@ -128,7 +238,6 @@ pub struct PopCheckPointWrapper {
     just_offset: bool,
     ck_stored: AtomicBool,
 }
-
 impl PopCheckPointWrapper {
     pub fn new(
         revive_queue_id: i32,

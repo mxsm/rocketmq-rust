@@ -120,7 +120,7 @@ impl<MS> PopMessageProcessor<MS> {
             consumer_offset_manager,
             consumer_manager,
             consumer_order_info_manager,
-            broker_config,
+            broker_config: broker_config.clone(),
             message_store,
             message_store_config,
             topic_config_manager,
@@ -131,6 +131,7 @@ impl<MS> PopMessageProcessor<MS> {
             pop_buffer_merge_service: ArcMut::new(PopBufferMergeService::new(
                 revive_topic.clone(),
                 queue_lock_manager.clone(),
+                broker_config,
             )),
             pop_inflight_message_counter,
             queue_lock_manager,

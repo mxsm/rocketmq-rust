@@ -187,6 +187,8 @@ pub struct BrokerConfig {
     pub pop_from_retry_probability: i32,
     pub pop_response_return_actual_retry_topic: bool,
     pub init_pop_offset_by_check_msg_in_mem: bool,
+    pub enable_pop_buffer_merge: bool,
+    pub pop_ck_stay_buffer_time_out: u64,
 }
 
 impl Default for BrokerConfig {
@@ -280,6 +282,8 @@ impl Default for BrokerConfig {
             pop_from_retry_probability: 20,
             pop_response_return_actual_retry_topic: false,
             init_pop_offset_by_check_msg_in_mem: true,
+            enable_pop_buffer_merge: false,
+            pop_ck_stay_buffer_time_out: 3_000,
         }
     }
 }
