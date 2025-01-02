@@ -78,6 +78,7 @@ pub struct BatchConsumeQueue {
 }
 
 impl BatchConsumeQueue {
+    #[inline]
     pub fn new(
         topic: CheetahString,
         queue_id: i32,
@@ -132,6 +133,7 @@ impl BatchConsumeQueue {
 
 #[allow(unused_variables)]
 impl FileQueueLifeCycle for BatchConsumeQueue {
+    #[inline]
     fn load(&mut self) -> bool {
         let result = self.mapped_file_queue.load();
         info!(
@@ -144,44 +146,54 @@ impl FileQueueLifeCycle for BatchConsumeQueue {
         result
     }
 
+    #[inline]
     fn recover(&mut self) {
         todo!()
     }
 
+    #[inline]
     fn check_self(&self) {
         todo!()
     }
 
+    #[inline]
     fn flush(&self, flush_least_pages: i32) -> bool {
         todo!()
     }
 
+    #[inline]
     fn destroy(&mut self) {
         todo!()
     }
 
+    #[inline]
     fn truncate_dirty_logic_files(&mut self, max_commit_log_pos: i64) {
         todo!()
     }
 
+    #[inline]
     fn delete_expired_file(&self, min_commit_log_pos: i64) -> i32 {
         todo!()
     }
 
+    #[inline]
     fn roll_next_file(&self, next_begin_offset: i64) -> i64 {
         todo!()
     }
 
+    #[inline]
     fn is_first_file_available(&self) -> bool {
         todo!()
     }
 
+    #[inline]
     fn is_first_file_exist(&self) -> bool {
         todo!()
     }
 }
 
 impl Swappable for BatchConsumeQueue {
+    #[inline]
     fn swap_map(
         &self,
         reserve_num: i32,
@@ -191,60 +203,74 @@ impl Swappable for BatchConsumeQueue {
         todo!()
     }
 
+    #[inline]
     fn clean_swapped_map(&self, force_clean_swap_interval_ms: i64) {
         todo!()
     }
 }
 
 impl ConsumeQueueTrait for BatchConsumeQueue {
+    #[inline]
     fn get_topic(&self) -> &CheetahString {
         todo!()
     }
 
+    #[inline]
     fn get_queue_id(&self) -> i32 {
         todo!()
     }
 
+    #[inline]
     fn get(&self, index: i64) -> Option<CqUnit> {
         todo!()
     }
 
+    #[inline]
     fn get_cq_unit_and_store_time(&self, index: i64) -> Option<(CqUnit, i64)> {
         todo!()
     }
 
+    #[inline]
     fn get_earliest_unit_and_store_time(&self) -> Option<(CqUnit, i64)> {
         todo!()
     }
 
+    #[inline]
     fn get_earliest_unit(&self) -> CqUnit {
         todo!()
     }
 
+    #[inline]
     fn get_latest_unit(&self) -> CqUnit {
         todo!()
     }
 
+    #[inline]
     fn get_last_offset(&self) -> i64 {
         todo!()
     }
 
+    #[inline]
     fn get_min_offset_in_queue(&self) -> i64 {
         todo!()
     }
 
+    #[inline]
     fn get_max_offset_in_queue(&self) -> i64 {
         todo!()
     }
 
+    #[inline]
     fn get_message_total_in_queue(&self) -> i64 {
         todo!()
     }
 
+    #[inline]
     fn get_offset_in_queue_by_time(&self, timestamp: i64) -> i64 {
         todo!()
     }
 
+    #[inline]
     fn get_offset_in_queue_by_time_boundary(
         &self,
         timestamp: i64,
@@ -253,34 +279,42 @@ impl ConsumeQueueTrait for BatchConsumeQueue {
         todo!()
     }
 
+    #[inline]
     fn get_max_physic_offset(&self) -> i64 {
         todo!()
     }
 
+    #[inline]
     fn get_min_logic_offset(&self) -> i64 {
         todo!()
     }
 
+    #[inline]
     fn get_cq_type(&self) -> CQType {
         todo!()
     }
 
+    #[inline]
     fn get_total_size(&self) -> i64 {
         todo!()
     }
 
+    #[inline]
     fn get_unit_size(&self) -> i32 {
         todo!()
     }
 
+    #[inline]
     fn correct_min_offset(&self, min_commit_log_offset: i64) {
         todo!()
     }
 
+    #[inline]
     fn put_message_position_info_wrapper(&mut self, request: &DispatchRequest) {
         todo!()
     }
 
+    #[inline]
     fn increase_queue_offset(
         &self,
         queue_offset_assigner: &QueueOffsetOperator,
@@ -290,6 +324,7 @@ impl ConsumeQueueTrait for BatchConsumeQueue {
         todo!()
     }
 
+    #[inline]
     fn assign_queue_offset(
         &self,
         queue_offset_operator: &QueueOffsetOperator,
@@ -298,14 +333,17 @@ impl ConsumeQueueTrait for BatchConsumeQueue {
         todo!()
     }
 
+    #[inline]
     fn estimate_message_count(&self, from: i64, to: i64, filter: &dyn MessageFilter) -> i64 {
         todo!()
     }
 
+    #[inline]
     fn iterate_from(&self, start_index: i64) -> Option<Box<dyn Iterator<Item = CqUnit>>> {
         todo!()
     }
 
+    #[inline]
     fn iterate_from_inner(
         &self,
         start_index: i64,
