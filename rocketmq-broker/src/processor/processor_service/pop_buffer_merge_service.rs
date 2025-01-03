@@ -417,8 +417,15 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
     }
 
     fn is_ck_done_for_finish(&self, point_wrapper: &PopCheckPointWrapper) -> bool {
-        // Implement the logic to check if the checkpoint is done for finish
-        unimplemented!()
+        let num = point_wrapper.get_ck().num;
+        let bits = point_wrapper.get_bits().load(Ordering::Relaxed)
+            ^ point_wrapper.get_to_store_bits().load(Ordering::Relaxed);
+        for i in 0..num {
+            if DataConverter::get_bit(bits, i as usize) {
+                return false;
+            }
+        }
+        true
     }
 
     async fn put_ck_to_store(&self, point_wrapper: &PopCheckPointWrapper, flag: bool) {
