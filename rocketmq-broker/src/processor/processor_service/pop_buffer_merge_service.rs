@@ -14,6 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#![allow(unused_variables)]
+
 use std::collections::VecDeque;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
@@ -239,6 +241,7 @@ impl PopBufferMergeService {
         let start_time = Instant::now();
         let mut count = 0;
         let mut count_ck = 0;
+
         self.buffer.retain(|key, point_wrapper| {
             // just process offset(already stored at pull thread), or buffer ck(not stored and ack
             // finish)
@@ -247,10 +250,15 @@ impl PopBufferMergeService {
                 || is_ck_done_for_finish(point_wrapper) && point_wrapper.is_ck_stored()
             {
                 self.counter.fetch_sub(1, Ordering::AcqRel);
-                return false;
+                false
+            } else {
+                true
             }
+        });
 
-            let point = point_wrapper.get_ck();
+        for key_value in self.buffer.iter() {
+            let point_wrapper = key_value.value();
+            let point = key_value.get_ck();
             let now = get_current_millis();
             let mut remove_ck = !self.serving.load(Ordering::Acquire);
             if point.get_revive_time() as u64 - now < self.broker_config.pop_ck_stay_buffer_time_out
@@ -264,11 +272,51 @@ impl PopBufferMergeService {
             }
 
             if is_ck_done(point_wrapper) {
+                //nothing to do
             } else if point_wrapper.is_just_offset() {
+                if point_wrapper.get_revive_queue_offset() < 0 {
+                    self.put_ck_to_store(point_wrapper, false);
+                    count_ck += 1;
+                }
             } else if remove_ck {
+                if point_wrapper.get_revive_queue_offset() < 0 {
+                    {
+                        self.put_ck_to_store(point_wrapper, false);
+                    }
+                    count_ck += 1;
+                }
+                if !point_wrapper.is_ck_stored() {
+                    continue;
+                }
+                if self.broker_config.enable_pop_batch_ack {
+                    for i in 0..point.num {
+                        if DataConverter::get_bit(
+                            point_wrapper.get_bits().load(Ordering::Relaxed),
+                            i as usize,
+                        ) && !DataConverter::get_bit(
+                            point_wrapper.get_to_store_bits().load(Ordering::Relaxed),
+                            i as usize,
+                        ) {
+                            self.batch_ack_index_list.push(i);
+                        }
+                    }
+                    if !self.batch_ack_index_list.is_empty()
+                        && self.put_batch_ack_to_store(point_wrapper, &self.batch_ack_index_list)
+                    {
+                        count += self.batch_ack_index_list.len();
+                        for index in &self.batch_ack_index_list {
+                            Self::mark_bit_cas(point_wrapper.get_to_store_bits(), *index as usize);
+                        }
+                    }
+
+                    self.batch_ack_index_list.clear();
+                }
+            } else if point_wrapper.get_revive_queue_offset() < 0 {
+                self.put_ck_to_store(point_wrapper, false);
+                count_ck += 1;
             }
-            true
-        });
+        }
+
         let offset_buffer_size = self.scan_commit_offset();
 
         let eclipse = start_time.elapsed().as_millis() as u64;
@@ -284,18 +332,16 @@ impl PopBufferMergeService {
                 offset_buffer_size
             );*/
             self.serving.store(false, Ordering::Release);
-        } else {
-            if self.scan_times % self.count_of_second1 == 0 {
-                info!(
-                    "[PopBuffer]scan, PopBufferEclipse={}, PopBufferToStoreAck={}, \
-                     PopBufferToStoreCk={}, PopBufferSize={}, PopBufferOffsetSize={}",
-                    eclipse,
-                    count,
-                    count_ck,
-                    self.counter.load(Ordering::Acquire),
-                    offset_buffer_size
-                );
-            }
+        } else if self.scan_times % self.count_of_second1 == 0 {
+            info!(
+                "[PopBuffer]scan, PopBufferEclipse={}, PopBufferToStoreAck={}, \
+                 PopBufferToStoreCk={}, PopBufferSize={}, PopBufferOffsetSize={}",
+                eclipse,
+                count,
+                count_ck,
+                self.counter.load(Ordering::Acquire),
+                offset_buffer_size
+            );
         }
 
         self.scan_times += 1;
@@ -364,7 +410,7 @@ impl PopBufferMergeService {
         unimplemented!()
     }
 
-    fn put_ck_to_store(&self, point_wrapper: &mut PopCheckPointWrapper, flag: bool) {
+    fn put_ck_to_store(&self, point_wrapper: &PopCheckPointWrapper, flag: bool) {
         // Implement the logic to put checkpoint to store
         unimplemented!()
     }
