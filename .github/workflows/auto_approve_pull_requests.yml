@@ -27,6 +27,9 @@ jobs:
         with:
           github-token: ${{ secrets.BOT_TOKEN }}
           script: |
+
+            const retryInterval1 = 300 * 1000; // 300 seconds
+            await new Promise(resolve => setTimeout(resolve, retryInterval1));
             const { owner, repo } = context.repo;
             const pr = context.payload.pull_request || context.payload.check_suite.pull_requests[0];
             const sha = pr.head.sha;
@@ -77,10 +80,9 @@ jobs:
               console.log('All required status checks have passed successfully');
               return true; // All checks passed
             }
-
             // Poll for status checks until they complete
-            const maxRetries = 720;
-            const retryInterval = 5 * 1000; // 10 seconds
+            const maxRetries = 20;
+            const retryInterval = 30 * 1000; // 30 seconds
             for (let i = 0; i < maxRetries; i++) {
               const allChecksPassed = await checkRequiredStatusChecks();
               if (allChecksPassed) {
