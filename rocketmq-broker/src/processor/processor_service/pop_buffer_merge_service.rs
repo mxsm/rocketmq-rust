@@ -17,6 +17,7 @@
 #![allow(unused_variables)]
 
 use std::collections::VecDeque;
+use std::net::SocketAddr;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
@@ -32,6 +33,8 @@ use rocketmq_common::common::pop_ack_constants::PopAckConstants;
 use rocketmq_common::utils::data_converter::DataConverter;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_rust::ArcMut;
+use rocketmq_store::base::message_status_enum::PutMessageStatus;
+use rocketmq_store::log_file::MessageStore;
 use rocketmq_store::pop::batch_ack_msg::BatchAckMsg;
 use rocketmq_store::pop::pop_check_point::PopCheckPoint;
 use rocketmq_store::pop::AckMessage;
@@ -41,9 +44,11 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
+use crate::failover::escape_bridge::EscapeBridge;
+use crate::processor::pop_message_processor::PopMessageProcessor;
 use crate::processor::pop_message_processor::QueueLockManager;
 
-pub(crate) struct PopBufferMergeService {
+pub(crate) struct PopBufferMergeService<MS> {
     buffer: DashMap<CheetahString /* mergeKey */, PopCheckPointWrapper>,
     commit_offsets:
         DashMap<CheetahString /* topic@cid@queueId */, QueueWithTime<PopCheckPointWrapper>>,
@@ -61,13 +66,17 @@ pub(crate) struct PopBufferMergeService {
     master: AtomicBool,
     broker_config: Arc<BrokerConfig>,
     shutdown: Arc<Notify>,
+    store_host: SocketAddr,
+    escape_bridge: ArcMut<EscapeBridge<MS>>,
 }
 
-impl PopBufferMergeService {
+impl<MS> PopBufferMergeService<MS> {
     pub fn new(
         revive_topic: CheetahString,
         queue_lock_manager: QueueLockManager,
         broker_config: Arc<BrokerConfig>,
+        store_host: SocketAddr,
+        escape_bridge: ArcMut<EscapeBridge<MS>>,
     ) -> Self {
         let interval = 5;
         Self {
@@ -87,11 +96,13 @@ impl PopBufferMergeService {
             master: AtomicBool::new(false),
             broker_config,
             shutdown: Arc::new(Notify::new()),
+            store_host,
+            escape_bridge,
         }
     }
 }
 
-impl PopBufferMergeService {
+impl<MS: MessageStore> PopBufferMergeService<MS> {
     pub fn add_ack(&mut self, revive_qid: i32, ack_msg: &dyn AckMessage) -> bool {
         if !self.broker_config.enable_pop_buffer_merge {
             return false;
@@ -237,7 +248,7 @@ impl PopBufferMergeService {
         self.master.load(Ordering::Acquire)
     }
 
-    fn scan(&mut self) {
+    async fn scan(&mut self) {
         let start_time = Instant::now();
         let mut count = 0;
         let mut count_ck = 0;
@@ -275,13 +286,13 @@ impl PopBufferMergeService {
                 //nothing to do
             } else if point_wrapper.is_just_offset() {
                 if point_wrapper.get_revive_queue_offset() < 0 {
-                    self.put_ck_to_store(point_wrapper, false);
+                    self.put_ck_to_store(point_wrapper, false).await;
                     count_ck += 1;
                 }
             } else if remove_ck {
                 if point_wrapper.get_revive_queue_offset() < 0 {
                     {
-                        self.put_ck_to_store(point_wrapper, false);
+                        self.put_ck_to_store(point_wrapper, false).await;
                     }
                     count_ck += 1;
                 }
@@ -312,7 +323,7 @@ impl PopBufferMergeService {
                     self.batch_ack_index_list.clear();
                 }
             } else if point_wrapper.get_revive_queue_offset() < 0 {
-                self.put_ck_to_store(point_wrapper, false);
+                self.put_ck_to_store(point_wrapper, false).await;
                 count_ck += 1;
             }
         }
@@ -377,7 +388,7 @@ impl PopBufferMergeService {
                             this.commit_offsets.clear();
                             return;
                         }
-                        this.mut_from_ref().scan();
+                        this.mut_from_ref().scan().await;
                         if this.scan_times % this.count_of_second30 == 0 {
                             this.scan_garbage();
                         }
@@ -395,7 +406,7 @@ impl PopBufferMergeService {
                 return;
             }
             while !this.buffer.is_empty() || this.get_offset_total_size() > 0 {
-                this.mut_from_ref().scan();
+                this.mut_from_ref().scan().await;
             }
         });
     }
@@ -410,9 +421,41 @@ impl PopBufferMergeService {
         unimplemented!()
     }
 
-    fn put_ck_to_store(&self, point_wrapper: &PopCheckPointWrapper, flag: bool) {
-        // Implement the logic to put checkpoint to store
-        unimplemented!()
+    async fn put_ck_to_store(&self, point_wrapper: &PopCheckPointWrapper, flag: bool) {
+        if point_wrapper.get_revive_queue_offset() >= 0 {
+            return;
+        }
+        let msg_inner = PopMessageProcessor::<MS>::build_ck_msg(
+            self.store_host,
+            point_wrapper.get_ck(),
+            point_wrapper.revive_queue_id,
+            self.revive_topic.clone(),
+        );
+        let put_message_result = self
+            .escape_bridge
+            .mut_from_ref()
+            .put_message_to_specific_queue(msg_inner)
+            .await;
+        match put_message_result.put_message_status() {
+            PutMessageStatus::PutOk
+            | PutMessageStatus::FlushDiskTimeout
+            | PutMessageStatus::FlushSlaveTimeout
+            | PutMessageStatus::SlaveNotAvailable => {
+                return;
+            }
+            _ => {}
+        }
+        point_wrapper.set_ck_stored(true);
+        if put_message_result.remote_put() {
+            point_wrapper.set_revive_queue_offset(0);
+        } else {
+            point_wrapper.set_revive_queue_offset(
+                put_message_result
+                    .append_message_result()
+                    .unwrap()
+                    .logics_offset,
+            );
+        }
     }
 
     fn put_batch_ack_to_store(

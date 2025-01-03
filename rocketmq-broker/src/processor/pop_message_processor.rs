@@ -72,6 +72,7 @@ use tracing::warn;
 
 use crate::broker_error::BrokerError;
 use crate::client::manager::consumer_manager::ConsumerManager;
+use crate::failover::escape_bridge::EscapeBridge;
 use crate::filter::expression_message_filter::ExpressionMessageFilter;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
 use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingService;
@@ -98,7 +99,7 @@ pub struct PopMessageProcessor<MS> {
     consumer_filter_manager: Arc<ConsumerFilterManager>,
     ck_message_number: AtomicI64,
     pop_long_polling_service: ArcMut<PopLongPollingService>,
-    pop_buffer_merge_service: ArcMut<PopBufferMergeService>,
+    pop_buffer_merge_service: ArcMut<PopBufferMergeService<MS>>,
     pop_inflight_message_counter: Arc<PopInflightMessageCounter>,
     queue_lock_manager: QueueLockManager,
     revive_topic: CheetahString,
@@ -118,6 +119,7 @@ impl<MS> PopMessageProcessor<MS> {
         consumer_filter_manager: Arc<ConsumerFilterManager>,
         pop_inflight_message_counter: Arc<PopInflightMessageCounter>,
         store_host: SocketAddr,
+        escape_bridge: ArcMut<EscapeBridge<MS>>,
     ) -> Self {
         let revive_topic = CheetahString::from_string(PopAckConstants::build_cluster_revive_topic(
             broker_config.broker_identity.broker_cluster_name.as_str(),
@@ -139,6 +141,8 @@ impl<MS> PopMessageProcessor<MS> {
                 revive_topic.clone(),
                 queue_lock_manager.clone(),
                 broker_config,
+                store_host,
+                escape_bridge,
             )),
             pop_inflight_message_counter,
             queue_lock_manager,
@@ -1178,23 +1182,28 @@ impl<MS> PopMessageProcessor<MS> {
         )
     }
 
-    pub fn pop_buffer_merge_service(&self) -> &ArcMut<PopBufferMergeService> {
+    pub fn pop_buffer_merge_service(&self) -> &ArcMut<PopBufferMergeService<MS>> {
         &self.pop_buffer_merge_service
     }
 
-    pub fn pop_buffer_merge_service_mut(&mut self) -> &mut ArcMut<PopBufferMergeService> {
+    pub fn pop_buffer_merge_service_mut(&mut self) -> &mut ArcMut<PopBufferMergeService<MS>> {
         &mut self.pop_buffer_merge_service
     }
 
-    pub fn build_ck_msg(&self, ck: &PopCheckPoint, revive_qid: i32) -> MessageExtBrokerInner {
+    pub fn build_ck_msg(
+        store_host: SocketAddr,
+        ck: &PopCheckPoint,
+        revive_qid: i32,
+        revive_topic: CheetahString,
+    ) -> MessageExtBrokerInner {
         let mut msg = MessageExtBrokerInner::default();
-        msg.set_topic(self.revive_topic.clone());
+        msg.set_topic(revive_topic);
         msg.set_body(Bytes::from(ck.to_json().unwrap()));
         msg.message_ext_inner.queue_id = revive_qid;
         msg.set_tags(CheetahString::from_static_str(PopAckConstants::CK_TAG));
         msg.message_ext_inner.born_timestamp = get_current_millis() as i64;
-        msg.message_ext_inner.born_host = self.store_host;
-        msg.message_ext_inner.store_host = self.store_host;
+        msg.message_ext_inner.born_host = store_host;
+        msg.message_ext_inner.store_host = store_host;
         msg.set_delay_time_ms((ck.get_revive_time() - PopAckConstants::ACK_TIME_INTERVAL) as u64);
         msg.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
