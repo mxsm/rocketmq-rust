@@ -28,12 +28,14 @@ pub struct QueueOffsetOperator {
 }
 
 impl Default for QueueOffsetOperator {
+    #[inline]
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl QueueOffsetOperator {
+    #[inline]
     pub fn new() -> Self {
         QueueOffsetOperator {
             topic_queue_table: Arc::new(parking_lot::Mutex::new(HashMap::new())),
@@ -42,18 +44,21 @@ impl QueueOffsetOperator {
         }
     }
 
+    #[inline]
     pub fn get_queue_offset(&self, topic_queue_key: CheetahString) -> i64 {
         let topic_queue_table = self.topic_queue_table.lock();
         let mut table = topic_queue_table;
         *table.entry(topic_queue_key).or_insert(0)
     }
 
+    #[inline]
     pub fn get_topic_queue_next_offset(&self, topic_queue_key: &CheetahString) -> Option<i64> {
         let topic_queue_table = self.topic_queue_table.lock();
         let table = topic_queue_table;
         table.get(topic_queue_key).cloned()
     }
 
+    #[inline]
     pub fn increase_queue_offset(&self, topic_queue_key: CheetahString, message_num: i16) {
         let topic_queue_table = self.topic_queue_table.lock();
         let mut table = topic_queue_table;
@@ -61,18 +66,21 @@ impl QueueOffsetOperator {
         *entry += message_num as i64;
     }
 
+    #[inline]
     pub fn update_queue_offset(&self, topic_queue_key: &CheetahString, offset: i64) {
         let topic_queue_table = self.topic_queue_table.lock();
         let mut table = topic_queue_table;
         table.insert(topic_queue_key.clone(), offset);
     }
 
+    #[inline]
     pub fn get_batch_queue_offset(&self, topic_queue_key: &CheetahString) -> i64 {
         let batch_topic_queue_table = self.batch_topic_queue_table.lock();
         let mut table = batch_topic_queue_table;
         *table.entry(topic_queue_key.clone()).or_insert(0)
     }
 
+    #[inline]
     pub fn increase_batch_queue_offset(&self, topic_queue_key: &CheetahString, message_num: i16) {
         let batch_topic_queue_table = self.batch_topic_queue_table.lock();
         let mut table = batch_topic_queue_table;
@@ -80,18 +88,21 @@ impl QueueOffsetOperator {
         *entry += message_num as i64;
     }
 
+    #[inline]
     pub fn get_lmq_offset(&self, topic_queue_key: &CheetahString) -> i64 {
         let lmq_topic_queue_table = self.lmq_topic_queue_table.lock();
         let mut table = lmq_topic_queue_table;
         *table.entry(topic_queue_key.clone()).or_insert(0)
     }
 
+    #[inline]
     pub fn get_lmq_topic_queue_next_offset(&self, topic_queue_key: &CheetahString) -> Option<i64> {
         let lmq_topic_queue_table = self.lmq_topic_queue_table.lock();
         let table = lmq_topic_queue_table;
         table.get(topic_queue_key).cloned()
     }
 
+    #[inline]
     pub fn increase_lmq_offset(&self, queue_key: &CheetahString, message_num: i16) {
         let lmq_topic_queue_table = self.lmq_topic_queue_table.lock();
         let mut table = lmq_topic_queue_table;
@@ -99,6 +110,7 @@ impl QueueOffsetOperator {
         *entry += message_num as i64;
     }
 
+    #[inline]
     pub fn current_queue_offset(&self, topic_queue_key: &CheetahString) -> i64 {
         let topic_queue_table = self.topic_queue_table.lock();
         let table = topic_queue_table;
@@ -106,6 +118,7 @@ impl QueueOffsetOperator {
         current_queue_offset.map_or(0, |offset| *offset)
     }
 
+    #[inline]
     pub fn remove(&self, topic: &CheetahString, queue_id: i32) {
         let topic_queue_key = CheetahString::from(format!("{}-{}", topic, queue_id));
         // Beware of thread-safety
@@ -122,10 +135,12 @@ impl QueueOffsetOperator {
         );
     }
 
+    #[inline]
     pub fn set_topic_queue_table(&self, topic_queue_table: HashMap<CheetahString, i64>) {
         *self.topic_queue_table.lock() = topic_queue_table;
     }
 
+    #[inline]
     pub fn set_lmq_topic_queue_table(&self, lmq_topic_queue_table: HashMap<CheetahString, i64>) {
         let mut table = HashMap::new();
         for (key, value) in lmq_topic_queue_table.iter() {
@@ -136,6 +151,7 @@ impl QueueOffsetOperator {
         *self.lmq_topic_queue_table.lock() = table;
     }
 
+    #[inline]
     pub fn set_batch_topic_queue_table(
         &self,
         batch_topic_queue_table: HashMap<CheetahString, i64>,
