@@ -572,6 +572,7 @@ impl BrokerRuntime {
             self.consumer_filter_manager.clone(),
             self.pop_inflight_message_counter.clone(),
             self.store_host,
+            self.escape_bridge.clone(),
         ));
         let ack_message_processor = ArcMut::new(AckMessageProcessor::new(
             self.topic_config_manager.clone(),
