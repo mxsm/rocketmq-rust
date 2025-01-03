@@ -191,6 +191,7 @@ pub struct BrokerConfig {
     pub enable_pop_buffer_merge: bool,
     pub pop_ck_stay_buffer_time_out: u64,
     pub broker_role: BrokerRole,
+    pub enable_pop_batch_ack: bool,
 }
 
 impl Default for BrokerConfig {
@@ -287,6 +288,7 @@ impl Default for BrokerConfig {
             enable_pop_buffer_merge: false,
             pop_ck_stay_buffer_time_out: 3_000,
             broker_role: BrokerRole::AsyncMaster,
+            enable_pop_batch_ack: false,
         }
     }
 }
