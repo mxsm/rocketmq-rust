@@ -14,12 +14,40 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::thread::JoinHandle;
 
 use cheetah_string::CheetahString;
 use rocketmq_store::pop::pop_check_point::PopCheckPoint;
 
-pub struct PopReviveService;
+pub struct PopReviveService {
+    queue_id: i32,
+    revive_topic: CheetahString,
+    current_revive_message_timestamp: i64,
+    should_run_pop_revive: bool,
+    inflight_revive_request_map: Arc<parking_lot::Mutex<BTreeMap<PopCheckPoint, (i64, bool)>>>,
+    revive_offset: i64,
+    ck_rewrite_intervals_in_seconds: [i32; 17],
+    join_handle: Option<JoinHandle<()>>,
+}
+impl PopReviveService {
+    pub fn new(revive_topic: CheetahString, queue_id: i32, revive_offset: i64) -> Self {
+        Self {
+            queue_id,
+            revive_topic,
+            current_revive_message_timestamp: -1,
+            should_run_pop_revive: false,
+            inflight_revive_request_map: Arc::new(Default::default()),
+            revive_offset,
+            ck_rewrite_intervals_in_seconds: [
+                10, 20, 30, 60, 120, 180, 240, 300, 360, 420, 480, 540, 600, 1200, 1800, 3600, 7200,
+            ],
+            join_handle: None,
+        }
+    }
+}
 
 struct ConsumeReviveObj {
     map: HashMap<CheetahString, PopCheckPoint>,
