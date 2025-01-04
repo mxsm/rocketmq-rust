@@ -187,6 +187,40 @@ impl<MS: MessageStore> PopReviveService<MS> {
         }
     }
 
+    pub(crate) async fn get_revive_message(
+        &self,
+        offset: i64,
+        queue_id: i32,
+    ) -> Option<Vec<ArcMut<MessageExt>>> {
+        let pull_result = self
+            .get_message(
+                &CheetahString::from_static_str(PopAckConstants::REVIVE_GROUP),
+                &self.revive_topic,
+                queue_id,
+                offset,
+                32,
+                true,
+            )
+            .await?;
+        if reach_tail(&pull_result, offset) {
+            //nothing to do
+        } else if pull_result.pull_status == PullStatus::OffsetIllegal
+            || pull_result.pull_status == PullStatus::NoMatchedMsg
+        {
+            if !self.should_run_pop_revive {
+                return None;
+            }
+            self.consumer_offset_manager.commit_offset(
+                CheetahString::from_static_str(PopAckConstants::LOCAL_HOST),
+                &CheetahString::from_static_str(PopAckConstants::REVIVE_GROUP),
+                &self.revive_topic,
+                queue_id,
+                pull_result.next_begin_offset as i64 - 1,
+            );
+        }
+        pull_result.msg_found_list
+    }
+
     pub async fn get_message(
         &self,
         group: &CheetahString,
@@ -249,6 +283,12 @@ impl<MS: MessageStore> PopReviveService<MS> {
             None
         }
     }
+}
+
+fn reach_tail(pull_result: &PullResult, offset: i64) -> bool {
+    *pull_result.pull_status() == PullStatus::NoNewMsg
+        || *pull_result.pull_status() == PullStatus::OffsetIllegal
+            && offset == pull_result.max_offset as i64
 }
 
 fn decode_msg_list(
