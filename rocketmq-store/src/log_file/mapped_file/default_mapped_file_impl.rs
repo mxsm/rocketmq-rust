@@ -809,10 +809,10 @@ impl ReferenceResource {
     #[inline]
     pub fn hold(&self) -> bool {
         if self.is_available() {
-            if self.ref_count.fetch_add(1, Ordering::Relaxed) + 1 > 0 {
+            if self.ref_count.fetch_add(1, Ordering::SeqCst) > 0 {
                 return true;
             } else {
-                self.ref_count.fetch_sub(1, Ordering::Relaxed);
+                self.ref_count.fetch_sub(1, Ordering::SeqCst);
             }
         }
         false
