@@ -1285,6 +1285,10 @@ impl MessageStore for DefaultMessageStore {
     fn remain_how_many_data_to_flush(&self) -> i64 {
         self.commit_log.remain_how_many_data_to_flush()
     }
+
+    fn get_message_store_config(&self) -> &MessageStoreConfig {
+        self.message_store_config.as_ref()
+    }
 }
 
 #[derive(Clone)]

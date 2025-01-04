@@ -30,6 +30,7 @@ use crate::base::get_message_result::GetMessageResult;
 use crate::base::message_result::PutMessageResult;
 use crate::base::query_message_result::QueryMessageResult;
 use crate::base::select_result::SelectMappedBufferResult;
+use crate::config::message_store_config::MessageStoreConfig;
 use crate::filter::MessageFilter;
 use crate::hook::put_message_hook::BoxedPutMessageHook;
 use crate::queue::ArcConsumeQueue;
@@ -438,4 +439,6 @@ pub trait RocketMQMessageStore: Sync + 'static {
     /// @return
     /// * `i64` - remain how many data to flush.
     fn remain_how_many_data_to_flush(&self) -> i64;
+
+    fn get_message_store_config(&self) -> &MessageStoreConfig;
 }
