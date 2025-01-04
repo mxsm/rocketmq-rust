@@ -89,6 +89,14 @@ impl TimerMessageStore {
                 .load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    pub fn get_enqueue_behind_millis(&self) -> i64 {
+        unimplemented!("getEnqueueBehindMillis")
+    }
+
+    pub fn get_enqueue_behind(&self) -> i64 {
+        self.get_enqueue_behind_millis() / 1000
+    }
+
     pub fn get_enqueue_behind_messages(&self) -> i64 {
         let temp_queue_offset = self
             .curr_queue_offset
