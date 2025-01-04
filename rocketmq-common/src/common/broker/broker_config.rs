@@ -192,6 +192,8 @@ pub struct BrokerConfig {
     pub pop_ck_stay_buffer_time_out: u64,
     pub broker_role: BrokerRole,
     pub enable_pop_batch_ack: bool,
+    pub revive_interval: u64,
+    pub revive_max_slow: u64,
 }
 
 impl Default for BrokerConfig {
@@ -289,6 +291,8 @@ impl Default for BrokerConfig {
             pop_ck_stay_buffer_time_out: 3_000,
             broker_role: BrokerRole::AsyncMaster,
             enable_pop_batch_ack: false,
+            revive_interval: 1000,
+            revive_max_slow: 3,
         }
     }
 }

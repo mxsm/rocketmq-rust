@@ -16,6 +16,8 @@
  */
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -34,6 +36,7 @@ use rocketmq_common::common::mix_all;
 use rocketmq_common::common::pop_ack_constants::PopAckConstants;
 use rocketmq_common::common::TopicFilterType;
 use rocketmq_common::MessageAccessor::MessageAccessor;
+use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::AppendMessageStatus;
@@ -41,6 +44,7 @@ use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::log_file::MessageStore;
 use rocketmq_store::pop::pop_check_point::PopCheckPoint;
 use tracing::error;
+use tracing::info;
 
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
@@ -59,6 +63,7 @@ pub struct PopReviveService<MS> {
     consumer_offset_manager: Arc<ConsumerOffsetManager>,
     escape_bridge: ArcMut<EscapeBridge<MS>>,
     message_store: ArcMut<MS>,
+    should_start_time: Arc<AtomicU64>,
 }
 impl<MS: MessageStore> PopReviveService<MS> {
     pub fn new(
@@ -70,6 +75,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
         consumer_offset_manager: Arc<ConsumerOffsetManager>,
         escape_bridge: ArcMut<EscapeBridge<MS>>,
         message_store: ArcMut<MS>,
+        should_start_time: Arc<AtomicU64>,
     ) -> Self {
         Self {
             queue_id,
@@ -86,6 +92,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
             consumer_offset_manager,
             escape_bridge,
             message_store,
+            should_start_time,
         }
     }
 
@@ -282,6 +289,93 @@ impl<MS: MessageStore> PopReviveService<MS> {
             }
             None
         }
+    }
+
+    pub fn start(mut this: ArcMut<Self>) {
+        tokio::spawn(async move {
+            let mut slow = 1;
+            loop {
+                if get_current_millis() < this.should_start_time.load(Relaxed) {
+                    info!(
+                        "PopReviveService Ready to run after {}",
+                        this.should_start_time.load(Relaxed)
+                    );
+                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    continue;
+                }
+                tokio::time::sleep(tokio::time::Duration::from_millis(
+                    this.broker_config.revive_interval,
+                ))
+                .await;
+                if !this.should_run_pop_revive {
+                    info!(
+                        "skip start revive topic={}, reviveQueueId={}",
+                        this.revive_topic, this.queue_id
+                    );
+                    continue;
+                }
+                if !this
+                    .message_store
+                    .get_message_store_config()
+                    .timer_wheel_enable
+                {
+                    info!("skip revive topic because timerWheelEnable is false");
+                    continue;
+                }
+                info!(
+                    "start revive topic={}, reviveQueueId={}",
+                    this.revive_topic, this.queue_id
+                );
+                let mut consume_revive_obj = ConsumeReviveObj::new();
+                this.consume_revive_message(&mut consume_revive_obj);
+                if !this.should_run_pop_revive {
+                    info!(
+                        "slave skip scan, revive topic={}, reviveQueueId={}",
+                        this.revive_topic, this.queue_id
+                    );
+                    continue;
+                }
+                this.merge_and_revive(&mut consume_revive_obj);
+                let mut delay = 0;
+                if let Some(ref sort_list) = consume_revive_obj.sort_list {
+                    if !sort_list.is_empty() {
+                        delay =
+                            (get_current_millis() - (sort_list[0].get_revive_time() as u64)) / 1000;
+                        this.current_revive_message_timestamp = sort_list[0].get_revive_time();
+                        slow = 1;
+                    }
+                } else {
+                    this.current_revive_message_timestamp = get_current_millis() as i64;
+                }
+                info!(
+                    "reviveQueueId={}, revive finish,old offset is {}, new offset is {}, \
+                     ckDelay={}  ",
+                    this.queue_id,
+                    consume_revive_obj.old_offset,
+                    consume_revive_obj.new_offset,
+                    delay
+                );
+
+                if consume_revive_obj.sort_list.is_none()
+                    || consume_revive_obj.sort_list.as_ref().unwrap().is_empty()
+                {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(
+                        slow * this.broker_config.revive_interval,
+                    ))
+                    .await;
+                    if slow < this.broker_config.revive_max_slow {
+                        slow += 1;
+                    }
+                }
+            }
+        });
+    }
+
+    fn consume_revive_message(&self, _consume_revive_obj: &mut ConsumeReviveObj) {
+        unimplemented!("consume_revive_message")
+    }
+    fn merge_and_revive(&self, _consume_revive_obj: &mut ConsumeReviveObj) {
+        unimplemented!("consume_revive_message")
     }
 }
 
