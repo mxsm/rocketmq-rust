@@ -35,6 +35,7 @@ pub mod consume_message_directly_result;
 pub mod group_list;
 pub mod ha_client_runtime_info;
 pub mod ha_connection_runtime_info;
+pub mod ha_runtime_info;
 pub mod kv_table;
 pub mod pop_process_queue_info;
 pub mod process_queue_info;
