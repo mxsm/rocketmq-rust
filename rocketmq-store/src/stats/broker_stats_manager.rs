@@ -97,6 +97,7 @@ impl BrokerStatsManager {
 }
 
 impl BrokerStatsManager {
+    #[inline]
     pub fn new(broker_config: Arc<BrokerConfig>) -> Self {
         let stats_table = Arc::new(parking_lot::RwLock::new(HashMap::new()));
         let enable_queue_stat = broker_config.enable_detail_stat;
@@ -119,6 +120,7 @@ impl BrokerStatsManager {
         broker_stats_manager
     }
 
+    #[inline]
     pub fn new_with_name(
         broker_config: Arc<BrokerConfig>,
         cluster_name: String,
@@ -144,6 +146,7 @@ impl BrokerStatsManager {
         broker_stats_manager
     }
 
+    #[inline]
     pub fn init(&mut self) {
         self.moment_stats_item_set_fall_size = Some(Arc::new(MomentStatsItemSet::new(
             Stats::GROUP_GET_FALL_SIZE.to_string(),
@@ -392,6 +395,7 @@ impl BrokerStatsManager {
             consumer_state_getter: Option<Arc<dyn StateGetter>>,
         }
         impl StatisticsItemStateGetter for DefaultStatisticsItemStateGetter {
+            #[inline]
             fn online(&self, item: &StatisticsItem) -> bool {
                 let vec = split_account_stat_key(item.stat_object());
                 if vec.is_empty() || vec.len() < 4 {
@@ -432,42 +436,52 @@ impl BrokerStatsManager {
             }));
     }
 
+    #[inline]
     pub fn set_producer_state_getter(&mut self, state_getter: Arc<dyn StateGetter>) {
         self.producer_state_getter = Some(state_getter);
     }
 
+    #[inline]
     pub fn set_consumer_state_getter(&mut self, state_getter: Arc<dyn StateGetter>) {
         self.consumer_state_getter = Some(state_getter);
     }
 
+    #[inline]
     pub fn get_stats_table(&self) -> Arc<parking_lot::RwLock<HashMap<String, StatsItemSet>>> {
         Arc::clone(&self.stats_table)
     }
 
+    #[inline]
     pub fn get_cluster_name(&self) -> &str {
         &self.cluster_name
     }
 
+    #[inline]
     pub fn get_enable_queue_stat(&self) -> bool {
         self.enable_queue_stat
     }
 
+    #[inline]
     pub fn get_moment_stats_item_set_fall_size(&self) -> Option<Arc<MomentStatsItemSet>> {
         self.moment_stats_item_set_fall_size.clone()
     }
 
+    #[inline]
     pub fn get_moment_stats_item_set_fall_time(&self) -> Option<Arc<MomentStatsItemSet>> {
         self.moment_stats_item_set_fall_time.clone()
     }
 
+    #[inline]
     pub fn get_broker_puts_num_without_system_topic(&self) -> u64 {
         0
     }
 
+    #[inline]
     pub fn get_broker_gets_num_without_system_topic(&self) -> u64 {
         0
     }
 
+    #[inline]
     pub fn record_disk_fall_behind_size(
         &self,
         group: &str,
@@ -477,25 +491,38 @@ impl BrokerStatsManager {
     ) {
     }
 
+    #[inline]
     pub fn inc_topic_put_nums(&self, topic: &str, num: i32, times: i32) {}
 
+    #[inline]
     pub fn inc_topic_put_size(&self, topic: &str, size: i32) {}
 
+    #[inline]
     pub fn inc_group_get_nums(&self, group: &str, topic: &str, inc_value: i32) {}
+    #[inline]
     pub fn inc_group_get_size(&self, group: &str, topic: &str, inc_value: i32) {}
 
+    #[inline]
     pub fn inc_group_ck_nums(&self, group: &str, topic: &str, inc_value: i32) {}
 
+    #[inline]
     pub fn inc_group_ack_nums(&self, group: &str, topic: &str, inc_value: i32) {}
+    #[inline]
     pub fn inc_broker_get_nums(&self, group: &str, inc_value: i32) {}
+    #[inline]
     pub fn inc_broker_put_nums(&self, group: &str, inc_value: i32) {}
 
+    #[inline]
     pub fn on_topic_deleted(&self, topic: &CheetahString) {}
 
+    #[inline]
     pub fn inc_queue_put_nums(&self, topic: &str, queue_id: i32, num: i32, times: i32) {}
+    #[inline]
     pub fn inc_queue_put_size(&self, topic: &str, queue_id: i32, size: i32) {}
+    #[inline]
     pub fn inc_topic_put_latency(&self, topic: &str, queue_id: i32, inc_value: i32) {}
 
+    #[inline]
     pub fn tps_group_get_nums(&self, group: &str, topic: &str) -> f64 {
         let stats_key = build_stats_key(Some(topic), Some(group));
         match self.stats_table.read().get(Stats::GROUP_GET_NUMS) {
@@ -504,9 +531,11 @@ impl BrokerStatsManager {
         }
     }
 
+    #[inline]
     pub fn inc_broker_ack_nums(&self, inc_value: i32) {}
 }
 
+#[inline]
 pub fn build_stats_key(topic: Option<&str>, group: Option<&str>) -> String {
     let mut str_builder = String::new();
     if let Some(t) = topic {
@@ -519,6 +548,7 @@ pub fn build_stats_key(topic: Option<&str>, group: Option<&str>) -> String {
     str_builder
 }
 
+#[inline]
 pub fn create_statistics_kind_meta(
     name: &str,
     item_names: Vec<&str>,
@@ -536,10 +566,12 @@ pub fn create_statistics_kind_meta(
     Arc::new(kind_meta)
 }
 
+#[inline]
 pub fn build_commercial_stats_key(owner: &str, topic: &str, group: &str, type_: &str) -> String {
     format!("{}@{}@{}@{}", owner, topic, group, type_)
 }
 
+#[inline]
 pub fn build_account_stats_key(
     account_owner_parent: &str,
     account_owner_self: &str,
@@ -554,6 +586,7 @@ pub fn build_account_stats_key(
     )
 }
 
+#[inline]
 pub fn build_account_stats_key_with_flowlimit(
     account_owner_parent: &str,
     account_owner_self: &str,
@@ -575,6 +608,7 @@ pub fn build_account_stats_key_with_flowlimit(
     )
 }
 
+#[inline]
 pub fn build_account_stat_key(
     owner: &str,
     instance_id: &str,
@@ -585,6 +619,7 @@ pub fn build_account_stat_key(
     format!("{}|{}|{}|{}|{}", owner, instance_id, topic, group, msg_type)
 }
 
+#[inline]
 pub fn build_account_stat_key_with_flowlimit(
     owner: &str,
     instance_id: &str,
@@ -599,6 +634,7 @@ pub fn build_account_stat_key_with_flowlimit(
     )
 }
 
+#[inline]
 pub fn split_account_stat_key(account_stat_key: &str) -> Vec<&str> {
     account_stat_key.split('|').collect()
 }
