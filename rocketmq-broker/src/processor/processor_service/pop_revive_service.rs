@@ -18,7 +18,10 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use bytes::Bytes;
 use cheetah_string::CheetahString;
+use rocketmq_client_rust::consumer::pull_result::PullResult;
+use rocketmq_client_rust::consumer::pull_status::PullStatus;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::key_builder::KeyBuilder;
@@ -32,9 +35,12 @@ use rocketmq_common::common::pop_ack_constants::PopAckConstants;
 use rocketmq_common::common::TopicFilterType;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_rust::ArcMut;
+use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::AppendMessageStatus;
+use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::log_file::MessageStore;
 use rocketmq_store::pop::pop_check_point::PopCheckPoint;
+use tracing::error;
 
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
@@ -52,6 +58,7 @@ pub struct PopReviveService<MS> {
     topic_config_manager: TopicConfigManager,
     consumer_offset_manager: Arc<ConsumerOffsetManager>,
     escape_bridge: ArcMut<EscapeBridge<MS>>,
+    message_store: ArcMut<MS>,
 }
 impl<MS: MessageStore> PopReviveService<MS> {
     pub fn new(
@@ -62,6 +69,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
         topic_config_manager: TopicConfigManager,
         consumer_offset_manager: Arc<ConsumerOffsetManager>,
         escape_bridge: ArcMut<EscapeBridge<MS>>,
+        message_store: ArcMut<MS>,
     ) -> Self {
         Self {
             queue_id,
@@ -77,6 +85,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
             topic_config_manager,
             consumer_offset_manager,
             escape_bridge,
+            message_store,
         }
     }
 
@@ -177,6 +186,87 @@ impl<MS: MessageStore> PopReviveService<MS> {
             );
         }
     }
+
+    pub async fn get_message(
+        &self,
+        group: &CheetahString,
+        topic: &CheetahString,
+        queue_id: i32,
+        offset: i64,
+        nums: i32,
+        de_compress_body: bool,
+    ) -> Option<PullResult> {
+        let get_message_result = self
+            .message_store
+            .get_message(
+                group,
+                topic,
+                queue_id,
+                offset,
+                nums,
+                128 * 1024 * 1024,
+                None,
+            )
+            .await;
+        if let Some(get_message_result_) = get_message_result {
+            let next_begin_offset = get_message_result_.next_begin_offset();
+            let min_offset = get_message_result_.min_offset();
+            let max_offset = get_message_result_.max_offset();
+            let pull_status = match get_message_result_.status().unwrap() {
+                GetMessageStatus::Found => {
+                    let found_list = decode_msg_list(get_message_result_, de_compress_body);
+                    (PullStatus::Found, Some(found_list))
+                }
+                GetMessageStatus::NoMatchedMessage => (PullStatus::NoMatchedMsg, None),
+
+                GetMessageStatus::NoMessageInQueue | GetMessageStatus::OffsetReset => {
+                    (PullStatus::NoNewMsg, None)
+                }
+
+                GetMessageStatus::MessageWasRemoving
+                | GetMessageStatus::NoMatchedLogicQueue
+                | GetMessageStatus::OffsetFoundNull
+                | GetMessageStatus::OffsetOverflowBadly
+                | GetMessageStatus::OffsetTooSmall
+                | GetMessageStatus::OffsetOverflowOne => (PullStatus::OffsetIllegal, None),
+            };
+            Some(PullResult::new(
+                pull_status.0,
+                next_begin_offset as u64,
+                min_offset as u64,
+                max_offset as u64,
+                pull_status.1,
+            ))
+        } else {
+            let max_queue_offset = self.message_store.get_max_offset_in_queue(topic, queue_id);
+            if max_queue_offset > offset {
+                error!(
+                    "get message from store return null. topic={}, groupId={}, requestOffset={}, \
+                     maxQueueOffset={}",
+                    topic, group, offset, max_queue_offset
+                );
+            }
+            None
+        }
+    }
+}
+
+fn decode_msg_list(
+    get_message_result: GetMessageResult,
+    de_compress_body: bool,
+) -> Vec<ArcMut<MessageExt>> {
+    let mut found_list = Vec::new();
+    for bb in get_message_result.message_mapped_list() {
+        let data = &bb.mapped_file.as_ref().unwrap().get_mapped_file()
+            [bb.start_offset as usize..(bb.start_offset + bb.size as u64) as usize];
+        let mut bytes = Bytes::copy_from_slice(data);
+        let msg_ext =
+            message_decoder::decode(&mut bytes, true, de_compress_body, false, false, false);
+        if let Some(msg_ext) = msg_ext {
+            found_list.push(ArcMut::new(msg_ext));
+        }
+    }
+    found_list
 }
 
 struct ConsumeReviveObj {
