@@ -194,6 +194,8 @@ pub struct BrokerConfig {
     pub enable_pop_batch_ack: bool,
     pub revive_interval: u64,
     pub revive_max_slow: u64,
+    pub revive_scan_time: u64,
+    pub enable_skip_long_awaiting_ack: bool,
 }
 
 impl Default for BrokerConfig {
@@ -293,6 +295,8 @@ impl Default for BrokerConfig {
             enable_pop_batch_ack: false,
             revive_interval: 1000,
             revive_max_slow: 3,
+            revive_scan_time: 10_000,
+            enable_skip_long_awaiting_ack: false,
         }
     }
 }

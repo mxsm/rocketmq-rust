@@ -35,6 +35,8 @@ use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::pop_ack_constants::PopAckConstants;
 use rocketmq_common::common::TopicFilterType;
+use rocketmq_common::utils::data_converter::DataConverter;
+use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_rust::ArcMut;
@@ -42,7 +44,10 @@ use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::AppendMessageStatus;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::log_file::MessageStore;
+use rocketmq_store::pop::ack_msg::AckMsg;
+use rocketmq_store::pop::batch_ack_msg::BatchAckMsg;
 use rocketmq_store::pop::pop_check_point::PopCheckPoint;
+use rocketmq_store::pop::AckMessage;
 use tracing::error;
 use tracing::info;
 
@@ -327,7 +332,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
                     this.revive_topic, this.queue_id
                 );
                 let mut consume_revive_obj = ConsumeReviveObj::new();
-                this.consume_revive_message(&mut consume_revive_obj);
+                this.consume_revive_message(&mut consume_revive_obj).await;
                 if !this.should_run_pop_revive {
                     info!(
                         "slave skip scan, revive topic={}, reviveQueueId={}",
@@ -371,9 +376,216 @@ impl<MS: MessageStore> PopReviveService<MS> {
         });
     }
 
-    fn consume_revive_message(&self, _consume_revive_obj: &mut ConsumeReviveObj) {
-        unimplemented!("consume_revive_message")
+    async fn consume_revive_message(&self, consume_revive_obj: &mut ConsumeReviveObj) {
+        let map = &mut consume_revive_obj.map;
+        let mut mock_point_map = HashMap::new();
+        let _start_scan_time = get_current_millis();
+        let mut end_time = 0;
+        let consume_offset = self.consumer_offset_manager.query_offset(
+            &CheetahString::from_static_str(PopAckConstants::REVIVE_GROUP),
+            &self.revive_topic,
+            self.queue_id,
+        );
+        let old_offset = self.revive_offset.max(consume_offset);
+        consume_revive_obj.old_offset = old_offset;
+        info!(
+            "reviveQueueId={}, old offset is {}",
+            self.queue_id, old_offset
+        );
+        let mut offset = old_offset + 1;
+        let mut no_msg_count = 0;
+        let mut first_rt = 0;
+
+        loop {
+            if !self.should_run_pop_revive {
+                info!(
+                    "slave skip scan, revive topic={}, reviveQueueId={}",
+                    self.revive_topic, self.queue_id
+                );
+                break;
+            }
+
+            let message_exts = self.get_revive_message(offset, self.queue_id).await;
+            if message_exts.is_none() || message_exts.as_ref().unwrap().is_empty() {
+                let old = end_time;
+                let timer_delay = self
+                    .message_store
+                    .get_timer_message_store()
+                    .get_dequeue_behind();
+                let commit_log_delay = self
+                    .message_store
+                    .get_timer_message_store()
+                    .get_enqueue_behind();
+                if end_time != 0
+                    && get_current_millis() - end_time > (3 * PopAckConstants::SECOND) as u64
+                    && timer_delay <= 0
+                    && commit_log_delay <= 0
+                {
+                    end_time = get_current_millis();
+                }
+                info!(
+                    "reviveQueueId={}, offset is {}, can not get new msg, old endTime {}, new \
+                     endTime {}, timerDelay={}, commitLogDelay={}",
+                    self.queue_id, offset, old, end_time, timer_delay, commit_log_delay
+                );
+                if end_time - first_rt
+                    > (PopAckConstants::ACK_TIME_INTERVAL + PopAckConstants::SECOND) as u64
+                {
+                    break;
+                }
+                no_msg_count += 1;
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                if no_msg_count * 100 > 4 * PopAckConstants::SECOND {
+                    break;
+                } else {
+                    continue;
+                }
+            } else {
+                no_msg_count = 0;
+            }
+
+            if get_current_millis() > self.broker_config.revive_scan_time {
+                info!("reviveQueueId={}, scan timeout", self.queue_id);
+                break;
+            }
+            let size = message_exts.as_ref().unwrap().len();
+            for message_ext in message_exts.unwrap() {
+                if PopAckConstants::CK_TAG == message_ext.get_tags().unwrap_or_default() {
+                    // let raw = String::from_utf8(message_ext.get_body().to_vec()).unwrap();
+
+                    info!(
+                        "reviveQueueId={},find ck, offset:{}",
+                        message_ext.queue_id, message_ext.queue_offset
+                    );
+                    let mut point: PopCheckPoint =
+                        SerdeJsonUtils::decode(message_ext.get_body().unwrap()).unwrap();
+                    if point.topic.is_empty() || point.cid.is_empty() {
+                        continue;
+                    }
+                    map.insert(
+                        format!(
+                            "{}{}{}{}{}{}",
+                            point.topic,
+                            point.cid,
+                            point.queue_id,
+                            point.start_offset,
+                            point.pop_time,
+                            point.broker_name.clone().unwrap_or_default()
+                        )
+                        .into(),
+                        point.clone(),
+                    );
+                    //  PopMetricsManager::inc_pop_revive_ck_get_count(&point, self.queue_id);
+                    point.revive_offset = message_ext.queue_offset;
+                    if first_rt == 0 {
+                        first_rt = point.get_revive_time() as u64;
+                    }
+                } else if PopAckConstants::ACK_TAG == message_ext.get_tags().unwrap_or_default() {
+                    let ack_msg: AckMsg =
+                        SerdeJsonUtils::decode(message_ext.get_body().unwrap()).unwrap();
+                    // PopMetricsManager::inc_pop_revive_ack_get_count(&ack_msg, self.queue_id);
+                    let merge_key = CheetahString::from_string(format!(
+                        "{}{}{}{}{}{}",
+                        ack_msg.topic,
+                        ack_msg.consumer_group,
+                        ack_msg.queue_id,
+                        ack_msg.start_offset,
+                        ack_msg.pop_time,
+                        ack_msg.broker_name
+                    ));
+                    if let Some(point) = map.get_mut(&merge_key) {
+                        let index_of_ack = point.index_of_ack(ack_msg.ack_offset());
+                        if index_of_ack > -1 {
+                            point.bit_map =
+                                DataConverter::set_bit(point.bit_map, index_of_ack as usize, true);
+                        } else {
+                            error!("invalid ack index, {}, {}", ack_msg, point);
+                        }
+                    } else {
+                        if !self.broker_config.enable_skip_long_awaiting_ack {
+                            continue;
+                        }
+                        if self.mock_ck_for_ack(
+                            &message_ext,
+                            &ack_msg,
+                            &merge_key,
+                            &mut mock_point_map,
+                        ) && first_rt == 0
+                        {
+                            first_rt =
+                                mock_point_map.get(&merge_key).unwrap().get_revive_time() as u64;
+                        }
+                    }
+                } else if PopAckConstants::BATCH_ACK_TAG
+                    == message_ext.get_tags().unwrap_or_default()
+                {
+                    //let raw = String::from_utf8(message_ext.get_body().to_vec()).unwrap();
+                    info!(
+                        "reviveQueueId={}, find batch ack, offset:{},",
+                        message_ext.queue_id, message_ext.queue_offset,
+                    );
+                    let b_ack_msg: BatchAckMsg =
+                        SerdeJsonUtils::decode(message_ext.get_body().unwrap()).unwrap();
+                    // PopMetricsManager::inc_pop_revive_ack_get_count(&b_ack_msg, self.queue_id);
+                    let merge_key = CheetahString::from_string(format!(
+                        "{}{}{}{}{}{}",
+                        b_ack_msg.ack_msg.topic,
+                        b_ack_msg.ack_msg.consumer_group,
+                        b_ack_msg.ack_msg.queue_id,
+                        b_ack_msg.ack_msg.start_offset,
+                        b_ack_msg.ack_msg.pop_time,
+                        b_ack_msg.ack_msg.broker_name
+                    ));
+                    if let Some(point) = map.get_mut(&merge_key) {
+                        for ack_offset in &b_ack_msg.ack_offset_list {
+                            let index_of_ack = point.index_of_ack(*ack_offset);
+                            if index_of_ack > -1 {
+                                point.bit_map = DataConverter::set_bit(
+                                    point.bit_map,
+                                    index_of_ack as usize,
+                                    true,
+                                );
+                            } else {
+                                info!("invalid batch ack index, {}, {}", b_ack_msg, point);
+                            }
+                        }
+                    } else {
+                        if !self.broker_config.enable_skip_long_awaiting_ack {
+                            continue;
+                        }
+                        if self.mock_ck_for_ack(
+                            &message_ext,
+                            &b_ack_msg,
+                            &merge_key,
+                            &mut mock_point_map,
+                        ) && first_rt == 0
+                        {
+                            first_rt =
+                                mock_point_map.get(&merge_key).unwrap().get_revive_time() as u64;
+                        }
+                    }
+                }
+                let deliver_time = message_ext.get_deliver_time_ms();
+                if deliver_time > end_time {
+                    end_time = deliver_time;
+                }
+            }
+            offset += size as i64;
+        }
+        consume_revive_obj.map.extend(mock_point_map);
+        consume_revive_obj.end_time = end_time as i64;
     }
+    fn mock_ck_for_ack(
+        &self,
+        _message_ext: &MessageExt,
+        _ack_msg: &dyn AckMessage,
+        _merge_key: &CheetahString,
+        _mock_point_map: &mut HashMap<CheetahString, PopCheckPoint>,
+    ) -> bool {
+        // Implement the logic to mock checkpoint for ack
+        unimplemented!()
+    }
+
     fn merge_and_revive(&self, _consume_revive_obj: &mut ConsumeReviveObj) {
         unimplemented!("consume_revive_message")
     }
