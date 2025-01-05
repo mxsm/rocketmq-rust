@@ -147,6 +147,418 @@ pub(crate) struct BrokerRuntime {
     pop_inflight_message_counter: Arc<PopInflightMessageCounter>,
 }
 
+pub(crate) struct BrokerInner<MS> {
+    store_host: SocketAddr,
+    broker_config: BrokerConfig,
+    message_store_config: MessageStoreConfig,
+    server_config: ServerConfig,
+    topic_config_manager: TopicConfigManager,
+    topic_queue_mapping_manager: TopicQueueMappingManager,
+    consumer_offset_manager: ConsumerOffsetManager,
+    subscription_group_manager: SubscriptionGroupManager<MS>,
+    consumer_filter_manager: ConsumerFilterManager,
+    consumer_order_info_manager: ConsumerOrderInfoManager<MS>,
+    message_store: Option<MS>,
+    broker_stats: Option<BrokerStats<MS>>,
+    schedule_message_service: ScheduleMessageService,
+    timer_message_store: Option<TimerMessageStore>,
+    broker_outer_api: BrokerOuterAPI,
+    producer_manager: ProducerManager,
+    consumer_manager: ConsumerManager,
+    broadcast_offset_manager: BroadcastOffsetManager,
+    broker_stats_manager: BrokerStatsManager,
+    topic_queue_mapping_clean_service: Option<TopicQueueMappingCleanService>,
+    update_master_haserver_addr_periodically: bool,
+    should_start_time: AtomicU64,
+    is_isolated: AtomicBool,
+    pull_request_hold_service: Option<PullRequestHoldService<MS>>,
+    rebalance_lock_manager: RebalanceLockManager,
+    broker_member_group: BrokerMemberGroup,
+    transactional_message_service: Option<DefaultTransactionalMessageService<MS>>,
+    transactional_message_check_listener: Option<DefaultTransactionalMessageCheckListener<MS>>,
+    transactional_message_check_service: Option<TransactionalMessageCheckService>,
+    transaction_metrics_flush_service: Option<TransactionMetricsFlushService>,
+    topic_route_info_manager: TopicRouteInfoManager,
+    escape_bridge: EscapeBridge<MS>,
+    pop_inflight_message_counter: PopInflightMessageCounter,
+}
+
+impl<MS: MessageStore> BrokerInner<MS> {
+    #[inline]
+    pub fn store_host(&self) -> SocketAddr {
+        self.store_host
+    }
+
+    #[inline]
+    pub fn broker_config(&self) -> &BrokerConfig {
+        &self.broker_config
+    }
+
+    #[inline]
+    pub fn message_store_config(&self) -> &MessageStoreConfig {
+        &self.message_store_config
+    }
+
+    #[inline]
+    pub fn server_config(&self) -> &ServerConfig {
+        &self.server_config
+    }
+
+    #[inline]
+    pub fn topic_config_manager(&self) -> &TopicConfigManager {
+        &self.topic_config_manager
+    }
+
+    #[inline]
+    pub fn topic_queue_mapping_manager(&self) -> &TopicQueueMappingManager {
+        &self.topic_queue_mapping_manager
+    }
+
+    #[inline]
+    pub fn consumer_offset_manager(&self) -> &ConsumerOffsetManager {
+        &self.consumer_offset_manager
+    }
+
+    #[inline]
+    pub fn subscription_group_manager(&self) -> &SubscriptionGroupManager<MS> {
+        &self.subscription_group_manager
+    }
+
+    #[inline]
+    pub fn consumer_filter_manager(&self) -> &ConsumerFilterManager {
+        &self.consumer_filter_manager
+    }
+
+    #[inline]
+    pub fn consumer_order_info_manager(&self) -> &ConsumerOrderInfoManager<MS> {
+        &self.consumer_order_info_manager
+    }
+
+    #[inline]
+    pub fn message_store(&self) -> &Option<MS> {
+        &self.message_store
+    }
+
+    #[inline]
+    pub fn broker_stats(&self) -> &Option<BrokerStats<MS>> {
+        &self.broker_stats
+    }
+
+    #[inline]
+    pub fn schedule_message_service(&self) -> &ScheduleMessageService {
+        &self.schedule_message_service
+    }
+
+    #[inline]
+    pub fn timer_message_store(&self) -> &Option<TimerMessageStore> {
+        &self.timer_message_store
+    }
+
+    #[inline]
+    pub fn broker_outer_api(&self) -> &BrokerOuterAPI {
+        &self.broker_outer_api
+    }
+
+    #[inline]
+    pub fn producer_manager(&self) -> &ProducerManager {
+        &self.producer_manager
+    }
+
+    #[inline]
+    pub fn consumer_manager(&self) -> &ConsumerManager {
+        &self.consumer_manager
+    }
+
+    #[inline]
+    pub fn broadcast_offset_manager(&self) -> &BroadcastOffsetManager {
+        &self.broadcast_offset_manager
+    }
+
+    #[inline]
+    pub fn broker_stats_manager(&self) -> &BrokerStatsManager {
+        &self.broker_stats_manager
+    }
+
+    #[inline]
+    pub fn topic_queue_mapping_clean_service(&self) -> &Option<TopicQueueMappingCleanService> {
+        &self.topic_queue_mapping_clean_service
+    }
+
+    #[inline]
+    pub fn update_master_haserver_addr_periodically(&self) -> bool {
+        self.update_master_haserver_addr_periodically
+    }
+
+    #[inline]
+    pub fn should_start_time(&self) -> &AtomicU64 {
+        &self.should_start_time
+    }
+
+    #[inline]
+    pub fn is_isolated(&self) -> &AtomicBool {
+        &self.is_isolated
+    }
+
+    #[inline]
+    pub fn pull_request_hold_service(&self) -> &Option<PullRequestHoldService<MS>> {
+        &self.pull_request_hold_service
+    }
+
+    #[inline]
+    pub fn rebalance_lock_manager(&self) -> &RebalanceLockManager {
+        &self.rebalance_lock_manager
+    }
+
+    #[inline]
+    pub fn broker_member_group(&self) -> &BrokerMemberGroup {
+        &self.broker_member_group
+    }
+
+    #[inline]
+    pub fn transactional_message_service(&self) -> &Option<DefaultTransactionalMessageService<MS>> {
+        &self.transactional_message_service
+    }
+
+    #[inline]
+    pub fn transactional_message_check_listener(
+        &self,
+    ) -> &Option<DefaultTransactionalMessageCheckListener<MS>> {
+        &self.transactional_message_check_listener
+    }
+
+    #[inline]
+    pub fn transactional_message_check_service(&self) -> &Option<TransactionalMessageCheckService> {
+        &self.transactional_message_check_service
+    }
+
+    #[inline]
+    pub fn transaction_metrics_flush_service(&self) -> &Option<TransactionMetricsFlushService> {
+        &self.transaction_metrics_flush_service
+    }
+
+    #[inline]
+    pub fn topic_route_info_manager(&self) -> &TopicRouteInfoManager {
+        &self.topic_route_info_manager
+    }
+
+    #[inline]
+    pub fn escape_bridge(&self) -> &EscapeBridge<MS> {
+        &self.escape_bridge
+    }
+
+    #[inline]
+    pub fn pop_inflight_message_counter(&self) -> &PopInflightMessageCounter {
+        &self.pop_inflight_message_counter
+    }
+
+    #[inline]
+    pub fn set_store_host(&mut self, store_host: SocketAddr) {
+        self.store_host = store_host;
+    }
+
+    #[inline]
+    pub fn set_broker_config(&mut self, broker_config: BrokerConfig) {
+        self.broker_config = broker_config;
+    }
+
+    #[inline]
+    pub fn set_message_store_config(&mut self, message_store_config: MessageStoreConfig) {
+        self.message_store_config = message_store_config;
+    }
+
+    #[inline]
+    pub fn set_server_config(&mut self, server_config: ServerConfig) {
+        self.server_config = server_config;
+    }
+
+    #[inline]
+    pub fn set_topic_config_manager(&mut self, topic_config_manager: TopicConfigManager) {
+        self.topic_config_manager = topic_config_manager;
+    }
+
+    #[inline]
+    pub fn set_topic_queue_mapping_manager(
+        &mut self,
+        topic_queue_mapping_manager: TopicQueueMappingManager,
+    ) {
+        self.topic_queue_mapping_manager = topic_queue_mapping_manager;
+    }
+
+    #[inline]
+    pub fn set_consumer_offset_manager(&mut self, consumer_offset_manager: ConsumerOffsetManager) {
+        self.consumer_offset_manager = consumer_offset_manager;
+    }
+
+    #[inline]
+    pub fn set_subscription_group_manager(
+        &mut self,
+        subscription_group_manager: SubscriptionGroupManager<MS>,
+    ) {
+        self.subscription_group_manager = subscription_group_manager;
+    }
+
+    #[inline]
+    pub fn set_consumer_filter_manager(&mut self, consumer_filter_manager: ConsumerFilterManager) {
+        self.consumer_filter_manager = consumer_filter_manager;
+    }
+
+    #[inline]
+    pub fn set_consumer_order_info_manager(
+        &mut self,
+        consumer_order_info_manager: ConsumerOrderInfoManager<MS>,
+    ) {
+        self.consumer_order_info_manager = consumer_order_info_manager;
+    }
+
+    #[inline]
+    pub fn set_message_store(&mut self, message_store: MS) {
+        self.message_store = Some(message_store);
+    }
+
+    #[inline]
+    pub fn set_broker_stats(&mut self, broker_stats: BrokerStats<MS>) {
+        self.broker_stats = Some(broker_stats);
+    }
+
+    #[inline]
+    pub fn set_schedule_message_service(
+        &mut self,
+        schedule_message_service: ScheduleMessageService,
+    ) {
+        self.schedule_message_service = schedule_message_service;
+    }
+
+    #[inline]
+    pub fn set_timer_message_store(&mut self, timer_message_store: TimerMessageStore) {
+        self.timer_message_store = Some(timer_message_store);
+    }
+
+    #[inline]
+    pub fn set_broker_outer_api(&mut self, broker_outer_api: BrokerOuterAPI) {
+        self.broker_outer_api = broker_outer_api;
+    }
+
+    #[inline]
+    pub fn set_producer_manager(&mut self, producer_manager: ProducerManager) {
+        self.producer_manager = producer_manager;
+    }
+
+    #[inline]
+    pub fn set_consumer_manager(&mut self, consumer_manager: ConsumerManager) {
+        self.consumer_manager = consumer_manager;
+    }
+
+    #[inline]
+    pub fn set_broadcast_offset_manager(
+        &mut self,
+        broadcast_offset_manager: BroadcastOffsetManager,
+    ) {
+        self.broadcast_offset_manager = broadcast_offset_manager;
+    }
+
+    #[inline]
+    pub fn set_broker_stats_manager(&mut self, broker_stats_manager: BrokerStatsManager) {
+        self.broker_stats_manager = broker_stats_manager;
+    }
+
+    #[inline]
+    pub fn set_topic_queue_mapping_clean_service(
+        &mut self,
+        topic_queue_mapping_clean_service: TopicQueueMappingCleanService,
+    ) {
+        self.topic_queue_mapping_clean_service = Some(topic_queue_mapping_clean_service);
+    }
+
+    #[inline]
+    pub fn set_update_master_haserver_addr_periodically(
+        &mut self,
+        update_master_haserver_addr_periodically: bool,
+    ) {
+        self.update_master_haserver_addr_periodically = update_master_haserver_addr_periodically;
+    }
+
+    #[inline]
+    pub fn set_should_start_time(&mut self, should_start_time: AtomicU64) {
+        self.should_start_time = should_start_time;
+    }
+
+    #[inline]
+    pub fn set_is_isolated(&mut self, is_isolated: AtomicBool) {
+        self.is_isolated = is_isolated;
+    }
+
+    #[inline]
+    pub fn set_pull_request_hold_service(
+        &mut self,
+        pull_request_hold_service: PullRequestHoldService<MS>,
+    ) {
+        self.pull_request_hold_service = Some(pull_request_hold_service);
+    }
+
+    #[inline]
+    pub fn set_rebalance_lock_manager(&mut self, rebalance_lock_manager: RebalanceLockManager) {
+        self.rebalance_lock_manager = rebalance_lock_manager;
+    }
+
+    #[inline]
+    pub fn set_broker_member_group(&mut self, broker_member_group: BrokerMemberGroup) {
+        self.broker_member_group = broker_member_group;
+    }
+
+    #[inline]
+    pub fn set_transactional_message_service(
+        &mut self,
+        transactional_message_service: DefaultTransactionalMessageService<MS>,
+    ) {
+        self.transactional_message_service = Some(transactional_message_service);
+    }
+
+    #[inline]
+    pub fn set_transactional_message_check_listener(
+        &mut self,
+        transactional_message_check_listener: DefaultTransactionalMessageCheckListener<MS>,
+    ) {
+        self.transactional_message_check_listener = Some(transactional_message_check_listener);
+    }
+
+    #[inline]
+    pub fn set_transactional_message_check_service(
+        &mut self,
+        transactional_message_check_service: TransactionalMessageCheckService,
+    ) {
+        self.transactional_message_check_service = Some(transactional_message_check_service);
+    }
+
+    #[inline]
+    pub fn set_transaction_metrics_flush_service(
+        &mut self,
+        transaction_metrics_flush_service: TransactionMetricsFlushService,
+    ) {
+        self.transaction_metrics_flush_service = Some(transaction_metrics_flush_service);
+    }
+
+    #[inline]
+    pub fn set_topic_route_info_manager(
+        &mut self,
+        topic_route_info_manager: TopicRouteInfoManager,
+    ) {
+        self.topic_route_info_manager = topic_route_info_manager;
+    }
+
+    #[inline]
+    pub fn set_escape_bridge(&mut self, escape_bridge: EscapeBridge<MS>) {
+        self.escape_bridge = escape_bridge;
+    }
+
+    #[inline]
+    pub fn set_pop_inflight_message_counter(
+        &mut self,
+        pop_inflight_message_counter: PopInflightMessageCounter,
+    ) {
+        self.pop_inflight_message_counter = pop_inflight_message_counter;
+    }
+}
+
 impl Clone for BrokerRuntime {
     fn clone(&self) -> Self {
         Self {
