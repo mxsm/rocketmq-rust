@@ -422,7 +422,7 @@ pub trait MappedFile {
     /// # Arguments
     /// * `interval_forcibly` - The time interval after which the store should be forcibly shut
     ///   down.
-    fn shutdown(&self, interval_forcibly: i64);
+    fn shutdown(&self, interval_forcibly: u64);
 
     /// Releases any resources held by the store.
     fn release(&self);
