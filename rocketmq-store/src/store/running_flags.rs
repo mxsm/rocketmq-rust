@@ -33,26 +33,26 @@ pub struct RunningFlags {
 }
 
 impl Default for RunningFlags {
+    #[inline]
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl RunningFlags {
-    /// Creates a new instance of `RunningFlags` with all flags set to 0.
+    #[inline]
     pub fn new() -> Self {
         RunningFlags {
             flag_bits: AtomicI32::new(0),
         }
     }
 
-    /// Returns the current value of the flag bits.
+    #[inline]
     pub fn get_flag_bits(&self) -> i32 {
         self.flag_bits.load(Ordering::SeqCst)
     }
 
-    /// Checks if the state is readable and makes it readable if it is not.
-    /// Returns the previous state of readability.
+    #[inline]
     pub fn get_and_make_readable(&self) -> bool {
         let result = self.is_readable();
         if !result {
@@ -62,18 +62,17 @@ impl RunningFlags {
         result
     }
 
-    /// Returns true if the state is readable.
+    #[inline]
     pub fn is_readable(&self) -> bool {
         (self.flag_bits.load(Ordering::SeqCst) & NOT_READABLE_BIT) == 0
     }
 
-    /// Returns true if the state is fenced.
+    #[inline]
     pub fn is_fenced(&self) -> bool {
         (self.flag_bits.load(Ordering::SeqCst) & FENCED_BIT) != 0
     }
 
-    /// Checks if the state is readable and makes it not readable if it is.
-    /// Returns the previous state of readability.
+    #[inline]
     pub fn get_and_make_not_readable(&self) -> bool {
         let result = self.is_readable();
         if result {
@@ -82,14 +81,13 @@ impl RunningFlags {
         result
     }
 
-    /// Clears the logics queue error flag.
+    #[inline]
     pub fn clear_logics_queue_error(&self) {
         self.flag_bits
             .fetch_and(!WRITE_LOGICS_QUEUE_ERROR_BIT, Ordering::SeqCst);
     }
 
-    /// Checks if the state is writeable and makes it writeable if it is not.
-    /// Returns the previous state of writeability.
+    #[inline]
     pub fn get_and_make_writeable(&self) -> bool {
         let result = self.is_writeable();
         if !result {
@@ -99,7 +97,7 @@ impl RunningFlags {
         result
     }
 
-    /// Returns true if the state is writeable.
+    #[inline]
     pub fn is_writeable(&self) -> bool {
         (self.flag_bits.load(Ordering::SeqCst)
             & (NOT_WRITEABLE_BIT
@@ -111,8 +109,7 @@ impl RunningFlags {
             == 0
     }
 
-    /// Returns true if the consume queue is writeable.
-    /// Ignores the disk full bit.
+    #[inline]
     pub fn is_cq_writeable(&self) -> bool {
         (self.flag_bits.load(Ordering::SeqCst)
             & (NOT_WRITEABLE_BIT
@@ -122,8 +119,7 @@ impl RunningFlags {
             == 0
     }
 
-    /// Checks if the state is writeable and makes it not writeable if it is.
-    /// Returns the previous state of writeability.
+    #[inline]
     pub fn get_and_make_not_writeable(&self) -> bool {
         let result = self.is_writeable();
         if result {
@@ -132,13 +128,13 @@ impl RunningFlags {
         result
     }
 
-    /// Sets the logics queue error flag.
+    #[inline]
     pub fn make_logics_queue_error(&self) {
         self.flag_bits
             .fetch_or(WRITE_LOGICS_QUEUE_ERROR_BIT, Ordering::SeqCst);
     }
 
-    /// Sets or clears the fenced flag based on the input parameter.
+    #[inline]
     pub fn make_fenced(&self, fenced: bool) {
         if fenced {
             self.flag_bits.fetch_or(FENCED_BIT, Ordering::SeqCst);
@@ -147,39 +143,39 @@ impl RunningFlags {
         }
     }
 
-    /// Returns true if the logics queue error flag is set.
+    #[inline]
     pub fn is_logics_queue_error(&self) -> bool {
         (self.flag_bits.load(Ordering::SeqCst) & WRITE_LOGICS_QUEUE_ERROR_BIT)
             == WRITE_LOGICS_QUEUE_ERROR_BIT
     }
 
-    /// Sets the index file error flag.
+    #[inline]
     pub fn make_index_file_error(&self) {
         self.flag_bits
             .fetch_or(WRITE_INDEX_FILE_ERROR_BIT, Ordering::SeqCst);
     }
 
-    /// Returns true if the index file error flag is set.
+    #[inline]
     pub fn is_index_file_error(&self) -> bool {
         (self.flag_bits.load(Ordering::SeqCst) & WRITE_INDEX_FILE_ERROR_BIT)
             == WRITE_INDEX_FILE_ERROR_BIT
     }
 
-    /// Sets the disk full flag and returns true if the disk was not full before.
+    #[inline]
     pub fn get_and_make_disk_full(&self) -> bool {
         let result = (self.flag_bits.load(Ordering::SeqCst) & DISK_FULL_BIT) != DISK_FULL_BIT;
         self.flag_bits.fetch_or(DISK_FULL_BIT, Ordering::SeqCst);
         result
     }
 
-    /// Clears the disk full flag and returns true if the disk was full before.
+    #[inline]
     pub fn get_and_make_disk_ok(&self) -> bool {
         let result = (self.flag_bits.load(Ordering::SeqCst) & DISK_FULL_BIT) != DISK_FULL_BIT;
         self.flag_bits.fetch_and(!DISK_FULL_BIT, Ordering::SeqCst);
         result
     }
 
-    /// Sets the logic disk full flag and returns true if the logic disk was not full before.
+    #[inline]
     pub fn get_and_make_logic_disk_full(&self) -> bool {
         let result =
             (self.flag_bits.load(Ordering::SeqCst) & LOGIC_DISK_FULL_BIT) != LOGIC_DISK_FULL_BIT;
@@ -188,7 +184,7 @@ impl RunningFlags {
         result
     }
 
-    /// Clears the logic disk full flag and returns true if the logic disk was full before.
+    #[inline]
     pub fn get_and_make_logic_disk_ok(&self) -> bool {
         let result =
             (self.flag_bits.load(Ordering::SeqCst) & LOGIC_DISK_FULL_BIT) != LOGIC_DISK_FULL_BIT;
