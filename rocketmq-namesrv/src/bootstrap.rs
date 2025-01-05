@@ -49,13 +49,15 @@ pub struct Builder {
 }
 
 struct NameServerRuntime {
-    name_server_config: ArcMut<NamesrvConfig>,
+    /*name_server_config: ArcMut<NamesrvConfig>,
     tokio_client_config: Arc<TokioClientConfig>,
     server_config: Arc<ServerConfig>,
     route_info_manager: RouteInfoManager,
     kvconfig_manager: KVConfigManager,
     name_server_runtime: Option<RocketMQRuntime>,
-    remoting_client: ArcMut<RocketmqDefaultClient>,
+    remoting_client: ArcMut<RocketmqDefaultClient>,*/
+    name_server_runtime: Option<RocketMQRuntime>,
+    inner: ArcMut<NameServerRuntimeInner>,
 }
 
 impl NameServerBootstrap {
@@ -74,20 +76,21 @@ impl NameServerRuntime {
         let (notify_conn_disconnect, _) = broadcast::channel::<SocketAddr>(100);
         let receiver = notify_conn_disconnect.subscribe();
         let request_processor = self.init_processors(receiver);
-        let server = RocketMQServer::new(self.server_config.clone());
+        let server = RocketMQServer::new(Arc::new(self.inner.server_config.clone()));
         tokio::spawn(async move {
             server.run(request_processor).await;
         });
         let namesrv = CheetahString::from_string(format!(
             "{}:{}",
             NetworkUtil::get_local_address().unwrap(),
-            self.server_config.listen_port
+            self.inner.server_config.listen_port
         ));
-        let weak_arc_mut = ArcMut::downgrade(&self.remoting_client);
-        self.remoting_client
+        let weak_arc_mut = ArcMut::downgrade(&self.inner.remoting_client);
+        self.inner
+            .remoting_client
             .update_name_server_address_list(vec![namesrv])
             .await;
-        self.remoting_client.start(weak_arc_mut).await;
+        self.inner.remoting_client.start(weak_arc_mut).await;
         info!("Rocketmq NameServer(Rust) started");
     }
 
@@ -95,26 +98,23 @@ impl NameServerRuntime {
         &self,
         receiver: broadcast::Receiver<SocketAddr>,
     ) -> NameServerRequestProcessor {
-        RouteInfoManager::start(self.route_info_manager.clone(), receiver);
+        self.inner.route_info_manager().start(receiver);
 
-        let client_request_processor = ClientRequestProcessor::new(
-            self.route_info_manager.clone(),
-            self.name_server_config.clone(),
-            self.kvconfig_manager.clone(),
-        );
+        let client_request_processor = ClientRequestProcessor::new(self.inner.clone());
         let default_request_processor =
             crate::processor::default_request_processor::DefaultRequestProcessor::new(
-                self.route_info_manager.clone(),
-                self.kvconfig_manager.clone(),
+                self.inner.clone(),
             );
 
-        let mut route_info_manager_arc = self.route_info_manager.clone();
+        let mut inner = self.inner.clone();
         self.name_server_runtime
             .as_ref()
             .unwrap()
             .schedule_at_fixed_rate_mut(
                 move || {
-                    route_info_manager_arc.scan_not_active_broker();
+                    if let Some(route_info_manager) = inner.route_info_manager.as_mut() {
+                        route_info_manager.scan_not_active_broker();
+                    }
                 },
                 Some(Duration::from_secs(5)),
                 Duration::from_secs(5),
@@ -159,26 +159,33 @@ impl Builder {
     }
 
     pub fn build(self) -> NameServerBootstrap {
-        let name_server_config = ArcMut::new(self.name_server_config.unwrap_or_default());
+        let name_server_config = self.name_server_config.unwrap_or_default();
         let runtime = RocketMQRuntime::new_multi(10, "namesrv-thread");
-        let tokio_client_config = Arc::new(TokioClientConfig::default());
+        let tokio_client_config = TokioClientConfig::default();
         let remoting_client = ArcMut::new(RocketmqDefaultClient::new(
-            tokio_client_config.clone(),
+            Arc::new(tokio_client_config.clone()),
             DefaultRemotingRequestProcessor,
         ));
+        let server_config = self.server_config.unwrap_or_default();
+        let mut inner = ArcMut::new(NameServerRuntimeInner {
+            name_server_config,
+            tokio_client_config,
+            server_config,
+            route_info_manager: None,
+            kvconfig_manager: None,
+            remoting_client,
+        });
+
+        let route_info_manager = RouteInfoManager::new(inner.clone());
+        let kv_config_manager = KVConfigManager::new(inner.clone());
+
+        inner.kvconfig_manager = Some(kv_config_manager);
+        inner.route_info_manager = Some(route_info_manager);
 
         NameServerBootstrap {
             name_server_runtime: NameServerRuntime {
-                name_server_config: name_server_config.clone(),
-                tokio_client_config,
-                server_config: Arc::new(self.server_config.unwrap()),
-                route_info_manager: RouteInfoManager::new(
-                    name_server_config.clone(),
-                    remoting_client.clone(),
-                ),
-                kvconfig_manager: KVConfigManager::new(name_server_config),
                 name_server_runtime: Some(runtime),
-                remoting_client,
+                inner,
             },
         }
     }
@@ -188,9 +195,9 @@ pub(crate) struct NameServerRuntimeInner {
     name_server_config: NamesrvConfig,
     tokio_client_config: TokioClientConfig,
     server_config: ServerConfig,
-    route_info_manager: RouteInfoManager,
-    kvconfig_manager: KVConfigManager,
-    remoting_client: RocketmqDefaultClient,
+    route_info_manager: Option<RouteInfoManager>,
+    kvconfig_manager: Option<KVConfigManager>,
+    remoting_client: ArcMut<RocketmqDefaultClient>,
 }
 
 impl NameServerRuntimeInner {
@@ -211,12 +218,16 @@ impl NameServerRuntimeInner {
 
     #[inline]
     pub fn route_info_manager_mut(&mut self) -> &mut RouteInfoManager {
-        &mut self.route_info_manager
+        self.route_info_manager
+            .as_mut()
+            .expect("route_info_manager is None")
     }
 
     #[inline]
     pub fn kvconfig_manager_mut(&mut self) -> &mut KVConfigManager {
-        &mut self.kvconfig_manager
+        self.kvconfig_manager
+            .as_mut()
+            .expect("kvconfig_manager is None")
     }
 
     #[inline]
@@ -241,12 +252,16 @@ impl NameServerRuntimeInner {
 
     #[inline]
     pub fn route_info_manager(&self) -> &RouteInfoManager {
-        &self.route_info_manager
+        self.route_info_manager
+            .as_ref()
+            .expect("route_info_manager is None")
     }
 
     #[inline]
     pub fn kvconfig_manager(&self) -> &KVConfigManager {
-        &self.kvconfig_manager
+        self.kvconfig_manager
+            .as_ref()
+            .expect("kvconfig_manager is None")
     }
 
     #[inline]
@@ -271,16 +286,16 @@ impl NameServerRuntimeInner {
 
     #[inline]
     pub fn set_route_info_manager(&mut self, route_info_manager: RouteInfoManager) {
-        self.route_info_manager = route_info_manager;
+        self.route_info_manager = Some(route_info_manager);
     }
 
     #[inline]
     pub fn set_kvconfig_manager(&mut self, kvconfig_manager: KVConfigManager) {
-        self.kvconfig_manager = kvconfig_manager;
+        self.kvconfig_manager = Some(kvconfig_manager);
     }
 
     #[inline]
-    pub fn set_remoting_client(&mut self, remoting_client: RocketmqDefaultClient) {
+    pub fn set_remoting_client(&mut self, remoting_client: ArcMut<RocketmqDefaultClient>) {
         self.remoting_client = remoting_client;
     }
 }

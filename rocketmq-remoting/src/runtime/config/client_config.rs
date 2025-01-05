@@ -23,6 +23,7 @@ lazy_static! {
     static ref NET_SYSTEM_CONFIG: NetSystemConfig = NetSystemConfig::new();
 }
 
+#[derive(Clone)]
 pub struct TokioClientConfig {
     // Worker thread number
     pub client_worker_threads: i32,

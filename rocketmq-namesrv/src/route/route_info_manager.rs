@@ -24,12 +24,10 @@ use cheetah_string::CheetahString;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::mix_all;
-use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::common::TopicSysFlag;
 use rocketmq_common::TimeUtils;
 use rocketmq_common::TimeUtils::get_current_millis;
-use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
@@ -51,6 +49,7 @@ use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
+use crate::bootstrap::NameServerRuntimeInner;
 use crate::route_info::broker_addr_info::BrokerAddrInfo;
 use crate::route_info::broker_addr_info::BrokerLiveInfo;
 use crate::route_info::broker_addr_info::BrokerStatusChangeInfo;
@@ -81,17 +80,13 @@ pub struct RouteInfoManager {
     pub(crate) broker_live_table: BrokerLiveTable,
     pub(crate) filter_server_table: FilterServerTable,
     pub(crate) topic_queue_mapping_info_table: TopicQueueMappingInfoTable,
-    pub(crate) namesrv_config: ArcMut<NamesrvConfig>,
-    pub(crate) remoting_client: ArcMut<RocketmqDefaultClient>,
+    pub(crate) name_server_runtime_inner: ArcMut<NameServerRuntimeInner>,
     lock: Arc<parking_lot::RwLock<()>>,
 }
 
 #[allow(private_interfaces)]
 impl RouteInfoManager {
-    pub fn new(
-        namesrv_config: ArcMut<NamesrvConfig>,
-        remoting_client: ArcMut<RocketmqDefaultClient>,
-    ) -> Self {
+    pub fn new(name_server_runtime_inner: ArcMut<NameServerRuntimeInner>) -> Self {
         RouteInfoManager {
             topic_queue_table: ArcMut::new(HashMap::new()),
             broker_addr_table: ArcMut::new(HashMap::new()),
@@ -99,9 +94,8 @@ impl RouteInfoManager {
             broker_live_table: ArcMut::new(HashMap::new()),
             filter_server_table: ArcMut::new(HashMap::new()),
             topic_queue_mapping_info_table: ArcMut::new(HashMap::new()),
-            namesrv_config,
-            remoting_client,
             lock: Arc::new(Default::default()),
+            name_server_runtime_inner,
         }
     }
 }
@@ -238,7 +232,10 @@ impl RouteInfoManager {
 
             // Delete the topics that don't exist in tcTable from the current broker
             // Static topic is not supported currently
-            if self.namesrv_config.delete_topic_with_broker_registration
+            if self
+                .name_server_runtime_inner
+                .name_server_config()
+                .delete_topic_with_broker_registration
                 && topic_queue_mapping_info_map.is_empty()
             {
                 let old_topic_set = self.topic_set_of_broker_name(&broker_name);
@@ -346,7 +343,12 @@ impl RouteInfoManager {
                 }
             }
         }
-        if is_min_broker_id_changed && self.namesrv_config.notify_min_broker_id_changed {
+        if is_min_broker_id_changed
+            && self
+                .name_server_runtime_inner
+                .name_server_config()
+                .notify_min_broker_id_changed
+        {
             self.notify_min_broker_id_changed(
                 broker_data.broker_addrs(),
                 None,
@@ -424,7 +426,11 @@ impl RouteInfoManager {
             topic_route_data.topic_queue_mapping_by_broker =
                 self.topic_queue_mapping_info_table.get(topic).cloned();
 
-            if !self.namesrv_config.support_acting_master {
+            if !self
+                .name_server_runtime_inner
+                .name_server_config()
+                .support_acting_master
+            {
                 return Some(topic_route_data);
             }
 
@@ -614,11 +620,12 @@ impl RouteInfoManager {
             self.choose_broker_addrs_to_notify(broker_addr_map, offline_broker_addr)
         {
             for broker_addr in broker_addrs_notify {
-                let remoting_client = self.remoting_client.clone();
+                let remoting_client = self.name_server_runtime_inner.clone();
                 let requst_header = request_header.clone();
                 let broker_addr = broker_addr.clone();
                 tokio::spawn(async move {
                     let _ = remoting_client
+                        .remoting_client()
                         .invoke_oneway(
                             &broker_addr,
                             RemotingCommand::create_request_command(
@@ -1023,7 +1030,12 @@ impl RouteInfoManager {
             }
         }
         self.clean_topic_by_un_register_requests(remove_broker, reduced_broker);
-        if !need_notify_broker_map.is_empty() && self.namesrv_config.notify_min_broker_id_changed {
+        if !need_notify_broker_map.is_empty()
+            && self
+                .name_server_runtime_inner
+                .name_server_config()
+                .notify_min_broker_id_changed
+        {
             for (broker_name, broker_status_change_info) in need_notify_broker_map {
                 let broker_data = self.broker_addr_table.get(&broker_name);
                 if let Some(broker_data) = broker_data {
@@ -1148,11 +1160,14 @@ impl RouteInfoManager {
 // Non-instance method implementations
 impl RouteInfoManager {
     /// start client connection disconnected listener
-    pub fn start(mut route_info_manager: Self, receiver: broadcast::Receiver<SocketAddr>) {
+    pub fn start(&self, receiver: broadcast::Receiver<SocketAddr>) {
+        let mut inner = self.name_server_runtime_inner.clone();
         let mut receiver = receiver;
         tokio::spawn(async move {
             while let Ok(socket_addr) = receiver.recv().await {
-                route_info_manager.connection_disconnected(socket_addr);
+                inner
+                    .route_info_manager_mut()
+                    .connection_disconnected(socket_addr);
             }
         });
     }

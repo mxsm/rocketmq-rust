@@ -20,7 +20,6 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_common::common::FAQUrl;
 use rocketmq_common::TimeUtils;
 use rocketmq_remoting::code::request_code::RequestCode;
@@ -34,32 +33,23 @@ use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerCon
 use rocketmq_rust::ArcMut;
 use tracing::warn;
 
-use crate::kvconfig::kvconfig_mananger::KVConfigManager;
+use crate::bootstrap::NameServerRuntimeInner;
 use crate::namesrv_error::NamesrvError::MQNamesrvError;
 use crate::namesrv_error::NamesrvRemotingErrorWithMessage;
 use crate::processor::NAMESPACE_ORDER_TOPIC_CONFIG;
-use crate::route::route_info_manager::RouteInfoManager;
 
 pub struct ClientRequestProcessor {
-    route_info_manager: RouteInfoManager,
-    namesrv_config: ArcMut<NamesrvConfig>,
+    name_server_runtime_inner: ArcMut<NameServerRuntimeInner>,
     need_check_namesrv_ready: AtomicBool,
     startup_time_millis: u64,
-    kvconfig_manager: KVConfigManager,
 }
 
 impl ClientRequestProcessor {
-    pub fn new(
-        route_info_manager: RouteInfoManager,
-        namesrv_config: ArcMut<NamesrvConfig>,
-        kvconfig_manager: KVConfigManager,
-    ) -> Self {
+    pub(crate) fn new(name_server_runtime_inner: ArcMut<NameServerRuntimeInner>) -> Self {
         Self {
-            route_info_manager,
-            namesrv_config,
             need_check_namesrv_ready: AtomicBool::new(true),
             startup_time_millis: TimeUtils::get_current_millis(),
-            kvconfig_manager,
+            name_server_runtime_inner,
         }
     }
 
@@ -77,9 +67,18 @@ impl ClientRequestProcessor {
             })?;
         let namesrv_ready = self.need_check_namesrv_ready.load(Ordering::Relaxed)
             && TimeUtils::get_current_millis() - self.startup_time_millis
-                >= Duration::from_secs(self.namesrv_config.wait_seconds_for_service as u64)
-                    .as_millis() as u64;
-        if self.namesrv_config.need_wait_for_service && !namesrv_ready {
+                >= Duration::from_secs(
+                    self.name_server_runtime_inner
+                        .name_server_config()
+                        .wait_seconds_for_service as u64,
+                )
+                .as_millis() as u64;
+        if self
+            .name_server_runtime_inner
+            .name_server_config()
+            .need_wait_for_service
+            && !namesrv_ready
+        {
             warn!(
                 "name remoting_server not ready. request code {} ",
                 request.code()
@@ -92,7 +91,8 @@ impl ClientRequestProcessor {
             ));
         }
         match self
-            .route_info_manager
+            .name_server_runtime_inner
+            .route_info_manager()
             .pickup_topic_route_data(request_header.topic.as_ref())
         {
             None => Ok(Some(
@@ -108,12 +108,19 @@ impl ClientRequestProcessor {
                     self.need_check_namesrv_ready
                         .store(false, Ordering::Release);
                 }
-                if self.namesrv_config.order_message_enable {
+                if self
+                    .name_server_runtime_inner
+                    .name_server_config()
+                    .order_message_enable
+                {
                     //get kv config
-                    let order_topic_config = self.kvconfig_manager.get_kvconfig(
-                        &CheetahString::from_static_str(NAMESPACE_ORDER_TOPIC_CONFIG),
-                        &request_header.topic,
-                    );
+                    let order_topic_config = self
+                        .name_server_runtime_inner
+                        .kvconfig_manager()
+                        .get_kvconfig(
+                            &CheetahString::from_static_str(NAMESPACE_ORDER_TOPIC_CONFIG),
+                            &request_header.topic,
+                        );
                     topic_route_data.order_topic_conf = order_topic_config;
                 };
                 /*let standard_json_only = request_header.accept_standard_json_only.unwrap_or(false);
