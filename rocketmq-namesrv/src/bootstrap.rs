@@ -183,3 +183,104 @@ impl Builder {
         }
     }
 }
+
+pub(crate) struct NameServerRuntimeInner {
+    name_server_config: NamesrvConfig,
+    tokio_client_config: TokioClientConfig,
+    server_config: ServerConfig,
+    route_info_manager: RouteInfoManager,
+    kvconfig_manager: KVConfigManager,
+    remoting_client: RocketmqDefaultClient,
+}
+
+impl NameServerRuntimeInner {
+    #[inline]
+    pub fn name_server_config_mut(&mut self) -> &mut NamesrvConfig {
+        &mut self.name_server_config
+    }
+
+    #[inline]
+    pub fn tokio_client_config_mut(&mut self) -> &mut TokioClientConfig {
+        &mut self.tokio_client_config
+    }
+
+    #[inline]
+    pub fn server_config_mut(&mut self) -> &mut ServerConfig {
+        &mut self.server_config
+    }
+
+    #[inline]
+    pub fn route_info_manager_mut(&mut self) -> &mut RouteInfoManager {
+        &mut self.route_info_manager
+    }
+
+    #[inline]
+    pub fn kvconfig_manager_mut(&mut self) -> &mut KVConfigManager {
+        &mut self.kvconfig_manager
+    }
+
+    #[inline]
+    pub fn remoting_client_mut(&mut self) -> &mut RocketmqDefaultClient {
+        &mut self.remoting_client
+    }
+
+    #[inline]
+    pub fn name_server_config(&self) -> &NamesrvConfig {
+        &self.name_server_config
+    }
+
+    #[inline]
+    pub fn tokio_client_config(&self) -> &TokioClientConfig {
+        &self.tokio_client_config
+    }
+
+    #[inline]
+    pub fn server_config(&self) -> &ServerConfig {
+        &self.server_config
+    }
+
+    #[inline]
+    pub fn route_info_manager(&self) -> &RouteInfoManager {
+        &self.route_info_manager
+    }
+
+    #[inline]
+    pub fn kvconfig_manager(&self) -> &KVConfigManager {
+        &self.kvconfig_manager
+    }
+
+    #[inline]
+    pub fn remoting_client(&self) -> &RocketmqDefaultClient {
+        &self.remoting_client
+    }
+
+    #[inline]
+    pub fn set_name_server_config(&mut self, name_server_config: NamesrvConfig) {
+        self.name_server_config = name_server_config;
+    }
+
+    #[inline]
+    pub fn set_tokio_client_config(&mut self, tokio_client_config: TokioClientConfig) {
+        self.tokio_client_config = tokio_client_config;
+    }
+
+    #[inline]
+    pub fn set_server_config(&mut self, server_config: ServerConfig) {
+        self.server_config = server_config;
+    }
+
+    #[inline]
+    pub fn set_route_info_manager(&mut self, route_info_manager: RouteInfoManager) {
+        self.route_info_manager = route_info_manager;
+    }
+
+    #[inline]
+    pub fn set_kvconfig_manager(&mut self, kvconfig_manager: KVConfigManager) {
+        self.kvconfig_manager = kvconfig_manager;
+    }
+
+    #[inline]
+    pub fn set_remoting_client(&mut self, remoting_client: RocketmqDefaultClient) {
+        self.remoting_client = remoting_client;
+    }
+}
