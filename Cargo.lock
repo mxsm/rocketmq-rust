@@ -2016,6 +2016,7 @@ dependencies = [
  "dirs",
  "dns-lookup",
  "lazy_static",
+ "log",
  "mockall",
  "num_cpus",
  "parking_lot",

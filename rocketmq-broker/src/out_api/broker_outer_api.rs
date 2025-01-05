@@ -20,6 +20,7 @@ use std::sync::Weak;
 
 use cheetah_string::CheetahString;
 use dns_lookup::lookup_host;
+use rocketmq_client_rust::consumer::pull_result::PullResult;
 use rocketmq_client_rust::producer::send_result::SendResult;
 use rocketmq_client_rust::producer::send_status::SendStatus;
 use rocketmq_common::common::broker::broker_config::BrokerIdentity;
@@ -489,6 +490,20 @@ impl BrokerOuterAPI {
             topic,
             &response,
         )
+    }
+
+    pub async fn pull_message_from_specific_broker_async(
+        &self,
+        _broker_name: &CheetahString,
+        _broker_addr: &CheetahString,
+        _consumer_group: &CheetahString,
+        _topic: &CheetahString,
+        _queue_id: i32,
+        _offset: i64,
+        _max_nums: i32,
+        _timeout_millis: u64,
+    ) -> Result<(Option<PullResult>, String, bool)> {
+        unimplemented!("pull_message_from_specific_broker_async")
     }
 }
 
