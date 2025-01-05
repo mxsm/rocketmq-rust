@@ -102,6 +102,104 @@ impl PopCheckPoint {
     pub fn get_revive_time(&self) -> i64 {
         self.pop_time + self.invisible_time
     }
+
+    // Getter methods
+    pub fn get_start_offset(&self) -> i64 {
+        self.start_offset
+    }
+
+    pub fn get_pop_time(&self) -> i64 {
+        self.pop_time
+    }
+
+    pub fn get_invisible_time(&self) -> i64 {
+        self.invisible_time
+    }
+
+    pub fn get_bit_map(&self) -> i32 {
+        self.bit_map
+    }
+
+    pub fn get_num(&self) -> u8 {
+        self.num
+    }
+
+    pub fn get_queue_id(&self) -> i32 {
+        self.queue_id
+    }
+
+    pub fn get_topic(&self) -> &CheetahString {
+        &self.topic
+    }
+
+    pub fn get_cid(&self) -> &CheetahString {
+        &self.cid
+    }
+
+    pub fn get_revive_offset(&self) -> i64 {
+        self.revive_offset
+    }
+
+    pub fn get_queue_offset_diff(&self) -> &Vec<i32> {
+        &self.queue_offset_diff
+    }
+
+    pub fn get_broker_name(&self) -> Option<&CheetahString> {
+        self.broker_name.as_ref()
+    }
+
+    pub fn get_re_put_times(&self) -> Option<&CheetahString> {
+        self.re_put_times.as_ref()
+    }
+
+    // Setter methods
+    pub fn set_start_offset(&mut self, start_offset: i64) {
+        self.start_offset = start_offset;
+    }
+
+    pub fn set_pop_time(&mut self, pop_time: i64) {
+        self.pop_time = pop_time;
+    }
+
+    pub fn set_invisible_time(&mut self, invisible_time: i64) {
+        self.invisible_time = invisible_time;
+    }
+
+    pub fn set_bit_map(&mut self, bit_map: i32) {
+        self.bit_map = bit_map;
+    }
+
+    pub fn set_num(&mut self, num: u8) {
+        self.num = num;
+    }
+
+    pub fn set_queue_id(&mut self, queue_id: i32) {
+        self.queue_id = queue_id;
+    }
+
+    pub fn set_topic(&mut self, topic: CheetahString) {
+        self.topic = topic;
+    }
+
+    pub fn set_cid(&mut self, cid: CheetahString) {
+        self.cid = cid;
+    }
+
+    pub fn set_revive_offset(&mut self, revive_offset: i64) {
+        self.revive_offset = revive_offset;
+    }
+
+    pub fn set_queue_offset_diff(&mut self, queue_offset_diff: Vec<i32>) {
+        self.queue_offset_diff = queue_offset_diff;
+    }
+
+    pub fn set_broker_name(&mut self, broker_name: Option<CheetahString>) {
+        self.broker_name = broker_name;
+    }
+
+    pub fn set_re_put_times(&mut self, re_put_times: Option<CheetahString>) {
+        self.re_put_times = re_put_times;
+    }
 }
 
 impl Ord for PopCheckPoint {

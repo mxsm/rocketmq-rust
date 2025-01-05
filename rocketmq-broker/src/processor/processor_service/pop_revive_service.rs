@@ -16,6 +16,7 @@
  */
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
@@ -53,6 +54,7 @@ use tracing::info;
 
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
+use crate::processor::pop_message_processor::PopMessageProcessor;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
@@ -61,7 +63,7 @@ pub struct PopReviveService<MS> {
     revive_topic: CheetahString,
     current_revive_message_timestamp: i64,
     should_run_pop_revive: bool,
-    inflight_revive_request_map: Arc<parking_lot::Mutex<BTreeMap<PopCheckPoint, (i64, bool)>>>,
+    inflight_revive_request_map: Arc<tokio::sync::Mutex<BTreeMap<PopCheckPoint, (i64, bool)>>>,
     revive_offset: i64,
     ck_rewrite_intervals_in_seconds: [i32; 17],
     broker_config: Arc<BrokerConfig>,
@@ -71,6 +73,7 @@ pub struct PopReviveService<MS> {
     message_store: ArcMut<MS>,
     should_start_time: Arc<AtomicU64>,
     subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
+    store_host: SocketAddr,
 }
 impl<MS: MessageStore> PopReviveService<MS> {
     pub fn new(
@@ -84,6 +87,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
         message_store: ArcMut<MS>,
         should_start_time: Arc<AtomicU64>,
         subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
+        store_host: SocketAddr,
     ) -> Self {
         Self {
             queue_id,
@@ -102,6 +106,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
             message_store,
             should_start_time,
             subscription_group_manager,
+            store_host,
         }
     }
 
@@ -663,15 +668,15 @@ impl<MS: MessageStore> PopReviveService<MS> {
 
             // may be need to optimize
             let mut remove = vec![];
-            let length = self.inflight_revive_request_map.lock().len();
+            let length = self.inflight_revive_request_map.lock().await.len();
             while length - remove.len() > 3 {
                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                let mut inflight_map = self.inflight_revive_request_map.lock();
+                let mut inflight_map = self.inflight_revive_request_map.lock().await;
                 let entry = inflight_map.first_entry().unwrap();
                 let pair = entry.get();
                 let old_ck = entry.key();
                 if !pair.1 && (get_current_millis() - pair.0 as u64 > 30 * 1000) {
-                    self.re_put_ck(old_ck, pair);
+                    self.re_put_ck(old_ck, pair).await;
                     remove.push(old_ck.clone());
                     info!(
                         "stay too long, remove from reviveRequestMap, {}, {:?}, {}, {}",
@@ -682,7 +687,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
                     );
                 }
             }
-            let mut inflight_revive_request_map = self.inflight_revive_request_map.lock();
+            let mut inflight_revive_request_map = self.inflight_revive_request_map.lock().await;
             for ck in remove {
                 inflight_revive_request_map.remove(&ck);
             }
@@ -712,9 +717,60 @@ impl<MS: MessageStore> PopReviveService<MS> {
         Ok(())
     }
 
-    fn re_put_ck(&self, _old_ck: &PopCheckPoint, _pair: &(i64, bool)) {
-        // Implement the logic to re-put checkpoint
-        unimplemented!()
+    async fn re_put_ck(&self, old_ck: &PopCheckPoint, pair: &(i64, bool)) {
+        let re_put_times = old_ck.parse_re_put_times();
+        if re_put_times >= self.ck_rewrite_intervals_in_seconds.len() as i32
+            && self.broker_config.skip_when_ck_re_put_reach_max_times
+        {
+            info!(
+                "rePut CK reach max times, drop it. {}, {}, {:?}, {}-{}, {}, {}, {}",
+                old_ck.get_topic(),
+                old_ck.get_cid(),
+                old_ck.get_broker_name(),
+                old_ck.get_queue_id(),
+                pair.0,
+                old_ck.get_pop_time(),
+                old_ck.get_invisible_time(),
+                re_put_times
+            );
+            return;
+        }
+
+        let mut new_ck = PopCheckPoint::default();
+        new_ck.set_bit_map(0);
+        new_ck.set_num(1);
+        new_ck.set_pop_time(old_ck.get_pop_time());
+        new_ck.set_invisible_time(old_ck.get_invisible_time());
+        new_ck.set_start_offset(pair.0);
+        new_ck.set_cid(old_ck.get_cid().clone());
+        new_ck.set_topic(old_ck.get_topic().clone());
+        new_ck.set_queue_id(old_ck.get_queue_id());
+        new_ck.set_broker_name(old_ck.get_broker_name().cloned());
+        new_ck.add_diff(0);
+        new_ck.set_re_put_times(Some(CheetahString::from_string(
+            (re_put_times + 1).to_string(),
+        )));
+
+        if old_ck.get_revive_time() <= get_current_millis() as i64 {
+            let interval_index =
+                if re_put_times >= self.ck_rewrite_intervals_in_seconds.len() as i32 {
+                    self.ck_rewrite_intervals_in_seconds.len() - 1
+                } else {
+                    re_put_times as usize
+                };
+            new_ck.set_invisible_time(
+                old_ck.get_invisible_time()
+                    + (self.ck_rewrite_intervals_in_seconds[interval_index] * 1000) as i64,
+            );
+        }
+
+        let ck_msg = PopMessageProcessor::<MS>::build_ck_msg(
+            self.store_host,
+            &new_ck,
+            self.queue_id,
+            self.revive_topic.clone(),
+        );
+        self.message_store.mut_from_ref().put_message(ck_msg).await;
     }
 
     fn revive_msg_from_ck(&self, _pop_check_point: &PopCheckPoint) {
