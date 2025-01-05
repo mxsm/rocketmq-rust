@@ -14,13 +14,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::future::Future;
+use std::ops::Deref;
+use std::pin::Pin;
 use std::sync::Arc;
 
+use bytes::Bytes;
 use cheetah_string::CheetahString;
+use rocketmq_client_rust::consumer::pull_status::PullStatus;
 use rocketmq_client_rust::producer::send_result::SendResult;
 use rocketmq_client_rust::producer::send_status::SendStatus;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::hasher::string_hasher::JavaStringHasher;
+use rocketmq_common::common::message::message_decoder;
+use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::MessageConst;
@@ -28,7 +35,9 @@ use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all;
 use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_rust::ArcMut;
+use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_result::PutMessageResult;
+use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::log_file::MessageStore;
 use tracing::error;
@@ -40,6 +49,8 @@ use crate::transaction::queue::transactional_message_util::TransactionalMessageU
 
 const SEND_TIMEOUT: u64 = 3_000;
 const DEFAULT_PULL_TIMEOUT_MILLIS: u64 = 10_000;
+type FutureResult = Pin<Box<dyn Future<Output = (Option<MessageExt>, String, bool)>>>;
+
 ///### RocketMQ's EscapeBridge for Dead Letter Queue (DLQ) Mechanism
 ///
 /// In the context of message passing within RocketMQ, the `EscapeBridge` primarily handles the Dead
@@ -385,6 +396,160 @@ where
             PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable)
         }
     }
+
+    pub fn get_message_async(
+        &self,
+        topic: &CheetahString,
+        offset: i64,
+        queue_id: i32,
+        broker_name: &CheetahString,
+        de_compress_body: bool,
+    ) -> FutureResult {
+        let message_store = self.message_store.clone().unwrap();
+        let inner_consumer_group_name = self.inner_consumer_group_name.clone();
+        let topic = topic.clone();
+        let broker_name = broker_name.clone();
+
+        if self.broker_config.broker_identity.broker_name == broker_name {
+            Box::pin(async move {
+                let result = message_store
+                    .get_message(
+                        &inner_consumer_group_name,
+                        &topic,
+                        queue_id,
+                        offset,
+                        1,
+                        128 * 1024 * 1024,
+                        None,
+                    )
+                    .await;
+                if result.is_none() {
+                    log::warn!(
+                        "getMessageResult is null, innerConsumerGroupName {}, topic {}, offset \
+                         {}, queueId {}",
+                        inner_consumer_group_name,
+                        topic,
+                        offset,
+                        queue_id
+                    );
+                    return (None, "getMessageResult is null".to_string(), false);
+                }
+                let result1 = result.unwrap();
+                let status = result1.status();
+                let mut list = decode_msg_list(result1, de_compress_body);
+                if list.is_empty() {
+                    let need_retry = status.unwrap() == GetMessageStatus::OffsetFoundNull;
+                    //   && message_store.is_tiered_message_store();
+                    log::warn!(
+                        "Can not get msg, topic {}, offset {}, queueId {}, needRetry {},",
+                        topic,
+                        offset,
+                        queue_id,
+                        need_retry,
+                        //result.unwrap()
+                    );
+                    return (None, "Can not get msg".to_string(), need_retry);
+                }
+                (Some(list.remove(0)), "".to_string(), false)
+            })
+        } else {
+            self.get_message_from_remote_async(&topic, offset, queue_id, &broker_name)
+        }
+    }
+
+    fn get_message_from_remote_async(
+        &self,
+        topic: &CheetahString,
+        offset: i64,
+        queue_id: i32,
+        broker_name: &CheetahString,
+    ) -> FutureResult {
+        let topic_route_info_manager = self.topic_route_info_manager.clone();
+        let broker_outer_api = self.broker_outer_api.clone();
+        let inner_consumer_group_name = self.inner_consumer_group_name.clone();
+        let topic = topic.clone();
+        let broker_name = broker_name.clone();
+
+        Box::pin(async move {
+            let mut broker_addr = topic_route_info_manager.find_broker_address_in_subscribe(
+                Some(&broker_name),
+                0,
+                false,
+            );
+
+            if broker_addr.is_none() {
+                topic_route_info_manager
+                    .update_topic_route_info_from_name_server_ext(&topic, true, false)
+                    .await;
+                broker_addr = topic_route_info_manager.find_broker_address_in_subscribe(
+                    Some(&broker_name),
+                    0,
+                    false,
+                );
+
+                if broker_addr.is_none() {
+                    warn!(
+                        "can't find broker address for topic {}, {}",
+                        topic, broker_name
+                    );
+                    return (None, "brokerAddress not found".to_string(), true);
+                }
+            }
+
+            let broker_addr = broker_addr.unwrap();
+            match broker_outer_api
+                .pull_message_from_specific_broker_async(
+                    &broker_name,
+                    &broker_addr,
+                    &inner_consumer_group_name,
+                    &topic,
+                    queue_id,
+                    offset,
+                    1,
+                    10000,
+                )
+                .await
+            {
+                Ok(pull_result) => {
+                    if let Some(result) = pull_result.0 {
+                        if result.pull_status == PullStatus::Found
+                            && result
+                                .msg_found_list
+                                .as_ref()
+                                .is_some_and(|value| !value.is_empty())
+                        {
+                            return (
+                                Some(result.msg_found_list.unwrap()[0].clone().deref().clone()),
+                                "".to_string(),
+                                false,
+                            );
+                        }
+                    }
+                }
+                Err(_e) => {}
+            }
+
+            (None, "Get message from remote failed".to_string(), true)
+        })
+    }
+}
+
+fn decode_msg_list(
+    get_message_result: GetMessageResult,
+    de_compress_body: bool,
+) -> Vec<MessageExt> {
+    let mut found_list = Vec::new();
+    for bb in get_message_result.message_mapped_list() {
+        let data = &bb.mapped_file.as_ref().unwrap().get_mapped_file()
+            [bb.start_offset as usize..(bb.start_offset + bb.size as u64) as usize];
+        let mut bytes = Bytes::copy_from_slice(data);
+        let msg_ext =
+            message_decoder::decode(&mut bytes, true, de_compress_body, false, false, false);
+        if let Some(msg_ext) = msg_ext {
+            found_list.push(msg_ext);
+        }
+    }
+    found_list
 }
 
 #[inline]
