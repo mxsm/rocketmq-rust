@@ -20,7 +20,6 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
 use std::ptr;
-use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
@@ -47,6 +46,8 @@ use crate::base::put_message_context::PutMessageContext;
 use crate::base::select_result::SelectMappedBufferResult;
 use crate::base::transient_store_pool::TransientStorePool;
 use crate::config::flush_disk_type::FlushDiskType;
+use crate::log_file::mapped_file::reference_resource::ReferenceResource;
+use crate::log_file::mapped_file::reference_resource_impl::ReferenceResourceImpl;
 use crate::log_file::mapped_file::MappedFile;
 
 pub const OS_PAGE_SIZE: u64 = 1024 * 4;
@@ -55,7 +56,7 @@ static TOTAL_MAPPED_VIRTUAL_MEMORY: AtomicI64 = AtomicI64::new(0);
 static TOTAL_MAPPED_FILES: AtomicI32 = AtomicI32::new(0);
 
 pub struct DefaultMappedFile {
-    reference_resource: ReferenceResource,
+    reference_resource: ReferenceResourceImpl,
     file: File,
     mmapped_file: SyncUnsafeCellWrapper<MmapMut>,
     transient_store_pool: Option<TransientStorePool>,
@@ -120,12 +121,7 @@ impl DefaultMappedFile {
 
         let mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
         Self {
-            reference_resource: ReferenceResource {
-                ref_count: AtomicI64::new(1),
-                available: AtomicBool::new(true),
-                cleanup_over: AtomicBool::new(false),
-                first_shutdown_timestamp: AtomicI64::new(0),
-            },
+            reference_resource: ReferenceResourceImpl::new(),
             file,
             mmapped_file: SyncUnsafeCellWrapper::new(mmap),
             file_name,
@@ -192,12 +188,7 @@ impl DefaultMappedFile {
 
         let mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
         Self {
-            reference_resource: ReferenceResource {
-                ref_count: AtomicI64::new(1),
-                available: AtomicBool::new(true),
-                cleanup_over: AtomicBool::new(false),
-                first_shutdown_timestamp: AtomicI64::new(0),
-            },
+            reference_resource: ReferenceResourceImpl::new(),
             file,
             file_name,
             file_from_offset,
@@ -243,7 +234,7 @@ impl MappedFile for DefaultMappedFile {
 
     #[inline]
     fn is_available(&self) -> bool {
-        self.reference_resource.available.load(Ordering::Relaxed)
+        self.reference_resource.is_available()
     }
 
     #[inline]
@@ -484,7 +475,7 @@ impl MappedFile for DefaultMappedFile {
     ) -> Option<SelectMappedBufferResult> {
         let read_position = self.get_read_position();
         if pos + size <= read_position {
-            if self.hold() {
+            if MappedFile::hold(self.as_ref()) {
                 self.mapped_byte_buffer_access_count_since_last_swap
                     .fetch_add(1, Ordering::SeqCst);
                 Some(SelectMappedBufferResult {
@@ -509,7 +500,7 @@ impl MappedFile for DefaultMappedFile {
     #[inline]
     fn select_mapped_buffer(self: Arc<Self>, pos: i32) -> Option<SelectMappedBufferResult> {
         let read_position = self.get_read_position();
-        if pos < read_position && read_position > 0 && self.hold() {
+        if pos < read_position && read_position > 0 && MappedFile::hold(self.as_ref()) {
             Some(SelectMappedBufferResult {
                 start_offset: self.get_file_from_offset() + pos as u64,
                 size: read_position - pos,
@@ -546,7 +537,7 @@ impl MappedFile for DefaultMappedFile {
         let read_position = self.get_read_position();
         let read_end_position = pos + size;
         if read_end_position <= read_position as usize {
-            if self.hold() {
+            if MappedFile::hold(self) {
                 let buffer = BytesMut::from(&self.get_mapped_file()[pos..read_end_position]);
                 Some(buffer.freeze())
             } else {
@@ -572,51 +563,13 @@ impl MappedFile for DefaultMappedFile {
     }
 
     #[inline]
-    fn shutdown(&self, interval_forcibly: i64) {
-        if self.reference_resource.available.load(Ordering::Relaxed) {
-            self.reference_resource
-                .available
-                .store(false, Ordering::Relaxed);
-            self.reference_resource.first_shutdown_timestamp.store(
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as i64,
-                Ordering::Relaxed,
-            );
-            self.release();
-        } else if self.reference_resource.get_ref_count() > 0
-            && (std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as i64
-                - self
-                    .reference_resource
-                    .first_shutdown_timestamp
-                    .load(Ordering::Relaxed))
-                >= interval_forcibly
-        {
-            self.reference_resource.ref_count.store(
-                -1000 - self.reference_resource.get_ref_count(),
-                Ordering::Relaxed,
-            );
-            self.release();
-        }
+    fn shutdown(&self, interval_forcibly: u64) {
+        self.reference_resource.shutdown(interval_forcibly);
     }
 
     #[inline]
     fn release(&self) {
-        let value = self
-            .reference_resource
-            .ref_count
-            .fetch_sub(1, Ordering::SeqCst)
-            - 1;
-        if value > 0 {
-            return;
-        }
-        self.reference_resource
-            .cleanup_over
-            .store(self.cleanup(value), Ordering::SeqCst);
+        self.reference_resource.release();
     }
 
     #[inline]
@@ -766,7 +719,7 @@ impl DefaultMappedFile {
 
     #[inline]
     fn cleanup(&self, current_ref: i64) -> bool {
-        if self.is_available() {
+        if MappedFile::is_available(self) {
             error!(
                 "this file[REF:{}] {} have not shutdown, stop unmapping.",
                 self.file_name, current_ref
@@ -788,55 +741,32 @@ impl DefaultMappedFile {
     }
 }
 
-pub struct ReferenceResource {
-    ref_count: AtomicI64,
-    available: AtomicBool,
-    cleanup_over: AtomicBool,
-    first_shutdown_timestamp: AtomicI64,
-}
-
-impl ReferenceResource {
-    #[inline]
-    pub fn new() -> Self {
-        Self {
-            ref_count: AtomicI64::new(1),
-            available: AtomicBool::new(true),
-            cleanup_over: AtomicBool::new(false),
-            first_shutdown_timestamp: AtomicI64::new(0),
-        }
+impl ReferenceResource for DefaultMappedFile {
+    fn hold(&self) -> bool {
+        self.reference_resource.hold()
     }
 
-    #[inline]
-    pub fn hold(&self) -> bool {
-        if self.is_available() {
-            if self.ref_count.fetch_add(1, Ordering::SeqCst) > 0 {
-                return true;
-            } else {
-                self.ref_count.fetch_sub(1, Ordering::SeqCst);
-            }
-        }
-        false
+    fn is_available(&self) -> bool {
+        self.reference_resource.is_available()
     }
 
-    #[inline]
-    pub fn is_available(&self) -> bool {
-        self.available.load(Ordering::Relaxed)
+    fn shutdown(&self, interval_forcibly: u64) {
+        self.reference_resource.shutdown(interval_forcibly)
     }
 
-    #[inline]
-    pub fn get_ref_count(&self) -> i64 {
-        self.ref_count.load(Ordering::Relaxed)
+    fn release(&self) {
+        self.reference_resource.release()
     }
 
-    #[inline]
-    pub fn is_cleanup_over(&self) -> bool {
-        self.ref_count.load(Ordering::Relaxed) <= 0 && self.cleanup_over.load(Ordering::Relaxed)
+    fn get_ref_count(&self) -> i64 {
+        self.reference_resource.get_ref_count()
     }
-}
 
-impl Default for ReferenceResource {
-    #[inline]
-    fn default() -> Self {
-        Self::new()
+    fn cleanup(&self, current_ref: i64) -> bool {
+        self.cleanup(current_ref)
+    }
+
+    fn is_cleanup_over(&self) -> bool {
+        self.reference_resource.is_cleanup_over()
     }
 }
