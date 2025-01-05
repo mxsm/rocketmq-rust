@@ -57,17 +57,16 @@ use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_rust::ArcMut;
 use tracing::warn;
 
+use crate::bootstrap::NameServerRuntimeInner;
 use crate::namesrv_error::NamesrvError::MQNamesrvError;
 use crate::namesrv_error::NamesrvRemotingErrorWithMessage;
 use crate::processor::NAMESPACE_ORDER_TOPIC_CONFIG;
-use crate::route::route_info_manager::RouteInfoManager;
-use crate::KVConfigManager;
 
 pub struct DefaultRequestProcessor {
-    route_info_manager: RouteInfoManager,
-    kvconfig_manager: KVConfigManager,
+    name_server_runtime_inner: ArcMut<NameServerRuntimeInner>,
 }
 
 impl DefaultRequestProcessor {
@@ -136,11 +135,13 @@ impl DefaultRequestProcessor {
             .set_remark(CheetahString::from_static_str("namespace or key is empty")));
         }
 
-        self.kvconfig_manager.put_kv_config(
-            request_header.namespace.clone(),
-            request_header.key.clone(),
-            request_header.value.clone(),
-        );
+        self.name_server_runtime_inner
+            .kvconfig_manager_mut()
+            .put_kv_config(
+                request_header.namespace.clone(),
+                request_header.key.clone(),
+                request_header.value.clone(),
+            );
         Ok(RemotingCommand::create_response_command())
     }
 
@@ -155,7 +156,8 @@ impl DefaultRequestProcessor {
             })?;
 
         let value = self
-            .kvconfig_manager
+            .name_server_runtime_inner
+            .kvconfig_manager()
             .get_kvconfig(&request_header.namespace, &request_header.key);
 
         if value.is_some() {
@@ -183,7 +185,8 @@ impl DefaultRequestProcessor {
                 )
             })?;
 
-        self.kvconfig_manager
+        self.name_server_runtime_inner
+            .kvconfig_manager_mut()
             .delete_kv_config(&request_header.namespace, &request_header.key);
         Ok(RemotingCommand::create_response_command())
     }
@@ -202,20 +205,26 @@ impl DefaultRequestProcessor {
             })?;
         let data_version = DataVersion::decode(request.get_body().expect("body is empty"))
             .expect("decode DataVersion failed");
-        let changed = self.route_info_manager.is_broker_topic_config_changed(
-            &request_header.cluster_name,
-            &request_header.broker_addr,
-            &data_version,
-        );
+        let changed = self
+            .name_server_runtime_inner
+            .route_info_manager()
+            .is_broker_topic_config_changed(
+                &request_header.cluster_name,
+                &request_header.broker_addr,
+                &data_version,
+            );
 
-        self.route_info_manager.update_broker_info_update_timestamp(
-            request_header.cluster_name.clone(),
-            request_header.broker_addr.clone(),
-        );
+        self.name_server_runtime_inner
+            .route_info_manager_mut()
+            .update_broker_info_update_timestamp(
+                request_header.cluster_name.clone(),
+                request_header.broker_addr.clone(),
+            );
         let mut command = RemotingCommand::create_response_command()
             .set_command_custom_header(QueryDataVersionResponseHeader::new(changed));
         if let Some(value) = self
-            .route_info_manager
+            .name_server_runtime_inner
+            .route_info_manager()
             .query_broker_topic_config(request_header.cluster_name, request_header.broker_addr)
         {
             command = command.set_body(value.encode().expect("encode DataVersion failed"));
@@ -226,10 +235,9 @@ impl DefaultRequestProcessor {
 
 #[allow(clippy::new_without_default)]
 impl DefaultRequestProcessor {
-    pub fn new(route_info_manager: RouteInfoManager, kvconfig_manager: KVConfigManager) -> Self {
+    pub(crate) fn new(name_server_runtime_inner: ArcMut<NameServerRuntimeInner>) -> Self {
         Self {
-            route_info_manager,
-            kvconfig_manager,
+            name_server_runtime_inner,
         }
     }
 }
@@ -268,36 +276,40 @@ impl DefaultRequestProcessor {
         } else {
             topic_config_wrapper = extract_register_topic_config_from_request(&request);
         }
-        let result = self.route_info_manager.register_broker(
-            request_header.cluster_name,
-            request_header.broker_addr,
-            request_header.broker_name,
-            request_header.broker_id,
-            request_header.ha_server_addr,
-            request
-                .ext_fields()
-                .and_then(|map| map.get(mix_all::ZONE_NAME).cloned()),
-            request_header.heartbeat_timeout_millis,
-            request_header.enable_acting_master,
-            topic_config_wrapper,
-            filter_server_list,
-            remote_addr,
-        );
+        let result = self
+            .name_server_runtime_inner
+            .route_info_manager()
+            .register_broker(
+                request_header.cluster_name,
+                request_header.broker_addr,
+                request_header.broker_name,
+                request_header.broker_id,
+                request_header.ha_server_addr,
+                request
+                    .ext_fields()
+                    .and_then(|map| map.get(mix_all::ZONE_NAME).cloned()),
+                request_header.heartbeat_timeout_millis,
+                request_header.enable_acting_master,
+                topic_config_wrapper,
+                filter_server_list,
+                remote_addr,
+            );
         if result.is_none() {
             return Ok(response_command
                 .set_code(RemotingSysResponseCode::SystemError)
                 .set_remark(CheetahString::from_static_str("register broker failed")));
         }
         if self
-            .kvconfig_manager
-            .namesrv_config
+            .name_server_runtime_inner
+            .name_server_config()
             .return_order_topic_config_to_broker
         {
-            if let Some(value) =
-                self.kvconfig_manager
-                    .get_kv_list_by_namespace(&CheetahString::from_static_str(
-                        NAMESPACE_ORDER_TOPIC_CONFIG,
-                    ))
+            if let Some(value) = self
+                .name_server_runtime_inner
+                .kvconfig_manager()
+                .get_kv_list_by_namespace(&CheetahString::from_static_str(
+                    NAMESPACE_ORDER_TOPIC_CONFIG,
+                ))
             {
                 response_command = response_command.set_body(value);
             }
@@ -323,7 +335,8 @@ impl DefaultRequestProcessor {
                     "decode UnRegisterBrokerRequestHeader fail".to_string(),
                 )
             })?;
-        self.route_info_manager
+        self.name_server_runtime_inner
+            .route_info_manager_mut()
             .un_register_broker(vec![request_header]);
         Ok(RemotingCommand::create_response_command())
     }
@@ -342,10 +355,12 @@ impl DefaultRequestProcessor {
                     "decode BrokerHeartbeatRequestHeader fail".to_string(),
                 )
             })?;
-        self.route_info_manager.update_broker_info_update_timestamp(
-            request_header.cluster_name,
-            request_header.broker_addr,
-        );
+        self.name_server_runtime_inner
+            .route_info_manager_mut()
+            .update_broker_info_update_timestamp(
+                request_header.cluster_name,
+                request_header.broker_addr,
+            );
         Ok(RemotingCommand::create_response_command())
     }
 
@@ -363,7 +378,8 @@ impl DefaultRequestProcessor {
             })?;
 
         let broker_member_group = self
-            .route_info_manager
+            .name_server_runtime_inner
+            .route_info_manager_mut()
             .get_broker_member_group(&request_header.cluster_name, &request_header.broker_name);
         let response_body = GetBrokerMemberGroupResponseBody {
             broker_member_group,
@@ -379,7 +395,8 @@ impl DefaultRequestProcessor {
 
     fn get_broker_cluster_info(&self, _request: RemotingCommand) -> crate::Result<RemotingCommand> {
         let vec = self
-            .route_info_manager
+            .name_server_runtime_inner
+            .route_info_manager()
             .get_all_cluster_info()
             .encode()
             .map_err(|e| MQNamesrvError(format!("encode ClusterInfo failed {:?}", e)))?;
@@ -402,7 +419,8 @@ impl DefaultRequestProcessor {
                 )
             })?;
         let wipe_topic_cnt = self
-            .route_info_manager
+            .name_server_runtime_inner
+            .route_info_manager_mut()
             .wipe_write_perm_of_broker_by_lock(&request_header.broker_name);
         Ok(RemotingCommand::create_response_command()
             .set_command_custom_header(WipeWritePermOfBrokerResponseHeader::new(wipe_topic_cnt)))
@@ -421,7 +439,8 @@ impl DefaultRequestProcessor {
                 )
             })?;
         let add_topic_cnt = self
-            .route_info_manager
+            .name_server_runtime_inner
+            .route_info_manager_mut()
             .add_write_perm_of_broker_by_lock(&request_header.broker_name);
         Ok(RemotingCommand::create_response_command()
             .set_command_custom_header(AddWritePermOfBrokerResponseHeader::new(add_topic_cnt)))
@@ -431,8 +450,15 @@ impl DefaultRequestProcessor {
         &self,
         _request: RemotingCommand,
     ) -> crate::Result<RemotingCommand> {
-        if self.route_info_manager.namesrv_config.enable_all_topic_list {
-            let topics = self.route_info_manager.get_all_topic_list();
+        if self
+            .name_server_runtime_inner
+            .name_server_config()
+            .enable_all_topic_list
+        {
+            let topics = self
+                .name_server_runtime_inner
+                .route_info_manager()
+                .get_all_topic_list();
             let body = topics
                 .encode()
                 .map_err(|e| MQNamesrvError(format!("encode TopicList failed {:?}", e)))?;
@@ -458,7 +484,8 @@ impl DefaultRequestProcessor {
                     "decode DeleteTopicFromNamesrvRequestHeader fail".to_string(),
                 )
             })?;
-        self.route_info_manager
+        self.name_server_runtime_inner
+            .route_info_manager_mut()
             .delete_topic(request_header.topic, request_header.cluster_name);
         Ok(RemotingCommand::create_response_command())
     }
@@ -478,7 +505,8 @@ impl DefaultRequestProcessor {
         if let Some(ref body) = request.body() {
             let topic_route_data = TopicRouteData::decode(body).unwrap_or_default();
             if !topic_route_data.queue_datas.is_empty() {
-                self.route_info_manager
+                self.name_server_runtime_inner
+                    .route_info_manager_mut()
                     .register_topic(request_header.topic, topic_route_data.queue_datas)
             }
         }
@@ -495,7 +523,8 @@ impl DefaultRequestProcessor {
                 )
             })?;
         let value = self
-            .kvconfig_manager
+            .name_server_runtime_inner
+            .kvconfig_manager()
             .get_kv_list_by_namespace(&request_header.namespace);
         if let Some(value) = value {
             return Ok(RemotingCommand::create_response_command().set_body(value));
@@ -510,7 +539,11 @@ impl DefaultRequestProcessor {
     }
 
     fn get_topics_by_cluster(&self, request: RemotingCommand) -> crate::Result<RemotingCommand> {
-        if !self.route_info_manager.namesrv_config.enable_topic_list {
+        if !self
+            .name_server_runtime_inner
+            .name_server_config()
+            .enable_topic_list
+        {
             return Ok(RemotingCommand::create_response_command_with_code(
                 RemotingSysResponseCode::SystemError,
             )
@@ -526,7 +559,8 @@ impl DefaultRequestProcessor {
                 )
             })?;
         let topics_by_cluster = self
-            .route_info_manager
+            .name_server_runtime_inner
+            .route_info_manager()
             .get_topics_by_cluster(&request_header.cluster);
         let body = topics_by_cluster
             .encode()
@@ -538,7 +572,10 @@ impl DefaultRequestProcessor {
         &self,
         _request: RemotingCommand,
     ) -> crate::Result<RemotingCommand> {
-        let topic_list = self.route_info_manager.get_system_topic_list();
+        let topic_list = self
+            .name_server_runtime_inner
+            .route_info_manager()
+            .get_system_topic_list();
         let body = topic_list
             .encode()
             .map_err(|e| MQNamesrvError(format!("encode TopicList failed {:?}", e)))?;
@@ -546,8 +583,15 @@ impl DefaultRequestProcessor {
     }
 
     fn get_unit_topic_list(&self, _request: RemotingCommand) -> crate::Result<RemotingCommand> {
-        if self.route_info_manager.namesrv_config.enable_topic_list {
-            let topic_list = self.route_info_manager.get_unit_topics();
+        if self
+            .name_server_runtime_inner
+            .name_server_config()
+            .enable_topic_list
+        {
+            let topic_list = self
+                .name_server_runtime_inner
+                .route_info_manager()
+                .get_unit_topics();
             let body = topic_list
                 .encode()
                 .map_err(|e| MQNamesrvError(format!("encode TopicList failed {:?}", e)))?;
@@ -565,8 +609,15 @@ impl DefaultRequestProcessor {
         &self,
         _request: RemotingCommand,
     ) -> crate::Result<RemotingCommand> {
-        if self.route_info_manager.namesrv_config.enable_topic_list {
-            let topic_list = self.route_info_manager.get_has_unit_sub_topic_list();
+        if self
+            .name_server_runtime_inner
+            .name_server_config()
+            .enable_topic_list
+        {
+            let topic_list = self
+                .name_server_runtime_inner
+                .route_info_manager()
+                .get_has_unit_sub_topic_list();
             let body = topic_list
                 .encode()
                 .map_err(|e| MQNamesrvError(format!("encode TopicList failed {:?}", e)))?;
@@ -584,9 +635,14 @@ impl DefaultRequestProcessor {
         &self,
         _request: RemotingCommand,
     ) -> crate::Result<RemotingCommand> {
-        if self.route_info_manager.namesrv_config.enable_topic_list {
+        if self
+            .name_server_runtime_inner
+            .name_server_config()
+            .enable_topic_list
+        {
             let topic_list = self
-                .route_info_manager
+                .name_server_runtime_inner
+                .route_info_manager()
                 .get_has_unit_sub_un_unit_topic_list();
             return Ok(RemotingCommand::create_response_command()
                 .set_body(topic_list.encode().expect("encode TopicList failed")));
@@ -623,8 +679,8 @@ impl DefaultRequestProcessor {
             if validate_blacklist_config_exist(
                 &properties,
                 &self
-                    .kvconfig_manager
-                    .get_namesrv_config()
+                    .name_server_runtime_inner
+                    .name_server_config()
                     .get_config_blacklist(),
             ) {
                 return Ok(RemotingCommand::create_response_command_with_code(
@@ -633,7 +689,10 @@ impl DefaultRequestProcessor {
                 .set_remark("Cannot update config in blacklist.".to_string()));
             }
 
-            let result = self.kvconfig_manager.update_namesrv_config(properties);
+            let result = self
+                .name_server_runtime_inner
+                .kvconfig_manager_mut()
+                .update_namesrv_config(properties);
             if let Err(e) = result {
                 return Ok(RemotingCommand::create_response_command_with_code(
                     RemotingSysResponseCode::SystemError,
@@ -649,7 +708,7 @@ impl DefaultRequestProcessor {
     }
 
     fn get_config(&mut self, _request: RemotingCommand) -> crate::Result<RemotingCommand> {
-        let config = self.kvconfig_manager.get_namesrv_config();
+        let config = self.name_server_runtime_inner.name_server_config();
         let result = match config.get_all_configs_format_string() {
             Ok(content) => {
                 let response = RemotingCommand::create_response_command_with_code_remark(
