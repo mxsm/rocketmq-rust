@@ -32,6 +32,8 @@ use crate::base::select_result::SelectMappedBufferResult;
 use crate::config::flush_disk_type::FlushDiskType;
 
 pub mod default_mapped_file_impl;
+pub(crate) mod reference_resource;
+mod reference_resource_impl;
 
 pub trait MappedFile {
     /// Returns the file name of the mapped file.
