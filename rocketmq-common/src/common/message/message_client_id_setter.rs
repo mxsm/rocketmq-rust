@@ -171,7 +171,7 @@ mod tests {
     fn create_fake_ip_generates_valid_ip() {
         let fake_ip = create_fake_ip();
         assert_eq!(fake_ip.len(), 4);
-        assert!(fake_ip.iter().all(|&byte| byte >= 0 && byte <= 255));
+        assert!(fake_ip.iter().all(|&byte| true));
     }
 
     #[test]
