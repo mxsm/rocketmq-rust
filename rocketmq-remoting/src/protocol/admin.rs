@@ -17,5 +17,6 @@
 
 pub mod consume_stats;
 pub mod offset_wrapper;
+pub mod rollback_stats;
 pub mod topic_offset;
 pub mod topic_stats_table;
