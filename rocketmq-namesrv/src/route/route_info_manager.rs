@@ -64,7 +64,7 @@ type ClusterAddrTable =
     ArcMut<HashMap<CheetahString /* clusterName */, HashSet<CheetahString /* brokerName */>>>;
 type BrokerLiveTable = ArcMut<HashMap<BrokerAddrInfo /* brokerAddr */, BrokerLiveInfo>>;
 type FilterServerTable =
-    ArcMut<HashMap<BrokerAddrInfo /* brokerAddr */, Vec<String> /* Filter Server */>>;
+    ArcMut<HashMap<BrokerAddrInfo /* brokerAddr */, Vec<CheetahString> /* Filter Server */>>;
 type TopicQueueMappingInfoTable = ArcMut<
     HashMap<
         CheetahString, /* topic */
@@ -113,7 +113,7 @@ impl RouteInfoManager {
         _timeout_millis: Option<i64>,
         enable_acting_master: Option<bool>,
         topic_config_serialize_wrapper: TopicConfigAndMappingSerializeWrapper,
-        filter_server_list: Vec<String>,
+        filter_server_list: Vec<CheetahString>,
         remote_addr: SocketAddr,
     ) -> Option<RegisterBrokerResult> {
         let mut result = RegisterBrokerResult::default();
@@ -405,14 +405,9 @@ impl RouteInfoManager {
                             if let Some(filter_server_list) =
                                 self.filter_server_table.get(&broker_addr_info)
                             {
-                                topic_route_data.filter_server_table.insert(
-                                    broker_addr.clone(),
-                                    filter_server_list
-                                        .clone()
-                                        .into_iter()
-                                        .map(CheetahString::from_string)
-                                        .collect(),
-                                );
+                                topic_route_data
+                                    .filter_server_table
+                                    .insert(broker_addr.clone(), filter_server_list.clone());
                             }
                         }
                     }
