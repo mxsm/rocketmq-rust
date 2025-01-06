@@ -21,6 +21,7 @@ use bytes::Buf;
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
+use cheetah_string::CheetahString;
 use flate2::read::DeflateDecoder;
 use flate2::write::DeflateEncoder;
 use flate2::Compression;
@@ -41,13 +42,13 @@ pub struct RegisterBrokerBody {
     #[serde(rename = "topicConfigSerializeWrapper")]
     pub topic_config_serialize_wrapper: TopicConfigAndMappingSerializeWrapper,
     #[serde(rename = "filterServerList")]
-    pub filter_server_list: Vec<String>,
+    pub filter_server_list: Vec<CheetahString>,
 }
 
 impl RegisterBrokerBody {
     pub fn new(
         topic_config_serialize_wrapper: TopicConfigAndMappingSerializeWrapper,
-        filter_server_list: Vec<String>,
+        filter_server_list: Vec<CheetahString>,
     ) -> Self {
         RegisterBrokerBody {
             topic_config_serialize_wrapper,
@@ -59,7 +60,7 @@ impl RegisterBrokerBody {
         &self.topic_config_serialize_wrapper
     }
 
-    pub fn filter_server_list(&self) -> &Vec<String> {
+    pub fn filter_server_list(&self) -> &Vec<CheetahString> {
         &self.filter_server_list
     }
 
@@ -186,7 +187,7 @@ mod tests {
     #[test]
     fn encode_without_compression() {
         let wrapper = TopicConfigAndMappingSerializeWrapper::default();
-        let filter_list = vec!["filter1".to_string(), "filter2".to_string()];
+        let filter_list = vec!["filter1".into(), "filter2".into()];
         let body = RegisterBrokerBody::new(wrapper, filter_list);
         let encoded = body.encode(false);
         assert!(!encoded.is_empty());
@@ -195,7 +196,7 @@ mod tests {
     #[test]
     fn encode_with_compression() {
         let wrapper = TopicConfigAndMappingSerializeWrapper::default();
-        let filter_list = vec!["filter1".to_string(), "filter2".to_string()];
+        let filter_list = vec!["filter1".into(), "filter2".into()];
         let body = RegisterBrokerBody::new(wrapper, filter_list);
         let encoded = body.encode(true);
         assert!(!encoded.is_empty());
@@ -204,7 +205,7 @@ mod tests {
     #[test]
     fn decode_without_compression() {
         let wrapper = TopicConfigAndMappingSerializeWrapper::default();
-        let filter_list = vec!["filter1".to_string(), "filter2".to_string()];
+        let filter_list = vec!["filter1".into(), "filter2".into()];
         let body = RegisterBrokerBody::new(wrapper, filter_list);
         let encoded = body.encode(false);
         let decoded =

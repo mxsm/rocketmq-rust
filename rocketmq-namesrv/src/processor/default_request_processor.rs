@@ -265,7 +265,7 @@ impl DefaultRequestProcessor {
         let mut response_command = RemotingCommand::create_response_command();
         let broker_version = RocketMqVersion::try_from(request.version()).expect("invalid version");
         let topic_config_wrapper;
-        let mut filter_server_list = Vec::<String>::new();
+        let mut filter_server_list = Vec::new();
         if broker_version as usize >= RocketMqVersion::V3011 as usize {
             let register_broker_body =
                 extract_register_broker_body_from_request(&request, &request_header);

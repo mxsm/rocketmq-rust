@@ -181,7 +181,7 @@ impl BrokerOuterAPI {
         broker_id: u64,
         ha_server_addr: CheetahString,
         topic_config_wrapper: TopicConfigAndMappingSerializeWrapper,
-        filter_server_list: Vec<String>,
+        filter_server_list: Vec<CheetahString>,
         oneway: bool,
         timeout_mills: u64,
         enable_acting_master: bool,
