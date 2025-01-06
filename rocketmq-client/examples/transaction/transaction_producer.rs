@@ -85,7 +85,7 @@ impl TransactionListener for TransactionListenerImpl {
     fn execute_local_transaction(
         &self,
         msg: &Message,
-        arg: Option<&(dyn Any + Send + Sync)>,
+        _arg: Option<&(dyn Any + Send + Sync)>,
     ) -> LocalTransactionState {
         let value = self
             .transaction_index
@@ -100,7 +100,7 @@ impl TransactionListener for TransactionListenerImpl {
     }
 
     fn check_local_transaction(&self, msg: &MessageExt) -> LocalTransactionState {
-        let mut guard = self.local_trans.lock();
+        let guard = self.local_trans.lock();
         let status = guard
             .get(&msg.get_transaction_id().cloned().unwrap_or_default())
             .unwrap_or(&-1);
