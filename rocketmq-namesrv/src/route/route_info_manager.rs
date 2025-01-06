@@ -15,6 +15,46 @@
  * limitations under the License.
  */
 
+//! `RouteInfoManager` is a core component in Apache RocketMQ, primarily responsible for
+//! managing and maintaining the routing information of the cluster. It ensures correct message
+//! routing and load balancing within the system. Below are its main functions:
+//!
+//! ### 1. **Broker Information Management**
+//! - Maintains information about all Brokers in the cluster, including addresses, names, and the
+//!   clusters they belong to.
+//! - Handles Broker registration, unregistration, and status updates.
+//!
+//! ### 2. **Topic Routing Information Management**
+//! - Maintains the mapping relationship between Topics and Brokers to ensure messages are correctly
+//!   routed to the target Brokers.
+//! - Handles Topic creation, updates, and deletion operations.
+//!
+//! ### 3. **Consumer Group Information Management**
+//! - Records the subscription relationships of consumer groups to ensure messages are correctly
+//!   pushed to consumers.
+//! - Handles consumer group registration, unregistration, and status updates.
+//!
+//! ### 4. **Routing Discovery Service**
+//! - Provides the latest routing information to producers and consumers to ensure correct message
+//!   routing and consumption.
+//! - Clients periodically request the latest routing information.
+//!
+//! ### 5. **Broker Failure Handling**
+//! - Detects Broker failures and updates routing information to avoid routing messages to
+//!   unavailable Brokers.
+//! - Supports automatic recovery and re-registration of Brokers.
+//!
+//! ### 6. **Cluster Scaling Support**
+//! - Dynamically adjusts routing information to accommodate cluster scaling (expansion or
+//!   reduction), ensuring high availability and load balancing.
+//!
+//! ### 7. **NameServer Data Maintenance**
+//! - Stores and manages routing information in the NameServer to ensure data consistency and high
+//!   availability.
+//!
+//! ### Summary
+//! `RouteInfoManager` is a critical component in RocketMQ, responsible for managing routing
+//! information and ensuring correct message routing and system stability.
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::net::SocketAddr;
@@ -1154,7 +1194,7 @@ impl RouteInfoManager {
 
 // Non-instance method implementations
 impl RouteInfoManager {
-    /// start client connection disconnected listener
+    //! start client connection disconnected listener
     pub fn start(&self, receiver: broadcast::Receiver<SocketAddr>) {
         let mut inner = self.name_server_runtime_inner.clone();
         let mut receiver = receiver;
