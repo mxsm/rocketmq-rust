@@ -35,4 +35,6 @@ pub mod producer;
 mod trace;
 pub mod utils;
 
+pub use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
+
 pub type Result<T> = std::result::Result<T, MQClientError>;
