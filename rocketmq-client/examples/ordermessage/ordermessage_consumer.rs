@@ -18,6 +18,7 @@ use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
 
 use rocketmq_client_rust::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
+#[allow(unused_imports)]
 use rocketmq_client_rust::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
 use rocketmq_client_rust::consumer::listener::consume_orderly_context::ConsumeOrderlyContext;
 use rocketmq_client_rust::consumer::listener::consume_orderly_status::ConsumeOrderlyStatus;
