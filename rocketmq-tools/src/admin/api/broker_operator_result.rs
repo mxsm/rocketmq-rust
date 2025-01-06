@@ -22,6 +22,7 @@ pub struct BrokerOperatorResult {
     failure_list: Vec<CheetahString>,
 }
 
+#[allow(dead_code)]
 impl BrokerOperatorResult {
     pub fn new() -> Self {
         BrokerOperatorResult {
