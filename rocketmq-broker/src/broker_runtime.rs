@@ -185,6 +185,181 @@ pub(crate) struct BrokerInner<MS> {
 
 impl<MS: MessageStore> BrokerInner<MS> {
     #[inline]
+    pub fn store_host_mut(&mut self) -> &mut SocketAddr {
+        &mut self.store_host
+    }
+
+    #[inline]
+    pub fn broker_config_mut(&mut self) -> &mut BrokerConfig {
+        &mut self.broker_config
+    }
+
+    #[inline]
+    pub fn message_store_config_mut(&mut self) -> &mut MessageStoreConfig {
+        &mut self.message_store_config
+    }
+
+    #[inline]
+    pub fn server_config_mut(&mut self) -> &mut ServerConfig {
+        &mut self.server_config
+    }
+
+    #[inline]
+    pub fn topic_config_manager_mut(&mut self) -> &mut TopicConfigManager {
+        &mut self.topic_config_manager
+    }
+
+    #[inline]
+    pub fn topic_queue_mapping_manager_mut(&mut self) -> &mut TopicQueueMappingManager {
+        &mut self.topic_queue_mapping_manager
+    }
+
+    #[inline]
+    pub fn consumer_offset_manager_mut(&mut self) -> &mut ConsumerOffsetManager {
+        &mut self.consumer_offset_manager
+    }
+
+    #[inline]
+    pub fn subscription_group_manager_mut(&mut self) -> &mut SubscriptionGroupManager<MS> {
+        &mut self.subscription_group_manager
+    }
+
+    #[inline]
+    pub fn consumer_filter_manager_mut(&mut self) -> &mut ConsumerFilterManager {
+        &mut self.consumer_filter_manager
+    }
+
+    #[inline]
+    pub fn consumer_order_info_manager_mut(&mut self) -> &mut ConsumerOrderInfoManager<MS> {
+        &mut self.consumer_order_info_manager
+    }
+
+    #[inline]
+    pub fn message_store_mut(&mut self) -> &mut Option<MS> {
+        &mut self.message_store
+    }
+
+    #[inline]
+    pub fn broker_stats_mut(&mut self) -> &mut Option<BrokerStats<MS>> {
+        &mut self.broker_stats
+    }
+
+    #[inline]
+    pub fn schedule_message_service_mut(&mut self) -> &mut ScheduleMessageService {
+        &mut self.schedule_message_service
+    }
+
+    #[inline]
+    pub fn timer_message_store_mut(&mut self) -> &mut Option<TimerMessageStore> {
+        &mut self.timer_message_store
+    }
+
+    #[inline]
+    pub fn broker_outer_api_mut(&mut self) -> &mut BrokerOuterAPI {
+        &mut self.broker_outer_api
+    }
+
+    #[inline]
+    pub fn producer_manager_mut(&mut self) -> &mut ProducerManager {
+        &mut self.producer_manager
+    }
+
+    #[inline]
+    pub fn consumer_manager_mut(&mut self) -> &mut ConsumerManager {
+        &mut self.consumer_manager
+    }
+
+    #[inline]
+    pub fn broadcast_offset_manager_mut(&mut self) -> &mut BroadcastOffsetManager {
+        &mut self.broadcast_offset_manager
+    }
+
+    #[inline]
+    pub fn broker_stats_manager_mut(&mut self) -> &mut BrokerStatsManager {
+        &mut self.broker_stats_manager
+    }
+
+    #[inline]
+    pub fn topic_queue_mapping_clean_service_mut(
+        &mut self,
+    ) -> &mut Option<TopicQueueMappingCleanService> {
+        &mut self.topic_queue_mapping_clean_service
+    }
+
+    #[inline]
+    pub fn update_master_haserver_addr_periodically_mut(&mut self) -> &mut bool {
+        &mut self.update_master_haserver_addr_periodically
+    }
+
+    #[inline]
+    pub fn should_start_time_mut(&mut self) -> &mut AtomicU64 {
+        &mut self.should_start_time
+    }
+
+    #[inline]
+    pub fn is_isolated_mut(&mut self) -> &mut AtomicBool {
+        &mut self.is_isolated
+    }
+
+    #[inline]
+    pub fn pull_request_hold_service_mut(&mut self) -> &mut Option<PullRequestHoldService<MS>> {
+        &mut self.pull_request_hold_service
+    }
+
+    #[inline]
+    pub fn rebalance_lock_manager_mut(&mut self) -> &mut RebalanceLockManager {
+        &mut self.rebalance_lock_manager
+    }
+
+    #[inline]
+    pub fn broker_member_group_mut(&mut self) -> &mut BrokerMemberGroup {
+        &mut self.broker_member_group
+    }
+
+    #[inline]
+    pub fn transactional_message_service_mut(
+        &mut self,
+    ) -> &mut Option<DefaultTransactionalMessageService<MS>> {
+        &mut self.transactional_message_service
+    }
+
+    #[inline]
+    pub fn transactional_message_check_listener_mut(
+        &mut self,
+    ) -> &mut Option<DefaultTransactionalMessageCheckListener<MS>> {
+        &mut self.transactional_message_check_listener
+    }
+
+    #[inline]
+    pub fn transactional_message_check_service_mut(
+        &mut self,
+    ) -> &mut Option<TransactionalMessageCheckService> {
+        &mut self.transactional_message_check_service
+    }
+
+    #[inline]
+    pub fn transaction_metrics_flush_service_mut(
+        &mut self,
+    ) -> &mut Option<TransactionMetricsFlushService> {
+        &mut self.transaction_metrics_flush_service
+    }
+
+    #[inline]
+    pub fn topic_route_info_manager_mut(&mut self) -> &mut TopicRouteInfoManager {
+        &mut self.topic_route_info_manager
+    }
+
+    #[inline]
+    pub fn escape_bridge_mut(&mut self) -> &mut EscapeBridge<MS> {
+        &mut self.escape_bridge
+    }
+
+    #[inline]
+    pub fn pop_inflight_message_counter_mut(&mut self) -> &mut PopInflightMessageCounter {
+        &mut self.pop_inflight_message_counter
+    }
+
+    #[inline]
     pub fn store_host(&self) -> SocketAddr {
         self.store_host
     }
