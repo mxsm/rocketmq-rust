@@ -24,18 +24,19 @@ use serde::Serialize;
 use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::FromMap;
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
 pub struct PutKVConfigRequestHeader {
+    #[required]
     pub namespace: CheetahString,
+
+    #[required]
     pub key: CheetahString,
+
+    #[required]
     pub value: CheetahString,
 }
 
 impl PutKVConfigRequestHeader {
-    const KEY: &'static str = "key";
-    const NAMESPACE: &'static str = "namespace";
-    const VALUE: &'static str = "value";
-
     /// Creates a new instance of `PutKVConfigRequestHeader`.
     ///
     /// # Arguments
@@ -53,60 +54,6 @@ impl PutKVConfigRequestHeader {
             key: key.into(),
             value: value.into(),
         }
-    }
-}
-
-impl CommandCustomHeader for PutKVConfigRequestHeader {
-    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
-        Some(HashMap::from([
-            (
-                CheetahString::from_static_str(PutKVConfigRequestHeader::NAMESPACE),
-                self.namespace.clone(),
-            ),
-            (
-                CheetahString::from_static_str(PutKVConfigRequestHeader::KEY),
-                self.key.clone(),
-            ),
-            (
-                CheetahString::from_static_str(PutKVConfigRequestHeader::VALUE),
-                self.value.clone(),
-            ),
-        ]))
-    }
-}
-
-impl FromMap for PutKVConfigRequestHeader {
-    type Error = crate::remoting_error::RemotingError;
-
-    type Target = PutKVConfigRequestHeader;
-
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
-        Ok(PutKVConfigRequestHeader {
-            namespace: map
-                .get(&CheetahString::from_static_str(
-                    PutKVConfigRequestHeader::NAMESPACE,
-                ))
-                .cloned()
-                .ok_or(Self::Error::RemotingCommandError(
-                    "Miss namespace field".to_string(),
-                ))?,
-            key: map
-                .get(&CheetahString::from_static_str(
-                    PutKVConfigRequestHeader::KEY,
-                ))
-                .cloned()
-                .ok_or(Self::Error::RemotingCommandError(
-                    "Miss key field".to_string(),
-                ))?,
-            value: map
-                .get(&CheetahString::from_static_str(
-                    PutKVConfigRequestHeader::VALUE,
-                ))
-                .cloned()
-                .ok_or(Self::Error::RemotingCommandError(
-                    "Miss value field".to_string(),
-                ))?,
-        })
     }
 }
 
