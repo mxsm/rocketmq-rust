@@ -732,7 +732,7 @@ fn extract_register_topic_config_from_request(
             return TopicConfigAndMappingSerializeWrapper::default();
         }
         return SerdeJsonUtils::decode::<TopicConfigAndMappingSerializeWrapper>(
-            body_inner.iter().as_slice(),
+            body_inner.as_ref(),
         )
         .expect("decode TopicConfigAndMappingSerializeWrapper failed");
     }
