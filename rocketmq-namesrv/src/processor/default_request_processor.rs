@@ -760,8 +760,8 @@ fn check_sum_crc32(
     if request_header.body_crc32 == 0 {
         return true;
     }
-    if let Some(bytes) = &request.get_body() {
-        let crc_32 = CRC32Utils::crc32(bytes.iter().as_ref());
+    if let Some(bytes) = request.get_body() {
+        let crc_32 = CRC32Utils::crc32(bytes.as_ref());
         if crc_32 != request_header.body_crc32 {
             warn!(
                 "receive registerBroker request,crc32 not match,origin:{}, cal:{}",
