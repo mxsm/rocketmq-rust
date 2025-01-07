@@ -76,44 +76,15 @@ impl GetKVConfigRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
 pub struct GetKVConfigResponseHeader {
+    #[required]
     pub value: Option<CheetahString>,
 }
 
 impl GetKVConfigResponseHeader {
-    const VALUE: &'static str = "value";
-
     pub fn new(value: Option<CheetahString>) -> Self {
         Self { value }
-    }
-}
-
-impl CommandCustomHeader for GetKVConfigResponseHeader {
-    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
-        if let Some(ref value) = self.value {
-            return Some(HashMap::from([(
-                CheetahString::from_static_str(GetKVConfigResponseHeader::VALUE),
-                value.clone(),
-            )]));
-        }
-        None
-    }
-}
-
-impl FromMap for GetKVConfigResponseHeader {
-    type Error = crate::remoting_error::RemotingError;
-
-    type Target = GetKVConfigResponseHeader;
-
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
-        Ok(GetKVConfigResponseHeader {
-            value: map
-                .get(&CheetahString::from_static_str(
-                    GetKVConfigResponseHeader::VALUE,
-                ))
-                .cloned(),
-        })
     }
 }
 
