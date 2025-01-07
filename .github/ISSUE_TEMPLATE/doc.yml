@@ -18,7 +18,7 @@
 name: Documentation Related
 title: "[Doc📝] Documentation Related "
 description: I find some issues related to the documentation.
-labels: [ "documentation" ]
+labels: [ "documentation📝" ]
 body:
   - type: checkboxes
     attributes:
