@@ -17,51 +17,25 @@
 use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::FromMap;
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
 pub struct WipeWritePermOfBrokerRequestHeader {
+    #[required]
     pub broker_name: CheetahString,
 }
 
 impl WipeWritePermOfBrokerRequestHeader {
-    const BROKER_NAME: &'static str = "brokerName";
-
     pub fn new(broker_name: impl Into<CheetahString>) -> Self {
         Self {
             broker_name: broker_name.into(),
         }
-    }
-}
-
-impl CommandCustomHeader for WipeWritePermOfBrokerRequestHeader {
-    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
-        Some(HashMap::from([(
-            CheetahString::from_static_str(Self::BROKER_NAME),
-            self.broker_name.clone(),
-        )]))
-    }
-}
-
-impl FromMap for WipeWritePermOfBrokerRequestHeader {
-    type Error = crate::remoting_error::RemotingError;
-
-    type Target = Self;
-
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
-        Ok(WipeWritePermOfBrokerRequestHeader {
-            broker_name: map
-                .get(&CheetahString::from_static_str(
-                    WipeWritePermOfBrokerRequestHeader::BROKER_NAME,
-                ))
-                .cloned()
-                .unwrap_or_default(),
-        })
     }
 }
 
