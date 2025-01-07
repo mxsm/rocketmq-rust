@@ -18,7 +18,7 @@
 name: Bug Report
 title: "[Bug🐛] Bug title "
 description: Create a report to help us identify any unintended flaws, errors, or faults.
-labels: [ "bug" ]
+labels: [ "bug🐛" ]
 body:
   - type: checkboxes
     attributes:
