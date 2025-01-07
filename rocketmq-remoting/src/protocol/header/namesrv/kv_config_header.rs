@@ -88,63 +88,21 @@ impl GetKVConfigResponseHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
 pub struct DeleteKVConfigRequestHeader {
+    #[required]
     pub namespace: CheetahString,
+
+    #[required]
     pub key: CheetahString,
 }
 
 impl DeleteKVConfigRequestHeader {
-    const KEY: &'static str = "key";
-    const NAMESPACE: &'static str = "namespace";
-
     pub fn new(namespace: impl Into<CheetahString>, key: impl Into<CheetahString>) -> Self {
         Self {
             namespace: namespace.into(),
             key: key.into(),
         }
-    }
-}
-
-impl CommandCustomHeader for DeleteKVConfigRequestHeader {
-    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
-        Some(HashMap::from([
-            (
-                CheetahString::from_static_str(DeleteKVConfigRequestHeader::NAMESPACE),
-                self.namespace.clone(),
-            ),
-            (
-                CheetahString::from_static_str(DeleteKVConfigRequestHeader::KEY),
-                self.key.clone(),
-            ),
-        ]))
-    }
-}
-
-impl FromMap for DeleteKVConfigRequestHeader {
-    type Error = crate::remoting_error::RemotingError;
-
-    type Target = DeleteKVConfigRequestHeader;
-
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
-        Ok(DeleteKVConfigRequestHeader {
-            namespace: map
-                .get(&CheetahString::from_static_str(
-                    DeleteKVConfigRequestHeader::NAMESPACE,
-                ))
-                .cloned()
-                .ok_or(Self::Error::RemotingCommandError(
-                    "Miss namespace field".to_string(),
-                ))?,
-            key: map
-                .get(&CheetahString::from_static_str(
-                    DeleteKVConfigRequestHeader::KEY,
-                ))
-                .cloned()
-                .ok_or(Self::Error::RemotingCommandError(
-                    "Miss key field".to_string(),
-                ))?,
-        })
     }
 }
 
