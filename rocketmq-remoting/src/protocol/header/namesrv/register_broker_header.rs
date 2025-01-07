@@ -19,6 +19,7 @@ use std::collections::HashMap;
 
 use anyhow::Error;
 use cheetah_string::CheetahString;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -26,26 +27,31 @@ use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::FromMap;
 
 /// Represents the header for a broker registration request.
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
 pub struct RegisterBrokerRequestHeader {
     /// The name of the broker.
     #[serde(rename = "brokerName")]
+    #[required]
     pub broker_name: CheetahString,
 
     /// The address of the broker.
     #[serde(rename = "brokerAddr")]
+    #[required]
     pub broker_addr: CheetahString,
 
     /// The name of the cluster to which the broker belongs.
     #[serde(rename = "clusterName")]
+    #[required]
     pub cluster_name: CheetahString,
 
     /// The address of the highly available (HA) remoting_server associated with the broker.
     #[serde(rename = "haServerAddr")]
+    #[required]
     pub ha_server_addr: CheetahString,
 
     /// The unique identifier for the broker.
     #[serde(rename = "brokerId")]
+    #[required]
     pub broker_id: u64,
 
     /// The optional heartbeat timeout in milliseconds.
@@ -57,24 +63,16 @@ pub struct RegisterBrokerRequestHeader {
     pub enable_acting_master: Option<bool>,
 
     /// Indicates whether the data is compressed.
+    #[required]
     pub compressed: bool,
 
     /// The CRC32 checksum for the message body.
     #[serde(rename = "bodyCrc32")]
+    #[required]
     pub body_crc32: u32,
 }
 
 impl RegisterBrokerRequestHeader {
-    const BODY_CRC32: &'static str = "bodyCrc32";
-    const BROKER_ADDR: &'static str = "brokerAddr";
-    const BROKER_ID: &'static str = "brokerId";
-    const BROKER_NAME: &'static str = "brokerName";
-    const CLUSTER_NAME: &'static str = "clusterName";
-    const COMPRESSED: &'static str = "compressed";
-    const ENABLE_ACTING_MASTER: &'static str = "enableActingMaster";
-    const HA_SERVER_ADDR: &'static str = "haServerAddr";
-    const HEARTBEAT_TIMEOUT_MILLIS: &'static str = "heartbeatTimeoutMillis";
-
     /// Creates a new instance of `RegisterBrokerRequestHeader`.
     ///
     /// # Arguments
@@ -115,127 +113,6 @@ impl RegisterBrokerRequestHeader {
             compressed,
             body_crc32,
         }
-    }
-}
-
-impl FromMap for RegisterBrokerRequestHeader {
-    type Error = crate::remoting_error::RemotingError;
-
-    type Target = Self;
-
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
-        Ok(RegisterBrokerRequestHeader {
-            broker_name: map
-                .get(&CheetahString::from_static_str(
-                    RegisterBrokerRequestHeader::BROKER_NAME,
-                ))
-                .cloned()
-                .unwrap_or_default(),
-            broker_addr: map
-                .get(&CheetahString::from_static_str(
-                    RegisterBrokerRequestHeader::BROKER_ADDR,
-                ))
-                .cloned()
-                .unwrap_or_default(),
-            cluster_name: map
-                .get(&CheetahString::from_static_str(
-                    RegisterBrokerRequestHeader::CLUSTER_NAME,
-                ))
-                .cloned()
-                .unwrap_or_default(),
-            ha_server_addr: map
-                .get(&CheetahString::from_static_str(
-                    RegisterBrokerRequestHeader::HA_SERVER_ADDR,
-                ))
-                .cloned()
-                .unwrap_or_default(),
-            broker_id: map
-                .get(&CheetahString::from_static_str(
-                    RegisterBrokerRequestHeader::BROKER_ID,
-                ))
-                .and_then(|s| s.parse::<u64>().ok())
-                .unwrap_or(0),
-            heartbeat_timeout_millis: map
-                .get(&CheetahString::from_static_str(
-                    RegisterBrokerRequestHeader::HEARTBEAT_TIMEOUT_MILLIS,
-                ))
-                .and_then(|s| s.parse::<i64>().ok()),
-            enable_acting_master: map
-                .get(&CheetahString::from_static_str(
-                    RegisterBrokerRequestHeader::ENABLE_ACTING_MASTER,
-                ))
-                .and_then(|s| s.parse::<bool>().ok()),
-            compressed: map
-                .get(&CheetahString::from_static_str(
-                    RegisterBrokerRequestHeader::COMPRESSED,
-                ))
-                .and_then(|s| s.parse::<bool>().ok())
-                .unwrap_or(false),
-            body_crc32: map
-                .get(&CheetahString::from_static_str(
-                    RegisterBrokerRequestHeader::BODY_CRC32,
-                ))
-                .and_then(|s| s.parse::<u32>().ok())
-                .unwrap_or(0),
-        })
-    }
-}
-
-impl CommandCustomHeader for RegisterBrokerRequestHeader {
-    fn check_fields(&self) -> anyhow::Result<(), Error> {
-        Ok(())
-    }
-
-    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
-        let mut map = HashMap::new();
-
-        map.insert(
-            CheetahString::from_static_str(RegisterBrokerRequestHeader::BROKER_NAME),
-            self.broker_name.clone(),
-        );
-        map.insert(
-            CheetahString::from_static_str(RegisterBrokerRequestHeader::BROKER_ADDR),
-            self.broker_addr.clone(),
-        );
-        map.insert(
-            CheetahString::from_static_str(RegisterBrokerRequestHeader::CLUSTER_NAME),
-            self.cluster_name.clone(),
-        );
-        map.insert(
-            CheetahString::from_static_str(RegisterBrokerRequestHeader::HA_SERVER_ADDR),
-            self.ha_server_addr.clone(),
-        );
-        map.insert(
-            CheetahString::from_static_str(RegisterBrokerRequestHeader::BROKER_ID),
-            CheetahString::from_string(self.broker_id.to_string()),
-        );
-
-        if let Some(heartbeat_timeout) = self.heartbeat_timeout_millis {
-            map.insert(
-                CheetahString::from_static_str(
-                    RegisterBrokerRequestHeader::HEARTBEAT_TIMEOUT_MILLIS,
-                ),
-                CheetahString::from_string(heartbeat_timeout.to_string()),
-            );
-        }
-
-        if let Some(enable_acting_master) = self.enable_acting_master {
-            map.insert(
-                CheetahString::from_static_str(RegisterBrokerRequestHeader::ENABLE_ACTING_MASTER),
-                CheetahString::from_string(enable_acting_master.to_string()),
-            );
-        }
-
-        map.insert(
-            CheetahString::from_static_str(RegisterBrokerRequestHeader::COMPRESSED),
-            CheetahString::from_string(self.compressed.to_string()),
-        );
-        map.insert(
-            CheetahString::from_static_str(RegisterBrokerRequestHeader::BODY_CRC32),
-            CheetahString::from_string(self.body_crc32.to_string()),
-        );
-
-        Some(map)
     }
 }
 
