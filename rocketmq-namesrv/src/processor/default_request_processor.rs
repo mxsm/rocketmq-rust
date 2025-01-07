@@ -165,13 +165,11 @@ impl DefaultRequestProcessor {
                 .set_command_custom_header(GetKVConfigResponseHeader::new(value)));
         }
         Ok(
-            RemotingCommand::create_response_command_with_code(
-                RemotingSysResponseCode::SystemError,
-            )
-            .set_remark(format!(
-                "No config item, Namespace: {} Key: {}",
-                request_header.namespace, request_header.key
-            )),
+            RemotingCommand::create_response_command_with_code(ResponseCode::QueryNotFound)
+                .set_remark(format!(
+                    "No config item, Namespace: {} Key: {}",
+                    request_header.namespace, request_header.key
+                )),
         )
     }
 
