@@ -58,63 +58,21 @@ impl PutKVConfigRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
 pub struct GetKVConfigRequestHeader {
+    #[required]
     pub namespace: CheetahString,
+
+    #[required]
     pub key: CheetahString,
 }
 
 impl GetKVConfigRequestHeader {
-    const KEY: &'static str = "key";
-    const NAMESPACE: &'static str = "namespace";
-
     pub fn new(namespace: impl Into<CheetahString>, key: impl Into<CheetahString>) -> Self {
         Self {
             namespace: namespace.into(),
             key: key.into(),
         }
-    }
-}
-
-impl CommandCustomHeader for GetKVConfigRequestHeader {
-    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
-        Some(HashMap::from([
-            (
-                CheetahString::from_static_str(GetKVConfigRequestHeader::NAMESPACE),
-                self.namespace.clone(),
-            ),
-            (
-                CheetahString::from_static_str(GetKVConfigRequestHeader::KEY),
-                self.key.clone(),
-            ),
-        ]))
-    }
-}
-
-impl FromMap for GetKVConfigRequestHeader {
-    type Error = crate::remoting_error::RemotingError;
-
-    type Target = GetKVConfigRequestHeader;
-
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
-        Ok(GetKVConfigRequestHeader {
-            namespace: map
-                .get(&CheetahString::from_static_str(
-                    GetKVConfigRequestHeader::NAMESPACE,
-                ))
-                .cloned()
-                .ok_or(Self::Error::RemotingCommandError(
-                    "Miss namespace field".to_string(),
-                ))?,
-            key: map
-                .get(&CheetahString::from_static_str(
-                    GetKVConfigRequestHeader::KEY,
-                ))
-                .cloned()
-                .ok_or(Self::Error::RemotingCommandError(
-                    "Miss key field".to_string(),
-                ))?,
-        })
     }
 }
 
