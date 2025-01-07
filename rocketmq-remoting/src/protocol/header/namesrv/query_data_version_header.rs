@@ -14,15 +14,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
 use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
-
-use crate::protocol::command_custom_header::CommandCustomHeader;
-use crate::protocol::command_custom_header::FromMap;
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
@@ -56,41 +52,69 @@ impl QueryDataVersionRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
 pub struct QueryDataVersionResponseHeader {
     changed: bool,
 }
 
 impl QueryDataVersionResponseHeader {
-    const CHANGED: &'static str = "changed";
-
     pub fn new(changed: bool) -> Self {
         Self { changed }
     }
 }
 
-impl CommandCustomHeader for QueryDataVersionResponseHeader {
-    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
-        Some(HashMap::from([(
-            CheetahString::from_static_str(Self::CHANGED),
-            CheetahString::from_string(self.changed.to_string()),
-        )]))
+#[cfg(test)]
+mod tests {
+    use cheetah_string::CheetahString;
+
+    use super::*;
+
+    #[test]
+    fn query_data_version_request_header_new() {
+        let header = QueryDataVersionRequestHeader::new("broker1", "127.0.0.1", "cluster1", 1);
+        assert_eq!(header.broker_name, CheetahString::from("broker1"));
+        assert_eq!(header.broker_addr, CheetahString::from("127.0.0.1"));
+        assert_eq!(header.cluster_name, CheetahString::from("cluster1"));
+        assert_eq!(header.broker_id, 1);
     }
-}
 
-impl FromMap for QueryDataVersionResponseHeader {
-    type Error = crate::remoting_error::RemotingError;
+    #[test]
+    fn query_data_version_request_header_serialization() {
+        let header = QueryDataVersionRequestHeader::new("broker1", "127.0.0.1", "cluster1", 1);
+        let serialized = serde_json::to_string(&header).unwrap();
+        assert_eq!(
+            serialized,
+            r#"{"brokerName":"broker1","brokerAddr":"127.0.0.1","clusterName":"cluster1","brokerId":1}"#
+        );
+    }
 
-    type Target = Self;
+    #[test]
+    fn query_data_version_request_header_deserialization() {
+        let json = r#"{"brokerName":"broker1","brokerAddr":"127.0.0.1","clusterName":"cluster1","brokerId":1}"#;
+        let deserialized: QueryDataVersionRequestHeader = serde_json::from_str(json).unwrap();
+        assert_eq!(deserialized.broker_name, CheetahString::from("broker1"));
+        assert_eq!(deserialized.broker_addr, CheetahString::from("127.0.0.1"));
+        assert_eq!(deserialized.cluster_name, CheetahString::from("cluster1"));
+        assert_eq!(deserialized.broker_id, 1);
+    }
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
-        Ok(QueryDataVersionResponseHeader {
-            changed: map
-                .get(&CheetahString::from_static_str(
-                    QueryDataVersionResponseHeader::CHANGED,
-                ))
-                .and_then(|s| s.parse::<bool>().ok())
-                .unwrap_or(false),
-        })
+    #[test]
+    fn query_data_version_response_header_new() {
+        let header = QueryDataVersionResponseHeader::new(true);
+        assert!(header.changed);
+    }
+
+    #[test]
+    fn query_data_version_response_header_serialization() {
+        let header = QueryDataVersionResponseHeader::new(true);
+        let serialized = serde_json::to_string(&header).unwrap();
+        assert_eq!(serialized, r#"{"changed":true}"#);
+    }
+
+    #[test]
+    fn query_data_version_response_header_deserialization() {
+        let json = r#"{"changed":true}"#;
+        let deserialized: QueryDataVersionResponseHeader = serde_json::from_str(json).unwrap();
+        assert!(deserialized.changed);
     }
 }
