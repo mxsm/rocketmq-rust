@@ -267,10 +267,8 @@ impl DefaultRequestProcessor {
         if broker_version as usize >= RocketMqVersion::V3011 as usize {
             let register_broker_body =
                 extract_register_broker_body_from_request(&request, &request_header);
-            topic_config_wrapper = register_broker_body
-                .topic_config_serialize_wrapper()
-                .clone();
-            filter_server_list = register_broker_body.filter_server_list().clone();
+            topic_config_wrapper = register_broker_body.topic_config_serialize_wrapper;
+            filter_server_list = register_broker_body.filter_server_list;
         } else {
             topic_config_wrapper = extract_register_topic_config_from_request(&request);
         }
