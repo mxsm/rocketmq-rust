@@ -16,6 +16,7 @@
  */
 use rocketmq_remoting::protocol::header::namesrv::broker_request::UnRegisterBrokerRequestHeader;
 use rocketmq_rust::ArcMut;
+use tracing::info;
 use tracing::warn;
 
 use crate::bootstrap::NameServerRuntimeInner;
@@ -53,6 +54,7 @@ impl BatchUnregistrationService {
         let mut rx = self.rx.take().expect("rx is None");
         let limit = 10;
         tokio::spawn(async move {
+            info!(">>>>>>>>BatchUnregistrationService started<<<<<<<<<<<<<<<<<<<");
             loop {
                 let mut unregistration_requests = Vec::with_capacity(limit);
                 tokio::select! {

@@ -1207,6 +1207,7 @@ impl RouteInfoManager {
     //! start client connection disconnected listener
     pub fn start(&self, receiver: broadcast::Receiver<SocketAddr>) {
         let mut inner = self.name_server_runtime_inner.clone();
+        self.un_register_service.mut_from_ref().start();
         let mut receiver = receiver;
         tokio::spawn(async move {
             while let Ok(socket_addr) = receiver.recv().await {
