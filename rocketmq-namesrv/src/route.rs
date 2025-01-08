@@ -15,4 +15,5 @@
  * limitations under the License.
  */
 
+pub(crate) mod batch_unregistration_service;
 pub mod route_info_manager;
