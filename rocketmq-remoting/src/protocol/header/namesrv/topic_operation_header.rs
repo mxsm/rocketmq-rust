@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -25,17 +26,15 @@ use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::FromMap;
 use crate::rpc::rpc_request_header::RpcRequestHeader;
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
 pub struct DeleteTopicFromNamesrvRequestHeader {
+    #[required]
     pub topic: CheetahString,
     pub cluster_name: Option<CheetahString>,
 }
 
 impl DeleteTopicFromNamesrvRequestHeader {
-    const CLUSTER_NAME: &'static str = "clusterName";
-    const TOPIC: &'static str = "topic";
-
     pub fn new(
         topic: impl Into<CheetahString>,
         cluster_name: Option<impl Into<CheetahString>>,
@@ -47,86 +46,21 @@ impl DeleteTopicFromNamesrvRequestHeader {
     }
 }
 
-impl CommandCustomHeader for DeleteTopicFromNamesrvRequestHeader {
-    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
-        let mut map = HashMap::from([(
-            CheetahString::from_static_str(Self::TOPIC),
-            self.topic.clone(),
-        )]);
-        if let Some(ref cluster_name) = self.cluster_name {
-            map.insert(
-                CheetahString::from_static_str(Self::CLUSTER_NAME),
-                cluster_name.clone(),
-            );
-        }
-        Some(map)
-    }
-}
-
-impl FromMap for DeleteTopicFromNamesrvRequestHeader {
-    type Error = crate::remoting_error::RemotingError;
-
-    type Target = Self;
-
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
-        Ok(DeleteTopicFromNamesrvRequestHeader {
-            topic: map
-                .get(&CheetahString::from_static_str(Self::TOPIC))
-                .cloned()
-                .unwrap_or_default(),
-            cluster_name: map
-                .get(&CheetahString::from_static_str(Self::CLUSTER_NAME))
-                .cloned(),
-        })
-    }
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
 pub struct RegisterTopicRequestHeader {
+    #[required]
     pub topic: CheetahString,
     #[serde(flatten)]
     pub topic_request: Option<TopicRequestHeader>,
 }
 
 impl RegisterTopicRequestHeader {
-    const TOPIC: &'static str = "topic";
-
     pub fn new(topic: impl Into<CheetahString>) -> Self {
         Self {
             topic: topic.into(),
             topic_request: None,
         }
-    }
-}
-
-impl CommandCustomHeader for RegisterTopicRequestHeader {
-    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
-        let mut map = HashMap::from([(
-            CheetahString::from_static_str(Self::TOPIC),
-            self.topic.clone(),
-        )]);
-        if let Some(ref request) = self.topic_request {
-            if let Some(val) = request.to_map() {
-                map.extend(val);
-            }
-        }
-        Some(map)
-    }
-}
-impl FromMap for RegisterTopicRequestHeader {
-    type Error = crate::remoting_error::RemotingError;
-
-    type Target = Self;
-
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
-        Ok(RegisterTopicRequestHeader {
-            topic: map
-                .get(&CheetahString::from_static_str(Self::TOPIC))
-                .cloned()
-                .unwrap_or_default(),
-            topic_request: Some(<TopicRequestHeader as FromMap>::from(map)?),
-        })
     }
 }
 
