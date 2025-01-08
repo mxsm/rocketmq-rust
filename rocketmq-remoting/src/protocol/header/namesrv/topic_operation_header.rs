@@ -15,15 +15,11 @@
  * limitations under the License.
  */
 
-use std::collections::HashMap;
-
 use cheetah_string::CheetahString;
 use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::protocol::command_custom_header::CommandCustomHeader;
-use crate::protocol::command_custom_header::FromMap;
 use crate::rpc::rpc_request_header::RpcRequestHeader;
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
@@ -64,14 +60,13 @@ impl RegisterTopicRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
 pub struct GetTopicsByClusterRequestHeader {
+    #[required]
     pub cluster: CheetahString,
 }
 
 impl GetTopicsByClusterRequestHeader {
-    const CLUSTER: &'static str = "cluster";
-
     pub fn new(cluster: impl Into<CheetahString>) -> Self {
         Self {
             cluster: cluster.into(),
@@ -79,32 +74,7 @@ impl GetTopicsByClusterRequestHeader {
     }
 }
 
-impl CommandCustomHeader for GetTopicsByClusterRequestHeader {
-    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
-        let map = HashMap::from([(
-            CheetahString::from_static_str(Self::CLUSTER),
-            self.cluster.clone(),
-        )]);
-        Some(map)
-    }
-}
-
-impl FromMap for GetTopicsByClusterRequestHeader {
-    type Error = crate::remoting_error::RemotingError;
-
-    type Target = Self;
-
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
-        Ok(GetTopicsByClusterRequestHeader {
-            cluster: map
-                .get(&CheetahString::from_static_str(Self::CLUSTER))
-                .cloned()
-                .unwrap_or_default(),
-        })
-    }
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
 pub struct TopicRequestHeader {
     pub lo: Option<bool>,
@@ -112,39 +82,68 @@ pub struct TopicRequestHeader {
     pub rpc: Option<RpcRequestHeader>,
 }
 
-impl TopicRequestHeader {
-    const LO: &'static str = "lo";
-}
+#[cfg(test)]
+mod tests {
+    use cheetah_string::CheetahString;
 
-impl CommandCustomHeader for TopicRequestHeader {
-    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
-        let mut map = HashMap::new();
-        if let Some(lo) = self.lo {
-            map.insert(
-                CheetahString::from_static_str(Self::LO),
-                CheetahString::from_string(lo.to_string()),
-            );
-        }
-        if let Some(ref rpc) = self.rpc {
-            if let Some(rpc_map) = rpc.to_map() {
-                map.extend(rpc_map);
-            }
-        }
-        Some(map)
+    use super::*;
+
+    #[test]
+    fn delete_topic_from_namesrv_request_header_new() {
+        let header = DeleteTopicFromNamesrvRequestHeader::new("topic1", Some("cluster1"));
+        assert_eq!(header.topic, CheetahString::from("topic1"));
+        assert_eq!(header.cluster_name, Some(CheetahString::from("cluster1")));
     }
-}
 
-impl FromMap for TopicRequestHeader {
-    type Error = crate::remoting_error::RemotingError;
+    #[test]
+    fn delete_topic_from_namesrv_request_header_serialization() {
+        let header = DeleteTopicFromNamesrvRequestHeader::new("topic1", Some("cluster1"));
+        let serialized = serde_json::to_string(&header).unwrap();
+        assert_eq!(serialized, r#"{"topic":"topic1","clusterName":"cluster1"}"#);
+    }
 
-    type Target = Self;
+    #[test]
+    fn delete_topic_from_namesrv_request_header_deserialization() {
+        let json = r#"{"topic":"topic1","clusterName":"cluster1"}"#;
+        let deserialized: DeleteTopicFromNamesrvRequestHeader = serde_json::from_str(json).unwrap();
+        assert_eq!(deserialized.topic, CheetahString::from("topic1"));
+        assert_eq!(
+            deserialized.cluster_name,
+            Some(CheetahString::from("cluster1"))
+        );
+    }
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
-        Ok(TopicRequestHeader {
-            lo: map
-                .get(&CheetahString::from_static_str(Self::LO))
-                .and_then(|s| s.parse::<bool>().ok()),
-            rpc: Some(<RpcRequestHeader as FromMap>::from(map)?),
-        })
+    #[test]
+    fn register_topic_request_header_new() {
+        let header = RegisterTopicRequestHeader::new("topic1");
+        assert_eq!(header.topic, CheetahString::from("topic1"));
+        assert!(header.topic_request.is_none());
+    }
+
+    #[test]
+    fn register_topic_request_header_serialization() {
+        let header = RegisterTopicRequestHeader::new("topic1");
+        let serialized = serde_json::to_string(&header).unwrap();
+        assert_eq!(serialized, r#"{"topic":"topic1"}"#);
+    }
+
+    #[test]
+    fn get_topics_by_cluster_request_header_new() {
+        let header = GetTopicsByClusterRequestHeader::new("cluster1");
+        assert_eq!(header.cluster, CheetahString::from("cluster1"));
+    }
+
+    #[test]
+    fn get_topics_by_cluster_request_header_serialization() {
+        let header = GetTopicsByClusterRequestHeader::new("cluster1");
+        let serialized = serde_json::to_string(&header).unwrap();
+        assert_eq!(serialized, r#"{"cluster":"cluster1"}"#);
+    }
+
+    #[test]
+    fn get_topics_by_cluster_request_header_deserialization() {
+        let json = r#"{"cluster":"cluster1"}"#;
+        let deserialized: GetTopicsByClusterRequestHeader = serde_json::from_str(json).unwrap();
+        assert_eq!(deserialized.cluster, CheetahString::from("cluster1"));
     }
 }
