@@ -15,15 +15,10 @@
  * limitations under the License.
  */
 
-use std::collections::HashMap;
-
 use cheetah_string::CheetahString;
 use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
-
-use crate::protocol::command_custom_header::CommandCustomHeader;
-use crate::protocol::command_custom_header::FromMap;
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
 pub struct PutKVConfigRequestHeader {
@@ -106,14 +101,13 @@ impl DeleteKVConfigRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
 pub struct GetKVListByNamespaceRequestHeader {
+    #[required]
     pub namespace: CheetahString,
 }
 
 impl GetKVListByNamespaceRequestHeader {
-    const NAMESPACE: &'static str = "namespace";
-
     pub fn new(namespace: impl Into<CheetahString>) -> Self {
         Self {
             namespace: namespace.into(),
@@ -121,30 +115,120 @@ impl GetKVListByNamespaceRequestHeader {
     }
 }
 
-impl CommandCustomHeader for GetKVListByNamespaceRequestHeader {
-    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
-        Some(HashMap::from([(
-            CheetahString::from_static_str(GetKVListByNamespaceRequestHeader::NAMESPACE),
-            self.namespace.clone(),
-        )]))
+#[cfg(test)]
+mod tests {
+    use cheetah_string::CheetahString;
+
+    use super::*;
+
+    #[test]
+    fn put_kv_config_request_header_new() {
+        let header = PutKVConfigRequestHeader::new("namespace1", "key1", "value1");
+        assert_eq!(header.namespace, CheetahString::from("namespace1"));
+        assert_eq!(header.key, CheetahString::from("key1"));
+        assert_eq!(header.value, CheetahString::from("value1"));
     }
-}
 
-impl FromMap for GetKVListByNamespaceRequestHeader {
-    type Error = crate::remoting_error::RemotingError;
+    #[test]
+    fn put_kv_config_request_header_serialization() {
+        let header = PutKVConfigRequestHeader::new("namespace1", "key1", "value1");
+        let serialized = serde_json::to_string(&header).unwrap();
+        assert_eq!(
+            serialized,
+            r#"{"namespace":"namespace1","key":"key1","value":"value1"}"#
+        );
+    }
 
-    type Target = GetKVListByNamespaceRequestHeader;
+    #[test]
+    fn put_kv_config_request_header_deserialization() {
+        let json = r#"{"namespace":"namespace1","key":"key1","value":"value1"}"#;
+        let deserialized: PutKVConfigRequestHeader = serde_json::from_str(json).unwrap();
+        assert_eq!(deserialized.namespace, CheetahString::from("namespace1"));
+        assert_eq!(deserialized.key, CheetahString::from("key1"));
+        assert_eq!(deserialized.value, CheetahString::from("value1"));
+    }
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
-        Ok(GetKVListByNamespaceRequestHeader {
-            namespace: map
-                .get(&CheetahString::from_static_str(
-                    GetKVListByNamespaceRequestHeader::NAMESPACE,
-                ))
-                .cloned()
-                .ok_or(Self::Error::RemotingCommandError(
-                    "Miss namespace field".to_string(),
-                ))?,
-        })
+    #[test]
+    fn get_kv_config_request_header_new() {
+        let header = GetKVConfigRequestHeader::new("namespace1", "key1");
+        assert_eq!(header.namespace, CheetahString::from("namespace1"));
+        assert_eq!(header.key, CheetahString::from("key1"));
+    }
+
+    #[test]
+    fn get_kv_config_request_header_serialization() {
+        let header = GetKVConfigRequestHeader::new("namespace1", "key1");
+        let serialized = serde_json::to_string(&header).unwrap();
+        assert_eq!(serialized, r#"{"namespace":"namespace1","key":"key1"}"#);
+    }
+
+    #[test]
+    fn get_kv_config_request_header_deserialization() {
+        let json = r#"{"namespace":"namespace1","key":"key1"}"#;
+        let deserialized: GetKVConfigRequestHeader = serde_json::from_str(json).unwrap();
+        assert_eq!(deserialized.namespace, CheetahString::from("namespace1"));
+        assert_eq!(deserialized.key, CheetahString::from("key1"));
+    }
+
+    #[test]
+    fn get_kv_config_response_header_new() {
+        let header = GetKVConfigResponseHeader::new(Some(CheetahString::from("value1")));
+        assert_eq!(header.value, Some(CheetahString::from("value1")));
+    }
+
+    #[test]
+    fn get_kv_config_response_header_serialization() {
+        let header = GetKVConfigResponseHeader::new(Some(CheetahString::from("value1")));
+        let serialized = serde_json::to_string(&header).unwrap();
+        assert_eq!(serialized, r#"{"value":"value1"}"#);
+    }
+
+    #[test]
+    fn get_kv_config_response_header_deserialization() {
+        let json = r#"{"value":"value1"}"#;
+        let deserialized: GetKVConfigResponseHeader = serde_json::from_str(json).unwrap();
+        assert_eq!(deserialized.value, Some(CheetahString::from("value1")));
+    }
+
+    #[test]
+    fn delete_kv_config_request_header_new() {
+        let header = DeleteKVConfigRequestHeader::new("namespace1", "key1");
+        assert_eq!(header.namespace, CheetahString::from("namespace1"));
+        assert_eq!(header.key, CheetahString::from("key1"));
+    }
+
+    #[test]
+    fn delete_kv_config_request_header_serialization() {
+        let header = DeleteKVConfigRequestHeader::new("namespace1", "key1");
+        let serialized = serde_json::to_string(&header).unwrap();
+        assert_eq!(serialized, r#"{"namespace":"namespace1","key":"key1"}"#);
+    }
+
+    #[test]
+    fn delete_kv_config_request_header_deserialization() {
+        let json = r#"{"namespace":"namespace1","key":"key1"}"#;
+        let deserialized: DeleteKVConfigRequestHeader = serde_json::from_str(json).unwrap();
+        assert_eq!(deserialized.namespace, CheetahString::from("namespace1"));
+        assert_eq!(deserialized.key, CheetahString::from("key1"));
+    }
+
+    #[test]
+    fn get_kv_list_by_namespace_request_header_new() {
+        let header = GetKVListByNamespaceRequestHeader::new("namespace1");
+        assert_eq!(header.namespace, CheetahString::from("namespace1"));
+    }
+
+    #[test]
+    fn get_kv_list_by_namespace_request_header_serialization() {
+        let header = GetKVListByNamespaceRequestHeader::new("namespace1");
+        let serialized = serde_json::to_string(&header).unwrap();
+        assert_eq!(serialized, r#"{"namespace":"namespace1"}"#);
+    }
+
+    #[test]
+    fn get_kv_list_by_namespace_request_header_deserialization() {
+        let json = r#"{"namespace":"namespace1"}"#;
+        let deserialized: GetKVListByNamespaceRequestHeader = serde_json::from_str(json).unwrap();
+        assert_eq!(deserialized.namespace, CheetahString::from("namespace1"));
     }
 }
