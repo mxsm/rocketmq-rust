@@ -90,6 +90,7 @@ use tracing::info;
 use tracing::warn;
 
 use crate::bootstrap::NameServerRuntimeInner;
+use crate::route::batch_unregistration_service::BatchUnregistrationService;
 use crate::route_info::broker_addr_info::BrokerAddrInfo;
 use crate::route_info::broker_addr_info::BrokerLiveInfo;
 use crate::route_info::broker_addr_info::BrokerStatusChangeInfo;
@@ -121,12 +122,16 @@ pub struct RouteInfoManager {
     pub(crate) filter_server_table: FilterServerTable,
     pub(crate) topic_queue_mapping_info_table: TopicQueueMappingInfoTable,
     pub(crate) name_server_runtime_inner: ArcMut<NameServerRuntimeInner>,
+    pub(crate) un_register_service: ArcMut<BatchUnregistrationService>,
     lock: Arc<parking_lot::RwLock<()>>,
 }
 
 #[allow(private_interfaces)]
 impl RouteInfoManager {
     pub fn new(name_server_runtime_inner: ArcMut<NameServerRuntimeInner>) -> Self {
+        let un_register_service = ArcMut::new(BatchUnregistrationService::new(
+            name_server_runtime_inner.clone(),
+        ));
         RouteInfoManager {
             topic_queue_table: ArcMut::new(HashMap::new()),
             broker_addr_table: ArcMut::new(HashMap::new()),
@@ -136,12 +141,17 @@ impl RouteInfoManager {
             topic_queue_mapping_info_table: ArcMut::new(HashMap::new()),
             lock: Arc::new(Default::default()),
             name_server_runtime_inner,
+            un_register_service,
         }
     }
 }
 
 //impl register broker
 impl RouteInfoManager {
+    pub fn submit_unregister_broker_request(&self, request: UnRegisterBrokerRequestHeader) -> bool {
+        self.un_register_service.submit(request)
+    }
+
     pub fn register_broker(
         &self,
         cluster_name: CheetahString,

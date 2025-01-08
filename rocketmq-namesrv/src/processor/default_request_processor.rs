@@ -331,9 +331,19 @@ impl DefaultRequestProcessor {
                     "decode UnRegisterBrokerRequestHeader fail".to_string(),
                 )
             })?;
-        self.name_server_runtime_inner
-            .route_info_manager_mut()
-            .un_register_broker(vec![request_header]);
+        /*self.name_server_runtime_inner
+        .route_info_manager_mut()
+        .un_register_broker(vec![request_header]);*/
+        if !self
+            .name_server_runtime_inner
+            .route_info_manager()
+            .submit_unregister_broker_request(request_header)
+        {
+            warn!("Couldn't submit the unregister broker request to handler");
+            return Ok(RemotingCommand::create_response_command_with_code(
+                ResponseCode::SystemError,
+            ));
+        }
         Ok(RemotingCommand::create_response_command())
     }
 }
