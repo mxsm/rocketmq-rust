@@ -998,7 +998,7 @@ impl RouteInfoManager {
     ) {
         let mut remove_broker = HashSet::<CheetahString>::new();
         let mut reduced_broker = HashSet::<CheetahString>::new();
-        let mut need_notify_broker_map = HashMap::<CheetahString, BrokerStatusChangeInfo>::new();
+        let mut need_notify_broker_map = HashMap::new();
 
         for un_register_request in un_register_requests {
             let broker_name = &un_register_request.broker_name;
@@ -1018,33 +1018,16 @@ impl RouteInfoManager {
             let mut remove_broker_name = false;
             let mut is_min_broker_id_changed = false;
 
-            if let Some(broker_data) = self.broker_addr_table.get_mut(broker_name.as_str()) {
+            if let Some(broker_data) = self.broker_addr_table.get_mut(broker_name) {
                 if !broker_data.broker_addrs().is_empty()
                     && un_register_request.broker_id
-                        == broker_data
-                            .broker_addrs()
-                            .iter()
-                            .map(|(broker_id, _)| broker_id)
-                            .cloned()
-                            .min()
-                            .unwrap()
+                        == broker_data.broker_addrs().keys().min().copied().unwrap()
                 {
                     is_min_broker_id_changed = true;
                 }
-                let mut remove_broker_id_set = HashSet::new();
-                for (broker_id, broker_addr_inner) in broker_data.broker_addrs().iter() {
-                    if broker_addr == broker_addr_inner {
-                        remove_broker_id_set.insert(*broker_id);
-                    }
-                }
-                let _removed = if remove_broker_id_set.is_empty() {
-                    for broker_id in remove_broker_id_set {
-                        broker_data.broker_addrs_mut().remove(&broker_id);
-                    }
-                    true
-                } else {
-                    false
-                };
+                broker_data
+                    .broker_addrs_mut()
+                    .retain(|&broker_id, broker_addr_inner| broker_addr != broker_addr_inner);
 
                 if broker_data.broker_addrs_mut().is_empty() {
                     self.broker_addr_table.remove(broker_name.as_str());
@@ -1087,8 +1070,8 @@ impl RouteInfoManager {
                     if !broker_data.enable_acting_master() {
                         continue;
                     }
-                    let broker_addrs = broker_status_change_info.broker_addrs.clone();
-                    let offline_broker_addr = broker_status_change_info.offline_broker_addr.clone();
+                    let broker_addrs = broker_status_change_info.broker_addrs;
+                    let offline_broker_addr = broker_status_change_info.offline_broker_addr;
                     self.notify_min_broker_id_changed(
                         &broker_addrs,
                         Some(offline_broker_addr),
