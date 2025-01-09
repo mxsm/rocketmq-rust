@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use futures::SinkExt;
 use rocketmq_common::common::server::config::ServerConfig;
-use rocketmq_rust::ArcMut;
+use rocketmq_rust::{wait_for_signal, ArcMut};
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::broadcast;
@@ -115,6 +115,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                 res = self.connection_handler_context.channel.connection.reader.next() => res,
                 _ = self.shutdown.recv() =>{
                     //If a shutdown signal is received, return from `handle`.
+                    self.channel.connection_mut().ok = false;
                     return Ok(());
                 }
             };
@@ -404,7 +405,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
         let (notify_conn_disconnect, _) = broadcast::channel::<SocketAddr>(100);
         run(
             listener,
-            tokio::signal::ctrl_c(),
+            wait_for_signal(),
             request_processor,
             Some(notify_conn_disconnect),
             vec![],
