@@ -1217,4 +1217,8 @@ impl RouteInfoManager {
             }
         });
     }
+
+    pub fn shutdown(&self) {
+        self.un_register_service.shutdown();
+    }
 }

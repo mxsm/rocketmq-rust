@@ -107,6 +107,13 @@ impl NameServerRuntime {
     }
 
     fn shutdown(&mut self) {
+        if let Some(runtime) = self.name_server_runtime.take() {
+            runtime.shutdown();
+        }
+        self.inner
+            .route_info_manager_mut()
+            .un_register_service
+            .shutdown();
         info!("Rocketmq NameServer(Rust) gracefully shutdown completed");
     }
 
@@ -144,9 +151,9 @@ impl NameServerRuntime {
 
 impl Drop for NameServerRuntime {
     fn drop(&mut self) {
-        if let Some(runtime) = self.name_server_runtime.take() {
-            runtime.shutdown();
-        }
+        // if let Some(runtime) = self.name_server_runtime.take() {
+        //     runtime.shutdown();
+        // }
     }
 }
 

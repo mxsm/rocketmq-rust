@@ -14,8 +14,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::sync::Arc;
+
 use rocketmq_remoting::protocol::header::namesrv::broker_request::UnRegisterBrokerRequestHeader;
 use rocketmq_rust::ArcMut;
+use tokio::sync::Notify;
 use tracing::info;
 use tracing::warn;
 
@@ -25,6 +28,7 @@ pub(crate) struct BatchUnregistrationService {
     name_server_runtime_inner: ArcMut<NameServerRuntimeInner>,
     tx: tokio::sync::mpsc::Sender<UnRegisterBrokerRequestHeader>,
     rx: Option<tokio::sync::mpsc::Receiver<UnRegisterBrokerRequestHeader>>,
+    shutdown_notify: Arc<Notify>,
 }
 
 impl BatchUnregistrationService {
@@ -38,6 +42,7 @@ impl BatchUnregistrationService {
             name_server_runtime_inner,
             tx,
             rx: Some(rx),
+            shutdown_notify: Default::default(),
         }
     }
 
@@ -52,6 +57,7 @@ impl BatchUnregistrationService {
     pub fn start(&mut self) {
         let mut name_server_runtime_inner = self.name_server_runtime_inner.clone();
         let mut rx = self.rx.take().expect("rx is None");
+        let shutdown_notify = self.shutdown_notify.clone();
         let limit = 10;
         tokio::spawn(async move {
             info!(">>>>>>>>BatchUnregistrationService started<<<<<<<<<<<<<<<<<<<");
@@ -61,8 +67,15 @@ impl BatchUnregistrationService {
                     _ = rx.recv_many(&mut unregistration_requests,limit) => {
                         name_server_runtime_inner.route_info_manager_mut().un_register_broker(unregistration_requests);
                     }
+                    _ = shutdown_notify.notified() => {
+                        break;
+                    }
                 }
             }
         });
+    }
+
+    pub fn shutdown(&self) {
+        self.shutdown_notify.notify_one();
     }
 }
