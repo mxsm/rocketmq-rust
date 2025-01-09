@@ -1027,7 +1027,7 @@ impl RouteInfoManager {
                 }
                 broker_data
                     .broker_addrs_mut()
-                    .retain(|&broker_id, broker_addr_inner| broker_addr != broker_addr_inner);
+                    .retain(|_broker_id, broker_addr_inner| broker_addr != broker_addr_inner);
 
                 if broker_data.broker_addrs_mut().is_empty() {
                     self.broker_addr_table.remove(broker_name.as_str());
