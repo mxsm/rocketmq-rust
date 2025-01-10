@@ -29,6 +29,7 @@ use crate::base::compaction_append_msg_callback::CompactionAppendMsgCallback;
 use crate::base::message_result::AppendMessageResult;
 use crate::base::put_message_context::PutMessageContext;
 use crate::base::select_result::SelectMappedBufferResult;
+use crate::base::transient_store_pool::TransientStorePool;
 use crate::config::flush_disk_type::FlushDiskType;
 
 pub mod default_mapped_file_impl;
@@ -596,4 +597,77 @@ pub trait MappedFile {
     /// # Returns
     /// `true` if the specified range is loaded into memory; `false` otherwise.
     fn is_loaded(&self, position: i64, size: usize) -> bool;
+}
+
+pub trait MappedFileRefactor {
+    fn get_file_name(&self) -> &CheetahString;
+    fn rename_to(&self, file_name: &CheetahString) -> bool;
+    fn get_file_size(&self) -> usize;
+    //fn get_file_channel(&self) -> &File;
+    fn is_full(&self) -> bool;
+    fn is_available(&self) -> bool;
+
+    fn append_message<AMC: AppendMessageCallback>(
+        &self,
+        message: &MessageExtBrokerInner,
+        message_callback: AMC,
+        put_message_context: &PutMessageContext,
+    ) -> AppendMessageResult;
+
+    fn append_messages<AMC: AppendMessageCallback>(
+        &self,
+        message: &MessageExtBatch,
+        message_callback: AMC,
+        put_message_context: &PutMessageContext,
+    ) -> AppendMessageResult;
+
+    fn append_message_with_callback(
+        &self,
+        byte_buffer_msg: &[u8],
+        cb: &dyn CompactionAppendMsgCallback,
+    ) -> AppendMessageResult;
+
+    fn append_message_bytes(&self, data: &[u8]) -> bool;
+    fn append_message_with_offset(&self, data: &[u8], offset: usize, length: usize) -> bool;
+    fn get_file_from_offset(&self) -> u64;
+    fn flush(&self, flush_least_pages: usize) -> usize;
+    fn commit(&self, commit_least_pages: usize) -> usize;
+    fn select_mapped_buffer(&self, pos: usize, size: usize) -> Option<SelectMappedBufferResult>;
+    fn select_mapped_buffer_with_position(&self, pos: usize) -> Option<SelectMappedBufferResult>;
+    fn get_mapped_byte_buffer(&self) -> &[u8];
+    fn slice_byte_buffer(&self) -> &[u8];
+    fn get_store_timestamp(&self) -> u64;
+    fn get_last_modified_timestamp(&self) -> u64;
+    fn get_data(&self, pos: usize, size: usize, byte_buffer: &mut [u8]) -> bool;
+    fn destroy(&self, interval_forcibly: u64) -> bool;
+    fn shutdown(&self, interval_forcibly: u64);
+    fn release(&self);
+    fn hold(&self) -> bool;
+    fn is_first_create_in_queue(&self) -> bool;
+    fn set_first_create_in_queue(&self, first_create_in_queue: bool);
+    fn get_flushed_position(&self) -> usize;
+    fn set_flushed_position(&self, flushed_position: usize);
+    fn get_wrote_position(&self) -> usize;
+    fn set_wrote_position(&self, wrote_position: usize);
+    fn get_read_position(&self) -> usize;
+    fn set_committed_position(&self, committed_position: usize);
+    fn m_lock(&self);
+    fn m_unlock(&self);
+    fn warm_mapped_file(&self, type_: FlushDiskType, pages: usize);
+    fn swap_map(&self) -> bool;
+    fn clean_swapped_map(&self, force: bool);
+    fn get_recent_swap_map_time(&self) -> u64;
+    fn get_mapped_byte_buffer_access_count_since_last_swap(&self) -> u64;
+    fn get_file(&self) -> &File;
+    fn rename_to_delete(&mut self);
+    fn move_to_parent(&self) -> io::Result<()>;
+    fn get_last_flush_time(&self) -> u64;
+    fn init(
+        &self,
+        file_name: &str,
+        file_size: usize,
+        transient_store_pool: &TransientStorePool,
+    ) -> io::Result<()>;
+    fn iterator(&self, pos: usize) -> Box<dyn Iterator<Item = SelectMappedBufferResult>>;
+    fn is_loaded(&self, position: u64, size: usize) -> bool;
 }
