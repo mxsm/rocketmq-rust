@@ -996,11 +996,11 @@ impl RouteInfoManager {
         &mut self,
         un_register_requests: Vec<UnRegisterBrokerRequestHeader>,
     ) {
-        let mut remove_broker = HashSet::<CheetahString>::new();
-        let mut reduced_broker = HashSet::<CheetahString>::new();
+        let mut remove_broker = HashSet::new();
+        let mut reduced_broker = HashSet::new();
         let mut need_notify_broker_map = HashMap::new();
 
-        for un_register_request in un_register_requests {
+        for un_register_request in &un_register_requests {
             let broker_name = &un_register_request.broker_name;
             let cluster_name = &un_register_request.cluster_name;
             let broker_addr = &un_register_request.broker_addr;
@@ -1030,7 +1030,7 @@ impl RouteInfoManager {
                     .retain(|_broker_id, broker_addr_inner| broker_addr != broker_addr_inner);
 
                 if broker_data.broker_addrs_mut().is_empty() {
-                    self.broker_addr_table.remove(broker_name.as_str());
+                    self.broker_addr_table.remove(broker_name);
                     remove_broker_name = true;
                 } else if is_min_broker_id_changed {
                     need_notify_broker_map.insert(
@@ -1047,14 +1047,14 @@ impl RouteInfoManager {
             if remove_broker_name {
                 let name_set = self.cluster_addr_table.get_mut(cluster_name.as_str());
                 if let Some(name_set_inner) = name_set {
-                    name_set_inner.remove(broker_name.as_str());
+                    name_set_inner.remove(broker_name);
                     if name_set_inner.is_empty() {
                         self.cluster_addr_table.remove(cluster_name.as_str());
                     }
                 }
-                remove_broker.insert(broker_name.clone());
+                remove_broker.insert(broker_name);
             } else {
-                reduced_broker.insert(broker_name.clone());
+                reduced_broker.insert(broker_name);
             }
         }
         self.clean_topic_by_un_register_requests(remove_broker, reduced_broker);
@@ -1084,14 +1084,14 @@ impl RouteInfoManager {
 
     fn clean_topic_by_un_register_requests(
         &mut self,
-        removed_broker: HashSet<CheetahString>,
-        reduced_broker: HashSet<CheetahString>,
+        removed_broker: HashSet<&CheetahString>,
+        reduced_broker: HashSet<&CheetahString>,
     ) {
         let mut delete_topic = HashSet::new();
         for (topic, queue_data_map) in self.topic_queue_table.iter_mut() {
-            for broker_name in &removed_broker {
-                if let Some(removed_qd) = queue_data_map.remove(broker_name) {
-                    println!(
+            for broker_name in removed_broker.iter() {
+                if let Some(removed_qd) = queue_data_map.remove(*broker_name) {
+                    info!(
                         "removeTopicByBrokerName, remove one broker's topic {} {:?}",
                         topic, removed_qd
                     );
@@ -1099,7 +1099,7 @@ impl RouteInfoManager {
             }
 
             if queue_data_map.is_empty() {
-                println!(
+                info!(
                     "removeTopicByBrokerName, remove the topic all queue {}",
                     topic
                 );
@@ -1107,15 +1107,15 @@ impl RouteInfoManager {
             }
 
             for broker_name in &reduced_broker {
-                if let Some(queue_data) = queue_data_map.get_mut(broker_name) {
+                if let Some(queue_data) = queue_data_map.get_mut(*broker_name) {
                     if self
                         .broker_addr_table
-                        .get(broker_name)
+                        .get(*broker_name)
                         .is_some_and(|b| b.enable_acting_master())
                     {
                         // Master has been unregistered, wipe the write perm
                         let flag = {
-                            let broker_data = self.broker_addr_table.get(broker_name);
+                            let broker_data = self.broker_addr_table.get(*broker_name);
                             if broker_data.is_none() {
                                 true
                             } else {
@@ -1126,7 +1126,7 @@ impl RouteInfoManager {
                                     broker_data_unwrap
                                         .broker_addrs()
                                         .keys()
-                                        .cloned()
+                                        .copied()
                                         .min()
                                         .unwrap()
                                         > 0
