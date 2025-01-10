@@ -225,8 +225,7 @@ impl DefaultMQPushConsumerImpl {
                     .get_or_create_mq_client_instance(
                         self.client_config.as_ref().clone(),
                         self.rpc_hook.clone(),
-                    )
-                    .await;
+                    );
                 self.client_instance = Some(client_instance.clone());
                 self.rebalance_impl
                     .set_consumer_group(self.consumer_config.consumer_group.clone());

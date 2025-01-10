@@ -19,18 +19,19 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use lazy_static::lazy_static;
+use parking_lot::RwLock;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_rust::ArcMut;
-use tokio::sync::RwLock;
 use tracing::info;
 
 use crate::base::client_config::ClientConfig;
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::producer::produce_accumulator::ProduceAccumulator;
 
-type ClientInstanceHashMap = HashMap<String /* clientId */, ArcMut<MQClientInstance>>;
-type AccumulatorHashMap = HashMap<String /* clientId */, ArcMut<ProduceAccumulator>>;
+type ClientInstanceHashMap = HashMap<CheetahString /* clientId */, ArcMut<MQClientInstance>>;
+type AccumulatorHashMap = HashMap<CheetahString /* clientId */, ArcMut<ProduceAccumulator>>;
 
 #[derive(Default)]
 pub struct MQClientManager {
@@ -55,46 +56,51 @@ impl MQClientManager {
         &INSTANCE
     }
 
-    pub async fn get_or_create_mq_client_instance(
+    pub fn get_or_create_mq_client_instance(
         &self,
         client_config: ClientConfig,
         rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
     ) -> ArcMut<MQClientInstance> {
-        let client_id = client_config.build_mq_client_id();
-        let mut factory_table = self.factory_table.write().await;
-        let instance = factory_table.entry(client_id.clone()).or_insert_with(|| {
-            let instance = MQClientInstance::new_arc(
-                client_config.clone(),
-                self.factory_index_generator.fetch_add(1, Ordering::SeqCst),
-                client_id.clone(),
-                rpc_hook,
-            );
-            info!("Created new MQClientInstance for clientId: [{}]", client_id);
-            instance
-        });
-        instance.clone()
+        let client_id = CheetahString::from_string(client_config.build_mq_client_id());
+        let mut factory_table = self.factory_table.write();
+
+        if let Some(instance) = factory_table.get(&client_id) {
+            return instance.clone();
+        }
+
+        let instance = MQClientInstance::new_arc(
+            client_config.clone(),
+            self.factory_index_generator.fetch_add(1, Ordering::SeqCst),
+            client_id.clone(),
+            rpc_hook,
+        );
+        info!("Created new MQClientInstance for clientId: [{}]", client_id);
+        factory_table.insert(client_id, instance.clone());
+        instance
     }
 
-    pub async fn get_or_create_produce_accumulator(
+    pub fn get_or_create_produce_accumulator(
         &self,
         client_config: ClientConfig,
     ) -> ArcMut<ProduceAccumulator> {
-        let client_id = client_config.build_mq_client_id();
-        let mut accumulator_table = self.accumulator_table.write().await;
-        let accumulator = accumulator_table
-            .entry(client_id.clone())
-            .or_insert_with(|| {
-                let accumulator = ProduceAccumulator::new(client_id.as_str());
-                info!(
-                    "Created new ProduceAccumulator for clientId: [{}]",
-                    client_id
-                );
-                ArcMut::new(accumulator)
-            });
-        accumulator.clone()
+        let client_id = CheetahString::from_string(client_config.build_mq_client_id());
+        let mut accumulator_table = self.accumulator_table.write();
+
+        if let Some(accumulator) = accumulator_table.get(&client_id) {
+            return accumulator.clone();
+        }
+
+        let accumulator = ArcMut::new(ProduceAccumulator::new(client_id.as_str()));
+        info!(
+            "Created new ProduceAccumulator for clientId:[{}]",
+            client_id
+        );
+        accumulator_table.insert(client_id, accumulator.clone());
+
+        accumulator
     }
 
-    pub async fn remove_client_factory(&self, client_id: &str) {
-        self.factory_table.write().await.remove(client_id);
+    pub async fn remove_client_factory(&self, client_id: &CheetahString) {
+        self.factory_table.write().remove(client_id);
     }
 }
