@@ -54,7 +54,7 @@ thiserror = { workspace = true }
 trait-variant = { workspace = true }
 cheetah-string = { workspace = true }
 dashmap = { workspace = true }
-log = "0.4.22"
+log = "0.4.24"
 [dev-dependencies]
 mockall = "0.13.1"
 static_assertions = { version = "1" }
