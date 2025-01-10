@@ -662,7 +662,7 @@ impl RouteInfoManager {
         );
 
         if let Some(broker_addrs_notify) =
-            self.choose_broker_addrs_to_notify(broker_addr_map, offline_broker_addr)
+            Self::choose_broker_addrs_to_notify(broker_addr_map, offline_broker_addr)
         {
             for broker_addr in broker_addrs_notify {
                 let remoting_client = self.name_server_runtime_inner.clone();
@@ -686,18 +686,17 @@ impl RouteInfoManager {
     }
 
     fn choose_broker_addrs_to_notify(
-        &self,
         broker_addr_map: &HashMap<u64, CheetahString>,
         offline_broker_addr: Option<CheetahString>,
-    ) -> Option<Vec<CheetahString>> {
+    ) -> Option<Vec<&CheetahString>> {
         if broker_addr_map.len() == 1 || offline_broker_addr.is_some() {
-            return Some(broker_addr_map.values().cloned().collect());
+            return Some(broker_addr_map.values().collect());
         }
         let min_broker_id = broker_addr_map.keys().min().copied().unwrap();
         let broker_addr_vec = broker_addr_map
             .iter()
             .filter(|(key, _value)| **key != min_broker_id)
-            .map(|(_, value)| value.clone())
+            .map(|(_, value)| value)
             .collect();
         Some(broker_addr_vec)
     }
