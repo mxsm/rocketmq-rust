@@ -15,9 +15,11 @@
  * limitations under the License.
  */
 
+use std::fs;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::path::Path;
 use std::path::PathBuf;
 use std::ptr;
 use std::sync::atomic::AtomicI32;
@@ -218,7 +220,20 @@ impl MappedFile for DefaultMappedFile {
 
     #[inline]
     fn rename_to(&mut self, file_name: &str) -> bool {
-        todo!()
+        let new_file = Path::new(file_name);
+        match std::fs::rename(self.file_name.as_str(), new_file) {
+            Ok(_) => {
+                self.file_name = CheetahString::from(file_name);
+                match fs::File::open(new_file) {
+                    Ok(new_file) => {
+                        self.file = new_file;
+                    }
+                    Err(_) => return false,
+                }
+                true
+            }
+            Err(_) => false,
+        }
     }
 
     #[inline]
