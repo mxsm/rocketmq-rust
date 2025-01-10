@@ -2193,8 +2193,7 @@ impl DefaultMQProducerImpl {
                     .get_or_create_mq_client_instance(
                         self.client_config.clone(),
                         self.rpc_hook.clone(),
-                    )
-                    .await;
+                    );
 
                 let service_detector = DefaultServiceDetector {
                     client_instance: client_instance.clone(),
