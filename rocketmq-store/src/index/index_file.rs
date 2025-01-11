@@ -136,7 +136,7 @@ impl IndexFile {
     }
 
     #[inline]
-    pub fn destroy(&self, interval_forcibly: i64) -> bool {
+    pub fn destroy(&self, interval_forcibly: u64) -> bool {
         self.mapped_file.destroy(interval_forcibly)
     }
 
