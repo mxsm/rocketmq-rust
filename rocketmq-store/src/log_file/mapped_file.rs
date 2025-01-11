@@ -600,10 +600,6 @@ pub trait MappedFile {
 }
 
 pub trait MappedFileRefactor {
-    fn get_file_name(&self) -> &CheetahString;
-    fn rename_to(&self, file_name: &CheetahString) -> bool;
-    fn get_file_size(&self) -> usize;
-    //fn get_file_channel(&self) -> &File;
     fn is_full(&self) -> bool;
     fn is_available(&self) -> bool;
 

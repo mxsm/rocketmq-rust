@@ -243,7 +243,7 @@ impl MappedFile for DefaultMappedFile {
 
     #[inline]
     fn is_full(&self) -> bool {
-        self.file_size == self.wrote_position.load(Ordering::Relaxed) as u64
+        self.file_size == self.wrote_position.load(Ordering::Acquire) as u64
     }
 
     #[inline]
