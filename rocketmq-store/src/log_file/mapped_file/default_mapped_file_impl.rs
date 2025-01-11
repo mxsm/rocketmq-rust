@@ -581,8 +581,20 @@ impl MappedFile for DefaultMappedFile {
     }
 
     #[inline]
-    fn destroy(&self, interval_forcibly: i64) -> bool {
-        true
+    fn destroy(&self, interval_forcibly: u64) -> bool {
+        MappedFile::shutdown(self, interval_forcibly);
+        if self.is_cleanup_over() {
+            if let Err(e) = fs::remove_file(self.file_name.as_str()) {
+                error!("delete file failed: {:?}", e);
+                false
+            } else {
+                info!("delete file success: {}", self.file_name);
+                true
+            }
+        } else {
+            warn!("destroy mapped file failed, cleanup over failed");
+            false
+        }
     }
 
     #[inline]
@@ -728,6 +740,15 @@ impl MappedFile for DefaultMappedFile {
         } else {
             None
         }
+    }
+
+    fn init(
+        &self,
+        file_name: &CheetahString,
+        file_size: usize,
+        transient_store_pool: &TransientStorePool,
+    ) -> std::io::Result<()> {
+        unimplemented!("init")
     }
 }
 
