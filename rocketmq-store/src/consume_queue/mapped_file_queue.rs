@@ -406,7 +406,7 @@ impl MappedFileQueue {
             result = whered == self.get_flushed_where() as u64;
             self.set_flushed_where(whered as i64);
             if flush_least_pages == 0 {
-                self.set_store_timestamp(tmp_time_stamp as u64);
+                self.set_store_timestamp(tmp_time_stamp);
             }
         }
         result

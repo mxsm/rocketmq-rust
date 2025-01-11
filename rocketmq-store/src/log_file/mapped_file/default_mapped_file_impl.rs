@@ -69,7 +69,7 @@ pub struct DefaultMappedFile {
     committed_position: AtomicI32,
     flushed_position: AtomicI32,
     file_size: u64,
-    store_timestamp: AtomicI64,
+    store_timestamp: AtomicU64,
     first_create_in_queue: bool,
     last_flush_time: AtomicU64,
     swap_map_time: u64,
@@ -280,7 +280,7 @@ impl MappedFile for DefaultMappedFile {
         self.wrote_position
             .fetch_add(result.wrote_bytes, Ordering::AcqRel);
         self.store_timestamp
-            .store(result.store_timestamp, Ordering::Release);
+            .store(result.store_timestamp as u64, Ordering::Release);
         result
     }
 
@@ -314,7 +314,7 @@ impl MappedFile for DefaultMappedFile {
         self.wrote_position
             .fetch_add(result.wrote_bytes, Ordering::AcqRel);
         self.store_timestamp.store(
-            message.message_ext_broker_inner.store_timestamp(),
+            message.message_ext_broker_inner.store_timestamp() as u64,
             Ordering::Release,
         );
         result
@@ -531,18 +531,27 @@ impl MappedFile for DefaultMappedFile {
     }
 
     #[inline]
-    fn slice_byte_buffer(&self) -> Bytes {
-        todo!()
+    fn slice_byte_buffer(&self) -> &[u8] {
+        self.mapped_byte_buffer_access_count_since_last_swap
+            .fetch_add(1, Ordering::AcqRel);
+        self.mmapped_file.as_ref()
     }
 
     #[inline]
-    fn get_store_timestamp(&self) -> i64 {
+    fn get_store_timestamp(&self) -> u64 {
         self.store_timestamp.load(Ordering::Relaxed)
     }
 
     #[inline]
-    fn get_last_modified_timestamp(&self) -> i64 {
-        todo!()
+    fn get_last_modified_timestamp(&self) -> u64 {
+        self.file
+            .metadata()
+            .unwrap()
+            .modified()
+            .unwrap()
+            .elapsed()
+            .unwrap()
+            .as_millis() as u64
     }
 
     #[inline]

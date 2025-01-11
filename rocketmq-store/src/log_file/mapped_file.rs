@@ -377,19 +377,19 @@ pub trait MappedFile {
     ///
     /// # Returns
     /// A `bytes::Bytes` instance representing a slice of the mapped byte buffer.
-    fn slice_byte_buffer(&self) -> bytes::Bytes;
+    fn slice_byte_buffer(&self) -> &[u8];
 
     /// Returns the timestamp when the store was created.
     ///
     /// # Returns
     /// A `i64` representing the timestamp of the store creation.
-    fn get_store_timestamp(&self) -> i64;
+    fn get_store_timestamp(&self) -> u64;
 
     /// Returns the timestamp of the last modification to the store.
     ///
     /// # Returns
     /// A `i64` representing the timestamp of the last modification.
-    fn get_last_modified_timestamp(&self) -> i64;
+    fn get_last_modified_timestamp(&self) -> u64;
 
     /// Retrieves data from the store starting at the specified position and of the specified size.
     ///
