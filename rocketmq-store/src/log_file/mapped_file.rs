@@ -614,10 +614,6 @@ pub trait MappedFileRefactor {
         cb: &dyn CompactionAppendMsgCallback,
     ) -> AppendMessageResult;
 
-    fn slice_byte_buffer(&self) -> &[u8];
-    fn get_store_timestamp(&self) -> u64;
-    fn get_last_modified_timestamp(&self) -> u64;
-    fn get_data(&self, pos: usize, size: usize, byte_buffer: &mut [u8]) -> bool;
     fn destroy(&self, interval_forcibly: u64) -> bool;
     fn shutdown(&self, interval_forcibly: u64);
     fn release(&self);
