@@ -56,7 +56,7 @@ impl StatsItem {
     pub fn compute_stats_data(cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>) -> StatsSnapshot {
         let mut stats_snapshot = StatsSnapshot::new();
         let cs_list = cs_list.lock();
-        if cs_list.len() > 0 {
+        if !cs_list.is_empty() {
             let first = cs_list.front().unwrap();
             let last = cs_list.back().unwrap();
             let sum = last.get_value() - first.get_value();
