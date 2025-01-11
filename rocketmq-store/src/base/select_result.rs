@@ -35,6 +35,17 @@ pub struct SelectMappedBufferResult {
     pub is_in_cache: bool,
 }
 
+impl Default for SelectMappedBufferResult {
+    fn default() -> Self {
+        Self {
+            start_offset: 0,
+            size: 0,
+            mapped_file: None,
+            is_in_cache: true,
+        }
+    }
+}
+
 impl SelectMappedBufferResult {
     /// Returns the buffer.
     pub fn get_buffer(&self) -> &[u8] {
