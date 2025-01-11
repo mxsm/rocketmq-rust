@@ -524,8 +524,10 @@ impl MappedFile for DefaultMappedFile {
     }
 
     #[inline]
-    fn get_mapped_byte_buffer(&self) -> Bytes {
-        todo!()
+    fn get_mapped_byte_buffer(&self) -> &[u8] {
+        self.mapped_byte_buffer_access_count_since_last_swap
+            .fetch_add(1, Ordering::AcqRel);
+        self.mmapped_file.as_ref()
     }
 
     #[inline]

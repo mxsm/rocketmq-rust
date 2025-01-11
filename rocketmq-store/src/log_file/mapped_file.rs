@@ -368,7 +368,7 @@ pub trait MappedFile {
     ///
     /// # Returns
     /// A `bytes::Bytes` instance containing the byte buffer of the entire mapped file.
-    fn get_mapped_byte_buffer(&self) -> bytes::Bytes;
+    fn get_mapped_byte_buffer(&self) -> &[u8];
 
     /// Creates a slice of the mapped byte buffer.
     ///
@@ -614,7 +614,6 @@ pub trait MappedFileRefactor {
         cb: &dyn CompactionAppendMsgCallback,
     ) -> AppendMessageResult;
 
-    fn get_mapped_byte_buffer(&self) -> &[u8];
     fn slice_byte_buffer(&self) -> &[u8];
     fn get_store_timestamp(&self) -> u64;
     fn get_last_modified_timestamp(&self) -> u64;
