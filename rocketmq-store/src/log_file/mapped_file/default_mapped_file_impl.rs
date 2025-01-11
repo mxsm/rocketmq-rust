@@ -24,6 +24,7 @@ use std::path::PathBuf;
 use std::ptr;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicI64;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -33,6 +34,7 @@ use cheetah_string::CheetahString;
 use memmap2::MmapMut;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_common::UtilAll::ensure_dir_ok;
 use tracing::debug;
 use tracing::error;
@@ -70,7 +72,7 @@ pub struct DefaultMappedFile {
     file_size: u64,
     store_timestamp: AtomicI64,
     first_create_in_queue: bool,
-    last_flush_time: u64,
+    last_flush_time: AtomicU64,
     swap_map_time: u64,
     mapped_byte_buffer_access_count_since_last_swap: AtomicI64,
     start_timestamp: u64,
@@ -134,7 +136,7 @@ impl DefaultMappedFile {
             file_size,
             store_timestamp: Default::default(),
             first_create_in_queue: false,
-            last_flush_time: 0,
+            last_flush_time: AtomicU64::new(0),
             swap_map_time: 0,
             mapped_byte_buffer_access_count_since_last_swap: Default::default(),
             start_timestamp: 0,
@@ -200,7 +202,7 @@ impl DefaultMappedFile {
             file_size,
             store_timestamp: Default::default(),
             first_create_in_queue: false,
-            last_flush_time: 0,
+            last_flush_time: AtomicU64::new(0),
             swap_map_time: 0,
             mapped_byte_buffer_access_count_since_last_swap: Default::default(),
             start_timestamp: 0,
@@ -455,21 +457,30 @@ impl MappedFile for DefaultMappedFile {
         if self.is_able_to_flush(flush_least_pages) {
             if self.reference_resource.hold() {
                 let value = self.get_read_position();
+                self.mapped_byte_buffer_access_count_since_last_swap
+                    .fetch_add(1, Ordering::AcqRel);
                 if self.transient_store_pool.is_none() {
-                    self.get_mapped_file()
-                        .flush()
-                        .expect("Error occurred when force data to disk.");
+                    if let Err(e) = self.mmapped_file.flush() {
+                        error!("Error occurred when force data to disk: {:?}", e);
+                    } else {
+                        self.last_flush_time
+                            .store(get_current_millis(), Ordering::Relaxed);
+                    }
+                    MappedFile::release(self);
                 } else {
-                    unimplemented!()
+                    unimplemented!(
+                        // need to implement
+                        "flush transient store pool"
+                    );
                 }
-                self.flushed_position.store(value, Ordering::SeqCst);
+                self.flushed_position.store(value, Ordering::Release);
             } else {
                 warn!(
                     "in flush, hold failed, flush offset = {}",
                     self.flushed_position.load(Ordering::Relaxed)
                 );
                 self.flushed_position
-                    .store(self.get_read_position(), Ordering::SeqCst);
+                    .store(self.get_read_position(), Ordering::Release);
             }
         }
         self.get_flushed_position()
@@ -602,7 +613,7 @@ impl MappedFile for DefaultMappedFile {
 
     #[inline]
     fn get_flushed_position(&self) -> i32 {
-        self.flushed_position.load(Ordering::Relaxed)
+        self.flushed_position.load(Ordering::Acquire)
     }
 
     #[inline]

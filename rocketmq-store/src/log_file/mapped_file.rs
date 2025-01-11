@@ -618,8 +618,7 @@ pub trait MappedFileRefactor {
         byte_buffer_msg: &[u8],
         cb: &dyn CompactionAppendMsgCallback,
     ) -> AppendMessageResult;
-    fn get_file_from_offset(&self) -> u64;
-    fn flush(&self, flush_least_pages: usize) -> usize;
+
     fn commit(&self, commit_least_pages: usize) -> usize;
     fn select_mapped_buffer(&self, pos: usize, size: usize) -> Option<SelectMappedBufferResult>;
     fn select_mapped_buffer_with_position(&self, pos: usize) -> Option<SelectMappedBufferResult>;
