@@ -280,8 +280,9 @@ impl CommitLog {
             Some(mmap_file) => {
                 let pos = offset % mapped_file_size as i64;
                 let mut select_mapped_buffer_result =
-                    MappedFile::select_mapped_buffer_size(mmap_file, pos as i32, size);
+                    mmap_file.select_mapped_buffer(pos as i32, size);
                 if let Some(ref mut result) = select_mapped_buffer_result {
+                    result.mapped_file = Some(mmap_file);
                     result.is_in_cache = self.cold_data_check_service.is_data_in_page_cache();
                 }
                 select_mapped_buffer_result
@@ -1131,7 +1132,11 @@ impl CommitLog {
             .find_mapped_file_by_offset(offset, return_first_on_not_found);
         if let Some(mapped_file) = mapped_file {
             let pos = (offset % mapped_file_size) as i32;
-            DefaultMappedFile::select_mapped_buffer(mapped_file, pos)
+            let mut result = mapped_file.select_mapped_buffer_with_position(pos);
+            if let Some(ref mut result) = result {
+                result.mapped_file = Some(mapped_file);
+            }
+            result
         } else {
             None
         }

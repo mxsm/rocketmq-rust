@@ -337,7 +337,12 @@ impl ConsumeQueue {
                 .mapped_file_queue
                 .find_mapped_file_by_offset(offset, false)
             {
-                return mapped_file.select_mapped_buffer((offset % mapped_file_size as i64) as i32);
+                let mut result = mapped_file
+                    .select_mapped_buffer_with_position((offset % mapped_file_size as i64) as i32);
+                if let Some(ref mut result) = result {
+                    result.mapped_file = Some(mapped_file);
+                }
+                return result;
             }
         }
         None
@@ -631,11 +636,13 @@ impl ConsumeQueueTrait for ConsumeQueue {
         }
         let last_mapped_file = last_mapped_file.unwrap();
         let max_readable_position = last_mapped_file.get_read_position();
-        let last_record = MappedFile::select_mapped_buffer_size(
-            last_mapped_file.clone(),
+        let mut last_record = last_mapped_file.select_mapped_buffer(
             max_readable_position - CQ_STORE_UNIT_SIZE,
             CQ_STORE_UNIT_SIZE,
         );
+        if let Some(ref mut result) = last_record {
+            result.mapped_file = Some(last_mapped_file.clone());
+        }
         if let Some(last_record) = last_record {
             let mut bytes = last_record
                 .mapped_file
@@ -680,7 +687,7 @@ impl ConsumeQueueTrait for ConsumeQueue {
                 );
                 return;
             }
-            let result = MappedFile::select_mapped_buffer(mapped_file.clone(), start as i32);
+            let result = mapped_file.select_mapped_buffer_with_position(start as i32);
             if result.is_none() {
                 warn!(
                     "[Bug] Failed to scan consume queue entries from file on correcting min \
@@ -689,7 +696,8 @@ impl ConsumeQueueTrait for ConsumeQueue {
                 );
                 return;
             }
-            let result = result.unwrap();
+            let mut result = result.unwrap();
+            result.mapped_file = Some(mapped_file);
             if result.size == 0 {
                 debug!(
                     "ConsumeQueue[topic={}, queue-id={}] contains no valid entries",

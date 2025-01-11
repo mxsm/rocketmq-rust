@@ -17,7 +17,6 @@
 
 use std::fs::File;
 use std::io;
-use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
@@ -176,6 +175,35 @@ pub trait MappedFile {
     /// `true` if the append operation was successful, `false` otherwise.
     fn append_message_offset_length(&self, data: &[u8], offset: usize, length: usize) -> bool;
 
+    /// Selects a portion of the mapped file based on the specified size.
+    ///
+    /// This method provides a way to access a specific portion of the mapped file, identified by
+    /// the starting position (`pos`) and the size (`size`). It is useful for reading or modifying
+    /// sections of the file without needing to load the entire file into memory.
+    ///
+    /// # Arguments
+    /// * `pos` - The starting position from which the buffer is selected.
+    /// * `size` - The size of the buffer to select.
+    ///
+    /// # Returns
+    /// An `Option<SelectMappedBufferResult>` containing the selected buffer if available, or `None`
+    /// if the specified range is not valid or the file is not available.
+    fn select_mapped_buffer(&self, pos: i32, size: i32) -> Option<SelectMappedBufferResult>;
+
+    /// Selects a buffer from the mapped file starting from the specified position.
+    ///
+    /// Similar to `select_mapped_buffer_size`, but selects the buffer starting from `pos` to the
+    /// end of the file. This method is useful for operations that require processing the
+    /// remainder of the file from a given position.
+    ///
+    /// # Arguments
+    /// * `pos` - The starting position from which the buffer is selected.
+    ///
+    /// # Returns
+    /// An `Option<SelectMappedBufferResult>` containing the selected buffer if available, or `None`
+    /// if the starting position is not valid or the file is not available.
+    fn select_mapped_buffer_with_position(&self, pos: i32) -> Option<SelectMappedBufferResult>;
+
     /// Retrieves a byte slice from the mapped file.
     ///
     /// This method returns a byte slice starting from the specified position and of the specified
@@ -332,39 +360,6 @@ pub trait MappedFile {
     /// # Returns
     /// The number of pages actually committed.
     fn commit(&self, commit_least_pages: i32) -> i32;
-
-    /// Selects a portion of the mapped file based on the specified size.
-    ///
-    /// This method provides a way to access a specific portion of the mapped file, identified by
-    /// the starting position (`pos`) and the size (`size`). It is useful for reading or modifying
-    /// sections of the file without needing to load the entire file into memory.
-    ///
-    /// # Arguments
-    /// * `pos` - The starting position from which the buffer is selected.
-    /// * `size` - The size of the buffer to select.
-    ///
-    /// # Returns
-    /// An `Option<SelectMappedBufferResult>` containing the selected buffer if available, or `None`
-    /// if the specified range is not valid or the file is not available.
-    fn select_mapped_buffer_size(
-        self: Arc<Self>,
-        pos: i32,
-        size: i32,
-    ) -> Option<SelectMappedBufferResult>;
-
-    /// Selects a buffer from the mapped file starting from the specified position.
-    ///
-    /// Similar to `select_mapped_buffer_size`, but selects the buffer starting from `pos` to the
-    /// end of the file. This method is useful for operations that require processing the
-    /// remainder of the file from a given position.
-    ///
-    /// # Arguments
-    /// * `pos` - The starting position from which the buffer is selected.
-    ///
-    /// # Returns
-    /// An `Option<SelectMappedBufferResult>` containing the selected buffer if available, or `None`
-    /// if the starting position is not valid or the file is not available.
-    fn select_mapped_buffer(self: Arc<Self>, pos: i32) -> Option<SelectMappedBufferResult>;
 
     /// Retrieves the entire mapped byte buffer.
     ///
@@ -619,9 +614,6 @@ pub trait MappedFileRefactor {
         cb: &dyn CompactionAppendMsgCallback,
     ) -> AppendMessageResult;
 
-    fn commit(&self, commit_least_pages: usize) -> usize;
-    fn select_mapped_buffer(&self, pos: usize, size: usize) -> Option<SelectMappedBufferResult>;
-    fn select_mapped_buffer_with_position(&self, pos: usize) -> Option<SelectMappedBufferResult>;
     fn get_mapped_byte_buffer(&self) -> &[u8];
     fn slice_byte_buffer(&self) -> &[u8];
     fn get_store_timestamp(&self) -> u64;

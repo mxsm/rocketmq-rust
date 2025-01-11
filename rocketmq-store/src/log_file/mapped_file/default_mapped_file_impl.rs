@@ -26,7 +26,6 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 
 use bytes::Bytes;
 use bytes::BytesMut;
@@ -488,27 +487,30 @@ impl MappedFile for DefaultMappedFile {
 
     #[inline]
     fn commit(&self, commit_least_pages: i32) -> i32 {
-        0
+        unimplemented!(
+            // need to implement
+            "commit"
+        )
     }
 
     #[inline]
-    fn select_mapped_buffer_size(
-        self: Arc<Self>,
-        pos: i32,
-        size: i32,
-    ) -> Option<SelectMappedBufferResult> {
+    fn select_mapped_buffer(&self, pos: i32, size: i32) -> Option<SelectMappedBufferResult> {
         let read_position = self.get_read_position();
         if pos + size <= read_position {
-            if MappedFile::hold(self.as_ref()) {
+            if MappedFile::hold(self) {
                 self.mapped_byte_buffer_access_count_since_last_swap
-                    .fetch_add(1, Ordering::SeqCst);
+                    .fetch_add(1, Ordering::AcqRel);
                 Some(SelectMappedBufferResult {
                     start_offset: self.file_from_offset + pos as u64,
                     size,
-                    mapped_file: Some(self),
+                    mapped_file: None,
                     is_in_cache: true,
                 })
             } else {
+                warn!(
+                    "matched, but hold failed, request pos: {}, fileFromOffset: {}",
+                    pos, self.file_from_offset
+                );
                 None
             }
         } else {
@@ -517,21 +519,6 @@ impl MappedFile for DefaultMappedFile {
                  fileFromOffset: {}",
                 pos, size, self.file_from_offset
             );
-            None
-        }
-    }
-
-    #[inline]
-    fn select_mapped_buffer(self: Arc<Self>, pos: i32) -> Option<SelectMappedBufferResult> {
-        let read_position = self.get_read_position();
-        if pos < read_position && read_position > 0 && MappedFile::hold(self.as_ref()) {
-            Some(SelectMappedBufferResult {
-                start_offset: self.get_file_from_offset() + pos as u64,
-                size: read_position - pos,
-                mapped_file: Some(self),
-                is_in_cache: true,
-            })
-        } else {
             None
         }
     }
@@ -713,6 +700,22 @@ impl MappedFile for DefaultMappedFile {
     #[inline]
     fn is_loaded(&self, position: i64, size: usize) -> bool {
         true
+    }
+
+    fn select_mapped_buffer_with_position(&self, pos: i32) -> Option<SelectMappedBufferResult> {
+        let read_position = self.get_read_position();
+        if pos < read_position && pos >= 0 && MappedFile::hold(self) {
+            self.mapped_byte_buffer_access_count_since_last_swap
+                .fetch_add(1, Ordering::AcqRel);
+            Some(SelectMappedBufferResult {
+                start_offset: self.get_file_from_offset() + pos as u64,
+                size: read_position - pos,
+                mapped_file: None,
+                is_in_cache: true,
+            })
+        } else {
+            None
+        }
     }
 }
 
