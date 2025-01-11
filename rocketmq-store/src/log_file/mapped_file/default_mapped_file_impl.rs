@@ -560,7 +560,8 @@ impl MappedFile for DefaultMappedFile {
         let read_end_position = pos + size;
         if read_end_position <= read_position as usize {
             if MappedFile::hold(self) {
-                let buffer = BytesMut::from(&self.get_mapped_file()[pos..read_end_position]);
+                let buffer = BytesMut::from(&self.mmapped_file.as_ref()[pos..read_end_position]);
+                MappedFile::release(self);
                 Some(buffer.freeze())
             } else {
                 debug!(
