@@ -339,13 +339,12 @@ impl MappedFile for DefaultMappedFile {
     }
 
     #[inline]
-    fn append_message_offset_length(&self, data: &Bytes, offset: usize, length: usize) -> bool {
-        let current_pos = self.wrote_position.load(Ordering::Relaxed) as usize;
+    fn append_message_offset_length(&self, data: &[u8], offset: usize, length: usize) -> bool {
+        let current_pos = self.wrote_position.load(Ordering::Acquire) as usize;
 
         if current_pos + length <= self.file_size as usize {
             let mut mapped_file =
                 &mut self.get_mapped_file_mut()[current_pos..current_pos + length];
-
             if let Some(data_slice) = data.get(offset..offset + length) {
                 if mapped_file.write_all(data_slice).is_ok() {
                     self.wrote_position

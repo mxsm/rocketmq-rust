@@ -19,7 +19,6 @@ use std::fs::File;
 use std::io;
 use std::sync::Arc;
 
-use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
@@ -147,21 +146,6 @@ pub trait MappedFile {
         cb: &dyn CompactionAppendMsgCallback,
     ) -> AppendMessageResult;
 
-    /// Retrieves a byte slice from the mapped file.
-    ///
-    /// This method returns a byte slice starting from the specified position and of the specified
-    /// size. It is useful for reading parts of the file without loading the entire file into
-    /// memory.
-    ///
-    /// # Arguments
-    /// * `pos` - The starting position from where bytes should be read.
-    /// * `size` - The number of bytes to read from the starting position.
-    ///
-    /// # Returns
-    /// An `Option<bytes::Bytes>` containing the requested byte slice if available, or `None` if the
-    /// requested slice goes beyond the file boundaries or the file is not available.
-    fn get_bytes(&self, pos: usize, size: usize) -> Option<bytes::Bytes>;
-
     /// Appends a byte array to the mapped file.
     ///
     /// This method appends a given byte array to the mapped file. It is a convenience method that
@@ -173,7 +157,7 @@ pub trait MappedFile {
     ///
     /// # Returns
     /// `true` if the append operation was successful, `false` otherwise.
-    fn append_message_bytes(&self, data: &bytes::Bytes) -> bool {
+    fn append_message_bytes(&self, data: &[u8]) -> bool {
         self.append_message_offset_length(data, 0, data.len())
     }
 
@@ -190,7 +174,22 @@ pub trait MappedFile {
     ///
     /// # Returns
     /// `true` if the append operation was successful, `false` otherwise.
-    fn append_message_offset_length(&self, data: &Bytes, offset: usize, length: usize) -> bool;
+    fn append_message_offset_length(&self, data: &[u8], offset: usize, length: usize) -> bool;
+
+    /// Retrieves a byte slice from the mapped file.
+    ///
+    /// This method returns a byte slice starting from the specified position and of the specified
+    /// size. It is useful for reading parts of the file without loading the entire file into
+    /// memory.
+    ///
+    /// # Arguments
+    /// * `pos` - The starting position from where bytes should be read.
+    /// * `size` - The number of bytes to read from the starting position.
+    ///
+    /// # Returns
+    /// An `Option<bytes::Bytes>` containing the requested byte slice if available, or `None` if the
+    /// requested slice goes beyond the file boundaries or the file is not available.
+    fn get_bytes(&self, pos: usize, size: usize) -> Option<bytes::Bytes>;
 
     /// Appends a byte array to the mapped file without updating the write position.
     ///
@@ -600,9 +599,6 @@ pub trait MappedFile {
 }
 
 pub trait MappedFileRefactor {
-    fn is_full(&self) -> bool;
-    fn is_available(&self) -> bool;
-
     fn append_message<AMC: AppendMessageCallback>(
         &self,
         message: &MessageExtBrokerInner,
@@ -622,9 +618,6 @@ pub trait MappedFileRefactor {
         byte_buffer_msg: &[u8],
         cb: &dyn CompactionAppendMsgCallback,
     ) -> AppendMessageResult;
-
-    fn append_message_bytes(&self, data: &[u8]) -> bool;
-    fn append_message_with_offset(&self, data: &[u8], offset: usize, length: usize) -> bool;
     fn get_file_from_offset(&self) -> u64;
     fn flush(&self, flush_least_pages: usize) -> usize;
     fn commit(&self, commit_least_pages: usize) -> usize;
