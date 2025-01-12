@@ -113,7 +113,6 @@ type TopicQueueMappingInfoTable = ArcMut<
     >,
 >;
 
-#[derive(Clone)]
 pub struct RouteInfoManager {
     pub(crate) topic_queue_table: TopicQueueTable,
     pub(crate) broker_addr_table: BrokerAddrTable,
