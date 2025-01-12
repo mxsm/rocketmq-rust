@@ -182,18 +182,19 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                 .register_single_topic_all(topic_config)
                 .await;
         } else {
-            self.broker_runtime_inner
-                .topic_config_manager()
-                .broker_runtime_inner()
-                .register_increment_broker_data(
-                    vec![topic_config],
-                    self.broker_runtime_inner
-                        .topic_config_manager()
-                        .data_version()
-                        .as_ref()
-                        .clone(),
-                )
-                .await;
+            /* self.broker_runtime_inner
+            .topic_config_manager()
+            .broker_runtime_inner()*/
+            BrokerRuntimeInner::<MS>::register_increment_broker_data(
+                self.broker_runtime_inner.clone(),
+                vec![topic_config],
+                self.broker_runtime_inner
+                    .topic_config_manager()
+                    .data_version()
+                    .as_ref()
+                    .clone(),
+            )
+            .await;
         }
 
         Some(response.set_code(ResponseCode::Success))
@@ -291,18 +292,16 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                     .await;
             }
         } else {
-            self.broker_runtime_inner
-                .topic_config_manager()
-                .broker_runtime_inner()
-                .register_increment_broker_data(
-                    request_body.topic_config_list,
-                    self.broker_runtime_inner
-                        .topic_config_manager()
-                        .data_version()
-                        .as_ref()
-                        .clone(),
-                )
-                .await;
+            BrokerRuntimeInner::<MS>::register_increment_broker_data(
+                self.broker_runtime_inner.clone(),
+                request_body.topic_config_list,
+                self.broker_runtime_inner
+                    .topic_config_manager()
+                    .data_version()
+                    .as_ref()
+                    .clone(),
+            )
+            .await;
         }
         Some(response.set_code(ResponseCode::Success))
     }
