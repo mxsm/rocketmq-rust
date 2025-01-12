@@ -1198,7 +1198,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     pub async fn register_increment_broker_data(
-        &self,
+        this: ArcMut<BrokerRuntimeInner<MS>>,
         topic_config_list: Vec<TopicConfig>,
         data_version: DataVersion,
     ) {
@@ -1213,11 +1213,11 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         let mut topic_config_table = HashMap::new();
         for topic_config in topic_config_list.iter() {
             let register_topic_config =
-                if !PermName::is_writeable(self.broker_config.broker_permission)
-                    || !PermName::is_readable(self.broker_config.broker_permission)
+                if !PermName::is_writeable(this.broker_config().broker_permission)
+                    || !PermName::is_readable(this.broker_config().broker_permission)
                 {
                     TopicConfig {
-                        perm: topic_config.perm & self.broker_config.broker_permission,
+                        perm: topic_config.perm & this.broker_config().broker_permission,
                         ..topic_config.clone()
                     }
                 } else {
@@ -1233,7 +1233,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             .topic_config_table = topic_config_table;
         let mut topic_queue_mapping_info_map = HashMap::new();
         for topic_config in topic_config_list {
-            if let Some(ref value) = self
+            if let Some(ref value) = this
                 .topic_queue_mapping_manager
                 .get_topic_queue_mapping(topic_config.topic_name.as_ref().unwrap().as_str())
             {
@@ -1244,8 +1244,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             }
         }
         serialize_wrapper.topic_queue_mapping_info_map = topic_queue_mapping_info_map;
-        /*self.do_register_broker_all(true, false, serialize_wrapper)
-        .await; TODO*/
+        Self::do_register_broker_all(this, true, false, serialize_wrapper).await;
     }
 
     async fn do_register_broker_all(
