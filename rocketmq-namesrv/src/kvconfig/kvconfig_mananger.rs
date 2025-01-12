@@ -31,7 +31,6 @@ use tracing::info;
 use crate::bootstrap::NameServerRuntimeInner;
 use crate::kvconfig::KVConfigSerializeWrapper;
 
-#[derive(Clone)]
 pub struct KVConfigManager {
     pub(crate) config_table: Arc<
         RwLock<
