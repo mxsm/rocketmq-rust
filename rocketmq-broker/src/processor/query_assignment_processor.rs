@@ -14,53 +14,58 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use crate::broker_error::BrokerError;
+use crate::broker_error::BrokerError::IllegalArgumentError;
+use crate::broker_runtime::BrokerRuntimeInner;
+
 use crate::load_balance::message_request_mode_manager::MessageRequestModeManager;
- use cheetah_string::CheetahString;
- use rocketmq_client_rust::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
- use rocketmq_client_rust::consumer::rebalance_strategy::allocate_message_queue_averagely::AllocateMessageQueueAveragely;
- use rocketmq_client_rust::consumer::rebalance_strategy::allocate_message_queue_averagely_by_circle::AllocateMessageQueueAveragelyByCircle;
- use rocketmq_common::common::config_manager::ConfigManager;
- use rocketmq_remoting::code::request_code::RequestCode;
- use rocketmq_remoting::net::channel::Channel;
- use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
- use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
- use rocketmq_store::config::message_store_config::MessageStoreConfig;
- use std::collections::{HashMap, HashSet};
- use std::sync::Arc;
-use tracing::{info, warn};
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
+
+use crate::Result;
+use cheetah_string::CheetahString;
+use rocketmq_client_rust::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
+use rocketmq_client_rust::consumer::rebalance_strategy::allocate_message_queue_averagely::AllocateMessageQueueAveragely;
+use rocketmq_client_rust::consumer::rebalance_strategy::allocate_message_queue_averagely_by_circle::AllocateMessageQueueAveragelyByCircle;
+
+use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
+use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
 use rocketmq_remoting::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
 use rocketmq_remoting::protocol::body::set_message_request_mode_request_body::SetMessageRequestModeRequestBody;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
+use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::{RemotingDeserializable, RemotingSerializable};
-use crate::client::manager::consumer_manager::ConsumerManager;
-use crate::broker_error::BrokerError;
-use crate::broker_error::BrokerError::IllegalArgumentError;
-use crate::topic::manager::topic_route_info_manager::TopicRouteInfoManager;
-use crate::Result;
+use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_rust::ArcMut;
 
-pub struct QueryAssignmentProcessor {
+use rocketmq_store::log_file::MessageStore;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use tracing::{info, warn};
+
+pub struct QueryAssignmentProcessor<MS> {
     message_request_mode_manager: MessageRequestModeManager,
     load_strategy: HashMap<CheetahString, Arc<dyn AllocateMessageQueueStrategy>>,
-    message_store_config: Arc<MessageStoreConfig>,
+    /*message_store_config: Arc<MessageStoreConfig>,
     broker_config: Arc<BrokerConfig>,
     topic_route_info_manager: Arc<TopicRouteInfoManager>,
-    consumer_manager: Arc<ConsumerManager>,
+    consumer_manager: Arc<ConsumerManager>,*/
+    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
-impl QueryAssignmentProcessor {
+impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
     pub fn new(
-        message_store_config: Arc<MessageStoreConfig>,
+        /* message_store_config: Arc<MessageStoreConfig>,
         broker_config: Arc<BrokerConfig>,
         topic_route_info_manager: Arc<TopicRouteInfoManager>,
-        consumer_manager: Arc<ConsumerManager>,
+        consumer_manager: Arc<ConsumerManager>,*/
+        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> Self {
         let allocate_message_queue_averagely: Arc<dyn AllocateMessageQueueStrategy> =
             Arc::new(AllocateMessageQueueAveragely);
@@ -75,20 +80,23 @@ impl QueryAssignmentProcessor {
             CheetahString::from_static_str(allocate_message_queue_averagely_by_circle.get_name()),
             allocate_message_queue_averagely_by_circle,
         );
-        let manager = MessageRequestModeManager::new(message_store_config.clone());
+        let manager = MessageRequestModeManager::new(Arc::new(
+            broker_runtime_inner.message_store_config().clone(),
+        ));
         let _ = manager.load();
         Self {
             message_request_mode_manager: manager,
             load_strategy,
-            message_store_config,
+            /*message_store_config,
             broker_config,
             topic_route_info_manager,
-            consumer_manager,
+            consumer_manager,*/
+            broker_runtime_inner,
         }
     }
 }
 
-impl QueryAssignmentProcessor {
+impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
     pub async fn process_request(
         &mut self,
         channel: Channel,
@@ -132,10 +140,16 @@ impl QueryAssignmentProcessor {
                     // retry topic must be pull mode
                     body.mode = MessageRequestMode::Pull;
                 } else {
-                    body.mode = self.broker_config.default_message_request_mode;
+                    body.mode = self
+                        .broker_runtime_inner
+                        .broker_config()
+                        .default_message_request_mode;
                 }
                 if body.mode == MessageRequestMode::Pop {
-                    body.pop_share_queue_num = self.broker_config.default_pop_share_queue_num;
+                    body.pop_share_queue_num = self
+                        .broker_runtime_inner
+                        .broker_config()
+                        .default_pop_share_queue_num;
                 }
                 body
             };
@@ -190,7 +204,8 @@ impl QueryAssignmentProcessor {
             // handle broadcasting consumer, this mode returns all message queues
             MessageModel::Broadcasting => {
                 let assigned_queue_set = self
-                    .topic_route_info_manager
+                    .broker_runtime_inner
+                    .topic_route_info_manager()
                     .get_topic_subscribe_info(topic)
                     .await;
                 if assigned_queue_set.is_none() {
@@ -208,13 +223,17 @@ impl QueryAssignmentProcessor {
                     let mut set = HashSet::new();
                     let queue = MessageQueue::from_parts(
                         topic.clone(),
-                        self.broker_config.broker_name.clone(),
+                        self.broker_runtime_inner
+                            .broker_config()
+                            .broker_name
+                            .clone(),
                         mix_all::LMQ_QUEUE_ID as i32,
                     );
                     set.insert(queue);
                     Some(set)
                 } else {
-                    self.topic_route_info_manager
+                    self.broker_runtime_inner
+                        .topic_route_info_manager()
                         .get_topic_subscribe_info(topic)
                         .await
                 };
@@ -229,12 +248,17 @@ impl QueryAssignmentProcessor {
                     return None;
                 }
 
-                if !self.broker_config.server_load_balancer_enable {
+                if !self
+                    .broker_runtime_inner
+                    .broker_config()
+                    .server_load_balancer_enable
+                {
                     return mq_set;
                 }
                 // get all consumer ids for the consumer group
                 let consumer_group_info = self
-                    .consumer_manager
+                    .broker_runtime_inner
+                    .consumer_manager()
                     .get_consumer_group_info(consumer_group);
                 let mut cid_all = if let Some(consumer_group_info) = consumer_group_info {
                     consumer_group_info.get_all_client_ids()

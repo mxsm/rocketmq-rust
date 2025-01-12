@@ -31,7 +31,7 @@ use crate::filter::manager::consumer_filter_wrapper::ConsumerFilterWrapper;
 
 const MS_24_HOUR: u64 = Duration::from_hours(24).as_millis() as u64;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(crate) struct ConsumerFilterManager {
     broker_config: Arc<BrokerConfig>,
     consumer_filter_wrapper: Arc<parking_lot::RwLock<ConsumerFilterWrapper>>,

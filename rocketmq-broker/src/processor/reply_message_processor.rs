@@ -14,12 +14,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::net::SocketAddr;
-use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
@@ -44,18 +41,14 @@ use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use rocketmq_store::stats::stats_type::StatsType;
 use tracing::warn;
 
-use crate::client::manager::producer_manager::ProducerManager;
-use crate::client::rebalance::rebalance_lock_manager::RebalanceLockManager;
+use crate::broker_runtime::BrokerRuntimeInner;
 use crate::mqtrace::send_message_context::SendMessageContext;
 use crate::processor::send_message_processor::Inner;
-use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
-use crate::topic::manager::topic_config_manager::TopicConfigManager;
-use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
 use crate::transaction::transactional_message_service::TransactionalMessageService;
 
 pub struct ReplyMessageProcessor<MS, TS> {
     inner: Inner<MS, TS>,
-    store_host: SocketAddr,
+    /* store_host: SocketAddr, */
 }
 
 impl<MS, TS> ReplyMessageProcessor<MS, TS>
@@ -64,7 +57,7 @@ where
     TS: TransactionalMessageService,
 {
     pub fn new(
-        topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
+        /*topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
         subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
         topic_config_manager: TopicConfigManager,
         broker_config: Arc<BrokerConfig>,
@@ -73,25 +66,23 @@ where
         broker_stats_manager: Arc<BrokerStatsManager>,
         producer_manager: Option<Arc<ProducerManager>>,
         transactional_message_service: ArcMut<TS>,
-        store_host: SocketAddr,
+        store_host: SocketAddr,*/
+        transactional_message_service: ArcMut<TS>,
+        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> Self {
         Self {
             inner: Inner {
-                broker_config,
-                topic_config_manager,
                 send_message_hook_vec: ArcMut::new(Vec::new()),
                 consume_message_hook_vec: ArcMut::new(Vec::new()),
-                topic_queue_mapping_manager,
-                subscription_group_manager,
-                message_store,
                 transactional_message_service,
-                rebalance_lock_manager,
+                /*rebalance_lock_manager,
                 broker_stats_manager,
-                producer_manager,
+                producer_manager: None,*/
                 broker_to_client: Default::default(),
-                store_host,
+                /* store_host, */
+                broker_runtime_inner,
             },
-            store_host,
+            /* store_host, */
         }
     }
 }
@@ -143,15 +134,24 @@ where
         response
             .add_ext_field(
                 MessageConst::PROPERTY_MSG_REGION,
-                self.inner.broker_config.region_id.as_str(),
+                self.inner
+                    .broker_runtime_inner
+                    .broker_config()
+                    .region_id
+                    .as_str(),
             )
             .add_ext_field(
                 MessageConst::PROPERTY_TRACE_SWITCH,
-                self.inner.broker_config.trace_on.to_string(),
+                self.inner
+                    .broker_runtime_inner
+                    .broker_config()
+                    .trace_on
+                    .to_string(),
             );
         let start_timstamp = self
             .inner
-            .broker_config
+            .broker_runtime_inner
+            .broker_config()
             .start_accept_send_request_time_stamp as u64;
         if get_current_millis() < start_timstamp {
             return response
@@ -170,7 +170,8 @@ where
         let mut queue_id_int = request_header.queue_id;
         let topic_config = self
             .inner
-            .topic_config_manager
+            .broker_runtime_inner
+            .topic_config_manager()
             .select_topic_config(request_header.topic())
             .unwrap();
         if queue_id_int < 0 {
@@ -191,7 +192,7 @@ where
         msg_inner.properties_string = request_header.properties.clone().unwrap_or_default();
         msg_inner.message_ext_inner.born_timestamp = request_header.born_timestamp;
         msg_inner.message_ext_inner.born_host = channel.remote_address();
-        msg_inner.message_ext_inner.store_host = self.store_host;
+        msg_inner.message_ext_inner.store_host = self.inner.broker_runtime_inner.store_host();
         msg_inner.message_ext_inner.reconsume_times = request_header.reconsume_times.unwrap_or(0);
 
         let mut push_reply_result = self
@@ -205,8 +206,20 @@ where
             queue_id_int,
         );
 
-        if self.inner.broker_config.store_reply_message_enable {
-            let put_message_result = self.inner.message_store.put_message(msg_inner).await;
+        if self
+            .inner
+            .broker_runtime_inner
+            .broker_config()
+            .store_reply_message_enable
+        {
+            let put_message_result = self
+                .inner
+                .broker_runtime_inner
+                .message_store_mut()
+                .as_mut()
+                .unwrap()
+                .put_message(msg_inner)
+                .await;
             self.handle_put_message_result(
                 put_message_result,
                 &request,
@@ -275,24 +288,37 @@ where
             .unwrap()
             .get(BrokerStatsManager::COMMERCIAL_OWNER)
             .cloned();
-        let commercial_size_per_msg = self.inner.broker_config.commercial_size_per_msg;
+        let commercial_size_per_msg = self
+            .inner
+            .broker_runtime_inner
+            .broker_config()
+            .commercial_size_per_msg;
         if put_ok {
-            self.inner.broker_stats_manager.inc_topic_put_nums(
-                topic,
-                put_message_result.append_message_result().unwrap().msg_num,
-                1,
-            );
-            self.inner.broker_stats_manager.inc_topic_put_size(
-                topic,
-                put_message_result
-                    .append_message_result()
-                    .unwrap()
-                    .wrote_bytes,
-            );
-            self.inner.broker_stats_manager.inc_broker_put_nums(
-                topic,
-                put_message_result.append_message_result().unwrap().msg_num,
-            );
+            self.inner
+                .broker_runtime_inner
+                .broker_stats_manager()
+                .inc_topic_put_nums(
+                    topic,
+                    put_message_result.append_message_result().unwrap().msg_num,
+                    1,
+                );
+            self.inner
+                .broker_runtime_inner
+                .broker_stats_manager()
+                .inc_topic_put_size(
+                    topic,
+                    put_message_result
+                        .append_message_result()
+                        .unwrap()
+                        .wrote_bytes,
+                );
+            self.inner
+                .broker_runtime_inner
+                .broker_stats_manager()
+                .inc_broker_put_nums(
+                    topic,
+                    put_message_result.append_message_result().unwrap().msg_num,
+                );
             response_header.set_msg_id(
                 put_message_result
                     .append_message_result()
@@ -315,7 +341,11 @@ where
                 send_message_context.msg_id = msg_id;
                 send_message_context.queue_id = queue_id;
                 send_message_context.queue_offset = queue_offset;
-                let commercial_base_count = self.inner.broker_config.commercial_base_count;
+                let commercial_base_count = self
+                    .inner
+                    .broker_runtime_inner
+                    .broker_config()
+                    .commercial_base_count;
                 let wrote_size = put_message_result
                     .append_message_result()
                     .unwrap()
@@ -365,7 +395,9 @@ where
     ) -> PushReplyResult {
         let reply_message_request_header = ReplyMessageRequestHeader {
             born_host: CheetahString::from_string(channel.remote_address().to_string()),
-            store_host: CheetahString::from_string(self.store_host.to_string()),
+            store_host: CheetahString::from_string(
+                self.inner.broker_runtime_inner.store_host().to_string(),
+            ),
             store_timestamp: get_current_millis() as i64,
             producer_group: request_header.producer_group.clone(),
             topic: request_header.topic.clone(),
@@ -394,9 +426,8 @@ where
         if let Some(sender_id) = sender_id {
             let channel = self
                 .inner
-                .producer_manager
-                .as_ref()
-                .unwrap()
+                .broker_runtime_inner
+                .producer_manager()
                 .find_channel(sender_id.as_str());
             if let Some(mut channel) = channel {
                 let push_response = self

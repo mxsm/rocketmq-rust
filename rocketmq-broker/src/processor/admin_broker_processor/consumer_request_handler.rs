@@ -31,23 +31,26 @@ use rocketmq_remoting::protocol::header::get_consumer_connection_list_request_he
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_rust::ArcMut;
 use rocketmq_store::log_file::MessageStore;
 use tracing::warn;
 
-use crate::processor::admin_broker_processor::Inner;
+use crate::broker_runtime::BrokerRuntimeInner;
 
 #[derive(Clone)]
-pub(super) struct ConsumerRequestHandler {
-    inner: Inner,
+pub(super) struct ConsumerRequestHandler<MS> {
+    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
-impl ConsumerRequestHandler {
-    pub fn new(inner: Inner) -> Self {
-        Self { inner }
+impl<MS> ConsumerRequestHandler<MS> {
+    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
+        Self {
+            broker_runtime_inner,
+        }
     }
 }
 
-impl ConsumerRequestHandler {
+impl<MS: MessageStore> ConsumerRequestHandler<MS> {
     pub async fn get_consumer_connection_list(
         &mut self,
         _channel: Channel,
@@ -60,8 +63,8 @@ impl ConsumerRequestHandler {
             .decode_command_custom_header::<GetConsumerConnectionListRequestHeader>()
             .unwrap();
         let consumer_group_info = self
-            .inner
-            .consume_manager
+            .broker_runtime_inner
+            .consumer_manager()
             .get_consumer_group_info(request_header.get_consumer_group());
         match consumer_group_info {
             Some(consumer_group_info) => {
@@ -116,14 +119,17 @@ impl ConsumerRequestHandler {
         let mut topics = HashSet::new();
         if request_header.get_topic().is_empty() {
             topics = self
-                .inner
-                .consumer_offset_manager
+                .broker_runtime_inner
+                .consumer_offset_manager()
                 .which_topic_by_consumer(request_header.get_consumer_group());
         } else {
             topics.insert(request_header.get_topic().clone());
         }
         for topic in topics.iter() {
-            let topic_config = self.inner.topic_config_manager.select_topic_config(topic);
+            let topic_config = self
+                .broker_runtime_inner
+                .topic_config_manager()
+                .select_topic_config(topic);
             if topic_config.is_none() {
                 warn!(
                     "AdminBrokerProcessor#getConsumeStats: topic config does not exist, topic={}",
@@ -133,19 +139,19 @@ impl ConsumerRequestHandler {
             }
 
             let mapping_detail = self
-                .inner
-                .topic_queue_mapping_manager
+                .broker_runtime_inner
+                .topic_queue_mapping_manager()
                 .get_topic_queue_mapping(topic);
 
             let find_subscription_data = self
-                .inner
-                .consume_manager
+                .broker_runtime_inner
+                .consumer_manager()
                 .find_subscription_data(request_header.get_consumer_group(), topic);
 
             if find_subscription_data.is_none()
                 && self
-                    .inner
-                    .consume_manager
+                    .broker_runtime_inner
+                    .consumer_manager()
                     .find_subscription_data_count(request_header.get_consumer_group())
                     > 0
             {
@@ -161,34 +167,39 @@ impl ConsumerRequestHandler {
             for i in 0..topic_config.unwrap().get_read_queue_nums() {
                 let mut mq = MessageQueue::new();
                 mq.set_topic(topic.to_string().into());
-                mq.set_broker_name(self.inner.broker_config.broker_name.clone());
+                mq.set_broker_name(
+                    self.broker_runtime_inner
+                        .broker_config()
+                        .broker_name
+                        .clone(),
+                );
                 mq.set_queue_id(i as i32);
 
                 let mut offset_wrapper = OffsetWrapper::new();
 
                 let mut broker_offset = self
-                    .inner
-                    .default_message_store
+                    .broker_runtime_inner
+                    .message_store()
+                    .as_ref()
+                    .unwrap()
                     .get_max_offset_in_queue(topic, i as i32);
                 if broker_offset < 0 {
                     broker_offset = 0;
                 }
 
-                let mut consumer_offset = self.inner.consumer_offset_manager.query_offset(
-                    request_header.get_consumer_group(),
-                    topic,
-                    i as i32,
-                );
+                let mut consumer_offset = self
+                    .broker_runtime_inner
+                    .consumer_offset_manager()
+                    .query_offset(request_header.get_consumer_group(), topic, i as i32);
 
                 if mapping_detail.is_none() && consumer_offset < 0 {
                     consumer_offset = 0;
                 }
 
-                let pull_offset = self.inner.consumer_offset_manager.query_offset(
-                    request_header.get_consumer_group(),
-                    topic,
-                    i as i32,
-                );
+                let pull_offset = self
+                    .broker_runtime_inner
+                    .consumer_offset_manager()
+                    .query_offset(request_header.get_consumer_group(), topic, i as i32);
 
                 offset_wrapper.set_broker_offset(broker_offset);
                 offset_wrapper.set_consumer_offset(consumer_offset);
@@ -197,8 +208,10 @@ impl ConsumerRequestHandler {
                 let time_offset = consumer_offset - 1;
                 if time_offset >= 0 {
                     let last_timestamp = self
-                        .inner
-                        .default_message_store
+                        .broker_runtime_inner
+                        .message_store()
+                        .as_ref()
+                        .unwrap()
                         .get_message_store_timestamp(topic, i as i32, time_offset);
                     if last_timestamp > 0 {
                         offset_wrapper.set_last_timestamp(last_timestamp);
@@ -209,8 +222,8 @@ impl ConsumerRequestHandler {
             }
 
             let consume_tps = self
-                .inner
-                .broker_stats_manager
+                .broker_runtime_inner
+                .broker_stats_manager()
                 .tps_group_get_nums(request_header.get_consumer_group(), topic);
 
             let new_consume_tps = consume_stats.get_consume_tps() + consume_tps;
@@ -229,7 +242,10 @@ impl ConsumerRequestHandler {
         _request: RemotingCommand,
     ) -> Option<RemotingCommand> {
         let mut response = RemotingCommand::create_response_command();
-        let content = self.inner.consumer_offset_manager.encode();
+        let content = self
+            .broker_runtime_inner
+            .consumer_offset_manager_mut()
+            .encode();
         if !content.is_empty() {
             response.set_body_mut_ref(content);
             Some(response)

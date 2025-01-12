@@ -19,40 +19,38 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::common::mix_all::is_sys_consumer_group;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingSerializable;
+use rocketmq_rust::ArcMut;
 use rocketmq_store::log_file::MessageStore;
 use serde::Deserialize;
 use serde::Serialize;
 use tracing::info;
 
 use crate::broker_path_config_helper::get_subscription_group_path;
+use crate::broker_runtime::BrokerRuntimeInner;
 
 pub const CHARACTER_MAX_LENGTH: usize = 255;
 pub const TOPIC_MAX_LENGTH: usize = 127;
 
 pub(crate) struct SubscriptionGroupManager<MS> {
-    pub(crate) broker_config: Arc<BrokerConfig>,
     pub(crate) subscription_group_wrapper: Arc<parking_lot::Mutex<SubscriptionGroupWrapper>>,
-    pub(crate) message_store: Option<MS>,
+    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
 impl<MS> SubscriptionGroupManager<MS> {
     pub fn new(
-        broker_config: Arc<BrokerConfig>,
-        message_store: Option<MS>,
+        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> SubscriptionGroupManager<MS> {
         Self {
-            broker_config,
             subscription_group_wrapper: Arc::new(parking_lot::Mutex::new(
                 SubscriptionGroupWrapper::default(),
             )),
-            message_store,
+            broker_runtime_inner,
         }
     }
 
@@ -61,9 +59,14 @@ impl<MS> SubscriptionGroupManager<MS> {
     }
 }
 
-impl<MS> ConfigManager for SubscriptionGroupManager<MS> {
+impl<MS: MessageStore> ConfigManager for SubscriptionGroupManager<MS> {
     fn config_file_path(&self) -> String {
-        get_subscription_group_path(self.broker_config.store_path_root_dir.as_str())
+        get_subscription_group_path(
+            self.broker_runtime_inner
+                .broker_config()
+                .store_path_root_dir
+                .as_str(),
+        )
     }
 
     fn encode_pretty(&self, pretty_format: bool) -> String {
@@ -128,7 +131,11 @@ where
     ) -> Option<SubscriptionGroupConfig> {
         let mut subscription_group_config = self.find_subscription_group_config_inner(group);
         if subscription_group_config.is_none()
-            && (self.broker_config.auto_create_subscription_group || is_sys_consumer_group(group))
+            && (self
+                .broker_runtime_inner
+                .broker_config()
+                .auto_create_subscription_group
+                || is_sys_consumer_group(group))
         {
             if group.len() > CHARACTER_MAX_LENGTH
                 || TopicValidator::is_topic_or_group_illegal(group)
@@ -148,11 +155,12 @@ where
                     subscription_group_config_new
                 );
             }
-            let state_machine_version = if let Some(ref store) = self.message_store {
-                store.get_state_machine_version()
-            } else {
-                0
-            };
+            let state_machine_version =
+                if let Some(ref store) = self.broker_runtime_inner.message_store() {
+                    store.get_state_machine_version()
+                } else {
+                    0
+                };
             self.subscription_group_wrapper
                 .lock()
                 .data_version

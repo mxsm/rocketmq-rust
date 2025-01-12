@@ -25,22 +25,25 @@ use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::body::kv_table::KVTable;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_rust::ArcMut;
 use rocketmq_store::log_file::MessageStore;
 use sysinfo::Disks;
 
-use crate::processor::admin_broker_processor::Inner;
+use crate::broker_runtime::BrokerRuntimeInner;
 
 #[derive(Clone)]
-pub(super) struct BrokerConfigRequestHandler {
-    inner: Inner,
+pub(super) struct BrokerConfigRequestHandler<MS> {
+    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
-impl BrokerConfigRequestHandler {
-    pub fn new(inner: Inner) -> Self {
-        BrokerConfigRequestHandler { inner }
+impl<MS> BrokerConfigRequestHandler<MS> {
+    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
+        BrokerConfigRequestHandler {
+            broker_runtime_inner,
+        }
     }
 }
-impl BrokerConfigRequestHandler {
+impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
     pub async fn update_broker_config(
         &mut self,
         _channel: Channel,
@@ -61,11 +64,13 @@ impl BrokerConfigRequestHandler {
         let mut response = RemotingCommand::create_response_command();
         // broker config => broker config
         // default message store config => message store config
-        let broker_config = self.inner.broker_config.clone();
+        let broker_config = self.broker_runtime_inner.broker_config().clone();
         let message_store_config = self
-            .inner
-            .default_message_store
-            .message_store_config()
+            .broker_runtime_inner
+            .message_store()
+            .as_ref()
+            .unwrap()
+            .get_message_store_config()
             .clone();
         let broker_config_properties = broker_config.get_properties();
         let message_store_config_properties = message_store_config.get_properties();
@@ -100,9 +105,14 @@ impl BrokerConfigRequestHandler {
     }
 
     fn prepare_runtime_info(&self) -> HashMap<CheetahString, CheetahString> {
-        let mut runtime_info = self.inner.default_message_store.get_runtime_info();
-        self.inner
-            .schedule_message_service
+        let mut runtime_info = self
+            .broker_runtime_inner
+            .message_store()
+            .as_ref()
+            .unwrap()
+            .get_runtime_info();
+        self.broker_runtime_inner
+            .schedule_message_service()
             .build_running_stats(&mut runtime_info);
         runtime_info.insert(
             "brokerActive".to_string(),
@@ -111,7 +121,7 @@ impl BrokerConfigRequestHandler {
         let version = RocketMqVersion::CURRENT_VERSION;
         runtime_info.insert("brokerVersionDesc".to_string(), version.to_string());
         runtime_info.insert("brokerVersion".to_string(), version.to_string());
-        let msg_put_total_yesterday_morning = match &self.inner.broker_stats {
+        let msg_put_total_yesterday_morning = match &self.broker_runtime_inner.broker_stats() {
             Some(broker_stats) => broker_stats
                 .get_msg_put_total_yesterday_morning()
                 .to_string(),
@@ -122,7 +132,7 @@ impl BrokerConfigRequestHandler {
             msg_put_total_yesterday_morning,
         );
 
-        let msg_put_total_today_morning = match &self.inner.broker_stats {
+        let msg_put_total_today_morning = match &self.broker_runtime_inner.broker_stats() {
             Some(broker_stats) => broker_stats.get_msg_put_total_today_morning().to_string(),
             None => String::from("No broker stats available msgPutTotalTodayMorning"),
         };
@@ -131,13 +141,13 @@ impl BrokerConfigRequestHandler {
             msg_put_total_today_morning,
         );
 
-        let msg_put_total_today_now = match &self.inner.broker_stats {
+        let msg_put_total_today_now = match &self.broker_runtime_inner.broker_stats() {
             Some(broker_stats) => broker_stats.get_msg_put_total_today_now().to_string(),
             None => String::from("No broker stats available msgPutTotalTodayNow"),
         };
         runtime_info.insert("msgPutTotalTodayNow".to_string(), msg_put_total_today_now);
 
-        let msg_get_total_yesterday_morning = match &self.inner.broker_stats {
+        let msg_get_total_yesterday_morning = match &self.broker_runtime_inner.broker_stats() {
             Some(broker_stats) => broker_stats
                 .get_msg_get_total_yesterday_morning()
                 .to_string(),
@@ -148,7 +158,7 @@ impl BrokerConfigRequestHandler {
             msg_get_total_yesterday_morning,
         );
 
-        let msg_get_total_today_morning = match &self.inner.broker_stats {
+        let msg_get_total_today_morning = match &self.broker_runtime_inner.broker_stats() {
             Some(broker_stats) => broker_stats.get_msg_get_total_today_morning().to_string(),
             None => String::from("No broker stats available msgGetTotalTodayMorning"),
         };
@@ -157,77 +167,96 @@ impl BrokerConfigRequestHandler {
             msg_get_total_today_morning,
         );
 
-        let msg_get_total_today_now = match &self.inner.broker_stats {
+        let msg_get_total_today_now = match &self.broker_runtime_inner.broker_stats() {
             Some(broker_stats) => broker_stats.get_msg_get_total_today_now().to_string(),
             None => String::from("No broker stats available msgGetTotalTodayNow"),
         };
         runtime_info.insert("msgGetTotalTodayNow".to_string(), msg_get_total_today_now);
         runtime_info.insert(
             "dispatchBehindBytes".to_string(),
-            self.inner
-                .default_message_store
+            self.broker_runtime_inner
+                .message_store()
+                .as_ref()
+                .unwrap()
                 .dispatch_behind_bytes()
                 .to_string(),
         );
         runtime_info.insert(
             "pageCacheLockTimeMills".to_string(),
-            self.inner
-                .default_message_store
+            self.broker_runtime_inner
+                .message_store()
+                .as_ref()
+                .unwrap()
                 .lock_time_mills()
                 .to_string(),
         );
         runtime_info.insert(
             "earliestMessageTimeStamp".to_string(),
-            self.inner
-                .default_message_store
+            self.broker_runtime_inner
+                .message_store()
+                .as_ref()
+                .unwrap()
                 .get_earliest_message_time()
                 .to_string(),
         );
         runtime_info.insert(
             "startAcceptSendRequestTimeStamp".to_string(),
-            self.inner
-                .broker_config
+            self.broker_runtime_inner
+                .broker_config()
                 .get_start_accept_send_request_time_stamp()
                 .to_string(),
         );
-        let is_timer_wheel_enable = self.inner.message_store_config.is_timer_wheel_enable();
+        let is_timer_wheel_enable = self
+            .broker_runtime_inner
+            .message_store_config()
+            .is_timer_wheel_enable();
         if is_timer_wheel_enable {
             runtime_info.insert(
                 "timerReadBehind".to_string(),
-                self.inner
-                    .default_message_store
+                self.broker_runtime_inner
+                    .message_store()
+                    .as_ref()
+                    .unwrap()
                     .get_timer_message_store()
                     .get_dequeue_behind()
                     .to_string(),
             );
             runtime_info.insert(
                 "timerOffsetBehind".to_string(),
-                self.inner
-                    .default_message_store
+                self.broker_runtime_inner
+                    .message_store()
+                    .as_ref()
+                    .unwrap()
                     .get_timer_message_store()
                     .get_enqueue_behind_messages()
                     .to_string(),
             );
             runtime_info.insert(
                 "timerCongestNum".to_string(),
-                self.inner
-                    .default_message_store
+                self.broker_runtime_inner
+                    .message_store()
+                    .as_ref()
+                    .unwrap()
                     .get_timer_message_store()
                     .get_all_congest_num()
                     .to_string(),
             );
             runtime_info.insert(
                 "timerEnqueueTps".to_string(),
-                self.inner
-                    .default_message_store
+                self.broker_runtime_inner
+                    .message_store()
+                    .as_ref()
+                    .unwrap()
                     .get_timer_message_store()
                     .get_enqueue_tps()
                     .to_string(),
             );
             runtime_info.insert(
                 "timerDequeueTps".to_string(),
-                self.inner
-                    .default_message_store
+                self.broker_runtime_inner
+                    .message_store()
+                    .as_ref()
+                    .unwrap()
                     .get_timer_message_store()
                     .get_dequeue_tps()
                     .to_string(),
@@ -239,14 +268,17 @@ impl BrokerConfigRequestHandler {
             runtime_info.insert("timerEnqueueTps".to_string(), "0.0".to_string());
             runtime_info.insert("timerDequeueTps".to_string(), "0.0".to_string());
         }
-        let default_message_store = self.inner.default_message_store.clone();
+        let default_message_store = self.broker_runtime_inner.message_store().as_ref().unwrap();
         runtime_info.insert(
             "remainTransientStoreBufferNumbs".to_string(),
             default_message_store
                 .remain_transient_store_buffer_nums()
                 .to_string(),
         );
-        if default_message_store.is_transient_store_pool_enable() {
+        if default_message_store
+            .get_message_store_config()
+            .transient_store_pool_enable
+        {
             runtime_info.insert(
                 "remainHowManyDataToCommit".to_string(),
                 mix_all::human_readable_byte_count(
@@ -262,7 +294,10 @@ impl BrokerConfigRequestHandler {
                 false,
             ),
         );
-        let store_path_root_dir = &self.inner.message_store_config.store_path_root_dir;
+        let store_path_root_dir = &self
+            .broker_runtime_inner
+            .message_store_config()
+            .store_path_root_dir;
         let commit_log_dir = std::path::Path::new(store_path_root_dir.as_str());
         if commit_log_dir.exists() {
             let disks = Disks::new_with_refreshed_list();

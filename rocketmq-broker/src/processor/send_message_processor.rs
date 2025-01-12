@@ -17,13 +17,11 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use rand::Rng;
 use rocketmq_common::common::attribute::cleanup_policy::CleanupPolicy;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::key_builder::KeyBuilder;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
@@ -75,15 +73,12 @@ use rocketmq_store::stats::stats_type::StatsType;
 use tracing::info;
 use tracing::warn;
 
-use crate::client::manager::producer_manager::ProducerManager;
+use crate::broker_runtime::BrokerRuntimeInner;
 use crate::client::net::broker_to_client::Broker2Client;
-use crate::client::rebalance::rebalance_lock_manager::RebalanceLockManager;
 use crate::mqtrace::consume_message_context::ConsumeMessageContext;
 use crate::mqtrace::consume_message_hook::ConsumeMessageHook;
 use crate::mqtrace::send_message_context::SendMessageContext;
 use crate::mqtrace::send_message_hook::SendMessageHook;
-use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
-use crate::topic::manager::topic_config_manager::TopicConfigManager;
 use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
 use crate::transaction::transactional_message_service::TransactionalMessageService;
 
@@ -128,7 +123,8 @@ where
                 let mut request_header = parse_request_header(&request, request_code)?;
                 let mapping_context = self
                     .inner
-                    .topic_queue_mapping_manager
+                    .broker_runtime_inner
+                    .topic_queue_mapping_manager()
                     .build_topic_queue_mapping_context(&request_header, true);
                 let rewrite_result = TopicQueueMappingManager::rewrite_request_for_static_topic(
                     &mut request_header,
@@ -185,7 +181,7 @@ where
     TS: TransactionalMessageService,
 {
     pub fn new(
-        topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
+        /*topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
         subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
         topic_config_manager: TopicConfigManager,
         broker_config: Arc<BrokerConfig>,
@@ -193,23 +189,29 @@ where
         transactional_message_service: ArcMut<TS>,
         rebalance_lock_manager: Arc<RebalanceLockManager>,
         broker_stats_manager: Arc<BrokerStatsManager>,
-        store_host: SocketAddr,
+        store_host: SocketAddr,*/
+        transactional_message_service: ArcMut<TS>,
+        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> Self {
+        let store_host = broker_runtime_inner.store_host();
         Self {
             inner: ArcMut::new(Inner {
-                broker_config,
+                /*broker_config,
                 topic_config_manager,
                 send_message_hook_vec: ArcMut::new(Vec::new()),
                 consume_message_hook_vec: ArcMut::new(Vec::new()),
                 topic_queue_mapping_manager,
                 subscription_group_manager,
-                message_store,
+                message_store,*/
+                send_message_hook_vec: ArcMut::new(Vec::new()),
+                consume_message_hook_vec: ArcMut::new(Vec::new()),
                 transactional_message_service,
-                rebalance_lock_manager,
+                /*rebalance_lock_manager,
                 broker_stats_manager,
-                producer_manager: None,
+                producer_manager: None,*/
                 broker_to_client: Default::default(),
-                store_host,
+                /* store_host, */
+                broker_runtime_inner,
             }),
             store_host,
         }
@@ -234,7 +236,8 @@ where
         }
         let topic_config = self
             .inner
-            .topic_config_manager
+            .broker_runtime_inner
+            .topic_config_manager()
             .select_topic_config(request_header.topic())
             .ok_or(RemotingCommandError(format!(
                 "topic {} not exist",
@@ -294,7 +297,8 @@ where
         message_ext.message_ext_inner.reconsume_times = request_header.reconsume_times.unwrap_or(0);
         let cluster_name = self
             .inner
-            .broker_config
+            .broker_runtime_inner
+            .broker_config()
             .broker_identity
             .broker_cluster_name
             .clone();
@@ -366,15 +370,28 @@ where
             .message_ext_inner
             .topic()
             .clone();
-        if self.inner.broker_config.async_send_enable {
-            let mut message_store = self.inner.message_store.clone();
+        if self
+            .inner
+            .broker_runtime_inner
+            .broker_config()
+            .async_send_enable
+        {
+            let mut broker_runtime_inner = self.inner.broker_runtime_inner.clone();
             let put_message_result = tokio::spawn(async move {
                 if is_inner_batch {
-                    message_store
+                    broker_runtime_inner
+                        .message_store_mut()
+                        .as_mut()
+                        .unwrap()
                         .put_message(batch_message.message_ext_broker_inner)
                         .await
                 } else {
-                    message_store.put_messages(batch_message).await
+                    broker_runtime_inner
+                        .message_store_mut()
+                        .as_mut()
+                        .unwrap()
+                        .put_messages(batch_message)
+                        .await
                 }
             })
             .await
@@ -399,11 +416,20 @@ where
         } else {
             let put_message_result = if is_inner_batch {
                 self.inner
-                    .message_store
+                    .broker_runtime_inner
+                    .message_store_mut()
+                    .as_mut()
+                    .unwrap()
                     .put_message(batch_message.message_ext_broker_inner)
                     .await
             } else {
-                self.inner.message_store.put_messages(batch_message).await
+                self.inner
+                    .broker_runtime_inner
+                    .message_store_mut()
+                    .as_mut()
+                    .unwrap()
+                    .put_messages(batch_message)
+                    .await
             };
             Ok(self
                 .handle_put_message_result(
@@ -445,7 +471,8 @@ where
 
         let mut topic_config = self
             .inner
-            .topic_config_manager
+            .broker_runtime_inner
+            .topic_config_manager()
             .select_topic_config(request_header.topic())
             .ok_or(RemotingCommandError(format!(
                 "topic {} not exist",
@@ -523,7 +550,8 @@ where
         message_ext.message_ext_inner.message.properties.insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_CLUSTER),
             self.inner
-                .broker_config
+                .broker_runtime_inner
+                .broker_config()
                 .broker_identity
                 .broker_cluster_name
                 .clone(),
@@ -539,13 +567,18 @@ where
             && !(message_ext.reconsume_times() > 0
                 && message_ext.message_ext_inner.message.get_delay_time_level() > 0)
         {
-            if self.inner.broker_config.reject_transaction_message {
+            if self
+                .inner
+                .broker_runtime_inner
+                .broker_config()
+                .reject_transaction_message
+            {
                 return Ok(Some(
                     response
                         .set_code(ResponseCode::NoPermission)
                         .set_remark(format!(
                             "the broker[{}] sending transaction message is forbidden",
-                            self.inner.broker_config.broker_ip1
+                            self.inner.broker_runtime_inner.broker_config().broker_ip1
                         )),
                 ));
             }
@@ -558,7 +591,12 @@ where
         let topic = message_ext.topic().clone();
         let transaction_id =
             MessageClientIDSetter::get_uniq_id(&message_ext.message_ext_inner.message);
-        if self.inner.broker_config.async_send_enable {
+        if self
+            .inner
+            .broker_runtime_inner
+            .broker_config()
+            .async_send_enable
+        {
             let put_message_handle = if send_transaction_prepare_message {
                 let mut transactional_message_service =
                     self.inner.transactional_message_service.clone();
@@ -568,8 +606,15 @@ where
                         .await
                 })
             } else {
-                let mut message_store = self.inner.message_store.clone();
-                tokio::spawn(async move { message_store.put_message(message_ext).await })
+                let mut broker_runtime_inner = self.inner.broker_runtime_inner.clone();
+                tokio::spawn(async move {
+                    broker_runtime_inner
+                        .message_store_mut()
+                        .as_mut()
+                        .unwrap()
+                        .put_message(message_ext)
+                        .await
+                })
             };
             let put_message_result = put_message_handle
                 .await
@@ -598,7 +643,13 @@ where
                     .prepare_message(message_ext)
                     .await
             } else {
-                self.inner.message_store.put_message(message_ext).await
+                self.inner
+                    .broker_runtime_inner
+                    .message_store_mut()
+                    .as_mut()
+                    .unwrap()
+                    .put_message(message_ext)
+                    .await
             };
 
             Ok(self
@@ -704,48 +755,70 @@ where
         let owner_self = ext_fields
             .get(BrokerStatsManager::ACCOUNT_OWNER_SELF)
             .cloned();
-        let commercial_size_per_msg = self.inner.broker_config.commercial_size_per_msg;
+        let commercial_size_per_msg = self
+            .inner
+            .broker_runtime_inner
+            .broker_config()
+            .commercial_size_per_msg;
         let response_header = response
             .read_custom_header_mut::<SendMessageResponseHeader>()
             .unwrap();
         if send_ok {
             if TopicValidator::RMQ_SYS_SCHEDULE_TOPIC == topic {
-                self.inner.broker_stats_manager.inc_queue_put_nums(
+                self.inner
+                    .broker_runtime_inner
+                    .broker_stats_manager()
+                    .inc_queue_put_nums(
+                        topic,
+                        queue_id_int,
+                        put_message_result.append_message_result().unwrap().msg_num,
+                        1,
+                    );
+                self.inner
+                    .broker_runtime_inner
+                    .broker_stats_manager()
+                    .inc_queue_put_size(
+                        topic,
+                        queue_id_int,
+                        put_message_result
+                            .append_message_result()
+                            .unwrap()
+                            .wrote_bytes,
+                    );
+            }
+            self.inner
+                .broker_runtime_inner
+                .broker_stats_manager()
+                .inc_topic_put_nums(
                     topic,
-                    queue_id_int,
                     put_message_result.append_message_result().unwrap().msg_num,
                     1,
                 );
-                self.inner.broker_stats_manager.inc_queue_put_size(
+            self.inner
+                .broker_runtime_inner
+                .broker_stats_manager()
+                .inc_topic_put_size(
                     topic,
-                    queue_id_int,
                     put_message_result
                         .append_message_result()
                         .unwrap()
                         .wrote_bytes,
                 );
-            }
-            self.inner.broker_stats_manager.inc_topic_put_nums(
-                topic,
-                put_message_result.append_message_result().unwrap().msg_num,
-                1,
-            );
-            self.inner.broker_stats_manager.inc_topic_put_size(
-                topic,
-                put_message_result
-                    .append_message_result()
-                    .unwrap()
-                    .wrote_bytes,
-            );
-            self.inner.broker_stats_manager.inc_broker_put_nums(
-                topic,
-                put_message_result.append_message_result().unwrap().msg_num,
-            );
-            self.inner.broker_stats_manager.inc_topic_put_latency(
-                topic,
-                queue_id_int,
-                begin_time_millis.elapsed().as_millis() as i32,
-            );
+            self.inner
+                .broker_runtime_inner
+                .broker_stats_manager()
+                .inc_broker_put_nums(
+                    topic,
+                    put_message_result.append_message_result().unwrap().msg_num,
+                );
+            self.inner
+                .broker_runtime_inner
+                .broker_stats_manager()
+                .inc_topic_put_latency(
+                    topic,
+                    queue_id_int,
+                    begin_time_millis.elapsed().as_millis() as i32,
+                );
 
             response_header.set_msg_id(
                 put_message_result
@@ -778,7 +851,11 @@ where
                 send_message_context.msg_id = CheetahString::from_string(msg_id);
                 send_message_context.queue_id = queue_id;
                 send_message_context.queue_offset = queue_offset;
-                let commercial_base_count = self.inner.broker_config.commercial_base_count;
+                let commercial_base_count = self
+                    .inner
+                    .broker_runtime_inner
+                    .broker_config()
+                    .commercial_base_count;
                 let wrote_size = put_message_result
                     .append_message_result()
                     .unwrap()
@@ -842,17 +919,30 @@ where
         response.with_opaque(request.opaque());
         response.add_ext_field(
             MessageConst::PROPERTY_MSG_REGION,
-            self.inner.broker_config.region_id(),
+            self.inner.broker_runtime_inner.broker_config().region_id(),
         );
         response.add_ext_field(
             MessageConst::PROPERTY_TRACE_SWITCH,
-            self.inner.broker_config.trace_on.to_string(),
+            self.inner
+                .broker_runtime_inner
+                .broker_config()
+                .trace_on
+                .to_string(),
         );
         let start_timestamp = self
             .inner
-            .broker_config
+            .broker_runtime_inner
+            .broker_config()
             .start_accept_send_request_time_stamp;
-        if self.inner.message_store.now() < (start_timestamp as u64) {
+        if self
+            .inner
+            .broker_runtime_inner
+            .message_store()
+            .as_ref()
+            .unwrap()
+            .now()
+            < (start_timestamp as u64)
+        {
             response = response
                 .set_code(RemotingSysResponseCode::SystemError)
                 .set_remark(format!(
@@ -882,7 +972,8 @@ where
                 CheetahString::from_string(KeyBuilder::parse_group(new_topic.as_str()));
             let subscription_group_config = self
                 .inner
-                .subscription_group_manager
+                .broker_runtime_inner
+                .subscription_group_manager()
                 .find_subscription_group_config(group_name.as_ref());
             if subscription_group_config.is_none() {
                 response
@@ -906,7 +997,8 @@ where
             let mut send_retry_message_to_dead_letter_queue_directly = false;
             if self
                 .inner
-                .rebalance_lock_manager
+                .broker_runtime_inner
+                .rebalance_lock_manager()
                 .is_lock_all_expired(group_name.as_str())
             {
                 info!(
@@ -929,7 +1021,8 @@ where
                 let queue_id_int = self.inner.random_queue_id(DLQ_NUMS_PER_GROUP) as i32;
                 let new_topic_config = self
                     .inner
-                    .topic_config_manager
+                    .broker_runtime_inner
+                    .topic_config_manager_mut()
                     .create_topic_in_send_message_back_method(
                         new_topic,
                         DLQ_NUMS_PER_GROUP as i32,
@@ -963,7 +1056,7 @@ where
 const DLQ_NUMS_PER_GROUP: u32 = 1;
 
 pub(crate) struct Inner<MS, TS> {
-    pub(crate) topic_config_manager: TopicConfigManager,
+    /*pub(crate) topic_config_manager: TopicConfigManager,
     pub(crate) send_message_hook_vec: ArcMut<Vec<Box<dyn SendMessageHook>>>,
     pub(crate) consume_message_hook_vec: ArcMut<Vec<Box<dyn ConsumeMessageHook>>>,
     pub(crate) topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
@@ -975,7 +1068,12 @@ pub(crate) struct Inner<MS, TS> {
     pub(crate) broker_stats_manager: Arc<BrokerStatsManager>,
     pub(crate) producer_manager: Option<Arc<ProducerManager>>,
     pub(crate) broker_to_client: Broker2Client,
-    pub(crate) store_host: SocketAddr,
+    pub(crate) store_host: SocketAddr,*/
+    pub(crate) send_message_hook_vec: ArcMut<Vec<Box<dyn SendMessageHook>>>,
+    pub(crate) consume_message_hook_vec: ArcMut<Vec<Box<dyn ConsumeMessageHook>>>,
+    pub(crate) broker_to_client: Broker2Client,
+    pub(crate) transactional_message_service: ArcMut<TS>,
+    pub(crate) broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
 impl<MS, TS> Inner<MS, TS>
@@ -1036,19 +1134,26 @@ where
         let request_header = request
             .decode_command_custom_header::<ConsumerSendMsgBackRequestHeader>()
             .map_err(|e| RemotingCommandError(e.to_string()))?;
-        if self.broker_config.broker_identity.broker_id != mix_all::MASTER_ID {
+        if self
+            .broker_runtime_inner
+            .broker_config()
+            .broker_identity
+            .broker_id
+            != mix_all::MASTER_ID
+        {
             return Ok(Some(
                 RemotingCommand::create_response_command_with_code_remark(
                     ResponseCode::SystemError,
                     format!(
                         "no master available along with {}",
-                        self.broker_config.broker_ip1
+                        self.broker_runtime_inner.broker_config().broker_ip1
                     ),
                 ),
             ));
         }
         let subscription_group_config = self
-            .subscription_group_manager
+            .broker_runtime_inner
+            .subscription_group_manager()
             .find_subscription_group_config(&request_header.group);
         if subscription_group_config.is_none() {
             return Ok(Some(
@@ -1063,14 +1168,17 @@ where
             ));
         }
 
-        if !PermName::is_writeable(self.broker_config.broker_permission) {
+        if !PermName::is_writeable(self.broker_runtime_inner.broker_config().broker_permission) {
             return Ok(Some(
                 RemotingCommand::create_response_command_with_code_remark(
                     ResponseCode::NoPermission,
                     format!(
                         "the broker[{}-{}] sending message is forbidden",
-                        self.broker_config.broker_identity.broker_name,
-                        self.broker_config.broker_ip1
+                        self.broker_runtime_inner
+                            .broker_config()
+                            .broker_identity
+                            .broker_name,
+                        self.broker_runtime_inner.broker_config().broker_ip1
                     ),
                 ),
             ));
@@ -1092,7 +1200,8 @@ where
             0
         };
         let topic_config = self
-            .topic_config_manager
+            .broker_runtime_inner
+            .topic_config_manager_mut()
             .create_topic_in_send_message_back_method(
                 &new_topic,
                 subscription_group_config.retry_queue_nums(),
@@ -1118,7 +1227,10 @@ where
             ));
         }
         let msg_ext = self
-            .message_store
+            .broker_runtime_inner
+            .message_store()
+            .as_ref()
+            .unwrap()
             .look_message_by_offset(request_header.offset);
         if msg_ext.is_none() {
             return Ok(Some(
@@ -1157,7 +1269,8 @@ where
             new_topic = CheetahString::from_string(mix_all::get_dlq_topic(&request_header.group));
             queue_id_int = 0;
             let topic_config_inner = self
-                .topic_config_manager
+                .broker_runtime_inner
+                .topic_config_manager_mut()
                 .create_topic_in_send_message_back_method(
                     &new_topic,
                     DLQ_NUMS_PER_GROUP as i32,
@@ -1197,7 +1310,7 @@ where
         msg_inner.message_ext_inner.sys_flag = msg_ext.sys_flag;
         msg_inner.message_ext_inner.born_timestamp = msg_ext.born_timestamp;
         msg_inner.message_ext_inner.born_host = msg_ext.born_host;
-        msg_inner.message_ext_inner.store_host = self.store_host;
+        msg_inner.message_ext_inner.store_host = self.broker_runtime_inner.store_host();
         msg_inner.message_ext_inner.reconsume_times = msg_ext.reconsume_times + 1;
 
         let origin_msg_id = if let Some(id) = MessageAccessor::get_origin_message_id(&msg_ext) {
@@ -1209,7 +1322,13 @@ where
         msg_inner.properties_string = message_properties_to_string(msg_ext.get_properties());
 
         let inner_topic = msg_inner.get_topic().clone();
-        let put_message_result = self.message_store.put_message(msg_inner).await;
+        let put_message_result = self
+            .broker_runtime_inner
+            .message_store_mut()
+            .as_mut()
+            .unwrap()
+            .put_message(msg_inner)
+            .await;
         let commercial_owner = request
             .get_ext_fields()
             .and_then(|value| value.get(BrokerStatsManager::COMMERCIAL_OWNER).cloned());
@@ -1307,11 +1426,14 @@ where
             channel.remote_address().to_string(),
         ));
         send_message_context.broker_addr(CheetahString::from_string(
-            self.broker_config.get_broker_addr(),
+            self.broker_runtime_inner.broker_config().get_broker_addr(),
         ));
         send_message_context.queue_id(Some(request_header.queue_id));
         send_message_context.broker_region_id(CheetahString::from_string(
-            self.broker_config.region_id().to_string(),
+            self.broker_runtime_inner
+                .broker_config()
+                .region_id()
+                .to_string(),
         ));
         send_message_context.born_time_stamp(request_header.born_timestamp);
         send_message_context.request_time_stamp(TimeUtils::get_current_millis() as i64);
@@ -1325,11 +1447,21 @@ where
             MessageDecoder::string_to_message_properties(request_header.properties.as_ref());
         properties.insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_MSG_REGION),
-            CheetahString::from_string(self.broker_config.region_id().to_string()),
+            CheetahString::from_string(
+                self.broker_runtime_inner
+                    .broker_config()
+                    .region_id()
+                    .to_string(),
+            ),
         );
         properties.insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_TRACE_SWITCH),
-            CheetahString::from_string(self.broker_config.trace_on.to_string()),
+            CheetahString::from_string(
+                self.broker_runtime_inner
+                    .broker_config()
+                    .trace_on
+                    .to_string(),
+            ),
         );
         request_header.properties = Some(MessageDecoder::message_properties_to_string(&properties));
 
@@ -1358,15 +1490,19 @@ where
         response: &mut RemotingCommand,
     ) {
         //check broker permission
-        if !PermName::is_writeable(self.broker_config.broker_permission())
-            && self
-                .topic_config_manager
-                .is_order_topic(request_header.topic.as_str())
+        if !PermName::is_writeable(
+            self.broker_runtime_inner
+                .broker_config()
+                .broker_permission(),
+        ) && self
+            .broker_runtime_inner
+            .topic_config_manager()
+            .is_order_topic(request_header.topic.as_str())
         {
             response.with_code(ResponseCode::NoPermission);
             response.with_remark(format!(
                 "the broker[{}] sending message is forbidden",
-                self.broker_config.broker_ip1.clone()
+                self.broker_runtime_inner.broker_config().broker_ip1.clone()
             ));
             return;
         }
@@ -1388,7 +1524,8 @@ where
             return;
         }
         let mut topic_config = self
-            .topic_config_manager
+            .broker_runtime_inner
+            .topic_config_manager()
             .select_topic_config(&request_header.topic);
         if topic_config.is_none() {
             let mut topic_sys_flag = 0;
@@ -1405,7 +1542,8 @@ where
                 channel.remote_address(),
             );
             topic_config = self
-                .topic_config_manager
+                .broker_runtime_inner
+                .topic_config_manager_mut()
                 .create_topic_in_send_message_method(
                     request_header.topic.as_str(),
                     request_header.default_topic.as_str(),
@@ -1417,7 +1555,8 @@ where
             if topic_config.is_none() && request_header.topic.starts_with(RETRY_GROUP_TOPIC_PREFIX)
             {
                 topic_config = self
-                    .topic_config_manager
+                    .broker_runtime_inner
+                    .topic_config_manager_mut()
                     .create_topic_in_send_message_back_method(
                         request_header.topic.as_ref(),
                         1,

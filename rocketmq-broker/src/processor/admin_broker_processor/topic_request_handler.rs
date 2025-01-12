@@ -47,23 +47,26 @@ use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::Topic
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_rust::ArcMut;
 use rocketmq_store::log_file::MessageStore;
 use tracing::info;
 
-use crate::processor::admin_broker_processor::Inner;
+use crate::broker_runtime::BrokerRuntimeInner;
 
 #[derive(Clone)]
-pub(super) struct TopicRequestHandler {
-    inner: Inner,
+pub(super) struct TopicRequestHandler<MS> {
+    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
-impl TopicRequestHandler {
-    pub fn new(inner: Inner) -> Self {
-        TopicRequestHandler { inner }
+impl<MS> TopicRequestHandler<MS> {
+    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
+        TopicRequestHandler {
+            broker_runtime_inner,
+        }
     }
 }
 
-impl TopicRequestHandler {
+impl<MS: MessageStore> TopicRequestHandler<MS> {
     pub async fn update_and_create_topic(
         &mut self,
         channel: Channel,
@@ -90,8 +93,8 @@ impl TopicRequestHandler {
             );
         }
         if self
-            .inner
-            .broker_config
+            .broker_runtime_inner
+            .broker_config()
             .validate_system_topic_when_update_topic
             && TopicValidator::is_system_topic(topic.as_str())
         {
@@ -136,7 +139,10 @@ impl TopicRequestHandler {
             attributes,
         };
         if topic_config.get_topic_message_type() == TopicMessageType::Mixed
-            && !self.inner.broker_config.enable_mixed_message_type
+            && !self
+                .broker_runtime_inner
+                .broker_config()
+                .enable_mixed_message_type
         {
             return Some(
                 response
@@ -146,8 +152,8 @@ impl TopicRequestHandler {
         }
 
         let topic_config_origin = self
-            .inner
-            .topic_config_manager
+            .broker_runtime_inner
+            .topic_config_manager()
             .topic_config_table()
             .lock()
             .get(&topic)
@@ -161,24 +167,28 @@ impl TopicRequestHandler {
             );
             return Some(response.set_code(ResponseCode::Success));
         }
-        self.inner
-            .topic_config_manager
+        self.broker_runtime_inner
+            .topic_config_manager_mut()
             .update_topic_config(&mut topic_config);
 
-        if self.inner.broker_config.enable_single_topic_register {
-            self.inner
-                .topic_config_manager
+        if self
+            .broker_runtime_inner
+            .broker_config()
+            .enable_single_topic_register
+        {
+            self.broker_runtime_inner
+                .topic_config_manager()
                 .broker_runtime_inner()
                 .register_single_topic_all(topic_config)
                 .await;
         } else {
-            self.inner
-                .topic_config_manager
+            self.broker_runtime_inner
+                .topic_config_manager()
                 .broker_runtime_inner()
                 .register_increment_broker_data(
                     vec![topic_config],
-                    self.inner
-                        .topic_config_manager
+                    self.broker_runtime_inner
+                        .topic_config_manager()
                         .data_version()
                         .as_ref()
                         .clone(),
@@ -220,8 +230,8 @@ impl TopicRequestHandler {
                 );
             }
             if self
-                .inner
-                .broker_config
+                .broker_runtime_inner
+                .broker_config()
                 .validate_system_topic_when_update_topic
                 && TopicValidator::is_system_topic(topic)
             {
@@ -235,7 +245,10 @@ impl TopicRequestHandler {
                 );
             }
             if topic_config.get_topic_message_type() == TopicMessageType::Mixed
-                && !self.inner.broker_config.enable_mixed_message_type
+                && !self
+                    .broker_runtime_inner
+                    .broker_config()
+                    .enable_mixed_message_type
             {
                 return Some(
                     response
@@ -244,8 +257,8 @@ impl TopicRequestHandler {
                 );
             }
             let topic_config_origin = self
-                .inner
-                .topic_config_manager
+                .broker_runtime_inner
+                .topic_config_manager()
                 .topic_config_table()
                 .lock()
                 .get(topic)
@@ -262,25 +275,29 @@ impl TopicRequestHandler {
             }
         }
 
-        self.inner
-            .topic_config_manager
+        self.broker_runtime_inner
+            .topic_config_manager_mut()
             .update_topic_config_list(request_body.topic_config_list.as_mut_slice());
-        if self.inner.broker_config.enable_single_topic_register {
+        if self
+            .broker_runtime_inner
+            .broker_config()
+            .enable_single_topic_register
+        {
             for topic_config in request_body.topic_config_list.iter() {
-                self.inner
-                    .topic_config_manager
+                self.broker_runtime_inner
+                    .topic_config_manager()
                     .broker_runtime_inner()
                     .register_single_topic_all(topic_config.clone())
                     .await;
             }
         } else {
-            self.inner
-                .topic_config_manager
+            self.broker_runtime_inner
+                .topic_config_manager()
                 .broker_runtime_inner()
                 .register_increment_broker_data(
                     request_body.topic_config_list,
-                    self.inner
-                        .topic_config_manager
+                    self.broker_runtime_inner
+                        .topic_config_manager()
                         .data_version()
                         .as_ref()
                         .clone(),
@@ -316,8 +333,8 @@ impl TopicRequestHandler {
             );
         }
         if self
-            .inner
-            .broker_config
+            .broker_runtime_inner
+            .broker_config()
             .validate_system_topic_when_update_topic
             && TopicValidator::is_system_topic(topic)
         {
@@ -331,8 +348,8 @@ impl TopicRequestHandler {
             );
         }
         let groups = self
-            .inner
-            .consumer_offset_manager
+            .broker_runtime_inner
+            .consumer_offset_manager()
             .which_group_by_topic(topic);
         for group in groups.iter() {
             let pop_retry_topic_v2 = CheetahString::from_string(KeyBuilder::build_pop_retry_topic(
@@ -341,8 +358,8 @@ impl TopicRequestHandler {
                 true,
             ));
             if self
-                .inner
-                .topic_config_manager
+                .broker_runtime_inner
+                .topic_config_manager()
                 .select_topic_config(pop_retry_topic_v2.as_ref())
                 .is_some()
             {
@@ -352,8 +369,8 @@ impl TopicRequestHandler {
                 KeyBuilder::build_pop_retry_topic_v1(topic, group.as_str()),
             );
             if self
-                .inner
-                .topic_config_manager
+                .broker_runtime_inner
+                .topic_config_manager()
                 .select_topic_config(pop_retry_topic_v1.as_ref())
                 .is_some()
             {
@@ -374,27 +391,27 @@ impl TopicRequestHandler {
         let mut response = RemotingCommand::create_response_command();
         let topic_config_and_mapping_serialize_wrapper = TopicConfigAndMappingSerializeWrapper {
             topic_queue_mapping_detail_map: self
-                .inner
-                .topic_queue_mapping_manager
+                .broker_runtime_inner
+                .topic_queue_mapping_manager()
                 .topic_queue_mapping_table
                 .lock()
                 .clone(),
             mapping_data_version: self
-                .inner
-                .topic_queue_mapping_manager
+                .broker_runtime_inner
+                .topic_queue_mapping_manager()
                 .data_version
                 .lock()
                 .clone(),
             topic_config_serialize_wrapper: TopicConfigSerializeWrapper {
                 data_version: self
-                    .inner
-                    .topic_config_manager
+                    .broker_runtime_inner
+                    .topic_config_manager()
                     .data_version()
                     .as_ref()
                     .clone(),
                 topic_config_table: self
-                    .inner
-                    .topic_config_manager
+                    .broker_runtime_inner
+                    .topic_config_manager()
                     .topic_config_table()
                     .lock()
                     .clone(),
@@ -439,7 +456,10 @@ impl TopicRequestHandler {
             .decode_command_custom_header::<GetTopicStatsRequestHeader>()
             .unwrap();
         let topic = request_header.topic.as_ref();
-        let topic_config = self.inner.topic_config_manager.select_topic_config(topic);
+        let topic_config = self
+            .broker_runtime_inner
+            .topic_config_manager()
+            .select_topic_config(topic);
         if topic_config.is_none() {
             return Some(
                 response
@@ -456,26 +476,37 @@ impl TopicRequestHandler {
         for i in 0..max_queue_nums {
             let mut message_queue = MessageQueue::new();
             message_queue.set_topic(topic.clone());
-            message_queue.set_broker_name(self.inner.broker_config.broker_name.clone());
+            message_queue.set_broker_name(
+                self.broker_runtime_inner
+                    .broker_config()
+                    .broker_name
+                    .clone(),
+            );
             message_queue.set_queue_id(i as i32);
             let mut topic_offset = TopicOffset::new();
             let min = std::cmp::max(
-                self.inner
-                    .default_message_store
+                self.broker_runtime_inner
+                    .message_store()
+                    .as_ref()
+                    .unwrap()
                     .get_min_offset_in_queue(topic, i as i32),
                 0,
             );
             let max = std::cmp::max(
-                self.inner
-                    .default_message_store
+                self.broker_runtime_inner
+                    .message_store()
+                    .as_ref()
+                    .unwrap()
                     .get_max_offset_in_queue(topic, i as i32),
                 0,
             );
             let mut timestamp = 0;
             if max > 0 {
                 timestamp = self
-                    .inner
-                    .default_message_store
+                    .broker_runtime_inner
+                    .message_store()
+                    .as_ref()
+                    .unwrap()
                     .get_message_store_timestamp(topic, i as i32, max - 1);
             }
             topic_offset.set_min_offset(min);
@@ -504,7 +535,10 @@ impl TopicRequestHandler {
             .decode_command_custom_header::<GetTopicConfigRequestHeader>()
             .unwrap();
         let topic = &request_header.topic;
-        let topic_config = self.inner.topic_config_manager.select_topic_config(topic);
+        let topic_config = self
+            .broker_runtime_inner
+            .topic_config_manager()
+            .select_topic_config(topic);
         if topic_config.is_none() {
             return Some(
                 response
@@ -517,8 +551,8 @@ impl TopicRequestHandler {
             if let Some(lo) = value.get_lo() {
                 if *lo {
                     topic_queue_mapping_detail = self
-                        .inner
-                        .topic_queue_mapping_manager
+                        .broker_runtime_inner
+                        .topic_queue_mapping_manager()
                         .topic_queue_mapping_table
                         .lock()
                         .get(topic)
@@ -548,10 +582,13 @@ impl TopicRequestHandler {
             .decode_command_custom_header::<QueryTopicConsumeByWhoRequestHeader>()
             .unwrap();
         let topic = request_header.topic.as_ref();
-        let mut groups = self.inner.consume_manager.query_topic_consume_by_who(topic);
+        let mut groups = self
+            .broker_runtime_inner
+            .consumer_manager()
+            .query_topic_consume_by_who(topic);
         let group_in_offset = self
-            .inner
-            .consumer_offset_manager
+            .broker_runtime_inner
+            .consumer_offset_manager()
             .which_group_by_topic(topic);
         groups.extend(group_in_offset.clone());
         let group_list = GroupList { group_list: groups };
@@ -571,12 +608,13 @@ impl TopicRequestHandler {
             .decode_command_custom_header::<QueryTopicsByConsumerRequestHeader>()
             .unwrap();
         let topics = self
-            .inner
-            .consumer_offset_manager
+            .broker_runtime_inner
+            .consumer_offset_manager()
             .which_topic_by_consumer(request_header.get_group());
         let broker_addr = format!(
             "{}:{}",
-            self.inner.broker_config.broker_ip1, self.inner.server_config.listen_port
+            self.broker_runtime_inner.broker_config().broker_ip1,
+            self.broker_runtime_inner.server_config().listen_port
         );
         let topic_list = TopicList {
             topic_list: topics.into_iter().collect(),
@@ -587,14 +625,22 @@ impl TopicRequestHandler {
     }
 
     fn delete_topic_in_broker(&mut self, topic: &CheetahString) {
-        self.inner.topic_config_manager.delete_topic_config(topic);
-        self.inner.topic_queue_mapping_manager.delete(topic);
-        self.inner
-            .consumer_offset_manager
+        self.broker_runtime_inner
+            .topic_config_manager()
+            .delete_topic_config(topic);
+        self.broker_runtime_inner
+            .topic_queue_mapping_manager()
+            .delete(topic);
+        self.broker_runtime_inner
+            .consumer_offset_manager()
             .clean_offset_by_topic(topic);
-        self.inner
-            .pop_inflight_message_counter
+        self.broker_runtime_inner
+            .pop_inflight_message_counter()
             .clear_in_flight_message_num_by_topic_name(topic);
-        self.inner.default_message_store.delete_topics(vec![topic]);
+        self.broker_runtime_inner
+            .message_store_mut()
+            .as_mut()
+            .unwrap()
+            .delete_topics(vec![topic]);
     }
 }

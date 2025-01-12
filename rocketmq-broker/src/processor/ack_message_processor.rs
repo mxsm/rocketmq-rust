@@ -17,12 +17,9 @@
 #![allow(unused_variables)]
 
 use std::cmp::Ordering;
-use std::net::SocketAddr;
-use std::sync::Arc;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::key_builder::POP_ORDER_REVIVE_QUEUE;
 use rocketmq_common::common::message::message_decoder;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
@@ -52,22 +49,19 @@ use tracing::error;
 
 use crate::broker_error::BrokerError::BrokerCommonError;
 use crate::broker_error::BrokerError::BrokerRemotingError;
-use crate::failover::escape_bridge::EscapeBridge;
-use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
-use crate::offset::manager::consumer_order_info_manager::ConsumerOrderInfoManager;
-use crate::processor::pop_inflight_message_counter::PopInflightMessageCounter;
+use crate::broker_runtime::BrokerRuntimeInner;
 use crate::processor::pop_message_processor::PopMessageProcessor;
-use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
 pub struct AckMessageProcessor<MS> {
-    topic_config_manager: TopicConfigManager,
-    message_store: ArcMut<MS>,
-    escape_bridge: ArcMut<EscapeBridge<MS>>,
-    store_host: SocketAddr,
-    pop_inflight_message_counter: Arc<PopInflightMessageCounter>,
-    consumer_offset_manager: Arc<ConsumerOffsetManager>,
-    consumer_order_info_manager: Arc<ConsumerOrderInfoManager<MS>>,
+    //topic_config_manager: TopicConfigManager,
+    // message_store: ArcMut<MS>,
+    // escape_bridge: ArcMut<EscapeBridge<MS>>,
+    //  store_host: SocketAddr,
+    //pop_inflight_message_counter: Arc<PopInflightMessageCounter>,
+    //  consumer_offset_manager: Arc<ConsumerOffsetManager>,
+    //   consumer_order_info_manager: Arc<ConsumerOrderInfoManager<MS>>,
     pop_message_processor: ArcMut<PopMessageProcessor<MS>>,
+    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
 impl<MS> AckMessageProcessor<MS>
@@ -75,7 +69,7 @@ where
     MS: MessageStore,
 {
     pub fn new(
-        topic_config_manager: TopicConfigManager,
+        /*topic_config_manager: TopicConfigManager,
         message_store: ArcMut<MS>,
         escape_bridge: ArcMut<EscapeBridge<MS>>,
         broker_config: Arc<BrokerConfig>,
@@ -83,17 +77,21 @@ where
         store_host: SocketAddr,
         consumer_offset_manager: Arc<ConsumerOffsetManager>,
         pop_message_processor: ArcMut<PopMessageProcessor<MS>>,
-        consumer_order_info_manager: Arc<ConsumerOrderInfoManager<MS>>,
+        consumer_order_info_manager: Arc<ConsumerOrderInfoManager<MS>>,*/
+        //pop_inflight_message_counter: Arc<PopInflightMessageCounter>,
+        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+        pop_message_processor: ArcMut<PopMessageProcessor<MS>>,
     ) -> AckMessageProcessor<MS> {
         AckMessageProcessor {
-            topic_config_manager,
-            message_store,
-            escape_bridge,
-            store_host,
-            pop_inflight_message_counter,
-            consumer_offset_manager,
+            /*  topic_config_manager,
+             message_store,
+             escape_bridge,
+             store_host,*/
+            // pop_inflight_message_counter,
+             /* consumer_offset_manager, */
             pop_message_processor,
-            consumer_order_info_manager,
+            /* consumer_order_info_manager, */
+            broker_runtime_inner,
         }
     }
 
@@ -137,7 +135,8 @@ where
             .decode_command_custom_header::<AckMessageRequestHeader>()
             .map_err(BrokerRemotingError)?;
         let topic_config = self
-            .topic_config_manager
+            .broker_runtime_inner
+            .topic_config_manager()
             .select_topic_config(&request_header.topic);
         if topic_config.is_none() {
             return Ok(Some(
@@ -170,10 +169,16 @@ where
             ));
         }
         let min_offset = self
-            .message_store
+            .broker_runtime_inner
+            .message_store()
+            .as_ref()
+            .unwrap()
             .get_min_offset_in_queue(&request_header.topic, request_header.queue_id);
         let max_offset = self
-            .message_store
+            .broker_runtime_inner
+            .message_store()
+            .as_ref()
+            .unwrap()
             .get_max_offset_in_queue(&request_header.topic, request_header.queue_id);
         if request_header.offset < min_offset || request_header.offset > max_offset {
             let error_msg = format!(
@@ -305,8 +310,18 @@ where
             let akc_offset = -1;
             let pop_time = batch_ack.pop_time;
             let invisible_time = batch_ack.invisible_time;
-            let min_offset = self.message_store.get_min_offset_in_queue(&topic, qid);
-            let max_offset = self.message_store.get_max_offset_in_queue(&topic, qid);
+            let min_offset = self
+                .broker_runtime_inner
+                .message_store()
+                .as_ref()
+                .unwrap()
+                .get_min_offset_in_queue(&topic, qid);
+            let max_offset = self
+                .broker_runtime_inner
+                .message_store()
+                .as_ref()
+                .unwrap()
+                .get_max_offset_in_queue(&topic, qid);
             if min_offset == -1 || max_offset == -1 {
                 //error!("Illegal topic or queue found when batch ack {:?}", batch_ack);
                 return;
@@ -408,7 +423,7 @@ where
             );
         }
         inner.message_ext_inner.born_timestamp = get_current_millis() as i64;
-        inner.message_ext_inner.store_host = self.store_host;
+        inner.message_ext_inner.store_host = self.broker_runtime_inner.store_host();
         inner.set_delay_time_ms((pop_time + invisible_time) as u64);
         inner.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
@@ -419,7 +434,8 @@ where
         inner.properties_string =
             message_decoder::message_properties_to_string(inner.get_properties());
         let put_message_result = self
-            .escape_bridge
+            .broker_runtime_inner
+            .escape_bridge_mut()
             .put_message_to_specific_queue(inner)
             .await;
         match put_message_result.put_message_status() {
@@ -434,7 +450,8 @@ where
                 );
             }
         }
-        self.pop_inflight_message_counter
+        self.broker_runtime_inner
+            .pop_inflight_message_counter()
             .decrement_in_flight_message_num(
                 &topic,
                 &consume_group,
@@ -464,7 +481,8 @@ where
             q_id
         ));
         let old_offset = self
-            .consumer_offset_manager
+            .broker_runtime_inner
+            .consumer_offset_manager()
             .query_offset(&consume_group, &topic, q_id);
         if old_offset > ack_offset {
             return;
@@ -476,18 +494,22 @@ where
             .await
         {}
         let old_offset = self
-            .consumer_offset_manager
+            .broker_runtime_inner
+            .consumer_offset_manager()
             .query_offset(&consume_group, &topic, q_id);
         if old_offset > ack_offset {
             return;
         }
-        let next_offset = self.consumer_order_info_manager.commit_and_next(
-            &consume_group,
-            &topic,
-            q_id,
-            ack_offset as u64,
-            pop_time as u64,
-        );
+        let next_offset = self
+            .broker_runtime_inner
+            .consumer_order_info_manager()
+            .commit_and_next(
+                &consume_group,
+                &topic,
+                q_id,
+                ack_offset as u64,
+                pop_time as u64,
+            );
         match next_offset.cmp(&-1) {
             Ordering::Less => {}
             Ordering::Equal => {
@@ -508,27 +530,33 @@ where
                 return;
             }
             Ordering::Greater => {
-                if !self.consumer_offset_manager.has_offset_reset(
-                    consume_group.as_str(),
-                    topic.as_str(),
-                    q_id,
-                ) {
-                    self.consumer_offset_manager.commit_offset(
-                        channel.remote_address().to_string().into(),
+                if !self
+                    .broker_runtime_inner
+                    .consumer_offset_manager()
+                    .has_offset_reset(consume_group.as_str(), topic.as_str(), q_id)
+                {
+                    self.broker_runtime_inner
+                        .consumer_offset_manager()
+                        .commit_offset(
+                            channel.remote_address().to_string().into(),
+                            &consume_group,
+                            &topic,
+                            q_id,
+                            next_offset,
+                        );
+                }
+
+                if !self
+                    .broker_runtime_inner
+                    .consumer_order_info_manager()
+                    .check_block(
+                        &CheetahString::empty(),
                         &consume_group,
                         &topic,
                         q_id,
-                        next_offset,
-                    );
-                }
-
-                if !self.consumer_order_info_manager.check_block(
-                    &CheetahString::empty(),
-                    &consume_group,
-                    &topic,
-                    q_id,
-                    invisible_time as u64,
-                ) {
+                        invisible_time as u64,
+                    )
+                {
                     self.pop_message_processor.notify_message_arriving(
                         &topic,
                         q_id,
@@ -541,7 +569,8 @@ where
             .queue_lock_manager()
             .unlock_with_key(lock_key)
             .await;
-        self.pop_inflight_message_counter
+        self.broker_runtime_inner
+            .pop_inflight_message_counter()
             .decrement_in_flight_message_num(&topic, &consume_group, pop_time, q_id, 1);
     }
 }

@@ -19,7 +19,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::IS_SUB_CHANGE;
@@ -33,14 +32,12 @@ use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_rust::ArcMut;
 use rocketmq_store::log_file::MessageStore;
 use tracing::info;
 
+use crate::broker_runtime::BrokerRuntimeInner;
 use crate::client::client_channel_info::ClientChannelInfo;
-use crate::client::manager::consumer_manager::ConsumerManager;
-use crate::client::manager::producer_manager::ProducerManager;
-use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
-use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
 pub struct ClientManageProcessor<MS> {
     consumer_group_heartbeat_table: Arc<
@@ -48,11 +45,12 @@ pub struct ClientManageProcessor<MS> {
             HashMap<CheetahString /* ConsumerGroup */, i32 /* HeartbeatFingerprint */>,
         >,
     >,
-    producer_manager: Arc<ProducerManager>,
+    /*producer_manager: Arc<ProducerManager>,
     consumer_manager: Arc<ConsumerManager>,
     topic_config_manager: TopicConfigManager,
     subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
-    broker_config: Arc<BrokerConfig>,
+    broker_config: Arc<BrokerConfig>,*/
+    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
 impl<MS> ClientManageProcessor<MS>
@@ -60,19 +58,21 @@ where
     MS: MessageStore,
 {
     pub fn new(
-        broker_config: Arc<BrokerConfig>,
+        /* broker_config: Arc<BrokerConfig>,
         producer_manager: Arc<ProducerManager>,
         consumer_manager: Arc<ConsumerManager>,
         topic_config_manager: TopicConfigManager,
-        subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
+        subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,*/
+        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> Self {
         Self {
             consumer_group_heartbeat_table: Arc::new(parking_lot::RwLock::new(HashMap::new())),
-            producer_manager,
+            /* producer_manager,
             consumer_manager,
             topic_config_manager,
             subscription_group_manager,
-            broker_config,
+            broker_config,*/
+            broker_runtime_inner,
         }
     }
 }
@@ -118,7 +118,8 @@ where
         );
 
         if let Some(ref group) = request_header.producer_group {
-            self.producer_manager
+            self.broker_runtime_inner
+                .producer_manager()
                 .unregister_producer(group, &client_channel_info, &ctx);
         }
 
@@ -151,7 +152,10 @@ where
 
         //do consumer data handle
         for consumer_data in heartbeat_data.consumer_data_set.iter() {
-            if self.broker_config.reject_pull_consumer_enable
+            if self
+                .broker_runtime_inner
+                .broker_config()
+                .reject_pull_consumer_enable
                 && ConsumeType::ConsumeActively == consumer_data.consume_type
             {
                 continue;
@@ -163,7 +167,8 @@ where
             let mut has_order_topic_sub = false;
             for subscription_data in consumer_data.subscription_data_set.iter() {
                 if self
-                    .topic_config_manager
+                    .broker_runtime_inner
+                    .topic_config_manager()
                     .is_order_topic(subscription_data.topic.as_str())
                 {
                     has_order_topic_sub = true;
@@ -171,7 +176,8 @@ where
                 }
             }
             let subscription_group_config = self
-                .subscription_group_manager
+                .broker_runtime_inner
+                .subscription_group_manager()
                 .find_subscription_group_config(consumer_data.group_name.as_ref());
             if subscription_group_config.is_none() {
                 continue;
@@ -187,7 +193,8 @@ where
             let new_topic = CheetahString::from_string(mix_all::get_retry_topic(
                 consumer_data.group_name.as_str(),
             ));
-            self.topic_config_manager
+            self.broker_runtime_inner
+                .topic_config_manager_mut()
                 .create_topic_in_send_message_back_method(
                     &new_topic,
                     subscription_group_config.retry_queue_nums(),
@@ -195,15 +202,18 @@ where
                     has_order_topic_sub,
                     topic_sys_flag,
                 );
-            let changed = self.consumer_manager.register_consumer(
-                consumer_data.group_name.as_ref(),
-                client_channel_info.clone(),
-                consumer_data.consume_type,
-                consumer_data.message_model,
-                consumer_data.consume_from_where,
-                consumer_data.subscription_data_set.clone(),
-                is_notify_consumer_ids_changed_enable,
-            );
+            let changed = self
+                .broker_runtime_inner
+                .consumer_manager()
+                .register_consumer(
+                    consumer_data.group_name.as_ref(),
+                    client_channel_info.clone(),
+                    consumer_data.consume_type,
+                    consumer_data.message_model,
+                    consumer_data.consume_from_where,
+                    consumer_data.subscription_data_set.clone(),
+                    is_notify_consumer_ids_changed_enable,
+                );
             if changed {
                 info!(
                     "ClientManageProcessor: registerConsumer info changed, SDK address={}, \
@@ -215,7 +225,8 @@ where
         }
         //do producer data handle
         for producer_data in heartbeat_data.producer_data_set.iter() {
-            self.producer_manager
+            self.broker_runtime_inner
+                .producer_manager()
                 .register_producer(&producer_data.group_name, &client_channel_info);
         }
         let mut response_command = RemotingCommand::create_response_command();
@@ -236,7 +247,8 @@ where
 
         //handle producer data
         for producer_data in heartbeat_data.producer_data_set.iter() {
-            self.producer_manager
+            self.broker_runtime_inner
+                .producer_manager()
                 .register_producer(&producer_data.group_name, &client_channel_info);
         }
         let mut response_command = RemotingCommand::create_response_command();

@@ -16,7 +16,6 @@
  */
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::sync::Weak;
 
 use cheetah_string::CheetahString;
 use dns_lookup::lookup_host;
@@ -76,6 +75,7 @@ use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_rust::ArcMut;
+use rocketmq_store::log_file::MessageStore;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -83,6 +83,7 @@ use tracing::warn;
 
 use crate::broker_error::BrokerError;
 use crate::broker_error::BrokerError::BrokerRemotingError;
+use crate::broker_runtime::BrokerRuntimeInner;
 use crate::Result;
 
 pub struct BrokerOuterAPI {
@@ -173,7 +174,7 @@ impl BrokerOuterAPI {
             .await;
     }
 
-    pub async fn register_broker_all(
+    pub async fn register_broker_all<MS: MessageStore>(
         &self,
         cluster_name: CheetahString,
         broker_addr: CheetahString,
@@ -188,7 +189,7 @@ impl BrokerOuterAPI {
         compressed: bool,
         heartbeat_timeout_millis: Option<i64>,
         _broker_identity: BrokerIdentity,
-        this: Weak<Self>,
+        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> Vec<RegisterBrokerResult> {
         let name_server_address_list = self.remoting_client.get_available_name_srv_list();
         let mut register_broker_result_list = Vec::new();
@@ -219,21 +220,12 @@ impl BrokerOuterAPI {
                 let cloned_body = body.clone();
                 let cloned_header = request_header.clone();
                 let addr = namesrv_addr.clone();
-                let outer_api = this.clone();
+                let broker_runtime_inner_ = broker_runtime_inner.clone();
                 let join_handle = tokio::spawn(async move {
-                    if let Some(outer_api) = outer_api.upgrade() {
-                        outer_api
-                            .register_broker(
-                                &addr,
-                                oneway,
-                                timeout_mills,
-                                cloned_header,
-                                cloned_body,
-                            )
-                            .await
-                    } else {
-                        None
-                    }
+                    broker_runtime_inner_
+                        .broker_outer_api()
+                        .register_broker(&addr, oneway, timeout_mills, cloned_header, cloned_body)
+                        .await
                 });
                 /*let handle =
                 self.register_broker(addr, oneway, timeout_mills, cloned_header, cloned_body);*/

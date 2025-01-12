@@ -35,6 +35,7 @@ use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_common::UtilAll::ensure_dir_ok;
+use rocketmq_rust::SyncUnsafeCellWrapper;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -60,7 +61,7 @@ static TOTAL_MAPPED_FILES: AtomicI32 = AtomicI32::new(0);
 pub struct DefaultMappedFile {
     reference_resource: ReferenceResourceImpl,
     file: File,
-    mmapped_file: MmapMut,
+    mmapped_file: SyncUnsafeCellWrapper<MmapMut>,
     transient_store_pool: Option<TransientStorePool>,
     file_name: CheetahString,
     file_from_offset: u64,
@@ -125,7 +126,7 @@ impl DefaultMappedFile {
         Self {
             reference_resource: ReferenceResourceImpl::new(),
             file,
-            mmapped_file: mmap,
+            mmapped_file: SyncUnsafeCellWrapper::new(mmap),
             file_name,
             file_from_offset,
             mapped_byte_buffer: None,
@@ -207,7 +208,7 @@ impl DefaultMappedFile {
             start_timestamp: 0,
             transient_store_pool: Some(transient_store_pool),
             stop_timestamp: 0,
-            mmapped_file: mmap,
+            mmapped_file: SyncUnsafeCellWrapper::new(mmap),
         }
     }
 }
@@ -757,12 +758,12 @@ impl DefaultMappedFile {
     #[inline]
     #[allow(clippy::mut_from_ref)]
     pub fn get_mapped_file_mut(&self) -> &mut MmapMut {
-        unsafe { &mut *(self.mmapped_file.as_ptr() as *mut MmapMut) }
+        self.mmapped_file.mut_from_ref()
     }
 
     #[inline]
     pub fn get_mapped_file(&self) -> &MmapMut {
-        unsafe { &*(self.mmapped_file.as_ptr() as *const MmapMut) }
+        self.mmapped_file.as_ref()
     }
 
     #[inline]

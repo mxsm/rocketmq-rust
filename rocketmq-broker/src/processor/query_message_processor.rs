@@ -14,7 +14,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::sync::Arc;
 
 use rocketmq_common::common::mix_all::UNIQUE_MSG_QUERY_FLAG;
 use rocketmq_remoting::code::request_code::RequestCode;
@@ -26,20 +25,25 @@ use rocketmq_remoting::protocol::header::view_message_request_header::ViewMessag
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_rust::ArcMut;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::log_file::MessageStore;
 
-#[derive(Default)]
+use crate::broker_runtime::BrokerRuntimeInner;
+
 pub struct QueryMessageProcessor<MS> {
-    message_store_config: Arc<MessageStoreConfig>,
-    message_store: ArcMut<MS>,
+    /*message_store_config: Arc<MessageStoreConfig>,
+    message_store: ArcMut<MS>,*/
+    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
 impl<MS> QueryMessageProcessor<MS> {
-    pub fn new(message_store_config: Arc<MessageStoreConfig>, message_store: ArcMut<MS>) -> Self {
+    pub fn new(
+        /* message_store_config: Arc<MessageStoreConfig>, message_store: ArcMut<MS> */
+        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    ) -> Self {
         Self {
-            message_store_config,
-            message_store,
+            /*message_store_config,
+            message_store,*/
+            broker_runtime_inner,
         }
     }
 }
@@ -77,10 +81,16 @@ where
         response.set_opaque_mut(request.opaque());
         let is_unique_key = request.ext_fields().unwrap().get(UNIQUE_MSG_QUERY_FLAG);
         if is_unique_key.is_some() && is_unique_key.unwrap() == "true" {
-            request_header.max_num = self.message_store_config.default_query_max_num as i32;
+            request_header.max_num = self
+                .broker_runtime_inner
+                .message_store_config()
+                .default_query_max_num as i32;
         }
         let query_message_result = self
-            .message_store
+            .broker_runtime_inner
+            .message_store()
+            .as_ref()
+            .unwrap()
             .query_message(
                 request_header.topic.as_ref(),
                 request_header.key.as_ref(),
@@ -123,7 +133,10 @@ where
             .decode_command_custom_header::<ViewMessageRequestHeader>()
             .unwrap();
         let select_mapped_buffer_result = self
-            .message_store
+            .broker_runtime_inner
+            .message_store()
+            .as_ref()
+            .unwrap()
             .select_one_message_by_offset(request_header.offset)
             .await;
         if let Some(result) = select_mapped_buffer_result {

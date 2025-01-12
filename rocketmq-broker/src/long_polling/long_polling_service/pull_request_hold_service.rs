@@ -19,7 +19,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::consume_queue::consume_queue_ext::CqExtUnit;
@@ -29,6 +28,7 @@ use tokio::time::Instant;
 use tracing::info;
 use tracing::warn;
 
+use crate::broker_runtime::BrokerRuntimeInner;
 use crate::long_polling::many_pull_request::ManyPullRequest;
 use crate::long_polling::pull_request::PullRequest;
 use crate::processor::pull_message_processor::PullMessageProcessor;
@@ -38,9 +38,10 @@ const TOPIC_QUEUE_ID_SEPARATOR: &str = "@";
 pub struct PullRequestHoldService<MS> {
     pull_request_table: Arc<parking_lot::RwLock<HashMap<String, ManyPullRequest>>>,
     pull_message_processor: ArcMut<PullMessageProcessor<MS>>,
-    message_store: ArcMut<MS>,
-    broker_config: Arc<BrokerConfig>,
+    //message_store: ArcMut<MS>,
+    // broker_config: Arc<BrokerConfig>,
     shutdown: Arc<Notify>,
+    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
 impl<MS> PullRequestHoldService<MS>
@@ -48,16 +49,19 @@ where
     MS: MessageStore + Send + Sync,
 {
     pub fn new(
-        message_store: ArcMut<MS>,
+        /* message_store: ArcMut<MS>,
         pull_message_processor: ArcMut<PullMessageProcessor<MS>>,
-        broker_config: Arc<BrokerConfig>,
+        broker_config: Arc<BrokerConfig>,*/
+        pull_message_processor: ArcMut<PullMessageProcessor<MS>>,
+        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> Self {
         PullRequestHoldService {
             pull_request_table: Arc::new(parking_lot::RwLock::new(HashMap::new())),
             pull_message_processor,
-            message_store,
-            broker_config,
+            /* message_store,
+            broker_config,*/
             shutdown: Arc::new(Default::default()),
+            broker_runtime_inner,
         }
     }
 }
@@ -67,25 +71,28 @@ impl<MS> PullRequestHoldService<MS>
 where
     MS: MessageStore + Send + Sync,
 {
-    pub fn start(&mut self, this: ArcMut<Self>) {
+    pub fn start(&mut self, this: ArcMut<BrokerRuntimeInner<MS>>) {
         tokio::spawn(async move {
             loop {
-                let handle_future = if this.broker_config.long_polling_enable {
+                let handle_future = if this.broker_config().long_polling_enable {
                     tokio::time::sleep(tokio::time::Duration::from_secs(5))
                 } else {
                     tokio::time::sleep(tokio::time::Duration::from_millis(
-                        this.broker_config.short_polling_time_mills,
+                        this.broker_config().short_polling_time_mills,
                     ))
                 };
                 tokio::select! {
                     _ = handle_future => {}
-                    _ = this.shutdown.notified() => {
+                    _ = this.pull_request_hold_service().as_ref().unwrap().shutdown.notified() => {
                         info!("PullRequestHoldService: shutdown..........");
                         break;
                     }
                 }
                 let instant = Instant::now();
-                this.check_hold_request();
+                this.pull_request_hold_service()
+                    .as_ref()
+                    .unwrap()
+                    .check_hold_request();
                 let elapsed = instant.elapsed().as_millis();
                 if elapsed > 5000 {
                     warn!(
@@ -123,7 +130,12 @@ where
                 "check hold request, topic: {}, queue_id: {}",
                 topic, queue_id
             );*/
-            let max_offset = self.message_store.get_max_offset_in_queue(&topic, queue_id);
+            let max_offset = self
+                .broker_runtime_inner
+                .message_store()
+                .as_ref()
+                .unwrap()
+                .get_max_offset_in_queue(&topic, queue_id);
             self.notify_message_arriving(&topic, queue_id, max_offset);
         }
     }
@@ -155,7 +167,12 @@ where
                 for request in request_list {
                     let mut newest_offset = max_offset;
                     if newest_offset <= request.pull_from_this_offset() {
-                        newest_offset = self.message_store.get_max_offset_in_queue(topic, queue_id);
+                        newest_offset = self
+                            .broker_runtime_inner
+                            .message_store()
+                            .as_ref()
+                            .unwrap()
+                            .get_max_offset_in_queue(topic, queue_id);
                     }
 
                     if newest_offset > request.pull_from_this_offset() {

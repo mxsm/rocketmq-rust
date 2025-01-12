@@ -29,7 +29,6 @@ use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use rand::thread_rng;
 use rand::Rng;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::constant::consume_init_mode::ConsumeInitMode;
 use rocketmq_common::common::constant::PermName;
@@ -60,7 +59,6 @@ use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerCon
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::filter::MessageFilter;
 use rocketmq_store::log_file::MessageStore;
 use rocketmq_store::pop::batch_ack_msg::BatchAckMsg;
@@ -71,44 +69,39 @@ use tracing::info;
 use tracing::warn;
 
 use crate::broker_error::BrokerError;
-use crate::client::manager::consumer_manager::ConsumerManager;
-use crate::failover::escape_bridge::EscapeBridge;
+use crate::broker_runtime::BrokerRuntimeInner;
 use crate::filter::expression_message_filter::ExpressionMessageFilter;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
 use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingService;
 use crate::long_polling::polling_header::PollingHeader;
 use crate::long_polling::polling_result::PollingResult;
-use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
-use crate::offset::manager::consumer_order_info_manager::ConsumerOrderInfoManager;
-use crate::processor::pop_inflight_message_counter::PopInflightMessageCounter;
 use crate::processor::processor_service::pop_buffer_merge_service::PopBufferMergeService;
-use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
-use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
 const BORN_TIME: &str = "bornTime";
 
 pub struct PopMessageProcessor<MS> {
-    consumer_manager: Arc<ConsumerManager>,
-    consumer_offset_manager: Arc<ConsumerOffsetManager>,
-    consumer_order_info_manager: Arc<ConsumerOrderInfoManager<MS>>,
-    broker_config: Arc<BrokerConfig>,
-    message_store: ArcMut<MS>,
-    message_store_config: Arc<MessageStoreConfig>,
-    topic_config_manager: Arc<TopicConfigManager>,
-    subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
-    consumer_filter_manager: Arc<ConsumerFilterManager>,
+    //consumer_manager: Arc<ConsumerManager>,
+    //  consumer_offset_manager: Arc<ConsumerOffsetManager>,
+    // consumer_order_info_manager: Arc<ConsumerOrderInfoManager<MS>>,
+    //  broker_config: Arc<BrokerConfig>,
+    //  message_store: ArcMut<MS>,
+    //   message_store_config: Arc<MessageStoreConfig>,
+    //  topic_config_manager: Arc<TopicConfigManager>,
+    //   subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
+    //    consumer_filter_manager: Arc<ConsumerFilterManager>,
     ck_message_number: AtomicI64,
     pop_long_polling_service: ArcMut<PopLongPollingService>,
     pop_buffer_merge_service: ArcMut<PopBufferMergeService<MS>>,
-    pop_inflight_message_counter: Arc<PopInflightMessageCounter>,
+    //pop_inflight_message_counter: Arc<PopInflightMessageCounter>,
     queue_lock_manager: QueueLockManager,
     revive_topic: CheetahString,
-    store_host: SocketAddr,
+    // store_host: SocketAddr,
+    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
-impl<MS> PopMessageProcessor<MS> {
+impl<MS: MessageStore> PopMessageProcessor<MS> {
     pub fn new(
-        consumer_manager: Arc<ConsumerManager>,
+        /*consumer_manager: Arc<ConsumerManager>,
         consumer_offset_manager: Arc<ConsumerOffsetManager>,
         consumer_order_info_manager: Arc<ConsumerOrderInfoManager<MS>>,
         broker_config: Arc<BrokerConfig>,
@@ -119,14 +112,20 @@ impl<MS> PopMessageProcessor<MS> {
         consumer_filter_manager: Arc<ConsumerFilterManager>,
         pop_inflight_message_counter: Arc<PopInflightMessageCounter>,
         store_host: SocketAddr,
-        escape_bridge: ArcMut<EscapeBridge<MS>>,
+        escape_bridge: ArcMut<EscapeBridge<MS>>,*/
+        //pop_inflight_message_counter: Arc<PopInflightMessageCounter>,
+        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> Self {
         let revive_topic = CheetahString::from_string(PopAckConstants::build_cluster_revive_topic(
-            broker_config.broker_identity.broker_cluster_name.as_str(),
+            broker_runtime_inner
+                .broker_config()
+                .broker_identity
+                .broker_cluster_name
+                .as_str(),
         ));
         let queue_lock_manager = QueueLockManager::new();
         PopMessageProcessor {
-            consumer_offset_manager,
+            /*consumer_offset_manager,
             consumer_manager,
             consumer_order_info_manager,
             broker_config: broker_config.clone(),
@@ -134,22 +133,24 @@ impl<MS> PopMessageProcessor<MS> {
             message_store_config,
             topic_config_manager: topic_config_manager.clone(),
             subscription_group_manager: subscription_group_manager.clone(),
-            consumer_filter_manager,
+            consumer_filter_manager,*/
             ck_message_number: Default::default(),
             pop_long_polling_service: ArcMut::new(PopLongPollingService),
             pop_buffer_merge_service: ArcMut::new(PopBufferMergeService::new(
                 revive_topic.clone(),
                 queue_lock_manager.clone(),
-                broker_config,
+                /*broker_config,
                 store_host,
                 escape_bridge,
                 topic_config_manager,
-                subscription_group_manager,
+                subscription_group_manager,*/
+                broker_runtime_inner.clone(),
             )),
-            pop_inflight_message_counter,
+            //pop_inflight_message_counter,
             queue_lock_manager,
             revive_topic,
-            store_host,
+            //store_host,
+            broker_runtime_inner,
         }
     }
 }
@@ -185,11 +186,13 @@ where
             .decode_command_custom_header::<PopMessageRequestHeader>()
             .map_err(BrokerError::BrokerRemotingError)?;
 
-        self.consumer_manager.compensate_basic_consumer_info(
-            &request_header.consumer_group,
-            ConsumeType::ConsumePop,
-            MessageModel::Clustering,
-        );
+        self.broker_runtime_inner
+            .consumer_manager()
+            .compensate_basic_consumer_info(
+                &request_header.consumer_group,
+                ConsumeType::ConsumePop,
+                MessageModel::Clustering,
+            );
 
         if request_header.is_timeout_too_much() {
             return Ok(Some(
@@ -197,19 +200,19 @@ where
                     ResponseCode::PollingTimeout,
                     format!(
                         "the broker[{}] pop message is timeout too much",
-                        self.broker_config.broker_ip1
+                        self.broker_runtime_inner.broker_config().broker_ip1
                     ),
                 ),
             ));
         }
 
-        if !PermName::is_readable(self.broker_config.broker_permission) {
+        if !PermName::is_readable(self.broker_runtime_inner.broker_config().broker_permission) {
             return Ok(Some(
                 RemotingCommand::create_response_command_with_code_remark(
                     ResponseCode::NoPermission,
                     format!(
                         "the broker[{}] pop message is forbidden",
-                        self.broker_config.broker_ip1
+                        self.broker_runtime_inner.broker_config().broker_ip1
                     ),
                 ),
             ));
@@ -221,25 +224,30 @@ where
                     ResponseCode::SystemError,
                     format!(
                         "the broker[{}] pop message's num is greater than 32",
-                        self.broker_config.broker_ip1
+                        self.broker_runtime_inner.broker_config().broker_ip1
                     ),
                 ),
             ));
         }
 
-        if !self.message_store_config.timer_wheel_enable {
+        if !self
+            .broker_runtime_inner
+            .message_store_config()
+            .timer_wheel_enable
+        {
             return Ok(Some(
                 RemotingCommand::create_response_command_with_code_remark(
                     ResponseCode::SystemError,
                     format!(
                         "the broker[{}] pop message is forbidden because timerWheelEnable is false",
-                        self.broker_config.broker_ip1
+                        self.broker_runtime_inner.broker_config().broker_ip1
                     ),
                 ),
             ));
         }
         let topic_config = self
-            .topic_config_manager
+            .broker_runtime_inner
+            .topic_config_manager()
             .select_topic_config(&request_header.topic);
         if topic_config.is_none() {
             return Ok(Some(
@@ -281,7 +289,8 @@ where
             ));
         }
         let subscription_group_config = self
-            .subscription_group_manager
+            .broker_runtime_inner
+            .subscription_group_manager()
             .find_subscription_group_config(&request_header.consumer_group);
         if subscription_group_config.is_none() {
             return Ok(Some(
@@ -326,15 +335,19 @@ where
                     ));
                 }
             };
-            self.consumer_manager.compensate_subscribe_data(
-                &request_header.consumer_group,
-                &request_header.topic,
-                &subscription_data,
-            );
+            self.broker_runtime_inner
+                .consumer_manager()
+                .compensate_subscribe_data(
+                    &request_header.consumer_group,
+                    &request_header.topic,
+                    &subscription_data,
+                );
             let retry_topic = CheetahString::from_string(KeyBuilder::build_pop_retry_topic(
                 &request_header.topic,
                 &request_header.consumer_group,
-                self.broker_config.enable_retry_topic_v2,
+                self.broker_runtime_inner
+                    .broker_config()
+                    .enable_retry_topic_v2,
             ));
             let retry_subscription_data = match FilterAPI::build(
                 &retry_topic,
@@ -351,11 +364,13 @@ where
                     ));
                 }
             };
-            self.consumer_manager.compensate_subscribe_data(
-                &request_header.consumer_group,
-                &retry_topic,
-                &retry_subscription_data,
-            );
+            self.broker_runtime_inner
+                .consumer_manager()
+                .compensate_subscribe_data(
+                    &request_header.consumer_group,
+                    &retry_topic,
+                    &retry_subscription_data,
+                );
             let message_filter =
                 if !ExpressionType::is_tag_type(Some(subscription_data.expression_type.as_str())) {
                     let consumer_filter_data = ConsumerFilterManager::build(
@@ -382,7 +397,7 @@ where
                         Box::new(ExpressionMessageFilter::new(
                             Some(subscription_data.clone()),
                             Some(consumer_filter_data.clone()),
-                            self.consumer_filter_manager.clone(),
+                            Arc::new(self.broker_runtime_inner.consumer_filter_manager().clone()),
                         ));
                     Some(message_filter)
                 } else {
@@ -405,15 +420,19 @@ where
                     ));
                 }
             };
-            self.consumer_manager.compensate_subscribe_data(
-                &request_header.consumer_group,
-                &request_header.topic,
-                &subscription_data,
-            );
+            self.broker_runtime_inner
+                .consumer_manager()
+                .compensate_subscribe_data(
+                    &request_header.consumer_group,
+                    &request_header.topic,
+                    &subscription_data,
+                );
             let retry_topic = CheetahString::from_string(KeyBuilder::build_pop_retry_topic(
                 &request_header.topic,
                 &request_header.consumer_group,
-                self.broker_config.enable_retry_topic_v2,
+                self.broker_runtime_inner
+                    .broker_config()
+                    .enable_retry_topic_v2,
             ));
             let retry_subscription_data = match FilterAPI::build(
                 &retry_topic,
@@ -430,11 +449,13 @@ where
                     ));
                 }
             };
-            self.consumer_manager.compensate_subscribe_data(
-                &request_header.consumer_group,
-                &retry_topic,
-                &retry_subscription_data,
-            );
+            self.broker_runtime_inner
+                .consumer_manager()
+                .compensate_subscribe_data(
+                    &request_header.consumer_group,
+                    &retry_topic,
+                    &retry_subscription_data,
+                );
             (subscription_data, None)
         };
 
@@ -443,16 +464,26 @@ where
             POP_ORDER_REVIVE_QUEUE
         } else {
             (self.ck_message_number.fetch_add(1, Ordering::AcqRel)
-                % self.broker_config.revive_queue_num as i64)
+                % self.broker_runtime_inner.broker_config().revive_queue_num as i64)
                 .abs() as i32
         };
         let mut get_message_result = ArcMut::new(GetMessageResult::new_result_size(
             request_header.max_msg_nums as usize,
         ));
-        let need_retry = randomq < self.broker_config.pop_from_retry_probability;
+        let need_retry = randomq
+            < self
+                .broker_runtime_inner
+                .broker_config()
+                .pop_from_retry_probability;
         let mut need_retry_v1 = false;
-        if self.broker_config.enable_retry_topic_v2
-            && self.broker_config.retrieve_message_from_pop_retry_topic_v1
+        if self
+            .broker_runtime_inner
+            .broker_config()
+            .enable_retry_topic_v2
+            && self
+                .broker_runtime_inner
+                .broker_config()
+                .retrieve_message_from_pop_retry_topic_v1
         {
             need_retry_v1 = randomq % 2 == 0;
         }
@@ -490,7 +521,9 @@ where
                 let retry_topic = CheetahString::from_string(KeyBuilder::build_pop_retry_topic(
                     &request_header.topic,
                     &request_header.consumer_group,
-                    self.broker_config.enable_retry_topic_v2,
+                    self.broker_runtime_inner
+                        .broker_config()
+                        .enable_retry_topic_v2,
                 ));
                 self.pop_msg_from_topic_by_name(
                     &retry_topic,
@@ -577,7 +610,9 @@ where
                 let retry_topic = CheetahString::from_string(KeyBuilder::build_pop_retry_topic(
                     &request_header.topic,
                     &request_header.consumer_group,
-                    self.broker_config.enable_retry_topic_v2,
+                    self.broker_runtime_inner
+                        .broker_config()
+                        .enable_retry_topic_v2,
                 ));
                 self.pop_msg_from_topic_by_name(
                     &retry_topic,
@@ -727,7 +762,10 @@ where
         random_q: i32,
         rest_num: i64,
     ) -> i64 {
-        let topic_config = self.topic_config_manager.select_topic_config(topic);
+        let topic_config = self
+            .broker_runtime_inner
+            .topic_config_manager()
+            .select_topic_config(topic);
         if topic_config.is_none() {
             return rest_num;
         }
@@ -788,13 +826,27 @@ where
             .try_lock_with_key(lock_key.clone())
             .await
         {
-            return self.message_store.get_max_offset_in_queue(topic, queue_id) - offset + rest_num;
+            return self
+                .broker_runtime_inner
+                .message_store()
+                .as_ref()
+                .unwrap()
+                .get_max_offset_in_queue(topic, queue_id)
+                - offset
+                + rest_num;
         }
         self.queue_lock_manager()
             .unlock_with_key(lock_key.clone())
             .await;
         if !self.is_pop_should_stop(topic, &request_header.consumer_group, queue_id) {
-            return self.message_store.get_max_offset_in_queue(topic, queue_id) - offset + rest_num;
+            return self
+                .broker_runtime_inner
+                .message_store()
+                .as_ref()
+                .unwrap()
+                .get_max_offset_in_queue(topic, queue_id)
+                - offset
+                + rest_num;
         }
         let offset = self.get_pop_offset(
             topic,
@@ -806,24 +858,39 @@ where
             true,
         );
         if request_header.order.unwrap_or(false) {
-            if self.consumer_order_info_manager.check_block(
-                attempt_id,
-                topic,
-                &request_header.consumer_group,
-                queue_id,
-                request_header.invisible_time,
-            ) {
+            if self
+                .broker_runtime_inner
+                .consumer_order_info_manager()
+                .check_block(
+                    attempt_id,
+                    topic,
+                    &request_header.consumer_group,
+                    queue_id,
+                    request_header.invisible_time,
+                )
+            {
                 return rest_num;
             }
-            self.pop_inflight_message_counter
+            self.broker_runtime_inner
+                .pop_inflight_message_counter()
                 .clear_in_flight_message_num(topic, &request_header.consumer_group, queue_id);
         }
 
         if get_message_result.message_mapped_list().len() >= request_header.max_msg_nums as usize {
-            return self.message_store.get_max_offset_in_queue(topic, queue_id) - offset + rest_num;
+            return self
+                .broker_runtime_inner
+                .message_store()
+                .as_ref()
+                .unwrap()
+                .get_max_offset_in_queue(topic, queue_id)
+                - offset
+                + rest_num;
         }
         let get_message_result_inner = self
-            .message_store
+            .broker_runtime_inner
+            .message_store()
+            .as_ref()
+            .unwrap()
             .get_message(
                 &request_header.consumer_group,
                 topic,
@@ -841,7 +908,12 @@ where
         let is_order = request_header.order.unwrap_or(false);
         match get_message_result_inner {
             None => {
-                let num = self.message_store.get_max_offset_in_queue(topic, queue_id)
+                let num = self
+                    .broker_runtime_inner
+                    .message_store()
+                    .as_ref()
+                    .unwrap()
+                    .get_max_offset_in_queue(topic, queue_id)
                     - atomic_offset.load(Ordering::Acquire)
                     + atomic_rest_num.load(Ordering::Acquire);
                 atomic_rest_num.store(num, Ordering::Release);
@@ -854,16 +926,21 @@ where
                         GetMessageStatus::OffsetFoundNull
                         | GetMessageStatus::OffsetOverflowBadly
                         | GetMessageStatus::OffsetTooSmall => {
-                            self.consumer_offset_manager.commit_offset(
-                                channel.remote_address().to_string().into(),
-                                &request_header.consumer_group,
-                                topic,
-                                queue_id,
-                                result.next_begin_offset(),
-                            );
+                            self.broker_runtime_inner
+                                .consumer_offset_manager()
+                                .commit_offset(
+                                    channel.remote_address().to_string().into(),
+                                    &request_header.consumer_group,
+                                    topic,
+                                    queue_id,
+                                    result.next_begin_offset(),
+                                );
                             atomic_offset.store(result.next_begin_offset(), Ordering::Release);
                             let get_message_result_in = self
-                                .message_store
+                                .broker_runtime_inner
+                                .message_store()
+                                .as_ref()
+                                .unwrap()
                                 .get_message(
                                     &request_header.consumer_group,
                                     topic,
@@ -877,10 +954,14 @@ where
                                 .await;
                             match get_message_result_in {
                                 None => {
-                                    let num =
-                                        self.message_store.get_max_offset_in_queue(topic, queue_id)
-                                            - atomic_offset.load(Ordering::Acquire)
-                                            + atomic_rest_num.load(Ordering::Acquire);
+                                    let num = self
+                                        .broker_runtime_inner
+                                        .message_store()
+                                        .as_ref()
+                                        .unwrap()
+                                        .get_max_offset_in_queue(topic, queue_id)
+                                        - atomic_offset.load(Ordering::Acquire)
+                                        + atomic_rest_num.load(Ordering::Acquire);
                                     return num;
                                 }
                                 Some(value) => value,
@@ -891,24 +972,28 @@ where
                 };
                 if !result_inner.message_mapped_list().is_empty() {
                     if is_order {
-                        self.consumer_order_info_manager.update(
-                            request_header.attempt_id.clone().unwrap_or_default(),
-                            is_retry,
-                            topic,
-                            &request_header.consumer_group,
-                            queue_id,
-                            pop_time,
-                            request_header.invisible_time,
-                            result_inner.message_queue_offset().clone(),
-                            order_count_info,
-                        );
-                        self.consumer_offset_manager.commit_offset(
-                            channel.remote_address().to_string().into(),
-                            &request_header.consumer_group,
-                            topic,
-                            queue_id,
-                            final_offset,
-                        );
+                        self.broker_runtime_inner
+                            .consumer_order_info_manager()
+                            .update(
+                                request_header.attempt_id.clone().unwrap_or_default(),
+                                is_retry,
+                                topic,
+                                &request_header.consumer_group,
+                                queue_id,
+                                pop_time,
+                                request_header.invisible_time,
+                                result_inner.message_queue_offset().clone(),
+                                order_count_info,
+                            );
+                        self.broker_runtime_inner
+                            .consumer_offset_manager()
+                            .commit_offset(
+                                channel.remote_address().to_string().into(),
+                                &request_header.consumer_group,
+                                topic,
+                                queue_id,
+                                final_offset,
+                            );
                     } else if !self.append_check_point(
                         request_header,
                         topic,
@@ -917,7 +1002,10 @@ where
                         final_offset,
                         &result_inner,
                         pop_time as i64,
-                        self.broker_config.broker_name.as_str(),
+                        self.broker_runtime_inner
+                            .broker_config()
+                            .broker_name
+                            .as_str(),
                     ) {
                         return atomic_rest_num.load(Ordering::Acquire)
                             + result_inner.message_count() as i64;
@@ -943,9 +1031,18 @@ where
                     result_inner.max_offset() - result_inner.next_begin_offset(),
                     Ordering::AcqRel,
                 );
-                let broker_name = self.broker_config.broker_name.as_str();
+                let broker_name = self
+                    .broker_runtime_inner
+                    .broker_config()
+                    .broker_name
+                    .as_str();
                 for msg in result_inner.message_mapped_list() {
-                    if self.broker_config.pop_response_return_actual_retry_topic || !is_retry {
+                    if self
+                        .broker_runtime_inner
+                        .broker_config()
+                        .pop_response_return_actual_retry_topic
+                        || !is_retry
+                    {
                         //get_message_result.message_mapped_list().push(msg.clone());
                     } else {
                         let mut bytes = msg.get_bytes().unwrap_or_default();
@@ -954,7 +1051,8 @@ where
                         unimplemented!("PopMessageProcessor pop_msg_from_queue")
                     }
                 }
-                self.pop_inflight_message_counter
+                self.broker_runtime_inner
+                    .pop_inflight_message_counter()
                     .increment_in_flight_message_num(
                         topic,
                         &request_header.consumer_group,
@@ -1000,7 +1098,8 @@ where
         check_reset_offset: bool,
     ) -> i64 {
         let mut offset = self
-            .consumer_offset_manager
+            .broker_runtime_inner
+            .consumer_offset_manager()
             .query_offset(group, topic, queue_id);
         if offset < 0 {
             offset = self.get_init_offset(topic, group, queue_id, init_mode, init);
@@ -1031,16 +1130,39 @@ where
         let mut offset;
         if init_mode == ConsumeInitMode::MIN || topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX)
         {
-            offset = self.message_store.get_min_offset_in_queue(topic, queue_id);
-        } else if self.broker_config.init_pop_offset_by_check_msg_in_mem
-            && self.message_store.get_min_offset_in_queue(topic, queue_id) <= 0
+            offset = self
+                .broker_runtime_inner
+                .message_store()
+                .as_ref()
+                .unwrap()
+                .get_min_offset_in_queue(topic, queue_id);
+        } else if self
+            .broker_runtime_inner
+            .broker_config()
+            .init_pop_offset_by_check_msg_in_mem
             && self
-                .message_store
+                .broker_runtime_inner
+                .message_store()
+                .as_ref()
+                .unwrap()
+                .get_min_offset_in_queue(topic, queue_id)
+                <= 0
+            && self
+                .broker_runtime_inner
+                .message_store()
+                .as_ref()
+                .unwrap()
                 .check_in_mem_by_consume_offset(topic, queue_id, 0, 1)
         {
             offset = 0;
         } else {
-            offset = self.message_store.get_max_offset_in_queue(topic, queue_id) - 1;
+            offset = self
+                .broker_runtime_inner
+                .message_store()
+                .as_ref()
+                .unwrap()
+                .get_max_offset_in_queue(topic, queue_id)
+                - 1;
             if offset < 0 {
                 offset = 0;
             }
@@ -1048,13 +1170,9 @@ where
 
         // whichever initMode
         if init {
-            self.consumer_offset_manager.commit_offset(
-                "getPopOffset".into(),
-                group,
-                topic,
-                queue_id,
-                offset,
-            );
+            self.broker_runtime_inner
+                .consumer_offset_manager()
+                .commit_offset("getPopOffset".into(), group, topic, queue_id, offset);
         }
         offset
     }
@@ -1074,19 +1192,17 @@ where
             queue_id
         ));
         let reset_offset = self
-            .consumer_offset_manager
+            .broker_runtime_inner
+            .consumer_offset_manager()
             .query_then_erase_reset_offset(group, topic, queue_id);
         if let Some(value) = &reset_offset {
-            self.consumer_order_info_manager
+            self.broker_runtime_inner
+                .consumer_order_info_manager()
                 .clear_block(topic, group, queue_id);
             self.pop_buffer_merge_service.clear_offset_queue(&lock_key);
-            self.consumer_offset_manager.commit_offset(
-                "ResetPopOffset".into(),
-                group,
-                topic,
-                queue_id,
-                *value,
-            )
+            self.broker_runtime_inner
+                .consumer_offset_manager()
+                .commit_offset("ResetPopOffset".into(), group, topic, queue_id, *value)
         }
         reset_offset
     }

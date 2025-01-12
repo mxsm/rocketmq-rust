@@ -74,9 +74,9 @@ pub struct BrokerRequestProcessor<MS, TS> {
     pub(crate) query_message_processor: ArcMut<QueryMessageProcessor<MS>>,
     pub(crate) client_manage_processor: ArcMut<ClientManageProcessor<MS>>,
     pub(crate) consumer_manage_processor: ArcMut<ConsumerManageProcessor<MS>>,
-    pub(crate) query_assignment_processor: ArcMut<QueryAssignmentProcessor>,
+    pub(crate) query_assignment_processor: ArcMut<QueryAssignmentProcessor<MS>>,
     pub(crate) end_transaction_processor: ArcMut<EndTransactionProcessor<TS, MS>>,
-    pub(crate) admin_broker_processor: ArcMut<AdminBrokerProcessor>,
+    pub(crate) admin_broker_processor: ArcMut<AdminBrokerProcessor<MS>>,
 }
 impl<MS, TS> Clone for BrokerRequestProcessor<MS, TS> {
     fn clone(&self) -> Self {
