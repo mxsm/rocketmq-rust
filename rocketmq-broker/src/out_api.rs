@@ -15,4 +15,4 @@
  * limitations under the License.
  */
 
-pub(crate) mod broker_outer_api;
+pub mod broker_outer_api;

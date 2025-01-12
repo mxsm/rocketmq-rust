@@ -20,57 +20,55 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Display;
 use std::ops::Deref;
-use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_rust::ArcMut;
+use rocketmq_store::log_file::MessageStore;
 use serde::Deserialize;
 use serde::Serialize;
 use tracing::info;
 use tracing::warn;
 
 use crate::broker_path_config_helper::get_consumer_order_info_path;
+use crate::broker_runtime::BrokerRuntimeInner;
 use crate::offset::manager::consumer_order_info_lock_manager::ConsumerOrderInfoLockManager;
-use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
-use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
 const TOPIC_GROUP_SEPARATOR: &str = "@";
 const CLEAN_SPAN_FROM_LAST: u64 = 24 * 3600 * 1000;
 
 pub(crate) struct ConsumerOrderInfoManager<MS> {
-    pub(crate) broker_config: Arc<BrokerConfig>,
     pub(crate) consumer_order_info_wrapper: parking_lot::Mutex<ConsumerOrderInfoWrapper>,
     pub(crate) consumer_order_info_lock_manager: Option<ConsumerOrderInfoLockManager>,
-    pub(crate) topic_config_manager: Arc<TopicConfigManager>,
-    pub(crate) subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
+    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
 impl<MS> ConsumerOrderInfoManager<MS> {
     pub fn new(
-        broker_config: Arc<BrokerConfig>,
-        topic_config_manager: Arc<TopicConfigManager>,
-        subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
+        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> ConsumerOrderInfoManager<MS> {
         Self {
-            broker_config,
             consumer_order_info_wrapper: parking_lot::Mutex::new(
                 ConsumerOrderInfoWrapper::default(),
             ),
             consumer_order_info_lock_manager: None,
-            topic_config_manager,
-            subscription_group_manager,
+            broker_runtime_inner,
         }
     }
 }
 
 //Fully implemented will be removed
 #[allow(unused_variables)]
-impl<MS> ConfigManager for ConsumerOrderInfoManager<MS> {
+impl<MS: MessageStore> ConfigManager for ConsumerOrderInfoManager<MS> {
     fn config_file_path(&self) -> String {
-        get_consumer_order_info_path(self.broker_config.store_path_root_dir.as_str())
+        get_consumer_order_info_path(
+            self.broker_runtime_inner
+                .broker_config()
+                .store_path_root_dir
+                .as_str(),
+        )
     }
 
     fn encode_pretty(&self, pretty_format: bool) -> String {
@@ -105,7 +103,7 @@ impl<MS> ConfigManager for ConsumerOrderInfoManager<MS> {
     }
 }
 
-impl<MS> ConsumerOrderInfoManager<MS> {
+impl<MS: MessageStore> ConsumerOrderInfoManager<MS> {
     pub fn clear_block(&self, topic: &CheetahString, group: &CheetahString, queue_id: i32) {
         unimplemented!()
     }
@@ -126,7 +124,8 @@ impl<MS> ConsumerOrderInfoManager<MS> {
             let group = arrays[1];
 
             let topic_config = self
-                .topic_config_manager
+                .broker_runtime_inner
+                .topic_config_manager()
                 .select_topic_config(&CheetahString::from(topic));
             if topic_config.is_none() {
                 info!(
@@ -137,7 +136,8 @@ impl<MS> ConsumerOrderInfoManager<MS> {
                 continue;
             }
             let subscription_group_wrapper = self
-                .subscription_group_manager
+                .broker_runtime_inner
+                .subscription_group_manager()
                 .subscription_group_wrapper()
                 .lock();
             let subscription_group_config = subscription_group_wrapper

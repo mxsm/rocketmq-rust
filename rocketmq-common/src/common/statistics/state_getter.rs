@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 use cheetah_string::CheetahString;
+use rocketmq_rust::ArcMut;
 
 /// `StateGetter` is a trait that provides a method for checking the online status of a specific
 /// instance.

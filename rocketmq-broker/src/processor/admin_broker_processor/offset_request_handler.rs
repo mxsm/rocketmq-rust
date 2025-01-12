@@ -28,22 +28,25 @@ use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_utils::TopicQ
 use rocketmq_remoting::rpc::rpc_client::RpcClient;
 use rocketmq_remoting::rpc::rpc_request::RpcRequest;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_rust::ArcMut;
 use rocketmq_store::log_file::MessageStore;
 
-use crate::processor::admin_broker_processor::Inner;
+use crate::broker_runtime::BrokerRuntimeInner;
 
 #[derive(Clone)]
-pub(super) struct OffsetRequestHandler {
-    inner: Inner,
+pub(super) struct OffsetRequestHandler<MS> {
+    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
-impl OffsetRequestHandler {
-    pub fn new(inner: Inner) -> Self {
-        Self { inner }
+impl<MS> OffsetRequestHandler<MS> {
+    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
+        Self {
+            broker_runtime_inner,
+        }
     }
 }
 
-impl OffsetRequestHandler {
+impl<MS: MessageStore> OffsetRequestHandler<MS> {
     pub async fn get_max_offset(
         &mut self,
         _channel: Channel,
@@ -55,8 +58,8 @@ impl OffsetRequestHandler {
             .decode_command_custom_header::<GetMaxOffsetRequestHeader>()
             .unwrap(); //need to optimize
         let mapping_context = self
-            .inner
-            .topic_queue_mapping_manager
+            .broker_runtime_inner
+            .topic_queue_mapping_manager()
             .build_topic_queue_mapping_context(&request_header, false);
         let topic = request_header.topic.clone();
         let queue_id = request_header.queue_id;
@@ -68,8 +71,10 @@ impl OffsetRequestHandler {
         }
 
         let offset = self
-            .inner
-            .default_message_store
+            .broker_runtime_inner
+            .message_store()
+            .as_ref()
+            .unwrap()
             .get_max_offset_in_queue(topic.as_ref(), queue_id);
         let response_header = GetMaxOffsetResponseHeader { offset };
         Some(RemotingCommand::create_response_command_with_header(
@@ -89,8 +94,8 @@ impl OffsetRequestHandler {
             .unwrap(); //need to optimize
 
         let mapping_context = self
-            .inner
-            .topic_queue_mapping_manager
+            .broker_runtime_inner
+            .topic_queue_mapping_manager()
             .build_topic_queue_mapping_context(&request_header, false);
         let topic = request_header.topic.clone();
         let queue_id = request_header.queue_id;
@@ -102,8 +107,10 @@ impl OffsetRequestHandler {
         }
 
         let offset = self
-            .inner
-            .default_message_store
+            .broker_runtime_inner
+            .message_store()
+            .as_ref()
+            .unwrap()
             .get_min_offset_in_queue(topic.as_ref(), queue_id);
         let response_header = GetMinOffsetResponseHeader { offset };
         Some(RemotingCommand::create_response_command_with_header(
@@ -146,17 +153,22 @@ impl OffsetRequestHandler {
         request_header.queue_id = max_item.queue_id;
         let max_physical_offset = if max_item.bname == mapping_detail.topic_queue_mapping_info.bname
         {
-            self.inner
-                .default_message_store
+            self.broker_runtime_inner
+                .message_store()
+                .as_ref()
+                .unwrap()
                 .get_min_offset_in_queue(mapping_context.topic.as_ref(), max_item.queue_id)
         } else {
             let rpc_request =
                 RpcRequest::new(RequestCode::GetMinOffset.to_i32(), request_header, None);
             let rpc_response = self
-                .inner
-                .broker_out_api
+                .broker_runtime_inner
+                .broker_outer_api()
                 .rpc_client()
-                .invoke(rpc_request, self.inner.broker_config.forward_timeout)
+                .invoke(
+                    rpc_request,
+                    self.broker_runtime_inner.broker_config().forward_timeout,
+                )
                 .await;
             if let Err(e) = rpc_response {
                 return Some(
@@ -215,8 +227,10 @@ impl OffsetRequestHandler {
         request_header.queue_id = max_item.queue_id;
         let max_physical_offset = if max_item.bname == mapping_detail.topic_queue_mapping_info.bname
         {
-            self.inner
-                .default_message_store
+            self.broker_runtime_inner
+                .message_store()
+                .as_ref()
+                .unwrap()
                 .get_max_offset_in_queue(mapping_context.topic.as_ref(), max_item.queue_id)
         } else {
             let rpc_request = RpcRequest::new(
@@ -225,10 +239,13 @@ impl OffsetRequestHandler {
                 None,
             );
             let rpc_response = self
-                .inner
-                .broker_out_api
+                .broker_runtime_inner
+                .broker_outer_api()
                 .rpc_client()
-                .invoke(rpc_request, self.inner.broker_config.forward_timeout)
+                .invoke(
+                    rpc_request,
+                    self.broker_runtime_inner.broker_config().forward_timeout,
+                )
                 .await;
             if let Err(e) = rpc_response {
                 return Some(

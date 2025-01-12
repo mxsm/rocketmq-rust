@@ -14,10 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::common::message::message_decoder;
 use rocketmq_common::common::message::message_ext::MessageExt;
@@ -37,34 +35,37 @@ use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::log_file::MessageStore;
 use tracing::warn;
 
+use crate::broker_runtime::BrokerRuntimeInner;
 use crate::transaction::operation_result::OperationResult;
 use crate::transaction::queue::transactional_message_util::TransactionalMessageUtil;
 use crate::transaction::transactional_message_service::TransactionalMessageService;
 
-#[derive(Default)]
 pub struct EndTransactionProcessor<TM, MS> {
-    message_store_config: Arc<MessageStoreConfig>,
-    broker_config: Arc<BrokerConfig>,
+    /*  message_store_config: Arc<MessageStoreConfig>,
+    broker_config: Arc<BrokerConfig>,*/
     transactional_message_service: ArcMut<TM>,
-    message_store: ArcMut<MS>,
+    // message_store: ArcMut<MS>,
+    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
 impl<TM, MS> EndTransactionProcessor<TM, MS> {
     pub fn new(
-        message_store_config: Arc<MessageStoreConfig>,
+        /*message_store_config: Arc<MessageStoreConfig>,
         broker_config: Arc<BrokerConfig>,
         transactional_message_service: ArcMut<TM>,
-        message_store: ArcMut<MS>,
+        message_store: ArcMut<MS>,*/
+        transactional_message_service: ArcMut<TM>,
+        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> Self {
         Self {
-            message_store_config,
-            broker_config,
+            /*message_store_config,
+            broker_config,*/
             transactional_message_service,
-            message_store,
+            /* message_store, */
+            broker_runtime_inner,
         }
     }
 }
@@ -84,7 +85,7 @@ where
         let request_header = request
             .decode_command_custom_header::<EndTransactionRequestHeader>()
             .expect("EndTransactionRequestHeader decode failed");
-        if BrokerRole::Slave == self.message_store_config.broker_role {
+        if BrokerRole::Slave == self.broker_runtime_inner.message_store_config().broker_role {
             warn!("Message store is slave mode, so end transaction is forbidden. ");
             return Some(RemotingCommand::create_response_command_with_code(
                 ResponseCode::SlaveNotAvailable,
@@ -216,7 +217,9 @@ where
                 get_current_millis() - (message_ext.born_timestamp as u64);
             let check_immunity_time = TransactionalMessageUtil::get_immunity_time(
                 check_immunity_time_str.as_ref().unwrap(),
-                self.broker_config.transaction_timeout,
+                self.broker_runtime_inner
+                    .broker_config()
+                    .transaction_timeout,
             );
             return value_of_current_minus_born > check_immunity_time;
         }
@@ -263,7 +266,13 @@ where
     }
 
     async fn send_final_message(&mut self, msg_inner: MessageExtBrokerInner) -> RemotingCommand {
-        let put_message_result = self.message_store.put_message(msg_inner).await;
+        let put_message_result = self
+            .broker_runtime_inner
+            .message_store_mut()
+            .as_mut()
+            .unwrap()
+            .put_message(msg_inner)
+            .await;
         let mut response = RemotingCommand::create_response_command();
         match put_message_result.put_message_status() {
             PutMessageStatus::PutOk
@@ -283,7 +292,9 @@ where
                 response.set_remark_mut(format!(
                     "The message is illegal, maybe msg body or properties length not matched. msg \
                      body length limit {}B, msg properties length limit 32KB.",
-                    self.message_store_config.max_message_size
+                    self.broker_runtime_inner
+                        .message_store_config()
+                        .max_message_size
                 ));
             }
             PutMessageStatus::OsPageCacheBusy => {
@@ -311,9 +322,17 @@ where
                 response.set_remark_mut(format!(
                     "timer message is under flow control, max num limit is {} or the current \
                      value is greater than {} and less than {}, trigger random flow control",
-                    self.message_store_config.timer_congest_num_each_slot * 2,
-                    self.message_store_config.timer_congest_num_each_slot,
-                    self.message_store_config.timer_congest_num_each_slot * 2,
+                    self.broker_runtime_inner
+                        .message_store_config()
+                        .timer_congest_num_each_slot
+                        * 2,
+                    self.broker_runtime_inner
+                        .message_store_config()
+                        .timer_congest_num_each_slot,
+                    self.broker_runtime_inner
+                        .message_store_config()
+                        .timer_congest_num_each_slot
+                        * 2,
                 ));
             }
             PutMessageStatus::WheelTimerMsgIllegal => {
@@ -322,14 +341,19 @@ where
                     "timer message illegal, the delay time should not be bigger than the max \
                      delay {}ms; or if set del msg, the delay time should be bigger than the \
                      current time",
-                    self.message_store_config.timer_max_delay_sec * 1000
+                    self.broker_runtime_inner
+                        .message_store_config()
+                        .timer_max_delay_sec
+                        * 1000
                 ));
             }
             PutMessageStatus::WheelTimerNotEnable => {
                 response.set_code_mut(ResponseCode::SystemError);
                 response.set_remark_mut(format!(
                     "accurate timer message is not enabled, timerWheelEnable is {}",
-                    self.message_store_config.timer_wheel_enable
+                    self.broker_runtime_inner
+                        .message_store_config()
+                        .timer_wheel_enable
                 ));
             }
         }

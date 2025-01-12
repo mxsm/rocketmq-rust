@@ -14,10 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::message::message_ext::MessageExt;
@@ -35,35 +33,38 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-use crate::client::manager::producer_manager::ProducerManager;
+use crate::broker_runtime::BrokerRuntimeInner;
 use crate::client::net::broker_to_client::Broker2Client;
-use crate::topic::manager::topic_config_manager::TopicConfigManager;
 use crate::transaction::transactional_message_check_listener::TransactionalMessageCheckListener;
 
 const TCMT_QUEUE_NUMS: i32 = 1;
 
 pub struct DefaultTransactionalMessageCheckListener<MS> {
-    inner: TransactionalMessageCheckListenerInner,
-    topic_config_manager: TopicConfigManager,
-    message_store: ArcMut<MS>,
+    inner: TransactionalMessageCheckListenerInner<MS>,
+    // topic_config_manager: TopicConfigManager,
+    //message_store: ArcMut<MS>,
+    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
-impl<MS> DefaultTransactionalMessageCheckListener<MS> {
+impl<MS: MessageStore> DefaultTransactionalMessageCheckListener<MS> {
     pub fn new(
-        broker_config: Arc<BrokerConfig>,
-        producer_manager: Arc<ProducerManager>,
+        /* broker_config: Arc<BrokerConfig>,
+        producer_manager: Arc<ProducerManager>,*/
         broker_client: Broker2Client,
-        topic_config_manager: TopicConfigManager,
-        message_store: ArcMut<MS>,
+        /*topic_config_manager: TopicConfigManager,
+        message_store: ArcMut<MS>,*/
+        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> Self {
         Self {
             inner: TransactionalMessageCheckListenerInner::new(
-                broker_config,
-                producer_manager,
+                /*  broker_config,
+                producer_manager,*/
                 broker_client,
+                broker_runtime_inner.clone(),
             ),
-            topic_config_manager,
-            message_store,
+            /*topic_config_manager,
+            message_store,*/
+            broker_runtime_inner,
         }
     }
 }
@@ -80,14 +81,21 @@ where
         );
 
         let topic_config = self
-            .topic_config_manager
+            .broker_runtime_inner
+            .topic_config_manager_mut()
             .create_topic_of_tran_check_max_time(
                 TCMT_QUEUE_NUMS,
                 PermName::PERM_READ | PermName::PERM_WRITE,
             )
             .expect("Create topic of tran check max time failed");
         let broker_inner = to_message_ext_broker_inner(&topic_config, &msg_ext);
-        let put_message_result = self.message_store.put_message(broker_inner).await;
+        let put_message_result = self
+            .broker_runtime_inner
+            .message_store_mut()
+            .as_mut()
+            .unwrap()
+            .put_message(broker_inner)
+            .await;
 
         if put_message_result.put_message_status() == PutMessageStatus::PutOk {
             info!(
@@ -111,22 +119,25 @@ where
 }
 
 #[derive(Clone)]
-struct TransactionalMessageCheckListenerInner {
-    broker_config: Arc<BrokerConfig>,
-    producer_manager: Arc<ProducerManager>,
+struct TransactionalMessageCheckListenerInner<MS> {
+    //broker_config: Arc<BrokerConfig>,
+    //producer_manager: Arc<ProducerManager>,
     broker_client: ArcMut<Broker2Client>,
+    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
-impl TransactionalMessageCheckListenerInner {
+impl<MS: MessageStore> TransactionalMessageCheckListenerInner<MS> {
     pub fn new(
-        broker_config: Arc<BrokerConfig>,
-        producer_manager: Arc<ProducerManager>,
+        /* broker_config: Arc<BrokerConfig>,
+        producer_manager: Arc<ProducerManager>,*/
         broker_client: Broker2Client,
+        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> Self {
         Self {
-            broker_config,
-            producer_manager,
+            /*broker_config,
+            producer_manager,*/
             broker_client: ArcMut::new(broker_client),
+            broker_runtime_inner,
         }
     }
 
@@ -142,7 +153,12 @@ impl TransactionalMessageCheckListenerInner {
             transaction_id: msg_id,
             tran_state_table_offset: msg_ext.queue_offset,
             rpc_request_header: Some(RpcRequestHeader {
-                broker_name: Some(self.broker_config.broker_name.clone()),
+                broker_name: Some(
+                    self.broker_runtime_inner
+                        .broker_config()
+                        .broker_name
+                        .clone(),
+                ),
                 ..Default::default()
             }),
         };
@@ -163,7 +179,8 @@ impl TransactionalMessageCheckListenerInner {
             MessageConst::PROPERTY_PRODUCER_GROUP,
         ));
         let channel = self
-            .producer_manager
+            .broker_runtime_inner
+            .producer_manager()
             .get_available_channel(group_id.as_ref());
         if let Some(mut channel) = channel {
             let _ = self
@@ -184,14 +201,15 @@ impl TransactionalMessageCheckListenerInner {
         Ok(())
     }
 
-    pub fn resolve_half_msg(&self, msg_ext: MessageExt) -> crate::Result<()> {
-        let this = self.clone();
+    pub fn resolve_half_msg(&self, _msg_ext: MessageExt) -> crate::Result<()> {
+        /*let this = self.clone();
         tokio::spawn(async move {
             if let Err(e) = this.send_check_message(msg_ext).await {
-                warn!("Send check message failed: {:?}", e);
+                warn!("Send check m_msg_extfailed: {:?}", e);
             }
         });
-        Ok(())
+        Ok(())*/
+        unimplemented!("resolve_half_msg")
     }
 }
 

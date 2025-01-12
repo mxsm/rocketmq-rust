@@ -23,7 +23,6 @@ use cheetah_string::CheetahString;
 use rocketmq_client_rust::factory::mq_client_instance::topic_route_data2topic_publish_info;
 use rocketmq_client_rust::factory::mq_client_instance::topic_route_data2topic_subscribe_info;
 use rocketmq_client_rust::producer::producer_impl::topic_publish_info::TopicPublishInfo;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
 use rocketmq_remoting::code::response_code::ResponseCode;
@@ -31,17 +30,18 @@ use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::RocketMQTokioMutex;
+use rocketmq_store::log_file::MessageStore;
 use tracing::info;
 use tracing::warn;
 
 use crate::broker_error::BrokerError::MQBrokerError;
-use crate::out_api::broker_outer_api::BrokerOuterAPI;
+use crate::broker_runtime::BrokerRuntimeInner;
 
 const GET_TOPIC_ROUTE_TIMEOUT: u64 = 3000;
 const LOCK_TIMEOUT_MILLIS: u64 = 3000;
 
 #[derive(Clone)]
-pub(crate) struct TopicRouteInfoManager {
+pub(crate) struct TopicRouteInfoManager<MS> {
     pub(crate) lock: Arc<RocketMQTokioMutex<()>>,
     pub(crate) topic_route_table: ArcMut<HashMap<CheetahString /* Topic */, TopicRouteData>>,
     pub(crate) broker_addr_table: ArcMut<
@@ -54,31 +54,33 @@ pub(crate) struct TopicRouteInfoManager {
         ArcMut<HashMap<CheetahString /* topic */, TopicPublishInfo>>,
     pub(crate) topic_subscribe_info_table:
         ArcMut<HashMap<CheetahString /* topic */, HashSet<MessageQueue>>>,
-    pub(crate) broker_config: Arc<BrokerConfig>,
-    pub(crate) broker_outer_api: Arc<BrokerOuterAPI>,
+    pub(crate) broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
-impl TopicRouteInfoManager {
-    pub fn new(broker_outer_api: Arc<BrokerOuterAPI>, broker_config: Arc<BrokerConfig>) -> Self {
+impl<MS: MessageStore> TopicRouteInfoManager<MS> {
+    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
         TopicRouteInfoManager {
             lock: Arc::new(RocketMQTokioMutex::new(())),
             topic_route_table: ArcMut::new(HashMap::new()),
             broker_addr_table: ArcMut::new(HashMap::new()),
             topic_publish_info_table: ArcMut::new(HashMap::new()),
             topic_subscribe_info_table: ArcMut::new(HashMap::new()),
-            broker_config,
-            broker_outer_api,
+            broker_runtime_inner,
         }
     }
 
     pub fn start(&self) {
-        let this = self.clone();
-        let load_balance_poll_name_server_interval =
-            self.broker_config.load_balance_poll_name_server_interval;
+        let this = self.broker_runtime_inner.clone();
+        let load_balance_poll_name_server_interval = self
+            .broker_runtime_inner
+            .broker_config()
+            .load_balance_poll_name_server_interval;
         tokio::spawn(async move {
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             loop {
-                this.update_topic_route_info_from_name_server().await;
+                this.topic_route_info_manager()
+                    .update_topic_route_info_from_name_server()
+                    .await;
                 tokio::time::sleep(tokio::time::Duration::from_millis(
                     load_balance_poll_name_server_interval,
                 ))
@@ -125,7 +127,8 @@ impl TopicRouteInfoManager {
             .await
         {
             let topic_route_data = self
-                .broker_outer_api
+                .broker_runtime_inner
+                .broker_outer_api()
                 .get_topic_route_info_from_name_server(topic, GET_TOPIC_ROUTE_TIMEOUT, true)
                 .await;
             if let Err(e) = topic_route_data {

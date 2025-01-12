@@ -15,9 +15,6 @@
  * limitations under the License.
  */
 
-use std::sync::Arc;
-
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
@@ -36,20 +33,17 @@ use rocketmq_store::log_file::MessageStore;
 use tracing::info;
 use tracing::warn;
 
-use crate::client::manager::consumer_manager::ConsumerManager;
-use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
-use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
-use crate::topic::manager::topic_config_manager::TopicConfigManager;
-use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
+use crate::broker_runtime::BrokerRuntimeInner;
 
 pub struct ConsumerManageProcessor<MS> {
-    broker_config: Arc<BrokerConfig>,
+    /*broker_config: Arc<BrokerConfig>,
     consumer_manager: Arc<ConsumerManager>,
     topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
     consumer_offset_manager: Arc<ConsumerOffsetManager>,
     subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
     topic_config_manager: Arc<TopicConfigManager>,
-    message_store: ArcMut<MS>,
+    message_store: ArcMut<MS>,*/
+    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
 impl<MS> ConsumerManageProcessor<MS>
@@ -57,22 +51,24 @@ where
     MS: MessageStore,
 {
     pub fn new(
-        broker_config: Arc<BrokerConfig>,
+        /*broker_config: Arc<BrokerConfig>,
         consumer_manager: Arc<ConsumerManager>,
         topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
         subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
         consumer_offset_manager: Arc<ConsumerOffsetManager>,
         topic_config_manager: Arc<TopicConfigManager>,
-        message_store: ArcMut<MS>,
+        message_store: ArcMut<MS>,*/
+        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> Self {
         Self {
-            broker_config,
+            /*broker_config,
             consumer_manager,
             topic_queue_mapping_manager,
             consumer_offset_manager,
             subscription_group_manager,
             topic_config_manager,
-            message_store,
+            message_store,*/
+            broker_runtime_inner,
         }
     }
 }
@@ -114,7 +110,8 @@ where
             .decode_command_custom_header::<GetConsumerListByGroupRequestHeader>()
             .unwrap();
         let consumer_group_info = self
-            .consumer_manager
+            .broker_runtime_inner
+            .consumer_manager()
             .get_consumer_group_info(request_header.consumer_group.as_ref());
 
         match consumer_group_info {
@@ -168,7 +165,8 @@ where
             .decode_command_custom_header::<UpdateConsumerOffsetRequestHeader>()
             .unwrap();
         let mut mapping_context = self
-            .topic_queue_mapping_manager
+            .broker_runtime_inner
+            .topic_queue_mapping_manager()
             .build_topic_queue_mapping_context(&request_header, false);
 
         let rewrite_result = self.rewrite_request_for_static_topic_for_consume_offset(
@@ -184,7 +182,8 @@ where
         let offset = request_header.commit_offset;
         let response = RemotingCommand::create_response_command();
         if !self
-            .subscription_group_manager
+            .broker_runtime_inner
+            .subscription_group_manager()
             .contains_subscription_group(group)
         {
             return Some(
@@ -194,7 +193,11 @@ where
             );
         }
 
-        if !self.topic_config_manager.contains_topic(topic) {
+        if !self
+            .broker_runtime_inner
+            .topic_config_manager()
+            .contains_topic(topic)
+        {
             return Some(
                 response
                     .set_code(ResponseCode::TopicNotExist)
@@ -216,9 +219,13 @@ where
         //             .set_remark(format!("Offset is null, topic is {}", topic)),
         //     );
         // }
-        if self.broker_config.use_server_side_reset_offset
+        if self
+            .broker_runtime_inner
+            .broker_config()
+            .use_server_side_reset_offset
             && self
-                .consumer_offset_manager
+                .broker_runtime_inner
+                .consumer_offset_manager()
                 .has_offset_reset(topic, group, queue_id)
         {
             info!(
@@ -228,13 +235,15 @@ where
             );
             return Some(response.set_remark("Offset has been previously reset"));
         }
-        self.consumer_offset_manager.commit_offset(
-            channel.remote_address().to_string().into(),
-            group,
-            topic,
-            queue_id,
-            offset,
-        );
+        self.broker_runtime_inner
+            .consumer_offset_manager()
+            .commit_offset(
+                channel.remote_address().to_string().into(),
+                group,
+                topic,
+                queue_id,
+                offset,
+            );
         Some(response)
     }
 
@@ -248,25 +257,32 @@ where
             .decode_command_custom_header::<QueryConsumerOffsetRequestHeader>()
             .unwrap();
         let mut mapping_context = self
-            .topic_queue_mapping_manager
+            .broker_runtime_inner
+            .topic_queue_mapping_manager()
             .build_topic_queue_mapping_context(&request_header, false);
         if let Some(result) =
             self.rewrite_request_for_static_topic(&mut request_header, &mut mapping_context)
         {
             return Some(result);
         }
-        let offset = self.consumer_offset_manager.query_offset(
-            request_header.consumer_group.as_ref(),
-            request_header.topic.as_ref(),
-            request_header.queue_id,
-        );
+        let offset = self
+            .broker_runtime_inner
+            .consumer_offset_manager()
+            .query_offset(
+                request_header.consumer_group.as_ref(),
+                request_header.topic.as_ref(),
+                request_header.queue_id,
+            );
         let mut response = RemotingCommand::create_response_command();
         let mut response_header = QueryConsumerOffsetResponseHeader::default();
         if offset >= 0 {
             response_header.offset = Some(offset);
         } else {
             let min_offset = self
-                .message_store
+                .broker_runtime_inner
+                .message_store()
+                .as_ref()
+                .unwrap()
                 .get_min_offset_in_queue(request_header.topic.as_ref(), request_header.queue_id);
             if let Some(value) = request_header.set_zero_if_not_found {
                 if !value {
@@ -275,12 +291,17 @@ where
                         .set_remark("Not found, do not set to zero, maybe this group boot first");
                 }
             } else if min_offset <= 0
-                && self.message_store.check_in_mem_by_consume_offset(
-                    request_header.topic.as_ref(),
-                    request_header.queue_id,
-                    0,
-                    1,
-                )
+                && self
+                    .broker_runtime_inner
+                    .message_store()
+                    .as_ref()
+                    .unwrap()
+                    .check_in_mem_by_consume_offset(
+                        request_header.topic.as_ref(),
+                        request_header.queue_id,
+                        0,
+                        1,
+                    )
             {
                 response_header.offset = Some(0);
             } else {
@@ -340,11 +361,14 @@ where
         for mapping_item in mapping_item_list.iter().rev() {
             mapping_context.current_item = Some(mapping_item.clone());
             if mapping_item.bname == mapping_detail.topic_queue_mapping_info.bname {
-                offset = self.consumer_offset_manager.query_offset(
-                    request_header.consumer_group.as_ref(),
-                    request_header.topic.as_ref(),
-                    mapping_item.queue_id,
-                );
+                offset = self
+                    .broker_runtime_inner
+                    .consumer_offset_manager()
+                    .query_offset(
+                        request_header.consumer_group.as_ref(),
+                        request_header.topic.as_ref(),
+                        mapping_item.queue_id,
+                    );
                 if offset >= 0 {
                     break;
                 }

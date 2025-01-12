@@ -23,7 +23,6 @@ use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::consumer::pull_result::PullResult;
 use rocketmq_client_rust::consumer::pull_status::PullStatus;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
@@ -46,22 +45,21 @@ use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::log_file::MessageStore;
 use rocketmq_store::log_file::MAX_PULL_MSG_SIZE;
-use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use tokio::sync::Mutex;
 use tracing::error;
 
-use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
-use crate::topic::manager::topic_config_manager::TopicConfigManager;
+use crate::broker_runtime::BrokerRuntimeInner;
 use crate::transaction::queue::transactional_message_util::TransactionalMessageUtil;
 
 pub struct TransactionalMessageBridge<MS> {
     pub(crate) op_queue_map: Arc<Mutex<HashMap<i32, MessageQueue>>>,
-    pub(crate) message_store: ArcMut<MS>,
+    // pub(crate) message_store: ArcMut<MS>,
     pub(crate) store_host: SocketAddr,
-    pub(crate) broker_stats_manager: Arc<BrokerStatsManager>,
-    pub(crate) consumer_offset_manager: ConsumerOffsetManager,
-    pub(crate) broker_config: Arc<BrokerConfig>,
-    pub(crate) topic_config_manager: TopicConfigManager,
+    //  pub(crate) broker_stats_manager: Arc<BrokerStatsManager>,
+    //pub(crate) consumer_offset_manager: ConsumerOffsetManager,
+    // pub(crate) broker_config: Arc<BrokerConfig>,
+    //  pub(crate) topic_config_manager: TopicConfigManager,
+    pub(crate) broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
 impl<MS> TransactionalMessageBridge<MS>
@@ -69,21 +67,23 @@ where
     MS: MessageStore,
 {
     pub fn new(
-        message_store: ArcMut<MS>,
+        /* message_store: ArcMut<MS>,
         broker_stats_manager: Arc<BrokerStatsManager>,
         consumer_offset_manager: ConsumerOffsetManager,
         broker_config: Arc<BrokerConfig>,
         topic_config_manager: TopicConfigManager,
-        store_host: SocketAddr,
+        store_host: SocketAddr,*/
+        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> Self {
         Self {
             op_queue_map: Arc::new(Mutex::new(HashMap::new())),
-            message_store,
-            store_host,
-            broker_stats_manager,
-            consumer_offset_manager,
-            broker_config,
-            topic_config_manager,
+            //message_store,
+            store_host: broker_runtime_inner.store_host(),
+            //broker_stats_manager,
+            // consumer_offset_manager,
+            //broker_config,
+            // topic_config_manager,
+            broker_runtime_inner,
         }
     }
 }
@@ -98,10 +98,16 @@ where
         let topic = mq.get_topic_cs();
         let queue_id = mq.get_queue_id();
         let mut offset = self
-            .consumer_offset_manager
+            .broker_runtime_inner
+            .consumer_offset_manager()
             .query_offset(&group, topic, queue_id);
         if offset == -1 {
-            offset = self.message_store.get_min_offset_in_queue(topic, queue_id);
+            offset = self
+                .broker_runtime_inner
+                .message_store()
+                .as_ref()
+                .unwrap()
+                .get_min_offset_in_queue(topic, queue_id);
         }
         offset
     }
@@ -109,7 +115,11 @@ where
     pub fn fetch_message_queues(&mut self, topic: &CheetahString) -> HashSet<MessageQueue> {
         let mut message_queues = HashSet::new();
         let topic_config = self.select_topic_config(topic);
-        let broker_name = self.broker_config.broker_name.clone();
+        let broker_name = self
+            .broker_runtime_inner
+            .broker_config()
+            .broker_name
+            .clone();
         if let Some(topic_config) = topic_config {
             for i in 0..topic_config.read_queue_nums {
                 let mq = MessageQueue::from_parts(topic, broker_name.as_str(), i as i32);
@@ -120,13 +130,15 @@ where
     }
 
     pub fn update_consume_offset(&self, mq: &MessageQueue, offset: i64) {
-        self.consumer_offset_manager.commit_offset(
-            self.store_host.to_string().into(),
-            &CheetahString::from_static_str(TransactionalMessageUtil::build_consumer_group()),
-            mq.get_topic_cs(),
-            mq.get_queue_id(),
-            offset,
-        );
+        self.broker_runtime_inner
+            .consumer_offset_manager()
+            .commit_offset(
+                self.store_host.to_string().into(),
+                &CheetahString::from_static_str(TransactionalMessageUtil::build_consumer_group()),
+                mq.get_topic_cs(),
+                mq.get_queue_id(),
+                offset,
+            );
     }
 
     pub async fn get_half_message(
@@ -173,7 +185,10 @@ where
         _sub: Option<SubscriptionData>,
     ) -> Option<PullResult> {
         let get_message_result = self
-            .message_store
+            .broker_runtime_inner
+            .message_store()
+            .as_ref()
+            .unwrap()
             .get_message(
                 group,
                 topic,
@@ -241,10 +256,14 @@ where
     }
 
     pub fn select_topic_config(&mut self, topic: &CheetahString) -> Option<TopicConfig> {
-        let mut topic_config = self.topic_config_manager.select_topic_config(topic);
+        let mut topic_config = self
+            .broker_runtime_inner
+            .topic_config_manager()
+            .select_topic_config(topic);
         if topic_config.is_none() {
             topic_config = self
-                .topic_config_manager
+                .broker_runtime_inner
+                .topic_config_manager_mut()
                 .create_topic_in_send_message_back_method(
                     topic,
                     1,
@@ -261,7 +280,12 @@ where
         mut message: MessageExtBrokerInner,
     ) -> PutMessageResult {
         Self::parse_half_message_inner(&mut message);
-        self.message_store.put_message(message).await
+        self.broker_runtime_inner
+            .message_store_mut()
+            .as_mut()
+            .unwrap()
+            .put_message(message)
+            .await
     }
 
     pub fn parse_half_message_inner(message: &mut MessageExtBrokerInner) {
@@ -373,13 +397,23 @@ where
     }
 
     pub fn look_message_by_offset(&self, offset: i64) -> Option<MessageExt> {
-        self.message_store.look_message_by_offset(offset)
+        self.broker_runtime_inner
+            .message_store()
+            .as_ref()
+            .unwrap()
+            .look_message_by_offset(offset)
     }
 
     pub async fn write_op(&self, queue_id: i32, message: Message) -> bool {
         let mut op_queue_map = self.op_queue_map.lock().await;
         let op_queue = op_queue_map.entry(queue_id).or_insert_with(|| {
-            get_op_queue_by_half(queue_id, self.broker_config.broker_name.clone())
+            get_op_queue_by_half(
+                queue_id,
+                self.broker_runtime_inner
+                    .broker_config()
+                    .broker_name
+                    .clone(),
+            )
         });
         let inner = self.make_op_message_inner(&message, op_queue);
         let result = self.put_message_return_result(inner).await;
@@ -391,8 +425,11 @@ where
         message_inner: MessageExtBrokerInner,
     ) -> PutMessageResult {
         let result = self
-            .message_store
+            .broker_runtime_inner
             .mut_from_ref()
+            .message_store_mut()
+            .as_mut()
+            .unwrap()
             .put_message(message_inner)
             .await;
         if result.put_message_status() == PutMessageStatus::PutOk {

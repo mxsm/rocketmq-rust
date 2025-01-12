@@ -18,7 +18,6 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
 use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
@@ -54,24 +53,18 @@ use tokio::sync::Mutex;
 use tracing::error;
 use tracing::warn;
 
+use crate::broker_runtime::BrokerRuntimeInner;
 use crate::client::consumer_group_info::ConsumerGroupInfo;
-use crate::client::manager::consumer_manager::ConsumerManager;
 use crate::coldctr::cold_data_cg_ctr_service::ColdDataCgCtrService;
 use crate::coldctr::cold_data_pull_request_hold_service::NO_SUSPEND_KEY;
 use crate::filter::expression_for_retry_message_filter::ExpressionForRetryMessageFilter;
 use crate::filter::expression_message_filter::ExpressionMessageFilter;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
-use crate::offset::manager::broadcast_offset_manager::BroadcastOffsetManager;
-use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
-use crate::out_api::broker_outer_api::BrokerOuterAPI;
 use crate::processor::pull_message_result_handler::PullMessageResultHandler;
-use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
-use crate::topic::manager::topic_config_manager::TopicConfigManager;
-use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
 
 pub struct PullMessageProcessor<MS> {
     pull_message_result_handler: ArcMut<Box<dyn PullMessageResultHandler>>,
-    broker_config: Arc<BrokerConfig>,
+    /*broker_config: Arc<BrokerConfig>,
     subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
     topic_config_manager: Arc<TopicConfigManager>,
     topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
@@ -81,17 +74,19 @@ pub struct PullMessageProcessor<MS> {
     broadcast_offset_manager: Arc<BroadcastOffsetManager>,
     message_store: ArcMut<MS>,
     cold_data_cg_ctr_service: Arc<ColdDataCgCtrService>,
-    broker_outer_api: Arc<BrokerOuterAPI>,
+    broker_outer_api: Arc<BrokerOuterAPI>,*/
     // write message to consume client runtime
+    cold_data_cg_ctr_service: Arc<ColdDataCgCtrService>,
     write_message_runtime: Arc<RocketMQRuntime>,
     // write message to consume client lock
     write_message_lock: Arc<Mutex<()>>,
+    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
-impl<MS> PullMessageProcessor<MS> {
+impl<MS: MessageStore> PullMessageProcessor<MS> {
     pub fn new(
         pull_message_result_handler: ArcMut<Box<dyn PullMessageResultHandler>>,
-        broker_config: Arc<BrokerConfig>,
+        /* broker_config: Arc<BrokerConfig>,
         subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
         topic_config_manager: Arc<TopicConfigManager>,
         topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
@@ -100,12 +95,13 @@ impl<MS> PullMessageProcessor<MS> {
         consumer_offset_manager: Arc<ConsumerOffsetManager>,
         broadcast_offset_manager: Arc<BroadcastOffsetManager>,
         message_store: ArcMut<MS>,
-        broker_outer_api: Arc<BrokerOuterAPI>,
+        broker_outer_api: Arc<BrokerOuterAPI>,*/
+        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> Self {
         let cpus = num_cpus::get();
         Self {
             pull_message_result_handler,
-            broker_config,
+            /* broker_config,
             subscription_group_manager,
             topic_config_manager,
             topic_queue_mapping_manager,
@@ -115,12 +111,14 @@ impl<MS> PullMessageProcessor<MS> {
             broadcast_offset_manager,
             message_store,
             cold_data_cg_ctr_service: Arc::new(Default::default()),
-            broker_outer_api,
+            broker_outer_api,*/
+            cold_data_cg_ctr_service: Arc::new(Default::default()),
             write_message_runtime: Arc::new(RocketMQRuntime::new_multi(
                 cpus,
                 "write_consumer_message_runtime",
             )),
             write_message_lock: Arc::new(Default::default()),
+            broker_runtime_inner,
         }
     }
 
@@ -192,9 +190,13 @@ impl<MS> PullMessageProcessor<MS> {
             None,
         );
         let rpc_response = self
-            .broker_outer_api
+            .broker_runtime_inner
+            .broker_outer_api()
             .rpc_client()
-            .invoke(rpc_request, self.broker_config.forward_timeout)
+            .invoke(
+                rpc_request,
+                self.broker_runtime_inner.broker_config().forward_timeout,
+            )
             .await;
         let rpc_response = match rpc_response {
             Ok(value) => value,
@@ -373,7 +375,7 @@ where
         //info!("receive pull message request: {:?}", request_header);
         let mut response_header = PullMessageResponseHeader::default();
 
-        if !PermName::is_readable(self.broker_config.broker_permission) {
+        if !PermName::is_readable(self.broker_runtime_inner.broker_config().broker_permission) {
             response_header.forbidden_type = Some(ForbiddenType::BROKER_FORBIDDEN);
             return Some(
                 response
@@ -381,12 +383,15 @@ where
                     .set_command_custom_header(response_header)
                     .set_remark(format!(
                         "the broker[{}] pulling message is forbidden",
-                        self.broker_config.broker_ip1
+                        self.broker_runtime_inner.broker_config().broker_ip1
                     )),
             );
         }
         if RequestCode::LitePullMessage == request_code
-            && !self.broker_config.lite_pull_message_enable
+            && !self
+                .broker_runtime_inner
+                .broker_config()
+                .lite_pull_message_enable
         {
             response_header.forbidden_type = Some(ForbiddenType::BROKER_FORBIDDEN);
             return Some(
@@ -395,12 +400,13 @@ where
                     .set_command_custom_header(response_header)
                     .set_remark(format!(
                         "the broker[{}] pulling message is forbidden",
-                        self.broker_config.broker_ip1
+                        self.broker_runtime_inner.broker_config().broker_ip1
                     )),
             );
         }
         let subscription_group_config = self
-            .subscription_group_manager
+            .broker_runtime_inner
+            .subscription_group_manager()
             .find_subscription_group_config(request_header.consumer_group.as_ref());
 
         if subscription_group_config.is_none() {
@@ -427,7 +433,8 @@ where
             );
         }
         let topic_config = self
-            .topic_config_manager
+            .broker_runtime_inner
+            .topic_config_manager()
             .select_topic_config(request_header.topic.as_ref());
         if topic_config.is_none() {
             error!(
@@ -457,7 +464,8 @@ where
             );
         }
         let mut topic_queue_mapping_context = self
-            .topic_queue_mapping_manager
+            .broker_runtime_inner
+            .topic_queue_mapping_manager()
             .build_topic_queue_mapping_context(&request_header, false);
         if let Some(resp) = self
             .rewrite_request_for_static_topic(&mut request_header, &mut topic_queue_mapping_context)
@@ -488,11 +496,14 @@ where
             RequestSource::ProxyForStream => {
                 unimplemented!("ProxyForStream not implement")
             }
-            _ => self.consumer_manager.compensate_basic_consumer_info(
-                request_header.consumer_group.as_ref(),
-                ConsumeType::ConsumePassively,
-                MessageModel::Clustering,
-            ),
+            _ => self
+                .broker_runtime_inner
+                .consumer_manager()
+                .compensate_basic_consumer_info(
+                    request_header.consumer_group.as_ref(),
+                    ConsumeType::ConsumePassively,
+                    MessageModel::Clustering,
+                ),
         }
         let has_subscription_flag =
             PullSysFlag::has_subscription_flag(request_header.sys_flag as u32);
@@ -513,11 +524,13 @@ where
                 );
             }
             let subscription_data = subscription_data.unwrap();
-            self.consumer_manager.compensate_subscribe_data(
-                request_header.consumer_group.as_ref(),
-                request_header.topic.as_ref(),
-                &subscription_data,
-            );
+            self.broker_runtime_inner
+                .consumer_manager()
+                .compensate_subscribe_data(
+                    request_header.consumer_group.as_ref(),
+                    request_header.topic.as_ref(),
+                    &subscription_data,
+                );
             let consumer_filter_data =
                 if !ExpressionType::is_tag_type(Some(subscription_data.expression_type.as_str())) {
                     let consumer_filter_data = ConsumerFilterManager::build(
@@ -541,7 +554,8 @@ where
             (Some(subscription_data), consumer_filter_data)
         } else {
             let consumer_group_info = self
-                .consumer_manager
+                .broker_runtime_inner
+                .consumer_manager()
                 .get_consumer_group_info(request_header.consumer_group.as_ref());
             if consumer_group_info.is_none() {
                 warn!(
@@ -575,11 +589,14 @@ where
                 );
             }
 
-            let read_forbidden = self.subscription_group_manager.get_forbidden(
-                sgc_ref.group_name(),
-                request_header.topic.as_str(),
-                PermName::INDEX_PERM_READ as i32,
-            );
+            let read_forbidden = self
+                .broker_runtime_inner
+                .subscription_group_manager()
+                .get_forbidden(
+                    sgc_ref.group_name(),
+                    request_header.topic.as_str(),
+                    PermName::INDEX_PERM_READ as i32,
+                );
             if read_forbidden {
                 response_header.forbidden_type = Some(ForbiddenType::SUBSCRIPTION_FORBIDDEN);
                 return Some(
@@ -628,10 +645,13 @@ where
             let consumer_filter_data = if !ExpressionType::is_tag_type(Some(
                 subscription_data.as_ref().unwrap().expression_type.as_str(),
             )) {
-                let consumer_filter_data = self.consumer_filter_manager.get_consumer_filter_data(
-                    request_header.topic.as_ref(),
-                    request_header.consumer_group.as_ref(),
-                );
+                let consumer_filter_data = self
+                    .broker_runtime_inner
+                    .consumer_filter_manager()
+                    .get_consumer_filter_data(
+                        request_header.topic.as_ref(),
+                        request_header.consumer_group.as_ref(),
+                    );
                 if consumer_filter_data.is_none() {
                     return Some(
                         response
@@ -668,7 +688,10 @@ where
 
         let subscription_data = subscription_data.unwrap();
         if !ExpressionType::is_tag_type(Some(subscription_data.expression_type.as_str()))
-            && !self.broker_config.enable_property_filter
+            && !self
+                .broker_runtime_inner
+                .broker_config()
+                .enable_property_filter
         {
             return Some(
                 response
@@ -680,14 +703,18 @@ where
             );
         }
 
-        let message_filter: Arc<Box<dyn MessageFilter>> = if self.broker_config.filter_support_retry
+        //need optimize
+        let message_filter: Arc<Box<dyn MessageFilter>> = if self
+            .broker_runtime_inner
+            .broker_config()
+            .filter_support_retry
         {
             Arc::new(Box::new(ExpressionForRetryMessageFilter))
         } else {
             Arc::new(Box::new(ExpressionMessageFilter::new(
                 Some(subscription_data.clone()),
                 consumer_filter_data,
-                self.consumer_filter_manager.clone(),
+                Arc::new(self.broker_runtime_inner.consumer_filter_manager().clone()), /* need optimize */
             )))
         };
 
@@ -701,21 +728,35 @@ where
             }
         }
 
-        let use_reset_offset_feature = self.broker_config.use_server_side_reset_offset;
+        let use_reset_offset_feature = self
+            .broker_runtime_inner
+            .broker_config()
+            .use_server_side_reset_offset;
         let topic = request_header.topic.as_ref();
         let group = request_header.consumer_group.as_ref();
         let queue_id = request_header.queue_id;
         let reset_offset = self
-            .consumer_offset_manager
+            .broker_runtime_inner
+            .consumer_offset_manager()
             .query_then_erase_reset_offset(topic, group, queue_id);
         let get_message_result = if use_reset_offset_feature && reset_offset.is_some() {
             let mut get_message_result = GetMessageResult::new();
             get_message_result.set_status(Some(GetMessageStatus::OffsetReset));
             get_message_result.set_next_begin_offset(reset_offset.unwrap());
-            get_message_result
-                .set_min_offset(self.message_store.get_min_offset_in_queue(topic, queue_id));
-            get_message_result
-                .set_max_offset(self.message_store.get_max_offset_in_queue(topic, queue_id));
+            get_message_result.set_min_offset(
+                self.broker_runtime_inner
+                    .message_store()
+                    .as_ref()
+                    .unwrap()
+                    .get_min_offset_in_queue(topic, queue_id),
+            );
+            get_message_result.set_max_offset(
+                self.broker_runtime_inner
+                    .message_store()
+                    .as_ref()
+                    .unwrap()
+                    .get_max_offset_in_queue(topic, queue_id),
+            );
             get_message_result.set_suggest_pulling_from_slave(false);
             Some(get_message_result)
         } else {
@@ -733,7 +774,10 @@ where
                 Some(get_message_result)
             } else {
                 let result = self
-                    .message_store
+                    .broker_runtime_inner
+                    .message_store()
+                    .as_ref()
+                    .unwrap()
                     .get_message(
                         group,
                         topic,
@@ -781,10 +825,17 @@ where
         request_header: &PullMessageRequestHeader,
         channel: &Channel,
     ) -> i64 {
-        if !self.broker_config.enable_broadcast_offset_store {
+        if !self
+            .broker_runtime_inner
+            .broker_config()
+            .enable_broadcast_offset_store
+        {
             return -1;
         }
-        let consumer_group_info = self.consumer_manager.get_consumer_group_info(group);
+        let consumer_group_info = self
+            .broker_runtime_inner
+            .consumer_manager()
+            .get_consumer_group_info(group);
         let proxy_pull_broadcast = RequestSource::ProxyForBroadcast
             == From::from(request_header.request_source.unwrap_or(-2));
 
@@ -803,14 +854,17 @@ where
                     Some(value) => Some(value.client_id().clone()),
                 }
             };
-            return self.broadcast_offset_manager.query_init_offset(
-                topic,
-                group,
-                queue_id,
-                client_id.as_ref().unwrap().as_str(),
-                request_header.queue_offset,
-                proxy_pull_broadcast,
-            );
+            return self
+                .broker_runtime_inner
+                .broadcast_offset_manager()
+                .query_init_offset(
+                    topic,
+                    group,
+                    queue_id,
+                    client_id.as_ref().unwrap().as_str(),
+                    request_header.queue_offset,
+                    proxy_pull_broadcast,
+                );
         }
         -1
     }

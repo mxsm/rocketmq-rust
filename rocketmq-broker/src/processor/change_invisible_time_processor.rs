@@ -14,12 +14,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::net::SocketAddr;
-use std::sync::Arc;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::message::message_decoder;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::message::MessageConst;
@@ -43,57 +40,65 @@ use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::log_file::MessageStore;
 use rocketmq_store::pop::ack_msg::AckMsg;
 use rocketmq_store::pop::pop_check_point::PopCheckPoint;
-use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use tracing::error;
 use tracing::info;
 
-use crate::failover::escape_bridge::EscapeBridge;
-use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
-use crate::offset::manager::consumer_order_info_manager::ConsumerOrderInfoManager;
+use crate::broker_runtime::BrokerRuntimeInner;
 use crate::processor::pop_message_processor::PopMessageProcessor;
-use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
 pub struct ChangeInvisibleTimeProcessor<MS> {
-    broker_config: Arc<BrokerConfig>,
-    topic_config_manager: TopicConfigManager,
-    message_store: ArcMut<MS>,
-    consumer_offset_manager: Arc<ConsumerOffsetManager>,
-    consumer_order_info_manager: Arc<ConsumerOrderInfoManager<MS>>,
-    broker_stats_manager: Arc<BrokerStatsManager>,
-    escape_bridge: ArcMut<EscapeBridge<MS>>,
+    // broker_config: Arc<BrokerConfig>,
+    // topic_config_manager: TopicConfigManager,
+    //  message_store: ArcMut<MS>,
+    //   consumer_offset_manager: Arc<ConsumerOffsetManager>,
+    //   consumer_order_info_manager: Arc<ConsumerOrderInfoManager<MS>>,
+    //   broker_stats_manager: Arc<BrokerStatsManager>,
+    //   escape_bridge: ArcMut<EscapeBridge<MS>>,
     revive_topic: CheetahString,
-    store_host: SocketAddr,
+    //   store_host: SocketAddr,
     pop_message_processor: ArcMut<PopMessageProcessor<MS>>,
+    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
-impl<MS> ChangeInvisibleTimeProcessor<MS> {
+impl<MS: MessageStore> ChangeInvisibleTimeProcessor<MS> {
     pub fn new(
-        broker_config: Arc<BrokerConfig>,
+        /*broker_config: Arc<BrokerConfig>,
         topic_config_manager: TopicConfigManager,
         message_store: ArcMut<MS>,
         consumer_offset_manager: Arc<ConsumerOffsetManager>,
         consumer_order_info_manager: Arc<ConsumerOrderInfoManager<MS>>,
         broker_stats_manager: Arc<BrokerStatsManager>,
         escape_bridge: ArcMut<EscapeBridge<MS>>,
+        pop_message_processor: ArcMut<PopMessageProcessor<MS>>,*/
         pop_message_processor: ArcMut<PopMessageProcessor<MS>>,
+        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> Self {
         let revive_topic = PopAckConstants::build_cluster_revive_topic(
-            broker_config.broker_identity.broker_cluster_name.as_str(),
+            broker_runtime_inner
+                .broker_config()
+                .broker_identity
+                .broker_cluster_name
+                .as_str(),
         );
-        let store_host = format!("{}:{}", broker_config.broker_ip1, broker_config.listen_port)
-            .parse::<SocketAddr>()
-            .unwrap();
+        /*        let store_host = format!(
+            "{}:{}",
+            broker_runtime_inner.broker_config().broker_ip1,
+            broker_runtime_inner.broker_config().listen_port
+        )
+        .parse::<SocketAddr>()
+        .unwrap();*/
         ChangeInvisibleTimeProcessor {
-            broker_config,
+            /* broker_config,
             topic_config_manager,
             message_store,
             consumer_offset_manager,
             consumer_order_info_manager,
             broker_stats_manager,
-            escape_bridge,
+            escape_bridge,*/
             revive_topic: CheetahString::from_string(revive_topic),
-            store_host,
+            // store_host,
             pop_message_processor,
+            broker_runtime_inner,
         }
     }
 }
@@ -124,7 +129,8 @@ where
             .decode_command_custom_header::<ChangeInvisibleTimeRequestHeader>()
             .map_err(|e| RemotingCommandError(e.to_string()))?;
         let topic_config = self
-            .topic_config_manager
+            .broker_runtime_inner
+            .topic_config_manager()
             .select_topic_config(&request_header.topic);
         if topic_config.is_none() {
             error!(
@@ -166,10 +172,16 @@ where
             ));
         }
         let mix_offset = self
-            .message_store
+            .broker_runtime_inner
+            .message_store()
+            .as_ref()
+            .unwrap()
             .get_min_offset_in_queue(&request_header.topic, request_header.queue_id);
         let max_offset = self
-            .message_store
+            .broker_runtime_inner
+            .message_store()
+            .as_ref()
+            .unwrap()
             .get_max_offset_in_queue(&request_header.topic, request_header.queue_id);
         if request_header.offset < mix_offset || request_header.offset > max_offset {
             let info = format!(
@@ -265,12 +277,16 @@ where
         };
 
         let rq_id = ExtraInfoUtil::get_revive_qid(extra_info)?;
-        self.broker_stats_manager.inc_broker_ack_nums(1);
-        self.broker_stats_manager.inc_group_ack_nums(
-            request_header.consumer_group.as_str(),
-            request_header.topic.as_str(),
-            1,
-        );
+        self.broker_runtime_inner
+            .broker_stats_manager()
+            .inc_broker_ack_nums(1);
+        self.broker_runtime_inner
+            .broker_stats_manager()
+            .inc_group_ack_nums(
+                request_header.consumer_group.as_str(),
+                request_header.topic.as_str(),
+                1,
+            );
         if self
             .pop_message_processor
             .pop_buffer_merge_service_mut()
@@ -284,8 +300,8 @@ where
         inner.message_ext_inner.queue_id = rq_id;
         inner.set_tags(CheetahString::from_static_str(PopAckConstants::ACK_TAG));
         inner.message_ext_inner.born_timestamp = get_current_millis() as i64;
-        inner.message_ext_inner.born_host = self.store_host;
-        inner.message_ext_inner.store_host = self.store_host;
+        inner.message_ext_inner.born_host = self.broker_runtime_inner.store_host();
+        inner.message_ext_inner.store_host = self.broker_runtime_inner.store_host();
         let deliver_time_ms = ExtraInfoUtil::get_pop_time(extra_info)?
             + ExtraInfoUtil::get_invisible_time(extra_info)?;
         inner.set_delay_time_ms(deliver_time_ms as u64);
@@ -296,7 +312,8 @@ where
         inner.properties_string =
             message_decoder::message_properties_to_string(inner.get_properties());
         let result = self
-            .escape_bridge
+            .broker_runtime_inner
+            .escape_bridge_mut()
             .put_message_to_specific_queue(inner)
             .await;
         match result.put_message_status() {
@@ -347,8 +364,8 @@ where
         inner.message_ext_inner.queue_id = revive_qid;
         inner.set_tags(CheetahString::from_static_str(PopAckConstants::ACK_TAG));
         inner.message_ext_inner.born_timestamp = get_current_millis() as i64;
-        inner.message_ext_inner.born_host = self.store_host;
-        inner.message_ext_inner.store_host = self.store_host;
+        inner.message_ext_inner.born_host = self.broker_runtime_inner.store_host();
+        inner.message_ext_inner.store_host = self.broker_runtime_inner.store_host();
         let deliver_time_ms = ck.get_revive_time() - PopAckConstants::ACK_TIME_INTERVAL;
         let deliver_time_ms = if deliver_time_ms > 0 {
             deliver_time_ms as u64
@@ -363,10 +380,11 @@ where
         inner.properties_string =
             message_decoder::message_properties_to_string(inner.get_properties());
         let put_message_result = self
-            .escape_bridge
+            .broker_runtime_inner
+            .escape_bridge_mut()
             .put_message_to_specific_queue(inner)
             .await;
-        if self.broker_config.enable_pop_log {
+        if self.broker_runtime_inner.broker_config().enable_pop_log {
             info!(
                 "change Invisible , appendCheckPoint, topic {}, queueId {},reviveId {}, cid {}, \
                  startOffset {}, rt {}, result {}",
@@ -388,11 +406,14 @@ where
         extra_info: &[String],
     ) -> crate::Result<Option<RemotingCommand>> {
         let pop_time = ExtraInfoUtil::get_pop_time(extra_info)?;
-        let old_offset = self.consumer_offset_manager.query_offset(
-            &request_header.consumer_group,
-            &request_header.topic,
-            request_header.queue_id,
-        );
+        let old_offset = self
+            .broker_runtime_inner
+            .consumer_offset_manager()
+            .query_offset(
+                &request_header.consumer_group,
+                &request_header.topic,
+                request_header.queue_id,
+            );
         if old_offset > request_header.offset {
             return Ok(Some(RemotingCommand::create_response_command()));
         }
@@ -406,23 +427,28 @@ where
             )
             .await
         {}
-        let old_offset = self.consumer_offset_manager.query_offset(
-            &request_header.consumer_group,
-            &request_header.topic,
-            request_header.queue_id,
-        );
+        let old_offset = self
+            .broker_runtime_inner
+            .consumer_offset_manager()
+            .query_offset(
+                &request_header.consumer_group,
+                &request_header.topic,
+                request_header.queue_id,
+            );
         if old_offset > request_header.offset {
             return Ok(Some(RemotingCommand::create_response_command()));
         }
         let next_visible_time = get_current_millis() + request_header.invisible_time as u64;
-        self.consumer_order_info_manager.update_next_visible_time(
-            &request_header.topic,
-            &request_header.consumer_group,
-            request_header.queue_id,
-            request_header.offset as u64,
-            pop_time as u64,
-            next_visible_time,
-        );
+        self.broker_runtime_inner
+            .consumer_order_info_manager()
+            .update_next_visible_time(
+                &request_header.topic,
+                &request_header.consumer_group,
+                request_header.queue_id,
+                request_header.offset as u64,
+                pop_time as u64,
+                next_visible_time,
+            );
         let revive_qid = ExtraInfoUtil::get_revive_qid(extra_info)?;
         let response_header = ChangeInvisibleTimeResponseHeader {
             pop_time: pop_time as u64,

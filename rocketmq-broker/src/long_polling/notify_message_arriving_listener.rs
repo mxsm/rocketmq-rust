@@ -21,19 +21,20 @@ use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_arriving_listener::MessageArrivingListener;
 use rocketmq_store::log_file::MessageStore;
 
-use crate::long_polling::long_polling_service::pull_request_hold_service::PullRequestHoldService;
+use crate::broker_runtime::BrokerRuntimeInner;
 
 pub struct NotifyMessageArrivingListener<MS> {
-    pull_request_hold_service: ArcMut<PullRequestHoldService<MS>>,
+    //pull_request_hold_service: ArcMut<PullRequestHoldService<MS>>,
+    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
 impl<MS> NotifyMessageArrivingListener<MS>
 where
     MS: MessageStore + Send + Sync,
 {
-    pub fn new(pull_request_hold_service: ArcMut<PullRequestHoldService<MS>>) -> Self {
+    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
         Self {
-            pull_request_hold_service,
+            broker_runtime_inner,
         }
     }
 }
@@ -53,14 +54,18 @@ where
         filter_bit_map: Option<Vec<u8>>,
         properties: Option<&HashMap<CheetahString, CheetahString>>,
     ) {
-        self.pull_request_hold_service.notify_message_arriving_ext(
-            topic,
-            queue_id,
-            logic_offset,
-            tags_code,
-            msg_store_time,
-            filter_bit_map,
-            properties,
-        );
+        self.broker_runtime_inner
+            .pull_request_hold_service()
+            .as_ref()
+            .unwrap()
+            .notify_message_arriving_ext(
+                topic,
+                queue_id,
+                logic_offset,
+                tags_code,
+                msg_store_time,
+                filter_bit_map,
+                properties,
+            );
     }
 }

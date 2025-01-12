@@ -102,7 +102,8 @@ where
         let mut length = more_data_length;
         let max_size = self
             .transactional_message_bridge
-            .broker_config
+            .broker_runtime_inner
+            .broker_config()
             .transaction_op_msg_max_size as usize;
         if length < max_size {
             let sz = mq_context.get_total_size() as usize;
@@ -182,7 +183,8 @@ where
             if total_size
                 > self
                     .transactional_message_bridge
-                    .broker_config
+                    .broker_runtime_inner
+                    .broker_config()
                     .transaction_op_msg_max_size
             {
                 self.transactional_op_batch_service.wakeup();
