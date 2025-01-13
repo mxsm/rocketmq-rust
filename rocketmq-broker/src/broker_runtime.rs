@@ -151,6 +151,8 @@ pub(crate) struct BrokerRuntime {
     broker_runtime: Option<RocketMQRuntime>,
     shutdown: Arc<AtomicBool>,
     shutdown_hook: Option<BrokerShutdownHook>,
+    // receiver for shutdown signal
+    pub(crate) shutdown_rx: Option<tokio::sync::broadcast::Receiver<()>>,
 }
 
 impl BrokerRuntime {
@@ -240,6 +242,7 @@ impl BrokerRuntime {
             broker_runtime: Some(runtime),
             shutdown: Arc::new(AtomicBool::new(false)),
             shutdown_hook: None,
+            shutdown_rx: None,
         }
     }
 
@@ -265,9 +268,9 @@ impl BrokerRuntime {
             pull_request_hold_service.shutdown();
         }
 
-        /*        if let Some(runtime) = self.broker_runtime.take() {
+        if let Some(runtime) = self.broker_runtime.take() {
             runtime.shutdown();
-        }*/
+        }
     }
 
     pub(crate) fn shutdown_basic_service(&mut self) {
@@ -913,6 +916,13 @@ impl BrokerRuntime {
             "Rocketmq Broker({} ----Rust) start success",
             self.inner.broker_config.broker_identity.broker_name
         );
+        tokio::select! {
+            _ = self.shutdown_rx.as_mut().unwrap().recv() => {
+                info!("Broker Shutdown received, initiating graceful shutdown...");
+                self.shutdown();
+                info!("Broker Shutdown complete");
+            }
+        }
     }
 
     pub(crate) fn schedule_send_heartbeat(&mut self) {}

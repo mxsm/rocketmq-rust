@@ -14,9 +14,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+use log::info;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::server::config::ServerConfig;
+use rocketmq_rust::wait_for_signal;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use tracing::error;
 
@@ -32,7 +33,10 @@ impl BrokerBootstrap {
             error!("initialize fail");
             return;
         }
-        let (_start_result, _ctrl_c) = tokio::join!(self.start(), tokio::signal::ctrl_c());
+        let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
+        self.broker_runtime.shutdown_rx = Some(shutdown_rx);
+
+        tokio::join!(self.start(), wait_for_signal_inner(shutdown_tx));
     }
 
     async fn initialize(&mut self) -> bool {
@@ -42,6 +46,16 @@ impl BrokerBootstrap {
     async fn start(&mut self) {
         self.broker_runtime.start().await;
     }
+}
+
+async fn wait_for_signal_inner(shutdown_tx: tokio::sync::broadcast::Sender<()>) {
+    tokio::select! {
+        _ = wait_for_signal() => {
+            info!("Broker Received signal, initiating shutdown...");
+        }
+    }
+    // Send shutdown signal to all tasks
+    let _ = shutdown_tx.send(());
 }
 
 pub struct Builder {
