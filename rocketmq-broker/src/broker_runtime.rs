@@ -1093,11 +1093,13 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                 topic_config_wrapper,
                 vec![],
                 oneway,
-                10000,
-                false,
-                false,
-                None,
-                Default::default(),
+                this.broker_config.register_broker_timeout_mills as u64,
+                this.broker_config.enable_slave_acting_master,
+                this.broker_config.compressed_register,
+                this.broker_config
+                    .enable_slave_acting_master
+                    .then_some(this.broker_config.broker_not_active_timeout_millis),
+                Default::default(), //optimize
                 this.clone(),
             )
             .await;

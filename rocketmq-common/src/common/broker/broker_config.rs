@@ -197,6 +197,8 @@ pub struct BrokerConfig {
     pub revive_scan_time: u64,
     pub enable_skip_long_awaiting_ack: bool,
     pub skip_when_ck_re_put_reach_max_times: bool,
+    pub compressed_register: bool,
+    pub broker_not_active_timeout_millis: i64,
 }
 
 impl Default for BrokerConfig {
@@ -299,6 +301,8 @@ impl Default for BrokerConfig {
             revive_scan_time: 10_000,
             enable_skip_long_awaiting_ack: false,
             skip_when_ck_re_put_reach_max_times: false,
+            compressed_register: false,
+            broker_not_active_timeout_millis: 10_000,
         }
     }
 }
