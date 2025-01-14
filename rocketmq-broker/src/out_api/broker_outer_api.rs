@@ -53,6 +53,7 @@ use rocketmq_remoting::protocol::header::lock_batch_mq_request_header::LockBatch
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
+use rocketmq_remoting::protocol::header::namesrv::broker_request::UnRegisterBrokerRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::register_broker_header::RegisterBrokerRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::register_broker_header::RegisterBrokerResponseHeader;
 use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::RegisterTopicRequestHeader;
@@ -546,6 +547,72 @@ impl BrokerOuterAPI {
                 Ok((Some(pull_result_ext.pull_result), name, false))
             }
             Err(e) => Ok((None, e.to_string(), true)),
+        }
+    }
+
+    pub async fn unregister_broker_all(
+        &self,
+        cluster_name: &CheetahString,
+        broker_name: &CheetahString,
+        broker_addr: &CheetahString,
+        broker_id: u64,
+    ) {
+        let name_server_address_list = self.remoting_client.get_name_server_address_list();
+        for namesrv_addr in name_server_address_list.iter() {
+            match self
+                .unregister_broker(
+                    namesrv_addr,
+                    cluster_name,
+                    broker_addr,
+                    broker_name,
+                    broker_id,
+                )
+                .await
+            {
+                Ok(_) => {
+                    info!(
+                        "Unregister broker from name remoting_server success, namesrv_addr={}",
+                        namesrv_addr
+                    );
+                }
+                Err(e) => {
+                    error!(
+                        "Unregister broker from name remoting_server error, namesrv_addr={}, \
+                         error={}",
+                        namesrv_addr, e
+                    );
+                }
+            }
+        }
+    }
+    pub async fn unregister_broker(
+        &self,
+        namesrv_addr: &CheetahString,
+        cluster_name: &CheetahString,
+        broker_addr: &CheetahString,
+        broker_name: &CheetahString,
+        broker_id: u64,
+    ) -> Result<()> {
+        let request_header = UnRegisterBrokerRequestHeader {
+            broker_name: broker_name.clone(),
+            broker_addr: broker_addr.clone(),
+            cluster_name: cluster_name.clone(),
+            broker_id,
+        };
+        let request =
+            RemotingCommand::create_request_command(RequestCode::UnregisterBroker, request_header);
+        let response = self
+            .remoting_client
+            .invoke_async(Some(namesrv_addr), request, 3000)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            Ok(())
+        } else {
+            Err(BrokerError::MQBrokerError(
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string()),
+                broker_addr.to_string(),
+            ))
         }
     }
 }
