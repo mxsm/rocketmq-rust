@@ -360,7 +360,7 @@ impl Default for MessageStoreConfig {
             enable_clean_expired_offset: false,
             max_async_put_message_requests: 0,
             pull_batch_max_message_count: 0,
-            total_replicas: 0,
+            total_replicas: 1,
             in_sync_replicas: 1,
             min_in_sync_replicas: 0,
             all_ack_in_sync_state_set: false,
