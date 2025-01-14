@@ -160,7 +160,8 @@ impl BrokerRuntime {
         message_store_config: MessageStoreConfig,
         server_config: ServerConfig,
     ) -> Self {
-        let store_host = format!("{}:{}", broker_config.broker_ip1, broker_config.listen_port)
+        let broker_address = format!("{}:{}", broker_config.broker_ip1, broker_config.listen_port);
+        let store_host = broker_address
             .parse::<SocketAddr>()
             .expect("parse store_host failed");
         let runtime = RocketMQRuntime::new_multi(10, "broker-thread");
@@ -189,6 +190,7 @@ impl BrokerRuntime {
         let mut inner = ArcMut::new(BrokerRuntimeInner::<DefaultMessageStore> {
             shutdown: Arc::new(AtomicBool::new(false)),
             store_host,
+            broker_addr: CheetahString::from(broker_address),
             broker_config,
             message_store_config,
             server_config,
@@ -253,7 +255,9 @@ impl BrokerRuntime {
         self.inner.message_store_config()
     }
 
-    pub fn shutdown(&mut self) {
+    pub async fn shutdown(&mut self) {
+        self.shutdown_basic_service().await;
+
         self.inner.broker_outer_api.shutdown();
         if let Some(message_store) = &mut self.inner.message_store {
             message_store.shutdown()
@@ -272,8 +276,22 @@ impl BrokerRuntime {
         }
     }
 
-    pub(crate) fn shutdown_basic_service(&mut self) {
+    async fn unregister_broker(&mut self) {
+        self.inner
+            .broker_outer_api
+            .unregister_broker_all(
+                &self.inner.broker_config.broker_identity.broker_cluster_name,
+                &self.inner.broker_config.broker_identity.broker_name,
+                self.inner.get_broker_addr(),
+                self.inner.broker_config.broker_identity.broker_id,
+            )
+            .await;
+    }
+
+    pub(crate) async fn shutdown_basic_service(&mut self) {
         self.inner.shutdown.store(true, Ordering::SeqCst);
+
+        self.unregister_broker().await;
 
         if let Some(hook) = self.shutdown_hook.as_ref() {
             hook.before_shutdown();
@@ -918,7 +936,7 @@ impl BrokerRuntime {
         tokio::select! {
             _ = self.shutdown_rx.as_mut().unwrap().recv() => {
                 info!("Broker Shutdown received, initiating graceful shutdown...");
-                self.shutdown();
+                self.shutdown().await;
                 info!("Broker Shutdown complete");
             }
         }
@@ -1182,6 +1200,7 @@ impl<MS: MessageStore> StateGetter for ConsumerStateGetter<MS> {
 pub(crate) struct BrokerRuntimeInner<MS> {
     shutdown: Arc<AtomicBool>,
     store_host: SocketAddr,
+    broker_addr: CheetahString,
     broker_config: BrokerConfig,
     message_store_config: MessageStoreConfig,
     server_config: ServerConfig,
@@ -1916,6 +1935,10 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                 this_,
             )
             .await;
+    }
+
+    pub fn get_broker_addr(&self) -> &CheetahString {
+        &self.broker_addr
     }
 }
 
