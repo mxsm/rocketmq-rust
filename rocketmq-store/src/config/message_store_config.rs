@@ -58,12 +58,6 @@ pub struct MessageStoreConfig {
     pub timer_intercept_delay_level: bool,
     pub timer_max_delay_sec: u64,
     pub timer_wheel_enable: bool,
-    /**
-     * 1. Register to broker after (startTime + disappearTimeAfterStart)
-     * 2. Internal msg exchange will start after (startTime + disappearTimeAfterStart)
-     * A. PopReviveService
-     * B. TimerDequeueGetService
-     */
     pub disappear_time_after_start: i64,
     pub timer_stop_enqueue: bool,
     pub timer_check_metrics_when: String,
