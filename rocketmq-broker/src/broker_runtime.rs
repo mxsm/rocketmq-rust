@@ -149,7 +149,6 @@ pub(crate) struct BrokerRuntime {
     transactional_message_service:
         Option<ArcMut<DefaultTransactionalMessageService<DefaultMessageStore>>>,
     broker_runtime: Option<RocketMQRuntime>,
-    shutdown: Arc<AtomicBool>,
     shutdown_hook: Option<BrokerShutdownHook>,
     // receiver for shutdown signal
     pub(crate) shutdown_rx: Option<tokio::sync::broadcast::Receiver<()>>,
@@ -188,6 +187,7 @@ impl BrokerRuntime {
             PopInflightMessageCounter::new(should_start_time.clone());
 
         let mut inner = ArcMut::new(BrokerRuntimeInner::<DefaultMessageStore> {
+            shutdown: Arc::new(AtomicBool::new(false)),
             store_host,
             broker_config,
             message_store_config,
@@ -240,7 +240,6 @@ impl BrokerRuntime {
             inner,
             transactional_message_service: None,
             broker_runtime: Some(runtime),
-            shutdown: Arc::new(AtomicBool::new(false)),
             shutdown_hook: None,
             shutdown_rx: None,
         }
@@ -274,7 +273,7 @@ impl BrokerRuntime {
     }
 
     pub(crate) fn shutdown_basic_service(&mut self) {
-        self.shutdown.store(true, Ordering::SeqCst);
+        self.inner.shutdown.store(true, Ordering::SeqCst);
 
         if let Some(hook) = self.shutdown_hook.as_ref() {
             hook.before_shutdown();
@@ -988,15 +987,6 @@ impl BrokerRuntime {
     }
 }
 
-/*#[derive(Clone)]
-pub(crate) struct BrokerRuntimeInner {
-    pub(crate) broker_out_api: Arc<BrokerOuterAPI>,
-    pub(crate) broker_config: Arc<BrokerConfig>,
-    pub(crate) message_store_config: Arc<MessageStoreConfig>,
-    pub(crate) server_config: Arc<ServerConfig>,
-    pub(crate) topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
-}*/
-
 impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     pub async fn register_single_topic_all(&self, topic_config: TopicConfig) {
         let mut topic_config = topic_config;
@@ -1073,6 +1063,14 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         oneway: bool,
         topic_config_wrapper: TopicConfigAndMappingSerializeWrapper,
     ) {
+        if this.shutdown.load(Ordering::Acquire) {
+            info!(
+                "BrokerRuntimeInner#do_register_broker_all: broker has shutdown, no need to \
+                 register any more."
+            );
+            return;
+        }
+
         let cluster_name = this
             .broker_config
             .broker_identity
@@ -1180,6 +1178,7 @@ impl<MS: MessageStore> StateGetter for ConsumerStateGetter<MS> {
 }
 
 pub(crate) struct BrokerRuntimeInner<MS> {
+    shutdown: Arc<AtomicBool>,
     store_host: SocketAddr,
     broker_config: BrokerConfig,
     message_store_config: MessageStoreConfig,
