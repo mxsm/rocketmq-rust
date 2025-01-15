@@ -26,6 +26,7 @@ pub struct QueryResult {
 
 impl QueryResult {
     // Constructor equivalent
+    #[inline]
     pub fn new(index_last_update_timestamp: u64, message_list: Vec<MessageExt>) -> Self {
         QueryResult {
             index_last_update_timestamp,
@@ -34,10 +35,12 @@ impl QueryResult {
     }
 
     // Getter methods equivalent
+    #[inline]
     pub fn index_last_update_timestamp(&self) -> u64 {
         self.index_last_update_timestamp
     }
 
+    #[inline]
     pub fn message_list(&self) -> &Vec<MessageExt> {
         &self.message_list
     }
@@ -45,6 +48,7 @@ impl QueryResult {
 
 // Implementing the Display trait for pretty printing, similar to Java's toString method
 impl fmt::Display for QueryResult {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
