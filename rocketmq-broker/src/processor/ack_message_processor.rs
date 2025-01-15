@@ -46,6 +46,7 @@ use rocketmq_store::pop::ack_msg::AckMsg;
 use rocketmq_store::pop::batch_ack_msg::BatchAckMsg;
 use rocketmq_store::pop::AckMessage;
 use tracing::error;
+use tracing::warn;
 
 use crate::broker_error::BrokerError::BrokerCommonError;
 use crate::broker_error::BrokerError::BrokerRemotingError;
@@ -572,5 +573,9 @@ where
         self.broker_runtime_inner
             .pop_inflight_message_counter()
             .decrement_in_flight_message_num(&topic, &consume_group, pop_time, q_id, 1);
+    }
+
+    pub fn shutdown(&mut self) {
+        warn!("AckMessageProcessor shutdown unimplemented, need to be implemented");
     }
 }

@@ -30,6 +30,7 @@ use rocketmq_common::common::statistics::statistics_manager::StatisticsManager;
 use rocketmq_common::common::stats::moment_stats_item_set::MomentStatsItemSet;
 use rocketmq_common::common::stats::stats_item_set::StatsItemSet;
 use rocketmq_common::common::stats::Stats;
+use tracing::warn;
 
 pub struct BrokerStatsManager {
     stats_table: Arc<parking_lot::RwLock<HashMap<String, StatsItemSet>>>,
@@ -533,6 +534,10 @@ impl BrokerStatsManager {
 
     #[inline]
     pub fn inc_broker_ack_nums(&self, inc_value: i32) {}
+
+    pub fn shutdown(&self) {
+        warn!("BrokerStatsManager shutdown unimplemented");
+    }
 }
 
 #[inline]
