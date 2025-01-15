@@ -37,6 +37,7 @@ pub(crate) mod controller;
 pub(crate) mod failover;
 pub(crate) mod filter;
 pub(crate) mod hook;
+pub(crate) mod latency;
 pub(crate) mod load_balance;
 pub(crate) mod long_polling;
 pub(crate) mod mqtrace;
