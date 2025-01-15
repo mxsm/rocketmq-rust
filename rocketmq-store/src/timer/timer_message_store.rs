@@ -20,6 +20,7 @@ use cheetah_string::CheetahString;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::system_clock::SystemClock;
 use rocketmq_rust::ArcMut;
+use tracing::warn;
 
 use crate::log_file::MessageStore;
 use crate::message_store::default_message_store::DefaultMessageStore;
@@ -146,5 +147,9 @@ impl TimerMessageStore {
         default_message_store: Option<ArcMut<DefaultMessageStore>>,
     ) {
         self.default_message_store = default_message_store;
+    }
+
+    pub fn shutdown(&mut self) {
+        warn!("TimerMessageStore shutdown unimplemented, do nothing");
     }
 }
