@@ -14,4 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use tracing::warn;
+
 pub struct TransactionMetricsFlushService;
+
+impl TransactionMetricsFlushService {
+    pub fn shutdown(&mut self) {
+        warn!("TransactionMetricsFlushService shutdown not implemented");
+    }
+}
