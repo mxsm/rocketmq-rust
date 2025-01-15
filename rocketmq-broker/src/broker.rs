@@ -16,3 +16,4 @@
  */
 
 pub mod broker_hook;
+pub mod broker_pre_online_service;
