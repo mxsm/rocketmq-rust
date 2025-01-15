@@ -14,10 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use tracing::warn;
+
 pub struct BrokerPreOnlineService;
 
 impl BrokerPreOnlineService {
     pub fn shutdown(&mut self) {
-        unimplemented!("BrokerPreOnlineService shutdown not implemented");
+        warn!("BrokerPreOnlineService shutdown not implemented");
     }
 }
