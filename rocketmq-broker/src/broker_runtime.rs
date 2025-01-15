@@ -976,36 +976,47 @@ impl BrokerRuntime {
             self.register_broker_all(true, false, true).await;
         }
 
-        let cloned_broker_runtime = self.inner.clone();
-        let should_start_time = self.inner.should_start_time.clone();
-        let is_isolated = self.inner.is_isolated.clone();
-        let broker_config = self.inner.broker_config.clone();
+        //start register broker to name server scheduled task
+        let broker_runtime_inner = self.inner.clone();
         self.broker_runtime
             .as_ref()
             .unwrap()
             .get_handle()
             .spawn(async move {
                 let period = Duration::from_millis(
-                    10000.max(60000.min(broker_config.register_name_server_period)),
+                    10000.max(
+                        60000.min(
+                            broker_runtime_inner
+                                .broker_config
+                                .register_name_server_period,
+                        ),
+                    ),
                 );
                 let initial_delay = Duration::from_secs(10);
                 tokio::time::sleep(initial_delay).await;
                 loop {
-                    let start_time = should_start_time.load(Ordering::Relaxed);
+                    let start_time = broker_runtime_inner
+                        .should_start_time
+                        .load(Ordering::Relaxed);
                     if get_current_millis() < start_time {
                         info!("Register to namesrv after {}", start_time);
                         continue;
                     }
-                    if is_isolated.load(Ordering::Relaxed) {
+                    if broker_runtime_inner.is_isolated.load(Ordering::Relaxed) {
                         info!("Skip register for broker is isolated");
                         continue;
                     }
                     // record current execution time
                     let current_execution_time = tokio::time::Instant::now();
                     // execute task
-                    let this = cloned_broker_runtime.clone();
-                    cloned_broker_runtime
-                        .register_broker_all_inner(this, true, false, broker_config.force_register)
+                    let this = broker_runtime_inner.clone();
+                    broker_runtime_inner
+                        .register_broker_all_inner(
+                            this,
+                            true,
+                            false,
+                            broker_runtime_inner.broker_config.force_register,
+                        )
                         .await;
                     // Calculate the time of the next execution
                     let next_execution_time = current_execution_time + period;
@@ -1019,6 +1030,33 @@ impl BrokerRuntime {
 
         if self.inner.broker_config.enable_slave_acting_master {
             self.schedule_send_heartbeat();
+            let broker_runtime_inner = self.inner.clone();
+            self.broker_runtime
+                .as_ref()
+                .unwrap()
+                .get_handle()
+                .spawn(async move {
+                    let period = Duration::from_secs(1);
+                    let initial_delay = Duration::from_millis(
+                        broker_runtime_inner
+                            .broker_config
+                            .sync_broker_member_group_period,
+                    );
+                    tokio::time::sleep(initial_delay).await;
+                    loop {
+                        // record current execution time
+                        let current_execution_time = tokio::time::Instant::now();
+                        // execute task
+                        broker_runtime_inner.sync_broker_member_group();
+                        // Calculate the time of the next execution
+                        let next_execution_time = current_execution_time + period;
+
+                        // Wait until the next execution
+                        let delay = next_execution_time
+                            .saturating_duration_since(tokio::time::Instant::now());
+                        tokio::time::sleep(delay).await;
+                    }
+                });
         }
 
         if self.inner.broker_config.enable_controller_mode {
@@ -2071,6 +2109,9 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
     pub fn get_broker_addr(&self) -> &CheetahString {
         &self.broker_addr
+    }
+    pub fn sync_broker_member_group(&self) {
+        warn!("sync_broker_member_group not implemented");
     }
 }
 
