@@ -14,6 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use tracing::warn;
+
 #[derive(Debug, Default)]
 pub struct BroadcastOffsetManager {}
 
@@ -41,5 +43,9 @@ impl BroadcastOffsetManager {
         from_proxy: bool,
     ) {
         unimplemented!()
+    }
+
+    pub fn shutdown(&mut self) {
+        warn!("BroadcastOffsetManager shutdown is not implemented");
     }
 }
