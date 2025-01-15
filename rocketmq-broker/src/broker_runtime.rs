@@ -179,7 +179,7 @@ impl BrokerRuntime {
         );
         let producer_manager = ProducerManager::new();
         let consumer_manager = ConsumerManager::new_with_broker_stats(
-            Box::new(DefaultConsumerIdsChangeListener {}),
+            Arc::new(Box::new(DefaultConsumerIdsChangeListener {})),
             Arc::new(broker_config.clone()),
         );
 
