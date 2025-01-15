@@ -14,9 +14,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use tracing::warn;
+
 #[derive(Default)]
 pub struct ReplicasManager {}
 
 impl ReplicasManager {
-    pub fn start(&mut self) {}
+    pub fn start(&mut self) {
+        warn!("ReplicasManager started not implemented");
+    }
+
+    pub fn shutdown(&mut self) {
+        warn!("ReplicasManager shutdown not implemented");
+    }
 }
