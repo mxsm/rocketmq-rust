@@ -14,6 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use tracing::warn;
 
-pub mod broker_hook;
-pub mod broker_pre_online_service;
+pub struct BrokerPreOnlineService;
+
+impl BrokerPreOnlineService {
+    pub fn shutdown(&mut self) {
+        warn!("BrokerPreOnlineService shutdown not implemented");
+    }
+}
