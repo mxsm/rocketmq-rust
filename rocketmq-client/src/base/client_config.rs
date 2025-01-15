@@ -83,7 +83,6 @@ impl Default for ClientConfig {
 
 impl ClientConfig {
     pub fn new() -> Self {
-    pub fn new() -> Self {
         ClientConfig {
             namesrv_addr: NameServerAddressUtils::get_name_server_addresses()
                 .map(|addr| addr.into()),
