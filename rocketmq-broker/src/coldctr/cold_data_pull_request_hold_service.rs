@@ -14,6 +14,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use tracing::warn;
+
 pub const NO_SUSPEND_KEY: &str = "_noSuspend_";
 #[derive(Default)]
 pub struct ColdDataPullRequestHoldService {}
+
+impl ColdDataPullRequestHoldService {
+    pub fn shutdown(&mut self) {
+        warn!("ColdDataPullRequestHoldService shutdown not implemented");
+    }
+}

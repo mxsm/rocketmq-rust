@@ -15,11 +15,17 @@
  * limitations under the License.
  */
 
+use tracing::warn;
+
 #[derive(Default)]
 pub struct ColdDataCgCtrService;
 
 impl ColdDataCgCtrService {
     pub fn is_cg_need_cold_data_flow_ctr(&self, _consumer_group: &str) -> bool {
         false
+    }
+
+    pub fn shutdown(&mut self) {
+        warn!("ColdDataCgCtrService shutdown not implemented");
     }
 }
