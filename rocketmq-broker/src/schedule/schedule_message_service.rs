@@ -64,7 +64,8 @@ impl ConfigManager for ScheduleMessageService {
     }
 
     fn encode_pretty(&self, _pretty_format: bool) -> String {
-        todo!()
+        warn!("ScheduleMessageService encode_pretty not implemented");
+        "".to_string()
     }
 
     fn decode(&self, _json_string: &str) {}
