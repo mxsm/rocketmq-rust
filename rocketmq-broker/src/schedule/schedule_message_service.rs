@@ -21,6 +21,7 @@ use std::sync::Arc;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_store::store_path_config_helper::get_delay_offset_store_path;
+use tracing::warn;
 
 #[derive(Default, Clone)]
 pub struct ScheduleMessageService {
@@ -38,6 +39,10 @@ impl ScheduleMessageService {
 
     pub fn get_max_delay_level(&self) -> i32 {
         0
+    }
+
+    pub fn shutdown(&mut self) {
+        warn!("ScheduleMessageService shutdown not implemented");
     }
 }
 

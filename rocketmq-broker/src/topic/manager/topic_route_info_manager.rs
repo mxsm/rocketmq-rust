@@ -89,6 +89,9 @@ impl<MS: MessageStore> TopicRouteInfoManager<MS> {
         });
     }
 
+    pub fn shutdown(&mut self) {
+        warn!("TopicRouteInfoManager shutdown not implemented");
+    }
     async fn update_topic_route_info_from_name_server(&self) {
         let topic_set_for_pop_assignment = self
             .topic_subscribe_info_table
