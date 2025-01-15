@@ -16,6 +16,8 @@
  */
 use std::any::Any;
 
+use tracing::warn;
+
 use crate::client::consumer_group_event::ConsumerGroupEvent;
 use crate::client::consumer_ids_change_listener::ConsumerIdsChangeListener;
 
@@ -26,6 +28,6 @@ impl ConsumerIdsChangeListener for DefaultConsumerIdsChangeListener {
     fn handle(&self, _event: ConsumerGroupEvent, _group: &str, _args: &[&dyn Any]) {}
 
     fn shutdown(&self) {
-        todo!()
+        warn!("DefaultConsumerIdsChangeListener shutdown not implemented");
     }
 }
