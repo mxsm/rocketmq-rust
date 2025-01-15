@@ -1240,6 +1240,10 @@ where
         }
         Some(bytes_mut.freeze())
     }
+
+    pub fn shutdown(&mut self) {
+        warn!("PopMessageProcessor shutdown unimplemented, need to implement");
+    }
 }
 
 impl<MS> PopMessageProcessor<MS> {
