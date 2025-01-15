@@ -82,6 +82,7 @@ impl Default for ClientConfig {
 }
 
 impl ClientConfig {
+    #[inline]
     pub fn new() -> Self {
         ClientConfig {
             namesrv_addr: NameServerAddressUtils::get_name_server_addresses()
@@ -140,11 +141,13 @@ impl ClientConfig {
 }
 
 impl ClientConfig {
+    #[inline]
     pub fn with_namespace(&mut self, resource: &str) -> CheetahString {
         NamespaceUtil::wrap_namespace(self.get_namespace().unwrap_or_default().as_str(), resource)
             .into()
     }
 
+    #[inline]
     pub fn queue_with_namespace(&mut self, mut queue: MessageQueue) -> MessageQueue {
         if let Some(namespace) = self.get_namespace() {
             if !namespace.is_empty() {
@@ -159,6 +162,7 @@ impl ClientConfig {
         queue
     }
 
+    #[inline]
     pub fn get_namespace(&mut self) -> Option<CheetahString> {
         let namespace_initialized = self.namespace_initialized.load(Ordering::Acquire);
         if namespace_initialized {
@@ -180,12 +184,14 @@ impl ClientConfig {
         self.namespace.clone()
     }
 
+    #[inline]
     pub fn change_instance_name_to_pid(&mut self) {
         if self.instance_name == "DEFAULT" {
             self.instance_name = format!("{}#{}", std::process::id(), get_current_nano()).into();
         }
     }
 
+    #[inline]
     pub fn build_mq_client_id(&self) -> String {
         let mut sb = String::new();
         sb.push_str(self.client_ip.as_ref().unwrap());
@@ -207,6 +213,7 @@ impl ClientConfig {
         sb
     }
 
+    #[inline]
     pub fn get_namesrv_addr(&self) -> Option<CheetahString> {
         if StringUtils::is_not_empty_str(self.namesrv_addr.as_deref())
             && NAMESRV_ENDPOINT_PATTERN.is_match(self.namesrv_addr.as_ref().unwrap().as_str())
