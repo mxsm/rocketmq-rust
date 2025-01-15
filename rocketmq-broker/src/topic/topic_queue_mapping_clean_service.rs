@@ -15,4 +15,12 @@
  * limitations under the License.
  */
 
+use tracing::warn;
+
 pub struct TopicQueueMappingCleanService;
+
+impl TopicQueueMappingCleanService {
+    pub fn shutdown(&mut self) {
+        warn!("TopicQueueMappingCleanService shutdown not implemented");
+    }
+}
