@@ -199,6 +199,7 @@ pub struct BrokerConfig {
     pub skip_when_ck_re_put_reach_max_times: bool,
     pub compressed_register: bool,
     pub broker_not_active_timeout_millis: i64,
+    pub sync_broker_member_group_period: u64,
 }
 
 impl Default for BrokerConfig {
@@ -303,6 +304,7 @@ impl Default for BrokerConfig {
             skip_when_ck_re_put_reach_max_times: false,
             compressed_register: false,
             broker_not_active_timeout_millis: 10_000,
+            sync_broker_member_group_period: 1_000,
         }
     }
 }
