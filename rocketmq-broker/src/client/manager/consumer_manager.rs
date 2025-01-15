@@ -38,7 +38,7 @@ pub struct ConsumerManager {
     consumer_table: Arc<RwLock<HashMap<CheetahString, ConsumerGroupInfo>>>,
     consumer_compensation_table: Arc<RwLock<HashMap<CheetahString, ConsumerGroupInfo>>>,
     consumer_ids_change_listener_list:
-        Vec<Box<dyn ConsumerIdsChangeListener + Send + Sync + 'static>>,
+        Vec<Arc<Box<dyn ConsumerIdsChangeListener + Send + Sync + 'static>>>,
     broker_stats_manager: Arc<RwLock<Option<Weak<BrokerStatsManager>>>>,
     channel_expired_timeout: u64,
     subscription_expired_timeout: u64,
@@ -46,7 +46,9 @@ pub struct ConsumerManager {
 
 impl ConsumerManager {
     pub fn new(
-        consumer_ids_change_listener: Box<dyn ConsumerIdsChangeListener + Send + Sync + 'static>,
+        consumer_ids_change_listener: Arc<
+            Box<dyn ConsumerIdsChangeListener + Send + Sync + 'static>,
+        >,
         expired_timeout: u64,
     ) -> Self {
         let consumer_ids_change_listener_list = vec![consumer_ids_change_listener];
@@ -61,7 +63,9 @@ impl ConsumerManager {
     }
 
     pub fn new_with_broker_stats(
-        consumer_ids_change_listener: Box<dyn ConsumerIdsChangeListener + Send + Sync + 'static>,
+        consumer_ids_change_listener: Arc<
+            Box<dyn ConsumerIdsChangeListener + Send + Sync + 'static>,
+        >,
         broker_config: Arc<BrokerConfig>,
     ) -> Self {
         let consumer_ids_change_listener_list = vec![consumer_ids_change_listener];
