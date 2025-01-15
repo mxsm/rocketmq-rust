@@ -14,7 +14,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use tracing::warn;
 
 #[derive(Default)]
 pub struct NotificationProcessor {}
@@ -26,5 +28,9 @@ impl NotificationProcessor {
         _request: rocketmq_remoting::protocol::remoting_command::RemotingCommand,
     ) -> rocketmq_remoting::protocol::remoting_command::RemotingCommand {
         todo!()
+    }
+
+    pub fn shutdown(&mut self) {
+        warn!("NotificationProcessor shutdown unimplemented, need to implement it");
     }
 }
