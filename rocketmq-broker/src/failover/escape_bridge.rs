@@ -140,6 +140,10 @@ impl<MS: MessageStore> EscapeBridge<MS> {
             //self.message_store = message_store;
         }
     }
+
+    pub fn shutdown(&mut self) {
+        warn!("EscapeBridge shutdown not implemented");
+    }
 }
 
 impl<MS> EscapeBridge<MS>

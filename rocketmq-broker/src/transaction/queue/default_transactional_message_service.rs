@@ -141,6 +141,10 @@ where
             sb.as_bytes(),
         ))
     }
+
+    pub fn shutdown(&mut self) {
+        warn!("DefaultTransactionalMessageService shutdown unimplemented, need to implement");
+    }
 }
 
 impl<MS> TransactionalMessageService for DefaultTransactionalMessageService<MS>
