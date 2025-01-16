@@ -21,6 +21,8 @@ use bytes::Buf;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::hasher::string_hasher::JavaStringHasher;
+use tracing::info;
+use tracing::warn;
 
 use crate::index::index_header::IndexHeader;
 use crate::index::index_header::INDEX_HEADER_SIZE;
@@ -123,7 +125,7 @@ impl IndexFile {
             self.index_header.update_byte_buffer();
             self.mapped_file.flush(0);
             self.mapped_file.release();
-            log::info!(
+            info!(
                 "flush index file elapsed time(ms) {}",
                 begin_time.elapsed().as_millis()
             );
@@ -210,7 +212,7 @@ impl IndexFile {
 
             true
         } else {
-            log::warn!(
+            warn!(
                 "Over index file capacity: index count = {}; index max num = {}",
                 self.index_header.get_index_count(),
                 self.index_num
