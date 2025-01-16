@@ -11,3 +11,14 @@ readme.workspace = true
 description.workspace = true
 
 [dependencies]
+rocketmq-rust = { workspace = true }
+rocketmq-common = { workspace = true }
+rocketmq-tools = { workspace = true }
+rocketmq-client-rust = { workspace = true }
+tracing.workspace = true
+cheetah-string = { workspace = true }
+tokio =  { workspace = true }
+
+[[example]]
+name = "pop-consumer"
+path = "examples/consumer/pop_consumer.rs"

@@ -53,6 +53,12 @@ pub struct DefaultMQAdminExt {
     default_mqadmin_ext_impl: DefaultMQAdminExtImpl,
 }
 
+impl DefaultMQAdminExt {
+    pub fn new() -> Self {
+        unimplemented!("DefaultMQAdminExt::new")
+    }
+}
+
 #[allow(unused_variables)]
 #[allow(unused_mut)]
 #[cfg(feature = "async")]

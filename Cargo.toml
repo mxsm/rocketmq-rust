@@ -38,6 +38,7 @@ rocketmq-filter = { version = "0.4.0", path = "./rocketmq-filter" }
 rocketmq-store = { version = "0.4.0", path = "./rocketmq-store", default-features = true }
 rocketmq-remoting = { version = "0.4.0", path = "./rocketmq-remoting" }
 rocketmq-client-rust = { version = "0.4.0", path = "./rocketmq-client" }
+rocketmq-tools = { version = "0.4.0", path = "./rocketmq-tools" }
 
 tokio = { version = "1.43", features = ["full"] }
 tokio-util = { version = "0.7.13", features = ["full"] }
