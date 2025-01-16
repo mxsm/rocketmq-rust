@@ -153,6 +153,10 @@ impl<MS: MessageStore> PopMessageProcessor<MS> {
             broker_runtime_inner,
         }
     }
+
+    pub fn start(&mut self) {
+        warn!("PopMessageProcessor started not implemented");
+    }
 }
 
 impl<MS> PopMessageProcessor<MS>

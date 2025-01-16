@@ -20,6 +20,10 @@ use tracing::warn;
 pub struct TopicQueueMappingCleanService;
 
 impl TopicQueueMappingCleanService {
+    pub fn start(&mut self) {
+        warn!("TopicQueueMappingCleanService started not implemented");
+    }
+
     pub fn shutdown(&mut self) {
         warn!("TopicQueueMappingCleanService shutdown not implemented");
     }
