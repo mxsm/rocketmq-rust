@@ -73,7 +73,9 @@ impl TimerMessageStore {
         true
     }
 
-    pub fn start(&mut self) {}
+    pub fn start(&mut self) {
+        warn!("TimerMessageStore start unimplemented, do nothing");
+    }
 
     pub fn is_reject(&self, _deliver_ms: u64) -> bool {
         false
