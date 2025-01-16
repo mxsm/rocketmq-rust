@@ -98,6 +98,12 @@ impl BrokerStatsManager {
 }
 
 impl BrokerStatsManager {
+
+    #[inline]
+    pub fn start(&self) {
+        //nothing to do
+    }
+
     #[inline]
     pub fn new(broker_config: Arc<BrokerConfig>) -> Self {
         let stats_table = Arc::new(parking_lot::RwLock::new(HashMap::new()));
