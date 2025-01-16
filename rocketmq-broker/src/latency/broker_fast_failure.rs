@@ -19,7 +19,6 @@ use tracing::warn;
 pub struct BrokerFastFailure;
 
 impl BrokerFastFailure {
-    
     pub fn start(&mut self) {
         warn!("BrokerFastFailure started not implemented");
     }
