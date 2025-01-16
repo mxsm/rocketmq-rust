@@ -59,6 +59,12 @@ impl DefaultMQAdminExt {
     }
 }
 
+impl Default for DefaultMQAdminExt {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[allow(unused_variables)]
 #[allow(unused_mut)]
 #[cfg(feature = "async")]
