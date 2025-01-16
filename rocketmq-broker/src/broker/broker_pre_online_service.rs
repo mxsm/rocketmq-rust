@@ -19,6 +19,11 @@ use tracing::warn;
 pub struct BrokerPreOnlineService;
 
 impl BrokerPreOnlineService {
+
+    pub fn start(&mut self) {
+        warn!("BrokerPreOnlineService started not implemented");
+    }
+    
     pub fn shutdown(&mut self) {
         warn!("BrokerPreOnlineService shutdown not implemented");
     }
