@@ -98,7 +98,6 @@ impl BrokerStatsManager {
 }
 
 impl BrokerStatsManager {
-
     #[inline]
     pub fn start(&self) {
         //nothing to do

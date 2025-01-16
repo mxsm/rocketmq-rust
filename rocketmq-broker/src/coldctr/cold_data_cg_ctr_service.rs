@@ -21,7 +21,6 @@ use tracing::warn;
 pub struct ColdDataCgCtrService;
 
 impl ColdDataCgCtrService {
-    
     pub fn start(&mut self) {
         warn!("ColdDataCgCtrService started not implemented");
     }
