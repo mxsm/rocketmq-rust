@@ -924,9 +924,9 @@ impl BrokerRuntime {
         let request_processor = self.init_processor();
         let fast_request_processor = request_processor.clone();
         if let Some(ref mut message_store) = self.inner.message_store {
-            message_store.start().map_err(|e| {
-                panic!("Failed to start message store: {}", e)
-            })?;
+            message_store
+                .start()
+                .map_err(|e| panic!("Failed to start message store: {}", e))?;
         } else {
             panic!("Message store is not initialized");
         }
