@@ -21,6 +21,10 @@ pub struct BroadcastOffsetManager {}
 
 #[allow(unused_variables)]
 impl BroadcastOffsetManager {
+    pub fn start(&mut self) {
+        warn!("BroadcastOffsetManager started is not implemented");
+    }
+
     pub fn query_init_offset(
         &self,
         topic: &str,

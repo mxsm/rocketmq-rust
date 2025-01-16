@@ -119,6 +119,10 @@ where
             )),
         }
     }
+
+    pub fn start(&mut self) {
+        warn!("AckMessageProcessor started unimplemented, need to be implemented");
+    }
 }
 
 impl<MS> AckMessageProcessor<MS>
