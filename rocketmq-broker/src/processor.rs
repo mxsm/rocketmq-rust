@@ -164,9 +164,11 @@ where
             }
 
             RequestCode::QueryConsumeQueue | RequestCode::SetMessageRequestMode => {
-                self.query_assignment_processor
+                return self
+                    .query_assignment_processor
                     .process_request(channel, ctx, request_code, request)
                     .await
+                    .map_err(Into::into);
             }
 
             RequestCode::ChangeMessageInvisibleTime => {

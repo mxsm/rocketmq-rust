@@ -15,58 +15,48 @@
  * limitations under the License.
  */
 use crate::broker_error::BrokerError;
-use crate::broker_error::BrokerError::IllegalArgumentError;
-use crate::broker_runtime::BrokerRuntimeInner;
+ use crate::broker_error::BrokerError::{BrokerCommonError, IllegalArgumentError};
+ use crate::broker_runtime::BrokerRuntimeInner;
 
-use crate::load_balance::message_request_mode_manager::MessageRequestModeManager;
+ use crate::load_balance::message_request_mode_manager::MessageRequestModeManager;
 
-use crate::Result;
-use cheetah_string::CheetahString;
-use rocketmq_client_rust::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
-use rocketmq_client_rust::consumer::rebalance_strategy::allocate_message_queue_averagely::AllocateMessageQueueAveragely;
-use rocketmq_client_rust::consumer::rebalance_strategy::allocate_message_queue_averagely_by_circle::AllocateMessageQueueAveragelyByCircle;
+ use crate::Result;
+ use cheetah_string::CheetahString;
+ use rocketmq_client_rust::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
+ use rocketmq_client_rust::consumer::rebalance_strategy::allocate_message_queue_averagely::AllocateMessageQueueAveragely;
+ use rocketmq_client_rust::consumer::rebalance_strategy::allocate_message_queue_averagely_by_circle::AllocateMessageQueueAveragelyByCircle;
 
-use rocketmq_common::common::config_manager::ConfigManager;
-use rocketmq_common::common::message::message_enum::MessageRequestMode;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
-use rocketmq_common::common::mix_all;
-use rocketmq_common::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
-use rocketmq_remoting::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
-use rocketmq_remoting::protocol::body::set_message_request_mode_request_body::SetMessageRequestModeRequestBody;
-use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::protocol::{RemotingDeserializable, RemotingSerializable};
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_rust::ArcMut;
+ use rocketmq_common::common::config_manager::ConfigManager;
+ use rocketmq_common::common::message::message_enum::MessageRequestMode;
+ use rocketmq_common::common::message::message_queue::MessageQueue;
+ use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
+ use rocketmq_common::common::mix_all;
+ use rocketmq_common::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
+ use rocketmq_remoting::code::request_code::RequestCode;
+ use rocketmq_remoting::code::response_code::ResponseCode;
+ use rocketmq_remoting::net::channel::Channel;
+ use rocketmq_remoting::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
+ use rocketmq_remoting::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
+ use rocketmq_remoting::protocol::body::set_message_request_mode_request_body::SetMessageRequestModeRequestBody;
+ use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
+ use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+ use rocketmq_remoting::protocol::{RemotingDeserializable, RemotingSerializable};
+ use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+ use rocketmq_rust::ArcMut;
 
-use rocketmq_store::log_file::MessageStore;
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-use tracing::{info, warn};
+ use rocketmq_store::log_file::MessageStore;
+ use std::collections::{HashMap, HashSet};
+ use std::sync::Arc;
+ use tracing::{info, warn};
 
 pub struct QueryAssignmentProcessor<MS> {
     message_request_mode_manager: MessageRequestModeManager,
     load_strategy: HashMap<CheetahString, Arc<dyn AllocateMessageQueueStrategy>>,
-    /*message_store_config: Arc<MessageStoreConfig>,
-    broker_config: Arc<BrokerConfig>,
-    topic_route_info_manager: Arc<TopicRouteInfoManager>,
-    consumer_manager: Arc<ConsumerManager>,*/
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
 impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
-    pub fn new(
-        /* message_store_config: Arc<MessageStoreConfig>,
-        broker_config: Arc<BrokerConfig>,
-        topic_route_info_manager: Arc<TopicRouteInfoManager>,
-        consumer_manager: Arc<ConsumerManager>,*/
-        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-    ) -> Self {
+    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
         let allocate_message_queue_averagely: Arc<dyn AllocateMessageQueueStrategy> =
             Arc::new(AllocateMessageQueueAveragely);
         let allocate_message_queue_averagely_by_circle: Arc<dyn AllocateMessageQueueStrategy> =
@@ -87,10 +77,6 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
         Self {
             message_request_mode_manager: manager,
             load_strategy,
-            /*message_store_config,
-            broker_config,
-            topic_route_info_manager,
-            consumer_manager,*/
             broker_runtime_inner,
         }
     }
@@ -103,13 +89,13 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
         ctx: ConnectionHandlerContext,
         request_code: RequestCode,
         request: RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> crate::Result<Option<RemotingCommand>> {
         match request_code {
             RequestCode::QueryAssignment => self.query_assignment(channel, ctx, request).await,
             RequestCode::SetMessageRequestMode => {
                 self.set_message_request_mode(channel, ctx, request).await
             }
-            _ => None,
+            _ => Ok(None),
         }
     }
 
@@ -118,10 +104,17 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
         channel: Channel,
         _ctx: ConnectionHandlerContext,
         request: RemotingCommand,
-    ) -> Option<RemotingCommand> {
-        let request_body =
-            QueryAssignmentRequestBody::decode(request.get_body().expect("empty body"))
-                .expect("decode QueryAssignmentRequestBody failed");
+    ) -> crate::Result<Option<RemotingCommand>> {
+        if request.get_body().is_none() {
+            return Ok(Some(
+                RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::SystemError,
+                    "empty body",
+                ),
+            ));
+        }
+        let request_body = QueryAssignmentRequestBody::decode(request.get_body().unwrap())
+            .map_err(BrokerCommonError)?;
         let set_message_request_mode_request_body = self
             .message_request_mode_manager
             .get_message_request_mode(&request_body.topic, &request_body.consumer_group);
@@ -182,12 +175,11 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
         let body = QueryAssignmentResponseBody {
             message_queue_assignments: assignments,
         };
-        Some(
-            RemotingCommand::create_response_command().set_body(
-                body.encode()
-                    .expect("encode QueryAssignmentResponseBody failed"),
-            ),
-        )
+        Ok(Some(RemotingCommand::create_response_command().set_body(
+            body.encode().map_err(|e| {
+                IllegalArgumentError(format!("encode QueryAssignmentResponseBody failed {:?}", e))
+            })?,
+        )))
     }
 
     async fn do_load_balance(
@@ -373,17 +365,24 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         request: RemotingCommand,
-    ) -> Option<RemotingCommand> {
-        let request_body =
-            SetMessageRequestModeRequestBody::decode(request.get_body().expect("empty body"))
-                .expect("decode SetMessageRequestModeRequestBody failed");
+    ) -> crate::Result<Option<RemotingCommand>> {
+        if request.get_body().is_none() {
+            return Ok(Some(
+                RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::SystemError,
+                    "empty body",
+                ),
+            ));
+        }
+        let request_body = SetMessageRequestModeRequestBody::decode(request.get_body().unwrap())
+            .map_err(BrokerCommonError)?;
         if request_body.topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) {
-            return Some(
+            return Ok(Some(
                 RemotingCommand::create_response_command_with_code(ResponseCode::NoPermission)
                     .set_remark(CheetahString::from_static_str(
                         "retry topic is not allowed to set mode",
                     )),
-            );
+            ));
         }
         self.message_request_mode_manager.set_message_request_mode(
             request_body.topic.clone(),
@@ -391,9 +390,9 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
             request_body,
         );
         self.message_request_mode_manager.persist();
-        Some(RemotingCommand::create_response_command_with_code(
+        Ok(Some(RemotingCommand::create_response_command_with_code(
             ResponseCode::Success,
-        ))
+        )))
     }
 }
 
