@@ -923,12 +923,11 @@ impl BrokerRuntime {
     fn start_basic_service(&mut self) {
         let request_processor = self.init_processor();
         let fast_request_processor = request_processor.clone();
-        self.inner
-            .message_store
-            .as_mut()
-            .unwrap()
-            .start()
-            .expect("Message store start error");
+        if let Some(ref mut message_store) = self.inner.message_store {
+            message_store.start();
+        } else {
+            panic!("Message store is not initialized");
+        }
 
         let server = RocketMQServer::new(Arc::new(self.inner.server_config.clone()));
         //start nomarl broker remoting_server
