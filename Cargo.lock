@@ -2210,7 +2210,6 @@ dependencies = [
  "criterion",
  "dirs",
  "lazy_static",
- "log",
  "memmap2",
  "once_cell",
  "parking_lot",

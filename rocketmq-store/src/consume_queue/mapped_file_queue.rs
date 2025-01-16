@@ -23,10 +23,10 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use log::warn;
 use parking_lot::RwLock;
 use rocketmq_common::UtilAll::offset_to_file_name;
 use tracing::info;
+use tracing::warn;
 
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
