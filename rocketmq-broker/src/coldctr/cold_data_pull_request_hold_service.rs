@@ -21,6 +21,9 @@ pub const NO_SUSPEND_KEY: &str = "_noSuspend_";
 pub struct ColdDataPullRequestHoldService {}
 
 impl ColdDataPullRequestHoldService {
+    pub fn start(&mut self) {
+        warn!("ColdDataPullRequestHoldService started not implemented");
+    }
     pub fn shutdown(&mut self) {
         warn!("ColdDataPullRequestHoldService shutdown not implemented");
     }

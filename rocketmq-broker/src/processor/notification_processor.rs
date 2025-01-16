@@ -22,6 +22,10 @@ use tracing::warn;
 pub struct NotificationProcessor {}
 
 impl NotificationProcessor {
+    pub fn start(&mut self) {
+        warn!("NotificationProcessor started unimplemented, need to implement it");
+    }
+
     fn process_request(
         &self,
         _ctx: ConnectionHandlerContext,
