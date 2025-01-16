@@ -53,8 +53,10 @@ impl MessageRequestModeManager {
         request_body: SetMessageRequestModeRequestBody,
     ) {
         let mut message_request_mode_map = self.message_request_mode_map.lock();
-        let consumer_group_map = message_request_mode_map.entry(topic.clone()).or_default();
-        consumer_group_map.insert(consumer_group, request_body);
+        message_request_mode_map
+            .entry(topic)
+            .or_default()
+            .insert(consumer_group, request_body);
     }
 
     pub fn get_message_request_mode(
