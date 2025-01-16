@@ -21,6 +21,10 @@ use tracing::warn;
 pub struct ColdDataCgCtrService;
 
 impl ColdDataCgCtrService {
+    pub fn start(&mut self) {
+        warn!("ColdDataCgCtrService started not implemented");
+    }
+
     pub fn is_cg_need_cold_data_flow_ctr(&self, _consumer_group: &str) -> bool {
         false
     }
