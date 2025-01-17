@@ -487,7 +487,24 @@ impl Rebalance for RebalancePushImpl {
         self.rebalance_impl_inner.do_rebalance(is_order).await
     }
 
+    /// Determines if the client should perform rebalancing for the given topic.
+    ///
+    /// This function checks the following conditions to decide if rebalancing is needed:
+    /// 1. If `client_rebalance` is enabled in the consumer configuration.
+    /// 2. If the message model is set to `Broadcasting`.
+    /// 3. If the consumer is configured to consume messages in order.
+    ///
+    /// # Arguments
+    ///
+    /// * `topic` - A string slice that holds the name of the topic.
+    ///
+    /// # Returns
+    ///
+    /// * `true` if the client should perform rebalancing.
+    /// * `false` otherwise.
     fn client_rebalance(&mut self, topic: &str) -> bool {
+        //Pop message mode, order message consumer not implement, it's use
+        // ConsumeMessageOrderlyService to consume
         self.consumer_config.client_rebalance
             || self.rebalance_impl_inner.message_model.unwrap() == MessageModel::Broadcasting
             || self
