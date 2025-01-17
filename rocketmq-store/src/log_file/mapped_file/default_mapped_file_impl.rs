@@ -725,20 +725,21 @@ impl MappedFile for DefaultMappedFile {
     #[inline]
     #[cfg(target_os = "linux")]
     fn is_loaded(&self, position: i64, size: usize) -> bool {
-        use libc::c_void;
-        use libc::mincore;
-        use libc::EINVAL;
-        let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
-        let page_count = (length + page_size - 1) / page_size;
+        // use libc::c_void;
+        // use libc::mincore;
+        // use libc::EINVAL;
+        // let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
+        // let page_count = (length + page_size - 1) / page_size;
 
-        let mut vec = vec![0u8; page_count];
-        let ret = unsafe { mincore(address as *mut c_void, length, vec.as_mut_ptr()) };
+        // let mut vec = vec![0u8; page_count];
+        // let ret = unsafe { mincore(address as *mut c_void, length, vec.as_mut_ptr()) };
 
-        if ret == -1 {
-            return false;
-        }
+        // if ret == -1 {
+        //     return false;
+        // }
 
-        !vec.iter().any(|&byte| byte & 1 == 0)
+        // !vec.iter().any(|&byte| byte & 1 == 0)
+        true
     }
 
     #[inline]
