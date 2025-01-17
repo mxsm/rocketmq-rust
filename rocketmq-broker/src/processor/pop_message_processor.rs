@@ -80,42 +80,16 @@ use crate::processor::processor_service::pop_buffer_merge_service::PopBufferMerg
 const BORN_TIME: &str = "bornTime";
 
 pub struct PopMessageProcessor<MS> {
-    //consumer_manager: Arc<ConsumerManager>,
-    //  consumer_offset_manager: Arc<ConsumerOffsetManager>,
-    // consumer_order_info_manager: Arc<ConsumerOrderInfoManager<MS>>,
-    //  broker_config: Arc<BrokerConfig>,
-    //  message_store: ArcMut<MS>,
-    //   message_store_config: Arc<MessageStoreConfig>,
-    //  topic_config_manager: Arc<TopicConfigManager>,
-    //   subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
-    //    consumer_filter_manager: Arc<ConsumerFilterManager>,
     ck_message_number: AtomicI64,
     pop_long_polling_service: ArcMut<PopLongPollingService>,
     pop_buffer_merge_service: ArcMut<PopBufferMergeService<MS>>,
-    //pop_inflight_message_counter: Arc<PopInflightMessageCounter>,
     queue_lock_manager: QueueLockManager,
     revive_topic: CheetahString,
-    // store_host: SocketAddr,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
 impl<MS: MessageStore> PopMessageProcessor<MS> {
-    pub fn new(
-        /*consumer_manager: Arc<ConsumerManager>,
-        consumer_offset_manager: Arc<ConsumerOffsetManager>,
-        consumer_order_info_manager: Arc<ConsumerOrderInfoManager<MS>>,
-        broker_config: Arc<BrokerConfig>,
-        message_store: ArcMut<MS>,
-        message_store_config: Arc<MessageStoreConfig>,
-        topic_config_manager: Arc<TopicConfigManager>,
-        subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
-        consumer_filter_manager: Arc<ConsumerFilterManager>,
-        pop_inflight_message_counter: Arc<PopInflightMessageCounter>,
-        store_host: SocketAddr,
-        escape_bridge: ArcMut<EscapeBridge<MS>>,*/
-        //pop_inflight_message_counter: Arc<PopInflightMessageCounter>,
-        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-    ) -> Self {
+    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
         let revive_topic = CheetahString::from_string(PopAckConstants::build_cluster_revive_topic(
             broker_runtime_inner
                 .broker_config()
@@ -125,31 +99,17 @@ impl<MS: MessageStore> PopMessageProcessor<MS> {
         ));
         let queue_lock_manager = QueueLockManager::new();
         PopMessageProcessor {
-            /*consumer_offset_manager,
-            consumer_manager,
-            consumer_order_info_manager,
-            broker_config: broker_config.clone(),
-            message_store,
-            message_store_config,
-            topic_config_manager: topic_config_manager.clone(),
-            subscription_group_manager: subscription_group_manager.clone(),
-            consumer_filter_manager,*/
             ck_message_number: Default::default(),
             pop_long_polling_service: ArcMut::new(PopLongPollingService),
             pop_buffer_merge_service: ArcMut::new(PopBufferMergeService::new(
                 revive_topic.clone(),
                 queue_lock_manager.clone(),
-                /*broker_config,
-                store_host,
-                escape_bridge,
-                topic_config_manager,
-                subscription_group_manager,*/
                 broker_runtime_inner.clone(),
             )),
-            //pop_inflight_message_counter,
+
             queue_lock_manager,
             revive_topic,
-            //store_host,
+
             broker_runtime_inner,
         }
     }
