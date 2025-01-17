@@ -31,7 +31,6 @@ pub struct CountDownLatch {
 }
 
 impl CountDownLatch {
-
     /// A new `CountDownLatch`.
     #[inline]
     pub fn new(count: u32) -> Self {
