@@ -31,16 +31,8 @@ pub struct CountDownLatch {
 }
 
 impl CountDownLatch {
-    /// Creates a new `CountDownLatch` initialized with the given count.
-    ///
-    /// # Arguments
-    ///
-    /// * `count` - The number of times `count_down` must be invoked before tasks can pass through
-    ///   `wait`.
-    ///
-    /// # Returns
-    ///
     /// A new `CountDownLatch`.
+    #[inline]
     pub fn new(count: u32) -> Self {
         CountDownLatch {
             count: Arc::new(Mutex::new(count)),
@@ -48,9 +40,7 @@ impl CountDownLatch {
         }
     }
 
-    /// Decrements the count of the latch, releasing all waiting tasks if the count reaches zero.
-    ///
-    /// This method is asynchronous and will lock the internal count before decrementing it.
+    #[inline]
     pub async fn count_down(&self) {
         let mut count = self.count.lock().await;
         *count -= 1;
@@ -59,9 +49,7 @@ impl CountDownLatch {
         }
     }
 
-    /// Waits until the count reaches zero.
-    ///
-    /// This method is asynchronous and will block the current task until the count reaches zero.
+    #[inline]
     pub async fn wait(&self) {
         let count = self.count.lock().await;
         if *count > 0 {
@@ -70,18 +58,7 @@ impl CountDownLatch {
         }
     }
 
-    /// Waits until the count reaches zero or the specified timeout elapses.
-    ///
-    /// This method is asynchronous and will block the current task until the count reaches zero
-    /// or the timeout elapses.
-    ///
-    /// # Arguments
-    ///
-    /// * `timeout` - The maximum duration to wait for the count to reach zero.
-    ///
-    /// # Returns
-    ///
-    /// `true` if the count reached zero before the timeout elapsed, `false` otherwise.
+    #[inline]
     pub async fn wait_timeout(&self, timeout: Duration) -> bool {
         tokio::time::timeout(timeout, self.wait()).await.is_ok()
     }
