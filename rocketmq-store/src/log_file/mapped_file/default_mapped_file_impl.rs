@@ -723,7 +723,55 @@ impl MappedFile for DefaultMappedFile {
     }
 
     #[inline]
+    #[cfg(target_os = "linux")]
     fn is_loaded(&self, position: i64, size: usize) -> bool {
+        // use libc::c_void;
+        // use libc::mincore;
+        // use libc::EINVAL;
+        // let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
+        // let page_count = (length + page_size - 1) / page_size;
+
+        // let mut vec = vec![0u8; page_count];
+        // let ret = unsafe { mincore(address as *mut c_void, length, vec.as_mut_ptr()) };
+
+        // if ret == -1 {
+        //     return false;
+        // }
+
+        // !vec.iter().any(|&byte| byte & 1 == 0)
+        true
+    }
+
+    #[inline]
+    #[cfg(target_os = "windows")]
+    fn is_loaded(&self, position: i64, size: usize) -> bool {
+        /*use windows::Win32::Foundation::{BOOL, HANDLE};
+        use windows::Win32::System::Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION, MEM_COMMIT};
+
+        let address = self.mmapped_file.as_ptr().wrapping_add(position as usize);
+        let mut info: MEMORY_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
+        let mut offset = 0;
+
+        while offset < length {
+            let result = unsafe {
+                VirtualQuery(
+                    address.add(offset) as *const _,
+                    &mut info,
+                    std::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
+                )
+            };
+
+            if result == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+
+            if info.State != MEM_COMMIT {
+                return Ok(false);
+            }
+
+            offset += info.RegionSize;
+        }*/
+
         true
     }
 
