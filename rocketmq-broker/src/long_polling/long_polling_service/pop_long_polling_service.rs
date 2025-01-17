@@ -24,6 +24,7 @@ use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_store::filter::MessageFilter;
+use tracing::warn;
 
 use crate::long_polling::polling_header::PollingHeader;
 use crate::long_polling::polling_result::PollingResult;
@@ -31,6 +32,10 @@ use crate::long_polling::polling_result::PollingResult;
 pub(crate) struct PopLongPollingService;
 
 impl PopLongPollingService {
+    pub fn start(&mut self) {
+        warn!("PopLongPollingService::start is not implemented");
+    }
+
     pub fn notify_message_arriving(
         &self,
         topic: &CheetahString,
