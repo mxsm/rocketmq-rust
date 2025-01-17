@@ -384,6 +384,43 @@ impl RemotingCommand {
         })
     }
 
+    pub fn encode_header(&self) -> Option<Bytes> {
+        if let Some(body) = &self.body {
+            self.encode_header_with_body_length(body.len())
+        } else {
+            self.encode_header_with_body_length(0)
+        }
+    }
+    pub fn encode_header_with_body_length(&self, body_length: usize) -> Option<Bytes> {
+        //for zero copy
+        // 1> header length size
+        let mut length = 4;
+
+        // 2> header data length
+        let header_data = self.header_encode().unwrap();
+
+        length += header_data.len();
+
+        // 3> body data length
+        length += body_length;
+
+        let mut result = BytesMut::with_capacity(4 + length - body_length);
+
+        // length
+        result.put_i32(length as i32);
+
+        // header length
+        result.put_i32(mark_protocol_type(
+            header_data.len() as i32,
+            self.serialize_type,
+        ));
+
+        // header data
+        result.put(header_data);
+
+        Some(result.freeze())
+    }
+
     pub fn make_custom_header_to_net(&mut self) {
         if let Some(header) = &self.command_custom_header {
             let option = header.to_map();
@@ -744,6 +781,10 @@ impl RemotingCommand {
 
 pub fn parse_header_length(size: i32) -> usize {
     (size & 0xFFFFFF) as usize
+}
+
+pub fn mark_protocol_type(source: i32, serialize_type: SerializeType) -> i32 {
+    ((serialize_type.get_code() as i32) << 24) | (source & 0x00FFFFFF)
 }
 
 pub fn parse_serialize_type(size: i32) -> crate::Result<SerializeType> {
