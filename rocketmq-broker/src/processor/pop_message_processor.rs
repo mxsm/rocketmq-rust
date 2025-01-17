@@ -115,7 +115,9 @@ impl<MS: MessageStore> PopMessageProcessor<MS> {
     }
 
     pub fn start(&mut self) {
-        warn!("PopMessageProcessor started not implemented");
+        self.pop_long_polling_service.start();
+        PopBufferMergeService::start(self.pop_buffer_merge_service.clone());
+        self.queue_lock_manager.start();
     }
 }
 
@@ -1408,11 +1410,12 @@ impl QueueLockManager {
         count
     }
 
-    pub fn start(self: Arc<Self>) {
+    pub fn start(&self) {
+        let this = self.clone();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
-                let count = self.clean_unused_locks(60000).await;
+                let count = this.clean_unused_locks(60000).await;
                 info!("QueueLockSize={}", count);
             }
         });
