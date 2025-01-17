@@ -202,10 +202,6 @@ impl RemotingCommand {
         requestId.fetch_add(1, Ordering::AcqRel)
     }
 
-    pub fn set_cmd_version(self) -> Self {
-        self
-    }
-
     pub fn create_response_command_with_code(code: impl Into<i32>) -> Self {
         Self::default().set_code(code).mark_response_type()
     }
