@@ -59,6 +59,7 @@ use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerCon
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
+use rocketmq_store::base::select_result::SelectMappedBufferResult;
 use rocketmq_store::filter::MessageFilter;
 use rocketmq_store::log_file::MessageStore;
 use rocketmq_store::pop::batch_ack_msg::BatchAckMsg;
@@ -766,7 +767,7 @@ where
         topic: &CheetahString,
         attempt_id: &CheetahString,
         is_retry: bool,
-        get_message_result: ArcMut<GetMessageResult>,
+        mut get_message_result: ArcMut<GetMessageResult>,
         request_header: &PopMessageRequestHeader,
         queue_id: i32,
         rest_num: i64,
@@ -997,8 +998,26 @@ where
                         queue_id,
                         result_inner.message_queue_offset().clone(),
                     );
-                } else {
-                    unimplemented!()
+                } else if (result_inner.status().is_none()
+                    || result_inner.status().unwrap() == GetMessageStatus::NoMatchedMessage
+                    || result_inner.status().unwrap() == GetMessageStatus::OffsetFoundNull
+                    || result_inner.status().unwrap() == GetMessageStatus::MessageWasRemoving
+                    || result_inner.status().unwrap() == GetMessageStatus::NoMatchedLogicQueue)
+                    && result_inner.next_begin_offset() > -1
+                {
+                    if is_order {
+                        self.broker_runtime_inner
+                            .consumer_offset_manager()
+                            .commit_offset(
+                                channel.remote_address().to_string().into(),
+                                &request_header.consumer_group,
+                                topic,
+                                queue_id,
+                                result_inner.next_begin_offset(),
+                            );
+                    } else {
+                        unimplemented!("PopMessageProcessor pop_msg_from_queue")
+                    }
                 }
 
                 atomic_rest_num.fetch_add(
@@ -1010,19 +1029,51 @@ where
                     .broker_config()
                     .broker_name
                     .as_str();
-                for msg in result_inner.message_mapped_list() {
+                let message_count = result_inner.message_count();
+                for mut maped_buffer in result_inner.message_mapped_vec() {
                     if self
                         .broker_runtime_inner
                         .broker_config()
                         .pop_response_return_actual_retry_topic
                         || !is_retry
                     {
-                        //get_message_result.message_mapped_list().push(msg.clone());
+                        get_message_result.add_message_inner(maped_buffer);
                     } else {
-                        let mut bytes = msg.get_bytes().unwrap_or_default();
+                        let mut bytes = maped_buffer.get_bytes().unwrap_or_default();
                         let message_ext_list =
                             message_decoder::decodes_batch(&mut bytes, true, false);
-                        unimplemented!("PopMessageProcessor pop_msg_from_queue")
+                        maped_buffer.release();
+                        for mut message_ext in message_ext_list {
+                            let ck_info = ExtraInfoUtil::build_extra_info_with_msg_queue_offset(
+                                final_offset,
+                                pop_time as i64,
+                                request_header.invisible_time as i64,
+                                revive_qid,
+                                message_ext.get_topic(),
+                                broker_name,
+                                message_ext.queue_id(),
+                                message_ext.queue_offset(),
+                            );
+                            message_ext
+                                .message
+                                .properties
+                                .entry(CheetahString::from_static_str(
+                                    MessageConst::PROPERTY_POP_CK,
+                                ))
+                                .or_insert(ck_info.into());
+
+                            message_ext.set_topic(request_header.topic.clone());
+                            message_ext.set_store_size(0);
+
+                            let encode = message_decoder::encode(&message_ext, false).unwrap();
+                            let tmp_result = SelectMappedBufferResult {
+                                start_offset: maped_buffer.start_offset,
+                                size: encode.len() as i32,
+                                bytes: Some(encode),
+                                ..Default::default()
+                            };
+                            get_message_result.add_message_inner(tmp_result);
+                        }
                     }
                 }
                 self.broker_runtime_inner
@@ -1031,7 +1082,7 @@ where
                         topic,
                         &request_header.consumer_group,
                         queue_id,
-                        result_inner.message_count() as i64,
+                        message_count as i64,
                     );
             }
         }
