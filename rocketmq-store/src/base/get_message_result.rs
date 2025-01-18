@@ -222,8 +222,22 @@ impl GetMessageResult {
     }
 
     #[inline]
+    pub fn add_message_inner(&mut self, maped_buffer: SelectMappedBufferResult) {
+        let slice = maped_buffer.get_buffer();
+        // self.message_buffer_list.push(Bytes::copy_from_slice(slice));
+        self.buffer_total_size += maped_buffer.bytes.as_ref().map_or(0, |b| b.len() as i32);
+        self.message_count += 1;
+        self.message_mapped_list.push(maped_buffer);
+    }
+
+    #[inline]
     pub fn message_mapped_list(&self) -> &[SelectMappedBufferResult] {
         self.message_mapped_list.as_slice()
+    }
+
+    #[inline]
+    pub fn message_mapped_vec(self) -> Vec<SelectMappedBufferResult> {
+        self.message_mapped_list
     }
 
     #[inline]
