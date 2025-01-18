@@ -501,13 +501,10 @@ where
                     )
                     .await;
                 if result.is_none() {
-                    log::warn!(
+                    warn!(
                         "getMessageResult is null, innerConsumerGroupName {}, topic {}, offset \
                          {}, queueId {}",
-                        inner_consumer_group_name,
-                        topic,
-                        offset,
-                        queue_id
+                        inner_consumer_group_name, topic, offset, queue_id
                     );
                     return (None, "getMessageResult is null".to_string(), false);
                 }
@@ -517,7 +514,7 @@ where
                 if list.is_empty() {
                     let need_retry = status.unwrap() == GetMessageStatus::OffsetFoundNull;
                     //   && message_store.is_tiered_message_store();
-                    log::warn!(
+                    warn!(
                         "Can not get msg, topic {}, offset {}, queueId {}, needRetry {},",
                         topic,
                         offset,

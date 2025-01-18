@@ -14,12 +14,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use log::info;
+
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_rust::wait_for_signal;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use tracing::error;
+use tracing::info;
 
 use crate::broker_runtime::BrokerRuntime;
 
