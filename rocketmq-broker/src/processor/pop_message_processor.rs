@@ -411,7 +411,7 @@ where
             let retry_subscription_data = match FilterAPI::build(
                 &retry_topic,
                 &CheetahString::from_static_str(SubscriptionData::SUB_ALL),
-                request_header.exp_type.clone(),
+                Some(CheetahString::from_static_str(ExpressionType::TAG)),
             ) {
                 Ok(value) => value,
                 Err(_) => {
