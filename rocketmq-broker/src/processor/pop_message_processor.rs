@@ -293,6 +293,10 @@ where
             ) {
                 Ok(value) => value,
                 Err(_) => {
+                    warn!(
+                        "Parse the consumer's subscription[{}] error, group: {}",
+                        request_header.exp, request_header.consumer_group
+                    );
                     return Ok(Some(
                         RemotingCommand::create_response_command_with_code_remark(
                             ResponseCode::SubscriptionParseFailed,
@@ -322,6 +326,10 @@ where
             ) {
                 Ok(value) => value,
                 Err(_) => {
+                    warn!(
+                        "Parse the consumer's subscription[{}] error, group: {}",
+                        request_header.exp, request_header.consumer_group
+                    );
                     return Ok(Some(
                         RemotingCommand::create_response_command_with_code_remark(
                             ResponseCode::SubscriptionParseFailed,
@@ -373,8 +381,8 @@ where
         } else {
             let subscription_data = match FilterAPI::build(
                 &request_header.topic,
-                &request_header.exp.clone().unwrap_or_default(),
-                request_header.exp_type.clone(),
+                &CheetahString::from_static_str(SubscriptionData::SUB_ALL),
+                Some(CheetahString::from_static_str(ExpressionType::TAG)),
             ) {
                 Ok(value) => value,
                 Err(_) => {
