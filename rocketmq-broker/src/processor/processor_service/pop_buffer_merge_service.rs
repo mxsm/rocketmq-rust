@@ -69,12 +69,7 @@ pub(crate) struct PopBufferMergeService<MS> {
     count_of_second30: u64,
     batch_ack_index_list: Vec<u8>,
     master: AtomicBool,
-    //broker_config: Arc<BrokerConfig>,
     shutdown: Arc<Notify>,
-    //store_host: SocketAddr,
-    //escape_bridge: ArcMut<EscapeBridge<MS>>,
-    //topic_config_manager: Arc<TopicConfigManager>,
-    // subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
@@ -82,11 +77,6 @@ impl<MS> PopBufferMergeService<MS> {
     pub fn new(
         revive_topic: CheetahString,
         queue_lock_manager: QueueLockManager,
-        /*broker_config: Arc<BrokerConfig>,
-        store_host: SocketAddr,
-        escape_bridge: ArcMut<EscapeBridge<MS>>,
-        topic_config_manager: Arc<TopicConfigManager>,
-        subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,*/
         broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> Self {
         let interval = 5;
@@ -105,12 +95,7 @@ impl<MS> PopBufferMergeService<MS> {
             count_of_second30: 30 * 1000 / interval,
             batch_ack_index_list: Vec::with_capacity(32),
             master: AtomicBool::new(false),
-            // broker_config,
             shutdown: Arc::new(Notify::new()),
-            //  store_host,
-            // escape_bridge,
-            // topic_config_manager,
-            //  subscription_group_manager,
             broker_runtime_inner,
         }
     }
