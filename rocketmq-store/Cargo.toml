@@ -6,9 +6,9 @@ edition.workspace = true
 homepage.workspace = true
 repository.workspace = true
 license.workspace = true
-keywords.workspace = true
-readme.workspace = true
-description.workspace = true
+keywords = ["apache-rocketmq", "rocketmq-rust", "rocketmq-store", "rust", "storage"]
+readme = "README.md"
+description = "Storage layer for Apache RocketMQ in Rust."
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [features]
@@ -53,7 +53,7 @@ cheetah-string = { workspace = true }
 libc = "0.2.169"
 
 [target.'cfg(windows)'.dependencies]
-windows = {version = "0.59.0",features = ["Win32_Security","Win32_System_Memory_NonVolatile"]}
+windows = { version = "0.59.0", features = ["Win32_Security", "Win32_System_Memory_NonVolatile"] }
 
 
 [dev-dependencies]
