@@ -506,6 +506,7 @@ impl MappedFile for DefaultMappedFile {
                     size,
                     mapped_file: None,
                     is_in_cache: true,
+                    ..Default::default()
                 })
             } else {
                 warn!(
@@ -785,6 +786,7 @@ impl MappedFile for DefaultMappedFile {
                 size: read_position - pos,
                 mapped_file: None,
                 is_in_cache: true,
+                ..Default::default()
             })
         } else {
             None
