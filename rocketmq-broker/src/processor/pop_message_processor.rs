@@ -294,7 +294,7 @@ where
                 Ok(value) => value,
                 Err(_) => {
                     warn!(
-                        "Parse the consumer's subscription[{}] error, group: {}",
+                        "Parse the consumer's subscription[{:?}] error, group: {}",
                         request_header.exp, request_header.consumer_group
                     );
                     return Ok(Some(
@@ -327,7 +327,7 @@ where
                 Ok(value) => value,
                 Err(_) => {
                     warn!(
-                        "Parse the consumer's subscription[{}] error, group: {}",
+                        "Parse the consumer's subscription[{:?}] error, group: {}",
                         request_header.exp, request_header.consumer_group
                     );
                     return Ok(Some(
