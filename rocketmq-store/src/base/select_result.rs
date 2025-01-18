@@ -27,6 +27,9 @@ use crate::log_file::mapped_file::MappedFile;
 pub struct SelectMappedBufferResult {
     /// The start offset.
     pub start_offset: u64,
+
+    pub bytes: Option<Bytes>,
+
     /// The size.
     pub size: i32,
     /// The mapped file.
@@ -39,6 +42,7 @@ impl Default for SelectMappedBufferResult {
     fn default() -> Self {
         Self {
             start_offset: 0,
+            bytes: None,
             size: 0,
             mapped_file: None,
             is_in_cache: true,
