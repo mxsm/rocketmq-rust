@@ -64,17 +64,6 @@ use crate::processor::pull_message_result_handler::PullMessageResultHandler;
 
 pub struct PullMessageProcessor<MS> {
     pull_message_result_handler: ArcMut<Box<dyn PullMessageResultHandler>>,
-    /*broker_config: Arc<BrokerConfig>,
-    subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
-    topic_config_manager: Arc<TopicConfigManager>,
-    topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
-    consumer_manager: Arc<ConsumerManager>,
-    consumer_filter_manager: Arc<ConsumerFilterManager>,
-    consumer_offset_manager: Arc<ConsumerOffsetManager>,
-    broadcast_offset_manager: Arc<BroadcastOffsetManager>,
-    message_store: ArcMut<MS>,
-    cold_data_cg_ctr_service: Arc<ColdDataCgCtrService>,
-    broker_outer_api: Arc<BrokerOuterAPI>,*/
     // write message to consume client runtime
     cold_data_cg_ctr_service: Arc<ColdDataCgCtrService>,
     write_message_runtime: Arc<RocketMQRuntime>,
@@ -86,32 +75,11 @@ pub struct PullMessageProcessor<MS> {
 impl<MS: MessageStore> PullMessageProcessor<MS> {
     pub fn new(
         pull_message_result_handler: ArcMut<Box<dyn PullMessageResultHandler>>,
-        /* broker_config: Arc<BrokerConfig>,
-        subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
-        topic_config_manager: Arc<TopicConfigManager>,
-        topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
-        consumer_manager: Arc<ConsumerManager>,
-        consumer_filter_manager: Arc<ConsumerFilterManager>,
-        consumer_offset_manager: Arc<ConsumerOffsetManager>,
-        broadcast_offset_manager: Arc<BroadcastOffsetManager>,
-        message_store: ArcMut<MS>,
-        broker_outer_api: Arc<BrokerOuterAPI>,*/
         broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> Self {
         let cpus = num_cpus::get();
         Self {
             pull_message_result_handler,
-            /* broker_config,
-            subscription_group_manager,
-            topic_config_manager,
-            topic_queue_mapping_manager,
-            consumer_manager,
-            consumer_filter_manager,
-            consumer_offset_manager,
-            broadcast_offset_manager,
-            message_store,
-            cold_data_cg_ctr_service: Arc::new(Default::default()),
-            broker_outer_api,*/
             cold_data_cg_ctr_service: Arc::new(Default::default()),
             write_message_runtime: Arc::new(RocketMQRuntime::new_multi(
                 cpus,
