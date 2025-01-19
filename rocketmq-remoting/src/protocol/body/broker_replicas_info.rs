@@ -21,6 +21,8 @@ use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
+#[derive(Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct BrokerReplicasInfo {
     replicas_info_table: HashMap<CheetahString, ReplicasInfo>,
 }
