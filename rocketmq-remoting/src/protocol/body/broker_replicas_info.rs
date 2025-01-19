@@ -14,12 +14,41 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+use std::collections::HashMap;
 use std::fmt;
 
 use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
+
+#[derive(Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BrokerReplicasInfo {
+    replicas_info_table: HashMap<CheetahString, ReplicasInfo>,
+}
+
+impl BrokerReplicasInfo {
+    pub fn new() -> Self {
+        Self {
+            replicas_info_table: HashMap::new(),
+        }
+    }
+
+    pub fn add_replica_info(&mut self, broker_name: CheetahString, replicas_info: ReplicasInfo) {
+        self.replicas_info_table.insert(broker_name, replicas_info);
+    }
+
+    pub fn get_replicas_info_table(&self) -> &HashMap<CheetahString, ReplicasInfo> {
+        &self.replicas_info_table
+    }
+
+    pub fn set_replicas_info_table(
+        &mut self,
+        replicas_info_table: HashMap<CheetahString, ReplicasInfo>,
+    ) {
+        self.replicas_info_table = replicas_info_table;
+    }
+}
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
 #[serde(rename_all = "camelCase")]
