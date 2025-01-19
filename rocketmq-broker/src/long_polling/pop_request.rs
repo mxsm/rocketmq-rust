@@ -27,10 +27,11 @@ use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_store::filter::MessageFilter;
 
+#[derive(Clone)]
 pub struct PopRequest {
     remoting_command: RemotingCommand,
     ctx: ConnectionHandlerContext,
-    complete: AtomicBool,
+    complete: Arc<AtomicBool>,
     op: i64,
     expired: u64,
     subscription_data: SubscriptionData,
@@ -51,7 +52,7 @@ impl PopRequest {
         PopRequest {
             remoting_command,
             ctx,
-            complete: AtomicBool::new(false),
+            complete: Arc::new(AtomicBool::new(false)),
             op,
             expired,
             subscription_data,

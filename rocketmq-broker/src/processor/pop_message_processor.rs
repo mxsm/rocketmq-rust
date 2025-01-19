@@ -82,7 +82,7 @@ const BORN_TIME: &str = "bornTime";
 
 pub struct PopMessageProcessor<MS> {
     ck_message_number: AtomicI64,
-    pop_long_polling_service: ArcMut<PopLongPollingService>,
+    pop_long_polling_service: ArcMut<PopLongPollingService<MS>>,
     pop_buffer_merge_service: ArcMut<PopBufferMergeService<MS>>,
     queue_lock_manager: QueueLockManager,
     revive_topic: CheetahString,
@@ -101,7 +101,10 @@ impl<MS: MessageStore> PopMessageProcessor<MS> {
         let queue_lock_manager = QueueLockManager::new();
         PopMessageProcessor {
             ck_message_number: Default::default(),
-            pop_long_polling_service: ArcMut::new(PopLongPollingService),
+            pop_long_polling_service: ArcMut::new(PopLongPollingService::new(
+                broker_runtime_inner.clone(),
+                false,
+            )),
             pop_buffer_merge_service: ArcMut::new(PopBufferMergeService::new(
                 revive_topic.clone(),
                 queue_lock_manager.clone(),

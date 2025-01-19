@@ -54,6 +54,9 @@ thiserror = { workspace = true }
 trait-variant = { workspace = true }
 cheetah-string = { workspace = true }
 dashmap = { workspace = true }
+
+crossbeam-skiplist = "0.1"
+
 [dev-dependencies]
 mockall = "0.13.1"
 static_assertions = { version = "1" }
