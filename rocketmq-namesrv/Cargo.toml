@@ -33,7 +33,7 @@ serde_json.workspace = true
 config.workspace = true
 parking_lot.workspace = true
 
-clap = { version = "4.5.26", features = ["derive"] }
+clap = { version = "4.5.27", features = ["derive"] }
 cheetah-string = { workspace = true }
 thiserror = { workspace = true }
 
