@@ -475,7 +475,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
                         if this.scan_times % this.count_of_second30 == 0 {
                             this.mut_from_ref().scan_garbage();
                         }
-                        tokio::time::sleep(tokio::time::Duration::from_millis(this.interval)).await;
+                        tokio::time::sleep(tokio::time::Duration::from_millis(interval)).await;
                         if !this.serving.load(Ordering::Acquire) && this.buffer.is_empty()  && this.get_offset_total_size() == 0 {
                             this.serving.store(true,Ordering::Release);
                         }
