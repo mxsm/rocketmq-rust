@@ -496,7 +496,8 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
 
     fn scan_commit_offset(&self) -> i32 {
         // Implement the logic to scan commit offset
-        unimplemented!()
+        warn!("scan_commit_offset not implemented");
+        0
     }
 
     pub fn add_ck_mock(
