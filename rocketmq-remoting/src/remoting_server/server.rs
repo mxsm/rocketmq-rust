@@ -20,7 +20,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures::SinkExt;
 use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_rust::wait_for_signal;
 use rocketmq_rust::ArcMut;
@@ -30,7 +29,6 @@ use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::Semaphore;
 use tokio::time;
-use tokio_stream::StreamExt;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -113,7 +111,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
         while !self.shutdown.is_shutdown {
             //Get the next frame from the connection.
             let frame = tokio::select! {
-                res = self.connection_handler_context.channel.connection.reader.next() => res,
+                res = self.connection_handler_context.channel.connection.receive_command() => res,
                 _ = self.shutdown.recv() =>{
                     //If a shutdown signal is received, return from `handle`.
                     self.channel.connection_mut().ok = false;
@@ -184,7 +182,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
             }
             let response = response.unwrap();
             tokio::select! {
-                result =self.connection_handler_context.channel.connection.writer.send(response.set_opaque(opaque)) => match result{
+                result =self.connection_handler_context.channel.connection.send_command(response.set_opaque(opaque)) => match result{
                     Ok(_) =>{},
                     Err(err) => {
                         match err {
@@ -216,7 +214,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                     let response =
                         RemotingCommand::create_response_command_with_code_remark(code, message);
                     tokio::select! {
-                        result =self.connection_handler_context.channel.connection.writer.send(response.set_opaque(opaque)) => match result{
+                        result =self.connection_handler_context.channel.connection.send_command(response.set_opaque(opaque)) => match result{
                             Ok(_) =>{},
                             Err(err) => {
                                 match err {
@@ -237,7 +235,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                             exception_inner.to_string(),
                         );
                         tokio::select! {
-                            result =self.connection_handler_context.channel.connection.writer.send(response.set_opaque(opaque)) => match result{
+                            result =self.connection_handler_context.channel.connection.send_command(response.set_opaque(opaque)) => match result{
                                 Ok(_) =>{},
                                 Err(err) => {
                                     match err {

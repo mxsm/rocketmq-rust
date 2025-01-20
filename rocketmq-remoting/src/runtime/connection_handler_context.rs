@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use futures_util::SinkExt;
+
 use rocketmq_rust::WeakArcMut;
 use tracing::error;
 
@@ -44,7 +44,7 @@ impl ConnectionHandlerContextWrapper {
     }
 
     pub async fn write(&mut self, cmd: RemotingCommand) {
-        match self.channel.connection_mut().writer.send(cmd).await {
+        match self.channel.connection_mut().send_command(cmd).await {
             Ok(_) => {}
             Err(error) => {
                 error!("send response failed: {}", error);
