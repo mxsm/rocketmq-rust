@@ -23,7 +23,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures_util::SinkExt;
 use rocketmq_rust::ArcMut;
 use tokio::sync::mpsc::Receiver;
 use tokio::time::timeout;
@@ -67,7 +66,7 @@ pub(crate) async fn run_send(
                 ResponseFuture::new(opaque, timeout_millis.unwrap_or(0), true, tx),
             );
         }
-        match connection.writer.send(request).await {
+        match connection.send_command(request).await {
             Ok(_) => {}
             Err(error) => match error {
                 Io(error) => {

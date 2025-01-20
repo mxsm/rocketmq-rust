@@ -17,14 +17,18 @@
 use std::hash::Hash;
 use std::hash::Hasher;
 
+use bytes::BufMut;
+use bytes::BytesMut;
 use futures_util::stream::SplitSink;
 use futures_util::stream::SplitStream;
+use futures_util::SinkExt;
 use futures_util::StreamExt;
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
-use crate::codec::remoting_command_codec::RemotingCommandCodec;
+use crate::codec::remoting_command_codec::CompositeCodec;
 use crate::protocol::remoting_command::RemotingCommand;
+use crate::remoting_error::RemotingError;
 
 /// Send and receive `Frame` values from a remote peer.
 ///
@@ -42,8 +46,8 @@ pub struct Connection {
     /// The `Framed` instance used for reading from and writing to the TCP stream.
     /// It leverages the `RemotingCommandCodec` for encoding and decoding frames.
     //pub(crate) framed: Framed<TcpStream, RemotingCommandCodec>,
-    pub(crate) writer: SplitSink<Framed<TcpStream, RemotingCommandCodec>, RemotingCommand>,
-    pub(crate) reader: SplitStream<Framed<TcpStream, RemotingCommandCodec>>,
+    writer: SplitSink<Framed<TcpStream, CompositeCodec>, BytesMut>,
+    reader: SplitStream<Framed<TcpStream, CompositeCodec>>,
 
     /// A boolean flag indicating the current state of the connection.
     /// `true` means the connection is in a good state, while `false` indicates
@@ -58,13 +62,10 @@ impl Hash for Connection {
 
         // Use the addr: *const _ess of writer and reader to hash them (they serve as a unique
         // identifier for these components)
-        let writer_addr: *const SplitSink<
-            Framed<TcpStream, RemotingCommandCodec>,
-            RemotingCommand,
-        > = &self.writer
-            as *const SplitSink<Framed<TcpStream, RemotingCommandCodec>, RemotingCommand>;
-        let reader_addr: *const SplitStream<Framed<TcpStream, RemotingCommandCodec>> =
-            &self.reader as *const SplitStream<Framed<TcpStream, RemotingCommandCodec>>;
+        let writer_addr: *const SplitSink<Framed<TcpStream, CompositeCodec>, BytesMut> =
+            &self.writer as *const SplitSink<Framed<TcpStream, CompositeCodec>, BytesMut>;
+        let reader_addr: *const SplitStream<Framed<TcpStream, CompositeCodec>> =
+            &self.reader as *const SplitStream<Framed<TcpStream, CompositeCodec>>;
 
         writer_addr.hash(state);
         reader_addr.hash(state);
@@ -95,7 +96,7 @@ impl Connection {
     ///
     /// A new `Connection` instance.
     pub fn new(tcp_stream: TcpStream) -> Connection {
-        let framed = Framed::with_capacity(tcp_stream, RemotingCommandCodec::new(), 1024 * 4);
+        let framed = Framed::with_capacity(tcp_stream, CompositeCodec::new(), 1024 * 4);
         let (writer, reader) = framed.split();
         Self {
             writer,
@@ -103,17 +104,45 @@ impl Connection {
             ok: true,
         }
     }
-}
 
-impl Connection {
-    /*pub fn framed(&self) -> &Framed<TcpStream, RemotingCommandCodec> {
-        &self.framed
-    }*/
-    pub fn reader(&self) -> &SplitStream<Framed<TcpStream, RemotingCommandCodec>> {
+    #[inline]
+    pub fn reader(&self) -> &SplitStream<Framed<TcpStream, CompositeCodec>> {
         &self.reader
     }
 
-    pub fn writer(&self) -> &SplitSink<Framed<TcpStream, RemotingCommandCodec>, RemotingCommand> {
+    #[inline]
+    pub fn writer(&self) -> &SplitSink<Framed<TcpStream, CompositeCodec>, BytesMut> {
         &self.writer
+    }
+
+    /// Receives a `RemotingCommand` from the connection.
+    ///
+    /// # Returns
+    ///
+    /// A result containing the received command or an error.
+    pub async fn receive_command(&mut self) -> Option<Result<RemotingCommand, RemotingError>> {
+        self.reader.next().await
+    }
+
+    /// Sends a `RemotingCommand` over the connection.
+    ///
+    /// # Arguments
+    ///
+    /// * `command` - The `RemotingCommand` to send.
+    ///
+    /// # Returns
+    ///
+    /// A result indicating success or failure.
+    pub async fn send_command(
+        &mut self,
+        mut command: RemotingCommand,
+    ) -> Result<(), RemotingError> {
+        let mut dst = BytesMut::new();
+        command.fast_header_encode(&mut dst);
+        if let Some(body_inner) = command.get_body() {
+            dst.put(body_inner.as_ref());
+        }
+        self.writer.send(dst).await?;
+        Ok(())
     }
 }

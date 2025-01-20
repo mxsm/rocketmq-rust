@@ -16,8 +16,6 @@
  */
 use std::collections::HashMap;
 
-use futures_util::SinkExt;
-use futures_util::StreamExt;
 use rocketmq_rust::ArcMut;
 use tokio::sync::mpsc::Receiver;
 use tracing::error;
@@ -71,7 +69,7 @@ async fn run_send(mut client: ArcMut<ClientInner>, mut rx: Receiver<SendMessage>
 }
 
 async fn run_recv<PR: RequestProcessor>(mut client: ArcMut<ClientInner>, mut processor: PR) {
-    while let Some(response) = client.ctx.channel.connection.reader.next().await {
+    while let Some(response) = client.ctx.channel.connection.receive_command().await {
         match response {
             Ok(msg) => match msg.get_type() {
                 // handle request
@@ -193,7 +191,7 @@ impl ClientInner {
                 ResponseFuture::new(opaque, timeout_millis.unwrap_or(0), true, tx),
             );
         }
-        match self.ctx.channel.connection.writer.send(request).await {
+        match self.ctx.channel.connection.send_command(request).await {
             Ok(_) => Ok(()),
             Err(error) => match error {
                 Io(value) => {
@@ -326,7 +324,7 @@ impl Client {
     /// The `RemotingCommand` representing the response, wrapped in a `Result`. Returns an error if
     /// reading the response fails.
     async fn read(&mut self) -> Result<RemotingCommand> {
-        match self.inner.ctx.channel.connection.reader.next().await {
+        match self.inner.ctx.channel.connection.receive_command().await {
             None => {
                 self.inner.ctx.channel.connection.ok = false;
                 Err(ConnectionInvalid("connection disconnection".to_string()))
