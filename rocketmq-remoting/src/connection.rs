@@ -53,6 +53,8 @@ pub struct Connection {
     /// `true` means the connection is in a good state, while `false` indicates
     /// there are issues with the connection.
     pub(crate) ok: bool,
+
+    buf: BytesMut,
 }
 
 impl Hash for Connection {
@@ -102,6 +104,7 @@ impl Connection {
             writer,
             reader,
             ok: true,
+            buf: BytesMut::with_capacity(4096),
         }
     }
 
@@ -137,12 +140,12 @@ impl Connection {
         &mut self,
         mut command: RemotingCommand,
     ) -> Result<(), RemotingError> {
-        let mut dst = BytesMut::new();
-        command.fast_header_encode(&mut dst);
+        self.buf.clear();
+        command.fast_header_encode(&mut self.buf);
         if let Some(body_inner) = command.get_body() {
-            dst.put(body_inner.as_ref());
+            self.buf.put(body_inner.as_ref());
         }
-        self.writer.send(dst).await?;
+        self.writer.send(self.buf.clone()).await?;
         Ok(())
     }
 }
