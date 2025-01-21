@@ -121,8 +121,8 @@ impl Encoder<RemotingCommand> for RemotingCommandCodec {
     fn encode(&mut self, item: RemotingCommand, dst: &mut BytesMut) -> Result<(), Self::Error> {
         let mut item = item;
         item.fast_header_encode(dst);
-        if let Some(body_inner) = item.get_body() {
-            dst.put(body_inner.as_ref());
+        if let Some(body_inner) = item.take_body() {
+            dst.put(body_inner);
         }
         Ok(())
     }

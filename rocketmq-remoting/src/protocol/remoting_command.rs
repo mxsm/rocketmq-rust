@@ -599,6 +599,7 @@ impl RemotingCommand {
         &self.body
     }
 
+    #[inline]
     pub fn take_body(&mut self) -> Option<Bytes> {
         self.body.take()
     }
