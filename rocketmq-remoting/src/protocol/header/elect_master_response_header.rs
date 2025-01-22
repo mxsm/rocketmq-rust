@@ -1,6 +1,3 @@
-use std::collections::HashMap;
-
-use cheetah_string::CheetahString;
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
@@ -17,10 +14,11 @@ use cheetah_string::CheetahString;
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::collections::HashMap;
+use cheetah_string::CheetahString;
 use serde::{Serialize, Deserialize};
 
 use crate::protocol::command_custom_header::{CommandCustomHeader, FromMap};
-
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
