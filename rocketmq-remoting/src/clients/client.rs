@@ -31,6 +31,7 @@ use crate::protocol::RemotingCommandType;
 use crate::remoting_error::RemotingError::ConnectionInvalid;
 use crate::remoting_error::RemotingError::Io;
 use crate::remoting_error::RemotingError::RemoteError;
+use crate::runtime::connection_handler_context::ConnectionHandlerContext;
 use crate::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 use crate::runtime::processor::RequestProcessor;
 use crate::Result;
@@ -52,7 +53,7 @@ pub struct Client {
 struct ClientInner {
     response_table: ArcMut<HashMap<i32, ResponseFuture>>,
     channel: Channel,
-    ctx: ArcMut<ConnectionHandlerContextWrapper>,
+    ctx: ConnectionHandlerContext,
     tx: tokio::sync::mpsc::Sender<SendMessage>,
 }
 
@@ -76,11 +77,7 @@ async fn run_recv<PR: RequestProcessor>(mut client: ArcMut<ClientInner>, mut pro
                 RemotingCommandType::REQUEST => {
                     let opaque = msg.opaque();
                     let process_result = processor
-                        .process_request(
-                            client.channel.clone(),
-                            ArcMut::downgrade(&client.ctx),
-                            msg,
-                        )
+                        .process_request(client.channel.clone(), client.ctx.clone(), msg)
                         .await;
                     match process_result {
                         Ok(response) => {

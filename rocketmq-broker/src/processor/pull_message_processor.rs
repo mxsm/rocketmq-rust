@@ -841,7 +841,7 @@ where
         &self,
         mut pull_message_processor: ArcMut<PullMessageProcessor<MS>>,
         channel: Channel,
-        ctx: ConnectionHandlerContext,
+        mut ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) {
         let lock = Arc::clone(&self.write_message_lock);
@@ -863,14 +863,10 @@ where
 
             if let Some(response) = response {
                 let command = response.set_opaque(opaque).mark_response_type();
-                match ctx.upgrade() {
-                    None => {}
-                    Some(mut ctx) => {
-                        let guard = lock.lock().await;
-                        ctx.write(command).await;
-                        drop(guard);
-                    }
-                }
+
+                let guard = lock.lock().await;
+                ctx.write(command).await;
+                drop(guard);
             }
         });
     }

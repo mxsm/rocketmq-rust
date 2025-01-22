@@ -40,6 +40,7 @@ use crate::net::channel::Channel;
 use crate::protocol::remoting_command::RemotingCommand;
 use crate::protocol::RemotingCommandType;
 use crate::remoting_error::RemotingError;
+use crate::runtime::connection_handler_context::ConnectionHandlerContext;
 use crate::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 use crate::runtime::processor::RequestProcessor;
 use crate::runtime::RPCHook;
@@ -56,7 +57,7 @@ type Rx = mpsc::UnboundedReceiver<RemotingCommand>;
 
 pub struct ConnectionHandler<RP> {
     request_processor: RP,
-    connection_handler_context: ArcMut<ConnectionHandlerContextWrapper>,
+    connection_handler_context: ConnectionHandlerContext,
     channel: Channel,
     shutdown: Shutdown,
     _shutdown_complete: mpsc::Sender<()>,
@@ -156,7 +157,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
 
             let mut response = {
                 let channel = self.channel.clone();
-                let ctx = ArcMut::downgrade(&self.connection_handler_context);
+                let ctx = self.connection_handler_context.clone();
                 tokio::select! {
                     result = self.request_processor.process_request(channel,ctx,cmd) =>  match result{
                         Ok(value) => value,

@@ -109,7 +109,7 @@ where
     pub async fn process_request(
         &mut self,
         channel: Channel,
-        ctx: ConnectionHandlerContext,
+        mut ctx: ConnectionHandlerContext,
         request_code: RequestCode,
         request: RemotingCommand,
     ) -> crate::Result<Option<RemotingCommand>> {
@@ -149,7 +149,7 @@ where
                     //handle single message
                     self.send_message(
                         &channel,
-                        &ctx,
+                        &mut ctx,
                         request,
                         send_message_context,
                         request_header,
@@ -161,7 +161,7 @@ where
                     //handle batch message
                     self.send_batch_message(
                         &channel,
-                        &ctx,
+                        &mut ctx,
                         request,
                         send_message_context,
                         request_header,
@@ -220,7 +220,7 @@ where
     async fn send_batch_message<F>(
         &mut self,
         channel: &Channel,
-        ctx: &ConnectionHandlerContext,
+        ctx: &mut ConnectionHandlerContext,
         request: RemotingCommand,
         mut send_message_context: SendMessageContext,
         request_header: SendMessageRequestHeader,
@@ -454,7 +454,7 @@ where
     async fn send_message<F>(
         &mut self,
         channel: &Channel,
-        ctx: &ConnectionHandlerContext,
+        ctx: &mut ConnectionHandlerContext,
         request: RemotingCommand,
         mut send_message_context: SendMessageContext,
         request_header: SendMessageRequestHeader,
@@ -680,7 +680,7 @@ where
         topic: &str,
         transaction_id: Option<CheetahString>,
         send_message_context: &mut SendMessageContext,
-        ctx: &ConnectionHandlerContext,
+        ctx: &mut ConnectionHandlerContext,
         queue_id_int: i32,
         begin_time_millis: Instant,
         mapping_context: &mut TopicQueueMappingContext,
@@ -844,9 +844,9 @@ where
             let msg_id = response_header.msg_id().to_string();
             let queue_id = Some(response_header.queue_id());
             let queue_offset = Some(response_header.queue_offset());
-            if let Some(mut ctx) = ctx.upgrade() {
-                ctx.write(response.set_opaque(request.opaque())).await;
-            }
+
+            ctx.write(response.set_opaque(request.opaque())).await;
+
             if self.has_send_message_hook() {
                 send_message_context.msg_id = CheetahString::from_string(msg_id);
                 send_message_context.queue_id = queue_id;

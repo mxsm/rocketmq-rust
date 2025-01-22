@@ -200,8 +200,6 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
                         get_message_result.message_count(),
                     );
 
-                ctx.upgrade()?;
-
                 if self
                     .broker_runtime_inner
                     .broker_config()
