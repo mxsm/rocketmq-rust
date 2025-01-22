@@ -201,6 +201,8 @@ pub struct BrokerConfig {
     pub broker_not_active_timeout_millis: i64,
     pub sync_broker_member_group_period: u64,
     pub pop_polling_map_size: usize,
+    pub max_pop_polling_size: u64,
+    pub pop_polling_size: usize,
 }
 
 impl Default for BrokerConfig {
@@ -307,6 +309,8 @@ impl Default for BrokerConfig {
             broker_not_active_timeout_millis: 10_000,
             sync_broker_member_group_period: 1_000,
             pop_polling_map_size: 100000,
+            max_pop_polling_size: 100000,
+            pop_polling_size: 1024,
         }
     }
 }
