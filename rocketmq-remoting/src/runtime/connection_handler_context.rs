@@ -55,6 +55,10 @@ impl ConnectionHandlerContextWrapper {
     pub fn channel(&self) -> &Channel {
         &self.channel
     }
+
+    pub fn channel_mut(&mut self) -> &mut Channel {
+        &mut self.channel
+    }
 }
 
 impl AsRef<ConnectionHandlerContextWrapper> for ConnectionHandlerContextWrapper {

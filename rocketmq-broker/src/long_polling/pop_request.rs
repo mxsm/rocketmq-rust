@@ -60,13 +60,12 @@ impl PopRequest {
         }
     }
 
-    //need to implement and optimize
     pub fn get_channel(&self) -> &Channel {
-        unimplemented!("PopRequest::get_channel")
+        self.ctx.upgrade().expect("ctx is none").channel()
     }
 
     pub fn get_channel_mut(&mut self) -> &mut Channel {
-        unimplemented!("PopRequest::get_channel")
+        self.ctx.upgrade().expect("ctx is none").channel_mut()
     }
 
     pub fn get_ctx(&self) -> &ConnectionHandlerContext {
