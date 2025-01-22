@@ -56,6 +56,7 @@ use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
@@ -82,7 +83,7 @@ const BORN_TIME: &str = "bornTime";
 
 pub struct PopMessageProcessor<MS> {
     ck_message_number: AtomicI64,
-    pop_long_polling_service: ArcMut<PopLongPollingService<MS>>,
+    pop_long_polling_service: ArcMut<PopLongPollingService<MS, PopMessageProcessor<MS>>>,
     pop_buffer_merge_service: ArcMut<PopBufferMergeService<MS>>,
     queue_lock_manager: QueueLockManager,
     revive_topic: CheetahString,
@@ -118,6 +119,40 @@ impl<MS: MessageStore> PopMessageProcessor<MS> {
         }
     }
 
+    pub fn new_arc_mut(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> ArcMut<Self> {
+        let revive_topic = CheetahString::from_string(PopAckConstants::build_cluster_revive_topic(
+            broker_runtime_inner
+                .broker_config()
+                .broker_identity
+                .broker_cluster_name
+                .as_str(),
+        ));
+        let queue_lock_manager = QueueLockManager::new();
+        let processor = PopMessageProcessor {
+            ck_message_number: Default::default(),
+            pop_long_polling_service: ArcMut::new(PopLongPollingService::new(
+                broker_runtime_inner.clone(),
+                false,
+            )),
+            pop_buffer_merge_service: ArcMut::new(PopBufferMergeService::new(
+                revive_topic.clone(),
+                queue_lock_manager.clone(),
+                broker_runtime_inner.clone(),
+            )),
+
+            queue_lock_manager,
+            revive_topic,
+
+            broker_runtime_inner,
+        };
+        let mut processor_inner = ArcMut::new(processor);
+        let cloned = processor_inner.clone();
+        processor_inner
+            .pop_long_polling_service
+            .set_processor(cloned);
+        processor_inner
+    }
+
     pub fn start(&mut self) {
         self.pop_long_polling_service.start();
         PopBufferMergeService::start(self.pop_buffer_merge_service.clone());
@@ -125,11 +160,28 @@ impl<MS: MessageStore> PopMessageProcessor<MS> {
     }
 }
 
+impl<MS> RequestProcessor for PopMessageProcessor<MS>
+where
+    MS: MessageStore,
+{
+    async fn process_request(
+        &mut self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: RemotingCommand,
+    ) -> rocketmq_remoting::Result<Option<RemotingCommand>> {
+        let request_code = RequestCode::from(request.code());
+        self._process_request(channel, ctx, request_code, request)
+            .await
+            .map_err(Into::into)
+    }
+}
+
 impl<MS> PopMessageProcessor<MS>
 where
     MS: MessageStore,
 {
-    pub async fn process_request(
+    pub async fn _process_request(
         &mut self,
         channel: Channel,
         ctx: ConnectionHandlerContext,
