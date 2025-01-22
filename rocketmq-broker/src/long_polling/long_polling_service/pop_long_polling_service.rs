@@ -22,7 +22,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use crossbeam_skiplist::SkipMap;
 use crossbeam_skiplist::SkipSet;
 use dashmap::DashMap;
 use rocketmq_common::common::key_builder::KeyBuilder;
@@ -42,8 +41,8 @@ use crate::long_polling::pop_request::PopRequest;
 
 pub(crate) struct PopLongPollingService<MS> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-    topic_cid_map: DashMap<CheetahString, DashMap<String, u8>>,
-    polling_map: SkipMap<CheetahString, SkipSet<PopRequest>>,
+    topic_cid_map: DashMap<CheetahString, DashMap<CheetahString, u8>>,
+    polling_map: DashMap<CheetahString, SkipSet<PopRequest>>,
     last_clean_time: u64,
     total_polling_num: AtomicU64,
     notify_last: bool,
@@ -56,7 +55,7 @@ impl<MS: MessageStore> PopLongPollingService<MS> {
             topic_cid_map: DashMap::with_capacity(
                 broker_runtime_inner.broker_config().pop_polling_map_size,
             ),
-            polling_map: SkipMap::new(),
+            polling_map: DashMap::new(),
             last_clean_time: 0,
             total_polling_num: AtomicU64::new(0),
             notify_last,
@@ -123,7 +122,56 @@ impl<MS: MessageStore> PopLongPollingService<MS> {
         subscription_data: SubscriptionData,
         message_filter: Option<Arc<Box<dyn MessageFilter>>>,
     ) -> PollingResult {
-        unimplemented!("PopLongPollingService::polling")
+        //this method may be need to optimize
+
+        if request_header.get_poll_time() <= 0 {
+            return PollingResult::NotPolling;
+        }
+
+        let cids = self
+            .topic_cid_map
+            .entry(request_header.get_topic().clone())
+            .or_default();
+        cids.entry(request_header.get_consumer_group().clone())
+            .or_insert(u8::MIN);
+
+        let expired = request_header.get_born_time() + request_header.get_poll_time();
+        let request = PopRequest::new(
+            remoting_command.clone(),
+            ctx.clone(),
+            expired as u64,
+            subscription_data,
+            message_filter.unwrap(),
+        );
+
+        if self.total_polling_num.load(Ordering::SeqCst)
+            >= self
+                .broker_runtime_inner
+                .broker_config()
+                .max_pop_polling_size
+        {
+            return PollingResult::PollingFull;
+        }
+
+        if request.is_timeout() {
+            return PollingResult::PollingTimeout;
+        }
+
+        let key = CheetahString::from_string(KeyBuilder::build_polling_key(
+            request_header.get_topic(),
+            request_header.get_consumer_group(),
+            request_header.get_queue_id(),
+        ));
+        let queue = self.polling_map.entry(key).or_default();
+        if queue.len() > self.broker_runtime_inner.broker_config().pop_polling_size {
+            return PollingResult::PollingFull;
+        }
+
+        queue.insert(request);
+
+        remoting_command.set_suspended(true);
+        self.total_polling_num.fetch_add(1, Ordering::SeqCst);
+        PollingResult::PollingSuc
     }
 
     pub fn wake_up(&self, pop_request: PopRequest) -> bool {
