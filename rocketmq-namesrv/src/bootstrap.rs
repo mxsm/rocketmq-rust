@@ -56,6 +56,7 @@ struct NameServerRuntime {
 }
 
 impl NameServerBootstrap {
+    #[inline]
     pub async fn boot(mut self) {
         let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
         self.name_server_runtime.shutdown_rx = Some(shutdown_rx);
@@ -77,6 +78,7 @@ async fn wait_for_signal_inner(shutdown_tx: broadcast::Sender<()>) {
 }
 
 impl NameServerRuntime {
+    #[inline]
     pub async fn start(&mut self) {
         let (notify_conn_disconnect, _) = broadcast::channel::<SocketAddr>(100);
         let receiver = notify_conn_disconnect.subscribe();
@@ -106,6 +108,7 @@ impl NameServerRuntime {
         }
     }
 
+    #[inline]
     fn shutdown(&mut self) {
         if let Some(runtime) = self.name_server_runtime.take() {
             runtime.shutdown();
@@ -117,6 +120,7 @@ impl NameServerRuntime {
         info!("Rocketmq NameServer(Rust) gracefully shutdown completed");
     }
 
+    #[inline]
     fn init_processors(
         &self,
         receiver: broadcast::Receiver<SocketAddr>,
@@ -150,6 +154,7 @@ impl NameServerRuntime {
 }
 
 impl Drop for NameServerRuntime {
+    #[inline]
     fn drop(&mut self) {
         // if let Some(runtime) = self.name_server_runtime.take() {
         //     runtime.shutdown();
@@ -158,12 +163,14 @@ impl Drop for NameServerRuntime {
 }
 
 impl Default for Builder {
+    #[inline]
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl Builder {
+    #[inline]
     pub fn new() -> Self {
         Builder {
             name_server_config: None,
@@ -171,16 +178,19 @@ impl Builder {
         }
     }
 
+    #[inline]
     pub fn set_name_server_config(mut self, name_server_config: NamesrvConfig) -> Self {
         self.name_server_config = Some(name_server_config);
         self
     }
 
+    #[inline]
     pub fn set_server_config(mut self, server_config: ServerConfig) -> Self {
         self.server_config = Some(server_config);
         self
     }
 
+    #[inline]
     pub fn build(self) -> NameServerBootstrap {
         let name_server_config = self.name_server_config.unwrap_or_default();
         let runtime = RocketMQRuntime::new_multi(10, "namesrv-thread");
@@ -215,6 +225,7 @@ impl Builder {
     }
 }
 
+#[inline]
 pub(crate) struct NameServerRuntimeInner {
     name_server_config: NamesrvConfig,
     tokio_client_config: TokioClientConfig,
