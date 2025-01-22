@@ -66,15 +66,13 @@ impl ProducerManager {
         let channel_table = mutex_guard.get_mut(group);
         if let Some(ct) = channel_table {
             if !ct.is_empty() {
-                if let Some(ctx) = ctx.upgrade() {
-                    let old = ct.remove(ctx.channel());
-                    //let old = ct.remove(client_channel_info.channel());
-                    if old.is_some() {
-                        info!(
-                            "unregister a producer[{}] from groupChannelTable {:?}",
-                            group, client_channel_info
-                        );
-                    }
+                let old = ct.remove(ctx.channel());
+                //let old = ct.remove(client_channel_info.channel());
+                if old.is_some() {
+                    info!(
+                        "unregister a producer[{}] from groupChannelTable {:?}",
+                        group, client_channel_info
+                    );
                 }
             }
             if ct.is_empty() {

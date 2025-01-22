@@ -15,14 +15,14 @@
  * limitations under the License.
  */
 
-use rocketmq_rust::WeakArcMut;
+use rocketmq_rust::ArcMut;
 use tracing::error;
 
 use crate::connection::Connection;
 use crate::net::channel::Channel;
 use crate::protocol::remoting_command::RemotingCommand;
 
-pub type ConnectionHandlerContext = WeakArcMut<ConnectionHandlerContextWrapper>;
+pub type ConnectionHandlerContext = ArcMut<ConnectionHandlerContextWrapper>;
 
 #[derive(Hash, Eq, PartialEq)]
 pub struct ConnectionHandlerContextWrapper {
