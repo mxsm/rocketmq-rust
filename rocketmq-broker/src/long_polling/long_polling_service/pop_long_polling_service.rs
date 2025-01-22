@@ -28,10 +28,12 @@ use rocketmq_common::common::key_builder::KeyBuilder;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::consume_queue::consume_queue_ext::CqExtUnit;
 use rocketmq_store::filter::MessageFilter;
 use rocketmq_store::log_file::MessageStore;
+use tracing::error;
 use tracing::warn;
 
 use crate::broker_runtime::BrokerRuntimeInner;
@@ -39,16 +41,17 @@ use crate::long_polling::polling_header::PollingHeader;
 use crate::long_polling::polling_result::PollingResult;
 use crate::long_polling::pop_request::PopRequest;
 
-pub(crate) struct PopLongPollingService<MS> {
+pub(crate) struct PopLongPollingService<MS, RP> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     topic_cid_map: DashMap<CheetahString, DashMap<CheetahString, u8>>,
     polling_map: DashMap<CheetahString, SkipSet<PopRequest>>,
     last_clean_time: u64,
     total_polling_num: AtomicU64,
     notify_last: bool,
+    processor: Option<ArcMut<RP>>,
 }
 
-impl<MS: MessageStore> PopLongPollingService<MS> {
+impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingService<MS, RP> {
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>, notify_last: bool) -> Self {
         Self {
             // 100000 topic default,  100000 lru topic + cid + qid
@@ -60,6 +63,7 @@ impl<MS: MessageStore> PopLongPollingService<MS> {
             total_polling_num: AtomicU64::new(0),
             notify_last,
             broker_runtime_inner,
+            processor: None,
         }
     }
 
@@ -174,8 +178,37 @@ impl<MS: MessageStore> PopLongPollingService<MS> {
         PollingResult::PollingSuc
     }
 
-    pub fn wake_up(&self, pop_request: PopRequest) -> bool {
-        unimplemented!("PopLongPollingService::wake_up")
+    pub fn wake_up(&self, mut pop_request: PopRequest) -> bool {
+        if !pop_request.complete() {
+            return false;
+        }
+        match self.processor.clone() {
+            None => false,
+            Some(mut processor) => {
+                tokio::spawn(async move {
+                    let channel = pop_request.get_channel().clone();
+                    let ctx = pop_request.get_ctx().clone();
+                    let opaque = pop_request.get_remoting_command().opaque();
+                    let response = processor
+                        .process_request(channel, ctx, pop_request.get_remoting_command().clone())
+                        .await;
+                    match response {
+                        Ok(result) => {
+                            if let Some(response) = result {
+                                let _ = pop_request
+                                    .get_channel_mut()
+                                    .send_one_way(response.set_opaque(opaque), 1000)
+                                    .await;
+                            }
+                        }
+                        Err(e) => {
+                            error!("ExecuteRequestWhenWakeup run {}", e);
+                        }
+                    }
+                });
+                true
+            }
+        }
     }
 
     fn poll_remoting_commands(
@@ -207,5 +240,9 @@ impl<MS: MessageStore> PopLongPollingService<MS> {
             }
         }
         pop_request
+    }
+
+    pub fn set_processor(&mut self, processor: ArcMut<RP>) {
+        self.processor = Some(processor);
     }
 }

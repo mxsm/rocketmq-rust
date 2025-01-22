@@ -65,6 +65,10 @@ impl PopRequest {
         unimplemented!("PopRequest::get_channel")
     }
 
+    pub fn get_channel_mut(&mut self) -> &mut Channel {
+        unimplemented!("PopRequest::get_channel")
+    }
+
     pub fn get_ctx(&self) -> &ConnectionHandlerContext {
         &self.ctx
     }

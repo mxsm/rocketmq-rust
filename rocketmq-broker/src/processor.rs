@@ -188,11 +188,15 @@ where
             }
 
             RequestCode::PopMessage => {
+                /*return self
+                .pop_message_processor
+                .process_request(channel, ctx, request_code, request)
+                .await
+                .map_err(Into::into);*/
                 return self
                     .pop_message_processor
-                    .process_request(channel, ctx, request_code, request)
-                    .await
-                    .map_err(Into::into);
+                    .process_request(channel, ctx, request)
+                    .await;
             }
             _ => {
                 self.admin_broker_processor
