@@ -154,7 +154,7 @@ impl<MS: MessageStore> PopMessageProcessor<MS> {
     }
 
     pub fn start(&mut self) {
-        self.pop_long_polling_service.start();
+        PopLongPollingService::start(self.pop_long_polling_service.clone());
         PopBufferMergeService::start(self.pop_buffer_merge_service.clone());
         self.queue_lock_manager.start();
     }
