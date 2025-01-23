@@ -56,7 +56,6 @@ struct NameServerRuntime {
 }
 
 impl NameServerBootstrap {
-    #[inline]
     pub async fn boot(mut self) {
         let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
         self.name_server_runtime.shutdown_rx = Some(shutdown_rx);
@@ -67,6 +66,7 @@ impl NameServerBootstrap {
     }
 }
 
+#[inline]
 async fn wait_for_signal_inner(shutdown_tx: broadcast::Sender<()>) {
     tokio::select! {
         _ = wait_for_signal() => {
@@ -78,7 +78,6 @@ async fn wait_for_signal_inner(shutdown_tx: broadcast::Sender<()>) {
 }
 
 impl NameServerRuntime {
-    #[inline]
     pub async fn start(&mut self) {
         let (notify_conn_disconnect, _) = broadcast::channel::<SocketAddr>(100);
         let receiver = notify_conn_disconnect.subscribe();
@@ -225,7 +224,6 @@ impl Builder {
     }
 }
 
-#[inline]
 pub(crate) struct NameServerRuntimeInner {
     name_server_config: NamesrvConfig,
     tokio_client_config: TokioClientConfig,
