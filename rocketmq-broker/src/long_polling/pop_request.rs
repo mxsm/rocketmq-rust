@@ -27,7 +27,6 @@ use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_store::filter::MessageFilter;
 
-#[derive(Clone)]
 pub struct PopRequest {
     remoting_command: RemotingCommand,
     ctx: ConnectionHandlerContext,

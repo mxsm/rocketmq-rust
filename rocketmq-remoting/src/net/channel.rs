@@ -232,11 +232,7 @@ impl Channel {
         }
     }
 
-    pub async fn send_one_way(
-        &mut self,
-        request: RemotingCommand,
-        timeout_millis: u64,
-    ) -> Result<()> {
+    pub async fn send_one_way(&self, request: RemotingCommand, timeout_millis: u64) -> Result<()> {
         let request = request.mark_oneway_rpc();
         if let Err(err) = self.tx.send((request, None, Some(timeout_millis))).await {
             error!("send one way request failed: {}", err);
