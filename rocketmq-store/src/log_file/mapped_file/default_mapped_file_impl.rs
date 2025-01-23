@@ -776,6 +776,39 @@ impl MappedFile for DefaultMappedFile {
         true
     }
 
+    #[inline]
+    #[cfg(target_os = "macos")]
+    fn is_loaded(&self, position: i64, size: usize) -> bool {
+        /*use windows::Win32::Foundation::{BOOL, HANDLE};
+        use windows::Win32::System::Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION, MEM_COMMIT};
+
+        let address = self.mmapped_file.as_ptr().wrapping_add(position as usize);
+        let mut info: MEMORY_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
+        let mut offset = 0;
+
+        while offset < length {
+            let result = unsafe {
+                VirtualQuery(
+                    address.add(offset) as *const _,
+                    &mut info,
+                    std::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
+                )
+            };
+
+            if result == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+
+            if info.State != MEM_COMMIT {
+                return Ok(false);
+            }
+
+            offset += info.RegionSize;
+        }*/
+
+        true
+    }
+
     fn select_mapped_buffer_with_position(&self, pos: i32) -> Option<SelectMappedBufferResult> {
         let read_position = self.get_read_position();
         if pos < read_position && pos >= 0 && MappedFile::hold(self) {
