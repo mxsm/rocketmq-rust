@@ -244,6 +244,15 @@ impl Channel {
         }
         Ok(())
     }
+
+    pub async fn send(&mut self, request: RemotingCommand) -> Result<()> {
+        let request = request.mark_oneway_rpc();
+        if let Err(err) = self.tx.send((request, None, None)).await {
+            error!("send request failed: {}", err);
+            return Err(ChannelSendRequestFailed(err.to_string()));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
