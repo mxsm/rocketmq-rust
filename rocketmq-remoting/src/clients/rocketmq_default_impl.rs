@@ -25,6 +25,7 @@ use rand::Rng;
 use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::WeakArcMut;
+use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 use tokio::time;
 use tracing::debug;
@@ -56,7 +57,7 @@ pub struct RocketmqDefaultClient<PR = DefaultRemotingRequestProcessor> {
     namesrv_addr_choosed: ArcMut<Option<CheetahString>>,
     available_namesrv_addr_set: ArcMut<HashSet<CheetahString>>,
     namesrv_index: Arc<AtomicI32>,
-    client_runtime: Arc<RocketMQRuntime>,
+    client_runtime: Option<RocketMQRuntime>,
     processor: PR,
     tx: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
 }
@@ -77,7 +78,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             namesrv_addr_choosed: ArcMut::new(Default::default()),
             available_namesrv_addr_set: ArcMut::new(Default::default()),
             namesrv_index: Arc::new(AtomicI32::new(init_value_index())),
-            client_runtime: Arc::new(RocketMQRuntime::new_multi(10, "client-thread")),
+            client_runtime: Some(RocketMQRuntime::new_multi(10, "client-thread")),
             processor,
             tx,
         }
@@ -241,17 +242,33 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingService for Rocketmq
     async fn start(&self, this: WeakArcMut<Self>) {
         if let Some(client) = this.upgrade() {
             let connect_timeout_millis = self.tokio_client_config.connect_timeout_millis as u64;
-            self.client_runtime.get_handle().spawn(async move {
-                loop {
-                    client.scan_available_name_srv().await;
-                    time::sleep(Duration::from_millis(connect_timeout_millis)).await;
-                }
-            });
+            self.client_runtime
+                .as_ref()
+                .unwrap()
+                .get_handle()
+                .spawn(async move {
+                    loop {
+                        client.scan_available_name_srv().await;
+                        time::sleep(Duration::from_millis(connect_timeout_millis)).await;
+                    }
+                });
         }
     }
 
     fn shutdown(&mut self) {
-        todo!()
+        if let Some(rt) = self.client_runtime.take() {
+            rt.shutdown();
+        }
+        let connection_tables = self.connection_tables.clone();
+        tokio::task::block_in_place(move || {
+            Handle::current().block_on(async move {
+                connection_tables.lock().await.clear();
+            });
+        });
+        self.namesrv_addr_list.clear();
+        self.available_namesrv_addr_set.clear();
+
+        info!(">>>>>>>>>>>>>>>RemotingClient shutdown success<<<<<<<<<<<<<<<<<");
     }
 
     fn register_rpc_hook(&mut self, hook: Arc<Box<dyn RPCHook>>) {
@@ -337,6 +354,8 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
             Some(mut client) => {
                 match self
                     .client_runtime
+                    .as_ref()
+                    .unwrap()
                     .get_handle()
                     .spawn(async move {
                         time::timeout(Duration::from_millis(timeout_millis), async move {
@@ -371,18 +390,22 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
                 error!("get client failed");
             }
             Some(mut client) => {
-                self.client_runtime.get_handle().spawn(async move {
-                    match time::timeout(Duration::from_millis(timeout_millis), async move {
-                        let mut request = request;
-                        request.mark_oneway_rpc_ref();
-                        client.send(request).await
-                    })
-                    .await
-                    {
-                        Ok(_) => Ok(()),
-                        Err(err) => Err(RemotingError::RemoteError(err.to_string())),
-                    }
-                });
+                self.client_runtime
+                    .as_ref()
+                    .unwrap()
+                    .get_handle()
+                    .spawn(async move {
+                        match time::timeout(Duration::from_millis(timeout_millis), async move {
+                            let mut request = request;
+                            request.mark_oneway_rpc_ref();
+                            client.send(request).await
+                        })
+                        .await
+                        {
+                            Ok(_) => Ok(()),
+                            Err(err) => Err(RemotingError::RemoteError(err.to_string())),
+                        }
+                    });
             }
         }
     }
