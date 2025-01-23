@@ -1322,7 +1322,7 @@ where
     }
 
     pub fn shutdown(&mut self) {
-        warn!("PopMessageProcessor shutdown unimplemented, need to implement");
+        self.pop_long_polling_service.shutdown();
     }
 }
 
