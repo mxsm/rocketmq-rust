@@ -69,4 +69,3 @@ pub mod unregister_client_request_header;
 pub mod update_consumer_offset_header;
 pub mod view_message_request_header;
 pub mod view_message_response_header;
-
