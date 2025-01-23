@@ -345,7 +345,9 @@ impl BrokerOuterAPI {
         }
     }
 
-    pub fn shutdown(&self) {}
+    pub fn shutdown(&mut self) {
+        self.remoting_client.shutdown();
+    }
 
     pub fn refresh_metadata(&self) {}
 
