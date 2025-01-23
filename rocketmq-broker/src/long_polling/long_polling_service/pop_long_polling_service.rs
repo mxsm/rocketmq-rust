@@ -34,6 +34,7 @@ use rocketmq_rust::ArcMut;
 use rocketmq_store::consume_queue::consume_queue_ext::CqExtUnit;
 use rocketmq_store::filter::MessageFilter;
 use rocketmq_store::log_file::MessageStore;
+use tokio::select;
 use tokio::sync::Notify;
 use tracing::error;
 use tracing::warn;
@@ -74,7 +75,11 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
     pub fn start(this: ArcMut<Self>) {
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+                select! {
+                    _ = this.notify.notified() => {break;}
+                    _ = tokio::time::sleep(tokio::time::Duration::from_millis(20)) => {}
+                }
+
                 if this.polling_map.is_empty() {
                     continue;
                 }
@@ -106,6 +111,10 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
                 }
             }
         });
+    }
+
+    pub fn shutdown(&mut self) {
+        self.notify.notify_waiters();
     }
 
     fn clean_unused_resource(&self) {
