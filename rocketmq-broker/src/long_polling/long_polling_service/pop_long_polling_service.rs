@@ -25,6 +25,7 @@ use cheetah_string::CheetahString;
 use crossbeam_skiplist::SkipSet;
 use dashmap::DashMap;
 use rocketmq_common::common::key_builder::KeyBuilder;
+use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
@@ -33,6 +34,7 @@ use rocketmq_rust::ArcMut;
 use rocketmq_store::consume_queue::consume_queue_ext::CqExtUnit;
 use rocketmq_store::filter::MessageFilter;
 use rocketmq_store::log_file::MessageStore;
+use tokio::sync::Notify;
 use tracing::error;
 use tracing::warn;
 
@@ -49,6 +51,7 @@ pub(crate) struct PopLongPollingService<MS, RP> {
     total_polling_num: AtomicU64,
     notify_last: bool,
     processor: Option<ArcMut<RP>>,
+    notify: Notify,
 }
 
 impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingService<MS, RP> {
@@ -64,11 +67,49 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
             notify_last,
             broker_runtime_inner,
             processor: None,
+            notify: Default::default(),
         }
     }
 
-    pub fn start(&mut self) {
-        warn!("PopLongPollingService::start is not implemented");
+    pub fn start(this: ArcMut<Self>) {
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+                if this.polling_map.is_empty() {
+                    continue;
+                }
+                for entry in this.polling_map.iter() {
+                    let key = entry.key();
+                    let value = entry.value();
+                    if value.is_empty() {
+                        continue;
+                    }
+                    loop {
+                        let first = value.pop_front();
+                        if first.is_none() {
+                            break;
+                        }
+                        let first = first.unwrap().value().clone();
+                        if !first.is_timeout() {
+                            value.insert(first);
+                            break;
+                        }
+                        this.total_polling_num.fetch_sub(1, Ordering::AcqRel);
+                        this.wake_up(first);
+                    }
+                }
+
+                if this.last_clean_time == 0
+                    || get_current_millis() - this.last_clean_time > 5 * 60 * 1000
+                {
+                    this.clean_unused_resource();
+                }
+            }
+        });
+    }
+
+    fn clean_unused_resource(&self) {
+        warn!("clean_unused_resource start");
     }
 
     pub fn notify_message_arriving(
