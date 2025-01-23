@@ -46,7 +46,7 @@ use crate::long_polling::pop_request::PopRequest;
 pub(crate) struct PopLongPollingService<MS, RP> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     topic_cid_map: DashMap<CheetahString, DashMap<CheetahString, u8>>,
-    polling_map: DashMap<CheetahString, SkipSet<PopRequest>>,
+    polling_map: DashMap<CheetahString, SkipSet<Arc<PopRequest>>>,
     last_clean_time: u64,
     total_polling_num: AtomicU64,
     notify_last: bool,
@@ -181,13 +181,13 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
             .or_insert(u8::MIN);
 
         let expired = request_header.get_born_time() + request_header.get_poll_time();
-        let request = PopRequest::new(
+        let request = Arc::new(PopRequest::new(
             remoting_command.clone(),
             ctx.clone(),
             expired as u64,
             subscription_data,
             message_filter.unwrap(),
-        );
+        ));
 
         if self.total_polling_num.load(Ordering::SeqCst)
             >= self
@@ -219,7 +219,7 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
         PollingResult::PollingSuc
     }
 
-    pub fn wake_up(&self, mut pop_request: PopRequest) -> bool {
+    pub fn wake_up(&self, pop_request: Arc<PopRequest>) -> bool {
         if !pop_request.complete() {
             return false;
         }
@@ -237,7 +237,7 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
                         Ok(result) => {
                             if let Some(response) = result {
                                 let _ = pop_request
-                                    .get_channel_mut()
+                                    .get_channel()
                                     .send_one_way(response.set_opaque(opaque), 1000)
                                     .await;
                             }
@@ -254,13 +254,13 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
 
     fn poll_remoting_commands(
         &self,
-        remoting_commands: &SkipSet<PopRequest>,
-    ) -> Option<PopRequest> {
+        remoting_commands: &SkipSet<Arc<PopRequest>>,
+    ) -> Option<Arc<PopRequest>> {
         if remoting_commands.is_empty() {
             return None;
         }
 
-        let mut pop_request: Option<PopRequest>;
+        let mut pop_request: Option<Arc<PopRequest>>;
 
         //maybe need to optimize
         loop {
