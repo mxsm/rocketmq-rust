@@ -61,11 +61,11 @@ impl PopRequest {
     }
 
     pub fn get_channel(&self) -> &Channel {
-        self.ctx.upgrade().expect("ctx is none").channel()
+        self.ctx.channel()
     }
 
     pub fn get_channel_mut(&mut self) -> &mut Channel {
-        self.ctx.upgrade().expect("ctx is none").channel_mut()
+        self.ctx.channel_mut()
     }
 
     pub fn get_ctx(&self) -> &ConnectionHandlerContext {
