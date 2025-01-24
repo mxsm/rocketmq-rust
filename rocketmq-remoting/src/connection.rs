@@ -142,8 +142,8 @@ impl Connection {
     ) -> Result<(), RemotingError> {
         self.buf.clear();
         command.fast_header_encode(&mut self.buf);
-        if let Some(body_inner) = command.get_body() {
-            self.buf.put(body_inner.as_ref());
+        if let Some(body_inner) = command.take_body() {
+            self.buf.put(body_inner);
         }
         self.writer.send(self.buf.clone()).await?;
         Ok(())
