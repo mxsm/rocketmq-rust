@@ -48,7 +48,6 @@ use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::filter::MessageFilter;
 use rocketmq_store::log_file::MessageStore;
-use rocketmq_store::log_file::MAX_PULL_MSG_SIZE;
 use tokio::sync::Mutex;
 use tracing::error;
 use tracing::warn;
@@ -752,7 +751,7 @@ where
                         queue_id,
                         request_header.queue_offset,
                         request_header.max_msg_nums,
-                        MAX_PULL_MSG_SIZE,
+                        //   MAX_PULL_MSG_SIZE,
                         Some(message_filter.clone()),
                     )
                     .await;

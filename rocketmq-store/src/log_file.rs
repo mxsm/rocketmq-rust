@@ -246,6 +246,34 @@ pub trait RocketMQMessageStore: Sync + 'static {
         queue_id: i32,
         offset: i64,
         max_msg_nums: i32,
+        message_filter: Option<Arc<Box<dyn MessageFilter>>>,
+    ) -> Option<GetMessageResult>;
+
+    /// Get a message asynchronously with a total size limit.
+    ///
+    /// This function retrieves messages from a specified queue, considering the total size limit
+    /// for the messages. It supports optional message filtering.
+    ///
+    /// # Arguments
+    ///
+    /// * `group` - The consumer group name.
+    /// * `topic` - The topic name.
+    /// * `queue_id` - The queue identifier.
+    /// * `offset` - The offset of the message.
+    /// * `max_msg_nums` - The maximum number of messages to retrieve.
+    /// * `max_total_msg_size` - The maximum total size of the messages to retrieve.
+    /// * `message_filter` - An optional filter to apply to the messages.
+    ///
+    /// # Returns
+    ///
+    /// An `Option` containing the result of the message retrieval.
+    async fn get_message_with_total_size(
+        &self,
+        group: &CheetahString,
+        topic: &CheetahString,
+        queue_id: i32,
+        offset: i64,
+        max_msg_nums: i32,
         max_total_msg_size: i32,
         message_filter: Option<Arc<Box<dyn MessageFilter>>>,
     ) -> Option<GetMessageResult>;

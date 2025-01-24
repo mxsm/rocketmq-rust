@@ -928,7 +928,7 @@ where
                 offset,
                 request_header.max_msg_nums as i32
                     - get_message_result.message_mapped_list().len() as i32,
-                1024 * 1024,
+                //   1024 * 1024,
                 message_filter.clone(),
             )
             .await;
@@ -978,7 +978,7 @@ where
                                     offset,
                                     request_header.max_msg_nums as i32
                                         - get_message_result.message_mapped_list().len() as i32,
-                                    1024 * 1024,
+                                    //     1024 * 1024,
                                     message_filter,
                                 )
                                 .await;
