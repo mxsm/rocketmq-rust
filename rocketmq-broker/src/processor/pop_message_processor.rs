@@ -1053,11 +1053,11 @@ where
                         queue_id,
                         result_inner.message_queue_offset().clone(),
                     );
-                } else if (result_inner.status().is_none()
-                    || result_inner.status().unwrap() == GetMessageStatus::NoMatchedMessage
-                    || result_inner.status().unwrap() == GetMessageStatus::OffsetFoundNull
-                    || result_inner.status().unwrap() == GetMessageStatus::MessageWasRemoving
-                    || result_inner.status().unwrap() == GetMessageStatus::NoMatchedLogicQueue)
+                } else if (result_inner.status().is_some()
+                    && (result_inner.status().unwrap() == GetMessageStatus::NoMatchedMessage
+                        || result_inner.status().unwrap() == GetMessageStatus::OffsetFoundNull
+                        || result_inner.status().unwrap() == GetMessageStatus::MessageWasRemoving
+                        || result_inner.status().unwrap() == GetMessageStatus::NoMatchedLogicQueue))
                     && result_inner.next_begin_offset() > -1
                 {
                     if is_order {
