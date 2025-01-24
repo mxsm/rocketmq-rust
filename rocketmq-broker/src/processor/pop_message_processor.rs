@@ -868,7 +868,7 @@ where
         self.queue_lock_manager()
             .unlock_with_key(lock_key.clone())
             .await;
-        if !self.is_pop_should_stop(topic, &request_header.consumer_group, queue_id) {
+        if self.is_pop_should_stop(topic, &request_header.consumer_group, queue_id) {
             return self
                 .broker_runtime_inner
                 .message_store()
