@@ -44,7 +44,6 @@ use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::log_file::MessageStore;
-use rocketmq_store::log_file::MAX_PULL_MSG_SIZE;
 use tokio::sync::Mutex;
 use tracing::error;
 
@@ -190,12 +189,7 @@ where
             .as_ref()
             .unwrap()
             .get_message(
-                group,
-                topic,
-                queue_id,
-                offset,
-                nums,
-                MAX_PULL_MSG_SIZE,
+                group, topic, queue_id, offset, nums, //  MAX_PULL_MSG_SIZE,
                 None,
             )
             .await;

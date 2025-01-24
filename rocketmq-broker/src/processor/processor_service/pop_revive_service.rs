@@ -254,12 +254,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
         let get_message_result = self
             .message_store
             .get_message(
-                group,
-                topic,
-                queue_id,
-                offset,
-                nums,
-                128 * 1024 * 1024,
+                group, topic, queue_id, offset, nums, //    128 * 1024 * 1024,
                 None,
             )
             .await;

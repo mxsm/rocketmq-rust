@@ -793,6 +793,27 @@ impl MessageStore for DefaultMessageStore {
         queue_id: i32,
         offset: i64,
         max_msg_nums: i32,
+        message_filter: Option<Arc<Box<dyn MessageFilter>>>,
+    ) -> Option<GetMessageResult> {
+        self.get_message_with_total_size(
+            group,
+            topic,
+            queue_id,
+            offset,
+            max_msg_nums,
+            MAX_PULL_MSG_SIZE,
+            message_filter,
+        )
+        .await
+    }
+
+    async fn get_message_with_total_size(
+        &self,
+        group: &CheetahString,
+        topic: &CheetahString,
+        queue_id: i32,
+        offset: i64,
+        max_msg_nums: i32,
         max_total_msg_size: i32,
         message_filter: Option<Arc<Box<dyn MessageFilter>>>,
     ) -> Option<GetMessageResult> {
