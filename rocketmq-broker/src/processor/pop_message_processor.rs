@@ -1164,7 +1164,13 @@ where
         group: &CheetahString,
         queue_id: i32,
     ) -> bool {
-        unimplemented!("PopMessageProcessor is_pop_should_stop")
+        let broker_config = self.broker_runtime_inner.broker_config();
+        broker_config.enable_pop_message_threshold
+            && self
+                .broker_runtime_inner
+                .pop_inflight_message_counter()
+                .get_group_pop_in_flight_message_num(topic, group, queue_id)
+                > broker_config.pop_inflight_message_threshold
     }
 
     fn get_pop_offset(
