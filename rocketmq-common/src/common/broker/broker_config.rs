@@ -203,6 +203,8 @@ pub struct BrokerConfig {
     pub pop_polling_map_size: usize,
     pub max_pop_polling_size: u64,
     pub pop_polling_size: usize,
+    pub enable_pop_message_threshold: bool,
+    pub pop_inflight_message_threshold: i64,
 }
 
 impl Default for BrokerConfig {
@@ -311,6 +313,8 @@ impl Default for BrokerConfig {
             pop_polling_map_size: 100000,
             max_pop_polling_size: 100000,
             pop_polling_size: 1024,
+            enable_pop_message_threshold: false,
+            pop_inflight_message_threshold: 10000,
         }
     }
 }
