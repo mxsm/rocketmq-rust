@@ -206,13 +206,12 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
     pub fn get_latest_offset(&self, lock_key: &CheetahString) -> i64 {
         let queue = self.commit_offsets.get(lock_key);
         if let Some(queue) = queue {
-            let queue = queue.value();
             let queue = queue.get().lock();
-            if queue.is_empty() {
-                return -1;
+            if let Some(queue) = queue.back() {
+                queue.get_next_begin_offset()
+            } else {
+                -1
             }
-            let point = queue.back().unwrap();
-            point.get_next_begin_offset()
         } else {
             -1
         }
