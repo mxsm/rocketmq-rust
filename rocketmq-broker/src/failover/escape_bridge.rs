@@ -585,14 +585,14 @@ where
             {
                 Ok(pull_result) => {
                     if let Some(result) = pull_result.0 {
-                        if result.pull_status == PullStatus::Found
+                        if *result.pull_status() == PullStatus::Found
                             && result
-                                .msg_found_list
+                                .msg_found_list()
                                 .as_ref()
                                 .is_some_and(|value| !value.is_empty())
                         {
                             return (
-                                Some(result.msg_found_list.unwrap()[0].clone().deref().clone()),
+                                Some(result.msg_found_list().clone().unwrap()[0].clone().deref().clone()),
                                 "".to_string(),
                                 false,
                             );
