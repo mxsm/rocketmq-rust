@@ -782,18 +782,16 @@ pub fn process_send_response(
         let mut send_result = SendResult::new(
             status,
             Some(uniq_msg_id),
-            Some(CheetahString::from_string(
-                response_header.msg_id().to_string(),
-            )),
+            Some(response_header.msg_id().to_string()),
             Some(message_queue),
             response_header.queue_id() as u64,
         );
 
-        send_result.set_transaction_id(CheetahString::from_string(
+        send_result.set_transaction_id(
             response_header
                 .transaction_id()
                 .map_or("".to_string(), |s| s.to_string()),
-        ));
+        );
         if let Some(region_id) =
             response
                 .get_ext_fields()
@@ -802,11 +800,9 @@ pub fn process_send_response(
                     MessageConst::PROPERTY_MSG_REGION,
                 ))
         {
-            send_result.set_region_id(CheetahString::from_string(region_id.to_string()));
+            send_result.set_region_id(region_id.to_string());
         } else {
-            send_result.set_region_id(CheetahString::from_static_str(
-                mix_all::DEFAULT_TRACE_REGION_ID,
-            ));
+            send_result.set_region_id(mix_all::DEFAULT_TRACE_REGION_ID.to_string());
         }
 
         if let Some(trace_on) =
