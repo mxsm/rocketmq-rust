@@ -54,13 +54,6 @@ use crate::broker_runtime::BrokerRuntimeInner;
 use crate::processor::pop_message_processor::PopMessageProcessor;
 
 pub struct AckMessageProcessor<MS> {
-    //topic_config_manager: TopicConfigManager,
-    // message_store: ArcMut<MS>,
-    // escape_bridge: ArcMut<EscapeBridge<MS>>,
-    //  store_host: SocketAddr,
-    //pop_inflight_message_counter: Arc<PopInflightMessageCounter>,
-    //  consumer_offset_manager: Arc<ConsumerOffsetManager>,
-    //   consumer_order_info_manager: Arc<ConsumerOrderInfoManager<MS>>,
     pop_message_processor: ArcMut<PopMessageProcessor<MS>>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
@@ -70,28 +63,11 @@ where
     MS: MessageStore,
 {
     pub fn new(
-        /*topic_config_manager: TopicConfigManager,
-        message_store: ArcMut<MS>,
-        escape_bridge: ArcMut<EscapeBridge<MS>>,
-        broker_config: Arc<BrokerConfig>,
-        pop_inflight_message_counter: Arc<PopInflightMessageCounter>,
-        store_host: SocketAddr,
-        consumer_offset_manager: Arc<ConsumerOffsetManager>,
-        pop_message_processor: ArcMut<PopMessageProcessor<MS>>,
-        consumer_order_info_manager: Arc<ConsumerOrderInfoManager<MS>>,*/
-        //pop_inflight_message_counter: Arc<PopInflightMessageCounter>,
         broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
         pop_message_processor: ArcMut<PopMessageProcessor<MS>>,
     ) -> AckMessageProcessor<MS> {
         AckMessageProcessor {
-            /*  topic_config_manager,
-             message_store,
-             escape_bridge,
-             store_host,*/
-            // pop_inflight_message_counter,
-             /* consumer_offset_manager, */
             pop_message_processor,
-            /* consumer_order_info_manager, */
             broker_runtime_inner,
         }
     }
