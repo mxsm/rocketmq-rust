@@ -1074,7 +1074,17 @@ where
                                     result_inner.next_begin_offset(),
                                 );
                         } else {
-                            unimplemented!("PopMessageProcessor pop_msg_from_queue")
+                            self.pop_buffer_merge_service.mut_from_ref().add_ck_mock(
+                                request_header.consumer_group.clone(),
+                                topic.clone(),
+                                queue_id,
+                                final_offset as u64,
+                                request_header.invisible_time,
+                                pop_time,
+                                revive_qid,
+                                result_inner.next_begin_offset() as u64,
+                                self.broker_runtime_inner.broker_config().broker_name(),
+                            );
                         }
                     }
                 }
