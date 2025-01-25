@@ -1061,21 +1061,20 @@ where
                             | GetMessageStatus::OffsetFoundNull
                             | GetMessageStatus::MessageWasRemoving
                             | GetMessageStatus::NoMatchedLogicQueue
-                    ) {
-                        if result_inner.next_begin_offset() > -1 {
-                            if is_order {
-                                self.broker_runtime_inner
-                                    .consumer_offset_manager()
-                                    .commit_offset(
-                                        channel.remote_address().to_string().into(),
-                                        &request_header.consumer_group,
-                                        topic,
-                                        queue_id,
-                                        result_inner.next_begin_offset(),
-                                    );
-                            } else {
-                                unimplemented!("PopMessageProcessor pop_msg_from_queue")
-                            }
+                    ) && result_inner.next_begin_offset() > -1
+                    {
+                        if is_order {
+                            self.broker_runtime_inner
+                                .consumer_offset_manager()
+                                .commit_offset(
+                                    channel.remote_address().to_string().into(),
+                                    &request_header.consumer_group,
+                                    topic,
+                                    queue_id,
+                                    result_inner.next_begin_offset(),
+                                );
+                        } else {
+                            unimplemented!("PopMessageProcessor pop_msg_from_queue")
                         }
                     }
                 }
