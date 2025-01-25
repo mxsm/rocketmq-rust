@@ -27,9 +27,9 @@ pub struct SendResult {
     pub msg_id: Option<CheetahString>,
     pub message_queue: Option<MessageQueue>,
     pub queue_offset: u64,
-    pub transaction_id: Option<String>,
-    pub offset_msg_id: Option<String>,
-    pub region_id: Option<String>,
+    pub transaction_id: Option<CheetahString>,
+    pub offset_msg_id: Option<CheetahString>,
+    pub region_id: Option<CheetahString>,
     pub trace_on: bool,
     pub raw_resp_body: Option<Vec<u8>>,
 }
@@ -54,7 +54,7 @@ impl SendResult {
     pub fn new(
         send_status: SendStatus,
         msg_id: Option<CheetahString>,
-        offset_msg_id: Option<String>,
+        offset_msg_id: Option<CheetahString>,
         message_queue: Option<MessageQueue>,
         queue_offset: u64,
     ) -> Self {
@@ -76,9 +76,9 @@ impl SendResult {
         msg_id: Option<CheetahString>,
         message_queue: Option<MessageQueue>,
         queue_offset: u64,
-        transaction_id: Option<String>,
-        offset_msg_id: Option<String>,
-        region_id: Option<String>,
+        transaction_id: Option<CheetahString>,
+        offset_msg_id: Option<CheetahString>,
+        region_id: Option<CheetahString>,
     ) -> Self {
         SendResult {
             send_status,
@@ -104,7 +104,7 @@ impl SendResult {
     }
 
     #[inline]
-    pub fn set_region_id(&mut self, region_id: String) {
+    pub fn set_region_id(&mut self, region_id: CheetahString) {
         self.region_id = Some(region_id);
     }
 
@@ -129,12 +129,12 @@ impl SendResult {
     }
 
     #[inline]
-    pub fn set_transaction_id(&mut self, transaction_id: String) {
+    pub fn set_transaction_id(&mut self, transaction_id: CheetahString) {
         self.transaction_id = Some(transaction_id);
     }
 
     #[inline]
-    pub fn set_offset_msg_id(&mut self, offset_msg_id: String) {
+    pub fn set_offset_msg_id(&mut self, offset_msg_id: CheetahString) {
         self.offset_msg_id = Some(offset_msg_id);
     }
 

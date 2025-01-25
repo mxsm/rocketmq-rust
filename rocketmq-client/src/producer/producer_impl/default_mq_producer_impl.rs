@@ -1875,7 +1875,7 @@ impl DefaultMQProducerImpl {
                 if let Some(ref transaction_id) = send_result.transaction_id {
                     msg.put_user_property(
                         CheetahString::from_static_str(MessageConst::PROPERTY_TRANSACTION_ID),
-                        CheetahString::from_string(transaction_id.to_owned()),
+                        transaction_id.clone(),
                     );
                 }
                 let transaction_id = msg.get_property(&CheetahString::from_static_str(
@@ -1962,7 +1962,7 @@ impl DefaultMQProducerImpl {
             },
             from_transaction_check: false,
             msg_id: send_result.msg_id.clone().unwrap_or_default(),
-            transaction_id: transaction_id.map(CheetahString::from_string),
+            transaction_id,
             rpc_request_header: RpcRequestHeader {
                 broker_name: Some(dest_broker_name),
                 ..Default::default()

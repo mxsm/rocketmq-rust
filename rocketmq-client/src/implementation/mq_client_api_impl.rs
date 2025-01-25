@@ -602,11 +602,17 @@ impl MQClientAPIImpl {
         let send_result = SendResult {
             send_status,
             msg_id: uniq_msg_id,
-            offset_msg_id: Some(response_header.msg_id().to_string()),
+            offset_msg_id: Some(CheetahString::from_string(
+                response_header.msg_id().to_string(),
+            )),
             message_queue: Some(message_queue),
             queue_offset: response_header.queue_offset() as u64,
-            transaction_id: response_header.transaction_id().map(|s| s.to_string()),
-            region_id: Some(region_id),
+            transaction_id: Some(CheetahString::from_string(
+                response_header
+                    .transaction_id()
+                    .map_or("".to_string(), |s| s.to_string()),
+            )),
+            region_id: Some(CheetahString::from_string(region_id)),
             trace_on,
             ..Default::default()
         };
