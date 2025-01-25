@@ -20,12 +20,12 @@ use rocketmq_rust::ArcMut;
 
 use crate::consumer::pull_status::PullStatus;
 
-pub(crate) struct PullResult {
-    pub pull_status: PullStatus,
-    pub next_begin_offset: u64,
-    pub min_offset: u64,
-    pub max_offset: u64,
-    pub msg_found_list: Option<Vec<ArcMut<MessageExt>>>,
+pub struct PullResult {
+    pub(crate) pull_status: PullStatus,
+    pub(crate) next_begin_offset: u64,
+    pub(crate) min_offset: u64,
+    pub(crate) max_offset: u64,
+    pub(crate) msg_found_list: Option<Vec<ArcMut<MessageExt>>>,
 }
 
 impl PullResult {
