@@ -592,7 +592,12 @@ where
                                 .is_some_and(|value| !value.is_empty())
                         {
                             return (
-                                Some(result.msg_found_list().clone().unwrap()[0].clone().deref().clone()),
+                                Some(
+                                    result.msg_found_list().clone().unwrap()[0]
+                                        .clone()
+                                        .deref()
+                                        .clone(),
+                                ),
                                 "".to_string(),
                                 false,
                             );

@@ -679,8 +679,8 @@ fn process_pull_response(
         .map_err(BrokerRemotingError)?;
     let pull_result = PullResultExt {
         pull_result: PullResult::new(
-            pull_status, 
-            response_header.next_begin_offset as u64, 
+            pull_status,
+            response_header.next_begin_offset as u64,
             response_header.min_offset as u64,
             response_header.max_offset as u64,
             Some(vec![]),

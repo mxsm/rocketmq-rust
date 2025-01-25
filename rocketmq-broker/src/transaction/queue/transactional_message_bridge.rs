@@ -213,7 +213,7 @@ where
                 GetMessageStatus::OffsetReset => (PullStatus::NoNewMsg, None),
             };
             Some(PullResult::new(
-                pull_status, 
+                pull_status,
                 get_message_result.next_begin_offset() as u64,
                 get_message_result.min_offset() as u64,
                 get_message_result.max_offset() as u64,
@@ -223,7 +223,7 @@ where
                         .into_iter()
                         .map(ArcMut::new)
                         .collect(),
-                )
+                ),
             ))
         } else {
             error!(
