@@ -523,7 +523,7 @@ where
         let pop_time = get_current_millis();
 
         let message_filter = message_filter.map(Arc::new);
-        let mut rest_num = 0;
+        let mut rest_num = 0; // remaining number of messages to be fetched
         if need_retry && !request_header.order.unwrap_or(false) {
             rest_num = if need_retry_v1 {
                 let retry_topic = CheetahString::from_string(KeyBuilder::build_pop_retry_topic_v1(
@@ -722,15 +722,24 @@ where
 
         match ResponseCode::from(final_response.code()) {
             ResponseCode::Success => {
-                if let Some(bytes) = self.read_get_message_result(
-                    &get_message_result,
-                    &request_header.consumer_group,
-                    &request_header.topic,
-                    request_header.queue_id,
-                ) {
-                    final_response.set_body_mut_ref(bytes);
+                if self
+                    .broker_runtime_inner
+                    .broker_config()
+                    .transfer_msg_by_heap
+                {
+                    if let Some(bytes) = self.read_get_message_result(
+                        &get_message_result,
+                        &request_header.consumer_group,
+                        &request_header.topic,
+                        request_header.queue_id,
+                    ) {
+                        final_response.set_body_mut_ref(bytes);
+                    }
+                    Ok(Some(final_response))
+                } else {
+                    //zero copy is not implemented
+                    unimplemented!("transfer_msg_by_heap is false")
                 }
-                Ok(Some(final_response))
             }
             _ => Ok(Some(final_response)),
         }
