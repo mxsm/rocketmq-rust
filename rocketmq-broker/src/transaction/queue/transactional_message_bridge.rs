@@ -212,20 +212,19 @@ where
 
                 GetMessageStatus::OffsetReset => (PullStatus::NoNewMsg, None),
             };
-
-            Some(PullResult {
+            Some(PullResult::new(
                 pull_status,
-                next_begin_offset: get_message_result.next_begin_offset() as u64,
-                min_offset: get_message_result.min_offset() as u64,
-                max_offset: get_message_result.max_offset() as u64,
-                msg_found_list: Some(
+                get_message_result.next_begin_offset() as u64,
+                get_message_result.min_offset() as u64,
+                get_message_result.max_offset() as u64,
+                Some(
                     msg_found_list
                         .unwrap_or_default()
                         .into_iter()
                         .map(ArcMut::new)
                         .collect(),
                 ),
-            })
+            ))
         } else {
             error!(
                 "Get message from store return null. topic={}, groupId={}, requestOffset={}",

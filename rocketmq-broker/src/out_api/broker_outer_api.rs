@@ -544,7 +544,7 @@ impl BrokerOuterAPI {
                     Ok(value) => value,
                     Err(_) => return Ok((None, format!("Response Code:{}", code), true)),
                 };
-                let name = pull_result_ext.pull_result.pull_status.to_string();
+                let name = pull_result_ext.pull_result.pull_status().to_string();
                 process_pull_result(&mut pull_result_ext, broker_name, queue_id);
                 Ok((Some(pull_result_ext.pull_result), name, false))
             }
@@ -624,7 +624,7 @@ fn process_pull_result(
     broker_name: &CheetahString,
     queue_id: i32,
 ) {
-    if pull_result.pull_result.pull_status == PullStatus::Found {
+    if *pull_result.pull_result.pull_status() == PullStatus::Found {
         let mut bytes = pull_result.message_binary.take().unwrap_or_default();
         let mut message_list = MessageDecoder::decodes_batch(&mut bytes, true, true);
         for message in message_list.iter_mut() {
@@ -641,12 +641,12 @@ fn process_pull_result(
             MessageAccessor::put_property(
                 message,
                 CheetahString::from_static_str(MessageConst::PROPERTY_MIN_OFFSET),
-                pull_result.pull_result.min_offset.to_string().into(),
+                pull_result.pull_result.min_offset().to_string().into(),
             );
             MessageAccessor::put_property(
                 message,
                 CheetahString::from_static_str(MessageConst::PROPERTY_MAX_OFFSET),
-                pull_result.pull_result.max_offset.to_string().into(),
+                pull_result.pull_result.max_offset().to_string().into(),
             );
             message.set_broker_name(broker_name.clone());
             message.set_queue_id(queue_id);
@@ -678,13 +678,13 @@ fn process_pull_response(
         .decode_command_custom_header::<PullMessageResponseHeader>()
         .map_err(BrokerRemotingError)?;
     let pull_result = PullResultExt {
-        pull_result: PullResult {
+        pull_result: PullResult::new(
             pull_status,
-            next_begin_offset: response_header.next_begin_offset as u64,
-            min_offset: response_header.min_offset as u64,
-            max_offset: response_header.max_offset as u64,
-            msg_found_list: Some(vec![]),
-        },
+            response_header.next_begin_offset as u64,
+            response_header.min_offset as u64,
+            response_header.max_offset as u64,
+            Some(vec![]),
+        ),
         suggest_which_broker_id: response_header.suggest_which_broker_id,
         message_binary: response.take_body(),
         offset_delta: response_header.offset_delta,

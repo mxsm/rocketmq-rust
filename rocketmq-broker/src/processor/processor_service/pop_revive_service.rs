@@ -207,8 +207,8 @@ impl<MS: MessageStore> PopReviveService<MS> {
             .await?;
         if reach_tail(&pull_result, offset) {
             //nothing to do
-        } else if pull_result.pull_status == PullStatus::OffsetIllegal
-            || pull_result.pull_status == PullStatus::NoMatchedMsg
+        } else if *pull_result.pull_status() == PullStatus::OffsetIllegal
+            || *pull_result.pull_status() == PullStatus::NoMatchedMsg
         {
             if !self.should_run_pop_revive {
                 return None;
@@ -220,10 +220,10 @@ impl<MS: MessageStore> PopReviveService<MS> {
                     &CheetahString::from_static_str(PopAckConstants::REVIVE_GROUP),
                     &self.revive_topic,
                     queue_id,
-                    pull_result.next_begin_offset as i64 - 1,
+                    pull_result.next_begin_offset() as i64 - 1,
                 );
         }
-        pull_result.msg_found_list
+        pull_result.msg_found_list().clone()
     }
 
     pub async fn get_message(
@@ -804,7 +804,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
 fn reach_tail(pull_result: &PullResult, offset: i64) -> bool {
     *pull_result.pull_status() == PullStatus::NoNewMsg
         || *pull_result.pull_status() == PullStatus::OffsetIllegal
-            && offset == pull_result.max_offset as i64
+            && offset == pull_result.max_offset() as i64
 }
 
 fn decode_msg_list(
