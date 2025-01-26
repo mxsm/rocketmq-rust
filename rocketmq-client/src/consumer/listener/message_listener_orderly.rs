@@ -33,5 +33,5 @@ pub trait MessageListenerOrderly: Sync + Send {
 pub type ArcBoxMessageListenerOrderly = Arc<Box<dyn MessageListenerOrderly>>;
 
 pub type MessageListenerOrderlyFn = Arc<
-    dyn Fn(Vec<MessageExt>, ConsumeOrderlyContext) -> Result<ConsumeOrderlyStatus> + Send + Sync,
+    dyn Fn(&[MessageExt], &ConsumeOrderlyContext) -> Result<ConsumeOrderlyStatus> + Send + Sync,
 >;
