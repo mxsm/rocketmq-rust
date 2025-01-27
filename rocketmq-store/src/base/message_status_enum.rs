@@ -61,7 +61,27 @@ pub enum PutMessageStatus {
 
 impl std::fmt::Display for PutMessageStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
+        // Compatible with Java enums
+        match self {
+            PutMessageStatus::PutOk => write!(f, "PUT_OK"),
+            PutMessageStatus::FlushDiskTimeout => write!(f, "FLUSH_DISK_TIMEOUT"),
+            PutMessageStatus::FlushSlaveTimeout => write!(f, "FLUSH_SLAVE_TIMEOUT"),
+            PutMessageStatus::SlaveNotAvailable => write!(f, "SLAVE_NOT_AVAILABLE"),
+            PutMessageStatus::ServiceNotAvailable => write!(f, "SERVICE_NOT_AVAILABLE"),
+            PutMessageStatus::CreateMappedFileFailed => write!(f, "CREATE_MAPPED_FILE_FAILED"),
+            PutMessageStatus::MessageIllegal => write!(f, "MESSAGE_ILLEGAL"),
+            PutMessageStatus::PropertiesSizeExceeded => write!(f, "PROPERTIES_SIZE_EXCEEDED"),
+            PutMessageStatus::OsPageCacheBusy => write!(f, "OS_PAGE_CACHE_BUSY"),
+            PutMessageStatus::UnknownError => write!(f, "UNKNOWN_ERROR"),
+            PutMessageStatus::InSyncReplicasNotEnough => write!(f, "IN_SYNC_REPLICAS_NOT_ENOUGH"),
+            PutMessageStatus::PutToRemoteBrokerFail => write!(f, "PUT_TO_REMOTE_BROKER_FAIL"),
+            PutMessageStatus::LmqConsumeQueueNumExceeded => {
+                write!(f, "LMQ_CONSUME_QUEUE_NUM_EXCEEDED")
+            }
+            PutMessageStatus::WheelTimerFlowControl => write!(f, "WHEEL_TIMER_FLOW_CONTROL"),
+            PutMessageStatus::WheelTimerMsgIllegal => write!(f, "WHEEL_TIMER_MSG_ILLEGAL"),
+            PutMessageStatus::WheelTimerNotEnable => write!(f, "WHEEL_TIMER_NOT_ENABLE"),
+        }
     }
 }
 
@@ -82,7 +102,19 @@ pub enum GetMessageStatus {
 
 impl std::fmt::Display for GetMessageStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
+        // Compatible with Java enums
+        match self {
+            GetMessageStatus::Found => write!(f, "FOUND"),
+            GetMessageStatus::NoMatchedMessage => write!(f, "NO_MATCHED_MESSAGE"),
+            GetMessageStatus::MessageWasRemoving => write!(f, "MESSAGE_WAS_REMOVING"),
+            GetMessageStatus::OffsetFoundNull => write!(f, "OFFSET_FOUND_NULL"),
+            GetMessageStatus::OffsetOverflowBadly => write!(f, "OFFSET_OVERFLOW_BADLY"),
+            GetMessageStatus::OffsetOverflowOne => write!(f, "OFFSET_OVERFLOW_ONE"),
+            GetMessageStatus::OffsetTooSmall => write!(f, "OFFSET_TOO_SMALL"),
+            GetMessageStatus::NoMatchedLogicQueue => write!(f, "NO_MATCHED_LOGIC_QUEUE"),
+            GetMessageStatus::NoMessageInQueue => write!(f, "NO_MESSAGE_IN_QUEUE"),
+            GetMessageStatus::OffsetReset => write!(f, "OFFSET_RESET"),
+        }
     }
 }
 
@@ -122,5 +154,15 @@ mod tests {
             AppendMessageStatus::UnknownError.to_string(),
             "UNKNOWN_ERROR"
         );
+    }
+
+    #[test]
+    fn put_message_status_display_put_ok() {
+        assert_eq!(PutMessageStatus::PutOk.to_string(), "PUT_OK");
+    }
+
+    #[test]
+    fn get_message_status_display_found() {
+        assert_eq!(GetMessageStatus::Found.to_string(), "FOUND");
     }
 }
