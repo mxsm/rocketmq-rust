@@ -75,7 +75,9 @@ impl std::fmt::Display for PutMessageStatus {
             PutMessageStatus::UnknownError => write!(f, "UNKNOWN_ERROR"),
             PutMessageStatus::InSyncReplicasNotEnough => write!(f, "IN_SYNC_REPLICAS_NOT_ENOUGH"),
             PutMessageStatus::PutToRemoteBrokerFail => write!(f, "PUT_TO_REMOTE_BROKER_FAIL"),
-            PutMessageStatus::LmqConsumeQueueNumExceeded => write!(f, "LMQ_CONSUME_QUEUE_NUM_EXCEEDED"),
+            PutMessageStatus::LmqConsumeQueueNumExceeded => {
+                write!(f, "LMQ_CONSUME_QUEUE_NUM_EXCEEDED")
+            }
             PutMessageStatus::WheelTimerFlowControl => write!(f, "WHEEL_TIMER_FLOW_CONTROL"),
             PutMessageStatus::WheelTimerMsgIllegal => write!(f, "WHEEL_TIMER_MSG_ILLEGAL"),
             PutMessageStatus::WheelTimerNotEnable => write!(f, "WHEEL_TIMER_NOT_ENABLE"),
@@ -156,17 +158,11 @@ mod tests {
 
     #[test]
     fn put_message_status_display_put_ok() {
-        assert_eq!(
-            PutMessageStatus::PutOk.to_string(),
-            "PUT_OK"
-        );
+        assert_eq!(PutMessageStatus::PutOk.to_string(), "PUT_OK");
     }
 
     #[test]
     fn get_message_status_display_found() {
-        assert_eq!(
-            GetMessageStatus::Found.to_string(),
-            "FOUND"
-        );
+        assert_eq!(GetMessageStatus::Found.to_string(), "FOUND");
     }
 }
