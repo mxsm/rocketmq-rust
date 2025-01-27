@@ -22,6 +22,7 @@ pub enum RocketMQRuntime {
 }
 
 impl RocketMQRuntime {
+    #[inline]
     pub fn new_multi(threads: usize, name: &str) -> Self {
         Self::Multi(
             tokio::runtime::Builder::new_multi_thread()
@@ -35,30 +36,35 @@ impl RocketMQRuntime {
 }
 
 impl RocketMQRuntime {
+    #[inline]
     pub fn get_handle(&self) -> &tokio::runtime::Handle {
         match self {
             Self::Multi(runtime) => runtime.handle(),
         }
     }
 
+    #[inline]
     pub fn get_runtime(&self) -> &tokio::runtime::Runtime {
         match self {
             Self::Multi(runtime) => runtime,
         }
     }
 
+    #[inline]
     pub fn shutdown(self) {
         match self {
             Self::Multi(runtime) => runtime.shutdown_background(),
         }
     }
 
+    #[inline]
     pub fn shutdown_timeout(self, timeout: Duration) {
         match self {
             Self::Multi(runtime) => runtime.shutdown_timeout(timeout),
         }
     }
 
+    #[inline]
     pub fn schedule_at_fixed_rate<F>(
         &self,
         task: F,
@@ -93,6 +99,7 @@ impl RocketMQRuntime {
         }
     }
 
+    #[inline]
     pub fn schedule_at_fixed_rate_mut<F>(
         &self,
         mut task: F,
