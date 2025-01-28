@@ -75,5 +75,4 @@ mod tests {
         assert_eq!(deserialized.consume_failed_tps, 1.5);
         assert_eq!(deserialized.consume_failed_msgs, 6);
     }
-
 }
