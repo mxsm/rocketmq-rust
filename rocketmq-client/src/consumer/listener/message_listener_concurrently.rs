@@ -33,7 +33,7 @@ pub trait MessageListenerConcurrently: Sync + Send {
 pub type ArcBoxMessageListenerConcurrently = Arc<Box<dyn MessageListenerConcurrently>>;
 
 pub type MessageListenerConcurrentlyFn = Arc<
-    dyn Fn(Vec<MessageExt>, ConsumeConcurrentlyContext) -> Result<ConsumeConcurrentlyStatus>
+    dyn Fn(&[&MessageExt], &ConsumeConcurrentlyContext) -> Result<ConsumeConcurrentlyStatus>
         + Send
         + Sync,
 >;
