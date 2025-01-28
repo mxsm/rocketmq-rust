@@ -27,8 +27,8 @@ use crate::protocol::admin::offset_wrapper::OffsetWrapper;
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ConsumeStats {
     #[serde(with = "any_key_map")]
-    offset_table: HashMap<MessageQueue, OffsetWrapper>,
-    consume_tps: f64,
+    pub offset_table: HashMap<MessageQueue, OffsetWrapper>,
+    pub consume_tps: f64,
 }
 
 impl ConsumeStats {
