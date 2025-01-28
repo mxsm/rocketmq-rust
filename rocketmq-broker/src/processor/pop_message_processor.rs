@@ -27,7 +27,6 @@ use std::sync::Arc;
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
-use rand::thread_rng;
 use rand::Rng;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::constant::consume_init_mode::ConsumeInitMode;
@@ -489,7 +488,7 @@ where
             (subscription_data, None)
         };
 
-        let randomq = thread_rng().gen_range(0..100);
+        let randomq = rand::rng().random_range(0..100);
         let revive_qid = if request_header.order.unwrap_or(false) {
             POP_ORDER_REVIVE_QUEUE
         } else {

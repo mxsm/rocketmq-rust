@@ -456,8 +456,8 @@ impl PullAPIWrapper {
 }
 
 pub fn random_num() -> i32 {
-    let mut rng = rand::thread_rng();
-    let mut value = rng.gen::<i32>();
+    let mut rng = rand::rng();
+    let mut value = rng.random::<i32>();
     if value < 0 {
         value = value.abs();
         if value < 0 {

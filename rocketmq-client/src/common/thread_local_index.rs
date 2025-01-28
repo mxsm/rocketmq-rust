@@ -37,7 +37,7 @@ impl ThreadLocalIndex {
             let mut index = index.borrow_mut();
             let new_value = match *index {
                 Some(val) => val.wrapping_add(1) & POSITIVE_MASK,
-                None => rand::thread_rng().gen_range(0..=MAX) & POSITIVE_MASK,
+                None => rand::rng().random_range(0..=MAX) & POSITIVE_MASK,
             };
             *index = Some(new_value);
             new_value
@@ -45,7 +45,7 @@ impl ThreadLocalIndex {
     }
 
     pub fn reset(&self) {
-        let new_value = rand::thread_rng().gen_range(0..=MAX).abs();
+        let new_value = rand::rng().random_range(0..=MAX).abs();
         THREAD_LOCAL_INDEX.with(|index| {
             *index.borrow_mut() = Some(new_value);
         });
