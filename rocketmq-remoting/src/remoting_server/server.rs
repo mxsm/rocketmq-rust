@@ -144,10 +144,10 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
             let opaque = cmd.opaque();
             let oneway_rpc = cmd.is_oneway_rpc();
             //before handle request hooks
-            let exception = match self.do_before_rpc_hooks(&self.channel, Some(&mut cmd)) {
-                Ok(_) => None,
-                Err(error) => Some(error),
-            };
+
+            let exception = self
+                .do_before_rpc_hooks(&self.channel, Some(&mut cmd))
+                .err();
             //handle error if return have
             match self.handle_error(oneway_rpc, opaque, exception).await {
                 HandleErrorResult::Continue => continue,
@@ -168,10 +168,9 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                 }
             };
 
-            let exception = match self.do_before_rpc_hooks(&self.channel, response.as_mut()) {
-                Ok(_) => None,
-                Err(error) => Some(error),
-            };
+            let exception = self
+                .do_before_rpc_hooks(&self.channel, response.as_mut())
+                .err();
 
             match self.handle_error(oneway_rpc, opaque, exception).await {
                 HandleErrorResult::Continue => continue,

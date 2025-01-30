@@ -32,10 +32,7 @@ impl EnvUtils {
     /// An `Option` containing the value of the environment variable, or `None` if the variable is
     /// not set.
     pub fn get_property(key: impl Into<String>) -> Option<String> {
-        match std::env::var(key.into()) {
-            Ok(value) => Some(value),
-            Err(_error) => None,
-        }
+        std::env::var(key.into()).ok()
     }
 
     /// Gets the value of the ROCKETMQ_HOME environment variable.

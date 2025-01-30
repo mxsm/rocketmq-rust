@@ -303,10 +303,7 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
                             Err(e) => Err(BrokerError::ClientError(e)),
                         }
                     };
-                match result {
-                    Ok(value) => Some(value),
-                    Err(_) => None,
-                }
+                result.ok()
             }
         }
     }
