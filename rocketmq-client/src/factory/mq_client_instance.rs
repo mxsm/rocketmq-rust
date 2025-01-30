@@ -23,7 +23,7 @@ use std::thread;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
-use rand::seq::SliceRandom;
+use rand::seq::IndexedRandom;
 use rocketmq_common::common::base::service_state::ServiceState;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
@@ -508,7 +508,7 @@ impl MQClientInstance {
         if let Some(topic_route_data) = topic_route_table.get(topic) {
             let brokers = &topic_route_data.broker_datas;
             if !brokers.is_empty() {
-                let bd = brokers.choose(&mut rand::thread_rng());
+                let bd = brokers.choose(&mut rand::rng());
                 if let Some(bd) = bd {
                     return bd.select_broker_addr();
                 }

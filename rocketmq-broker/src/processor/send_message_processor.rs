@@ -1193,7 +1193,7 @@ where
         let mut new_topic =
             CheetahString::from_string(mix_all::get_retry_topic(request_header.group.as_str()));
         let mut queue_id_int =
-            rand::thread_rng().gen_range(0..subscription_group_config.retry_queue_nums());
+            rand::rng().random_range(0..subscription_group_config.retry_queue_nums());
         let topic_sys_flag = if request_header.unit_mode {
             TopicSysFlag::build_sys_flag(false, true)
         } else {
@@ -1593,7 +1593,7 @@ where
     }
 
     pub(crate) fn random_queue_id(&self, write_queue_nums: u32) -> u32 {
-        rand::thread_rng().gen_range(0..=99999999) % write_queue_nums
+        rand::rng().random_range(0..=99999999) % write_queue_nums
     }
 }
 

@@ -131,11 +131,7 @@ impl BrokerData {
     pub fn select_broker_addr(&self) -> Option<CheetahString> {
         let master_address = self.broker_addrs.get(&(mix_all::MASTER_ID)).cloned();
         if master_address.is_none() {
-            return self
-                .broker_addrs
-                .values()
-                .choose(&mut rand::thread_rng())
-                .cloned();
+            return self.broker_addrs.values().choose(&mut rand::rng()).cloned();
         }
         master_address
     }

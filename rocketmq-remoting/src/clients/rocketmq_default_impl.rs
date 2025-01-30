@@ -424,6 +424,6 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
 }
 
 fn init_value_index() -> i32 {
-    let mut rng = rand::thread_rng();
-    rng.gen_range(0..999)
+    let mut rng = rand::rng();
+    rng.random_range(0..999)
 }

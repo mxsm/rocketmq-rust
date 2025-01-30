@@ -101,7 +101,7 @@ where
 
         if !tmp_list.is_empty() {
             use rand::seq::SliceRandom;
-            let mut rng = rand::thread_rng();
+            let mut rng = rand::rng();
             tmp_list.shuffle(&mut rng);
             for fault_item in tmp_list {
                 if fault_item
