@@ -89,10 +89,7 @@ impl<T: ?Sized> RocketMQTokioRwLock<T> {
     /// An `Option` containing a `RwLockReadGuard` if the read lock was successfully acquired, or
     /// `None` if the lock is already held.
     pub async fn try_read(&self) -> Option<tokio::sync::RwLockReadGuard<'_, T>> {
-        match self.lock.try_read() {
-            Ok(guard) => Some(guard),
-            Err(_) => None,
-        }
+        self.lock.try_read().ok()
     }
 
     /// Attempts to acquire a write lock asynchronously without blocking.
@@ -102,10 +99,7 @@ impl<T: ?Sized> RocketMQTokioRwLock<T> {
     /// An `Option` containing a `RwLockWriteGuard` if the write lock was successfully acquired, or
     /// `None` if the lock is already held.
     pub async fn try_write(&self) -> Option<tokio::sync::RwLockWriteGuard<'_, T>> {
-        match self.lock.try_write() {
-            Ok(guard) => Some(guard),
-            Err(_) => None,
-        }
+        self.lock.try_write().ok()
     }
 
     /// Attempts to acquire a read lock asynchronously, blocking for up to the specified timeout.
@@ -122,10 +116,7 @@ impl<T: ?Sized> RocketMQTokioRwLock<T> {
         &self,
         timeout: Duration,
     ) -> Option<tokio::sync::RwLockReadGuard<'_, T>> {
-        match tokio::time::timeout(timeout, self.lock.read()).await {
-            Ok(guard) => Some(guard),
-            Err(_) => None,
-        }
+        (tokio::time::timeout(timeout, self.lock.read()).await).ok()
     }
 
     /// Attempts to acquire a write lock asynchronously, blocking for up to the specified timeout.
@@ -142,10 +133,7 @@ impl<T: ?Sized> RocketMQTokioRwLock<T> {
         &self,
         timeout: Duration,
     ) -> Option<tokio::sync::RwLockWriteGuard<'_, T>> {
-        match tokio::time::timeout(timeout, self.lock.write()).await {
-            Ok(guard) => Some(guard),
-            Err(_) => None,
-        }
+        (tokio::time::timeout(timeout, self.lock.write()).await).ok()
     }
 }
 
@@ -188,10 +176,7 @@ impl<T: ?Sized> RocketMQTokioMutex<T> {
     /// An `Option` containing a `MutexGuard` if the lock was successfully acquired, or `None` if
     /// the lock is already held.
     pub async fn try_lock(&self) -> Option<tokio::sync::MutexGuard<'_, T>> {
-        match self.lock.try_lock() {
-            Ok(guard) => Some(guard),
-            Err(_) => None,
-        }
+        self.lock.try_lock().ok()
     }
 
     /// Attempts to acquire the lock asynchronously, blocking for up to the specified timeout.
@@ -208,10 +193,7 @@ impl<T: ?Sized> RocketMQTokioMutex<T> {
         &self,
         timeout: Duration,
     ) -> Option<tokio::sync::MutexGuard<'_, T>> {
-        match tokio::time::timeout(timeout, self.lock.lock()).await {
-            Ok(guard) => Some(guard),
-            Err(_) => None,
-        }
+        (tokio::time::timeout(timeout, self.lock.lock()).await).ok()
     }
 }
 

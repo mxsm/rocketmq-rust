@@ -317,10 +317,7 @@ pub fn get_ip_str() -> CheetahString {
 }
 
 pub fn parse_date(date: &str, pattern: &str) -> Option<NaiveDateTime> {
-    match NaiveDateTime::parse_from_str(date, pattern) {
-        Ok(value) => Some(value),
-        Err(_) => None,
-    }
+    NaiveDateTime::parse_from_str(date, pattern).ok()
 }
 
 #[cfg(test)]
