@@ -15,7 +15,7 @@ title: "RocketMQ Rust"
 title_separator: "-"
 subtitle: "Document for RocketMQ Rust"
 name: &name "mxsm" # &name is a YAML anchor which can be *referenced later
-description: &description "A flexible Jekyll theme for your blog or site with a minimalist aesthetic."
+description: "Document for Rocketmq rust."
 url: https://rocketmq-rust.ljbmxsm.com # the base hostname & protocol for your site e.g. "https://mmistakes.github.io"
 baseurl: "" # the subpath of your site, e.g. "/blog"
 repository: "mxsm/rocketmq-rust"
@@ -58,7 +58,7 @@ search_full_content: true # true, false (default)
 search_provider: algolia # lunr (default), algolia
 algolia:
   application_id: A7P4XEL1X0  # YOUR_APPLICATION_ID
-  #index_name: rocketmq-rust #minimal_mistakes # YOUR_INDEX_NAME
+  index_name: rocketmq_rust_ljbmxsm_com_a7p4xel1x0_pages #minimal_mistakes # YOUR_INDEX_NAME
   search_only_api_key: db1ad68e86dd7d47a5988ab78dcc8347 # YOUR_SEARCH_ONLY_API_KEY
   powered_by: true # true (default), false
   files_to_exclude:
@@ -72,12 +72,12 @@ yandex_site_verification:
 baidu_site_verification:
 
 # Social Sharing
-twitter:
-  username: &twitter "mxsm"
-facebook:
-  username: &facebook "mxsm"
-  app_id:
-  publisher:
+#twitter:
+#  username: &twitter "mxsm"
+#facebook:
+#  username: &facebook "mxsm"
+#  app_id:
+#  publisher:
 og_image: "/assets/images/site-logo.png" # Open Graph/Twitter default site image
 # For specifying social profiles, used in _includes/seo.html
 # - https://developers.google.com/structured-data/customize/social-profiles
