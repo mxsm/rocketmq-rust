@@ -29,6 +29,8 @@ feature_row:
     title: "Lower memory usage"
     excerpt: "Through underlying optimizations, lower memory usage is achieved."
 ---
+
 <script async defer src="https://buttons.github.io/buttons.js"></script>
+<meta name="algolia-site-verification"  content="AECDAB6BC16D0E19" />
 {% include feature_row %}
 
