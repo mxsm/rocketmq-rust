@@ -60,4 +60,5 @@ jobs:
           crawler-api-key: ${{ secrets.CRAWLER_API_KEY }}
           algolia-app-id: ${{ secrets.ALGOLIA_APP_ID }}
           algolia-api-key: ${{ secrets.ALGOLIA_API_KEY }}
+          crawler-name: 'rocketmq_rust_ljbmxsm_com_a7p4xel1x0_pages'
           site-url: 'https://rocketmq-rust.ljbmxsm.com'
