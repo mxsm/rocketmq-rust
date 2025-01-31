@@ -102,15 +102,22 @@ where
             RequestCode::BatchAckMessage => {
                 self.process_batch_ack(channel, ctx, request, true).await
             }
-            _ => Ok(Some(
-                RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::MessageIllegal,
-                    format!(
-                        "request code not supported, request code: {:?}",
-                        request_code
+            _ => {
+                error!(
+                    "AckMessageProcessor failed to process RequestCode: {}, consumer: {} ",
+                    request_code.to_i32(),
+                    channel.remote_address()
+                );
+                Ok(Some(
+                    RemotingCommand::create_response_command_with_code_remark(
+                        ResponseCode::MessageIllegal,
+                        format!(
+                            "AckMessageProcessor failed to process RequestCode: {:?}",
+                            request_code
+                        ),
                     ),
-                ),
-            )),
+                ))
+            }
         }
     }
 
