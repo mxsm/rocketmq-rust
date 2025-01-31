@@ -16,6 +16,8 @@
  */
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 
@@ -61,6 +63,7 @@ pub struct PopReviveService<MS> {
     should_run_pop_revive: bool,
     inflight_revive_request_map: Arc<tokio::sync::Mutex<BTreeMap<PopCheckPoint, (i64, bool)>>>,
     revive_offset: i64,
+    shutdown: Arc<AtomicBool>,
 }
 impl<MS: MessageStore> PopReviveService<MS> {
     pub fn new(
@@ -84,6 +87,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
             ck_rewrite_intervals_in_seconds: [
                 10, 20, 30, 60, 120, 180, 240, 300, 360, 420, 480, 540, 600, 1200, 1800, 3600, 7200,
             ],
+            shutdown: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -296,6 +300,10 @@ impl<MS: MessageStore> PopReviveService<MS> {
         tokio::spawn(async move {
             let mut slow = 1;
             loop {
+                if this.shutdown.load(Relaxed) {
+                    break;
+                }
+
                 if get_current_millis()
                     < this.broker_runtime_inner.should_start_time().load(Relaxed)
                 {
@@ -378,6 +386,10 @@ impl<MS: MessageStore> PopReviveService<MS> {
                 }
             }
         });
+    }
+
+    pub fn shutdown(&mut self) {
+        self.shutdown.store(true, Ordering::Relaxed);
     }
 
     async fn consume_revive_message(&self, consume_revive_obj: &mut ConsumeReviveObj) {

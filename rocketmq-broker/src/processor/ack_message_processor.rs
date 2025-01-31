@@ -46,7 +46,6 @@ use rocketmq_store::pop::ack_msg::AckMsg;
 use rocketmq_store::pop::batch_ack_msg::BatchAckMsg;
 use rocketmq_store::pop::AckMessage;
 use tracing::error;
-use tracing::warn;
 
 use crate::broker_error::BrokerError::BrokerCommonError;
 use crate::broker_error::BrokerError::BrokerRemotingError;
@@ -577,6 +576,8 @@ where
     }
 
     pub fn shutdown(&mut self) {
-        warn!("AckMessageProcessor shutdown unimplemented, need to be implemented");
+        for pop_revive_service in self.pop_revive_services.iter_mut() {
+            pop_revive_service.shutdown();
+        }
     }
 }
