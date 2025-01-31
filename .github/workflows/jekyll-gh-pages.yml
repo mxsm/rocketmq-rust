@@ -4,8 +4,8 @@ name: Deploy Jekyll with GitHub Pages dependencies preinstalled
 on:
   # Runs on pushes targeting the default branch
   push:
-    branches: ["main"]  
-    paths: ["rocketmq-doc/**"]
+    branches: [ "main" ]
+    paths: [ "rocketmq-doc/**" ]
 
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
@@ -52,3 +52,12 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+      - name: Algolia crawler creation and crawl
+        uses: algolia/algoliasearch-crawler-github-actions@v1.0.10
+        id: algolia_crawler
+        with: #https://github.com/marketplace/actions/algolia-crawler-automatic-crawl
+          crawler-user-id: ${{ secrets.CRAWLER_USER_ID }}
+          crawler-api-key: ${{ secrets.CRAWLER_API_KEY }}
+          algolia-app-id: ${{ secrets.ALGOLIA_APP_ID }}
+          algolia-api-key: ${{ secrets.ALGOLIA_API_KEY }}
+          site-url: 'https://rocketmq-rust.ljbmxsm.com'
