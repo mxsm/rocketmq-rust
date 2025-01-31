@@ -89,17 +89,17 @@ social:
 #    - "https://www.facebook.com/michaelrose"
 
 # Analytics
-analytics:
-  provider: "google-universal" # false (default), "google", "google-universal", "google-gtag", "custom"
-  google:
-    tracking_id: "UA-2011187-3" # Replace this with your ID, or delete
-    anonymize_ip: true
+#analytics:
+#  provider: "google-universal" # false (default), "google", "google-universal", "google-gtag", "custom"
+#  google:
+#    tracking_id: "UA-2011187-3" # Replace this with your ID, or delete
+#    anonymize_ip: true
 
 
 # Site Author
 author:
   name: *name # *name is a YAML reference pointing to the &anchor earlier
-  avatar: "/assets/images/rocketmq-21.png"
+  avatar: "/assets/images/rocketmq-rust.png"
   bio: "Apache EventMesh PMC,Committer & Apache RocketMQ active contributor & RocketMQ-Rust owner"
   location: "Canton/Foshan China"
   links:

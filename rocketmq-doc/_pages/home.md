@@ -15,16 +15,17 @@ excerpt: >
   <a class="github-button" href="https://github.com/mxsm/rocketmq-rust/fork" data-icon="octicon-repo-forked" data-show-count="true" aria-label="Fork mxsm/rocketmq-rust on GitHub">Fork</a>  
   </small><br />
 feature_row:
-  - image_path: /assets/images/mm-customizable-feature.png
+  - image_path: /assets/images/fast.png
     alt: "customizable"
     title: "Faster"
     excerpt: "The asynchronous Tokio framework provides faster processing."
-    btn_label: "Learn more"
-  - image_path: /assets/images/mm-responsive-feature.png
+    image_width: "200px"
+    image_height: "200px"
+  - image_path: /assets/images/safe.png
     alt: "fully responsive"
     title: "Safe"
     excerpt: "Development based on Rust is more secure."
-  - image_path: /assets/images/mm-free-feature.png
+  - image_path: /assets/images/low.png
     alt: "100% free"
     title: "Lower memory usage"
     excerpt: "Through underlying optimizations, lower memory usage is achieved."
