@@ -46,6 +46,7 @@ use rocketmq_store::pop::ack_msg::AckMsg;
 use rocketmq_store::pop::batch_ack_msg::BatchAckMsg;
 use rocketmq_store::pop::AckMessage;
 use tracing::error;
+use tracing::warn;
 
 use crate::broker_error::BrokerError::BrokerCommonError;
 use crate::broker_error::BrokerError::BrokerRemotingError;
@@ -147,6 +148,12 @@ where
             .topic_config_manager()
             .select_topic_config(&request_header.topic);
         if topic_config.is_none() {
+            error!(
+                "topic[{}] not exist, consumer: {},apply first please! {}",
+                request_header.topic,
+                channel.remote_address(),
+                FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
+            );
             return Ok(Some(
                 RemotingCommand::create_response_command_with_code_remark(
                     ResponseCode::TopicNotExist,
@@ -169,6 +176,8 @@ where
                 topic_config.read_queue_nums,
                 channel.remote_address()
             );
+            warn!("{}", error_msg);
+
             return Ok(Some(
                 RemotingCommand::create_response_command_with_code_remark(
                     ResponseCode::MessageIllegal,
@@ -176,17 +185,10 @@ where
                 ),
             ));
         }
-        let min_offset = self
-            .broker_runtime_inner
-            .message_store()
-            .as_ref()
-            .unwrap()
+        let message_store_inner = self.broker_runtime_inner.message_store().as_ref().unwrap();
+        let min_offset = message_store_inner
             .get_min_offset_in_queue(&request_header.topic, request_header.queue_id);
-        let max_offset = self
-            .broker_runtime_inner
-            .message_store()
-            .as_ref()
-            .unwrap()
+        let max_offset = message_store_inner
             .get_max_offset_in_queue(&request_header.topic, request_header.queue_id);
         if request_header.offset < min_offset || request_header.offset > max_offset {
             let error_msg = format!(
@@ -194,6 +196,8 @@ where
                  max offset: {}",
                 request_header.offset, min_offset, max_offset
             );
+            warn!("{}", error_msg);
+
             return Ok(Some(
                 RemotingCommand::create_response_command_with_code_remark(
                     ResponseCode::NoMessage,
@@ -400,13 +404,26 @@ where
             .pop_buffer_merge_service_mut()
             .add_ack(r_qid, ack_msg.as_ref())
         {
+            self.broker_runtime_inner
+                .pop_inflight_message_counter()
+                .decrement_in_flight_message_num(
+                    &topic,
+                    &consume_group,
+                    pop_time,
+                    qid,
+                    ack_count as i64,
+                );
             return;
         }
         let mut inner = MessageExtBrokerInner::default();
         inner.set_topic(topic.clone());
         inner.message_ext_inner.queue_id = qid;
         if let Some(batch_ack) = ack_msg.as_any().downcast_ref::<BatchAckMsg>() {
-            inner.set_body(Bytes::from(batch_ack.encode().unwrap()));
+            if let Ok(bytes) = batch_ack.encode() {
+                inner.set_body(Bytes::from(bytes));
+            } else {
+                warn!("encode batch ack msg error");
+            }
             inner.set_tags(CheetahString::from_static_str(
                 PopAckConstants::BATCH_ACK_TAG,
             ));
@@ -419,7 +436,11 @@ where
                 )),
             );
         } else if let Some(ack_msg) = ack_msg.as_any().downcast_ref::<AckMsg>() {
-            inner.set_body(Bytes::from(ack_msg.encode().unwrap()));
+            if let Ok(bytes) = ack_msg.encode() {
+                inner.set_body(Bytes::from(bytes));
+            } else {
+                warn!("encode ack msg error");
+            }
             inner.set_tags(CheetahString::from_static_str(PopAckConstants::ACK_TAG));
             inner.put_property(
                 CheetahString::from_static_str(
@@ -432,6 +453,7 @@ where
         }
         inner.message_ext_inner.born_timestamp = get_current_millis() as i64;
         inner.message_ext_inner.store_host = self.broker_runtime_inner.store_host();
+        inner.message_ext_inner.born_host = self.broker_runtime_inner.store_host();
         inner.set_delay_time_ms((pop_time + invisible_time) as u64);
         inner.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
@@ -446,17 +468,17 @@ where
             .escape_bridge_mut()
             .put_message_to_specific_queue(inner)
             .await;
-        match put_message_result.put_message_status() {
+        if !matches!(
+            put_message_result.put_message_status(),
             PutMessageStatus::PutOk
-            | PutMessageStatus::FlushDiskTimeout
-            | PutMessageStatus::FlushSlaveTimeout
-            | PutMessageStatus::SlaveNotAvailable => {}
-            _ => {
-                error!(
-                    "put ack msg error:{:?}",
-                    put_message_result.put_message_status()
-                );
-            }
+                | PutMessageStatus::FlushDiskTimeout
+                | PutMessageStatus::FlushSlaveTimeout
+                | PutMessageStatus::SlaveNotAvailable
+        ) {
+            error!(
+                "put ack msg error:{:?}",
+                put_message_result.put_message_status()
+            );
         }
         self.broker_runtime_inner
             .pop_inflight_message_counter()
