@@ -54,6 +54,8 @@ docs:
         url: /docs/run-rocketmq-rust-locally/
       - title: "Run RocketMQ Rust with Docker"
         url: /docs/run-rocketmq-rust-docker/
+      - title: "Run RocketMQ Rust with Kubernetes"
+        url: /docs/run-rocketmq-rust-k8s/
   #      - title: "Overriding Theme Defaults"
   #        url: /docs/overriding-theme-defaults/
   #      - title: "Navigation"
