@@ -40,6 +40,12 @@ jobs:
         uses: actions/upload-pages-artifact@v3
         with:
           path: rocketmq-doc/_site
+      - name: Update Algolia index
+        working-directory: rocketmq-doc/
+        run: bundle exec jekyll algolia push
+        env:
+          ALGOLIA_API_KEY: ${{ secrets.ALGOLIA_API_KEY }}
+          continue-on-error: true
 
   # Deployment job
   deploy:
@@ -52,12 +58,6 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-      - name: Update Algolia index
-        working-directory: rocketmq-doc/
-        run: bundle exec jekyll algolia push
-        env:
-          ALGOLIA_API_KEY: ${{ secrets.ALGOLIA_API_KEY }}
-          continue-on-error: true
 #      - name: Algolia crawler creation and crawl
 #        uses: algolia/algoliasearch-crawler-github-actions@v1.0.10
 #        id: algolia_crawler
