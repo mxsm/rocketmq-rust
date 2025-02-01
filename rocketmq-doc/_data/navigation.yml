@@ -38,6 +38,8 @@ docs:
     children:
       - title: "What's Rocketmq Rust"
         url: /docs/what-rocketmq-rust/
+      - title: "Rocketmq Rust Components"
+        url: /docs/components/
   #      - title: "Structure"
   #        url: /docs/structure/
   #      - title: "Installation"
