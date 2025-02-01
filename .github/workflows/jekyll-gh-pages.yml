@@ -53,17 +53,47 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@v4
 
+  #      - name: Sleep for 30s
+  #        run: sleep 30
+  #
+  #      - name: Algolia crawler creation and crawl
+  #        uses: algolia/algoliasearch-crawler-github-actions@v1.0.10
+  #        id: algolia_crawler
+  #        with: #https://github.com/marketplace/actions/algolia-crawler-automatic-crawl
+  #          crawler-user-id: ${{ secrets.CRAWLER_USER_ID }}
+  #          crawler-api-key: ${{ secrets.CRAWLER_API_KEY }}
+  #          algolia-app-id: ${{ secrets.ALGOLIA_APP_ID }}
+  #          algolia-api-key: ${{ secrets.ALGOLIA_API_KEY }}
+  #          crawler-name: 'rocketmq_rust_ljbmxsm_com_a7p4xel1x0_pages'
+  #          site-url: 'https://rocketmq-rust.ljbmxsm.com'
+  #          override-config: true
+  #      - name: Update Algolia index
+  #        working-directory: docs/
+  #        run: bundle exec jekyll algolia push
+  #        env:
+  #          ALGOLIA_API_KEY: ${{ secrets.ALGOLIA_API_KEY }}
+  #        continue-on-error: true
+  algolia_recrawl:
+    name: Algolia Recrawl
+    runs-on: ubuntu-latest
+    steps:
+      # checkout this repo
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+
+      # We don't know when the site will be deployed, we just wait a few seconds
+      # Better solutions can be found
       - name: Sleep for 30s
         run: sleep 30
 
-      - name: Algolia crawler creation and crawl
-        uses: algolia/algoliasearch-crawler-github-actions@v1.0.10
-        id: algolia_crawler
-        with: #https://github.com/marketplace/actions/algolia-crawler-automatic-crawl
+      - name: Github-pages-MAIN => Algolia crawler creation and recrawl (Push on Main branch)
+        uses: algolia/algoliasearch-crawler-github-actions@v1
+        id: crawler_push
+        with:
           crawler-user-id: ${{ secrets.CRAWLER_USER_ID }}
           crawler-api-key: ${{ secrets.CRAWLER_API_KEY }}
           algolia-app-id: ${{ secrets.ALGOLIA_APP_ID }}
           algolia-api-key: ${{ secrets.ALGOLIA_API_KEY }}
-          #crawler-name: 'rocketmq_rust_ljbmxsm_com_a7p4xel1x0_pages'
           site-url: 'https://rocketmq-rust.ljbmxsm.com'
+          crawler-name: 'rocketmq_rust_ljbmxsm_com_a7p4xel1x0_pages'
           override-config: true
