@@ -21,7 +21,7 @@ foo:
 # main links
 main:
   - title: "Docs"
-    url: /docs/quick-start-guide/
+    url: /docs/architecture/
   - title: "About"
     url: /about/
   #  - title: "Sample Posts"
@@ -36,8 +36,8 @@ main:
 docs:
   - title: Introduction
   #    children:
-  #      - title: "Quick-Start Guide"
-  #        url: /docs/quick-start-guide/
+  #      - title: "Architecture"
+  #        url: /docs/architecture/
   #      - title: "Structure"
   #        url: /docs/structure/
   #      - title: "Installation"
@@ -45,9 +45,9 @@ docs:
   #      - title: "Upgrading"
   #        url: /docs/upgrading/
   - title: Getting Started
-  #    children:
-  #      - title: "Configuration"
-  #        url: /docs/configuration/
+    children:
+      - title: "Quick Start Guide"
+        url: /docs/quick-start-guide/
   #      - title: "Overriding Theme Defaults"
   #        url: /docs/overriding-theme-defaults/
   #      - title: "Navigation"
@@ -59,9 +59,9 @@ docs:
   #      - title: "Layouts"
   #        url: /docs/layouts/
   - title: Architecture
-  #    children:
-  #      - title: "Working with Posts"
-  #        url: /docs/posts/
+    children:
+      - title: "Architecture"
+        url: /docs/architecture/
   #      - title: "Working with Pages"
   #        url: /docs/pages/
   #      - title: "Working with Collections"
