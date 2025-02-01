@@ -52,6 +52,10 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+      - name: Sleep for 30s
+        run: sleep 30
+
       - name: Algolia crawler creation and crawl
         uses: algolia/algoliasearch-crawler-github-actions@v1.0.10
         id: algolia_crawler
@@ -62,3 +66,4 @@ jobs:
           algolia-api-key: ${{ secrets.ALGOLIA_API_KEY }}
           crawler-name: 'rocketmq_rust_ljbmxsm_com_a7p4xel1x0_pages'
           site-url: 'https://rocketmq-rust.ljbmxsm.com'
+          override-config: true
