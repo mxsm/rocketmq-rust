@@ -35,9 +35,9 @@ main:
 # documentation links
 docs:
   - title: Introduction
-  #    children:
-  #      - title: "Architecture"
-  #        url: /docs/architecture/
+    children:
+      - title: "What's Rocketmq Rust"
+        url: /docs/what-rocketmq-rust/
   #      - title: "Structure"
   #        url: /docs/structure/
   #      - title: "Installation"
