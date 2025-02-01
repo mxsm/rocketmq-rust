@@ -40,12 +40,42 @@ jobs:
         uses: actions/upload-pages-artifact@v3
         with:
           path: rocketmq-doc/_site
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+
+      - name: Setup cache for Bundler
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            rocketmq-doc/Gemfile.lock
+            rocketmq-doc/vendor/bundle
+          key: ${{ runner.os }}-bundler-${{ hashFiles('rocketmq-doc/Gemfile') }}
+          restore-keys: |
+            ${{ runner.os }}-bundler-
+
+      - name: Install Bundler Dependencies
+        working-directory: docs/
+        env:
+          MAKE: make -j2
+        run: |
+          bundle config set path vendor/bundle
+          bundle install --jobs=4 --retry=3
+          bundle clean
+
       - name: Update Algolia index
         working-directory: rocketmq-doc/
         run: bundle exec jekyll algolia push
         env:
           ALGOLIA_API_KEY: ${{ secrets.ALGOLIA_API_KEY }}
-          continue-on-error: true
+        continue-on-error: true
 
   # Deployment job
   deploy:
