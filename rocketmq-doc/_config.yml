@@ -58,7 +58,7 @@ search_full_content: true # true, false (default)
 search_provider: algolia # lunr (default), algolia
 algolia:
   application_id: A7P4XEL1X0  # YOUR_APPLICATION_ID
-  index_name: rocketmq_rust_ljbmxsm_com_a7p4xel1x0_pages #minimal_mistakes # YOUR_INDEX_NAME
+  index_name: crawler_rocketmq-rust.ljbmxsm.com_A7P4XEL1X0_index #minimal_mistakes # YOUR_INDEX_NAME
   search_only_api_key: db1ad68e86dd7d47a5988ab78dcc8347 # YOUR_SEARCH_ONLY_API_KEY
   powered_by: true # true (default), false
   files_to_exclude:
