@@ -52,17 +52,22 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-
-      - name: Algolia crawler creation and crawl
-        uses: algolia/algoliasearch-crawler-github-actions@v1.0.10
-        id: algolia_crawler
-        with: #https://github.com/marketplace/actions/algolia-crawler-automatic-crawl
-          crawler-user-id: ${{ secrets.CRAWLER_USER_ID }}
-          crawler-api-key: ${{ secrets.CRAWLER_API_KEY }}
-          algolia-app-id: ${{ secrets.ALGOLIA_APP_ID }}
-          algolia-api-key: ${{ secrets.ALGOLIA_API_KEY }}
-          crawler-name: 'rocketmq-rust.ljbmxsm.com_A7P4XEL1X0'
-          site-url: 'https://rocketmq-rust.ljbmxsm.com'
-          override-config: true
+      - name: Update Algolia index
+        working-directory: rocketmq-doc/
+        run: bundle exec jekyll algolia push
+        env:
+          ALGOLIA_API_KEY: ${{ secrets.ALGOLIA_API_KEY }}
+          continue-on-error: true
+#      - name: Algolia crawler creation and crawl
+#        uses: algolia/algoliasearch-crawler-github-actions@v1.0.10
+#        id: algolia_crawler
+#        with: #https://github.com/marketplace/actions/algolia-crawler-automatic-crawl
+#          crawler-user-id: ${{ secrets.CRAWLER_USER_ID }}
+#          crawler-api-key: ${{ secrets.CRAWLER_API_KEY }}
+#          algolia-app-id: ${{ secrets.ALGOLIA_APP_ID }}
+#          algolia-api-key: ${{ secrets.ALGOLIA_API_KEY }}
+#          crawler-name: 'rocketmq-rust.ljbmxsm.com_A7P4XEL1X0'
+#          site-url: 'https://rocketmq-rust.ljbmxsm.com'
+#          override-config: true
 
 
