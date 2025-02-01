@@ -50,6 +50,8 @@ docs:
     children:
       - title: "Quick Start Guide"
         url: /docs/quick-start-guide/
+      - title: "Run RocketMQ Rust locally"
+        url: /docs/run-rocketmq-rust-locally/
   #      - title: "Overriding Theme Defaults"
   #        url: /docs/overriding-theme-defaults/
   #      - title: "Navigation"
