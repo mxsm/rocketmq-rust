@@ -20,6 +20,10 @@ language.
 - **Cross-platform Support:** RocketMQ-Rust supports multiple platforms, including Linux, Windows, macOS, making it
   convenient for use in different environments.
 
+## Architecture
+
+![](resources/architecture.png)
+
 ## Roadmap
 
 ### **🔊Note**: ***[Rocketmq-rust](https://github.com/mxsm/rocketmq-rust)*** is implemented based on ***[Apache Rocketmq release-5.3.1📌](https://github.com/apache/rocketmq/tree/release-5.3.1)***, with subsequent feature enhancements to follow the updates of the version🚩.
