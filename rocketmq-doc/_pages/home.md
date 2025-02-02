@@ -31,5 +31,13 @@ feature_row:
 
 <script async defer src="https://buttons.github.io/buttons.js"></script>
 <meta name="algolia-site-verification"  content="AECDAB6BC16D0E19" />
+## Feature
+
 {% include feature_row %}
+
+
+
+## Architecture
+
+![](/assets/images/architecture.png)
 
