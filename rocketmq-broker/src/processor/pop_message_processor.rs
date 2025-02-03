@@ -1325,11 +1325,8 @@ where
         queue_id: i32,
         cid: &CheetahString,
     ) {
-        info!(
-            "notifyMessageArriving topic={} queueId={} cid={}",
-            topic, queue_id, cid
-        );
-        unimplemented!("PopMessageProcessor notify_message_arriving")
+        self.pop_long_polling_service
+            .notify_message_arriving(topic, queue_id, cid, None, 0, None, None);
     }
 
     fn read_get_message_result(
