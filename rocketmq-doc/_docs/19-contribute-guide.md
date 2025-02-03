@@ -101,9 +101,9 @@ git push origin feature-issueNo(custom)
 - The mentor will do code review before discussing some details (including the design, the implementation and the
   performance) with you. The request will be merged into the branch of current development version after the edit is
   well enough.
-- At last, congratulations on being an contributor of rocketmq-rust
+- At last, congratulations on being a contributor of rocketmq-rust
 
-**Note:** 🚨TThe code review suggestions from CodeRabbit are to be used as a reference only, and the PR submitter can
+**Note:** 🚨The code review suggestions from CodeRabbit are to be used as a reference only, and the PR submitter can
 decide whether to make changes based on their own judgment. Ultimately, the project management personnel will conduct
 the final code review💥
 {: .notice--info}
