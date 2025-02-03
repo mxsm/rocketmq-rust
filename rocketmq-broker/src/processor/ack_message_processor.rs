@@ -522,7 +522,9 @@ where
             .queue_lock_manager()
             .try_lock_with_key(lock_key.clone())
             .await
-        {}
+        {
+            //nothing to do
+        }
         let old_offset = self
             .broker_runtime_inner
             .consumer_offset_manager()
