@@ -147,7 +147,7 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
                 let mut match_result = message_filter.is_matched_by_consume_queue(
                     tags_code,
                     Some(&CqExtUnit::new(
-                        tags_code.unwrap(),
+                        tags_code.unwrap_or_default(),
                         msg_store_time,
                         filter_bit_map,
                     )),
@@ -159,6 +159,7 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
                 }
                 if !match_result {
                     remoting_commands.value().insert(pop_request);
+                    self.total_polling_num.fetch_add(1, Ordering::AcqRel);
                     return false;
                 }
 
