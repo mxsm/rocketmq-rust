@@ -7,7 +7,7 @@
 
 remote_theme: "mmistakes/minimal-mistakes@master"
 
-minimal_mistakes_skin: "sunrise" # "air", "aqua", "contrast", "dark", "dirt", "neon", "mint", "plum", "sunrise"
+minimal_mistakes_skin: "contrast" # "air", "aqua", "contrast", "dark", "dirt", "neon", "mint", "plum", "sunrise"
 
 # Site Settings
 locale: "en-US"
@@ -330,3 +330,8 @@ compress_html:
   clippings: all
   ignore:
     envs: development
+
+after_footer_scripts:
+  - https://cdn.jsdelivr.net/npm/mermaid@9.4.3/dist/mermaid.js
+  - assets/js/mermaid.js
+
