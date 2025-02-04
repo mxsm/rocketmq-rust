@@ -42,6 +42,8 @@ docs:
         url: /docs/what-rocketmq-rust/
       - title: "Rocketmq Rust Components"
         url: /docs/components/
+      - title: "Rocketmq Rust Roadmap"
+        url: /docs/roadmap/
   #      - title: "Structure"
   #        url: /docs/structure/
   #      - title: "Installation"
