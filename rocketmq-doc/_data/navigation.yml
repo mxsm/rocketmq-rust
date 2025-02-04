@@ -28,6 +28,8 @@ main:
   #    url: /year-archive/
   #  - title: "Sample Collections"
   #    url: /collection-archive/
+  - title: "Release Notes"
+    url: /release-notes/
   - title: "GitHub"
     url: https://github.com/mxsm/rocketmq-rust
     target: _blank
