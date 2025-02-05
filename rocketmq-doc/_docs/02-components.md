@@ -5,7 +5,8 @@ excerpt: "Rocketmq rust Components"
 last_modified_at: 2025-02-01T08:48:05-04:00
 redirect_from:
   - /theme-setup/
-toc: true
+toc: false
+classes: wide
 ---
 
 RocketMQ is a distributed message middleware, and its core architecture consists of multiple components working together to ensure highly available and high-performance message delivery. Below is a detailed analysis of its core components and functionalities:

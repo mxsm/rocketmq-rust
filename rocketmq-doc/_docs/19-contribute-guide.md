@@ -5,7 +5,8 @@ excerpt: "How to contribute to RocketMQ Rust."
 last_modified_at: 2025-01-30T22:48:05-23:00:05
 redirect_from:
   - /theme-setup/
-toc: true
+toc: false
+classes: wide
 ---
 
 You can report a bug, submit a new function enhancement suggestion, or submit a pull request directly.

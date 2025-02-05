@@ -5,7 +5,8 @@ excerpt: "Rocketmq rust Architecture"
 last_modified_at: 2025-02-02T23:24
 redirect_from:
   - /theme-setup/
-toc: true
+toc: false
+classes: wide
 ---
 
 ## **What is RocketMQ-Rust?**
