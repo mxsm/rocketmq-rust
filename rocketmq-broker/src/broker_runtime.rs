@@ -607,16 +607,7 @@ impl BrokerRuntime {
             self.inner.clone(),
         ));
 
-        let consumer_manage_processor = ConsumerManageProcessor::new(
-            /*self.broker_config.clone(),
-            self.consumer_manager.clone(),
-            self.topic_queue_mapping_manager.clone(),
-            self.subscription_group_manager.clone(),
-            Arc::new(self.consumer_offset_manager.clone()),
-            Arc::new(self.topic_config_manager.clone()),
-            self.message_store.clone().unwrap(),*/
-            self.inner.clone(),
-        );
+        let consumer_manage_processor = ConsumerManageProcessor::new(self.inner.clone());
         self.inner.pull_request_hold_service = Some(PullRequestHoldService::new(
             /* message_store.clone(), */
             pull_message_processor.clone(),

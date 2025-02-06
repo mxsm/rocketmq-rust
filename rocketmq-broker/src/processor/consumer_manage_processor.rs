@@ -36,13 +36,6 @@ use tracing::warn;
 use crate::broker_runtime::BrokerRuntimeInner;
 
 pub struct ConsumerManageProcessor<MS> {
-    /*broker_config: Arc<BrokerConfig>,
-    consumer_manager: Arc<ConsumerManager>,
-    topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
-    consumer_offset_manager: Arc<ConsumerOffsetManager>,
-    subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
-    topic_config_manager: Arc<TopicConfigManager>,
-    message_store: ArcMut<MS>,*/
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
@@ -50,24 +43,8 @@ impl<MS> ConsumerManageProcessor<MS>
 where
     MS: MessageStore,
 {
-    pub fn new(
-        /*broker_config: Arc<BrokerConfig>,
-        consumer_manager: Arc<ConsumerManager>,
-        topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
-        subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
-        consumer_offset_manager: Arc<ConsumerOffsetManager>,
-        topic_config_manager: Arc<TopicConfigManager>,
-        message_store: ArcMut<MS>,*/
-        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-    ) -> Self {
+    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
         Self {
-            /*broker_config,
-            consumer_manager,
-            topic_queue_mapping_manager,
-            consumer_offset_manager,
-            subscription_group_manager,
-            topic_config_manager,
-            message_store,*/
             broker_runtime_inner,
         }
     }
