@@ -252,11 +252,8 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
                     .broker_runtime_inner
                     .consumer_manager()
                     .get_consumer_group_info(consumer_group);
-                let mut cid_all = if let Some(consumer_group_info) = consumer_group_info {
-                    consumer_group_info.get_all_client_ids()
-                } else {
-                    vec![]
-                };
+                let mut cid_all =
+                    consumer_group_info.map_or_else(Vec::new, |info| info.get_all_client_ids());
                 if cid_all.is_empty() {
                     warn!(
                         "QueryLoad: no assignment for group[{}] topic[{}], get consumer id list \
