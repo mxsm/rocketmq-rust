@@ -104,9 +104,14 @@ impl MessageFilter for ExpressionMessageFilter {
             return true;
         }
         let real_filter_data = self.consumer_filter_data.as_ref().unwrap();
-        if real_filter_data.expression().is_none() || real_filter_data.expression_type().is_none() {
+        if real_filter_data.expression().is_none()
+            || real_filter_data.expression_type().is_none()
+            || real_filter_data.compiled_expression().is_none()
+        {
             return true;
         }
+
+        if let Some(msg_buffer) = msg_buffer {}
         unimplemented!("SQL92 expression type is not supported yet.")
     }
 }
