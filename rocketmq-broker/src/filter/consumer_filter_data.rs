@@ -101,4 +101,8 @@ impl ConsumerFilterData {
     pub fn set_client_version(&mut self, client_version: u64) {
         self.client_version = client_version;
     }
+
+    pub fn compiled_expression(&self) -> &Option<Arc<Box<dyn Expression + Send + Sync + 'static>>> {
+        &self.compiled_expression
+    }
 }

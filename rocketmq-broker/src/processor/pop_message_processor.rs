@@ -572,6 +572,7 @@ where
                 .await
             };
         }
+        //request_header.queue_id < 0 means read all queue
         rest_num = if request_header.queue_id < 0 {
             // read all queue
             self.pop_msg_from_topic(
