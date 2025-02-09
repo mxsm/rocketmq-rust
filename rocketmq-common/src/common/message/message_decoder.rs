@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 use std::collections::HashMap;
+use std::io::Cursor;
 use std::io::Write;
 use std::net::IpAddr;
 use std::net::Ipv4Addr;
@@ -24,6 +25,8 @@ use std::net::SocketAddrV4;
 use std::net::SocketAddrV6;
 use std::str;
 
+use byteorder::BigEndian;
+use byteorder::ByteOrder;
 use bytes::Buf;
 use bytes::BufMut;
 use bytes::Bytes;
@@ -807,6 +810,100 @@ pub fn create_crc32(mut input: &mut [u8], crc32: u32) {
     input.put_u8(PROPERTY_SEPARATOR as u8);
 }
 
+pub fn decode_properties(bytes: &mut Bytes) -> Option<HashMap<CheetahString, CheetahString>> {
+    // Ensure we have enough bytes to read SYSFLAG and MAGICCODE.
+    if bytes.len() < SYSFLAG_POSITION + 4 {
+        return None;
+    }
+
+    // Read sysFlag and magicCode using fixed positions.
+    let sys_flag = BigEndian::read_i32(&bytes[SYSFLAG_POSITION..SYSFLAG_POSITION + 4]);
+    let magic_code =
+        BigEndian::read_i32(&bytes[MESSAGE_MAGIC_CODE_POSITION..MESSAGE_MAGIC_CODE_POSITION + 4]);
+    let version = match MessageVersion::value_of_magic_code(magic_code) {
+        Ok(value) => value,
+        Err(_) => return None,
+    };
+
+    // Determine address lengths.
+    let bornhost_length = if (sys_flag & MessageSysFlag::BORNHOST_V6_FLAG) == 0 {
+        8
+    } else {
+        20
+    };
+    let storehost_address_length = if (sys_flag & MessageSysFlag::STOREHOSTADDRESS_V6_FLAG) == 0 {
+        8
+    } else {
+        20
+    };
+
+    // Calculate the bodySizePosition as in Java.
+    let body_size_position = 4   // TOTALSIZE
+        + 4   // MAGICCODE
+        + 4   // BODYCRC
+        + 4   // QUEUEID
+        + 4   // FLAG
+        + 8   // QUEUEOFFSET
+        + 8   // PHYSICALOFFSET
+        + 4   // SYSFLAG
+        + 8   // BORNTIMESTAMP
+        + bornhost_length // BORNHOST
+        + 8   // STORETIMESTAMP
+        + storehost_address_length // STOREHOSTADDRESS
+        + 4   // RECONSUMETIMES
+        + 8; // Prepared Transaction Offset
+
+    if bytes.len() < body_size_position + 4 {
+        return None;
+    }
+
+    // Read the body size stored as an int.
+    let body_size =
+        BigEndian::read_i32(&bytes[body_size_position..body_size_position + 4]) as usize;
+
+    // Compute the topic length position.
+    let topic_length_position = body_size_position + 4 + body_size;
+    if bytes.len() < topic_length_position {
+        return None;
+    }
+
+    // Create a Cursor over the slice starting at the topic length position.
+    let slice = &bytes[topic_length_position..];
+    let cursor = Cursor::new(slice);
+    let topic_length_size = version.get_topic_length_size();
+    bytes.advance(topic_length_position);
+    let topic_length = version.get_topic_length(bytes);
+
+    // Calculate the properties position.
+    let properties_position = topic_length_position + topic_length_size + topic_length;
+    if bytes.len() < properties_position + 2 {
+        return None;
+    }
+
+    // Read a short (2 bytes) as propertiesLength.
+    let properties_length =
+        BigEndian::read_i16(&bytes[properties_position..properties_position + 2]);
+
+    // Advance past the short value.
+    let properties_start = properties_position + 2;
+    if properties_length > 0 {
+        let end = properties_start + (properties_length as usize);
+        if bytes.len() < end {
+            return None;
+        }
+        let properties_bytes = &bytes[properties_start..end];
+        if let Ok(properties_string) = String::from_utf8(properties_bytes.to_vec()) {
+            Some(string_to_message_properties(Some(
+                &CheetahString::from_string(properties_string),
+            )))
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use bytes::BufMut;
@@ -933,5 +1030,98 @@ mod tests {
         assert!(result.is_ok());
         let bytes = result.unwrap();
         assert!(!bytes.is_empty());
+    }
+
+    #[test]
+    fn decode_properties_returns_none_if_bytes_length_is_insufficient() {
+        let mut bytes = Bytes::from(vec![0; SYSFLAG_POSITION + 3]);
+        assert!(decode_properties(&mut bytes).is_none());
+    }
+
+    #[test]
+    fn decode_properties_returns_none_if_magic_code_is_invalid() {
+        let mut bytes =
+            BytesMut::from_iter(vec![
+                0u8;
+                SYSFLAG_POSITION + 4 + MESSAGE_MAGIC_CODE_POSITION + 4
+            ]);
+        BigEndian::write_i32(&mut bytes[SYSFLAG_POSITION..SYSFLAG_POSITION + 4], 0);
+        BigEndian::write_i32(
+            &mut bytes[MESSAGE_MAGIC_CODE_POSITION..MESSAGE_MAGIC_CODE_POSITION + 4],
+            -1,
+        );
+        assert!(decode_properties(&mut bytes.freeze()).is_none());
+    }
+
+    #[test]
+    fn decode_properties_returns_none_if_body_size_is_insufficient() {
+        let mut bytes = BytesMut::from_iter(vec![
+            0u8;
+            SYSFLAG_POSITION
+                + 4
+                + MESSAGE_MAGIC_CODE_POSITION
+                + 4
+                + 4
+        ]);
+        BigEndian::write_i32(&mut bytes[SYSFLAG_POSITION..SYSFLAG_POSITION + 4], 0);
+        BigEndian::write_i32(
+            &mut bytes[MESSAGE_MAGIC_CODE_POSITION..MESSAGE_MAGIC_CODE_POSITION + 4],
+            MESSAGE_MAGIC_CODE,
+        );
+        assert!(decode_properties(&mut bytes.freeze()).is_none());
+    }
+
+    #[test]
+    fn decode_properties_returns_none_if_topic_length_is_insufficient() {
+        let mut bytes = BytesMut::from_iter(vec![
+            0u8;
+            SYSFLAG_POSITION
+                + 4
+                + MESSAGE_MAGIC_CODE_POSITION
+                + 4
+                + 4
+                + 4
+        ]);
+        BigEndian::write_i32(&mut bytes[SYSFLAG_POSITION..SYSFLAG_POSITION + 4], 0);
+        BigEndian::write_i32(
+            &mut bytes[MESSAGE_MAGIC_CODE_POSITION..MESSAGE_MAGIC_CODE_POSITION + 4],
+            MESSAGE_MAGIC_CODE,
+        );
+        BigEndian::write_i32(
+            &mut bytes[SYSFLAG_POSITION + 4 + MESSAGE_MAGIC_CODE_POSITION + 4
+                ..SYSFLAG_POSITION + 4 + MESSAGE_MAGIC_CODE_POSITION + 4 + 4],
+            0,
+        );
+        assert!(decode_properties(&mut bytes.freeze()).is_none());
+    }
+
+    #[test]
+    fn decode_properties_returns_none_if_properties_length_is_insufficient() {
+        let mut bytes = BytesMut::from_iter(vec![
+            0u8;
+            SYSFLAG_POSITION
+                + 4
+                + MESSAGE_MAGIC_CODE_POSITION
+                + 4
+                + 4
+                + 4
+                + 2
+        ]);
+        BigEndian::write_i32(&mut bytes[SYSFLAG_POSITION..SYSFLAG_POSITION + 4], 0);
+        BigEndian::write_i32(
+            &mut bytes[MESSAGE_MAGIC_CODE_POSITION..MESSAGE_MAGIC_CODE_POSITION + 4],
+            MESSAGE_MAGIC_CODE,
+        );
+        BigEndian::write_i32(
+            &mut bytes[SYSFLAG_POSITION + 4 + MESSAGE_MAGIC_CODE_POSITION + 4
+                ..SYSFLAG_POSITION + 4 + MESSAGE_MAGIC_CODE_POSITION + 4 + 4],
+            0,
+        );
+        BigEndian::write_i16(
+            &mut bytes[SYSFLAG_POSITION + 4 + MESSAGE_MAGIC_CODE_POSITION + 4 + 4 + 4
+                ..SYSFLAG_POSITION + 4 + MESSAGE_MAGIC_CODE_POSITION + 4 + 4 + 4 + 2],
+            1,
+        );
+        assert!(decode_properties(&mut bytes.freeze()).is_none());
     }
 }

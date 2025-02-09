@@ -14,13 +14,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::any::Any;
 use std::collections::HashMap;
+
+use cheetah_string::CheetahString;
 
 pub trait EvaluationContext {
     /// Get value by name from context
-    fn get(&self, name: &str) -> Option<&dyn Any>;
+    fn get(&self, name: &str) -> Option<&CheetahString>;
 
     /// Context variables
-    fn key_values(&self) -> HashMap<String, Box<dyn Any>>;
+    fn key_values(&self) -> Option<HashMap<CheetahString, CheetahString>>;
 }

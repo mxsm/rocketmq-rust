@@ -16,4 +16,5 @@ description = "A filter for RocketMQ messages"
 [dependencies]
 #json spupport
 serde.workspace = true
+cheetah-string = { workspace = true }
 
