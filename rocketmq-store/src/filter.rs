@@ -21,20 +21,34 @@ use cheetah_string::CheetahString;
 
 use crate::consume_queue::consume_queue_ext::CqExtUnit;
 
-/// Represents a message filter.
+/// A trait for filtering messages.
 pub trait MessageFilter: Send + Sync {
-    /// Matches by tags code or filter bit map which is calculated when the message is received
-    /// and stored in consume queue ext.
+    /// Checks if the message is matched by the consume queue.
+    ///
+    /// # Arguments
+    ///
+    /// * `tags_code` - An optional tag code.
+    /// * `cq_ext_unit` - An optional reference to a `CqExtUnit`.
+    ///
+    /// # Returns
+    ///
+    /// * `true` if the message is matched, `false` otherwise.
     fn is_matched_by_consume_queue(
         &self,
         tags_code: Option<i64>,
         cq_ext_unit: Option<&CqExtUnit>,
     ) -> bool;
 
-    /// Matches by message content which is stored in the commit log.
+    /// Checks if the message is matched by the commit log.
     ///
-    /// `msg_buffer`: Message buffer in the commit log, may be `None` if not invoked in store.
-    /// `properties`: Message properties, should be decoded from the buffer if `None`.
+    /// # Arguments
+    ///
+    /// * `msg_buffer` - An optional mutable reference to a message buffer.
+    /// * `properties` - An optional reference to a map of properties.
+    ///
+    /// # Returns
+    ///
+    /// * `true` if the message is matched, `false` otherwise.
     fn is_matched_by_commit_log(
         &self,
         msg_buffer: Option<&[u8]>,

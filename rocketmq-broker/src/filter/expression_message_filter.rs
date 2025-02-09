@@ -17,14 +17,17 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
+use rocketmq_common::common::message::message_decoder;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_store::consume_queue::consume_queue_ext::CqExtUnit;
 use rocketmq_store::filter::MessageFilter;
 
 use crate::filter::consumer_filter_data::ConsumerFilterData;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
+use crate::filter::message_evaluation_context::MessageEvaluationContext;
 
 pub struct ExpressionMessageFilter {
     subscription_data: Option<SubscriptionData>,
@@ -111,7 +114,21 @@ impl MessageFilter for ExpressionMessageFilter {
             return true;
         }
 
-        if let Some(msg_buffer) = msg_buffer {}
-        unimplemented!("SQL92 expression type is not supported yet.")
+        let temp_properties = if properties.is_none() && msg_buffer.is_some() {
+            let bytes = msg_buffer.unwrap();
+            let mut bytes_ = Bytes::copy_from_slice(bytes);
+            message_decoder::decode_properties(&mut bytes_)
+        } else {
+            None
+        };
+        let context = MessageEvaluationContext::new(temp_properties);
+        if let Some(filter) = real_filter_data.compiled_expression() {
+            match filter.evaluate(&context) {
+                Ok(value) => *value.downcast_ref::<bool>().unwrap_or(&false),
+                Err(_) => false,
+            }
+        } else {
+            true
+        }
     }
 }
