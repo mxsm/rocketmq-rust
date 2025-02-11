@@ -45,11 +45,6 @@ pub struct ClientManageProcessor<MS> {
             HashMap<CheetahString /* ConsumerGroup */, i32 /* HeartbeatFingerprint */>,
         >,
     >,
-    /*producer_manager: Arc<ProducerManager>,
-    consumer_manager: Arc<ConsumerManager>,
-    topic_config_manager: TopicConfigManager,
-    subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
-    broker_config: Arc<BrokerConfig>,*/
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
@@ -57,21 +52,9 @@ impl<MS> ClientManageProcessor<MS>
 where
     MS: MessageStore,
 {
-    pub fn new(
-        /* broker_config: Arc<BrokerConfig>,
-        producer_manager: Arc<ProducerManager>,
-        consumer_manager: Arc<ConsumerManager>,
-        topic_config_manager: TopicConfigManager,
-        subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,*/
-        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-    ) -> Self {
+    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
         Self {
             consumer_group_heartbeat_table: Arc::new(parking_lot::RwLock::new(HashMap::new())),
-            /* producer_manager,
-            consumer_manager,
-            topic_config_manager,
-            subscription_group_manager,
-            broker_config,*/
             broker_runtime_inner,
         }
     }
