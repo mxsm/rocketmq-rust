@@ -638,7 +638,7 @@ impl MappedFile for DefaultMappedFile {
     #[inline]
     fn get_wrote_position(&self) -> i32 {
         self.wrote_position
-            .load(std::sync::atomic::Ordering::Relaxed)
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 
     #[inline]
@@ -665,7 +665,7 @@ impl MappedFile for DefaultMappedFile {
 
     #[inline]
     fn get_committed_position(&self) -> i32 {
-        self.committed_position.load(Ordering::Relaxed)
+        self.committed_position.load(Ordering::Acquire)
     }
 
     #[inline]
