@@ -52,9 +52,7 @@ impl<MS> ClientManageProcessor<MS>
 where
     MS: MessageStore,
 {
-    pub fn new(
-        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-    ) -> Self {
+    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
         Self {
             consumer_group_heartbeat_table: Arc::new(parking_lot::RwLock::new(HashMap::new())),
             broker_runtime_inner,
