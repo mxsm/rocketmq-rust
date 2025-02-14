@@ -19,6 +19,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use lazy_static::lazy_static;
@@ -72,13 +73,27 @@ lazy_static! {
 }
 
 const SOCKS_PROXY_JSON: &str = "socksProxyJson";
-
+const NAMESPACE_ORDER_TOPIC_CONFIG: &str = "ORDER_TOPIC_CONFIG";
 pub struct DefaultMQAdminExtImpl {
     service_state: ServiceState,
     client_instance: Option<ArcMut<MQClientInstance>>,
     rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
-    timeout_millis: u64,
+    timeout_millis: Duration,
     kv_namespace_to_delete_list: Vec<CheetahString>,
+}
+
+impl DefaultMQAdminExtImpl {
+    pub fn new(rpc_hook: Option<Arc<Box<dyn RPCHook>>>, timeout_millis: Duration) -> Self {
+        DefaultMQAdminExtImpl {
+            service_state: ServiceState::CreateJust,
+            client_instance: None,
+            rpc_hook,
+            timeout_millis,
+            kv_namespace_to_delete_list: vec![CheetahString::from_static_str(
+                NAMESPACE_ORDER_TOPIC_CONFIG,
+            )],
+        }
+    }
 }
 
 #[allow(unused_variables)]
