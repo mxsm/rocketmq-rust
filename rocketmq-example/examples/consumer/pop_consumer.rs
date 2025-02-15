@@ -17,6 +17,7 @@
 use std::collections::HashSet;
 
 use cheetah_string::CheetahString;
+use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_client_rust::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
 use rocketmq_client_rust::consumer::listener::consume_concurrently_context::ConsumeConcurrentlyContext;
 use rocketmq_client_rust::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
@@ -28,7 +29,6 @@ use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_rust::rocketmq;
 use rocketmq_rust::wait_for_signal;
 use rocketmq_tools::admin::default_mq_admin_ext::DefaultMQAdminExt;
-use rocketmq_tools::admin::mq_admin_ext_async::MQAdminExt;
 use tracing::info;
 
 pub const MESSAGE_COUNT: usize = 1;

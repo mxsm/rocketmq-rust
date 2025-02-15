@@ -18,6 +18,3 @@
 mod api;
 pub mod common;
 pub mod default_mq_admin_ext;
-pub mod default_mq_admin_ext_impl;
-pub mod mq_admin_ext;
-pub mod mq_admin_ext_async;
