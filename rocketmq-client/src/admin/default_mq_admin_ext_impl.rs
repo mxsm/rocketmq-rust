@@ -348,8 +348,15 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
     async fn examine_topic_route_info(
         &self,
         topic: CheetahString,
-    ) -> crate::Result<TopicRouteData> {
-        todo!()
+    ) -> crate::Result<Option<TopicRouteData>> {
+        self.client_instance
+            .as_ref()
+            .unwrap()
+            .mq_client_api_impl
+            .as_ref()
+            .unwrap()
+            .get_topic_route_info_from_name_server(&topic, self.timeout_millis.as_millis() as u64)
+            .await
     }
 
     async fn examine_consumer_connection_info(

@@ -366,8 +366,10 @@ impl MQAdminExt for DefaultMQAdminExt {
     async fn examine_topic_route_info(
         &self,
         topic: CheetahString,
-    ) -> rocketmq_client_rust::Result<TopicRouteData> {
-        todo!()
+    ) -> rocketmq_client_rust::Result<Option<TopicRouteData>> {
+        self.default_mqadmin_ext_impl
+            .examine_topic_route_info(topic)
+            .await
     }
 
     async fn examine_consumer_connection_info(

@@ -159,7 +159,10 @@ pub trait MQAdminExtLocal: Sync {
 
     async fn examine_broker_cluster_info(&self) -> Result<ClusterInfo>;
 
-    async fn examine_topic_route_info(&self, topic: CheetahString) -> Result<TopicRouteData>;
+    async fn examine_topic_route_info(
+        &self,
+        topic: CheetahString,
+    ) -> Result<Option<TopicRouteData>>;
 
     async fn examine_consumer_connection_info(
         &self,

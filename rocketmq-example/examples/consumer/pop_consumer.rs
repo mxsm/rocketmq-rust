@@ -68,6 +68,7 @@ async fn switch_pop_consumer() -> Result<()> {
     let broker_datas =
         MQAdminExt::examine_topic_route_info(&mq_admin_ext, CheetahString::from_static_str(TOPIC))
             .await
+            .unwrap()
             .unwrap();
     for broker_data in broker_datas.broker_datas {
         let broker_addrs = broker_data
@@ -90,6 +91,7 @@ async fn switch_pop_consumer() -> Result<()> {
             .unwrap();
         }
     }
+    mq_admin_ext.shutdown().await;
     Ok(())
 }
 
