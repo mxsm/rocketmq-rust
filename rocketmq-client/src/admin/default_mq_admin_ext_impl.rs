@@ -98,6 +98,7 @@ impl DefaultMQAdminExtImpl {
         rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
         timeout_millis: Duration,
         client_config: ArcMut<ClientConfig>,
+        admin_ext_group: CheetahString,
     ) -> Self {
         DefaultMQAdminExtImpl {
             service_state: ServiceState::CreateJust,
@@ -108,7 +109,7 @@ impl DefaultMQAdminExtImpl {
                 NAMESPACE_ORDER_TOPIC_CONFIG,
             )],
             client_config,
-            admin_ext_group: Default::default(),
+            admin_ext_group,
             inner: None,
         }
     }
