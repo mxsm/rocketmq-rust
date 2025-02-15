@@ -20,12 +20,3 @@ rocketmq-client-rust = { workspace = true }
 
 cheetah-string = { workspace = true }
 thiserror = { workspace = true }
-
-trait-variant = { workspace = true }
-
-lazy_static = { workspace = true }
-
-[features]
-default = ["async"]
-async = []
-sync = []

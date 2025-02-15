@@ -14,7 +14,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#![allow(unused_imports)]
 use std::collections::HashMap;
 use std::collections::HashSet;
 
@@ -38,398 +37,536 @@ use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+use rocketmq_rust::ArcMut;
 
-use crate::admin::common::admin_tool_result::AdminToolResult;
+use crate::admin::default_mq_admin_ext_impl::DefaultMQAdminExtImpl;
+use crate::common::admin_tool_result::AdminToolResult;
 use crate::Result;
 
-#[cfg(feature = "sync")]
-#[allow(dead_code)]
-pub trait MQAdminExt {
-    fn start(&self) -> Result<()>;
-    fn shutdown(&self);
-    fn add_broker_to_container(
+#[derive(Clone)]
+pub struct MQAdminExtInnerImpl {
+    pub(crate) inner: ArcMut<DefaultMQAdminExtImpl>,
+}
+
+impl MQAdminExtInnerImpl {
+    async fn start(this: ArcMut<Self>) -> Result<()> {
+        unimplemented!()
+    }
+    async fn shutdown(&self) {
+        unimplemented!()
+    }
+    async fn add_broker_to_container(
         &self,
         broker_container_addr: CheetahString,
         broker_config: CheetahString,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        unimplemented!()
+    }
 
-    fn remove_broker_from_container(
+    async fn remove_broker_from_container(
         &self,
         broker_container_addr: CheetahString,
         cluster_name: CheetahString,
         broker_name: CheetahString,
         broker_id: u64,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        unimplemented!()
+    }
 
-    fn update_broker_config(
+    async fn update_broker_config(
         &self,
         broker_addr: CheetahString,
         properties: HashMap<CheetahString, CheetahString>,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        unimplemented!()
+    }
 
-    fn get_broker_config(
+    async fn get_broker_config(
         &self,
         broker_addr: CheetahString,
-    ) -> Result<HashMap<CheetahString, CheetahString>>;
+    ) -> Result<HashMap<CheetahString, CheetahString>> {
+        unimplemented!()
+    }
 
-    fn create_and_update_topic_config(
+    async fn create_and_update_topic_config(
         &self,
         addr: CheetahString,
         config: TopicConfig,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        unimplemented!()
+    }
 
-    fn create_and_update_topic_config_list(
+    async fn create_and_update_topic_config_list(
         &self,
         addr: CheetahString,
         topic_config_list: Vec<TopicConfig>,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        unimplemented!()
+    }
 
-    fn create_and_update_plain_access_config(
+    async fn create_and_update_plain_access_config(
         &self,
         addr: CheetahString,
         config: PlainAccessConfig,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        unimplemented!()
+    }
 
-    fn delete_plain_access_config(
+    async fn delete_plain_access_config(
         &self,
         addr: CheetahString,
         access_key: CheetahString,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        unimplemented!()
+    }
 
-    fn update_global_white_addr_config(
+    async fn update_global_white_addr_config(
         &self,
         addr: CheetahString,
         global_white_addrs: CheetahString,
         acl_file_full_path: Option<CheetahString>,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        unimplemented!()
+    }
 
-    fn examine_broker_cluster_acl_version_info(&self, addr: CheetahString)
-        -> Result<CheetahString>;
+    async fn examine_broker_cluster_acl_version_info(
+        &self,
+        addr: CheetahString,
+    ) -> Result<CheetahString> {
+        unimplemented!()
+    }
 
-    fn create_and_update_subscription_group_config(
+    async fn create_and_update_subscription_group_config(
         &self,
         addr: CheetahString,
         config: SubscriptionGroupConfig,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        unimplemented!()
+    }
 
-    fn create_and_update_subscription_group_config_list(
+    async fn create_and_update_subscription_group_config_list(
         &self,
         broker_addr: CheetahString,
         configs: Vec<SubscriptionGroupConfig>,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        unimplemented!()
+    }
 
-    fn examine_subscription_group_config(
+    async fn examine_subscription_group_config(
         &self,
         addr: CheetahString,
         group: CheetahString,
-    ) -> Result<SubscriptionGroupConfig>;
+    ) -> Result<SubscriptionGroupConfig> {
+        unimplemented!()
+    }
 
-    fn examine_topic_stats(
+    async fn examine_topic_stats(
         &self,
         topic: CheetahString,
         broker_addr: Option<CheetahString>,
-    ) -> Result<TopicStatsTable>;
+    ) -> Result<TopicStatsTable> {
+        unimplemented!()
+    }
 
-    fn examine_topic_stats_concurrent(
+    async fn examine_topic_stats_concurrent(
         &self,
         topic: CheetahString,
-    ) -> AdminToolResult<TopicStatsTable>;
+    ) -> AdminToolResult<TopicStatsTable> {
+        unimplemented!()
+    }
 
-    fn fetch_all_topic_list(&self) -> Result<TopicList>;
+    async fn fetch_all_topic_list(&self) -> Result<TopicList> {
+        unimplemented!()
+    }
 
-    fn fetch_topics_by_cluster(&self, cluster_name: CheetahString) -> Result<TopicList>;
+    async fn fetch_topics_by_cluster(&self, cluster_name: CheetahString) -> Result<TopicList> {
+        unimplemented!()
+    }
 
-    fn fetch_broker_runtime_stats(&self, broker_addr: CheetahString) -> Result<KVTable>;
+    async fn fetch_broker_runtime_stats(&self, broker_addr: CheetahString) -> Result<KVTable> {
+        unimplemented!()
+    }
 
-    fn examine_consume_stats(
+    async fn examine_consume_stats(
         &self,
         consumer_group: CheetahString,
         topic: Option<CheetahString>,
         cluster_name: Option<CheetahString>,
         broker_addr: Option<CheetahString>,
         timeout_millis: Option<u64>,
-    ) -> Result<ConsumeStats>;
+    ) -> Result<ConsumeStats> {
+        unimplemented!()
+    }
 
-    /*fn check_rocksdb_cq_write_progress(
+    /*async fn check_rocksdb_cq_write_progress(
         &self,
         broker_addr: CheetahString,
         topic: CheetahString,
-    ) -> Result<CheckRocksdbCqWriteProgressResponseBody>;*/
+    ) -> Result<CheckRocksdbCqWriteProgressResponseBody>{ unimplemented!()}*/
 
-    fn examine_broker_cluster_info(&self) -> Result<ClusterInfo>;
+    async fn examine_broker_cluster_info(&self) -> Result<ClusterInfo> {
+        unimplemented!()
+    }
 
-    fn examine_topic_route_info(&self, topic: CheetahString) -> Result<TopicRouteData>;
+    async fn examine_topic_route_info(&self, topic: CheetahString) -> Result<TopicRouteData> {
+        unimplemented!()
+    }
 
-    fn examine_consumer_connection_info(
+    async fn examine_consumer_connection_info(
         &self,
         consumer_group: CheetahString,
         broker_addr: Option<CheetahString>,
-    ) -> Result<ConsumerConnection>;
+    ) -> Result<ConsumerConnection> {
+        unimplemented!()
+    }
 
-    fn examine_producer_connection_info(
+    async fn examine_producer_connection_info(
         &self,
         producer_group: CheetahString,
         topic: CheetahString,
-    ) -> Result<ProducerConnection>;
+    ) -> Result<ProducerConnection> {
+        unimplemented!()
+    }
 
-    /* fn get_all_producer_info(
+    /* async fn get_all_producer_info(
         &self,
         broker_addr: CheetahString,
-    ) -> Result<ProducerTableInfo>;*/
+    ) -> Result<ProducerTableInfo>{ unimplemented!()}*/
 
-    fn get_name_server_address_list(&self) -> Vec<CheetahString>;
+    async fn get_name_server_address_list(&self) -> Vec<CheetahString> {
+        unimplemented!()
+    }
 
-    fn wipe_write_perm_of_broker(
+    async fn wipe_write_perm_of_broker(
         &self,
         namesrv_addr: CheetahString,
         broker_name: CheetahString,
-    ) -> Result<i32>;
+    ) -> Result<i32> {
+        unimplemented!()
+    }
 
-    fn add_write_perm_of_broker(
+    async fn add_write_perm_of_broker(
         &self,
         namesrv_addr: CheetahString,
         broker_name: CheetahString,
-    ) -> Result<i32>;
+    ) -> Result<i32> {
+        unimplemented!()
+    }
 
-    fn put_kv_config(&self, namespace: CheetahString, key: CheetahString, value: CheetahString);
-
-    fn get_kv_config(&self, namespace: CheetahString, key: CheetahString) -> Result<CheetahString>;
-
-    fn get_kv_list_by_namespace(&self, namespace: CheetahString) -> Result<KVTable>;
-
-    fn delete_topic(&self, topic_name: CheetahString, cluster_name: CheetahString) -> Result<()>;
-
-    fn delete_topic_in_broker(
-        &self,
-        addrs: HashSet<CheetahString>,
-        topic: CheetahString,
-    ) -> Result<()>;
-
-    /*fn delete_topic_in_broker_concurrent(
-        &self,
-        addrs: HashSet<CheetahString>,
-        topic: CheetahString,
-    ) -> AdminToolResult<BrokerOperatorResult>;*/
-
-    fn delete_topic_in_name_server(
-        &self,
-        addrs: HashSet<CheetahString>,
-        cluster_name: Option<CheetahString>,
-        topic: CheetahString,
-    ) -> Result<()>;
-
-    fn delete_subscription_group(
-        &self,
-        addr: CheetahString,
-        group_name: CheetahString,
-        remove_offset: Option<bool>,
-    ) -> Result<()>;
-
-    fn create_and_update_kv_config(
+    async fn put_kv_config(
         &self,
         namespace: CheetahString,
         key: CheetahString,
         value: CheetahString,
-    ) -> Result<()>;
+    ) {
+        unimplemented!()
+    }
 
-    fn delete_kv_config(&self, namespace: CheetahString, key: CheetahString) -> Result<()>;
+    async fn get_kv_config(
+        &self,
+        namespace: CheetahString,
+        key: CheetahString,
+    ) -> Result<CheetahString> {
+        unimplemented!()
+    }
 
-    /*fn reset_offset_by_timestamp_old(
+    async fn get_kv_list_by_namespace(&self, namespace: CheetahString) -> Result<KVTable> {
+        unimplemented!()
+    }
+
+    async fn delete_topic(
+        &self,
+        topic_name: CheetahString,
+        cluster_name: CheetahString,
+    ) -> Result<()> {
+        unimplemented!()
+    }
+
+    async fn delete_topic_in_broker(
+        &self,
+        addrs: HashSet<CheetahString>,
+        topic: CheetahString,
+    ) -> Result<()> {
+        unimplemented!()
+    }
+
+    /*async fn delete_topic_in_broker_concurrent(
+        &self,
+        addrs: HashSet<CheetahString>,
+        topic: CheetahString,
+    ) -> AdminToolResult<BrokerOperatorResult>{ unimplemented!()}*/
+
+    async fn delete_topic_in_name_server(
+        &self,
+        addrs: HashSet<CheetahString>,
+        cluster_name: Option<CheetahString>,
+        topic: CheetahString,
+    ) -> Result<()> {
+        unimplemented!()
+    }
+
+    async fn delete_subscription_group(
+        &self,
+        addr: CheetahString,
+        group_name: CheetahString,
+        remove_offset: Option<bool>,
+    ) -> Result<()> {
+        unimplemented!()
+    }
+
+    async fn create_and_update_kv_config(
+        &self,
+        namespace: CheetahString,
+        key: CheetahString,
+        value: CheetahString,
+    ) -> Result<()> {
+        unimplemented!()
+    }
+
+    async fn delete_kv_config(&self, namespace: CheetahString, key: CheetahString) -> Result<()> {
+        unimplemented!()
+    }
+
+    /*async fn reset_offset_by_timestamp_old(
         &self,
         consumer_group: CheetahString,
         topic: CheetahString,
         timestamp: u64,
         force: bool,
-    ) -> Result<Vec<RollbackStats>>;*/
+    ) -> Result<Vec<RollbackStats>>{ unimplemented!()}*/
 
-    fn reset_offset_by_timestamp(
+    async fn reset_offset_by_timestamp(
         &self,
         cluster_name: Option<CheetahString>,
         topic: CheetahString,
         group: CheetahString,
         timestamp: u64,
         is_force: bool,
-    ) -> Result<HashMap<MessageQueue, u64>>;
+    ) -> Result<HashMap<MessageQueue, u64>> {
+        unimplemented!()
+    }
 
-    fn reset_offset_new(
+    async fn reset_offset_new(
         &self,
         consumer_group: CheetahString,
         topic: CheetahString,
         timestamp: u64,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        unimplemented!()
+    }
 
-    /*fn reset_offset_new_concurrent(
+    /*async fn reset_offset_new_concurrent(
         &self,
         group: CheetahString,
         topic: CheetahString,
         timestamp: u64,
-    ) -> AdminToolResult<BrokerOperatorResult>;*/
+    ) -> AdminToolResult<BrokerOperatorResult>{ unimplemented!()}*/
 
-    fn get_consume_status(
+    async fn get_consume_status(
         &self,
         topic: CheetahString,
         group: CheetahString,
         client_addr: CheetahString,
-    ) -> Result<HashMap<CheetahString, HashMap<MessageQueue, u64>>>;
+    ) -> Result<HashMap<CheetahString, HashMap<MessageQueue, u64>>> {
+        unimplemented!()
+    }
 
-    fn create_or_update_order_conf(
+    async fn create_or_update_order_conf(
         &self,
         key: CheetahString,
         value: CheetahString,
         is_cluster: bool,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        unimplemented!()
+    }
 
-    fn query_topic_consume_by_who(&self, topic: CheetahString) -> Result<GroupList>;
+    async fn query_topic_consume_by_who(&self, topic: CheetahString) -> Result<GroupList> {
+        unimplemented!()
+    }
 
-    fn query_topics_by_consumer(&self, group: CheetahString) -> Result<TopicList>;
+    async fn query_topics_by_consumer(&self, group: CheetahString) -> Result<TopicList> {
+        unimplemented!()
+    }
 
-    fn query_topics_by_consumer_concurrent(
+    async fn query_topics_by_consumer_concurrent(
         &self,
         group: CheetahString,
-    ) -> AdminToolResult<TopicList>;
+    ) -> AdminToolResult<TopicList> {
+        unimplemented!()
+    }
 
-    fn query_subscription(
+    async fn query_subscription(
         &self,
         group: CheetahString,
         topic: CheetahString,
-    ) -> Result<SubscriptionData>;
+    ) -> Result<SubscriptionData> {
+        unimplemented!()
+    }
 
-    /*fn query_consume_time_span(
+    /*async fn query_consume_time_span(
         &self,
         topic: CheetahString,
         group: CheetahString,
-    ) -> Result<Vec<QueueTimeSpan>>;
+    ) -> Result<Vec<QueueTimeSpan>>{ unimplemented!()}
 
-    fn query_consume_time_span_concurrent(
+    async fn query_consume_time_span_concurrent(
         &self,
         topic: CheetahString,
         group: CheetahString,
-    ) -> AdminToolResult<Vec<QueueTimeSpan>>;*/
+    ) -> AdminToolResult<Vec<QueueTimeSpan>>{ unimplemented!()}*/
 
-    fn clean_expired_consumer_queue(
+    async fn clean_expired_consumer_queue(
         &self,
         cluster: Option<CheetahString>,
         addr: Option<CheetahString>,
-    ) -> Result<bool>;
+    ) -> Result<bool> {
+        unimplemented!()
+    }
 
-    fn delete_expired_commit_log(
+    async fn delete_expired_commit_log(
         &self,
         cluster: Option<CheetahString>,
         addr: Option<CheetahString>,
-    ) -> Result<bool>;
+    ) -> Result<bool> {
+        unimplemented!()
+    }
 
-    fn clean_unused_topic(
+    async fn clean_unused_topic(
         &self,
         cluster: Option<CheetahString>,
         addr: Option<CheetahString>,
-    ) -> Result<bool>;
+    ) -> Result<bool> {
+        unimplemented!()
+    }
 
-    fn get_consumer_running_info(
+    async fn get_consumer_running_info(
         &self,
         consumer_group: CheetahString,
         client_id: CheetahString,
         jstack: bool,
         metrics: Option<bool>,
-    ) -> Result<ConsumerRunningInfo>;
+    ) -> Result<ConsumerRunningInfo> {
+        unimplemented!()
+    }
 
-    fn consume_message_directly(
+    async fn consume_message_directly(
         &self,
         consumer_group: CheetahString,
         client_id: CheetahString,
         topic: CheetahString,
         msg_id: CheetahString,
-    ) -> Result<ConsumeMessageDirectlyResult>;
+    ) -> Result<ConsumeMessageDirectlyResult> {
+        unimplemented!()
+    }
 
-    fn consume_message_directly_ext(
+    async fn consume_message_directly_ext(
         &self,
         cluster_name: CheetahString,
         consumer_group: CheetahString,
         client_id: CheetahString,
         topic: CheetahString,
         msg_id: CheetahString,
-    ) -> Result<ConsumeMessageDirectlyResult>;
+    ) -> Result<ConsumeMessageDirectlyResult> {
+        unimplemented!()
+    }
 
-    /*fn message_track_detail(
+    /*async fn message_track_detail(
         &self,
         msg: MessageExt,
-    ) -> Result<Vec<MessageTrack>>;
+    ) -> Result<Vec<MessageTrack>>{ unimplemented!()}
 
-    fn message_track_detail_concurrent(
+    async fn message_track_detail_concurrent(
         &self,
         msg: MessageExt,
-    ) -> AdminToolResult<Vec<MessageTrack>>;*/
+    ) -> AdminToolResult<Vec<MessageTrack>>{ unimplemented!()}*/
 
-    fn clone_group_offset(
+    async fn clone_group_offset(
         &self,
         src_group: CheetahString,
         dest_group: CheetahString,
         topic: CheetahString,
         is_offline: bool,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        unimplemented!()
+    }
 
-    /*fn view_broker_stats_data(
+    /*async fn view_broker_stats_data(
         &self,
         broker_addr: CheetahString,
         stats_name: CheetahString,
         stats_key: CheetahString,
-    ) -> Result<BrokerStatsData>;*/
+    ) -> Result<BrokerStatsData>{ unimplemented!()}*/
 
-    fn get_cluster_list(&self, topic: String) -> Result<HashSet<CheetahString>>;
+    async fn get_cluster_list(&self, topic: String) -> Result<HashSet<CheetahString>> {
+        unimplemented!()
+    }
 
-    /*fn fetch_consume_stats_in_broker(
+    /*async fn fetch_consume_stats_in_broker(
         &self,
         broker_addr: CheetahString,
         is_order: bool,
         timeout_millis: u64,
-    ) -> Result<ConsumeStatsList>;*/
+    ) -> Result<ConsumeStatsList>{ unimplemented!()}*/
 
-    fn get_topic_cluster_list(&self, topic: String) -> Result<HashSet<CheetahString>>;
+    async fn get_topic_cluster_list(&self, topic: String) -> Result<HashSet<CheetahString>> {
+        unimplemented!()
+    }
 
-    /*fn get_all_subscription_group(
+    /*async fn get_all_subscription_group(
         &self,
         broker_addr: CheetahString,
         timeout_millis: u64,
-    ) -> Result<SubscriptionGroupWrapper>;*/
+    ) -> Result<SubscriptionGroupWrapper>{ unimplemented!()}*/
 
-    /*fn get_user_subscription_group(
+    /*async fn get_user_subscription_group(
         &self,
         broker_addr: CheetahString,
         timeout_millis: u64,
-    ) -> Result<SubscriptionGroupWrapper>;*/
+    ) -> Result<SubscriptionGroupWrapper>{ unimplemented!()}*/
 
-    fn get_all_topic_config(
+    async fn get_all_topic_config(
         &self,
         broker_addr: CheetahString,
         timeout_millis: u64,
-    ) -> Result<TopicConfigSerializeWrapper>;
+    ) -> Result<TopicConfigSerializeWrapper> {
+        unimplemented!()
+    }
 
-    fn get_user_topic_config(
+    async fn get_user_topic_config(
         &self,
         broker_addr: CheetahString,
         special_topic: bool,
         timeout_millis: u64,
-    ) -> Result<TopicConfigSerializeWrapper>;
+    ) -> Result<TopicConfigSerializeWrapper> {
+        unimplemented!()
+    }
 
-    fn update_consume_offset(
+    async fn update_consume_offset(
         &self,
         broker_addr: CheetahString,
         consume_group: CheetahString,
         mq: MessageQueue,
         offset: u64,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        unimplemented!()
+    }
 
-    fn update_name_server_config(
+    async fn update_name_server_config(
         &self,
         properties: HashMap<CheetahString, CheetahString>,
         name_servers: Vec<CheetahString>,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        unimplemented!()
+    }
 
-    fn get_name_server_config(
+    async fn get_name_server_config(
         &self,
         name_servers: Vec<CheetahString>,
-    ) -> Result<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>>;
+    ) -> Result<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>> {
+        unimplemented!()
+    }
 
-    /*fn query_consume_queue(
+    /*async fn query_consume_queue(
         &self,
         broker_addr: CheetahString,
         topic: CheetahString,
@@ -437,15 +574,17 @@ pub trait MQAdminExt {
         index: u64,
         count: i32,
         consumer_group: CheetahString,
-    ) -> Result<QueryConsumeQueueResponseBody>;*/
+    ) -> Result<QueryConsumeQueueResponseBody>{ unimplemented!()}*/
 
-    fn resume_check_half_message(
+    async fn resume_check_half_message(
         &self,
         topic: CheetahString,
         msg_id: CheetahString,
-    ) -> Result<bool>;
+    ) -> Result<bool> {
+        unimplemented!()
+    }
 
-    fn set_message_request_mode(
+    async fn set_message_request_mode(
         &self,
         broker_addr: CheetahString,
         topic: CheetahString,
@@ -453,163 +592,196 @@ pub trait MQAdminExt {
         mode: MessageRequestMode,
         pop_work_group_size: i32,
         timeout_millis: u64,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        unimplemented!()
+    }
 
-    fn reset_offset_by_queue_id(
+    async fn reset_offset_by_queue_id(
         &self,
         broker_addr: CheetahString,
         consumer_group: CheetahString,
         topic_name: CheetahString,
         queue_id: i32,
         reset_offset: u64,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        unimplemented!()
+    }
 
-    fn examine_topic_config(
+    async fn examine_topic_config(
         &self,
         addr: CheetahString,
         topic: CheetahString,
-    ) -> Result<TopicConfig>;
+    ) -> Result<TopicConfig> {
+        unimplemented!()
+    }
 
-    fn create_static_topic(
+    async fn create_static_topic(
         &self,
         addr: CheetahString,
         default_topic: CheetahString,
         topic_config: TopicConfig,
         mapping_detail: TopicQueueMappingDetail,
         force: bool,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        unimplemented!()
+    }
 
-    /*fn update_and_get_group_read_forbidden(
+    /*async fn update_and_get_group_read_forbidden(
         &self,
         broker_addr: CheetahString,
         group_name: CheetahString,
         topic_name: CheetahString,
         readable: Option<bool>,
-    ) -> Result<GroupForbidden>;
+    ) -> Result<GroupForbidden>{ unimplemented!()}
 
-    fn query_message(
+    async fn query_message(
         &self,
         cluster_name: CheetahString,
         topic: CheetahString,
         msg_id: CheetahString,
-    ) -> Result<MessageExt>;
+    ) -> Result<MessageExt>{ unimplemented!()}
 
-    fn get_broker_ha_status(&self, broker_addr: CheetahString) -> Result<HARuntimeInfo>;
+    async fn get_broker_ha_status(&self, broker_addr: CheetahString) -> Result<HARuntimeInfo>{ unimplemented!()}
 
-    fn get_in_sync_state_data(
+    async fn get_in_sync_state_data(
         &self,
         controller_address: CheetahString,
         brokers: Vec<CheetahString>,
-    ) -> Result<BrokerReplicasInfo>;
+    ) -> Result<BrokerReplicasInfo>{ unimplemented!()}
 
-    fn get_broker_epoch_cache(
+    async fn get_broker_epoch_cache(
         &self,
         broker_addr: CheetahString,
-    ) -> Result<EpochEntryCache>;
+    ) -> Result<EpochEntryCache>{ unimplemented!()}
 
-    fn get_controller_meta_data(
+    async fn get_controller_meta_data(
         &self,
         controller_addr: CheetahString,
-    ) -> Result<GetMetaDataResponseHeader>;*/
+    ) -> Result<GetMetaDataResponseHeader>{ unimplemented!()}*/
 
-    fn reset_master_flush_offset(
+    async fn reset_master_flush_offset(
         &self,
         broker_addr: CheetahString,
         master_flush_offset: u64,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        unimplemented!()
+    }
 
-    fn get_controller_config(
+    async fn get_controller_config(
         &self,
         controller_servers: Vec<CheetahString>,
-    ) -> Result<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>>;
+    ) -> Result<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>> {
+        unimplemented!()
+    }
 
-    fn update_controller_config(
+    async fn update_controller_config(
         &self,
         properties: HashMap<CheetahString, CheetahString>,
         controllers: Vec<CheetahString>,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        unimplemented!()
+    }
 
-    /*fn elect_master(
+    /*async fn elect_master(
         &self,
         controller_addr: CheetahString,
         cluster_name: CheetahString,
         broker_name: CheetahString,
         broker_id: Option<u64>,
-    ) -> Result<(ElectMasterResponseHeader, BrokerMemberGroup)>;*/
+    ) -> Result<(ElectMasterResponseHeader, BrokerMemberGroup)>{ unimplemented!()}*/
 
-    fn clean_controller_broker_data(
+    async fn clean_controller_broker_data(
         &self,
         controller_addr: CheetahString,
         cluster_name: CheetahString,
         broker_name: CheetahString,
         broker_controller_ids_to_clean: Option<CheetahString>,
         is_clean_living_broker: bool,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        unimplemented!()
+    }
 
-    fn update_cold_data_flow_ctr_group_config(
+    async fn update_cold_data_flow_ctr_group_config(
         &self,
         broker_addr: CheetahString,
         properties: HashMap<CheetahString, CheetahString>,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        unimplemented!()
+    }
 
-    fn remove_cold_data_flow_ctr_group_config(
+    async fn remove_cold_data_flow_ctr_group_config(
         &self,
         broker_addr: CheetahString,
         consumer_group: CheetahString,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        unimplemented!()
+    }
 
-    fn get_cold_data_flow_ctr_info(&self, broker_addr: CheetahString) -> Result<CheetahString>;
+    async fn get_cold_data_flow_ctr_info(
+        &self,
+        broker_addr: CheetahString,
+    ) -> Result<CheetahString> {
+        unimplemented!()
+    }
 
-    fn set_commit_log_read_ahead_mode(
+    async fn set_commit_log_read_ahead_mode(
         &self,
         broker_addr: CheetahString,
         mode: CheetahString,
-    ) -> Result<CheetahString>;
+    ) -> Result<CheetahString> {
+        unimplemented!()
+    }
 
-    fn create_user(
+    async fn create_user(
         &self,
         broker_addr: CheetahString,
         username: CheetahString,
         password: CheetahString,
         user_type: CheetahString,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        unimplemented!()
+    }
 
-    /*fn create_user_with_info(
+    /*async fn create_user_with_info(
         &self,
         broker_addr: CheetahString,
         user_info: UserInfo,
-    ) -> Result<()>;*/
+    ) -> Result<()>{ unimplemented!()}*/
 
-    fn update_user(
+    async fn update_user(
         &self,
         broker_addr: CheetahString,
         username: CheetahString,
         password: CheetahString,
         user_type: CheetahString,
         user_status: CheetahString,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        unimplemented!()
+    }
 
-    /* fn update_user_with_info(
+    /* async fn update_user_with_info(
         &self,
         broker_addr: CheetahString,
         user_info: UserInfo,
-    ) -> Result<()>;*/
+    ) -> Result<()>{ unimplemented!()}*/
 
-    fn delete_user(&self, broker_addr: CheetahString, username: CheetahString) -> Result<()>;
+    async fn delete_user(&self, broker_addr: CheetahString, username: CheetahString) -> Result<()> {
+        unimplemented!()
+    }
 
-    /*fn get_user(
+    /*async fn get_user(
         &self,
         broker_addr: CheetahString,
         username: CheetahString,
-    ) -> Result<UserInfo>;*/
+    ) -> Result<UserInfo>{ unimplemented!()}*/
 
-    /* fn list_users(
+    /* async fn list_users(
         &self,
         broker_addr: CheetahString,
         filter: CheetahString,
-    ) -> Result<Vec<UserInfo>>;*/
+    ) -> Result<Vec<UserInfo>>{ unimplemented!()}*/
 
-    fn create_acl(
+    async fn create_acl(
         &self,
         broker_addr: CheetahString,
         subject: CheetahString,
@@ -617,15 +789,17 @@ pub trait MQAdminExt {
         actions: Vec<CheetahString>,
         source_ips: Vec<CheetahString>,
         decision: CheetahString,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        unimplemented!()
+    }
 
-    /*fn create_acl_with_info(
+    /*async fn create_acl_with_info(
         &self,
         broker_addr: CheetahString,
         acl_info: AclInfo,
-    ) -> Result<()>;*/
+    ) -> Result<()>{ unimplemented!()}*/
 
-    fn update_acl(
+    async fn update_acl(
         &self,
         broker_addr: CheetahString,
         subject: CheetahString,
@@ -633,31 +807,35 @@ pub trait MQAdminExt {
         actions: Vec<CheetahString>,
         source_ips: Vec<CheetahString>,
         decision: CheetahString,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        unimplemented!()
+    }
 
-    /*fn update_acl_with_info(
+    /*async fn update_acl_with_info(
         &self,
         broker_addr: CheetahString,
         acl_info: AclInfo,
-    ) -> Result<()>;*/
+    ) -> Result<()>{ unimplemented!()}*/
 
-    fn delete_acl(
+    async fn delete_acl(
         &self,
         broker_addr: CheetahString,
         subject: CheetahString,
         resource: CheetahString,
-    ) -> Result<()>;
+    ) -> Result<()> {
+        unimplemented!()
+    }
 
-    /*fn get_acl(
+    /*async fn get_acl(
         &self,
         broker_addr: CheetahString,
         subject: CheetahString,
-    ) -> Result<AclInfo>;*/
+    ) -> Result<AclInfo>{ unimplemented!()}*/
 
-    /*fn list_acl(
+    /*async fn list_acl(
         &self,
         broker_addr: CheetahString,
         subject_filter: CheetahString,
         resource_filter: CheetahString,
-    ) -> Result<Vec<AclInfo>>;*/
+    ) -> Result<Vec<AclInfo>>{ unimplemented!()}*/
 }

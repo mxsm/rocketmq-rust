@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 use thiserror::Error;
+
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug, Error)]
 pub enum ToolsError {
