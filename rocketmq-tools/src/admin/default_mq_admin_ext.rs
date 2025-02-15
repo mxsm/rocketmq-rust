@@ -184,8 +184,8 @@ impl MQAdminExt for DefaultMQAdminExt {
         MQAdminExt::start(self.default_mqadmin_ext_impl.as_mut()).await
     }
 
-    async fn shutdown(&self) {
-        todo!()
+    async fn shutdown(&mut self) {
+        MQAdminExt::shutdown(self.default_mqadmin_ext_impl.as_mut()).await
     }
 
     async fn add_broker_to_container(
