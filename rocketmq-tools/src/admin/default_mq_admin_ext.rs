@@ -61,18 +61,20 @@ pub struct DefaultMQAdminExt {
 
 impl DefaultMQAdminExt {
     pub fn new() -> Self {
+        let admin_ext_group = CheetahString::from_static_str(ADMIN_EXT_GROUP);
         let client_config = ArcMut::new(ClientConfig::new());
         let mut default_mqadmin_ext_impl = ArcMut::new(DefaultMQAdminExtImpl::new(
             None,
             Duration::from_millis(5000),
             client_config.clone(),
+            admin_ext_group.clone(),
         ));
         let inner = default_mqadmin_ext_impl.clone();
         default_mqadmin_ext_impl.set_inner(inner);
         Self {
             client_config,
             default_mqadmin_ext_impl,
-            admin_ext_group: CheetahString::from_static_str(ADMIN_EXT_GROUP),
+            admin_ext_group,
             create_topic_key: CheetahString::from_static_str(
                 TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC,
             ),
@@ -81,6 +83,7 @@ impl DefaultMQAdminExt {
     }
 
     pub fn with_timeout(timeout_millis: Duration) -> Self {
+        let admin_ext_group = CheetahString::from_static_str(ADMIN_EXT_GROUP);
         let client_config = ArcMut::new(ClientConfig::new());
         Self {
             client_config: client_config.clone(),
@@ -88,8 +91,9 @@ impl DefaultMQAdminExt {
                 None,
                 timeout_millis,
                 client_config,
+                admin_ext_group.clone(),
             )),
-            admin_ext_group: CheetahString::from_static_str(ADMIN_EXT_GROUP),
+            admin_ext_group,
             create_topic_key: CheetahString::from_static_str(
                 TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC,
             ),
@@ -98,6 +102,7 @@ impl DefaultMQAdminExt {
     }
 
     pub fn with_rpc_hook(rpc_hook: impl RPCHook) -> Self {
+        let admin_ext_group = CheetahString::from_static_str(ADMIN_EXT_GROUP);
         let rpc_hook_inner: Box<dyn RPCHook> = Box::new(rpc_hook);
         let client_config = ArcMut::new(ClientConfig::new());
         Self {
@@ -106,8 +111,9 @@ impl DefaultMQAdminExt {
                 Some(Arc::new(rpc_hook_inner)),
                 Duration::from_millis(5000),
                 client_config,
+                admin_ext_group.clone(),
             )),
-            admin_ext_group: CheetahString::from_static_str(ADMIN_EXT_GROUP),
+            admin_ext_group,
             create_topic_key: CheetahString::from_static_str(
                 TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC,
             ),
@@ -116,6 +122,7 @@ impl DefaultMQAdminExt {
     }
 
     pub fn with_rpc_hook_and_timeout(rpc_hook: impl RPCHook, timeout_millis: Duration) -> Self {
+        let admin_ext_group = CheetahString::from_static_str(ADMIN_EXT_GROUP);
         let rpc_hook_inner: Box<dyn RPCHook> = Box::new(rpc_hook);
         let client_config = ArcMut::new(ClientConfig::new());
         Self {
@@ -124,8 +131,9 @@ impl DefaultMQAdminExt {
                 Some(Arc::new(rpc_hook_inner)),
                 timeout_millis,
                 client_config,
+                admin_ext_group.clone(),
             )),
-            admin_ext_group: CheetahString::from_static_str(ADMIN_EXT_GROUP),
+            admin_ext_group,
             create_topic_key: CheetahString::from_static_str(
                 TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC,
             ),
@@ -134,6 +142,7 @@ impl DefaultMQAdminExt {
     }
 
     pub fn with_admin_ext_group(admin_ext_group: impl Into<CheetahString>) -> Self {
+        let admin_ext_group = admin_ext_group.into();
         let client_config = ArcMut::new(ClientConfig::new());
         Self {
             client_config: client_config.clone(),
@@ -141,8 +150,9 @@ impl DefaultMQAdminExt {
                 None,
                 Duration::from_millis(5000),
                 client_config,
+                admin_ext_group.clone(),
             )),
-            admin_ext_group: admin_ext_group.into(),
+            admin_ext_group,
             create_topic_key: CheetahString::from_static_str(
                 TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC,
             ),
@@ -154,6 +164,7 @@ impl DefaultMQAdminExt {
         admin_ext_group: impl Into<CheetahString>,
         timeout_millis: Duration,
     ) -> Self {
+        let admin_ext_group = admin_ext_group.into();
         let client_config = ArcMut::new(ClientConfig::new());
         Self {
             client_config: client_config.clone(),
@@ -161,13 +172,24 @@ impl DefaultMQAdminExt {
                 None,
                 timeout_millis,
                 client_config,
+                admin_ext_group.clone(),
             )),
-            admin_ext_group: admin_ext_group.into(),
+            admin_ext_group,
             create_topic_key: CheetahString::from_static_str(
                 TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC,
             ),
             timeout_millis,
         }
+    }
+
+    #[inline]
+    pub fn client_config(&self) -> &ArcMut<ClientConfig> {
+        &self.client_config
+    }
+
+    #[inline]
+    pub fn client_config_mut(&mut self) -> &mut ArcMut<ClientConfig> {
+        &mut self.client_config
     }
 }
 

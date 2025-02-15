@@ -62,6 +62,8 @@ pub async fn main() -> Result<()> {
 
 async fn switch_pop_consumer() -> Result<()> {
     let mut mq_admin_ext = DefaultMQAdminExt::new();
+    mq_admin_ext.client_config_mut().namesrv_addr =
+        Some(CheetahString::from_static_str(DEFAULT_NAMESRVADDR));
     MQAdminExt::start(&mut mq_admin_ext).await.unwrap();
     let broker_datas =
         MQAdminExt::examine_topic_route_info(&mq_admin_ext, CheetahString::from_static_str(TOPIC))
