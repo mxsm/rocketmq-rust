@@ -45,7 +45,7 @@ use crate::Result;
 #[trait_variant::make(MQAdminExt: Send)]
 pub trait MQAdminExtLocal: Sync {
     async fn start(&mut self) -> Result<()>;
-    async fn shutdown(&self);
+    async fn shutdown(&mut self);
     async fn add_broker_to_container(
         &self,
         broker_container_addr: CheetahString,

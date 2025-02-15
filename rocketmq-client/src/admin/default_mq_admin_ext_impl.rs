@@ -30,6 +30,7 @@ use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
+use rocketmq_common::common::FAQUrl;
 use rocketmq_remoting::protocol::admin::consume_stats::ConsumeStats;
 use rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable;
 use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
@@ -47,10 +48,13 @@ use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::Topic
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_rust::ArcMut;
+use tracing::info;
 
 use crate::admin::mq_admin_ext_async::MQAdminExt;
 use crate::admin::mq_admin_ext_async_inner::MQAdminExtInnerImpl;
 use crate::base::client_config::ClientConfig;
+use crate::client_error::ClientErr;
+use crate::client_error::MQClientError::MQClientErr;
 use crate::common::admin_tool_result::AdminToolResult;
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::implementation::mq_client_manager::MQClientManager;
@@ -146,7 +150,23 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
                         },
                     )
                     .await;
-
+                if !register_ok {
+                    self.service_state = ServiceState::StartFailed;
+                    return Err(MQClientErr(ClientErr::new(format!(
+                        "The adminExt group[{}] has created already, specified another name \
+                         please.{}",
+                        self.admin_ext_group,
+                        FAQUrl::suggest_todo(FAQUrl::GROUP_NAME_DUPLICATE_URL)
+                    ))));
+                }
+                let arc_mut = self.client_instance.clone().unwrap();
+                self.client_instance
+                    .as_mut()
+                    .unwrap()
+                    .start(arc_mut)
+                    .await?;
+                self.service_state = ServiceState::Running;
+                info!("the adminExt [{}] start OK", self.admin_ext_group);
                 Ok(())
             }
             ServiceState::Running | ServiceState::ShutdownAlready | ServiceState::StartFailed => {
@@ -155,8 +175,20 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         }
     }
 
-    async fn shutdown(&self) {
-        todo!()
+    async fn shutdown(&mut self) {
+        match self.service_state {
+            ServiceState::CreateJust
+            | ServiceState::ShutdownAlready
+            | ServiceState::StartFailed => {
+                // do nothing
+            }
+            ServiceState::Running => {
+                let instance = self.client_instance.as_mut().unwrap();
+                instance.unregister_admin_ext(&self.admin_ext_group).await;
+                instance.shutdown().await;
+                self.service_state = ServiceState::ShutdownAlready;
+            }
+        }
     }
 
     async fn add_broker_to_container(

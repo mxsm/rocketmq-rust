@@ -1118,6 +1118,10 @@ impl MQClientInstance {
         self.unregister_client(Some(group.into()), None).await;
     }
 
+    pub async fn unregister_admin_ext(&mut self, group: impl Into<CheetahString>) {
+        let mut write_guard = self.admin_ext_table.write().await;
+        let _ = write_guard.remove(&group.into());
+    }
     async fn unregister_client(
         &mut self,
         producer_group: Option<CheetahString>,
