@@ -49,12 +49,6 @@ pub struct MQAdminExtInnerImpl {
 }
 
 impl MQAdminExtInnerImpl {
-    async fn start(this: ArcMut<Self>) -> Result<()> {
-        unimplemented!()
-    }
-    async fn shutdown(&self) {
-        unimplemented!()
-    }
     async fn add_broker_to_container(
         &self,
         broker_container_addr: CheetahString,
