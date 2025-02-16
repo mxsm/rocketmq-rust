@@ -18,13 +18,13 @@
 use crate::admin::api::track_type::TrackType;
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct MessageTrack {
     pub consumer_group: String,
     pub track_type: Option<TrackType>,
     pub exception_desc: String,
 }
 
+#[allow(dead_code)]
 impl MessageTrack {
     pub fn get_consumer_group(&self) -> String {
         self.consumer_group.clone()
