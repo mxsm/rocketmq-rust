@@ -45,7 +45,7 @@ impl MessageTrack {
         self.exception_desc.clone()
     }
 
-    pub fn set_expception_desc(&mut self, exception_desc: String) {
+    pub fn set_exception_desc(&mut self, exception_desc: String) {
         self.exception_desc = exception_desc;
     }
 }
@@ -74,13 +74,13 @@ mod tests {
     pub fn test_message_track() {
         let mut message_track = MessageTrack {
             consumer_group: "test_consumer_group".to_string(),
-            track_type: Some(TrackType::CONSUMED),
+            track_type: Some(TrackType::Consumed),
             exception_desc: "test_exception_desc".to_string(),
         };
 
         assert_eq!(message_track.get_consumer_group(), "test_consumer_group");
         assert_eq!(message_track.get_exception_desc(), "test_exception_desc");
-        assert_eq!(message_track.get_track_type(), Some(TrackType::CONSUMED));
+        assert_eq!(message_track.get_track_type(), Some(TrackType::Consumed));
 
         let display = format!("{}", message_track);
         println!("{}", display);
@@ -91,7 +91,7 @@ mod tests {
         );
 
         message_track.set_consumer_group("test_consumer_group2".to_string());
-        message_track.set_track_type(TrackType::PULL);
+        message_track.set_track_type(TrackType::Pull);
         message_track.set_expception_desc("test_exception_desc2".to_string());
 
         assert_eq!(message_track.get_consumer_group(), "test_consumer_group2");

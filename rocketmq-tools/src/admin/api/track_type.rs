@@ -17,25 +17,25 @@
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[allow(dead_code)]
 pub enum TrackType {
-    CONSUMED,
+    Consumed,
     ConsumedButFiltered,
-    PULL,
-    NotConsumeYet,
+    Pull,
+    NotConsumedYet,
     NotOnline,
     ConsumeBroadcasting,
-    UNKNOWN,
+    Unknown,
 }
 
 impl std::fmt::Display for TrackType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TrackType::CONSUMED => write!(f, "CONSUMED"),
+            TrackType::Consumed => write!(f, "CONSUMED"),
             TrackType::ConsumedButFiltered => write!(f, "CONSUMED_BUT_FILTERED"),
-            TrackType::PULL => write!(f, "PULL"),
-            TrackType::NotConsumeYet => write!(f, "NOT_CONSUME_YET"),
+            TrackType::Pull => write!(f, "PULL"),
+            TrackType::NotConsumedYet => write!(f, "NOT_CONSUME_YET"),
             TrackType::NotOnline => write!(f, "NOT_ONLINE"),
             TrackType::ConsumeBroadcasting => write!(f, "CONSUME_BROADCASTING"),
-            TrackType::UNKNOWN => write!(f, "UNKNOWN"),
+            TrackType::Unknown => write!(f, "UNKNOWN"),
         }
     }
 }
