@@ -7,7 +7,7 @@ homepage.workspace = true
 repository.workspace = true
 license.workspace = true
 keywords = ["apache-rocketmq", "rocketmq-rust", "apache", "rust", "rocketmq-tools"]
-categories.workspace = true
+categories = ["command-line-utilities", "parsing"]
 readme = "README.md"
 description = "Rust implementation of Apache RocketMQ tools"
 
