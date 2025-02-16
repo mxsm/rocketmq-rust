@@ -18,6 +18,7 @@
 use crate::admin::api::track_type::TrackType;
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct MessageTrack {
     pub consumer_group: String,
     pub track_type: Option<TrackType>,
@@ -34,7 +35,7 @@ impl MessageTrack {
     }
 
     pub fn get_track_type(&self) -> Option<TrackType> {
-        self.track_type.clone()
+        self.track_type
     }
 
     pub fn set_track_type(&mut self, track_type: TrackType) {
@@ -55,7 +56,7 @@ impl std::fmt::Display for MessageTrack {
         let track_type_str = self
             .track_type
             .as_ref()
-            .map_or("None".to_string(), |tt| format!("{:?}", tt));
+            .map_or("None".to_string(), |tt| format!("{}", tt));
         write!(
             f,
             "MessageTrack [consumerGroup={}, trackType={}, exceptionDesc={}]",
@@ -92,7 +93,7 @@ mod tests {
 
         message_track.set_consumer_group("test_consumer_group2".to_string());
         message_track.set_track_type(TrackType::Pull);
-        message_track.set_expception_desc("test_exception_desc2".to_string());
+        message_track.set_exception_desc("test_exception_desc2".to_string());
 
         assert_eq!(message_track.get_consumer_group(), "test_consumer_group2");
         assert_eq!(message_track.get_exception_desc(), "test_exception_desc2");
