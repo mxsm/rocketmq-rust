@@ -14,5 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+pub mod admin_tool_result;
+pub mod admin_tools_result_code_enum;
 pub mod client_error_code;
 pub mod thread_local_index;

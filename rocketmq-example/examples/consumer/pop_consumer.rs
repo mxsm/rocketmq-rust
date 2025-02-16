@@ -17,6 +17,7 @@
 use std::collections::HashSet;
 
 use cheetah_string::CheetahString;
+use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_client_rust::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
 use rocketmq_client_rust::consumer::listener::consume_concurrently_context::ConsumeConcurrentlyContext;
 use rocketmq_client_rust::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
@@ -28,7 +29,6 @@ use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_rust::rocketmq;
 use rocketmq_rust::wait_for_signal;
 use rocketmq_tools::admin::default_mq_admin_ext::DefaultMQAdminExt;
-use rocketmq_tools::admin::mq_admin_ext_async::MQAdminExt;
 use tracing::info;
 
 pub const MESSAGE_COUNT: usize = 1;
@@ -62,10 +62,13 @@ pub async fn main() -> Result<()> {
 
 async fn switch_pop_consumer() -> Result<()> {
     let mut mq_admin_ext = DefaultMQAdminExt::new();
+    mq_admin_ext.client_config_mut().namesrv_addr =
+        Some(CheetahString::from_static_str(DEFAULT_NAMESRVADDR));
     MQAdminExt::start(&mut mq_admin_ext).await.unwrap();
     let broker_datas =
         MQAdminExt::examine_topic_route_info(&mq_admin_ext, CheetahString::from_static_str(TOPIC))
             .await
+            .unwrap()
             .unwrap();
     for broker_data in broker_datas.broker_datas {
         let broker_addrs = broker_data
@@ -88,6 +91,7 @@ async fn switch_pop_consumer() -> Result<()> {
             .unwrap();
         }
     }
+    mq_admin_ext.shutdown().await;
     Ok(())
 }
 

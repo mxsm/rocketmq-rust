@@ -15,15 +15,22 @@
  * limitations under the License.
  */
 #![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::Arc;
+use std::time::Duration;
 
 use cheetah_string::CheetahString;
+use rocketmq_client_rust::admin::default_mq_admin_ext_impl::DefaultMQAdminExtImpl;
+use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_client_rust::base::client_config::ClientConfig;
+use rocketmq_client_rust::common::admin_tool_result::AdminToolResult;
 use rocketmq_common::common::base::plain_access_config::PlainAccessConfig;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_remoting::protocol::admin::consume_stats::ConsumeStats;
 use rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable;
 use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
@@ -39,23 +46,150 @@ use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_rust::ArcMut;
 
-use crate::admin::common::admin_tool_result::AdminToolResult;
-use crate::admin::default_mq_admin_ext_impl::DefaultMQAdminExtImpl;
-use crate::admin::mq_admin_ext_async::MQAdminExt;
+const ADMIN_EXT_GROUP: &str = "admin_ext_group";
 
 pub struct DefaultMQAdminExt {
     client_config: ArcMut<ClientConfig>,
     admin_ext_group: CheetahString,
     create_topic_key: CheetahString,
-    timeout_millis: u64,
-    default_mqadmin_ext_impl: DefaultMQAdminExtImpl,
+    timeout_millis: Duration,
+    default_mqadmin_ext_impl: ArcMut<DefaultMQAdminExtImpl>,
 }
 
 impl DefaultMQAdminExt {
     pub fn new() -> Self {
-        unimplemented!("DefaultMQAdminExt::new")
+        let admin_ext_group = CheetahString::from_static_str(ADMIN_EXT_GROUP);
+        let client_config = ArcMut::new(ClientConfig::new());
+        let mut default_mqadmin_ext_impl = ArcMut::new(DefaultMQAdminExtImpl::new(
+            None,
+            Duration::from_millis(5000),
+            client_config.clone(),
+            admin_ext_group.clone(),
+        ));
+        let inner = default_mqadmin_ext_impl.clone();
+        default_mqadmin_ext_impl.set_inner(inner);
+        Self {
+            client_config,
+            default_mqadmin_ext_impl,
+            admin_ext_group,
+            create_topic_key: CheetahString::from_static_str(
+                TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC,
+            ),
+            timeout_millis: Duration::from_millis(5000),
+        }
+    }
+
+    pub fn with_timeout(timeout_millis: Duration) -> Self {
+        let admin_ext_group = CheetahString::from_static_str(ADMIN_EXT_GROUP);
+        let client_config = ArcMut::new(ClientConfig::new());
+        Self {
+            client_config: client_config.clone(),
+            default_mqadmin_ext_impl: ArcMut::new(DefaultMQAdminExtImpl::new(
+                None,
+                timeout_millis,
+                client_config,
+                admin_ext_group.clone(),
+            )),
+            admin_ext_group,
+            create_topic_key: CheetahString::from_static_str(
+                TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC,
+            ),
+            timeout_millis,
+        }
+    }
+
+    pub fn with_rpc_hook(rpc_hook: impl RPCHook) -> Self {
+        let admin_ext_group = CheetahString::from_static_str(ADMIN_EXT_GROUP);
+        let rpc_hook_inner: Box<dyn RPCHook> = Box::new(rpc_hook);
+        let client_config = ArcMut::new(ClientConfig::new());
+        Self {
+            client_config: client_config.clone(),
+            default_mqadmin_ext_impl: ArcMut::new(DefaultMQAdminExtImpl::new(
+                Some(Arc::new(rpc_hook_inner)),
+                Duration::from_millis(5000),
+                client_config,
+                admin_ext_group.clone(),
+            )),
+            admin_ext_group,
+            create_topic_key: CheetahString::from_static_str(
+                TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC,
+            ),
+            timeout_millis: Duration::from_millis(5000),
+        }
+    }
+
+    pub fn with_rpc_hook_and_timeout(rpc_hook: impl RPCHook, timeout_millis: Duration) -> Self {
+        let admin_ext_group = CheetahString::from_static_str(ADMIN_EXT_GROUP);
+        let rpc_hook_inner: Box<dyn RPCHook> = Box::new(rpc_hook);
+        let client_config = ArcMut::new(ClientConfig::new());
+        Self {
+            client_config: client_config.clone(),
+            default_mqadmin_ext_impl: ArcMut::new(DefaultMQAdminExtImpl::new(
+                Some(Arc::new(rpc_hook_inner)),
+                timeout_millis,
+                client_config,
+                admin_ext_group.clone(),
+            )),
+            admin_ext_group,
+            create_topic_key: CheetahString::from_static_str(
+                TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC,
+            ),
+            timeout_millis,
+        }
+    }
+
+    pub fn with_admin_ext_group(admin_ext_group: impl Into<CheetahString>) -> Self {
+        let admin_ext_group = admin_ext_group.into();
+        let client_config = ArcMut::new(ClientConfig::new());
+        Self {
+            client_config: client_config.clone(),
+            default_mqadmin_ext_impl: ArcMut::new(DefaultMQAdminExtImpl::new(
+                None,
+                Duration::from_millis(5000),
+                client_config,
+                admin_ext_group.clone(),
+            )),
+            admin_ext_group,
+            create_topic_key: CheetahString::from_static_str(
+                TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC,
+            ),
+            timeout_millis: Duration::from_millis(5000),
+        }
+    }
+
+    pub fn with_admin_ext_group_and_timeout(
+        admin_ext_group: impl Into<CheetahString>,
+        timeout_millis: Duration,
+    ) -> Self {
+        let admin_ext_group = admin_ext_group.into();
+        let client_config = ArcMut::new(ClientConfig::new());
+        Self {
+            client_config: client_config.clone(),
+            default_mqadmin_ext_impl: ArcMut::new(DefaultMQAdminExtImpl::new(
+                None,
+                timeout_millis,
+                client_config,
+                admin_ext_group.clone(),
+            )),
+            admin_ext_group,
+            create_topic_key: CheetahString::from_static_str(
+                TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC,
+            ),
+            timeout_millis,
+        }
+    }
+
+    #[inline]
+    pub fn client_config(&self) -> &ArcMut<ClientConfig> {
+        &self.client_config
+    }
+
+    #[inline]
+    pub fn client_config_mut(&mut self) -> &mut ArcMut<ClientConfig> {
+        &mut self.client_config
     }
 }
 
@@ -67,21 +201,20 @@ impl Default for DefaultMQAdminExt {
 
 #[allow(unused_variables)]
 #[allow(unused_mut)]
-#[cfg(feature = "async")]
 impl MQAdminExt for DefaultMQAdminExt {
-    async fn start(&self) -> crate::Result<()> {
-        todo!()
+    async fn start(&mut self) -> rocketmq_client_rust::Result<()> {
+        MQAdminExt::start(self.default_mqadmin_ext_impl.as_mut()).await
     }
 
-    async fn shutdown(&self) {
-        todo!()
+    async fn shutdown(&mut self) {
+        MQAdminExt::shutdown(self.default_mqadmin_ext_impl.as_mut()).await
     }
 
     async fn add_broker_to_container(
         &self,
         broker_container_addr: CheetahString,
         broker_config: CheetahString,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_client_rust::Result<()> {
         todo!()
     }
 
@@ -91,7 +224,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         cluster_name: CheetahString,
         broker_name: CheetahString,
         broker_id: u64,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_client_rust::Result<()> {
         todo!()
     }
 
@@ -99,14 +232,14 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         broker_addr: CheetahString,
         properties: HashMap<CheetahString, CheetahString>,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_client_rust::Result<()> {
         todo!()
     }
 
     async fn get_broker_config(
         &self,
         broker_addr: CheetahString,
-    ) -> crate::Result<HashMap<CheetahString, CheetahString>> {
+    ) -> rocketmq_client_rust::Result<HashMap<CheetahString, CheetahString>> {
         todo!()
     }
 
@@ -114,7 +247,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         addr: CheetahString,
         config: TopicConfig,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_client_rust::Result<()> {
         todo!()
     }
 
@@ -122,7 +255,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         addr: CheetahString,
         topic_config_list: Vec<TopicConfig>,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_client_rust::Result<()> {
         todo!()
     }
 
@@ -130,7 +263,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         addr: CheetahString,
         config: PlainAccessConfig,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_client_rust::Result<()> {
         todo!()
     }
 
@@ -138,7 +271,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         addr: CheetahString,
         access_key: CheetahString,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_client_rust::Result<()> {
         todo!()
     }
 
@@ -147,14 +280,14 @@ impl MQAdminExt for DefaultMQAdminExt {
         addr: CheetahString,
         global_white_addrs: CheetahString,
         acl_file_full_path: Option<CheetahString>,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_client_rust::Result<()> {
         todo!()
     }
 
     async fn examine_broker_cluster_acl_version_info(
         &self,
         addr: CheetahString,
-    ) -> crate::Result<CheetahString> {
+    ) -> rocketmq_client_rust::Result<CheetahString> {
         todo!()
     }
 
@@ -162,7 +295,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         addr: CheetahString,
         config: SubscriptionGroupConfig,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_client_rust::Result<()> {
         todo!()
     }
 
@@ -170,7 +303,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         broker_addr: CheetahString,
         configs: Vec<SubscriptionGroupConfig>,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_client_rust::Result<()> {
         todo!()
     }
 
@@ -178,7 +311,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         addr: CheetahString,
         group: CheetahString,
-    ) -> crate::Result<SubscriptionGroupConfig> {
+    ) -> rocketmq_client_rust::Result<SubscriptionGroupConfig> {
         todo!()
     }
 
@@ -186,7 +319,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         topic: CheetahString,
         broker_addr: Option<CheetahString>,
-    ) -> crate::Result<TopicStatsTable> {
+    ) -> rocketmq_client_rust::Result<TopicStatsTable> {
         todo!()
     }
 
@@ -197,21 +330,21 @@ impl MQAdminExt for DefaultMQAdminExt {
         todo!()
     }
 
-    async fn fetch_all_topic_list(&self) -> crate::Result<TopicList> {
+    async fn fetch_all_topic_list(&self) -> rocketmq_client_rust::Result<TopicList> {
         todo!()
     }
 
     async fn fetch_topics_by_cluster(
         &self,
         cluster_name: CheetahString,
-    ) -> crate::Result<TopicList> {
+    ) -> rocketmq_client_rust::Result<TopicList> {
         todo!()
     }
 
     async fn fetch_broker_runtime_stats(
         &self,
         broker_addr: CheetahString,
-    ) -> crate::Result<KVTable> {
+    ) -> rocketmq_client_rust::Result<KVTable> {
         todo!()
     }
 
@@ -222,26 +355,28 @@ impl MQAdminExt for DefaultMQAdminExt {
         cluster_name: Option<CheetahString>,
         broker_addr: Option<CheetahString>,
         timeout_millis: Option<u64>,
-    ) -> crate::Result<ConsumeStats> {
+    ) -> rocketmq_client_rust::Result<ConsumeStats> {
         todo!()
     }
 
-    async fn examine_broker_cluster_info(&self) -> crate::Result<ClusterInfo> {
+    async fn examine_broker_cluster_info(&self) -> rocketmq_client_rust::Result<ClusterInfo> {
         todo!()
     }
 
     async fn examine_topic_route_info(
         &self,
         topic: CheetahString,
-    ) -> crate::Result<TopicRouteData> {
-        todo!()
+    ) -> rocketmq_client_rust::Result<Option<TopicRouteData>> {
+        self.default_mqadmin_ext_impl
+            .examine_topic_route_info(topic)
+            .await
     }
 
     async fn examine_consumer_connection_info(
         &self,
         consumer_group: CheetahString,
         broker_addr: Option<CheetahString>,
-    ) -> crate::Result<ConsumerConnection> {
+    ) -> rocketmq_client_rust::Result<ConsumerConnection> {
         todo!()
     }
 
@@ -249,7 +384,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         producer_group: CheetahString,
         topic: CheetahString,
-    ) -> crate::Result<ProducerConnection> {
+    ) -> rocketmq_client_rust::Result<ProducerConnection> {
         todo!()
     }
 
@@ -261,7 +396,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         namesrv_addr: CheetahString,
         broker_name: CheetahString,
-    ) -> crate::Result<i32> {
+    ) -> rocketmq_client_rust::Result<i32> {
         todo!()
     }
 
@@ -269,7 +404,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         namesrv_addr: CheetahString,
         broker_name: CheetahString,
-    ) -> crate::Result<i32> {
+    ) -> rocketmq_client_rust::Result<i32> {
         todo!()
     }
 
@@ -286,11 +421,14 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         namespace: CheetahString,
         key: CheetahString,
-    ) -> crate::Result<CheetahString> {
+    ) -> rocketmq_client_rust::Result<CheetahString> {
         todo!()
     }
 
-    async fn get_kv_list_by_namespace(&self, namespace: CheetahString) -> crate::Result<KVTable> {
+    async fn get_kv_list_by_namespace(
+        &self,
+        namespace: CheetahString,
+    ) -> rocketmq_client_rust::Result<KVTable> {
         todo!()
     }
 
@@ -298,7 +436,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         topic_name: CheetahString,
         cluster_name: CheetahString,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_client_rust::Result<()> {
         todo!()
     }
 
@@ -306,7 +444,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         addrs: HashSet<CheetahString>,
         topic: CheetahString,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_client_rust::Result<()> {
         todo!()
     }
 
@@ -315,7 +453,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         addrs: HashSet<CheetahString>,
         cluster_name: Option<CheetahString>,
         topic: CheetahString,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_client_rust::Result<()> {
         todo!()
     }
 
@@ -324,7 +462,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         addr: CheetahString,
         group_name: CheetahString,
         remove_offset: Option<bool>,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_client_rust::Result<()> {
         todo!()
     }
 
@@ -333,7 +471,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         namespace: CheetahString,
         key: CheetahString,
         value: CheetahString,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_client_rust::Result<()> {
         todo!()
     }
 
@@ -341,7 +479,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         namespace: CheetahString,
         key: CheetahString,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_client_rust::Result<()> {
         todo!()
     }
 
@@ -352,7 +490,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         group: CheetahString,
         timestamp: u64,
         is_force: bool,
-    ) -> crate::Result<HashMap<MessageQueue, u64>> {
+    ) -> rocketmq_client_rust::Result<HashMap<MessageQueue, u64>> {
         todo!()
     }
 
@@ -361,7 +499,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         consumer_group: CheetahString,
         topic: CheetahString,
         timestamp: u64,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_client_rust::Result<()> {
         todo!()
     }
 
@@ -370,7 +508,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         topic: CheetahString,
         group: CheetahString,
         client_addr: CheetahString,
-    ) -> crate::Result<HashMap<CheetahString, HashMap<MessageQueue, u64>>> {
+    ) -> rocketmq_client_rust::Result<HashMap<CheetahString, HashMap<MessageQueue, u64>>> {
         todo!()
     }
 
@@ -379,15 +517,21 @@ impl MQAdminExt for DefaultMQAdminExt {
         key: CheetahString,
         value: CheetahString,
         is_cluster: bool,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_client_rust::Result<()> {
         todo!()
     }
 
-    async fn query_topic_consume_by_who(&self, topic: CheetahString) -> crate::Result<GroupList> {
+    async fn query_topic_consume_by_who(
+        &self,
+        topic: CheetahString,
+    ) -> rocketmq_client_rust::Result<GroupList> {
         todo!()
     }
 
-    async fn query_topics_by_consumer(&self, group: CheetahString) -> crate::Result<TopicList> {
+    async fn query_topics_by_consumer(
+        &self,
+        group: CheetahString,
+    ) -> rocketmq_client_rust::Result<TopicList> {
         todo!()
     }
 
@@ -402,7 +546,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         group: CheetahString,
         topic: CheetahString,
-    ) -> crate::Result<SubscriptionData> {
+    ) -> rocketmq_client_rust::Result<SubscriptionData> {
         todo!()
     }
 
@@ -410,7 +554,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         cluster: Option<CheetahString>,
         addr: Option<CheetahString>,
-    ) -> crate::Result<bool> {
+    ) -> rocketmq_client_rust::Result<bool> {
         todo!()
     }
 
@@ -418,7 +562,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         cluster: Option<CheetahString>,
         addr: Option<CheetahString>,
-    ) -> crate::Result<bool> {
+    ) -> rocketmq_client_rust::Result<bool> {
         todo!()
     }
 
@@ -426,7 +570,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         cluster: Option<CheetahString>,
         addr: Option<CheetahString>,
-    ) -> crate::Result<bool> {
+    ) -> rocketmq_client_rust::Result<bool> {
         todo!()
     }
 
@@ -436,7 +580,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         client_id: CheetahString,
         jstack: bool,
         metrics: Option<bool>,
-    ) -> crate::Result<ConsumerRunningInfo> {
+    ) -> rocketmq_client_rust::Result<ConsumerRunningInfo> {
         todo!()
     }
 
@@ -446,7 +590,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         client_id: CheetahString,
         topic: CheetahString,
         msg_id: CheetahString,
-    ) -> crate::Result<ConsumeMessageDirectlyResult> {
+    ) -> rocketmq_client_rust::Result<ConsumeMessageDirectlyResult> {
         todo!()
     }
 
@@ -457,7 +601,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         client_id: CheetahString,
         topic: CheetahString,
         msg_id: CheetahString,
-    ) -> crate::Result<ConsumeMessageDirectlyResult> {
+    ) -> rocketmq_client_rust::Result<ConsumeMessageDirectlyResult> {
         todo!()
     }
 
@@ -467,15 +611,21 @@ impl MQAdminExt for DefaultMQAdminExt {
         dest_group: CheetahString,
         topic: CheetahString,
         is_offline: bool,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_client_rust::Result<()> {
         todo!()
     }
 
-    async fn get_cluster_list(&self, topic: String) -> crate::Result<HashSet<CheetahString>> {
+    async fn get_cluster_list(
+        &self,
+        topic: String,
+    ) -> rocketmq_client_rust::Result<HashSet<CheetahString>> {
         todo!()
     }
 
-    async fn get_topic_cluster_list(&self, topic: String) -> crate::Result<HashSet<CheetahString>> {
+    async fn get_topic_cluster_list(
+        &self,
+        topic: String,
+    ) -> rocketmq_client_rust::Result<HashSet<CheetahString>> {
         todo!()
     }
 
@@ -483,7 +633,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         broker_addr: CheetahString,
         timeout_millis: u64,
-    ) -> crate::Result<TopicConfigSerializeWrapper> {
+    ) -> rocketmq_client_rust::Result<TopicConfigSerializeWrapper> {
         todo!()
     }
 
@@ -492,7 +642,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         broker_addr: CheetahString,
         special_topic: bool,
         timeout_millis: u64,
-    ) -> crate::Result<TopicConfigSerializeWrapper> {
+    ) -> rocketmq_client_rust::Result<TopicConfigSerializeWrapper> {
         todo!()
     }
 
@@ -502,7 +652,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         consume_group: CheetahString,
         mq: MessageQueue,
         offset: u64,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_client_rust::Result<()> {
         todo!()
     }
 
@@ -510,14 +660,15 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         properties: HashMap<CheetahString, CheetahString>,
         name_servers: Vec<CheetahString>,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_client_rust::Result<()> {
         todo!()
     }
 
     async fn get_name_server_config(
         &self,
         name_servers: Vec<CheetahString>,
-    ) -> crate::Result<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>> {
+    ) -> rocketmq_client_rust::Result<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>>
+    {
         todo!()
     }
 
@@ -525,7 +676,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         topic: CheetahString,
         msg_id: CheetahString,
-    ) -> crate::Result<bool> {
+    ) -> rocketmq_client_rust::Result<bool> {
         todo!()
     }
 
@@ -537,17 +688,17 @@ impl MQAdminExt for DefaultMQAdminExt {
         mode: MessageRequestMode,
         pop_work_group_size: i32,
         timeout_millis: u64,
-    ) -> crate::Result<()> {
-        self.default_mqadmin_ext_impl
-            .set_message_request_mode(
-                broker_addr,
-                topic,
-                consumer_group,
-                mode,
-                pop_work_group_size,
-                timeout_millis,
-            )
-            .await
+    ) -> rocketmq_client_rust::Result<()> {
+        MQAdminExt::set_message_request_mode(
+            self.default_mqadmin_ext_impl.as_ref(),
+            broker_addr,
+            topic,
+            consumer_group,
+            mode,
+            pop_work_group_size,
+            timeout_millis,
+        )
+        .await
     }
 
     async fn reset_offset_by_queue_id(
@@ -557,7 +708,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         topic_name: CheetahString,
         queue_id: i32,
         reset_offset: u64,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_client_rust::Result<()> {
         todo!()
     }
 
@@ -565,7 +716,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         addr: CheetahString,
         topic: CheetahString,
-    ) -> crate::Result<TopicConfig> {
+    ) -> rocketmq_client_rust::Result<TopicConfig> {
         todo!()
     }
 
@@ -576,7 +727,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         topic_config: TopicConfig,
         mapping_detail: TopicQueueMappingDetail,
         force: bool,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_client_rust::Result<()> {
         todo!()
     }
 
@@ -584,14 +735,15 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         broker_addr: CheetahString,
         master_flush_offset: u64,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_client_rust::Result<()> {
         todo!()
     }
 
     async fn get_controller_config(
         &self,
         controller_servers: Vec<CheetahString>,
-    ) -> crate::Result<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>> {
+    ) -> rocketmq_client_rust::Result<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>>
+    {
         todo!()
     }
 
@@ -599,7 +751,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         properties: HashMap<CheetahString, CheetahString>,
         controllers: Vec<CheetahString>,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_client_rust::Result<()> {
         todo!()
     }
 
@@ -610,7 +762,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         broker_name: CheetahString,
         broker_controller_ids_to_clean: Option<CheetahString>,
         is_clean_living_broker: bool,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_client_rust::Result<()> {
         todo!()
     }
 
@@ -618,7 +770,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         broker_addr: CheetahString,
         properties: HashMap<CheetahString, CheetahString>,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_client_rust::Result<()> {
         todo!()
     }
 
@@ -626,14 +778,14 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         broker_addr: CheetahString,
         consumer_group: CheetahString,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_client_rust::Result<()> {
         todo!()
     }
 
     async fn get_cold_data_flow_ctr_info(
         &self,
         broker_addr: CheetahString,
-    ) -> crate::Result<CheetahString> {
+    ) -> rocketmq_client_rust::Result<CheetahString> {
         todo!()
     }
 
@@ -641,7 +793,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         broker_addr: CheetahString,
         mode: CheetahString,
-    ) -> crate::Result<CheetahString> {
+    ) -> rocketmq_client_rust::Result<CheetahString> {
         todo!()
     }
 
@@ -651,7 +803,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         username: CheetahString,
         password: CheetahString,
         user_type: CheetahString,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_client_rust::Result<()> {
         todo!()
     }
 
@@ -662,7 +814,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         password: CheetahString,
         user_type: CheetahString,
         user_status: CheetahString,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_client_rust::Result<()> {
         todo!()
     }
 
@@ -670,7 +822,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         broker_addr: CheetahString,
         username: CheetahString,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_client_rust::Result<()> {
         todo!()
     }
 
@@ -682,7 +834,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         actions: Vec<CheetahString>,
         source_ips: Vec<CheetahString>,
         decision: CheetahString,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_client_rust::Result<()> {
         todo!()
     }
 
@@ -694,7 +846,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         actions: Vec<CheetahString>,
         source_ips: Vec<CheetahString>,
         decision: CheetahString,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_client_rust::Result<()> {
         todo!()
     }
 
@@ -703,7 +855,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         broker_addr: CheetahString,
         subject: CheetahString,
         resource: CheetahString,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_client_rust::Result<()> {
         todo!()
     }
 }

@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use crate::admin::common::admin_tools_result_code_enum::AdminToolsResultCodeEnum;
+use crate::common::admin_tools_result_code_enum::AdminToolsResultCodeEnum;
 
 pub struct AdminToolResult<T> {
     success: bool,
@@ -99,7 +99,7 @@ impl<T> AdminToolResult<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::admin::common::admin_tools_result_code_enum::AdminToolsResultCodeEnum;
+    use crate::common::admin_tools_result_code_enum::AdminToolsResultCodeEnum;
 
     #[test]
     fn new_initializes_correctly() {

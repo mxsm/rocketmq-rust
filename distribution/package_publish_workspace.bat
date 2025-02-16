@@ -9,7 +9,20 @@ cd ..
 
 echo Starting to package Rust workspace projects...
 
-set PROJECTS=rocketmq-common rocketmq-runtime rocketmq-macros rocketmq rocketmq-filter rocketmq-store rocketmq-remoting rocketmq-cli rocketmq-example rocketmq-client rocketmq-namesrv rocketmq-broker rocketmq-tools
+set PROJECTS=rocketmq-common ^
+ rocketmq-runtime ^
+ rocketmq-macros ^
+ rocketmq ^
+ rocketmq-filter ^
+ rocketmq-store ^
+ rocketmq-remoting ^
+ rocketmq-cli ^
+ rocketmq-example ^
+ rocketmq-client ^
+ rocketmq-namesrv ^
+ rocketmq-broker ^
+ rocketmq-tools ^
+ rocketmq-tui
 
 for %%P in (%PROJECTS%) do (
     echo Packaging %%P...

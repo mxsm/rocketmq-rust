@@ -14,14 +14,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+#![allow(dead_code)]
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::env;
+use std::sync::Arc;
+use std::time::Duration;
 
 use cheetah_string::CheetahString;
+use lazy_static::lazy_static;
 use rocketmq_common::common::base::plain_access_config::PlainAccessConfig;
+use rocketmq_common::common::base::service_state::ServiceState;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_common::common::mix_all;
+use rocketmq_common::common::FAQUrl;
 use rocketmq_remoting::protocol::admin::consume_stats::ConsumeStats;
 use rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable;
 use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
@@ -37,21 +46,159 @@ use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+use rocketmq_remoting::runtime::RPCHook;
+use rocketmq_rust::ArcMut;
+use tracing::info;
 
-use crate::admin::common::admin_tool_result::AdminToolResult;
-use crate::Result;
+use crate::admin::mq_admin_ext_async::MQAdminExt;
+use crate::admin::mq_admin_ext_async_inner::MQAdminExtInnerImpl;
+use crate::base::client_config::ClientConfig;
+use crate::client_error::ClientErr;
+use crate::client_error::MQClientError::MQClientErr;
+use crate::common::admin_tool_result::AdminToolResult;
+use crate::factory::mq_client_instance::MQClientInstance;
+use crate::implementation::mq_client_manager::MQClientManager;
 
-#[cfg(feature = "async")]
-#[allow(dead_code)]
-#[trait_variant::make(MQAdminExt: Send)]
-pub trait MQAdminExtLocal: Sync {
-    async fn start(&self) -> Result<()>;
-    async fn shutdown(&self);
+lazy_static! {
+    static ref SYSTEM_GROUP_SET: HashSet<CheetahString> = {
+        let mut set = HashSet::new();
+        set.insert(CheetahString::from(mix_all::DEFAULT_CONSUMER_GROUP));
+        set.insert(CheetahString::from(mix_all::DEFAULT_PRODUCER_GROUP));
+        set.insert(CheetahString::from(mix_all::TOOLS_CONSUMER_GROUP));
+        set.insert(CheetahString::from(mix_all::SCHEDULE_CONSUMER_GROUP));
+        set.insert(CheetahString::from(mix_all::FILTERSRV_CONSUMER_GROUP));
+        set.insert(CheetahString::from(mix_all::MONITOR_CONSUMER_GROUP));
+        set.insert(CheetahString::from(mix_all::CLIENT_INNER_PRODUCER_GROUP));
+        set.insert(CheetahString::from(mix_all::SELF_TEST_PRODUCER_GROUP));
+        set.insert(CheetahString::from(mix_all::SELF_TEST_CONSUMER_GROUP));
+        set.insert(CheetahString::from(mix_all::ONS_HTTP_PROXY_GROUP));
+        set.insert(CheetahString::from(mix_all::CID_ONSAPI_PERMISSION_GROUP));
+        set.insert(CheetahString::from(mix_all::CID_ONSAPI_OWNER_GROUP));
+        set.insert(CheetahString::from(mix_all::CID_ONSAPI_PULL_GROUP));
+        set.insert(CheetahString::from(mix_all::CID_SYS_RMQ_TRANS));
+        set
+    };
+}
+
+const SOCKS_PROXY_JSON: &str = "socksProxyJson";
+const NAMESPACE_ORDER_TOPIC_CONFIG: &str = "ORDER_TOPIC_CONFIG";
+pub struct DefaultMQAdminExtImpl {
+    service_state: ServiceState,
+    client_instance: Option<ArcMut<MQClientInstance>>,
+    rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
+    timeout_millis: Duration,
+    kv_namespace_to_delete_list: Vec<CheetahString>,
+    client_config: ArcMut<ClientConfig>,
+    admin_ext_group: CheetahString,
+    inner: Option<ArcMut<DefaultMQAdminExtImpl>>,
+}
+
+impl DefaultMQAdminExtImpl {
+    pub fn new(
+        rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
+        timeout_millis: Duration,
+        client_config: ArcMut<ClientConfig>,
+        admin_ext_group: CheetahString,
+    ) -> Self {
+        DefaultMQAdminExtImpl {
+            service_state: ServiceState::CreateJust,
+            client_instance: None,
+            rpc_hook,
+            timeout_millis,
+            kv_namespace_to_delete_list: vec![CheetahString::from_static_str(
+                NAMESPACE_ORDER_TOPIC_CONFIG,
+            )],
+            client_config,
+            admin_ext_group,
+            inner: None,
+        }
+    }
+
+    pub fn set_inner(&mut self, inner: ArcMut<DefaultMQAdminExtImpl>) {
+        self.inner = Some(inner);
+    }
+}
+
+#[allow(unused_variables)]
+#[allow(unused_mut)]
+impl MQAdminExt for DefaultMQAdminExtImpl {
+    async fn start(&mut self) -> crate::Result<()> {
+        match self.service_state {
+            ServiceState::CreateJust => {
+                self.service_state = ServiceState::StartFailed;
+                self.client_config.change_instance_name_to_pid();
+                if "{}".eq(&self.client_config.socks_proxy_config) {
+                    self.client_config.socks_proxy_config = env::var(SOCKS_PROXY_JSON)
+                        .unwrap_or_else(|_| "{}".to_string())
+                        .into();
+                }
+                self.client_instance = Some(
+                    MQClientManager::get_instance().get_or_create_mq_client_instance(
+                        self.client_config.as_ref().clone(),
+                        self.rpc_hook.clone(),
+                    ),
+                );
+
+                let group = &self.admin_ext_group.clone();
+                let register_ok = self
+                    .client_instance
+                    .as_mut()
+                    .unwrap()
+                    .register_admin_ext(
+                        group,
+                        MQAdminExtInnerImpl {
+                            inner: self.inner.as_ref().unwrap().clone(),
+                        },
+                    )
+                    .await;
+                if !register_ok {
+                    self.service_state = ServiceState::StartFailed;
+                    return Err(MQClientErr(ClientErr::new(format!(
+                        "The adminExt group[{}] has created already, specified another name \
+                         please.{}",
+                        self.admin_ext_group,
+                        FAQUrl::suggest_todo(FAQUrl::GROUP_NAME_DUPLICATE_URL)
+                    ))));
+                }
+                let arc_mut = self.client_instance.clone().unwrap();
+                self.client_instance
+                    .as_mut()
+                    .unwrap()
+                    .start(arc_mut)
+                    .await?;
+                self.service_state = ServiceState::Running;
+                info!("the adminExt [{}] start OK", self.admin_ext_group);
+                Ok(())
+            }
+            ServiceState::Running | ServiceState::ShutdownAlready | ServiceState::StartFailed => {
+                unimplemented!()
+            }
+        }
+    }
+
+    async fn shutdown(&mut self) {
+        match self.service_state {
+            ServiceState::CreateJust
+            | ServiceState::ShutdownAlready
+            | ServiceState::StartFailed => {
+                // do nothing
+            }
+            ServiceState::Running => {
+                let instance = self.client_instance.as_mut().unwrap();
+                instance.unregister_admin_ext(&self.admin_ext_group).await;
+                instance.shutdown().await;
+                self.service_state = ServiceState::ShutdownAlready;
+            }
+        }
+    }
+
     async fn add_broker_to_container(
         &self,
         broker_container_addr: CheetahString,
         broker_config: CheetahString,
-    ) -> Result<()>;
+    ) -> crate::Result<()> {
+        todo!()
+    }
 
     async fn remove_broker_from_container(
         &self,
@@ -59,89 +206,129 @@ pub trait MQAdminExtLocal: Sync {
         cluster_name: CheetahString,
         broker_name: CheetahString,
         broker_id: u64,
-    ) -> Result<()>;
+    ) -> crate::Result<()> {
+        todo!()
+    }
 
     async fn update_broker_config(
         &self,
         broker_addr: CheetahString,
         properties: HashMap<CheetahString, CheetahString>,
-    ) -> Result<()>;
+    ) -> crate::Result<()> {
+        todo!()
+    }
 
     async fn get_broker_config(
         &self,
         broker_addr: CheetahString,
-    ) -> Result<HashMap<CheetahString, CheetahString>>;
+    ) -> crate::Result<HashMap<CheetahString, CheetahString>> {
+        todo!()
+    }
 
     async fn create_and_update_topic_config(
         &self,
         addr: CheetahString,
         config: TopicConfig,
-    ) -> Result<()>;
+    ) -> crate::Result<()> {
+        todo!()
+    }
 
     async fn create_and_update_topic_config_list(
         &self,
         addr: CheetahString,
         topic_config_list: Vec<TopicConfig>,
-    ) -> Result<()>;
+    ) -> crate::Result<()> {
+        todo!()
+    }
 
     async fn create_and_update_plain_access_config(
         &self,
         addr: CheetahString,
         config: PlainAccessConfig,
-    ) -> Result<()>;
+    ) -> crate::Result<()> {
+        todo!()
+    }
 
     async fn delete_plain_access_config(
         &self,
         addr: CheetahString,
         access_key: CheetahString,
-    ) -> Result<()>;
+    ) -> crate::Result<()> {
+        todo!()
+    }
 
     async fn update_global_white_addr_config(
         &self,
         addr: CheetahString,
         global_white_addrs: CheetahString,
         acl_file_full_path: Option<CheetahString>,
-    ) -> Result<()>;
+    ) -> crate::Result<()> {
+        todo!()
+    }
 
     async fn examine_broker_cluster_acl_version_info(
         &self,
         addr: CheetahString,
-    ) -> Result<CheetahString>;
+    ) -> crate::Result<CheetahString> {
+        todo!()
+    }
 
     async fn create_and_update_subscription_group_config(
         &self,
         addr: CheetahString,
         config: SubscriptionGroupConfig,
-    ) -> Result<()>;
+    ) -> crate::Result<()> {
+        todo!()
+    }
 
     async fn create_and_update_subscription_group_config_list(
         &self,
         broker_addr: CheetahString,
         configs: Vec<SubscriptionGroupConfig>,
-    ) -> Result<()>;
+    ) -> crate::Result<()> {
+        todo!()
+    }
 
     async fn examine_subscription_group_config(
         &self,
         addr: CheetahString,
         group: CheetahString,
-    ) -> Result<SubscriptionGroupConfig>;
+    ) -> crate::Result<SubscriptionGroupConfig> {
+        todo!()
+    }
 
     async fn examine_topic_stats(
         &self,
         topic: CheetahString,
         broker_addr: Option<CheetahString>,
-    ) -> Result<TopicStatsTable>;
+    ) -> crate::Result<TopicStatsTable> {
+        todo!()
+    }
 
     async fn examine_topic_stats_concurrent(
         &self,
         topic: CheetahString,
-    ) -> AdminToolResult<TopicStatsTable>;
+    ) -> AdminToolResult<TopicStatsTable> {
+        todo!()
+    }
 
-    async fn fetch_all_topic_list(&self) -> Result<TopicList>;
+    async fn fetch_all_topic_list(&self) -> crate::Result<TopicList> {
+        todo!()
+    }
 
-    async fn fetch_topics_by_cluster(&self, cluster_name: CheetahString) -> Result<TopicList>;
+    async fn fetch_topics_by_cluster(
+        &self,
+        cluster_name: CheetahString,
+    ) -> crate::Result<TopicList> {
+        todo!()
+    }
 
-    async fn fetch_broker_runtime_stats(&self, broker_addr: CheetahString) -> Result<KVTable>;
+    async fn fetch_broker_runtime_stats(
+        &self,
+        broker_addr: CheetahString,
+    ) -> crate::Result<KVTable> {
+        todo!()
+    }
 
     async fn examine_consume_stats(
         &self,
@@ -150,112 +337,135 @@ pub trait MQAdminExtLocal: Sync {
         cluster_name: Option<CheetahString>,
         broker_addr: Option<CheetahString>,
         timeout_millis: Option<u64>,
-    ) -> Result<ConsumeStats>;
+    ) -> crate::Result<ConsumeStats> {
+        todo!()
+    }
 
-    /*async fn check_rocksdb_cq_write_progress(
+    async fn examine_broker_cluster_info(&self) -> crate::Result<ClusterInfo> {
+        todo!()
+    }
+
+    async fn examine_topic_route_info(
         &self,
-        broker_addr: CheetahString,
         topic: CheetahString,
-    ) -> Result<CheckRocksdbCqWriteProgressResponseBody>;*/
-
-    async fn examine_broker_cluster_info(&self) -> Result<ClusterInfo>;
-
-    async fn examine_topic_route_info(&self, topic: CheetahString) -> Result<TopicRouteData>;
+    ) -> crate::Result<Option<TopicRouteData>> {
+        self.client_instance
+            .as_ref()
+            .unwrap()
+            .mq_client_api_impl
+            .as_ref()
+            .unwrap()
+            .get_topic_route_info_from_name_server(&topic, self.timeout_millis.as_millis() as u64)
+            .await
+    }
 
     async fn examine_consumer_connection_info(
         &self,
         consumer_group: CheetahString,
         broker_addr: Option<CheetahString>,
-    ) -> Result<ConsumerConnection>;
+    ) -> crate::Result<ConsumerConnection> {
+        todo!()
+    }
 
     async fn examine_producer_connection_info(
         &self,
         producer_group: CheetahString,
         topic: CheetahString,
-    ) -> Result<ProducerConnection>;
+    ) -> crate::Result<ProducerConnection> {
+        todo!()
+    }
 
-    /* async fn get_all_producer_info(
-        &self,
-        broker_addr: CheetahString,
-    ) -> Result<ProducerTableInfo>;*/
-
-    async fn get_name_server_address_list(&self) -> Vec<CheetahString>;
+    async fn get_name_server_address_list(&self) -> Vec<CheetahString> {
+        todo!()
+    }
 
     async fn wipe_write_perm_of_broker(
         &self,
         namesrv_addr: CheetahString,
         broker_name: CheetahString,
-    ) -> Result<i32>;
+    ) -> crate::Result<i32> {
+        todo!()
+    }
 
     async fn add_write_perm_of_broker(
         &self,
         namesrv_addr: CheetahString,
         broker_name: CheetahString,
-    ) -> Result<i32>;
+    ) -> crate::Result<i32> {
+        todo!()
+    }
 
     async fn put_kv_config(
         &self,
         namespace: CheetahString,
         key: CheetahString,
         value: CheetahString,
-    );
+    ) {
+        todo!()
+    }
 
     async fn get_kv_config(
         &self,
         namespace: CheetahString,
         key: CheetahString,
-    ) -> Result<CheetahString>;
+    ) -> crate::Result<CheetahString> {
+        todo!()
+    }
 
-    async fn get_kv_list_by_namespace(&self, namespace: CheetahString) -> Result<KVTable>;
+    async fn get_kv_list_by_namespace(&self, namespace: CheetahString) -> crate::Result<KVTable> {
+        todo!()
+    }
 
     async fn delete_topic(
         &self,
         topic_name: CheetahString,
         cluster_name: CheetahString,
-    ) -> Result<()>;
+    ) -> crate::Result<()> {
+        todo!()
+    }
 
     async fn delete_topic_in_broker(
         &self,
         addrs: HashSet<CheetahString>,
         topic: CheetahString,
-    ) -> Result<()>;
-
-    /*async fn delete_topic_in_broker_concurrent(
-        &self,
-        addrs: HashSet<CheetahString>,
-        topic: CheetahString,
-    ) -> AdminToolResult<BrokerOperatorResult>;*/
+    ) -> crate::Result<()> {
+        todo!()
+    }
 
     async fn delete_topic_in_name_server(
         &self,
         addrs: HashSet<CheetahString>,
         cluster_name: Option<CheetahString>,
         topic: CheetahString,
-    ) -> Result<()>;
+    ) -> crate::Result<()> {
+        todo!()
+    }
 
     async fn delete_subscription_group(
         &self,
         addr: CheetahString,
         group_name: CheetahString,
         remove_offset: Option<bool>,
-    ) -> Result<()>;
+    ) -> crate::Result<()> {
+        todo!()
+    }
 
     async fn create_and_update_kv_config(
         &self,
         namespace: CheetahString,
         key: CheetahString,
         value: CheetahString,
-    ) -> Result<()>;
+    ) -> crate::Result<()> {
+        todo!()
+    }
 
-    async fn delete_kv_config(&self, namespace: CheetahString, key: CheetahString) -> Result<()>;
-
-    /*async fn reset_offset_by_timestamp_old(
+    async fn delete_kv_config(
         &self,
-        consumer_group: CheetahString,
-        topic: CheetahString,
-        timestamp: u64,
-        force: bool,
-    ) -> Result<Vec<RollbackStats>>;*/
+        namespace: CheetahString,
+        key: CheetahString,
+    ) -> crate::Result<()> {
+        todo!()
+    }
 
     async fn reset_offset_by_timestamp(
         &self,
@@ -264,80 +474,83 @@ pub trait MQAdminExtLocal: Sync {
         group: CheetahString,
         timestamp: u64,
         is_force: bool,
-    ) -> Result<HashMap<MessageQueue, u64>>;
+    ) -> crate::Result<HashMap<MessageQueue, u64>> {
+        todo!()
+    }
 
     async fn reset_offset_new(
         &self,
         consumer_group: CheetahString,
         topic: CheetahString,
         timestamp: u64,
-    ) -> Result<()>;
-
-    /*async fn reset_offset_new_concurrent(
-        &self,
-        group: CheetahString,
-        topic: CheetahString,
-        timestamp: u64,
-    ) -> AdminToolResult<BrokerOperatorResult>;*/
+    ) -> crate::Result<()> {
+        todo!()
+    }
 
     async fn get_consume_status(
         &self,
         topic: CheetahString,
         group: CheetahString,
         client_addr: CheetahString,
-    ) -> Result<HashMap<CheetahString, HashMap<MessageQueue, u64>>>;
+    ) -> crate::Result<HashMap<CheetahString, HashMap<MessageQueue, u64>>> {
+        todo!()
+    }
 
     async fn create_or_update_order_conf(
         &self,
         key: CheetahString,
         value: CheetahString,
         is_cluster: bool,
-    ) -> Result<()>;
+    ) -> crate::Result<()> {
+        todo!()
+    }
 
-    async fn query_topic_consume_by_who(&self, topic: CheetahString) -> Result<GroupList>;
+    async fn query_topic_consume_by_who(&self, topic: CheetahString) -> crate::Result<GroupList> {
+        todo!()
+    }
 
-    async fn query_topics_by_consumer(&self, group: CheetahString) -> Result<TopicList>;
+    async fn query_topics_by_consumer(&self, group: CheetahString) -> crate::Result<TopicList> {
+        todo!()
+    }
 
     async fn query_topics_by_consumer_concurrent(
         &self,
         group: CheetahString,
-    ) -> AdminToolResult<TopicList>;
+    ) -> AdminToolResult<TopicList> {
+        todo!()
+    }
 
     async fn query_subscription(
         &self,
         group: CheetahString,
         topic: CheetahString,
-    ) -> Result<SubscriptionData>;
-
-    /*async fn query_consume_time_span(
-        &self,
-        topic: CheetahString,
-        group: CheetahString,
-    ) -> Result<Vec<QueueTimeSpan>>;
-
-    async fn query_consume_time_span_concurrent(
-        &self,
-        topic: CheetahString,
-        group: CheetahString,
-    ) -> AdminToolResult<Vec<QueueTimeSpan>>;*/
+    ) -> crate::Result<SubscriptionData> {
+        todo!()
+    }
 
     async fn clean_expired_consumer_queue(
         &self,
         cluster: Option<CheetahString>,
         addr: Option<CheetahString>,
-    ) -> Result<bool>;
+    ) -> crate::Result<bool> {
+        todo!()
+    }
 
     async fn delete_expired_commit_log(
         &self,
         cluster: Option<CheetahString>,
         addr: Option<CheetahString>,
-    ) -> Result<bool>;
+    ) -> crate::Result<bool> {
+        todo!()
+    }
 
     async fn clean_unused_topic(
         &self,
         cluster: Option<CheetahString>,
         addr: Option<CheetahString>,
-    ) -> Result<bool>;
+    ) -> crate::Result<bool> {
+        todo!()
+    }
 
     async fn get_consumer_running_info(
         &self,
@@ -345,7 +558,9 @@ pub trait MQAdminExtLocal: Sync {
         client_id: CheetahString,
         jstack: bool,
         metrics: Option<bool>,
-    ) -> Result<ConsumerRunningInfo>;
+    ) -> crate::Result<ConsumerRunningInfo> {
+        todo!()
+    }
 
     async fn consume_message_directly(
         &self,
@@ -353,7 +568,9 @@ pub trait MQAdminExtLocal: Sync {
         client_id: CheetahString,
         topic: CheetahString,
         msg_id: CheetahString,
-    ) -> Result<ConsumeMessageDirectlyResult>;
+    ) -> crate::Result<ConsumeMessageDirectlyResult> {
+        todo!()
+    }
 
     async fn consume_message_directly_ext(
         &self,
@@ -362,17 +579,9 @@ pub trait MQAdminExtLocal: Sync {
         client_id: CheetahString,
         topic: CheetahString,
         msg_id: CheetahString,
-    ) -> Result<ConsumeMessageDirectlyResult>;
-
-    /*async fn message_track_detail(
-        &self,
-        msg: MessageExt,
-    ) -> Result<Vec<MessageTrack>>;
-
-    async fn message_track_detail_concurrent(
-        &self,
-        msg: MessageExt,
-    ) -> AdminToolResult<Vec<MessageTrack>>;*/
+    ) -> crate::Result<ConsumeMessageDirectlyResult> {
+        todo!()
+    }
 
     async fn clone_group_offset(
         &self,
@@ -380,50 +589,34 @@ pub trait MQAdminExtLocal: Sync {
         dest_group: CheetahString,
         topic: CheetahString,
         is_offline: bool,
-    ) -> Result<()>;
+    ) -> crate::Result<()> {
+        todo!()
+    }
 
-    /*async fn view_broker_stats_data(
-        &self,
-        broker_addr: CheetahString,
-        stats_name: CheetahString,
-        stats_key: CheetahString,
-    ) -> Result<BrokerStatsData>;*/
+    async fn get_cluster_list(&self, topic: String) -> crate::Result<HashSet<CheetahString>> {
+        todo!()
+    }
 
-    async fn get_cluster_list(&self, topic: String) -> Result<HashSet<CheetahString>>;
-
-    /*async fn fetch_consume_stats_in_broker(
-        &self,
-        broker_addr: CheetahString,
-        is_order: bool,
-        timeout_millis: u64,
-    ) -> Result<ConsumeStatsList>;*/
-
-    async fn get_topic_cluster_list(&self, topic: String) -> Result<HashSet<CheetahString>>;
-
-    /*async fn get_all_subscription_group(
-        &self,
-        broker_addr: CheetahString,
-        timeout_millis: u64,
-    ) -> Result<SubscriptionGroupWrapper>;*/
-
-    /*async fn get_user_subscription_group(
-        &self,
-        broker_addr: CheetahString,
-        timeout_millis: u64,
-    ) -> Result<SubscriptionGroupWrapper>;*/
+    async fn get_topic_cluster_list(&self, topic: String) -> crate::Result<HashSet<CheetahString>> {
+        todo!()
+    }
 
     async fn get_all_topic_config(
         &self,
         broker_addr: CheetahString,
         timeout_millis: u64,
-    ) -> Result<TopicConfigSerializeWrapper>;
+    ) -> crate::Result<TopicConfigSerializeWrapper> {
+        todo!()
+    }
 
     async fn get_user_topic_config(
         &self,
         broker_addr: CheetahString,
         special_topic: bool,
         timeout_millis: u64,
-    ) -> Result<TopicConfigSerializeWrapper>;
+    ) -> crate::Result<TopicConfigSerializeWrapper> {
+        todo!()
+    }
 
     async fn update_consume_offset(
         &self,
@@ -431,34 +624,32 @@ pub trait MQAdminExtLocal: Sync {
         consume_group: CheetahString,
         mq: MessageQueue,
         offset: u64,
-    ) -> Result<()>;
+    ) -> crate::Result<()> {
+        todo!()
+    }
 
     async fn update_name_server_config(
         &self,
         properties: HashMap<CheetahString, CheetahString>,
         name_servers: Vec<CheetahString>,
-    ) -> Result<()>;
+    ) -> crate::Result<()> {
+        todo!()
+    }
 
     async fn get_name_server_config(
         &self,
         name_servers: Vec<CheetahString>,
-    ) -> Result<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>>;
-
-    /*async fn query_consume_queue(
-        &self,
-        broker_addr: CheetahString,
-        topic: CheetahString,
-        queue_id: i32,
-        index: u64,
-        count: i32,
-        consumer_group: CheetahString,
-    ) -> Result<QueryConsumeQueueResponseBody>;*/
+    ) -> crate::Result<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>> {
+        todo!()
+    }
 
     async fn resume_check_half_message(
         &self,
         topic: CheetahString,
         msg_id: CheetahString,
-    ) -> Result<bool>;
+    ) -> crate::Result<bool> {
+        todo!()
+    }
 
     async fn set_message_request_mode(
         &self,
@@ -468,7 +659,27 @@ pub trait MQAdminExtLocal: Sync {
         mode: MessageRequestMode,
         pop_work_group_size: i32,
         timeout_millis: u64,
-    ) -> Result<()>;
+    ) -> crate::Result<()> {
+        let mut mq_client_api = self
+            .client_instance
+            .as_ref()
+            .unwrap()
+            .get_mq_client_api_impl();
+        match mq_client_api
+            .set_message_request_mode(
+                &broker_addr,
+                &topic,
+                &consumer_group,
+                mode,
+                pop_work_group_size,
+                timeout_millis,
+            )
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
 
     async fn reset_offset_by_queue_id(
         &self,
@@ -477,13 +688,17 @@ pub trait MQAdminExtLocal: Sync {
         topic_name: CheetahString,
         queue_id: i32,
         reset_offset: u64,
-    ) -> Result<()>;
+    ) -> crate::Result<()> {
+        todo!()
+    }
 
     async fn examine_topic_config(
         &self,
         addr: CheetahString,
         topic: CheetahString,
-    ) -> Result<TopicConfig>;
+    ) -> crate::Result<TopicConfig> {
+        todo!()
+    }
 
     async fn create_static_topic(
         &self,
@@ -492,65 +707,32 @@ pub trait MQAdminExtLocal: Sync {
         topic_config: TopicConfig,
         mapping_detail: TopicQueueMappingDetail,
         force: bool,
-    ) -> Result<()>;
-
-    /*async fn update_and_get_group_read_forbidden(
-        &self,
-        broker_addr: CheetahString,
-        group_name: CheetahString,
-        topic_name: CheetahString,
-        readable: Option<bool>,
-    ) -> Result<GroupForbidden>;
-
-    async fn query_message(
-        &self,
-        cluster_name: CheetahString,
-        topic: CheetahString,
-        msg_id: CheetahString,
-    ) -> Result<MessageExt>;
-
-    async fn get_broker_ha_status(&self, broker_addr: CheetahString) -> Result<HARuntimeInfo>;
-
-    async fn get_in_sync_state_data(
-        &self,
-        controller_address: CheetahString,
-        brokers: Vec<CheetahString>,
-    ) -> Result<BrokerReplicasInfo>;
-
-    async fn get_broker_epoch_cache(
-        &self,
-        broker_addr: CheetahString,
-    ) -> Result<EpochEntryCache>;
-
-    async fn get_controller_meta_data(
-        &self,
-        controller_addr: CheetahString,
-    ) -> Result<GetMetaDataResponseHeader>;*/
+    ) -> crate::Result<()> {
+        todo!()
+    }
 
     async fn reset_master_flush_offset(
         &self,
         broker_addr: CheetahString,
         master_flush_offset: u64,
-    ) -> Result<()>;
+    ) -> crate::Result<()> {
+        todo!()
+    }
 
     async fn get_controller_config(
         &self,
         controller_servers: Vec<CheetahString>,
-    ) -> Result<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>>;
+    ) -> crate::Result<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>> {
+        todo!()
+    }
 
     async fn update_controller_config(
         &self,
         properties: HashMap<CheetahString, CheetahString>,
         controllers: Vec<CheetahString>,
-    ) -> Result<()>;
-
-    /*async fn elect_master(
-        &self,
-        controller_addr: CheetahString,
-        cluster_name: CheetahString,
-        broker_name: CheetahString,
-        broker_id: Option<u64>,
-    ) -> Result<(ElectMasterResponseHeader, BrokerMemberGroup)>;*/
+    ) -> crate::Result<()> {
+        todo!()
+    }
 
     async fn clean_controller_broker_data(
         &self,
@@ -559,30 +741,40 @@ pub trait MQAdminExtLocal: Sync {
         broker_name: CheetahString,
         broker_controller_ids_to_clean: Option<CheetahString>,
         is_clean_living_broker: bool,
-    ) -> Result<()>;
+    ) -> crate::Result<()> {
+        todo!()
+    }
 
     async fn update_cold_data_flow_ctr_group_config(
         &self,
         broker_addr: CheetahString,
         properties: HashMap<CheetahString, CheetahString>,
-    ) -> Result<()>;
+    ) -> crate::Result<()> {
+        todo!()
+    }
 
     async fn remove_cold_data_flow_ctr_group_config(
         &self,
         broker_addr: CheetahString,
         consumer_group: CheetahString,
-    ) -> Result<()>;
+    ) -> crate::Result<()> {
+        todo!()
+    }
 
     async fn get_cold_data_flow_ctr_info(
         &self,
         broker_addr: CheetahString,
-    ) -> Result<CheetahString>;
+    ) -> crate::Result<CheetahString> {
+        todo!()
+    }
 
     async fn set_commit_log_read_ahead_mode(
         &self,
         broker_addr: CheetahString,
         mode: CheetahString,
-    ) -> Result<CheetahString>;
+    ) -> crate::Result<CheetahString> {
+        todo!()
+    }
 
     async fn create_user(
         &self,
@@ -590,13 +782,9 @@ pub trait MQAdminExtLocal: Sync {
         username: CheetahString,
         password: CheetahString,
         user_type: CheetahString,
-    ) -> Result<()>;
-
-    /*async fn create_user_with_info(
-        &self,
-        broker_addr: CheetahString,
-        user_info: UserInfo,
-    ) -> Result<()>;*/
+    ) -> crate::Result<()> {
+        todo!()
+    }
 
     async fn update_user(
         &self,
@@ -605,27 +793,17 @@ pub trait MQAdminExtLocal: Sync {
         password: CheetahString,
         user_type: CheetahString,
         user_status: CheetahString,
-    ) -> Result<()>;
+    ) -> crate::Result<()> {
+        todo!()
+    }
 
-    /* async fn update_user_with_info(
-        &self,
-        broker_addr: CheetahString,
-        user_info: UserInfo,
-    ) -> Result<()>;*/
-
-    async fn delete_user(&self, broker_addr: CheetahString, username: CheetahString) -> Result<()>;
-
-    /*async fn get_user(
+    async fn delete_user(
         &self,
         broker_addr: CheetahString,
         username: CheetahString,
-    ) -> Result<UserInfo>;*/
-
-    /* async fn list_users(
-        &self,
-        broker_addr: CheetahString,
-        filter: CheetahString,
-    ) -> Result<Vec<UserInfo>>;*/
+    ) -> crate::Result<()> {
+        todo!()
+    }
 
     async fn create_acl(
         &self,
@@ -635,13 +813,9 @@ pub trait MQAdminExtLocal: Sync {
         actions: Vec<CheetahString>,
         source_ips: Vec<CheetahString>,
         decision: CheetahString,
-    ) -> Result<()>;
-
-    /*async fn create_acl_with_info(
-        &self,
-        broker_addr: CheetahString,
-        acl_info: AclInfo,
-    ) -> Result<()>;*/
+    ) -> crate::Result<()> {
+        todo!()
+    }
 
     async fn update_acl(
         &self,
@@ -651,31 +825,16 @@ pub trait MQAdminExtLocal: Sync {
         actions: Vec<CheetahString>,
         source_ips: Vec<CheetahString>,
         decision: CheetahString,
-    ) -> Result<()>;
-
-    /*async fn update_acl_with_info(
-        &self,
-        broker_addr: CheetahString,
-        acl_info: AclInfo,
-    ) -> Result<()>;*/
+    ) -> crate::Result<()> {
+        todo!()
+    }
 
     async fn delete_acl(
         &self,
         broker_addr: CheetahString,
         subject: CheetahString,
         resource: CheetahString,
-    ) -> Result<()>;
-
-    /*async fn get_acl(
-        &self,
-        broker_addr: CheetahString,
-        subject: CheetahString,
-    ) -> Result<AclInfo>;*/
-
-    /*async fn list_acl(
-        &self,
-        broker_addr: CheetahString,
-        subject_filter: CheetahString,
-        resource_filter: CheetahString,
-    ) -> Result<Vec<AclInfo>>;*/
+    ) -> crate::Result<()> {
+        todo!()
+    }
 }

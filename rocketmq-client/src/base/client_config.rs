@@ -33,14 +33,6 @@ use rocketmq_remoting::protocol::LanguageCode;
 
 use crate::base::access_channel::AccessChannel;
 
-pub const SEND_MESSAGE_WITH_VIP_CHANNEL_PROPERTY: &str = "com.rocketmq.sendMessageWithVIPChannel";
-pub const SOCKS_PROXY_CONFIG: &str = "com.rocketmq.socks.proxy.config";
-pub const DECODE_READ_BODY: &str = "com.rocketmq.read.body";
-pub const DECODE_DECOMPRESS_BODY: &str = "com.rocketmq.decompress.body";
-pub const SEND_LATENCY_ENABLE: &str = "com.rocketmq.sendLatencyEnable";
-pub const START_DETECTOR_ENABLE: &str = "com.rocketmq.startDetectorEnable";
-pub const HEART_BEAT_V2: &str = "com.rocketmq.heartbeat.v2";
-
 #[derive(Clone)]
 pub struct ClientConfig {
     pub namesrv_addr: Option<CheetahString>,
@@ -82,6 +74,15 @@ impl Default for ClientConfig {
 }
 
 impl ClientConfig {
+    pub const SEND_MESSAGE_WITH_VIP_CHANNEL_PROPERTY: &'static str =
+        "com.rocketmq.sendMessageWithVIPChannel";
+    pub const SOCKS_PROXY_CONFIG: &'static str = "com.rocketmq.socks.proxy.config";
+    pub const DECODE_READ_BODY: &'static str = "com.rocketmq.read.body";
+    pub const DECODE_DECOMPRESS_BODY: &'static str = "com.rocketmq.decompress.body";
+    pub const SEND_LATENCY_ENABLE: &'static str = "com.rocketmq.sendLatencyEnable";
+    pub const START_DETECTOR_ENABLE: &'static str = "com.rocketmq.startDetectorEnable";
+    pub const HEART_BEAT_V2: &'static str = "com.rocketmq.heartbeat.v2";
+
     pub fn new() -> Self {
         ClientConfig {
             namesrv_addr: NameServerAddressUtils::get_name_server_addresses()
@@ -101,24 +102,24 @@ impl ClientConfig {
             pull_time_delay_millis_when_exception: 1000,
             unit_mode: false,
             unit_name: None,
-            decode_read_body: env::var(DECODE_READ_BODY)
+            decode_read_body: env::var(Self::DECODE_READ_BODY)
                 .unwrap_or_else(|_| "true".to_string())
                 .parse::<bool>()
                 .unwrap_or(true),
-            decode_decompress_body: env::var(DECODE_DECOMPRESS_BODY)
+            decode_decompress_body: env::var(Self::DECODE_DECOMPRESS_BODY)
                 .unwrap_or_else(|_| "true".to_string())
                 .parse::<bool>()
                 .unwrap_or(true),
-            vip_channel_enabled: env::var(SEND_MESSAGE_WITH_VIP_CHANNEL_PROPERTY)
+            vip_channel_enabled: env::var(Self::SEND_MESSAGE_WITH_VIP_CHANNEL_PROPERTY)
                 .unwrap_or_else(|_| "false".to_string())
                 .parse::<bool>()
                 .unwrap_or(false),
-            use_heartbeat_v2: env::var(HEART_BEAT_V2)
+            use_heartbeat_v2: env::var(Self::HEART_BEAT_V2)
                 .unwrap_or_else(|_| "false".to_string())
                 .parse::<bool>()
                 .unwrap_or(false),
             use_tls: false,
-            socks_proxy_config: env::var(SOCKS_PROXY_CONFIG)
+            socks_proxy_config: env::var(Self::SOCKS_PROXY_CONFIG)
                 .unwrap_or_else(|_| "{}".to_string())
                 .into(),
             mq_client_api_timeout: Duration::from_secs(3).as_millis() as u64,
@@ -126,10 +127,10 @@ impl ClientConfig {
             detect_interval: Duration::from_secs(2).as_millis() as u32,
             language: LanguageCode::RUST,
             enable_stream_request_type: false,
-            send_latency_enable: env::var(SEND_LATENCY_ENABLE)
+            send_latency_enable: env::var(Self::SEND_LATENCY_ENABLE)
                 .unwrap_or_else(|_| "false".to_string())
                 == "false",
-            start_detector_enable: env::var(START_DETECTOR_ENABLE)
+            start_detector_enable: env::var(Self::START_DETECTOR_ENABLE)
                 .unwrap_or_else(|_| "false".to_string())
                 == "false",
             enable_heartbeat_channel_event_listener: true,

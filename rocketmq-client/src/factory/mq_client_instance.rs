@@ -51,7 +51,7 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-use crate::admin::mq_admin_ext_inner::MQAdminExtInner;
+use crate::admin::mq_admin_ext_async_inner::MQAdminExtInnerImpl;
 use crate::base::client_config::ClientConfig;
 use crate::client_error::MQClientError::MQClientErr;
 use crate::consumer::consumer_impl::pull_message_service::PullMessageService;
@@ -89,7 +89,7 @@ pub struct MQClientInstance {
      * The container of the adminExt in the current client. The key is the name of
      * adminExtGroup.
      */
-    admin_ext_table: Arc<RwLock<HashMap<CheetahString, Box<dyn MQAdminExtInner>>>>,
+    admin_ext_table: Arc<RwLock<HashMap<CheetahString, MQAdminExtInnerImpl>>>,
     pub(crate) mq_client_api_impl: Option<ArcMut<MQClientAPIImpl>>,
     pub(crate) mq_admin_impl: ArcMut<MQAdminImpl>,
     pub(crate) topic_route_table: Arc<RwLock<HashMap<CheetahString /* Topic */, TopicRouteData>>>,
@@ -353,6 +353,19 @@ impl MQClientInstance {
             return false;
         }
         producer_table.insert(group.into(), producer);
+        true
+    }
+
+    pub async fn register_admin_ext(&mut self, group: &str, admin: MQAdminExtInnerImpl) -> bool {
+        if group.is_empty() {
+            return false;
+        }
+        let mut admin_ext_table = self.admin_ext_table.write().await;
+        if admin_ext_table.contains_key(group) {
+            warn!("the admin group[{}] exist already.", group);
+            return false;
+        }
+        admin_ext_table.insert(group.into(), admin);
         true
     }
 
@@ -1105,6 +1118,10 @@ impl MQClientInstance {
         self.unregister_client(Some(group.into()), None).await;
     }
 
+    pub async fn unregister_admin_ext(&mut self, group: impl Into<CheetahString>) {
+        let mut write_guard = self.admin_ext_table.write().await;
+        let _ = write_guard.remove(&group.into());
+    }
     async fn unregister_client(
         &mut self,
         producer_group: Option<CheetahString>,

@@ -22,14 +22,14 @@ extern crate core;
 
 use crate::client_error::MQClientError;
 
-mod admin;
+pub mod admin;
 pub mod base;
 pub mod client_error;
-mod common;
+pub mod common;
 pub mod consumer;
 pub mod factory;
 mod hook;
-mod implementation;
+pub mod implementation;
 mod latency;
 pub mod producer;
 mod trace;
