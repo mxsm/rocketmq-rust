@@ -305,68 +305,83 @@ impl RemotingCommand {
         self
     }
 
+    #[inline]
     pub fn set_remark(mut self, remark: impl Into<CheetahString>) -> Self {
         self.remark = Some(remark.into());
         self
     }
 
+    #[inline]
     pub fn set_remark_option_mut(&mut self, remark: Option<impl Into<CheetahString>>) {
         self.remark = remark.map(|item| item.into());
     }
 
+    #[inline]
     pub fn set_remark_mut(&mut self, remark: impl Into<CheetahString>) {
         self.remark = Some(remark.into());
     }
 
+    #[inline]
     pub fn set_ext_fields(mut self, ext_fields: HashMap<CheetahString, CheetahString>) -> Self {
         self.ext_fields = Some(ext_fields);
         self
     }
 
+    #[inline]
     pub fn set_body(mut self, body: impl Into<Bytes>) -> Self {
         self.body = Some(body.into());
         self
     }
 
+    #[inline]
     pub fn set_body_mut_ref(&mut self, body: impl Into<Bytes>) {
         self.body = Some(body.into());
     }
 
+    #[inline]
     pub fn set_suspended(mut self, suspended: bool) -> Self {
         self.suspended = suspended;
         self
     }
 
+    #[inline]
     pub fn set_suspended_ref(&mut self, suspended: bool) {
         self.suspended = suspended;
     }
 
+    #[inline]
     pub fn set_serialize_type(mut self, serialize_type: SerializeType) -> Self {
         self.serialize_type = serialize_type;
         self
     }
 
+    #[inline]
     pub fn mark_response_type(mut self) -> Self {
         let mark = 1 << Self::RPC_TYPE;
         self.flag |= mark;
         self
     }
 
+    #[inline]
     pub fn mark_response_type_ref(&mut self) {
         let mark = 1 << Self::RPC_TYPE;
         self.flag |= mark;
     }
 
+    #[inline]
     pub fn mark_oneway_rpc(mut self) -> Self {
         let mark = 1 << Self::RPC_ONEWAY;
         self.flag |= mark;
         self
     }
+
+    #[inline]
     pub fn mark_oneway_rpc_ref(&mut self) {
         let mark = 1 << Self::RPC_ONEWAY;
         self.flag |= mark;
     }
 
+    #[inline]
     pub fn get_serialize_type(&self) -> SerializeType {
         self.serialize_type
     }
@@ -552,26 +567,32 @@ impl RemotingCommand {
         }
     }
 
+    #[inline]
     pub fn get_body(&self) -> Option<&Bytes> {
         self.body.as_ref()
     }
 
+    #[inline]
     pub fn get_body_mut(&mut self) -> Option<&mut Bytes> {
         self.body.as_mut()
     }
 
+    #[inline]
     pub fn mark_serialize_type(header_length: i32, protocol_type: SerializeType) -> i32 {
         ((protocol_type.get_code() as i32) << 24) | (header_length & 0x00FFFFFF)
     }
 
+    #[inline]
     pub fn code(&self) -> i32 {
         self.code
     }
 
+    #[inline]
     pub fn language(&self) -> LanguageCode {
         self.language
     }
 
+    #[inline]
     pub fn version(&self) -> i32 {
         self.version
     }
@@ -591,10 +612,12 @@ impl RemotingCommand {
         self.remark.as_ref()
     }
 
+    #[inline]
     pub fn ext_fields(&self) -> Option<&HashMap<CheetahString, CheetahString>> {
         self.ext_fields.as_ref()
     }
 
+    #[inline]
     pub fn body(&self) -> &Option<Bytes> {
         &self.body
     }
@@ -647,6 +670,7 @@ impl RemotingCommand {
         }
     }
 
+    #[inline]
     pub fn is_response_type(&self) -> bool {
         let bits = 1 << Self::RPC_TYPE;
         (self.flag & bits) == bits
@@ -666,6 +690,7 @@ impl RemotingCommand {
         }
     }
 
+    #[inline]
     pub fn with_opaque(&mut self, opaque: i32) -> &mut Self {
         self.opaque = opaque;
         self
@@ -682,16 +707,19 @@ impl RemotingCommand {
         self
     }
 
+    #[inline]
     pub fn with_code(&mut self, code: impl Into<i32>) -> &mut Self {
         self.code = code.into();
         self
     }
 
+    #[inline]
     pub fn with_remark(&mut self, remark: impl Into<CheetahString>) -> &mut Self {
         self.remark = Some(remark.into());
         self
     }
 
+    #[inline]
     pub fn get_ext_fields(&self) -> Option<&HashMap<CheetahString, CheetahString>> {
         self.ext_fields.as_ref()
     }
