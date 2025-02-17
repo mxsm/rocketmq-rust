@@ -17,7 +17,6 @@ PROJECTS=(
     "rocketmq-store"
     "rocketmq-remoting"
     "rocketmq-cli"
-    "rocketmq-example"
     "rocketmq-client"
     "rocketmq-namesrv"
     "rocketmq-broker"
