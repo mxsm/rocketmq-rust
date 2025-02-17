@@ -65,7 +65,9 @@ use rocketmq_store::log_file::MessageStore;
 use rocketmq_store::pop::batch_ack_msg::BatchAckMsg;
 use rocketmq_store::pop::pop_check_point::PopCheckPoint;
 use rocketmq_store::pop::AckMessage;
+use tokio::select;
 use tokio::sync::Mutex;
+use tokio::sync::Notify;
 use tracing::info;
 use tracing::warn;
 
@@ -1349,6 +1351,7 @@ where
 
     pub fn shutdown(&mut self) {
         self.pop_long_polling_service.shutdown();
+        self.queue_lock_manager.shutdown();
     }
 }
 
@@ -1485,12 +1488,14 @@ impl TimedLock {
 #[derive(Clone)]
 pub struct QueueLockManager {
     expired_local_cache: Arc<Mutex<HashMap<CheetahString, TimedLock>>>,
+    shutdown: Arc<Notify>,
 }
 
 impl QueueLockManager {
     pub fn new() -> Self {
         QueueLockManager {
             expired_local_cache: Arc::new(Mutex::new(HashMap::with_capacity(4096))),
+            shutdown: Arc::new(Notify::new()),
         }
     }
 
@@ -1554,11 +1559,20 @@ impl QueueLockManager {
         let this = self.clone();
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+                select! {
+                    _ = this.shutdown.notified() => {
+                        break;
+                    }
+                    _ = tokio::time::sleep(tokio::time::Duration::from_secs(60)) => {}
+                }
                 let count = this.clean_unused_locks(60000).await;
                 info!("QueueLockSize={}", count);
             }
         });
+    }
+
+    pub fn shutdown(&self) {
+        self.shutdown.notify_waiters();
     }
 }
 
