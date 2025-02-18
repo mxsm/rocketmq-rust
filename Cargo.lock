@@ -2387,6 +2387,8 @@ dependencies = [
  "rocketmq-common",
  "rocketmq-remoting",
  "rocketmq-rust",
+ "serde",
+ "serde_json",
  "thiserror 2.0.11",
 ]
 

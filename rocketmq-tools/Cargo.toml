@@ -17,6 +17,8 @@ rocketmq-remoting = { workspace = true }
 rocketmq-rust = { workspace = true }
 rocketmq-client-rust = { workspace = true }
 
+serde.workspace = true
+serde_json.workspace = true
 
 cheetah-string = { workspace = true }
 thiserror = { workspace = true }
