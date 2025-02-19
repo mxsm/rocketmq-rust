@@ -181,36 +181,16 @@ where
     TS: TransactionalMessageService,
 {
     pub fn new(
-        /*topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
-        subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
-        topic_config_manager: TopicConfigManager,
-        broker_config: Arc<BrokerConfig>,
-        message_store: ArcMut<MS>,
-        transactional_message_service: ArcMut<TS>,
-        rebalance_lock_manager: Arc<RebalanceLockManager>,
-        broker_stats_manager: Arc<BrokerStatsManager>,
-        store_host: SocketAddr,*/
         transactional_message_service: ArcMut<TS>,
         broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> Self {
         let store_host = broker_runtime_inner.store_host();
         Self {
             inner: ArcMut::new(Inner {
-                /*broker_config,
-                topic_config_manager,
-                send_message_hook_vec: ArcMut::new(Vec::new()),
-                consume_message_hook_vec: ArcMut::new(Vec::new()),
-                topic_queue_mapping_manager,
-                subscription_group_manager,
-                message_store,*/
                 send_message_hook_vec: ArcMut::new(Vec::new()),
                 consume_message_hook_vec: ArcMut::new(Vec::new()),
                 transactional_message_service,
-                /*rebalance_lock_manager,
-                broker_stats_manager,
-                producer_manager: None,*/
                 broker_to_client: Default::default(),
-                /* store_host, */
                 broker_runtime_inner,
             }),
             store_host,
