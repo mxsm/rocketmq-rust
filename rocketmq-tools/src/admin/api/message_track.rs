@@ -14,10 +14,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::admin::api::track_type::TrackType;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MessageTrack {
     pub consumer_group: String,
     pub track_type: Option<TrackType>,
