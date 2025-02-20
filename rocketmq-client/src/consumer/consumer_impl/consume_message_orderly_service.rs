@@ -410,7 +410,8 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
         let begin_timestamp = Instant::now();
 
         let status = self.message_listener.consume_message(
-            &msgs.iter()
+            &msgs
+                .iter()
                 .map(|msg| msg.as_ref())
                 .collect::<Vec<&MessageExt>>()[..],
             &mut context,
