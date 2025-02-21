@@ -53,7 +53,7 @@ cheetah-string = { workspace = true }
 libc = "0.2.169"
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.59.0", features = ["Win32_Security", "Win32_System_Memory_NonVolatile"] }
+windows = { version = "0.60.0", features = ["Win32_Security", "Win32_System_Memory_NonVolatile"] }
 
 
 [dev-dependencies]
