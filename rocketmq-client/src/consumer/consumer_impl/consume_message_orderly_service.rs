@@ -615,7 +615,7 @@ impl ConsumeRequest {
 
                 match consume_message_orderly_service_inner
                     .message_listener
-                    .consume_message(&vec, &mut context)
+                    .consume_message(vec, &mut context)
                 {
                     Ok(value) => {
                         status = Some(value);
