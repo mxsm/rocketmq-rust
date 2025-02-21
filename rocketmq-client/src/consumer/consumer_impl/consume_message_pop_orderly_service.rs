@@ -136,7 +136,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
             &msgs
                 .iter()
                 .map(|msg| msg.as_ref())
-                .collect::<Vec<&MessageExt>>(),
+                .collect::<Vec<&MessageExt>>()[..],
             &mut context,
         );
         let mut result = ConsumeMessageDirectlyResult::default();

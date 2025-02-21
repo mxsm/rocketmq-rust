@@ -413,7 +413,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
             &msgs
                 .iter()
                 .map(|msg| msg.as_ref())
-                .collect::<Vec<&MessageExt>>(),
+                .collect::<Vec<&MessageExt>>()[..],
             &mut context,
         );
         let mut result = ConsumeMessageDirectlyResult::default();
@@ -608,14 +608,14 @@ impl ConsumeRequest {
                     );
                     break;
                 }
-                let vec = msgs
+                let vec = &msgs
                     .iter()
                     .map(|msg| msg.as_ref())
-                    .collect::<Vec<&MessageExt>>();
+                    .collect::<Vec<&MessageExt>>()[..];
 
                 match consume_message_orderly_service_inner
                     .message_listener
-                    .consume_message(&vec, &mut context)
+                    .consume_message(vec, &mut context)
                 {
                     Ok(value) => {
                         status = Some(value);
