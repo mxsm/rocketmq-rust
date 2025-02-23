@@ -876,11 +876,8 @@ where
                 - offset
                 + rest_num;
         }
-        self.queue_lock_manager()
-            .unlock_with_key(lock_key.clone())
-            .await;
         if self.is_pop_should_stop(topic, &request_header.consumer_group, queue_id) {
-            return self
+            let result = self
                 .broker_runtime_inner
                 .message_store()
                 .as_ref()
@@ -888,6 +885,10 @@ where
                 .get_max_offset_in_queue(topic, queue_id)
                 - offset
                 + rest_num;
+            self.queue_lock_manager()
+                .unlock_with_key(lock_key.clone())
+                .await;
+            return result;
         }
         let offset = self.get_pop_offset(
             topic,
@@ -910,6 +911,9 @@ where
                     request_header.invisible_time,
                 )
             {
+                self.queue_lock_manager()
+                    .unlock_with_key(lock_key.clone())
+                    .await;
                 return rest_num;
             }
             self.broker_runtime_inner
@@ -918,7 +922,7 @@ where
         }
 
         if get_message_result.message_mapped_list().len() >= request_header.max_msg_nums as usize {
-            return self
+            let result = self
                 .broker_runtime_inner
                 .message_store()
                 .as_ref()
@@ -926,6 +930,10 @@ where
                 .get_max_offset_in_queue(topic, queue_id)
                 - offset
                 + rest_num;
+            self.queue_lock_manager()
+                .unlock_with_key(lock_key.clone())
+                .await;
+            return result;
         }
         let get_message_result_inner = self
             .broker_runtime_inner
@@ -988,7 +996,6 @@ where
                                     offset,
                                     request_header.max_msg_nums as i32
                                         - get_message_result.message_mapped_list().len() as i32,
-                                    //     1024 * 1024,
                                     message_filter,
                                 )
                                 .await;
