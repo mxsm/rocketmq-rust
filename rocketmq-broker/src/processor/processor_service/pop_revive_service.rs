@@ -319,10 +319,10 @@ impl<MS: MessageStore> PopReviveService<MS> {
                 ))
                 .await;
                 if !this.should_run_pop_revive {
-                    info!(
+                    /*                    info!(
                         "skip start revive topic={}, reviveQueueId={}",
                         this.revive_topic, this.queue_id
-                    );
+                    );*/
                     continue;
                 }
                 if !this
