@@ -163,7 +163,7 @@ where
                     .await
             }
 
-            RequestCode::QueryConsumeQueue | RequestCode::SetMessageRequestMode => {
+            RequestCode::QueryAssignment | RequestCode::SetMessageRequestMode => {
                 return self
                     .query_assignment_processor
                     .process_request(channel, ctx, request_code, request)
