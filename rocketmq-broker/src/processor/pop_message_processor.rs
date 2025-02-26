@@ -520,7 +520,11 @@ where
         }
         let mut start_offset_info = String::with_capacity(64);
         let mut msg_offset_info = String::with_capacity(64);
-        let mut order_count_info = String::with_capacity(64);
+        let mut order_count_info = if request_header.order.is_some() {
+            String::with_capacity(64)
+        } else {
+            String::new()
+        };
         let pop_time = get_current_millis();
 
         let message_filter = message_filter.map(Arc::new);
