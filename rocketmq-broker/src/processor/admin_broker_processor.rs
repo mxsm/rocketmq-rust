@@ -47,24 +47,7 @@ pub struct AdminBrokerProcessor<MS> {
 }
 
 impl<MS: MessageStore> AdminBrokerProcessor<MS> {
-    pub fn new(
-        /* broker_config: Arc<BrokerConfig>,
-        server_config: Arc<ServerConfig>,
-        message_store_config: Arc<MessageStoreConfig>,
-        topic_config_manager: TopicConfigManager,
-        consumer_offset_manager: ConsumerOffsetManager,
-        topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
-        default_message_store: ArcMut<DefaultMessageStore>,
-        schedule_message_service: ScheduleMessageService,
-        broker_stats: Option<Arc<BrokerStats<DefaultMessageStore>>>,
-        consume_manager: Arc<ConsumerManager>,
-        broker_out_api: Arc<BrokerOuterAPI>,
-        broker_stats_manager: Arc<BrokerStatsManager>,
-        rebalance_lock_manager: Arc<RebalanceLockManager>,
-        broker_member_group: Arc<BrokerMemberGroup>,
-        pop_inflight_message_counter: Arc<PopInflightMessageCounter>,*/
-        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-    ) -> Self {
+    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
         let topic_request_handler = TopicRequestHandler::new(broker_runtime_inner.clone());
         let broker_config_request_handler =
             BrokerConfigRequestHandler::new(broker_runtime_inner.clone());
