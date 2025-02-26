@@ -47,9 +47,7 @@ pub struct AdminBrokerProcessor<MS> {
 }
 
 impl<MS: MessageStore> AdminBrokerProcessor<MS> {
-    pub fn new(
-        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-    ) -> Self {
+    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
         let topic_request_handler = TopicRequestHandler::new(broker_runtime_inner.clone());
         let broker_config_request_handler =
             BrokerConfigRequestHandler::new(broker_runtime_inner.clone());
