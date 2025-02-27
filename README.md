@@ -123,9 +123,11 @@ cargo run --bin rocketmq-broker-rust
 
 First, start the RocketMQ NameServer and Broker services.
 
-- [**Send a single message**](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md#Send-a-single-message)
+- [**Send a single message
+  **](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md#Send-a-single-message)
 
-- [**Send batch messages**](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md#Send-batch-messages)
+- [**Send batch messages
+  **](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md#Send-batch-messages)
 
 - [**Send RPC messages**](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md#Send-RPC-messages)
 
@@ -150,7 +152,8 @@ will be carried out sequentially in the following order.
 ## Contributing
 
 Contributions to code, issue reporting, and suggestions are welcome. The development of RocketMQ-Rust relies on the
-support of developers. Let's collaborate to advance Rust in the message middleware domain.
+support of developers. Let's collaborate to advance Rust in the message middleware
+domain. [**`Contribute Guide`**](https://rocketmq-rust.ljbmxsm.com/docs/contribute-guide/)
 
 ![](https://repobeats.axiom.co/api/embed/6ca125de92b36e1f78c6681d0a1296b8958adea1.svg "Repobeats analytics image")
 
