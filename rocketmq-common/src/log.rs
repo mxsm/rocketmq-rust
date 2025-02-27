@@ -51,19 +51,19 @@ pub struct Level(&'static str);
 
 impl Level {
     /// Constant representing the ERROR log level.
-    pub const ERROR: Level = Level(&"ERROR");
+    pub const ERROR: Level = Level("ERROR");
 
     /// Constant representing the WARN log level.
-    pub const WARN: Level = Level(&"WARN");
+    pub const WARN: Level = Level("WARN");
 
     /// Constant representing the INFO log level.
-    pub const INFO: Level = Level(&"INFO");
+    pub const INFO: Level = Level("INFO");
 
     /// Constant representing the DEBUG log level.
-    pub const DEBUG: Level = Level(&"DEBUG");
+    pub const DEBUG: Level = Level("DEBUG");
 
     /// Constant representing the TRACE log level.
-    pub const TRACE: Level = Level(&"TRACE");
+    pub const TRACE: Level = Level("TRACE");
 
     pub fn as_str(&self) -> &'static str {
         self.0
