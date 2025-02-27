@@ -20,8 +20,6 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use parking_lot::Mutex;
-use parking_lot::RwLock;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::net::channel::Channel;
@@ -39,10 +37,10 @@ pub struct ConsumerGroupInfo {
     group_name: CheetahString,
     subscription_table: Arc<DashMap<CheetahString, SubscriptionData>>,
     channel_info_table: Arc<DashMap<Channel, ClientChannelInfo>>,
-    consume_type: Arc<RwLock<ConsumeType>>,
-    message_model: Arc<RwLock<MessageModel>>,
-    consume_from_where: Arc<RwLock<ConsumeFromWhere>>,
-    last_update_timestamp: Arc<Mutex<u64>>,
+    consume_type: ConsumeType,
+    message_model: MessageModel,
+    consume_from_where: ConsumeFromWhere,
+    last_update_timestamp: u64,
 }
 
 impl ConsumerGroupInfo {
@@ -56,10 +54,10 @@ impl ConsumerGroupInfo {
             group_name: group_name.into(),
             subscription_table: Arc::new(DashMap::new()),
             channel_info_table: Arc::new(DashMap::new()),
-            consume_type: Arc::new(RwLock::new(consume_type)),
-            message_model: Arc::new(RwLock::new(message_model)),
-            consume_from_where: Arc::new(RwLock::new(consume_from_where)),
-            last_update_timestamp: Arc::new(Mutex::new(get_current_millis())),
+            consume_type,
+            message_model,
+            consume_from_where,
+            last_update_timestamp: get_current_millis(),
         }
     }
 
@@ -68,10 +66,10 @@ impl ConsumerGroupInfo {
             group_name: group_name.into(),
             subscription_table: Arc::new(DashMap::new()),
             channel_info_table: Arc::new(DashMap::new()),
-            consume_type: Arc::new(RwLock::new(ConsumeType::ConsumePassively)),
-            message_model: Arc::new(RwLock::new(MessageModel::Clustering)),
-            consume_from_where: Arc::new(RwLock::new(ConsumeFromWhere::ConsumeFromLastOffset)),
-            last_update_timestamp: Arc::new(Mutex::new(get_current_millis())),
+            consume_type: ConsumeType::ConsumePassively,
+            message_model: MessageModel::Clustering,
+            consume_from_where: ConsumeFromWhere::ConsumeFromLastOffset,
+            last_update_timestamp: get_current_millis(),
         }
     }
 
@@ -144,7 +142,7 @@ impl ConsumerGroupInfo {
     }
 
     pub fn update_channel(
-        &self,
+        &mut self,
         info_new: ClientChannelInfo,
         consume_type: ConsumeType,
         message_model: MessageModel,
@@ -152,20 +150,11 @@ impl ConsumerGroupInfo {
     ) -> bool {
         let mut updated = false;
 
-        {
-            let mut consume_type_lock = self.consume_type.write();
-            *consume_type_lock = consume_type;
-        }
+        self.consume_type = consume_type;
 
-        {
-            let mut message_model_lock = self.message_model.write();
-            *message_model_lock = message_model;
-        }
+        self.message_model = message_model;
 
-        {
-            let mut consume_from_where_lock = self.consume_from_where.write();
-            *consume_from_where_lock = consume_from_where;
-        }
+        self.consume_from_where = consume_from_where;
 
         if let Some(mut info_old) = self.channel_info_table.get_mut(info_new.channel()) {
             if info_old.client_id() != info_new.client_id() {
@@ -190,24 +179,24 @@ impl ConsumerGroupInfo {
             updated = true;
         }
 
-        *self.last_update_timestamp.lock() = get_current_millis();
+        self.last_update_timestamp = get_current_millis();
 
         updated
     }
 
-    pub fn update_subscription(&self, sub_list: &HashSet<SubscriptionData>) -> bool {
+    pub fn update_subscription(&mut self, sub_list: &HashSet<SubscriptionData>) -> bool {
         let mut updated = false;
         let mut topic_set = HashSet::new();
-
         for sub in sub_list.iter() {
             if let Some(old) = self.subscription_table.get(sub.topic.as_str()) {
                 if sub.sub_version > old.sub_version {
-                    if *self.consume_type.read() == ConsumeType::ConsumePassively {
+                    if self.consume_type == ConsumeType::ConsumePassively {
                         info!(
                             "Subscription changed, group: {} OLD: {:?} NEW: {:?}",
                             self.group_name, old, sub
                         );
                     }
+                    drop(old); //release lock
                     self.subscription_table
                         .insert(sub.topic.clone(), sub.clone());
                 }
@@ -222,7 +211,6 @@ impl ConsumerGroupInfo {
             }
             topic_set.insert(sub.topic.clone());
         }
-
         self.subscription_table.retain(|old_topic, _| {
             if !topic_set.contains(old_topic) {
                 warn!(
@@ -235,9 +223,7 @@ impl ConsumerGroupInfo {
                 true
             }
         });
-
-        *self.last_update_timestamp.lock() = self.get_last_update_timestamp();
-
+        self.last_update_timestamp = get_current_millis();
         updated
     }
 
@@ -255,21 +241,19 @@ impl ConsumerGroupInfo {
     }
 
     pub fn get_consume_type(&self) -> ConsumeType {
-        *self.consume_type.read()
+        self.consume_type
     }
 
-    pub fn set_consume_type(&self, consume_type: ConsumeType) {
-        let mut consume_type_lock = self.consume_type.write();
-        *consume_type_lock = consume_type;
+    pub fn set_consume_type(&mut self, consume_type: ConsumeType) {
+        self.consume_type = consume_type;
     }
 
     pub fn get_message_model(&self) -> MessageModel {
-        *self.message_model.read()
+        self.message_model
     }
 
-    pub fn set_message_model(&self, message_model: MessageModel) {
-        let mut message_model_lock = self.message_model.write();
-        *message_model_lock = message_model;
+    pub fn set_message_model(&mut self, message_model: MessageModel) {
+        self.message_model = message_model;
     }
 
     pub fn get_group_name(&self) -> &CheetahString {
@@ -277,21 +261,19 @@ impl ConsumerGroupInfo {
     }
 
     pub fn get_last_update_timestamp(&self) -> u64 {
-        *self.last_update_timestamp.lock()
+        self.last_update_timestamp
     }
 
-    pub fn set_last_update_timestamp(&self, timestamp: u64) {
-        let mut last_update_timestamp_lock = self.last_update_timestamp.lock();
-        *last_update_timestamp_lock = timestamp;
+    pub fn set_last_update_timestamp(&mut self, timestamp: u64) {
+        self.last_update_timestamp = timestamp;
     }
 
     pub fn get_consume_from_where(&self) -> ConsumeFromWhere {
-        *self.consume_from_where.read()
+        self.consume_from_where
     }
 
-    pub fn set_consume_from_where(&self, consume_from_where: ConsumeFromWhere) {
-        let mut consume_from_where_lock = self.consume_from_where.write();
-        *consume_from_where_lock = consume_from_where;
+    pub fn set_consume_from_where(&mut self, consume_from_where: ConsumeFromWhere) {
+        self.consume_from_where = consume_from_where;
     }
 }
 
@@ -390,7 +372,7 @@ mod tests {
         let message_model = MessageModel::Clustering;
         let consume_from_where = ConsumeFromWhere::ConsumeFromLastOffset;
 
-        let consumer_group_info = ConsumerGroupInfo::new(
+        let mut consumer_group_info = ConsumerGroupInfo::new(
             group_name.clone(),
             consume_type,
             message_model,
