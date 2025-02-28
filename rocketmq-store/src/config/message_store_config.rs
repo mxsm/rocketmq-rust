@@ -243,7 +243,7 @@ impl Default for MessageStoreConfig {
             timer_enable_check_metrics: false,
             timer_intercept_delay_level: false,
             timer_max_delay_sec: 0,
-            timer_wheel_enable: false,
+            timer_wheel_enable: true,
             disappear_time_after_start: -1,
             timer_stop_enqueue: false,
             timer_check_metrics_when: "".to_string(),
