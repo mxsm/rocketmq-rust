@@ -54,7 +54,7 @@ pub struct PopMessageRequestHeader {
 
 impl PopMessageRequestHeader {
     pub fn is_timeout_too_much(&self) -> bool {
-        get_current_millis() - self.born_time - self.poll_time > 500
+        get_current_millis() as i64 - self.born_time as i64 - self.poll_time as i64 > 500
     }
 }
 
