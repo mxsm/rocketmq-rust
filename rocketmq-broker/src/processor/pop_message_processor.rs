@@ -1192,7 +1192,36 @@ where
         pop_time: i64,
         broker_name: &str,
     ) -> bool {
-        unimplemented!()
+        let mut ck = PopCheckPoint {
+            start_offset: offset,
+            pop_time,
+            invisible_time: request_header.invisible_time as i64,
+            bit_map: 0,
+            num: get_message_tmp_result.message_mapped_list().len() as u8,
+            queue_id,
+            topic: topic.into(),
+            cid: request_header.consumer_group.clone(),
+            broker_name: Some(broker_name.into()),
+            ..Default::default()
+        };
+        for msg_queue_offset in get_message_tmp_result.message_queue_offset() {
+            ck.add_diff(((*msg_queue_offset) as i64 - offset) as i32);
+        }
+        let pop_buffer_merge_service_ref_mut = self.pop_buffer_merge_service.mut_from_ref();
+        match pop_buffer_merge_service_ref_mut.add_ck(
+            &ck,
+            revive_qid,
+            -1,
+            get_message_tmp_result.next_begin_offset(),
+        ) {
+            true => true,
+            false => pop_buffer_merge_service_ref_mut.add_ck_just_offset(
+                ck,
+                revive_qid,
+                -1,
+                get_message_tmp_result.next_begin_offset(),
+            ),
+        }
     }
 
     fn is_pop_should_stop(

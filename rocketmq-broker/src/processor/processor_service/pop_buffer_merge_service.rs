@@ -102,6 +102,26 @@ impl<MS> PopBufferMergeService<MS> {
 }
 
 impl<MS: MessageStore> PopBufferMergeService<MS> {
+    pub fn add_ck(
+        &mut self,
+        point: &PopCheckPoint,
+        revive_queue_id: i32,
+        revive_queue_offset: i64,
+        next_begin_offset: i64,
+    ) -> bool {
+        unimplemented!("add_ck  not implemented")
+    }
+
+    pub fn add_ck_just_offset(
+        &mut self,
+        point: PopCheckPoint,
+        revive_queue_id: i32,
+        revive_queue_offset: i64,
+        next_begin_offset: i64,
+    ) -> bool {
+        unimplemented!("add_ck  not implemented")
+    }
+
     pub fn add_ack(&mut self, revive_qid: i32, ack_msg: &dyn AckMessage) -> bool {
         if !self
             .broker_runtime_inner
