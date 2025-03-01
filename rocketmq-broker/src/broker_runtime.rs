@@ -557,16 +557,6 @@ impl BrokerRuntime {
             self.inner.clone(),
         );
         let reply_message_processor = ReplyMessageProcessor::new(
-            /*self.topic_queue_mapping_manager.clone(),
-            self.subscription_group_manager.clone(),
-            self.topic_config_manager.clone(),
-            self.broker_config.clone(),
-            self.message_store.clone().unwrap(),
-            self.rebalance_lock_manager.clone(),
-            self.broker_stats_manager.clone(),
-            Some(self.producer_manager.clone()),
-            self.transactional_message_service.as_ref().unwrap().clone(),
-            self.store_host,*/
             self.transactional_message_service.as_ref().unwrap().clone(),
             self.inner.clone(),
         );

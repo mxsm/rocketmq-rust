@@ -48,7 +48,6 @@ use crate::transaction::transactional_message_service::TransactionalMessageServi
 
 pub struct ReplyMessageProcessor<MS, TS> {
     inner: Inner<MS, TS>,
-    /* store_host: SocketAddr, */
 }
 
 impl<MS, TS> ReplyMessageProcessor<MS, TS>
@@ -57,16 +56,6 @@ where
     TS: TransactionalMessageService,
 {
     pub fn new(
-        /*topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
-        subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
-        topic_config_manager: TopicConfigManager,
-        broker_config: Arc<BrokerConfig>,
-        message_store: ArcMut<MS>,
-        rebalance_lock_manager: Arc<RebalanceLockManager>,
-        broker_stats_manager: Arc<BrokerStatsManager>,
-        producer_manager: Option<Arc<ProducerManager>>,
-        transactional_message_service: ArcMut<TS>,
-        store_host: SocketAddr,*/
         transactional_message_service: ArcMut<TS>,
         broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> Self {
@@ -75,14 +64,9 @@ where
                 send_message_hook_vec: ArcMut::new(Vec::new()),
                 consume_message_hook_vec: ArcMut::new(Vec::new()),
                 transactional_message_service,
-                /*rebalance_lock_manager,
-                broker_stats_manager,
-                producer_manager: None,*/
                 broker_to_client: Default::default(),
-                /* store_host, */
                 broker_runtime_inner,
             },
-            /* store_host, */
         }
     }
 }
