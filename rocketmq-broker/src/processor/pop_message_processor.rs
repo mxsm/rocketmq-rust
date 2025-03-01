@@ -598,20 +598,21 @@ where
             )
             .await
         } else {
-            self.pop_msg_from_topic(
-                &topic_config,
+            self.pop_msg_from_queue(
+                &topic_config.topic_name.unwrap_or_default(),
+                &request_header.attempt_id.clone().unwrap_or_default(),
                 false,
                 get_message_result.clone(),
                 &request_header,
                 request_header.queue_id,
+                rest_num,
+                revive_qid,
                 channel.clone(),
                 pop_time,
                 message_filter.clone(),
                 &mut start_offset_info,
                 &mut msg_offset_info,
                 &mut order_count_info,
-                randomq,
-                rest_num,
             )
             .await
         };
