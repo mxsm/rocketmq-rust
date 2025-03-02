@@ -17,7 +17,10 @@
 
 #![allow(dead_code)]
 
+use core::fmt;
 use std::cell::SyncUnsafeCell;
+use std::fmt::Debug;
+use std::fmt::Formatter;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::ops::Deref;
@@ -132,21 +135,21 @@ impl<T: ?Sized> Clone for ArcMut<T> {
     }
 }
 
-impl<T> AsRef<T> for ArcMut<T> {
+impl<T: ?Sized> AsRef<T> for ArcMut<T> {
     #[inline]
     fn as_ref(&self) -> &T {
         unsafe { &*self.inner.get() }
     }
 }
 
-impl<T> AsMut<T> for ArcMut<T> {
+impl<T: ?Sized> AsMut<T> for ArcMut<T> {
     #[inline]
     fn as_mut(&mut self) -> &mut T {
         unsafe { &mut *self.inner.get() }
     }
 }
 
-impl<T> Deref for ArcMut<T> {
+impl<T: ?Sized> Deref for ArcMut<T> {
     type Target = T;
 
     #[inline]
@@ -155,7 +158,7 @@ impl<T> Deref for ArcMut<T> {
     }
 }
 
-impl<T> DerefMut for ArcMut<T> {
+impl<T: ?Sized> DerefMut for ArcMut<T> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.as_mut()
@@ -210,6 +213,12 @@ impl<T> DerefMut for SyncUnsafeCellWrapper<T> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.as_mut()
+    }
+}
+
+impl<T: ?Sized + Debug> std::fmt::Debug for ArcMut<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        fmt::Debug::fmt(&**self, f)
     }
 }
 
