@@ -54,9 +54,11 @@ use crate::processor::pop_message_processor::PopMessageProcessor;
 use crate::processor::pop_message_processor::QueueLockManager;
 
 pub(crate) struct PopBufferMergeService<MS> {
-    buffer: DashMap<CheetahString /* mergeKey */, PopCheckPointWrapper>,
-    commit_offsets:
-        DashMap<CheetahString /* topic@cid@queueId */, QueueWithTime<PopCheckPointWrapper>>,
+    buffer: DashMap<CheetahString /* mergeKey */, ArcMut<PopCheckPointWrapper>>,
+    commit_offsets: DashMap<
+        CheetahString, /* topic@cid@queueId */
+        QueueWithTime<ArcMut<PopCheckPointWrapper>>,
+    >,
     serving: AtomicBool,
     counter: AtomicI32,
     scan_times: u64,
@@ -102,14 +104,94 @@ impl<MS> PopBufferMergeService<MS> {
 }
 
 impl<MS: MessageStore> PopBufferMergeService<MS> {
+    /// Adds a checkpoint to the buffer
     pub fn add_ck(
-        &mut self,
+        &self,
         point: &PopCheckPoint,
         revive_queue_id: i32,
         revive_queue_offset: i64,
         next_begin_offset: i64,
     ) -> bool {
-        unimplemented!("add_ck  not implemented")
+        // Check if buffer merge is enabled
+        let broker_config = self.broker_runtime_inner.broker_config();
+        if !broker_config.enable_pop_buffer_merge {
+            return false;
+        }
+
+        // Check if service is active
+        if !self.serving.load(Ordering::Acquire) {
+            return false;
+        }
+
+        // Check timeout condition
+        let now = get_current_millis() as i64;
+
+        if point.get_revive_time() - now < broker_config.pop_ck_stay_buffer_time_out as i64 + 1500 {
+            if broker_config.enable_pop_log {
+                warn!("[PopBuffer]add ck, timeout, {:?}, {}", point, now);
+            }
+            return false;
+        }
+
+        // Check buffer size
+        if self.counter.load(Ordering::Acquire) as i64 > broker_config.pop_ck_max_buffer_size {
+            warn!(
+                "[PopBuffer]add ck, max size, {:?}, {}",
+                point,
+                self.counter.load(Ordering::Acquire)
+            );
+            return false;
+        }
+
+        // Create wrapper
+        let point_wrapper = ArcMut::new(PopCheckPointWrapper::new(
+            revive_queue_id,
+            revive_queue_offset,
+            Arc::new(point.clone()),
+            next_begin_offset,
+        ));
+
+        // Check if queue is valid
+        if !self.check_queue_ok(&point_wrapper) {
+            return false;
+        }
+
+        // Check for merge key conflict
+        let merge_key = point_wrapper.get_merge_key();
+        if self.buffer.contains_key(merge_key) {
+            warn!(
+                "[PopBuffer]mergeKey conflict when add ck. ck:{:?}, mergeKey:{}",
+                point_wrapper, merge_key
+            );
+            return false;
+        }
+
+        // Add to offset queue
+        self.put_offset_queue(point_wrapper.clone());
+
+        if broker_config.enable_pop_log {
+            info!("[PopBuffer]add ck, {:?}", point_wrapper);
+        }
+        // Add to buffer
+        self.buffer.insert(merge_key.clone(), point_wrapper);
+        self.counter.fetch_add(1, Ordering::AcqRel);
+
+        true
+    }
+
+    // Helper methods
+    fn check_queue_ok(&self, point_wrapper: &PopCheckPointWrapper) -> bool {
+        let queue = self.commit_offsets.get(point_wrapper.get_lock_key());
+        match queue {
+            None => true,
+            Some(value) => {
+                value.get().lock().len()
+                    < self
+                        .broker_runtime_inner
+                        .broker_config()
+                        .pop_ck_offset_max_queue_size as usize
+            }
+        }
     }
 
     pub fn add_ck_just_offset(
@@ -167,7 +249,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         {
             if self.broker_runtime_inner.broker_config().enable_pop_log {
                 warn!(
-                    "[PopBuffer]add ack fail, rqId={}, almost timeout for revive, {}, {}, {}",
+                    "[PopBuffer]add ack fail, rqId={}, almost timeout for revive, {:?}, {}, {}",
                     revive_qid,
                     point_wrapper.value(),
                     ack_msg,
@@ -185,7 +267,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         {
             if self.broker_runtime_inner.broker_config().enable_pop_log {
                 warn!(
-                    "[PopBuffer]add ack fail, rqId={}, timeout for revive, {}, {}, {}",
+                    "[PopBuffer]add ack fail, rqId={}, timeout for revive, {:?}, {}, {}",
                     revive_qid,
                     point_wrapper.value(),
                     ack_msg,
@@ -552,7 +634,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         );
         point_wrapper.set_ck_stored(true);
 
-        self.put_offset_queue(point_wrapper);
+        self.put_offset_queue(ArcMut::new(point_wrapper));
     }
 
     fn is_ck_done_for_finish(&self, point_wrapper: &PopCheckPointWrapper) -> bool {
@@ -567,7 +649,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         true
     }
 
-    fn put_offset_queue(&mut self, point_wrapper: PopCheckPointWrapper) -> bool {
+    fn put_offset_queue(&self, point_wrapper: ArcMut<PopCheckPointWrapper>) -> bool {
         let queue = self
             .commit_offsets
             .entry(point_wrapper.lock_key.clone())
@@ -759,6 +841,7 @@ impl<T> QueueWithTime<T> {
     }
 }
 
+#[derive(Debug)]
 pub struct PopCheckPointWrapper {
     revive_queue_id: i32,
     // -1: not stored, >=0: stored, Long.MAX: storing.
@@ -887,7 +970,7 @@ impl PopCheckPointWrapper {
         &self.lock_key
     }
 
-    pub fn get_merge_key(&self) -> &str {
+    pub fn get_merge_key(&self) -> &CheetahString {
         &self.merge_key
     }
 
