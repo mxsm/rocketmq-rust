@@ -1047,19 +1047,22 @@ where
                                 queue_id,
                                 final_offset,
                             );
-                    } else if !self.append_check_point(
-                        request_header,
-                        topic,
-                        revive_qid,
-                        queue_id,
-                        final_offset,
-                        &result_inner,
-                        pop_time as i64,
-                        self.broker_runtime_inner
-                            .broker_config()
-                            .broker_name
-                            .as_str(),
-                    ) {
+                    } else if !self
+                        .append_check_point(
+                            request_header,
+                            topic,
+                            revive_qid,
+                            queue_id,
+                            final_offset,
+                            &result_inner,
+                            pop_time as i64,
+                            self.broker_runtime_inner
+                                .broker_config()
+                                .broker_name
+                                .as_str(),
+                        )
+                        .await
+                    {
                         self.queue_lock_manager().unlock_with_key(lock_key).await;
                         return atomic_rest_num.load(Ordering::Acquire)
                             + result_inner.message_count() as i64;
@@ -1181,7 +1184,7 @@ where
         self.queue_lock_manager().unlock_with_key(lock_key).await;
         atomic_rest_num.load(Ordering::Acquire)
     }
-    fn append_check_point(
+    async fn append_check_point(
         &self,
         request_header: &PopMessageRequestHeader,
         topic: &str,
@@ -1215,12 +1218,16 @@ where
             get_message_tmp_result.next_begin_offset(),
         ) {
             true => true,
-            false => pop_buffer_merge_service_ref_mut.add_ck_just_offset(
-                ck,
-                revive_qid,
-                -1,
-                get_message_tmp_result.next_begin_offset(),
-            ),
+            false => {
+                pop_buffer_merge_service_ref_mut
+                    .add_ck_just_offset(
+                        ck,
+                        revive_qid,
+                        -1,
+                        get_message_tmp_result.next_begin_offset(),
+                    )
+                    .await
+            }
         }
     }
 
