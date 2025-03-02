@@ -10,7 +10,7 @@ header:
       url: "/docs/quick-start-guide/"
 excerpt: >
   🚀Apache RocketMQ build in Rust🦀. Faster, safer, and with lower memory usage.<br />
-  <small><a href="https://github.com/mxsm/rocketmq-rust/releases/tag/v0.3.0">Latest release 🔖v0.3.0</a></small><br />
+  <small><a href="https://github.com/mxsm/rocketmq-rust/releases/tag/v0.4.0">Latest release 🔖v0.4.0</a></small><br />
   <small><a class="github-button" href="https://github.com/mxsm/rocketmq-rust" data-icon="octicon-star" data-show-count="true" aria-label="Star mxsm/rocketmq-rust on GitHub">Star</a>
   <a class="github-button" href="https://github.com/mxsm/rocketmq-rust/fork" data-icon="octicon-repo-forked" data-show-count="true" aria-label="Fork mxsm/rocketmq-rust on GitHub">Fork</a>  
   </small><br />
@@ -34,8 +34,6 @@ feature_row:
 ## Feature
 
 {% include feature_row %}
-
-
 
 ## Architecture
 
