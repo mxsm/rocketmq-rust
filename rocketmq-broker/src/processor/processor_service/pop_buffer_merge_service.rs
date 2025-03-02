@@ -194,14 +194,48 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         }
     }
 
-    pub fn add_ck_just_offset(
-        &mut self,
+    pub async fn add_ck_just_offset(
+        &self,
         point: PopCheckPoint,
         revive_queue_id: i32,
         revive_queue_offset: i64,
         next_begin_offset: i64,
     ) -> bool {
-        unimplemented!("add_ck  not implemented")
+        // Create a new wrapper with justOffset flag set to true
+        let point_wrapper = ArcMut::new(PopCheckPointWrapper::new_with_offset(
+            revive_queue_id,
+            revive_queue_offset,
+            Arc::new(point),
+            next_begin_offset,
+            true,
+        ));
+
+        // Check for merge key conflict in the buffer
+        let merge_key = point_wrapper.get_merge_key();
+        if self.buffer.contains_key(merge_key) {
+            // Log warning about merge key conflict
+            warn!(
+                "[PopBuffer]mergeKey conflict when add ckJustOffset. ck:{:?}, mergeKey:{}",
+                point_wrapper, merge_key
+            );
+            return false;
+        }
+
+        // Put checkpoint to store with condition: !checkQueueOk
+        let should_run_in_current = !self.check_queue_ok(&point_wrapper);
+        self.put_ck_to_store(point_wrapper.as_ref(), should_run_in_current)
+            .await;
+
+        // Add to offset queue
+        self.put_offset_queue(point_wrapper.clone());
+        // Log if enabled
+        if self.broker_runtime_inner.broker_config().enable_pop_log {
+            info!("[PopBuffer]add ck just offset, {:?}", point_wrapper);
+        }
+        // Add to buffer and increment counter
+        self.buffer.insert(merge_key.clone(), point_wrapper);
+        self.counter.fetch_add(1, Ordering::AcqRel);
+        true
     }
 
     pub fn add_ack(&mut self, revive_qid: i32, ack_msg: &dyn AckMessage) -> bool {
