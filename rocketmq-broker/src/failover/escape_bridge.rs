@@ -31,7 +31,6 @@ use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all;
-use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_result::PutMessageResult;
@@ -90,8 +89,6 @@ type FutureResult = Pin<Box<dyn Future<Output = (Option<MessageExt>, String, boo
 pub(crate) struct EscapeBridge<MS> {
     inner_producer_group_name: CheetahString,
     inner_consumer_group_name: CheetahString,
-    escape_bridge_runtime: Option<RocketMQRuntime>,
-    message_store: Option<ArcMut<MS>>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
@@ -117,8 +114,6 @@ impl<MS: MessageStore> EscapeBridge<MS> {
         Self {
             inner_producer_group_name,
             inner_consumer_group_name,
-            escape_bridge_runtime: None,
-            message_store: None,
             broker_runtime_inner,
         }
     }
@@ -133,10 +128,7 @@ impl<MS: MessageStore> EscapeBridge<MS> {
                 .broker_config()
                 .enable_remote_escape
         {
-            self.escape_bridge_runtime = Some(RocketMQRuntime::new_multi(
-                num_cpus::get(),
-                "AsyncEscapeBridgeExecutor",
-            ));
+
             //self.message_store = message_store;
         }
     }
@@ -161,7 +153,8 @@ where
             .broker_id
             == mix_all::MASTER_ID
         {
-            self.message_store
+            self.broker_runtime_inner
+                .message_store_mut()
                 .as_mut()
                 .unwrap()
                 .put_message(message_ext)
@@ -328,7 +321,8 @@ where
             .broker_id
             == mix_all::MASTER_ID
         {
-            self.message_store
+            self.broker_runtime_inner
+                .message_store_mut()
                 .as_mut()
                 .unwrap()
                 .put_message(message_ext)
@@ -392,7 +386,8 @@ where
             .broker_id
             == mix_all::MASTER_ID
         {
-            self.message_store
+            self.broker_runtime_inner
+                .message_store_mut()
                 .as_mut()
                 .unwrap()
                 .put_message(message_ext)
@@ -476,7 +471,7 @@ where
         broker_name: &CheetahString,
         de_compress_body: bool,
     ) -> FutureResult {
-        let message_store = self.message_store.clone().unwrap();
+        let message_store = self.broker_runtime_inner.message_store().clone().unwrap();
         let inner_consumer_group_name = self.inner_consumer_group_name.clone();
         let topic = topic.clone();
         let broker_name = broker_name.clone();
