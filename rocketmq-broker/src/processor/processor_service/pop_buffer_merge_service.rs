@@ -967,51 +967,63 @@ impl PopCheckPointWrapper {
         }
     }
 
+    #[inline]
     pub fn get_revive_queue_id(&self) -> i32 {
         self.revive_queue_id
     }
 
+    #[inline]
     pub fn get_revive_queue_offset(&self) -> i64 {
         self.revive_queue_offset.load(Ordering::SeqCst) as i64
     }
 
+    #[inline]
     pub fn is_ck_stored(&self) -> bool {
         self.ck_stored.load(Ordering::SeqCst)
     }
 
+    #[inline]
     pub fn set_revive_queue_offset(&self, revive_queue_offset: i64) {
         self.revive_queue_offset
             .store(revive_queue_offset as i32, Ordering::SeqCst);
     }
 
+    #[inline]
     pub fn get_ck(&self) -> &Arc<PopCheckPoint> {
         &self.ck
     }
 
+    #[inline]
     pub fn get_bits(&self) -> &AtomicI32 {
         &self.bits
     }
 
+    #[inline]
     pub fn get_to_store_bits(&self) -> &AtomicI32 {
         &self.to_store_bits
     }
 
+    #[inline]
     pub fn get_next_begin_offset(&self) -> i64 {
         self.next_begin_offset
     }
 
+    #[inline]
     pub fn get_lock_key(&self) -> &CheetahString {
         &self.lock_key
     }
 
+    #[inline]
     pub fn get_merge_key(&self) -> &CheetahString {
         &self.merge_key
     }
 
+    #[inline]
     pub fn is_just_offset(&self) -> bool {
         self.just_offset
     }
 
+    #[inline]
     pub fn set_ck_stored(&self, ck_stored: bool) {
         self.ck_stored.store(ck_stored, Ordering::SeqCst);
     }
