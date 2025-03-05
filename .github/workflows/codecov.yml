@@ -14,6 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - name: Install Rust nightly
+      run: rustup toolchain install nightly
     - uses: actions-rs/toolchain@v1
       with:
         toolchain: nightly
