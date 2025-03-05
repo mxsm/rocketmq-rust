@@ -501,6 +501,7 @@ where
         let mut get_message_result = ArcMut::new(GetMessageResult::new_result_size(
             request_header.max_msg_nums as usize,
         ));
+
         let need_retry = randomq
             < self
                 .broker_runtime_inner
@@ -742,6 +743,7 @@ where
                     ) {
                         final_response.set_body_mut_ref(bytes);
                     }
+                    final_response.set_command_custom_header_ref(response_header);
                     Ok(Some(final_response))
                 } else {
                     //zero copy is not implemented
@@ -904,7 +906,8 @@ where
             &lock_key,
             true,
         );
-        if request_header.order.unwrap_or(false) {
+        let is_order = request_header.order.unwrap_or(false);
+        if is_order {
             if self
                 .broker_runtime_inner
                 .consumer_order_info_manager()
@@ -958,8 +961,8 @@ where
         let atomic_rest_num = AtomicI64::new(rest_num);
         let atomic_offset = AtomicI64::new(offset);
         let final_offset = offset;
-        let is_order = request_header.order.unwrap_or(false);
-        match get_message_result_inner {
+
+        let result = match get_message_result_inner {
             None => {
                 let num = self
                     .broker_runtime_inner
@@ -970,12 +973,13 @@ where
                     - atomic_offset.load(Ordering::Acquire)
                     + atomic_rest_num.load(Ordering::Acquire);
                 atomic_rest_num.store(num, Ordering::Release);
+                None
             }
-            Some(result) => {
-                let result_inner = if result.status().is_none() {
-                    result
+            Some(value) => {
+                if value.status().is_none() {
+                    Some(value)
                 } else {
-                    match result.status().as_ref().unwrap() {
+                    match value.status().unwrap() {
                         GetMessageStatus::OffsetFoundNull
                         | GetMessageStatus::OffsetOverflowBadly
                         | GetMessageStatus::OffsetTooSmall => {
@@ -986,11 +990,10 @@ where
                                     &request_header.consumer_group,
                                     topic,
                                     queue_id,
-                                    result.next_begin_offset(),
+                                    value.next_begin_offset(),
                                 );
-                            atomic_offset.store(result.next_begin_offset(), Ordering::Release);
-                            let get_message_result_in = self
-                                .broker_runtime_inner
+                            atomic_offset.store(value.next_begin_offset(), Ordering::Release);
+                            self.broker_runtime_inner
                                 .message_store()
                                 .as_ref()
                                 .unwrap()
@@ -1003,26 +1006,26 @@ where
                                         - get_message_result.message_mapped_list().len() as i32,
                                     message_filter,
                                 )
-                                .await;
-                            match get_message_result_in {
-                                None => {
-                                    let num = self
-                                        .broker_runtime_inner
-                                        .message_store()
-                                        .as_ref()
-                                        .unwrap()
-                                        .get_max_offset_in_queue(topic, queue_id)
-                                        - atomic_offset.load(Ordering::Acquire)
-                                        + atomic_rest_num.load(Ordering::Acquire);
-                                    self.queue_lock_manager().unlock_with_key(lock_key).await;
-                                    return num;
-                                }
-                                Some(value) => value,
-                            }
+                                .await
                         }
-                        _ => result,
+                        _ => Some(value),
                     }
-                };
+                }
+            }
+        };
+        match result {
+            None => {
+                let num = self
+                    .broker_runtime_inner
+                    .message_store()
+                    .as_ref()
+                    .unwrap()
+                    .get_max_offset_in_queue(topic, queue_id)
+                    - atomic_offset.load(Ordering::Acquire)
+                    + atomic_rest_num.load(Ordering::Acquire);
+                atomic_rest_num.store(num, Ordering::Release);
+            }
+            Some(result_inner) => {
                 if !result_inner.message_mapped_list().is_empty() {
                     if is_order {
                         self.broker_runtime_inner
@@ -1067,7 +1070,6 @@ where
                         return atomic_rest_num.load(Ordering::Acquire)
                             + result_inner.message_count() as i64;
                     }
-
                     ExtraInfoUtil::build_start_offset_info(
                         start_offset_info,
                         topic,
@@ -1181,6 +1183,7 @@ where
                     );
             }
         }
+
         self.queue_lock_manager().unlock_with_key(lock_key).await;
         atomic_rest_num.load(Ordering::Acquire)
     }
@@ -1195,7 +1198,7 @@ where
         pop_time: i64,
         broker_name: &str,
     ) -> bool {
-        let mut ck = PopCheckPoint {
+        /*let mut ck = PopCheckPoint {
             start_offset: offset,
             pop_time,
             invisible_time: request_header.invisible_time as i64,
@@ -1228,7 +1231,8 @@ where
                     )
                     .await
             }
-        }
+        }*/
+        true
     }
 
     fn is_pop_should_stop(

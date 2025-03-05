@@ -291,10 +291,11 @@ impl ExtraInfoUtil {
             string_builder.push(';');
         }
         string_builder.push_str(&format!(
-            "{}{}{}",
+            "{}{}{}{}",
             retry,
             MessageConst::KEY_SEPARATOR,
-            queue_id
+            queue_id,
+            MessageConst::KEY_SEPARATOR,
         ));
         for (i, msg_offset) in msg_offsets.iter().enumerate() {
             string_builder.push_str(&msg_offset.to_string());
