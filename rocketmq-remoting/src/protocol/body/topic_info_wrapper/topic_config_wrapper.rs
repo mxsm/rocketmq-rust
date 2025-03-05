@@ -25,7 +25,7 @@ use crate::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
 use crate::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use crate::protocol::DataVersion;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct TopicConfigAndMappingSerializeWrapper {
     #[serde(rename = "topicQueueMappingInfoMap")]
     pub topic_queue_mapping_info_map:
@@ -42,7 +42,7 @@ pub struct TopicConfigAndMappingSerializeWrapper {
     pub topic_config_serialize_wrapper: TopicConfigSerializeWrapper,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct TopicConfigSerializeWrapper {
     #[serde(rename = "topicConfigTable")]
     pub topic_config_table: HashMap<CheetahString, TopicConfig>,
@@ -76,26 +76,6 @@ impl TopicConfigSerializeWrapper {
 
     pub fn data_version(&self) -> &DataVersion {
         &self.data_version
-    }
-}
-
-impl Default for TopicConfigAndMappingSerializeWrapper {
-    fn default() -> Self {
-        Self {
-            topic_queue_mapping_info_map: HashMap::new(),
-            topic_queue_mapping_detail_map: HashMap::new(),
-            mapping_data_version: DataVersion::new(),
-            topic_config_serialize_wrapper: TopicConfigSerializeWrapper::default(),
-        }
-    }
-}
-
-impl Default for TopicConfigSerializeWrapper {
-    fn default() -> Self {
-        Self {
-            topic_config_table: HashMap::new(),
-            data_version: DataVersion::new(),
-        }
     }
 }
 

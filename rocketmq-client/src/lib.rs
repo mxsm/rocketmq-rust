@@ -17,6 +17,7 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
 #![recursion_limit = "256"]
+#![allow(clippy::result_large_err)]
 
 extern crate core;
 
