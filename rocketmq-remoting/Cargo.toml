@@ -57,4 +57,4 @@ bytemuck = "1.22.0"
 dashmap = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
-bytes = "1.10.0"
+bytes = "1.10.1"
