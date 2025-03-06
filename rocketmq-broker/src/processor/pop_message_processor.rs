@@ -963,18 +963,7 @@ where
         let final_offset = offset;
 
         let result = match get_message_result_inner {
-            None => {
-                let num = self
-                    .broker_runtime_inner
-                    .message_store()
-                    .as_ref()
-                    .unwrap()
-                    .get_max_offset_in_queue(topic, queue_id)
-                    - atomic_offset.load(Ordering::Acquire)
-                    + atomic_rest_num.load(Ordering::Acquire);
-                atomic_rest_num.store(num, Ordering::Release);
-                None
-            }
+            None => None,
             Some(value) => {
                 if value.status().is_none() {
                     Some(value)
