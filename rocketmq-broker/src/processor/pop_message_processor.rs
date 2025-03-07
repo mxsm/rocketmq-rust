@@ -1191,7 +1191,7 @@ where
         pop_time: i64,
         broker_name: &str,
     ) -> bool {
-        /*let mut ck = PopCheckPoint {
+        let mut ck = PopCheckPoint {
             start_offset: offset,
             pop_time,
             invisible_time: request_header.invisible_time as i64,
@@ -1224,8 +1224,7 @@ where
                     )
                     .await
             }
-        }*/
-        true
+        }
     }
 
     fn is_pop_should_stop(
