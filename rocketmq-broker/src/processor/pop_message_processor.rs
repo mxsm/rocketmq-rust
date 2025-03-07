@@ -724,7 +724,11 @@ where
             rest_num: rest_num as u64,
             start_offset_info: Some(CheetahString::from_string(start_offset_info)),
             msg_offset_info: Some(CheetahString::from_string(msg_offset_info)),
-            order_count_info: Some(CheetahString::from_string(order_count_info)),
+            order_count_info: if order_count_info.is_empty() {
+                None
+            } else {
+                Some(CheetahString::from_string(order_count_info))
+            },
         };
         final_response.set_remark_mut(get_message_result.status().unwrap().to_string());
 
