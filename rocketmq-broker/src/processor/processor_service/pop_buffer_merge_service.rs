@@ -16,6 +16,7 @@
  */
 #![allow(unused_variables)]
 
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
@@ -404,56 +405,45 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         let start_time = Instant::now();
         let mut count = 0;
         let mut count_ck = 0;
-
-        self.buffer.retain(|key, point_wrapper| {
-            // just process offset(already stored at pull thread), or buffer ck(not stored and ack
-            // finish)
+        let pop_ck_stay_buffer_time_out = self
+            .broker_runtime_inner
+            .broker_config()
+            .pop_ck_stay_buffer_time_out as i64;
+        let pop_ck_stay_buffer_time = self
+            .broker_runtime_inner
+            .broker_config()
+            .pop_ck_stay_buffer_time as i64;
+        let mut remove_keys = HashSet::new();
+        for entry in self.buffer.iter() {
+            let point_wrapper = entry.value();
             if point_wrapper.is_just_offset() && point_wrapper.is_ck_stored()
                 || is_ck_done(point_wrapper)
                 || is_ck_done_for_finish(point_wrapper) && point_wrapper.is_ck_stored()
             {
                 self.counter.fetch_sub(1, Ordering::AcqRel);
-                false
-            } else {
-                true
+                remove_keys.insert(entry.key().clone());
+                continue;
             }
-        });
-
-        for key_value in self.buffer.iter() {
-            let point_wrapper = key_value.value();
-            let point = key_value.get_ck();
+            let point = point_wrapper.get_ck();
             let now = get_current_millis();
             let mut remove_ck = !self.serving.load(Ordering::Acquire);
-            if point.get_revive_time() as u64 - now
-                < self
-                    .broker_runtime_inner
-                    .broker_config()
-                    .pop_ck_stay_buffer_time_out
-            {
+            if (point.get_revive_time() - now as i64) < pop_ck_stay_buffer_time_out {
                 remove_ck = true;
             }
-
-            if now - point.get_revive_time() as u64
-                > self
-                    .broker_runtime_inner
-                    .broker_config()
-                    .pop_ck_stay_buffer_time_out
-            {
+            if (now as i64 - point.get_revive_time()) > pop_ck_stay_buffer_time {
                 remove_ck = true;
             }
-
             if is_ck_done(point_wrapper) {
-                //nothing to do
+                continue;
             } else if point_wrapper.is_just_offset() {
                 if point_wrapper.get_revive_queue_offset() < 0 {
                     self.put_ck_to_store(point_wrapper, false).await;
                     count_ck += 1;
                 }
+                continue;
             } else if remove_ck {
                 if point_wrapper.get_revive_queue_offset() < 0 {
-                    {
-                        self.put_ck_to_store(point_wrapper, false).await;
-                    }
+                    self.put_ck_to_store(point_wrapper, false).await;
                     count_ck += 1;
                 }
                 if !point_wrapper.is_ck_stored() {
@@ -502,32 +492,26 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
                         }
                     }
                 }
-            } else if point_wrapper.get_revive_queue_offset() < 0 {
-                self.put_ck_to_store(point_wrapper, false).await;
-                count_ck += 1;
+                if is_ck_done_for_finish(point_wrapper) && point_wrapper.is_ck_stored() {
+                    remove_keys.insert(entry.key().clone());
+                    self.counter.fetch_sub(1, Ordering::AcqRel);
+                }
             }
+        }
+        // Remove keys
+        for key in remove_keys {
+            self.buffer.remove(&key);
         }
 
         let offset_buffer_size = self.scan_commit_offset();
-
-        let eclipse = start_time.elapsed().as_millis() as u64;
+        let eclipse = start_time.elapsed().as_millis() as i64;
         if eclipse
             > self
                 .broker_runtime_inner
                 .broker_config()
-                .pop_ck_stay_buffer_time_out
+                .pop_ck_stay_buffer_time_out as i64
                 - 1000
         {
-            /*            info!(
-                "[PopBuffer]scan stop, because eclipse too long, PopBufferEclipse={}, \
-                 PopBufferToStoreAck={}, PopBufferToStoreCk={}, PopBufferSize={}, \
-                 PopBufferOffsetSize={}",
-                eclipse,
-                count,
-                count_ck,
-                *self.counter.lock().unwrap(),
-                offset_buffer_size
-            );*/
             self.serving.store(false, Ordering::Release);
         } else if self.scan_times % self.count_of_second1 == 0 {
             info!(
