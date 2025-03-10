@@ -864,15 +864,17 @@ where
             PopAckConstants::SPLIT,
             queue_id
         ));
-        let offset = self.get_pop_offset(
-            topic,
-            &request_header.consumer_group,
-            queue_id,
-            request_header.init_mode,
-            false,
-            &lock_key,
-            false,
-        );
+        let offset = self
+            .get_pop_offset(
+                topic,
+                &request_header.consumer_group,
+                queue_id,
+                request_header.init_mode,
+                false,
+                &lock_key,
+                false,
+            )
+            .await;
         if !self
             .queue_lock_manager()
             .try_lock_with_key(lock_key.clone())
@@ -901,15 +903,17 @@ where
                 .await;
             return result;
         }
-        let offset = self.get_pop_offset(
-            topic,
-            &request_header.consumer_group,
-            queue_id,
-            request_header.init_mode,
-            true,
-            &lock_key,
-            true,
-        );
+        let offset = self
+            .get_pop_offset(
+                topic,
+                &request_header.consumer_group,
+                queue_id,
+                request_header.init_mode,
+                true,
+                &lock_key,
+                true,
+            )
+            .await;
         let is_order = request_header.order.unwrap_or(false);
         if is_order {
             if self
@@ -1095,17 +1099,20 @@ where
                                     result_inner.next_begin_offset(),
                                 );
                         } else {
-                            self.pop_buffer_merge_service.mut_from_ref().add_ck_mock(
-                                request_header.consumer_group.clone(),
-                                topic.clone(),
-                                queue_id,
-                                final_offset as u64,
-                                request_header.invisible_time,
-                                pop_time,
-                                revive_qid,
-                                result_inner.next_begin_offset() as u64,
-                                self.broker_runtime_inner.broker_config().broker_name(),
-                            );
+                            self.pop_buffer_merge_service
+                                .mut_from_ref()
+                                .add_ck_mock(
+                                    request_header.consumer_group.clone(),
+                                    topic.clone(),
+                                    queue_id,
+                                    final_offset as u64,
+                                    request_header.invisible_time,
+                                    pop_time,
+                                    revive_qid,
+                                    result_inner.next_begin_offset() as u64,
+                                    self.broker_runtime_inner.broker_config().broker_name(),
+                                )
+                                .await;
                         }
                     }
                 }
@@ -1207,12 +1214,15 @@ where
             ck.add_diff(((*msg_queue_offset) as i64 - offset) as i32);
         }
         let pop_buffer_merge_service_ref_mut = self.pop_buffer_merge_service.mut_from_ref();
-        match pop_buffer_merge_service_ref_mut.add_ck(
-            &ck,
-            revive_qid,
-            -1,
-            get_message_tmp_result.next_begin_offset(),
-        ) {
+        match pop_buffer_merge_service_ref_mut
+            .add_ck(
+                &ck,
+                revive_qid,
+                -1,
+                get_message_tmp_result.next_begin_offset(),
+            )
+            .await
+        {
             true => true,
             false => {
                 pop_buffer_merge_service_ref_mut
@@ -1242,7 +1252,7 @@ where
                 > broker_config.pop_inflight_message_threshold
     }
 
-    fn get_pop_offset(
+    async fn get_pop_offset(
         &self,
         topic: &CheetahString,
         group: &CheetahString,
@@ -1266,7 +1276,10 @@ where
             }
         }
 
-        let buffer_offset = self.pop_buffer_merge_service.get_latest_offset(lock_key);
+        let buffer_offset = self
+            .pop_buffer_merge_service
+            .get_latest_offset(lock_key)
+            .await;
         if buffer_offset < 0 {
             offset
         } else {
