@@ -627,27 +627,13 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
                     break;
                 }
                 let point_wrapper = point_wrapper.unwrap();
-
-                println!(
-                    "======{}={}={}={}===",
-                    point_wrapper.is_just_offset(),
-                    point_wrapper.is_ck_stored(),
-                    is_ck_done(point_wrapper),
-                    is_ck_done_for_finish(point_wrapper),
-                );
-
                 if point_wrapper.is_just_offset() && point_wrapper.is_ck_stored()
                     || is_ck_done(point_wrapper)
                     || is_ck_done_for_finish(point_wrapper) && point_wrapper.is_ck_stored()
                 {
                     if self.commit_offset(point_wrapper.as_ref()).await {
-                        let option = queue.pop_front();
-                        println!(
-                            "========================11111111111111111===================={:?}",
-                            option
-                        );
+                        queue.pop_front();
                     } else {
-                        println!("========================2222222222222222====================");
                         break;
                     }
                 } else {
