@@ -25,6 +25,7 @@ use cheetah_string::CheetahString;
 use crossbeam_skiplist::SkipSet;
 use dashmap::DashMap;
 use rocketmq_common::common::key_builder::KeyBuilder;
+use rocketmq_common::common::pop_ack_constants::PopAckConstants;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
@@ -37,7 +38,7 @@ use rocketmq_store::log_file::MessageStore;
 use tokio::select;
 use tokio::sync::Notify;
 use tracing::error;
-use tracing::warn;
+use tracing::info;
 
 use crate::broker_runtime::BrokerRuntimeInner;
 use crate::long_polling::polling_header::PollingHeader;
@@ -107,7 +108,7 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
                 if this.last_clean_time == 0
                     || get_current_millis() - this.last_clean_time > 5 * 60 * 1000
                 {
-                    this.clean_unused_resource();
+                    this.mut_from_ref().clean_unused_resource();
                 }
             }
         });
@@ -117,8 +118,106 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
         self.notify.notify_waiters();
     }
 
-    fn clean_unused_resource(&self) {
-        warn!("clean_unused_resource start");
+    fn clean_unused_resource(&mut self) {
+        // Clean up topicCidMap
+        {
+            let mut topic_keys_to_remove = Vec::new();
+
+            for topic_entry in self.topic_cid_map.iter() {
+                let topic = topic_entry.key();
+
+                if self
+                    .broker_runtime_inner
+                    .topic_config_manager()
+                    .select_topic_config(topic)
+                    .is_none()
+                {
+                    info!(target: "pop_logger", "remove non-existent topic {} in topicCidMap!", topic);
+                    topic_keys_to_remove.push(topic.clone());
+                    continue;
+                }
+
+                let cid_map = topic_entry.value();
+                let mut cid_keys_to_remove = Vec::new();
+
+                for cid_entry in cid_map.iter() {
+                    let cid = cid_entry.key();
+
+                    let subscription_group_wrapper = self
+                        .broker_runtime_inner
+                        .subscription_group_manager()
+                        .subscription_group_wrapper()
+                        .lock();
+                    if !subscription_group_wrapper
+                        .subscription_group_table()
+                        .contains_key(cid)
+                    {
+                        info!(target: "pop_logger", "remove non-existent sub {} of topic {} in topicCidMap!", cid, topic);
+                        cid_keys_to_remove.push(cid.clone());
+                    }
+                }
+
+                // Remove CIDs outside the iteration
+                for cid in cid_keys_to_remove {
+                    cid_map.remove(&cid);
+                }
+            }
+
+            // Remove topics outside the iteration
+            for topic in topic_keys_to_remove {
+                self.topic_cid_map.remove(&topic);
+            }
+        }
+
+        {
+            // Clean up pollingMap
+            let mut polling_keys_to_remove = Vec::new();
+
+            for polling_entry in self.polling_map.iter() {
+                let key = polling_entry.key();
+
+                if key.is_empty() {
+                    continue;
+                }
+
+                let key_array: Vec<&str> = key.split(PopAckConstants::SPLIT).collect();
+                if key_array.len() != 3 {
+                    continue;
+                }
+
+                let topic = CheetahString::from_slice(key_array[0]);
+                let cid = CheetahString::from_slice(key_array[1]);
+
+                if self
+                    .broker_runtime_inner
+                    .topic_config_manager()
+                    .select_topic_config(&topic)
+                    .is_none()
+                {
+                    info!(target: "pop_logger", "remove non-existent topic {} in pollingMap!", topic);
+                    polling_keys_to_remove.push(key.clone());
+                    continue;
+                }
+                let subscription_group_wrapper = self
+                    .broker_runtime_inner
+                    .subscription_group_manager()
+                    .subscription_group_wrapper()
+                    .lock();
+                if !subscription_group_wrapper
+                    .subscription_group_table()
+                    .contains_key(&cid)
+                {
+                    info!(target: "pop_logger", "remove non-existent sub {} of topic {} in pollingMap!", cid, topic);
+                    polling_keys_to_remove.push(key.clone());
+                }
+            }
+
+            // Remove polling entries outside the iteration
+            for key in polling_keys_to_remove {
+                self.polling_map.remove(&key);
+            }
+        }
+        self.last_clean_time = get_current_millis();
     }
 
     pub fn notify_message_arriving(
