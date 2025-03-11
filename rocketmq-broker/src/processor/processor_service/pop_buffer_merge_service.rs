@@ -735,18 +735,6 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         self.put_offset_queue(ArcMut::new(point_wrapper)).await;
     }
 
-    fn is_ck_done_for_finish(&self, point_wrapper: &PopCheckPointWrapper) -> bool {
-        let num = point_wrapper.get_ck().num;
-        let bits = point_wrapper.get_bits().load(Ordering::Relaxed)
-            ^ point_wrapper.get_to_store_bits().load(Ordering::Relaxed);
-        for i in 0..num {
-            if DataConverter::get_bit(bits, i as usize) {
-                return false;
-            }
-        }
-        true
-    }
-
     async fn put_offset_queue(&self, point_wrapper: ArcMut<PopCheckPointWrapper>) -> bool {
         let queue = self
             .commit_offsets
@@ -905,14 +893,15 @@ fn is_ck_done(point_wrapper: &PopCheckPointWrapper) -> bool {
 
 fn is_ck_done_for_finish(point_wrapper: &PopCheckPointWrapper) -> bool {
     let num = point_wrapper.ck.num;
+    let bits = point_wrapper.bits.load(Ordering::Acquire)
+        ^ point_wrapper.to_store_bits.load(Ordering::Acquire);
     for i in 0..num {
-        if !DataConverter::get_bit(point_wrapper.get_bits().load(Ordering::Relaxed), i as usize) {
+        if !DataConverter::get_bit(bits, i as usize) {
             return false;
         }
     }
     true
 }
-
 pub struct QueueWithTime<T> {
     queue: Arc<tokio::sync::Mutex<VecDeque<T>>>,
     time: u64,
