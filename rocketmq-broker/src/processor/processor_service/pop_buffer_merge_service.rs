@@ -106,7 +106,7 @@ impl<MS> PopBufferMergeService<MS> {
 
 impl<MS: MessageStore> PopBufferMergeService<MS> {
     /// Adds a checkpoint to the buffer
-    pub fn add_ck(
+    pub async fn add_ck(
         &self,
         point: &PopCheckPoint,
         revive_queue_id: i32,
@@ -153,7 +153,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         ));
 
         // Check if queue is valid
-        if !self.check_queue_ok(&point_wrapper) {
+        if !self.check_queue_ok(&point_wrapper).await {
             return false;
         }
 
@@ -168,7 +168,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         }
 
         // Add to offset queue
-        self.put_offset_queue(point_wrapper.clone());
+        self.put_offset_queue(point_wrapper.clone()).await;
 
         if broker_config.enable_pop_log {
             info!("[PopBuffer]add ck, {:?}", point_wrapper);
@@ -181,12 +181,12 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
     }
 
     // Helper methods
-    fn check_queue_ok(&self, point_wrapper: &PopCheckPointWrapper) -> bool {
+    async fn check_queue_ok(&self, point_wrapper: &PopCheckPointWrapper) -> bool {
         let queue = self.commit_offsets.get(point_wrapper.get_lock_key());
         match queue {
             None => true,
             Some(value) => {
-                value.get().lock().len()
+                value.get().lock().await.len()
                     < self
                         .broker_runtime_inner
                         .broker_config()
@@ -223,12 +223,12 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         }
 
         // Put checkpoint to store with condition: !checkQueueOk
-        let should_run_in_current = !self.check_queue_ok(&point_wrapper);
+        let should_run_in_current = !self.check_queue_ok(&point_wrapper).await;
         self.put_ck_to_store(point_wrapper.as_ref(), should_run_in_current)
             .await;
 
         // Add to offset queue
-        self.put_offset_queue(point_wrapper.clone());
+        self.put_offset_queue(point_wrapper.clone()).await;
         // Log if enabled
         if self.broker_runtime_inner.broker_config().enable_pop_log {
             info!("[PopBuffer]add ck just offset, {:?}", point_wrapper);
@@ -340,10 +340,10 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
     }
 
     #[inline]
-    pub fn get_latest_offset(&self, lock_key: &CheetahString) -> i64 {
+    pub async fn get_latest_offset(&self, lock_key: &CheetahString) -> i64 {
         let queue = self.commit_offsets.get(lock_key);
         if let Some(queue) = queue {
-            let queue = queue.get().lock();
+            let queue = queue.get().lock().await;
             if let Some(queue) = queue.back() {
                 queue.get_next_begin_offset()
             } else {
@@ -354,7 +354,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         }
     }
 
-    pub fn get_latest_offset_full(
+    pub async fn get_latest_offset_full(
         &self,
         topic: &CheetahString,
         group: &CheetahString,
@@ -363,6 +363,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         self.get_latest_offset(&CheetahString::from_string(KeyBuilder::build_polling_key(
             topic, group, queue_id,
         )))
+        .await
     }
 
     pub fn clear_offset_queue(&self, lock_key: &CheetahString) {
@@ -503,7 +504,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
             self.buffer.remove(&key);
         }
 
-        let offset_buffer_size = self.scan_commit_offset();
+        let offset_buffer_size = self.scan_commit_offset().await;
         let eclipse = start_time.elapsed().as_millis() as i64;
         if eclipse
             > self
@@ -564,11 +565,11 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         });
     }
 
-    pub fn get_offset_total_size(&self) -> usize {
+    pub async fn get_offset_total_size(&self) -> usize {
         let mut count = 0;
         for entry in self.commit_offsets.iter() {
             let queue = entry.value();
-            let guard = queue.get().lock();
+            let guard = queue.get().lock().await;
             count += guard.len();
         }
         count
@@ -596,7 +597,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
                             this.mut_from_ref().scan_garbage();
                         }
                         tokio::time::sleep(tokio::time::Duration::from_millis(this.interval)).await;
-                        if !this.serving.load(Ordering::Acquire) && this.buffer.is_empty()  && this.get_offset_total_size() == 0 {
+                        if !this.serving.load(Ordering::Acquire) && this.buffer.is_empty()  && this.get_offset_total_size().await == 0 {
                             this.serving.store(true,Ordering::Release);
                         }
                     } =>{}
@@ -608,19 +609,98 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
             if !this.is_should_running() {
                 return;
             }
-            while !this.buffer.is_empty() || this.get_offset_total_size() > 0 {
+            while !this.buffer.is_empty() || this.get_offset_total_size().await > 0 {
                 this.mut_from_ref().scan().await;
             }
         });
     }
 
-    fn scan_commit_offset(&self) -> i32 {
-        // Implement the logic to scan commit offset
-        warn!("scan_commit_offset not implemented");
-        0
+    async fn scan_commit_offset(&self) -> usize {
+        let mut count = 0;
+
+        for entry in self.commit_offsets.iter() {
+            let queue_ = entry.value();
+            let mut queue = queue_.get().lock().await;
+            loop {
+                let point_wrapper = queue.front_mut();
+                if point_wrapper.is_none() {
+                    break;
+                }
+                let point_wrapper = point_wrapper.unwrap();
+
+                println!(
+                    "======{}={}={}={}===",
+                    point_wrapper.is_just_offset(),
+                    point_wrapper.is_ck_stored(),
+                    is_ck_done(point_wrapper),
+                    is_ck_done_for_finish(point_wrapper),
+                );
+
+                if point_wrapper.is_just_offset() && point_wrapper.is_ck_stored()
+                    || is_ck_done(point_wrapper)
+                    || is_ck_done_for_finish(point_wrapper) && point_wrapper.is_ck_stored()
+                {
+                    if self.commit_offset(point_wrapper.as_ref()).await {
+                        let option = queue.pop_front();
+                        println!(
+                            "========================11111111111111111===================={:?}",
+                            option
+                        );
+                    } else {
+                        println!("========================2222222222222222====================");
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+            let qs = queue.len();
+            count += qs;
+        }
+        count
     }
 
-    pub fn add_ck_mock(
+    async fn commit_offset(&self, point_wrapper: &PopCheckPointWrapper) -> bool {
+        if point_wrapper.next_begin_offset < 0 {
+            return true;
+        }
+        let pop_check_point = point_wrapper.get_ck();
+        let lock_key = point_wrapper.get_lock_key();
+        if !self
+            .queue_lock_manager
+            .try_lock_with_key(lock_key.clone())
+            .await
+        {
+            return false;
+        }
+        let consumer_offset_manager = self.broker_runtime_inner.consumer_offset_manager();
+        let offset = consumer_offset_manager.query_offset(
+            &pop_check_point.cid,
+            &pop_check_point.topic,
+            pop_check_point.queue_id,
+        );
+        if point_wrapper.next_begin_offset > offset {
+            info!("Commit offset, {}, {}", point_wrapper, offset);
+        } else {
+            warn!(
+                "Commit offset, consumer offset less than store, {}, {}",
+                point_wrapper, offset
+            )
+        }
+        consumer_offset_manager.commit_offset(
+            "PopBufferMergeService".into(),
+            &pop_check_point.cid,
+            &pop_check_point.topic,
+            pop_check_point.queue_id,
+            point_wrapper.next_begin_offset,
+        );
+        self.queue_lock_manager
+            .unlock_with_key(lock_key.clone())
+            .await;
+        true
+    }
+
+    pub async fn add_ck_mock(
         &mut self,
         group: CheetahString,
         topic: CheetahString,
@@ -652,7 +732,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         );
         point_wrapper.set_ck_stored(true);
 
-        self.put_offset_queue(ArcMut::new(point_wrapper));
+        self.put_offset_queue(ArcMut::new(point_wrapper)).await;
     }
 
     fn is_ck_done_for_finish(&self, point_wrapper: &PopCheckPointWrapper) -> bool {
@@ -667,12 +747,12 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         true
     }
 
-    fn put_offset_queue(&self, point_wrapper: ArcMut<PopCheckPointWrapper>) -> bool {
+    async fn put_offset_queue(&self, point_wrapper: ArcMut<PopCheckPointWrapper>) -> bool {
         let queue = self
             .commit_offsets
             .entry(point_wrapper.lock_key.clone())
             .or_insert(QueueWithTime::new());
-        let mut guard = queue.get().lock();
+        let mut guard = queue.get().lock().await;
         guard.push_back(point_wrapper);
         true
     }
@@ -693,14 +773,14 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
             .escape_bridge_mut()
             .put_message_to_specific_queue(msg_inner)
             .await;
-        match put_message_result.put_message_status() {
+        if !matches!(
+            put_message_result.put_message_status(),
             PutMessageStatus::PutOk
-            | PutMessageStatus::FlushDiskTimeout
-            | PutMessageStatus::FlushSlaveTimeout
-            | PutMessageStatus::SlaveNotAvailable => {
-                return;
-            }
-            _ => {}
+                | PutMessageStatus::FlushDiskTimeout
+                | PutMessageStatus::FlushSlaveTimeout
+                | PutMessageStatus::SlaveNotAvailable
+        ) {
+            return;
         }
         point_wrapper.set_ck_stored(true);
         if put_message_result.remote_put() {
@@ -834,14 +914,14 @@ fn is_ck_done_for_finish(point_wrapper: &PopCheckPointWrapper) -> bool {
 }
 
 pub struct QueueWithTime<T> {
-    queue: Arc<parking_lot::Mutex<VecDeque<T>>>,
+    queue: Arc<tokio::sync::Mutex<VecDeque<T>>>,
     time: u64,
 }
 
 impl<T> QueueWithTime<T> {
     pub fn new() -> Self {
         Self {
-            queue: Arc::new(parking_lot::Mutex::new(VecDeque::new())),
+            queue: Arc::new(tokio::sync::Mutex::new(VecDeque::new())),
             time: get_current_millis(),
         }
     }
@@ -854,7 +934,7 @@ impl<T> QueueWithTime<T> {
         self.time
     }
 
-    pub fn get(&self) -> &Arc<parking_lot::Mutex<VecDeque<T>>> {
+    pub fn get(&self) -> &Arc<tokio::sync::Mutex<VecDeque<T>>> {
         &self.queue
     }
 }
@@ -875,6 +955,43 @@ pub struct PopCheckPointWrapper {
     just_offset: bool,
     ck_stored: AtomicBool,
 }
+
+impl std::fmt::Display for PopCheckPointWrapper {
+    /// Formats the PopCheckPointWrapper for display
+    ///
+    /// Outputs the wrapper's fields in a compact format showing:
+    /// - revive queue ID (rq)
+    /// - revive queue offset (rqo)
+    /// - checkpoint reference (ck)
+    /// - bits for tracking acknowledged messages
+    /// - store bits for tracking persisted acknowledgments
+    /// - next begin offset (nbo)
+    /// - checkpoint stored status (cks)
+    /// - just offset flag (jo)
+    ///
+    /// # Arguments
+    /// * `f` - The formatter to write to
+    ///
+    /// # Returns
+    /// A formatting result indicating success or failure
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "CkWrap{{rq={}, rqo={}, ck={:?}, bits={}, sBits={}, nbo={}, cks={}, jo={}}}",
+            self.revive_queue_id,
+            self.revive_queue_offset
+                .load(std::sync::atomic::Ordering::Relaxed),
+            self.ck,
+            self.bits.load(std::sync::atomic::Ordering::Relaxed),
+            self.to_store_bits
+                .load(std::sync::atomic::Ordering::Relaxed),
+            self.next_begin_offset,
+            self.ck_stored.load(std::sync::atomic::Ordering::Relaxed),
+            self.just_offset
+        )
+    }
+}
+
 impl PopCheckPointWrapper {
     pub fn new(
         revive_queue_id: i32,
@@ -1013,23 +1130,6 @@ impl PopCheckPointWrapper {
     }
 }
 
-impl std::fmt::Display for PopCheckPointWrapper {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "CkWrap{{rq={}, rqo={}, ck={:?}, bits={}, sBits={}, nbo={}, cks={}, jo={}}}",
-            self.revive_queue_id,
-            self.revive_queue_offset.load(Ordering::Relaxed),
-            self.ck,
-            self.bits.load(Ordering::Relaxed),
-            self.to_store_bits.load(Ordering::Relaxed),
-            self.next_begin_offset,
-            self.ck_stored.load(Ordering::Relaxed),
-            self.just_offset
-        )
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1083,10 +1183,10 @@ mod tests {
         assert!(display.contains("CkWrap{rq=1, rqo=100"));
     }
 
-    #[test]
-    fn queue_with_time_initializes_correctly() {
+    #[tokio::test]
+    async fn queue_with_time_initializes_correctly() {
         let queue_with_time: QueueWithTime<i32> = QueueWithTime::new();
-        let guard = queue_with_time.get().lock();
+        let guard = queue_with_time.get().lock().await;
         assert!(guard.is_empty());
         assert!(queue_with_time.get_time() > 0);
     }
@@ -1098,10 +1198,10 @@ mod tests {
         assert_eq!(queue_with_time.get_time(), 123456789);
     }
 
-    #[test]
-    fn get_queue_mut_returns_mutable_reference() {
+    #[tokio::test]
+    async fn get_queue_mut_returns_mutable_reference() {
         let queue_with_time: QueueWithTime<i32> = QueueWithTime::new();
-        let mut guard = queue_with_time.get().lock();
+        let mut guard = queue_with_time.get().lock().await;
         guard.push_back(1);
         assert_eq!(guard.len(), 1);
     }
