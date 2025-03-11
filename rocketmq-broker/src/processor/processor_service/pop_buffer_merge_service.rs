@@ -1183,7 +1183,7 @@ mod tests {
         assert!(display.contains("CkWrap{rq=1, rqo=100"));
     }
 
-    #[test]
+    #[tokio::test]
     async fn queue_with_time_initializes_correctly() {
         let queue_with_time: QueueWithTime<i32> = QueueWithTime::new();
         let guard = queue_with_time.get().lock().await;
@@ -1198,7 +1198,7 @@ mod tests {
         assert_eq!(queue_with_time.get_time(), 123456789);
     }
 
-    #[test]
+    #[tokio::test]
     async fn get_queue_mut_returns_mutable_reference() {
         let queue_with_time: QueueWithTime<i32> = QueueWithTime::new();
         let mut guard = queue_with_time.get().lock().await;
