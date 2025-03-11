@@ -144,23 +144,26 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
                     pop_request.get_subscription_data(),
                 );
 
-                let mut match_result = message_filter.is_matched_by_consume_queue(
-                    tags_code,
-                    Some(&CqExtUnit::new(
-                        tags_code.unwrap_or_default(),
-                        msg_store_time,
-                        filter_bit_map,
-                    )),
-                );
-                if match_result {
-                    if let Some(props) = properties {
-                        match_result = message_filter.is_matched_by_commit_log(None, Some(props));
+                if let Some(message_filter) = message_filter {
+                    let mut match_result = message_filter.is_matched_by_consume_queue(
+                        tags_code,
+                        Some(&CqExtUnit::new(
+                            tags_code.unwrap_or_default(),
+                            msg_store_time,
+                            filter_bit_map,
+                        )),
+                    );
+                    if match_result {
+                        if let Some(props) = properties {
+                            match_result =
+                                message_filter.is_matched_by_commit_log(None, Some(props));
+                        }
                     }
-                }
-                if !match_result {
-                    remoting_commands.value().insert(pop_request);
-                    self.total_polling_num.fetch_add(1, Ordering::AcqRel);
-                    return false;
+                    if !match_result {
+                        remoting_commands.value().insert(pop_request);
+                        self.total_polling_num.fetch_add(1, Ordering::AcqRel);
+                        return false;
+                    }
                 }
 
                 return self.wake_up(pop_request);
@@ -178,7 +181,6 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
         message_filter: Option<Arc<Box<dyn MessageFilter>>>,
     ) -> PollingResult {
         //this method may be need to optimize
-
         if request_header.get_poll_time() <= 0 {
             return PollingResult::NotPolling;
         }
@@ -196,7 +198,7 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
             ctx.clone(),
             expired as u64,
             subscription_data,
-            message_filter.unwrap(),
+            message_filter,
         ));
 
         if self.total_polling_num.load(Ordering::SeqCst)

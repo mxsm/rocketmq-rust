@@ -34,7 +34,7 @@ pub struct PopRequest {
     op: i64,
     expired: u64,
     subscription_data: SubscriptionData,
-    message_filter: Arc<Box<dyn MessageFilter>>,
+    message_filter: Option<Arc<Box<dyn MessageFilter>>>,
 }
 
 impl PopRequest {
@@ -43,7 +43,7 @@ impl PopRequest {
         ctx: ConnectionHandlerContext,
         expired: u64,
         subscription_data: SubscriptionData,
-        message_filter: Arc<Box<dyn MessageFilter>>,
+        message_filter: Option<Arc<Box<dyn MessageFilter>>>,
     ) -> Self {
         static COUNTER: AtomicI64 = AtomicI64::new(i64::MIN);
         let op = COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -94,8 +94,8 @@ impl PopRequest {
         &self.subscription_data
     }
 
-    pub fn get_message_filter(&self) -> &Arc<Box<dyn MessageFilter>> {
-        &self.message_filter
+    pub fn get_message_filter(&self) -> Option<&Arc<Box<dyn MessageFilter>>> {
+        self.message_filter.as_ref()
     }
 }
 
