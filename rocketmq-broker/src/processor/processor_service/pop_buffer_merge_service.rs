@@ -734,12 +734,12 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
 
         self.put_offset_queue(ArcMut::new(point_wrapper)).await;
     }
-
     async fn put_offset_queue(&self, point_wrapper: ArcMut<PopCheckPointWrapper>) -> bool {
-        let queue = self
+        let mut queue = self
             .commit_offsets
             .entry(point_wrapper.lock_key.clone())
             .or_insert(QueueWithTime::new());
+        queue.set_time(point_wrapper.get_ck().pop_time as u64);
         let mut guard = queue.get().lock().await;
         guard.push_back(point_wrapper);
         true
