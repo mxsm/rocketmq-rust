@@ -63,7 +63,9 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
             topic_cid_map: DashMap::with_capacity(
                 broker_runtime_inner.broker_config().pop_polling_map_size,
             ),
-            polling_map: DashMap::new(),
+            polling_map: DashMap::with_capacity(
+                broker_runtime_inner.broker_config().pop_polling_map_size,
+            ),
             last_clean_time: 0,
             total_polling_num: AtomicU64::new(0),
             notify_last,
@@ -109,6 +111,14 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
                     || get_current_millis() - this.last_clean_time > 5 * 60 * 1000
                 {
                     this.mut_from_ref().clean_unused_resource();
+                }
+            }
+
+            //clean all
+            for entry in this.polling_map.iter() {
+                let value = entry.value();
+                while let Some(first) = value.pop_front() {
+                    this.wake_up(first.value().clone());
                 }
             }
         });
