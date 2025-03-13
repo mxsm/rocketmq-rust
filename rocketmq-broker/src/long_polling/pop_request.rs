@@ -33,7 +33,7 @@ pub struct PopRequest {
     complete: Arc<AtomicBool>,
     op: i64,
     expired: u64,
-    subscription_data: SubscriptionData,
+    subscription_data: Option<SubscriptionData>,
     message_filter: Option<Arc<Box<dyn MessageFilter>>>,
 }
 
@@ -42,7 +42,7 @@ impl PopRequest {
         remoting_command: RemotingCommand,
         ctx: ConnectionHandlerContext,
         expired: u64,
-        subscription_data: SubscriptionData,
+        subscription_data: Option<SubscriptionData>,
         message_filter: Option<Arc<Box<dyn MessageFilter>>>,
     ) -> Self {
         static COUNTER: AtomicI64 = AtomicI64::new(i64::MIN);
@@ -90,8 +90,8 @@ impl PopRequest {
         self.expired
     }
 
-    pub fn get_subscription_data(&self) -> &SubscriptionData {
-        &self.subscription_data
+    pub fn get_subscription_data(&self) -> Option<&SubscriptionData> {
+        self.subscription_data.as_ref()
     }
 
     pub fn get_message_filter(&self) -> Option<&Arc<Box<dyn MessageFilter>>> {
