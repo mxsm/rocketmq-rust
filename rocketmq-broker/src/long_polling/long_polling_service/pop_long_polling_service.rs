@@ -281,6 +281,119 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
         false
     }
 
+    /// Notifies that a message has arrived on a retry topic.
+    ///
+    /// # Parameters
+    ///
+    /// * `topic` - The topic name
+    /// * `queue_id` - The queue ID
+    pub fn notify_message_arriving_with_retry_topic(&self, topic: &CheetahString, queue_id: i32) {
+        self.notify_message_arriving_with_retry_topic_full(
+            topic.clone(),
+            queue_id,
+            None,
+            0,
+            None,
+            None,
+        );
+    }
+
+    /// Notifies that a message has arrived on a retry topic with extended information.
+    ///
+    /// # Parameters
+    ///
+    /// * `topic` - The topic name
+    /// * `queue_id` - The queue ID
+    /// * `tags_code` - Optional tag code for filtering
+    /// * `msg_store_time` - The timestamp when the message was stored
+    /// * `filter_bit_map` - Optional filter bitmap for message matching
+    /// * `properties` - Optional message properties
+    pub fn notify_message_arriving_with_retry_topic_full(
+        &self,
+        topic: CheetahString,
+        queue_id: i32,
+        tags_code: Option<i64>,
+        msg_store_time: i64,
+        filter_bit_map: Option<Vec<u8>>,
+        properties: Option<&HashMap<CheetahString, CheetahString>>,
+    ) {
+        let notify_topic = if KeyBuilder::is_pop_retry_topic_v2(&topic) {
+            KeyBuilder::parse_normal_topic_default(topic.as_str()).into()
+        } else {
+            topic
+        };
+
+        self.notify_message_arriving_(
+            &notify_topic,
+            queue_id,
+            tags_code,
+            msg_store_time,
+            filter_bit_map,
+            properties,
+        );
+    }
+
+    /// Notifies that a message has arrived on a topic queue.
+    ///
+    /// This method looks up all consumer groups subscribed to the given topic
+    /// and notifies them about the new message.
+    ///
+    /// # Parameters
+    ///
+    /// * `topic` - The topic name
+    /// * `queue_id` - The queue ID
+    /// * `tags_code` - Optional tag code for filtering
+    /// * `msg_store_time` - The timestamp when the message was stored
+    /// * `filter_bit_map` - Optional filter bitmap for message matching
+    /// * `properties` - Optional message properties
+    pub fn notify_message_arriving_(
+        &self,
+        topic: &CheetahString,
+        queue_id: i32,
+        tags_code: Option<i64>,
+        msg_store_time: i64,
+        filter_bit_map: Option<Vec<u8>>,
+        properties: Option<&HashMap<CheetahString, CheetahString>>,
+    ) {
+        // Get the consumer IDs for this topic from the topic-consumer map
+        // Return early if there are no consumers for this topic
+        let cids = match self.topic_cid_map.get(topic) {
+            Some(cids) => cids,
+            None => return,
+        };
+
+        // For each consumer ID associated with this topic
+        for entry in cids.iter() {
+            let cid = entry.key();
+            // If queue_id is valid (>= 0), also notify for queue_id = -1 (which indicates "all
+            // queues") This allows consumers to be notified about both specific queues
+            // and all queues
+            if queue_id >= 0 {
+                let filter_bit_map_ = filter_bit_map.clone();
+                self.notify_message_arriving(
+                    topic,
+                    -1,
+                    cid,
+                    tags_code,
+                    msg_store_time,
+                    filter_bit_map_,
+                    properties,
+                );
+            }
+            let filter_bit_map_ = filter_bit_map.clone();
+            // Always notify for the specific queue_id provided
+            self.notify_message_arriving(
+                topic,
+                queue_id,
+                cid,
+                tags_code,
+                msg_store_time,
+                filter_bit_map_,
+                properties,
+            );
+        }
+    }
+
     pub fn polling(
         &self,
         ctx: ConnectionHandlerContext,
