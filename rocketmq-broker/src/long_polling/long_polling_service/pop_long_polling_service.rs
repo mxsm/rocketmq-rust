@@ -395,8 +395,9 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
                     .map(|entry| entry.value().clone());
             }
 
-            if let Some(ref request) = pop_request {
-                self.total_polling_num.fetch_sub(1, Ordering::AcqRel);
+            self.total_polling_num.fetch_sub(1, Ordering::AcqRel);
+            if pop_request.is_some() && !pop_request.as_ref().unwrap().get_channel().is_ok() {
+                continue;
             } else {
                 break;
             }
