@@ -249,6 +249,11 @@ impl Channel {
         }
         Ok(())
     }
+
+    #[inline]
+    pub fn is_ok(&self) -> bool {
+        self.connection.ok
+    }
 }
 
 #[cfg(test)]
