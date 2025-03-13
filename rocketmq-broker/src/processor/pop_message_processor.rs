@@ -690,7 +690,7 @@ where
                 ctx.clone(),
                 request,
                 PollingHeader::new_from_pop_message_request_header(&request_header),
-                subscription_data,
+                Some(subscription_data),
                 message_filter,
             );
             match polling_result {

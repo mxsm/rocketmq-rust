@@ -253,7 +253,8 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
                     pop_request.get_subscription_data(),
                 );
 
-                if let Some(message_filter) = message_filter {
+                if message_filter.is_some() && subscription_data.is_some() {
+                    let message_filter = message_filter.unwrap();
                     let mut match_result = message_filter.is_matched_by_consume_queue(
                         tags_code,
                         Some(&CqExtUnit::new(
@@ -394,12 +395,21 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
         }
     }
 
+    pub fn polling_(
+        &self,
+        ctx: ConnectionHandlerContext,
+        remoting_command: RemotingCommand,
+        request_header: PollingHeader,
+    ) -> PollingResult {
+        self.polling(ctx, remoting_command, request_header, None, None)
+    }
+
     pub fn polling(
         &self,
         ctx: ConnectionHandlerContext,
         remoting_command: RemotingCommand,
         request_header: PollingHeader,
-        subscription_data: SubscriptionData,
+        subscription_data: Option<SubscriptionData>,
         message_filter: Option<Arc<Box<dyn MessageFilter>>>,
     ) -> PollingResult {
         //this method may be need to optimize
