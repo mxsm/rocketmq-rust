@@ -265,8 +265,8 @@ where
                 ExtraInfoUtil::split(request_header.extra_info.as_str()).unwrap_or_default();
             let broker_name =
                 ExtraInfoUtil::get_broker_name(extra_info.as_slice()).unwrap_or_default();
-            let consume_group = request_header.consumer_group.clone();
-            let topic = request_header.topic.clone();
+            let consume_group = request_header.consumer_group;
+            let topic = request_header.topic;
             let qid = request_header.queue_id;
             let r_qid = ExtraInfoUtil::get_revive_qid(extra_info.as_slice()).unwrap_or_default();
             let start_offset =
@@ -307,11 +307,11 @@ where
         } else {
             //handle batch ack
             let batch_ack = batch_ack.unwrap();
-            let consume_group = batch_ack.consumer_group.clone();
+            let consumer_group = batch_ack.consumer_group;
             let topic = CheetahString::from(
                 ExtraInfoUtil::get_real_topic_with_retry(
                     batch_ack.topic.as_str(),
-                    batch_ack.consumer_group.as_str(),
+                    consumer_group.as_str(),
                     batch_ack.retry.as_str(),
                 )
                 .unwrap_or_default(),
@@ -353,7 +353,7 @@ where
                 if r_qid == POP_ORDER_REVIVE_QUEUE {
                     self.ack_orderly(
                         topic.clone(),
-                        consume_group.clone(),
+                        consumer_group.clone(),
                         qid,
                         offset,
                         pop_time,
@@ -369,18 +369,14 @@ where
             if r_qid == POP_ORDER_REVIVE_QUEUE || batch_ack_msg.ack_offset_list.is_empty() {
                 return;
             }
-            if r_qid == POP_ORDER_REVIVE_QUEUE || batch_ack_msg.ack_offset_list.is_empty() {
-                return;
-            }
             let ack_count = batch_ack_msg.ack_offset_list.len();
-            //let ack = batch_ack_msg.ack_msg;
             (
-                consume_group,
+                consumer_group,
                 topic,
                 qid,
                 r_qid,
                 start_offset,
-                -1,
+                akc_offset,
                 pop_time,
                 invisible_time,
                 ack_count,
@@ -416,7 +412,7 @@ where
             return;
         }
         let mut inner = MessageExtBrokerInner::default();
-        inner.set_topic(topic.clone());
+        inner.set_topic(self.revive_topic.clone());
         inner.message_ext_inner.queue_id = qid;
         if let Some(batch_ack) = ack_msg.as_any().downcast_ref::<BatchAckMsg>() {
             if let Ok(bytes) = batch_ack.encode() {
