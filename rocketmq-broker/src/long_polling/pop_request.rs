@@ -82,8 +82,8 @@ impl PopRequest {
 
     pub fn complete(&self) -> bool {
         self.complete
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .unwrap_or_default()
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
+            .is_ok()
     }
 
     pub fn get_expired(&self) -> u64 {
