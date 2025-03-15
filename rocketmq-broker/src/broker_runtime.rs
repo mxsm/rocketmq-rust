@@ -2121,6 +2121,18 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     pub fn sync_broker_member_group(&self) {
         warn!("sync_broker_member_group not implemented");
     }
+
+    pub fn pop_message_processor_unchecked(&self) -> &ArcMut<PopMessageProcessor<MS>> {
+        unsafe { self.pop_message_processor.as_ref().unwrap_unchecked() }
+    }
+
+    pub fn ack_message_processor_unchecked(&self) -> &ArcMut<AckMessageProcessor<MS>> {
+        unsafe { self.ack_message_processor.as_ref().unwrap_unchecked() }
+    }
+
+    pub fn notification_processor_unchecked(&self) -> &ArcMut<NotificationProcessor> {
+        unsafe { self.notification_processor.as_ref().unwrap_unchecked() }
+    }
 }
 
 fn need_register(
