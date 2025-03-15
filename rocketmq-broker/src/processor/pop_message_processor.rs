@@ -1187,6 +1187,26 @@ where
         self.queue_lock_manager().unlock_with_key(lock_key).await;
         atomic_rest_num.load(Ordering::Acquire)
     }
+
+    /// Appends a checkpoint for a pop message. And wait ack.
+    ///
+    /// This function creates a `PopCheckPoint` and adds it to the `PopBufferMergeService`.
+    /// It ensures that the checkpoint is added correctly and handles retries if necessary.
+    ///
+    /// # Arguments
+    ///
+    /// * `request_header` - The header of the pop message request.
+    /// * `topic` - The topic of the message.
+    /// * `revive_qid` - The revive queue ID.
+    /// * `queue_id` - The queue ID.
+    /// * `offset` - The offset of the message. This is the start offset of the message.
+    /// * `get_message_tmp_result` - The result of the get message operation.
+    /// * `pop_time` - The time the message was popped.
+    /// * `broker_name` - The name of the broker.
+    ///
+    /// # Returns
+    ///
+    /// * `bool` - Returns `true` if the checkpoint was added successfully, `false` otherwise.
     async fn append_check_point(
         &self,
         request_header: &PopMessageRequestHeader,
@@ -1211,9 +1231,12 @@ where
             ..Default::default()
         };
         for msg_queue_offset in get_message_tmp_result.message_queue_offset() {
+            // Add the difference between the offset of all pulled messages and the start offset
             ck.add_diff(((*msg_queue_offset) as i64 - offset) as i32);
         }
         let pop_buffer_merge_service_ref_mut = self.pop_buffer_merge_service.mut_from_ref();
+
+        // put check point into memory
         match pop_buffer_merge_service_ref_mut
             .add_ck(
                 &ck,
@@ -1225,6 +1248,8 @@ where
         {
             true => true,
             false => {
+                // The in-memory matching fails (in-memory matching is not enabled),
+                // so put the Offset into both the memory and the disk.
                 pop_buffer_merge_service_ref_mut
                     .add_ck_just_offset(
                         ck,
