@@ -14,8 +14,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use tracing::error;
 use tracing::warn;
 
 #[derive(Default)]
@@ -36,5 +39,23 @@ impl NotificationProcessor {
 
     pub fn shutdown(&mut self) {
         warn!("NotificationProcessor shutdown unimplemented, need to implement it");
+    }
+
+    #[allow(unused_variables)]
+    pub fn notify_message_arriving(&self, topic: &CheetahString, queue_id: i32) {
+        error!("notify_message_arriving unimplemented, need to implement it");
+    }
+
+    #[allow(unused_variables)]
+    pub fn notify_message_arriving_full(
+        &self,
+        topic: CheetahString,
+        queue_id: i32,
+        tags_code: Option<i64>,
+        msg_store_time: i64,
+        filter_bit_map: Option<Vec<u8>>,
+        properties: Option<&HashMap<CheetahString, CheetahString>>,
+    ) {
+        error!("notify_message_arriving_full unimplemented, need to implement it");
     }
 }

@@ -64,6 +64,28 @@ where
                 logic_offset,
                 tags_code,
                 msg_store_time,
+                filter_bit_map.clone(),
+                properties,
+            );
+
+        self.broker_runtime_inner
+            .pop_message_processor_unchecked()
+            .notify_message_arriving_full(
+                topic.clone(),
+                queue_id,
+                tags_code,
+                msg_store_time,
+                filter_bit_map.clone(),
+                properties,
+            );
+
+        self.broker_runtime_inner
+            .notification_processor_unchecked()
+            .notify_message_arriving_full(
+                topic.clone(),
+                queue_id,
+                tags_code,
+                msg_store_time,
                 filter_bit_map,
                 properties,
             );

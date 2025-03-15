@@ -1389,6 +1389,26 @@ where
             .notify_message_arriving(topic, queue_id, cid, None, 0, None, None);
     }
 
+    pub fn notify_message_arriving_full(
+        &self,
+        topic: CheetahString,
+        queue_id: i32,
+        tags_code: Option<i64>,
+        msg_store_time: i64,
+        filter_bit_map: Option<Vec<u8>>,
+        properties: Option<&HashMap<CheetahString, CheetahString>>,
+    ) {
+        self.pop_long_polling_service
+            .notify_message_arriving_with_retry_topic_full(
+                topic,
+                queue_id,
+                tags_code,
+                msg_store_time,
+                filter_bit_map,
+                properties,
+            );
+    }
+
     fn read_get_message_result(
         &self,
         get_message_result: &GetMessageResult,
