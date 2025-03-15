@@ -31,32 +31,28 @@ use std::time::Instant;
 use bytes::Buf;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::attribute::cleanup_policy::CleanupPolicy;
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::broker::broker_role::BrokerRole;
+use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_ext::MessageExt;
+use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::mix_all::is_lmq;
 use rocketmq_common::common::mix_all::is_sys_consumer_group_for_no_cold_read_limit;
 use rocketmq_common::common::mix_all::MULTI_DISPATCH_QUEUE_SPLITTER;
 use rocketmq_common::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
+use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
+use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
 use rocketmq_common::utils::util_all;
 use rocketmq_common::CleanupPolicyUtils::get_delete_policy;
+use rocketmq_common::FileUtils::string_to_file;
+use rocketmq_common::MessageDecoder;
 use rocketmq_common::TimeUtils::get_current_millis;
-use rocketmq_common::{
-    common::{
-        broker::broker_config::BrokerConfig,
-        config::TopicConfig,
-        message::{message_ext_broker_inner::MessageExtBrokerInner, MessageConst},
-        sys_flag::message_sys_flag::MessageSysFlag,
-        //thread::thread_service_tokio::ThreadService,
-    },
-    utils::queue_type_utils::QueueTypeUtils,
-    FileUtils::string_to_file,
-    MessageDecoder,
-    UtilAll::ensure_dir_ok,
-};
+use rocketmq_common::UtilAll::ensure_dir_ok;
 use rocketmq_rust::ArcMut;
 use tokio::runtime::Handle;
-use tokio::sync::mpsc::Sender;
+use tokio::sync::Notify;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -206,7 +202,7 @@ impl DefaultMessageStore {
             shutdown: Arc::new(AtomicBool::new(false)),
             running_flags,
             reput_message_service: ReputMessageService {
-                tx: None,
+                shutdown: Arc::new(Notify::new()),
                 reput_from_offset: None,
                 message_store_config,
                 inner: None,
@@ -1328,9 +1324,9 @@ impl CommitLogDispatcher for CommitLogDispatcherDefault {
         }
     }
 }
-#[derive(Clone)]
+
 struct ReputMessageService {
-    tx: Option<Arc<Sender<()>>>,
+    shutdown: Arc<Notify>,
     reput_from_offset: Option<Arc<AtomicI64>>,
     message_store_config: Arc<MessageStoreConfig>,
     inner: Option<ReputMessageServiceInner>,
@@ -1413,34 +1409,15 @@ impl ReputMessageService {
             message_store,
         };
         self.inner = Some(inner.clone());
-        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-        self.tx = Some(Arc::new(tx));
+        let shutdown = self.shutdown.clone();
         let handle = tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_millis(1));
-            let mut break_flag = false;
             loop {
                 tokio::select! {
                     _ = inner.do_reput() => {}
-                    _ = rx.recv() => {
-                        let mut index = 0;
-                        while index < 50 && inner.is_commit_log_available() {
-                            tokio::time::sleep(Duration::from_millis(100)).await;
-                            if inner.is_commit_log_available() {
-                                warn!(
-                                    "shutdown ReputMessageService, but CommitLog have not finish to be \
-                                     dispatched, CommitLog max offset={}, reputFromOffset={}",
-                                    inner.commit_log.get_max_offset(),
-                                    inner.reput_from_offset.load(Ordering::Relaxed)
-                                );
-                            }
-                            index += 1;
-                        }
-                        info!("ReputMessageService shutdown now......");
-                        break_flag = true;
+                    _ = shutdown.notified() => {
+                        break;
                     }
-                }
-                if break_flag {
-                    break;
                 }
                 interval.tick().await;
             }
@@ -1449,19 +1426,27 @@ impl ReputMessageService {
 
     pub fn shutdown(&mut self) {
         let handle = Handle::current();
-        let tx_option = self.tx.take();
+        let inner = self.inner.as_ref().unwrap().clone();
         let _ = thread::spawn(move || {
             handle.block_on(async move {
-                if let Some(tx) = tx_option {
-                    tokio::select! {
-                      _ =  tx.send(()) =>{
-
-                        }
+                let mut index = 0;
+                while index < 50 && inner.is_commit_log_available() {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    if inner.is_commit_log_available() {
+                        warn!(
+                            "shutdown ReputMessageService, but CommitLog have not finish to be \
+                             dispatched, CommitLog max offset={}, reputFromOffset={}",
+                            inner.commit_log.get_max_offset(),
+                            inner.reput_from_offset.load(Ordering::Relaxed)
+                        );
                     }
+                    index += 1;
                 }
+                info!("ReputMessageService shutdown now......");
             });
         })
         .join();
+        self.shutdown.notify_waiters();
     }
 }
 
