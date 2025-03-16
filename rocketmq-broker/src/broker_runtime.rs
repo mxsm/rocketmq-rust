@@ -215,7 +215,7 @@ impl BrokerRuntime {
             consumer_order_info_manager: None,
             message_store: None,
             broker_stats: None,
-            schedule_message_service: Default::default(),
+            schedule_message_service: ArcMut::new(ScheduleMessageService::new()),
             timer_message_store: None,
             broker_outer_api,
             producer_manager,
@@ -1381,7 +1381,7 @@ pub(crate) struct BrokerRuntimeInner<MS> {
     consumer_order_info_manager: Option<ConsumerOrderInfoManager<MS>>,
     message_store: Option<ArcMut<MS>>,
     broker_stats: Option<BrokerStats<MS>>,
-    schedule_message_service: ScheduleMessageService,
+    schedule_message_service: ArcMut<ScheduleMessageService<MS>>,
     timer_message_store: Option<TimerMessageStore>,
     broker_outer_api: BrokerOuterAPI,
     producer_manager: ProducerManager,
@@ -1474,7 +1474,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn schedule_message_service_mut(&mut self) -> &mut ScheduleMessageService {
+    pub fn schedule_message_service_mut(&mut self) -> &mut ArcMut<ScheduleMessageService<MS>> {
         &mut self.schedule_message_service
     }
 
@@ -1645,12 +1645,17 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
+    pub fn message_store_unchecked(&self) -> &ArcMut<MS> {
+        unsafe { self.message_store.as_ref().unwrap_unchecked() }
+    }
+
+    #[inline]
     pub fn broker_stats(&self) -> &Option<BrokerStats<MS>> {
         &self.broker_stats
     }
 
     #[inline]
-    pub fn schedule_message_service(&self) -> &ScheduleMessageService {
+    pub fn schedule_message_service(&self) -> &ArcMut<ScheduleMessageService<MS>> {
         &self.schedule_message_service
     }
 
@@ -1828,9 +1833,9 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     #[inline]
     pub fn set_schedule_message_service(
         &mut self,
-        schedule_message_service: ScheduleMessageService,
+        schedule_message_service: ScheduleMessageService<MS>,
     ) {
-        self.schedule_message_service = schedule_message_service;
+        self.schedule_message_service = ArcMut::new(schedule_message_service);
     }
 
     #[inline]

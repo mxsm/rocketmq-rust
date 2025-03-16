@@ -23,16 +23,23 @@ use serde::Serialize;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DelayOffsetSerializeWrapper {
-    offset_table: HashMap<i32 /* level */, i64 /* offset */>,
-    data_version: DataVersion,
+    offset_table: Option<HashMap<i32 /* level */, i64 /* offset */>>,
+    data_version: Option<DataVersion>,
 }
 
 impl DelayOffsetSerializeWrapper {
-    pub fn offset_table(&self) -> &HashMap<i32, i64> {
-        &self.offset_table
+    pub fn offset_table(&self) -> Option<&HashMap<i32, i64>> {
+        self.offset_table.as_ref()
     }
 
-    pub fn data_version(&self) -> &DataVersion {
-        &self.data_version
+    pub fn data_version(&self) -> Option<&DataVersion> {
+        self.data_version.as_ref()
+    }
+
+    pub fn new(offset_table: Option<HashMap<i32, i64>>, data_version: Option<DataVersion>) -> Self {
+        Self {
+            offset_table,
+            data_version,
+        }
     }
 }

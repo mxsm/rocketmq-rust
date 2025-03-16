@@ -122,7 +122,7 @@ pub struct MessageStoreConfig {
     pub put_message_timeout: usize,
     pub slave_timeout: usize,
     pub message_delay_level: String,
-    pub flush_delay_offset_interval: usize,
+    pub flush_delay_offset_interval: u64,
     pub clean_file_forcibly_enable: bool,
     pub warm_mapped_file_enable: bool,
     pub offset_check_in_slave: bool,
@@ -307,7 +307,8 @@ impl Default for MessageStoreConfig {
             sync_flush_timeout: 1000 * 5,
             put_message_timeout: 0,
             slave_timeout: 0,
-            message_delay_level: "".to_string(),
+            message_delay_level: "1s 5s 10s 30s 1m 2m 3m 4m 5m 6m 7m 8m 9m 10m 20m 30m 1h 2h"
+                .to_string(),
             flush_delay_offset_interval: 0,
             clean_file_forcibly_enable: false,
             warm_mapped_file_enable: false,

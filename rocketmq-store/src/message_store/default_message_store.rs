@@ -1107,6 +1107,10 @@ impl MessageStore for DefaultMessageStore {
         )
     }
 
+    fn get_queue_store(&self) -> Arc<Box<dyn ConsumeQueueStoreTrait>> {
+        todo!()
+    }
+
     fn delete_topics(&mut self, delete_topics: Vec<&CheetahString>) -> i32 {
         if delete_topics.is_empty() {
             return 0;
