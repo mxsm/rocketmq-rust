@@ -197,7 +197,6 @@ pub struct CommitLog {
     topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
     consume_queue_store: ConsumeQueueStore,
     flush_manager: Arc<tokio::sync::Mutex<DefaultFlushManager>>,
-    //flush_manager: Arc<parking_lot::Mutex<DefaultFlushManager>>,
     begin_time_in_lock: Arc<AtomicU64>,
     cold_data_check_service: Arc<ColdDataCheckService>,
 }

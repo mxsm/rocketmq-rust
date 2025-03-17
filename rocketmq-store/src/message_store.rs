@@ -17,3 +17,5 @@
 
 #[cfg(feature = "local_file_store")]
 pub mod default_message_store;
+
+pub mod local_file_message_store;

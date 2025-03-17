@@ -60,13 +60,13 @@ pub trait MessageStoreInner {
     /// Load previously stored messages.
     ///
     /// Returns true if successful, false otherwise.
-    fn load(&self) -> Result<bool, StoreError>;
+    async fn load(&mut self) -> bool;
 
     /// Launch this message store.
-    async fn start(&self) -> Result<(), StoreError>;
+    fn start(&mut self) -> Result<(), StoreError>;
 
     /// Shutdown this message store.
-    fn shutdown(&self);
+    fn shutdown(&mut self);
 
     /// Destroy this message store.
     /// Generally, all persistent files should be removed after invocation.
@@ -579,5 +579,5 @@ pub trait MessageStoreInner {
     fn recover_topic_queue_table(&self);
 
     /// Notify message arrive if necessary
-    fn notify_message_arrive_if_necessary(&self, dispatch_request: &DispatchRequest);
+    fn notify_message_arrive_if_necessary(&self, dispatch_request: &mut DispatchRequest);
 }
