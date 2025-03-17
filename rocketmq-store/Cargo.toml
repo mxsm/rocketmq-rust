@@ -47,7 +47,7 @@ trait-variant.workspace = true
 sysinfo = "0.33.1"
 once_cell = { workspace = true }
 cheetah-string = { workspace = true }
-
+thiserror = { workspace = true }
 
 [target.'cfg(linux)'.dependencies]
 libc = "0.2.171"
