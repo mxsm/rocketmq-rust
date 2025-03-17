@@ -215,7 +215,7 @@ impl BrokerRuntime {
             consumer_order_info_manager: None,
             message_store: None,
             broker_stats: None,
-            schedule_message_service: ArcMut::new(ScheduleMessageService::new()),
+            schedule_message_service: None,
             timer_message_store: None,
             broker_outer_api,
             producer_manager,
@@ -257,6 +257,8 @@ impl BrokerRuntime {
         inner.subscription_group_manager = Some(SubscriptionGroupManager::new(inner.clone()));
         inner.consumer_order_info_manager = Some(ConsumerOrderInfoManager::new(inner.clone()));
         inner.broker_stats_manager = Some(stats_manager);
+        inner.schedule_message_service =
+            Some(ArcMut::new(ScheduleMessageService::new(inner.clone())));
 
         Self {
             inner,
@@ -372,8 +374,10 @@ impl BrokerRuntime {
             consumer_order_info_manager.persist();
         }
 
-        self.inner.schedule_message_service.persist();
-        self.inner.schedule_message_service.shutdown();
+        if let Some(schedule_message_service) = self.inner.schedule_message_service.as_mut() {
+            schedule_message_service.persist();
+            schedule_message_service.shutdown();
+        }
         if let Some(transactional_message_check_service) =
             self.inner.transactional_message_check_service.as_mut()
         {
@@ -511,7 +515,9 @@ impl BrokerRuntime {
         {
             result &= self.inner.timer_message_store.as_mut().unwrap().load();
         }
-        result &= self.inner.schedule_message_service.load();
+
+        // maybe need to optimize
+        result &= self.inner.schedule_message_service.as_ref().unwrap().load();
 
         if result {
             self.initialize_remoting_server();
@@ -1381,7 +1387,7 @@ pub(crate) struct BrokerRuntimeInner<MS> {
     consumer_order_info_manager: Option<ConsumerOrderInfoManager<MS>>,
     message_store: Option<ArcMut<MS>>,
     broker_stats: Option<BrokerStats<MS>>,
-    schedule_message_service: ArcMut<ScheduleMessageService<MS>>,
+    schedule_message_service: Option<ArcMut<ScheduleMessageService<MS>>>,
     timer_message_store: Option<TimerMessageStore>,
     broker_outer_api: BrokerOuterAPI,
     producer_manager: ProducerManager,
@@ -1475,7 +1481,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
     #[inline]
     pub fn schedule_message_service_mut(&mut self) -> &mut ArcMut<ScheduleMessageService<MS>> {
-        &mut self.schedule_message_service
+        self.schedule_message_service.as_mut().unwrap()
     }
 
     #[inline]
@@ -1656,7 +1662,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
     #[inline]
     pub fn schedule_message_service(&self) -> &ArcMut<ScheduleMessageService<MS>> {
-        &self.schedule_message_service
+        self.schedule_message_service.as_ref().unwrap()
     }
 
     #[inline]
@@ -1835,7 +1841,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         &mut self,
         schedule_message_service: ScheduleMessageService<MS>,
     ) {
-        self.schedule_message_service = ArcMut::new(schedule_message_service);
+        self.schedule_message_service = Some(ArcMut::new(schedule_message_service));
     }
 
     #[inline]

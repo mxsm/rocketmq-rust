@@ -1310,6 +1310,14 @@ impl MessageStore for DefaultMessageStore {
     fn get_message_store_config(&self) -> &MessageStoreConfig {
         self.message_store_config.as_ref()
     }
+
+    fn get_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue> {
+        unimplemented!("get_consume_queue not implemented")
+    }
+
+    fn get_commit_log(&self) -> &CommitLog {
+        todo!()
+    }
 }
 
 #[derive(Clone)]

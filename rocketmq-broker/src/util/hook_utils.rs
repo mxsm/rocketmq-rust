@@ -355,7 +355,7 @@ impl HookUtils {
 
         msg.message_ext_inner.message.topic =
             CheetahString::from_static_str(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC);
-        msg.message_ext_inner.queue_id = ScheduleMessageService::<MS>::delay_level2queue_id(
+        msg.message_ext_inner.queue_id = ScheduleMessageService::<MS>::delay_level_to_queue_id(
             msg.message_ext_inner.message.get_delay_time_level(),
         );
     }

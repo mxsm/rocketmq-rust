@@ -33,6 +33,7 @@ use crate::base::select_result::SelectMappedBufferResult;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::filter::MessageFilter;
 use crate::hook::put_message_hook::BoxedPutMessageHook;
+use crate::log_file::commit_log::CommitLog;
 use crate::queue::ArcConsumeQueue;
 use crate::queue::ConsumeQueueStoreTrait;
 use crate::stats::broker_stats_manager::BrokerStatsManager;
@@ -472,4 +473,13 @@ pub trait RocketMQMessageStore: Sync + 'static {
     fn remain_how_many_data_to_flush(&self) -> i64;
 
     fn get_message_store_config(&self) -> &MessageStoreConfig;
+
+    fn get_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue>;
+
+    /// Retrieves the commit log.
+    ///
+    /// # Returns
+    ///
+    /// A reference to the `CommitLog`.
+    fn get_commit_log(&self) -> &CommitLog;
 }

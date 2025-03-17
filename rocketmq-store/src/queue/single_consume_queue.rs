@@ -850,7 +850,7 @@ impl ConsumeQueueTrait for ConsumeQueue {
     }
 
     #[inline]
-    fn iterate_from(&self, start_index: i64) -> Option<Box<dyn Iterator<Item = CqUnit>>> {
+    fn iterate_from(&self, start_index: i64) -> Option<Box<dyn Iterator<Item = CqUnit> + Send>> {
         match self.get_index_buffer(start_index) {
             None => None,
             Some(value) => Some(Box::new(ConsumeQueueIterator {
@@ -867,7 +867,7 @@ impl ConsumeQueueTrait for ConsumeQueue {
         &self,
         start_index: i64,
         _count: i32,
-    ) -> Option<Box<dyn Iterator<Item = CqUnit>>> {
+    ) -> Option<Box<dyn Iterator<Item = CqUnit> + Send>> {
         self.iterate_from(start_index)
     }
 }
