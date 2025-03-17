@@ -33,7 +33,9 @@ use crate::base::select_result::SelectMappedBufferResult;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::filter::MessageFilter;
 use crate::hook::put_message_hook::BoxedPutMessageHook;
+use crate::log_file::commit_log::CommitLog;
 use crate::queue::ArcConsumeQueue;
+use crate::queue::ConsumeQueueStoreTrait;
 use crate::stats::broker_stats_manager::BrokerStatsManager;
 use crate::store::running_flags::RunningFlags;
 use crate::timer::timer_message_store::TimerMessageStore;
@@ -317,6 +319,8 @@ pub trait RocketMQMessageStore: Sync + 'static {
     /// An `Option` containing an `Arc` to the consume queue, if it exists.
     fn find_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue>;
 
+    fn get_queue_store(&self) -> Arc<Box<dyn ConsumeQueueStoreTrait>>;
+
     /// Delete topics from the message store.
     ///
     /// # Arguments
@@ -469,4 +473,13 @@ pub trait RocketMQMessageStore: Sync + 'static {
     fn remain_how_many_data_to_flush(&self) -> i64;
 
     fn get_message_store_config(&self) -> &MessageStoreConfig;
+
+    fn get_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue>;
+
+    /// Retrieves the commit log.
+    ///
+    /// # Returns
+    ///
+    /// A reference to the `CommitLog`.
+    fn get_commit_log(&self) -> &CommitLog;
 }

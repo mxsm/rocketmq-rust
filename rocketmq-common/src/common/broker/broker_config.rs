@@ -208,6 +208,7 @@ pub struct BrokerConfig {
     pub pop_inflight_message_threshold: i64,
     pub pop_ck_max_buffer_size: i64,
     pub pop_ck_offset_max_queue_size: u64,
+    pub delay_offset_update_version_step: u64,
 }
 
 impl Default for BrokerConfig {
@@ -321,6 +322,7 @@ impl Default for BrokerConfig {
             pop_inflight_message_threshold: 10_000,
             pop_ck_max_buffer_size: 200_000,
             pop_ck_offset_max_queue_size: 20_000,
+            delay_offset_update_version_step: 200,
         }
     }
 }

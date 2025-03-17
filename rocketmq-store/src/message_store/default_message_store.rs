@@ -1107,6 +1107,10 @@ impl MessageStore for DefaultMessageStore {
         )
     }
 
+    fn get_queue_store(&self) -> Arc<Box<dyn ConsumeQueueStoreTrait>> {
+        todo!()
+    }
+
     fn delete_topics(&mut self, delete_topics: Vec<&CheetahString>) -> i32 {
         if delete_topics.is_empty() {
             return 0;
@@ -1305,6 +1309,14 @@ impl MessageStore for DefaultMessageStore {
 
     fn get_message_store_config(&self) -> &MessageStoreConfig {
         self.message_store_config.as_ref()
+    }
+
+    fn get_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue> {
+        unimplemented!("get_consume_queue not implemented")
+    }
+
+    fn get_commit_log(&self) -> &CommitLog {
+        todo!()
     }
 }
 

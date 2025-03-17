@@ -829,7 +829,7 @@ pub trait ConsumeQueueTrait: Send + Sync + FileQueueLifeCycle {
     /// # Returns
     /// An optional box containing an iterator over `CqUnit` items, or `None` if iteration cannot
     /// start.
-    fn iterate_from(&self, start_index: i64) -> Option<Box<dyn Iterator<Item = CqUnit>>>;
+    fn iterate_from(&self, start_index: i64) -> Option<Box<dyn Iterator<Item = CqUnit> + Send>>;
 
     /// Iterates over a specified number of messages from a start index.
     ///
@@ -848,5 +848,5 @@ pub trait ConsumeQueueTrait: Send + Sync + FileQueueLifeCycle {
         &self,
         start_index: i64,
         count: i32,
-    ) -> Option<Box<dyn Iterator<Item = CqUnit>>>;
+    ) -> Option<Box<dyn Iterator<Item = CqUnit> + Send>>;
 }

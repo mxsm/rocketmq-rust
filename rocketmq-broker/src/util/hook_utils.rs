@@ -165,9 +165,9 @@ impl HookUtils {
         None
     }
 
-    pub fn handle_schedule_message(
+    pub fn handle_schedule_message<MS: MessageStore>(
         timer_message_store: &TimerMessageStore,
-        schedule_message_service: &ScheduleMessageService,
+        schedule_message_service: &ScheduleMessageService<MS>,
         message_store_config: &Arc<MessageStoreConfig>,
         msg: &mut MessageExtBrokerInner,
     ) -> Option<PutMessageResult> {
@@ -329,8 +329,8 @@ impl HookUtils {
         None
     }
 
-    pub fn transform_delay_level_message(
-        schedule_message_service: &ScheduleMessageService,
+    pub fn transform_delay_level_message<MS: MessageStore>(
+        schedule_message_service: &ScheduleMessageService<MS>,
         msg: &mut MessageExtBrokerInner,
     ) {
         if msg.message_ext_inner.message.get_delay_time_level()
@@ -355,7 +355,7 @@ impl HookUtils {
 
         msg.message_ext_inner.message.topic =
             CheetahString::from_static_str(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC);
-        msg.message_ext_inner.queue_id = ScheduleMessageService::delay_level2queue_id(
+        msg.message_ext_inner.queue_id = ScheduleMessageService::<MS>::delay_level_to_queue_id(
             msg.message_ext_inner.message.get_delay_time_level(),
         );
     }

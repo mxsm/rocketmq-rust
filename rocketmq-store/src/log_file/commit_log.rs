@@ -1168,6 +1168,10 @@ impl CommitLog {
     pub fn remain_how_many_data_to_flush(&self) -> i64 {
         self.mapped_file_queue.remain_how_many_data_to_flush()
     }
+
+    pub fn pickup_store_timestamp(&self, offset: i64, size: i32) -> i64 {
+        unimplemented!("pickupStoreTimestamp not implemented")
+    }
 }
 
 pub fn check_message_and_return_size(
