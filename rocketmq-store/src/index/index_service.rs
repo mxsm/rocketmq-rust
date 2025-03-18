@@ -69,6 +69,10 @@ impl IndexService {
         //nothing to do
     }
 
+    pub fn shutdown(&self) {
+        error!("StoreStatsService shutdown not implemented");
+    }
+
     #[inline]
     pub fn load(&mut self, last_exit_ok: bool) -> bool {
         let dir = Path::new(&self.store_path);

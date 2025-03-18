@@ -118,7 +118,7 @@ pub struct LocalFileMessageStore {
     put_message_hook_list: Arc<parking_lot::RwLock<Vec<BoxedPutMessageHook>>>,
     topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
     commit_log: CommitLog,
-    compaction_service: CompactionService,
+    compaction_service: Option<CompactionService>,
     store_checkpoint: Option<Arc<StoreCheckpoint>>,
     master_flushed_offset: Arc<AtomicI64>,
     index_service: IndexService,
@@ -585,7 +585,7 @@ impl MessageStoreRefactor for LocalFileMessageStore {
         result &= self.consume_queue_store.load();
 
         if self.message_store_config.enable_compaction {
-            result &= self.compaction_service.load(last_exit_ok);
+            result &= self.compaction_service.as_mut().unwrap().load(last_exit_ok);
             if !result {
                 return result;
             }
@@ -668,10 +668,33 @@ impl MessageStoreRefactor for LocalFileMessageStore {
 
     fn shutdown(&mut self) {
         if !self.shutdown.load(Ordering::Acquire) {
-            self.shutdown.store(true, Ordering::SeqCst);
-            self.reput_message_service.shutdown();
+            self.shutdown.store(true, Ordering::Release);
+
+            if let Some(ha_service) = self.ha_service.as_ref() {
+                ha_service.shutdown();
+            }
+
+            self.store_stats_service.shutdown();
             self.commit_log.shutdown();
 
+            self.reput_message_service.shutdown();
+            self.consume_queue_store.shutdown();
+
+            // dispatch-related services must be shut down after reputMessageService
+            self.index_service.shutdown();
+
+            if let Some(compaction_service) = self.compaction_service.as_ref() {
+                compaction_service.shutdown();
+            }
+
+            if self.message_store_config.rocksdb_cq_double_write_enable {
+                // this.rocksDBMessageStore.consumeQueueStore.shutdown();
+            }
+            self.flush_consume_queue_service.shutdown();
+            self.allocate_mapped_file_service.shutdown();
+            if let Some(store_checkpoint) = self.store_checkpoint.as_ref() {
+                let _ = store_checkpoint.shutdown();
+            }
             if self.running_flags.is_writeable() {
                 //delete abort file
                 self.delete_file(get_abort_file(
@@ -679,6 +702,8 @@ impl MessageStoreRefactor for LocalFileMessageStore {
                 ))
             }
         }
+
+        self.transient_store_pool.destroy();
     }
 
     fn destroy(&self) {
@@ -1608,5 +1633,9 @@ struct FlushConsumeQueueService;
 impl FlushConsumeQueueService {
     fn start(&self) {
         error!("flush consume queue service start unimplemented!")
+    }
+
+    fn shutdown(&self) {
+        error!("flush consume queue service run unimplemented!")
     }
 }
