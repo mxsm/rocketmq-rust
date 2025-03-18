@@ -206,6 +206,7 @@ pub struct MessageStoreConfig {
     pub enable_rocksdb_log: bool,
     pub topic_queue_lock_num: usize,
     pub max_filter_message_size: i32,
+    pub enable_dleger_commit_log: bool,
 }
 
 impl Default for MessageStoreConfig {
@@ -393,6 +394,7 @@ impl Default for MessageStoreConfig {
             enable_rocksdb_log: false,
             topic_queue_lock_num: 32,
             max_filter_message_size: 16000,
+            enable_dleger_commit_log: false,
         }
     }
 }

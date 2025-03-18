@@ -27,6 +27,7 @@ use parking_lot::RwLock;
 use rocketmq_common::common::broker::broker_config::BrokerIdentity;
 use rocketmq_common::common::system_clock::SystemClock;
 use rocketmq_common::TimeUtils::get_current_millis;
+use tracing::error;
 
 const FREQUENCY_OF_SAMPLING: u64 = 1000;
 const MAX_RECORDS_OF_SAMPLING: usize = 60 * 10;
@@ -118,6 +119,10 @@ impl StoreStatsService {
 }
 
 impl StoreStatsService {
+    pub fn start(&self) {
+        error!("StoreStatsService start not implemented");
+    }
+
     #[inline]
     pub fn get_message_times_total_found(&self) -> &AtomicUsize {
         &self.get_message_times_total_found

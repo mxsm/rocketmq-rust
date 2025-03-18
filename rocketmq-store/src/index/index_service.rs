@@ -65,6 +65,10 @@ impl IndexService {
         }
     }
 
+    pub fn start(&self) {
+        //nothing to do
+    }
+
     #[inline]
     pub fn load(&mut self, last_exit_ok: bool) -> bool {
         let dir = Path::new(&self.store_path);

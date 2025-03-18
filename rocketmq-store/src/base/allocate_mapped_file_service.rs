@@ -23,6 +23,7 @@ use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
+use tracing::error;
 
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 
@@ -58,51 +59,11 @@ impl AllocateMappedFileService {
     ) -> DefaultMappedFile {
         unimplemented!()
     }
+
+    pub fn start(&self) {
+        error!("AllocateMappedFileService start failed, not implement yet");
+    }
 }
-
-/*impl ThreadService for AllocateMappedFileService {
-    fn start(&self) {
-        let service_name = self.get_service_name();
-        let builder = std::thread::Builder::new().name(service_name);
-        let rx = self.rx.clone();
-        let request_table = self.request_table.clone();
-        let _ = builder
-            .spawn(move || loop {
-                match rx.lock().recv() {
-                    Ok(ref req) => {
-                        let guard = request_table.lock();
-                        let expected_request = guard.get(&req.file_path);
-                        if expected_request.is_none() {
-                            warn!(
-                                "this mmap request expired, maybe cause timeout {} {}",
-                                req.file_path, req.file_size,
-                            );
-                            continue;
-                        }
-                        if expected_request.unwrap() != req {
-                            warn!(
-                                "this mmap request expired, maybe cause timeout {} {}",
-                                req.file_path, req.file_size,
-                            );
-                            continue;
-                        }
-                        if req.mapped_file.is_none() {}
-                    }
-                    Err(err) => {
-                        error!("{}", err)
-                    }
-                }
-            })
-            .unwrap()
-            .join();
-    }
-
-    fn shutdown(&self) {}
-
-    fn get_service_name(&self) -> String {
-        "AllocateMappedFileService".to_string()
-    }
-}*/
 
 struct AllocateRequest {
     file_path: String,
