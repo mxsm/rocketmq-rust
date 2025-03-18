@@ -31,6 +31,20 @@ pub enum StoreError {
     General(String),
 }
 
+#[derive(Debug, Error)]
+pub enum HAError {
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("RocksDB error: {0}")]
+    RocksDb(String),
+
+    #[error("HA service error: {0}")]
+    Service(String),
+}
+
+pub type HAResult<T> = std::result::Result<T, HAError>;
+
 #[cfg(test)]
 mod tests {
     use super::*;
