@@ -40,13 +40,13 @@ pub trait RocketHAService: Sync {
     ///
     /// # Returns
     /// IO Result indicating success or failure
-    async fn init<MS: MessageStoreRefactor>(&self, message_store: ArcMut<MS>) -> HAResult<()>;
+    fn init<MS: MessageStoreRefactor>(&mut self, message_store: ArcMut<MS>) -> HAResult<()>;
 
     /// Start the HA service
     ///
     /// # Returns
     /// Result indicating success or failure
-    async fn start(&self) -> HAResult<()>;
+    fn start(&mut self) -> HAResult<()>;
 
     /// Shutdown the HA service
     fn shutdown(&self);
