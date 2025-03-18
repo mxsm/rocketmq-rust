@@ -14,15 +14,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use tracing::error;
+
 #[derive(Default, Clone)]
 pub struct CompactionService {}
 
 impl CompactionService {
     pub fn load(&mut self, exit_ok: bool) -> bool {
-        println!(
+        error!(
             "[unimplemented]load compaction service, exit ok: {}",
             exit_ok
         );
         true
+    }
+
+    pub fn shutdown(&self) {
+        error!("[unimplemented]shutdown compaction service");
     }
 }

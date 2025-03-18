@@ -63,6 +63,10 @@ impl AllocateMappedFileService {
     pub fn start(&self) {
         error!("AllocateMappedFileService start failed, not implement yet");
     }
+
+    pub fn shutdown(&self) {
+        error!("AllocateMappedFileService shutdown failed, not implement yet");
+    }
 }
 
 struct AllocateRequest {

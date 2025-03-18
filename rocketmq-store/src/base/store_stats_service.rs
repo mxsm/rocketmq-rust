@@ -123,6 +123,10 @@ impl StoreStatsService {
         error!("StoreStatsService start not implemented");
     }
 
+    pub fn shutdown(&self) {
+        error!("StoreStatsService shutdown not implemented");
+    }
+
     #[inline]
     pub fn get_message_times_total_found(&self) -> &AtomicUsize {
         &self.get_message_times_total_found
