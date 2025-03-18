@@ -15,5 +15,4 @@
  * limitations under the License.
  */
 
-pub(crate) mod ha_connection_state;
-pub(crate) mod wait_notify_object;
+pub(crate) struct WaitNotifyObject;
