@@ -37,10 +37,12 @@ pub struct GeneralHAService;
 impl HAService for GeneralHAService {
     fn init<MS: MessageStoreRefactor>(&mut self, message_store: ArcMut<MS>) -> HAResult<()> {
         error!("Initializing general HAService is not implemented");
+        Ok(())
     }
 
     fn start(&mut self) -> HAResult<()> {
         error!("Starting general HAService is not implemented");
+        Ok(())
     }
 
     fn shutdown(&self) {
