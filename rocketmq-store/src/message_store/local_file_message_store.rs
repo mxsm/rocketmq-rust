@@ -83,6 +83,8 @@ use crate::config::message_store_config::MessageStoreConfig;
 use crate::config::store_path_config_helper::get_store_path_batch_consume_queue;
 use crate::config::store_path_config_helper::get_store_path_consume_queue_ext;
 use crate::filter::MessageFilter;
+use crate::ha::general_ha_service::GeneralHAService;
+use crate::ha::ha_service::HAService;
 use crate::hook::put_message_hook::BoxedPutMessageHook;
 use crate::hook::put_message_hook::PutMessageHook;
 use crate::hook::send_message_back_hook::SendMessageBackHook;
@@ -140,6 +142,8 @@ pub struct LocalFileMessageStore {
     timer_message_store: Arc<TimerMessageStore>,
     transient_store_pool: TransientStorePool,
     message_store_arc: Option<ArcMut<LocalFileMessageStore>>,
+    ha_service: Option<ArcMut<GeneralHAService>>,
+    flush_consume_queue_service: FlushConsumeQueueService,
 }
 
 impl LocalFileMessageStore {
@@ -501,6 +505,10 @@ impl LocalFileMessageStore {
     ) {
         self.message_arriving_listener = message_arriving_listener;
     }
+
+    fn do_recheck_reput_offset_from_cq(&self) {
+        error!("do_recheck_reput_offset_from_cq called, not implemented yet");
+    }
 }
 
 fn estimate_in_mem_by_commit_offset(
@@ -609,7 +617,26 @@ impl MessageStoreRefactor for LocalFileMessageStore {
     }
 
     fn start(&mut self) -> Result<(), StoreError> {
-        self.create_temp_file();
+        if !self.message_store_config.enable_dleger_commit_log
+            && !self.message_store_config.duplication_enable
+        {
+            if let Some(ha_service) = self.ha_service.as_mut() {
+                ha_service
+                    .init(self.message_store_arc.clone().unwrap())
+                    .map_err(|e| {
+                        error!("HA service start failed: {:?}", e);
+                        StoreError::General(e.to_string())
+                    })?;
+            }
+        }
+
+        if self.is_transient_store_pool_enable() {
+            self.transient_store_pool.init();
+        }
+
+        self.allocate_mapped_file_service.start();
+
+        self.index_service.start();
 
         self.reput_message_service
             .set_reput_from_offset(self.commit_log.get_confirm_offset());
@@ -620,11 +647,22 @@ impl MessageStoreRefactor for LocalFileMessageStore {
             self.notify_message_arrive_in_batch,
             self.message_store_arc.clone().unwrap(),
         );
-
+        self.do_recheck_reput_offset_from_cq();
+        self.flush_consume_queue_service.start();
         self.commit_log.start();
+        self.consume_queue_store.start();
+        self.store_stats_service.start();
 
-        //self.add_schedule_task();
-
+        if let Some(ha_service) = self.ha_service.as_mut() {
+            ha_service.start().map_err(|e| {
+                error!("HA service start failed: {:?}", e);
+                StoreError::General(e.to_string())
+            })?;
+        }
+        self.create_temp_file();
+        self.add_schedule_task();
+        // self.perfs.start();
+        self.shutdown.store(false, Ordering::Release);
         Ok(())
     }
 
@@ -1562,5 +1600,13 @@ struct CorrectLogicOffsetService {}
 impl CorrectLogicOffsetService {
     fn run(&self) {
         println!("correct logic offset service run unimplemented!")
+    }
+}
+
+struct FlushConsumeQueueService;
+
+impl FlushConsumeQueueService {
+    fn start(&self) {
+        error!("flush consume queue service start unimplemented!")
     }
 }
