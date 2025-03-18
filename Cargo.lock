@@ -2372,6 +2372,7 @@ dependencies = [
  "once_cell",
  "parking_lot",
  "rocketmq-common",
+ "rocketmq-remoting",
  "rocketmq-rust",
  "serde",
  "serde_json",
