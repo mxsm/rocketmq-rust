@@ -19,4 +19,5 @@ pub(crate) mod ha_client;
 pub(crate) mod ha_connection;
 pub(crate) mod ha_connection_state;
 pub(crate) mod ha_connection_state_notification_request;
+pub(crate) mod ha_service;
 pub(crate) mod wait_notify_object;
