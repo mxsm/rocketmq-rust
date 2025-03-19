@@ -706,8 +706,16 @@ impl MessageStoreRefactor for LocalFileMessageStore {
         self.transient_store_pool.destroy();
     }
 
-    fn destroy(&self) {
-        todo!()
+    fn destroy(&mut self) {
+        self.consume_queue_store.destroy();
+        self.commit_log.destroy();
+        self.index_service.destroy();
+        self.delete_file(get_abort_file(
+            self.message_store_config.store_path_root_dir.as_str(),
+        ));
+        self.delete_file(get_store_checkpoint(
+            self.message_store_config.store_path_root_dir.as_str(),
+        ));
     }
 
     async fn async_put_message(
