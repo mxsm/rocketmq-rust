@@ -70,7 +70,7 @@ pub trait MessageStoreInner {
 
     /// Destroy this message store.
     /// Generally, all persistent files should be removed after invocation.
-    fn destroy(&self);
+    fn destroy(&mut self);
 
     /// Store a message into the store in async manner.
     ///

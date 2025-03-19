@@ -265,9 +265,13 @@ impl CommitLog {
         });
     }
 
-    pub fn shutdown(&mut self) {}
+    pub fn shutdown(&mut self) {
+        error!("shutdown commit log unimplemented");
+    }
 
-    pub fn destroy(&mut self) {}
+    pub fn destroy(&mut self) {
+        error!("destroy commit log unimplemented");
+    }
 
     pub fn get_message(&self, offset: i64, size: i32) -> Option<SelectMappedBufferResult> {
         let mapped_file_size = self.message_store_config.mapped_file_size_commit_log;
