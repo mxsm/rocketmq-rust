@@ -31,3 +31,9 @@ impl ConfigManager for TimerMetrics {
         todo!()
     }
 }
+
+impl TimerMetrics {
+    pub fn get_timing_count(&self, key: &CheetahString) -> i64 {
+        unimplemented!("get_timing_count is not implemented")
+    }
+}
