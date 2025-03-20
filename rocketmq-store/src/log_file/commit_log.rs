@@ -1124,6 +1124,10 @@ impl CommitLog {
         self.get_data_with_option(offset, offset == 0)
     }
 
+    pub fn get_bulk_data(&self, offset: i64, size: i32) -> Option<Vec<SelectMappedBufferResult>> {
+        unimplemented!("get_bulk_data not implemented")
+    }
+
     pub fn get_data_with_option(
         &self,
         offset: i64,

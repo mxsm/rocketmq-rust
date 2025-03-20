@@ -1355,16 +1355,29 @@ impl MessageStoreRefactor for LocalFileMessageStore {
         Ok(-1)
     }
 
-    fn get_message_total_in_queue(&self, topic: &str, queue_id: i32) -> i64 {
-        todo!()
+    fn get_message_total_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64 {
+        if let Some(logic_queue) = self.get_consume_queue(topic, queue_id) {
+            return logic_queue.get_message_total_in_queue();
+        }
+        0
     }
 
-    fn get_commit_log_data(&self, offset: i64) -> Result<SelectMappedBufferResult, StoreError> {
-        todo!()
+    fn get_commit_log_data(&self, offset: i64) -> Option<SelectMappedBufferResult> {
+        if self.shutdown.load(Ordering::Acquire) {
+            return None;
+        }
+        self.commit_log.get_data(offset)
     }
 
-    fn get_bulk_commit_log_data(&self, offset: i64, size: i32) -> Vec<SelectMappedBufferResult> {
-        todo!()
+    fn get_bulk_commit_log_data(
+        &self,
+        offset: i64,
+        size: i32,
+    ) -> Option<Vec<SelectMappedBufferResult>> {
+        if self.shutdown.load(Ordering::Acquire) {
+            return None;
+        }
+        self.commit_log.get_bulk_data(offset, size)
     }
 
     fn append_to_commit_log(
