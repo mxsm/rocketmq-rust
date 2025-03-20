@@ -72,7 +72,7 @@ Run the following command to start the name server
 cargo run --bin rocketmq-namesrv-rust
 ```
 
-### Run Borker
+### Run Broker
 
 **Run the following command to see usage：**
 
