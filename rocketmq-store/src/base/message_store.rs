@@ -307,16 +307,16 @@ pub trait MessageStoreInner {
     fn execute_delete_files_manually(&self);
 
     /// Query messages by given key.
-    fn query_message(
+    async fn query_message(
         &self,
-        topic: &str,
-        key: &str,
+        topic: &CheetahString,
+        key: &CheetahString,
         max_num: i32,
         begin: i64,
         end: i64,
-    ) -> Result<QueryMessageResult, StoreError>;
+    ) -> Option<QueryMessageResult>;
 
-    /// Asynchronous query messages by given key.
+    /*/// Asynchronous query messages by given key.
     async fn query_message_async(
         &self,
         topic: &str,
@@ -324,7 +324,7 @@ pub trait MessageStoreInner {
         max_num: i32,
         begin: i64,
         end: i64,
-    ) -> Result<QueryMessageResult, StoreError>;
+    ) -> Result<QueryMessageResult, StoreError>;*/
 
     /// Update HA master address.
     fn update_ha_master_address(&self, new_addr: &str);
@@ -341,7 +341,7 @@ pub trait MessageStoreInner {
     }
 
     /// Delete topic's consume queue file and unused stats.
-    fn delete_topics(&self, delete_topics: &HashSet<String>) -> i32;
+    fn delete_topics(&mut self, delete_topics: Vec<&CheetahString>) -> i32;
 
     /// Clean unused topics which not in retain topic name set.
     fn clean_unused_topic(&self, retain_topics: &HashSet<String>) -> i32;
@@ -352,7 +352,7 @@ pub trait MessageStoreInner {
     /// Check if the given message is in the page cache.
     fn check_in_mem_by_consume_offset(
         &self,
-        topic: &str,
+        topic: &CheetahString,
         queue_id: i32,
         consume_offset: i64,
         batch_size: i32,
@@ -580,8 +580,12 @@ pub trait MessageStoreInner {
     // fn init_metrics(&self, meter: &Meter, attributes_builder_supplier: Arc<dyn Fn() ->
     // AttributesBuilder>);
 
-    /// Recover topic queue table
-    fn recover_topic_queue_table(&self);
+    /// Recover the topic queue table.
+    ///
+    /// This function is responsible for recovering the topic queue table
+    /// to ensure that the message store can correctly manage and track
+    /// the offsets and states of various topic queues.
+    fn recover_topic_queue_table(&mut self);
 
     /// Notify message arrive if necessary
     fn notify_message_arrive_if_necessary(&self, dispatch_request: &mut DispatchRequest);

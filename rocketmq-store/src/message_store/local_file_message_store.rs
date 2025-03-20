@@ -350,12 +350,6 @@ impl LocalFileMessageStore {
         );
     }
 
-    pub fn recover_topic_queue_table(&mut self) {
-        let min_phy_offset = self.commit_log.get_min_offset();
-        self.consume_queue_store
-            .recover_offset_table(min_phy_offset);
-    }
-
     pub async fn recover_normally(&mut self, max_phy_offset_of_consume_queue: i64) {
         unimplemented!("recover_normally not implemented yet");
         /*self.commit_log
@@ -1412,18 +1406,58 @@ impl MessageStoreRefactor for LocalFileMessageStore {
             .execute_delete_files_manually()
     }
 
-    fn query_message(
+    async fn query_message(
         &self,
-        topic: &str,
-        key: &str,
+        topic: &CheetahString,
+        key: &CheetahString,
         max_num: i32,
-        begin: i64,
-        end: i64,
-    ) -> Result<QueryMessageResult, StoreError> {
-        todo!()
+        begin_timestamp: i64,
+        end_timestamp: i64,
+    ) -> Option<QueryMessageResult> {
+        let mut query_message_result = QueryMessageResult::default();
+        let mut last_query_msg_time = end_timestamp;
+        for i in 1..3 {
+            let mut query_offset_result = self.index_service.query_offset(
+                topic,
+                key,
+                max_num,
+                begin_timestamp,
+                end_timestamp,
+            );
+            if query_offset_result.get_phy_offsets().is_empty() {
+                break;
+            }
+
+            query_offset_result.get_phy_offsets_mut().sort();
+
+            query_message_result.index_last_update_timestamp =
+                query_offset_result.get_index_last_update_timestamp();
+            query_message_result.index_last_update_phyoffset =
+                query_offset_result.get_index_last_update_phyoffset();
+            let phy_offsets = query_offset_result.get_phy_offsets();
+            for m in 0..phy_offsets.len() {
+                let offset = *phy_offsets.get(m).unwrap();
+                let msg = self.look_message_by_offset(offset);
+                if m == 0 {
+                    last_query_msg_time = msg.as_ref().unwrap().store_timestamp;
+                }
+                let result = self.commit_log.get_data_with_option(offset, false);
+                if let Some(sbr) = result {
+                    query_message_result.add_message(sbr);
+                }
+            }
+            if query_message_result.buffer_total_size > 0 {
+                break;
+            }
+            if last_query_msg_time < begin_timestamp {
+                break;
+            }
+        }
+
+        Some(query_message_result)
     }
 
-    async fn query_message_async(
+    /*async fn query_message_async(
         &self,
         topic: &str,
         key: &str,
@@ -1431,8 +1465,8 @@ impl MessageStoreRefactor for LocalFileMessageStore {
         begin: i64,
         end: i64,
     ) -> Result<QueryMessageResult, StoreError> {
-        todo!()
-    }
+
+    }*/
 
     fn update_ha_master_address(&self, new_addr: &str) {
         todo!()
@@ -1446,8 +1480,50 @@ impl MessageStoreRefactor for LocalFileMessageStore {
         todo!()
     }
 
-    fn delete_topics(&self, delete_topics: &HashSet<String>) -> i32 {
-        todo!()
+    fn delete_topics(&mut self, delete_topics: Vec<&CheetahString>) -> i32 {
+        if delete_topics.is_empty() {
+            return 0;
+        }
+        let mut delete_count = 0;
+        for topic in delete_topics {
+            let queue_table = self.consume_queue_store.find_consume_queue_map(topic);
+            if queue_table.is_none() {
+                continue;
+            }
+            let queue_table = queue_table.unwrap();
+            for (queue_id, consume_queue) in queue_table {
+                self.consume_queue_store
+                    .destroy_consume_queue(consume_queue.as_ref().as_ref());
+                self.consume_queue_store
+                    .remove_topic_queue_table(topic, queue_id);
+            }
+            // remove topic from cq table
+            let consume_queue_table = self.consume_queue_store.get_consume_queue_table();
+            consume_queue_table.lock().remove(topic);
+
+            if self.broker_config.auto_delete_unused_stats {
+                self.broker_stats_manager
+                    .as_ref()
+                    .unwrap()
+                    .on_topic_deleted(topic);
+            }
+
+            let root_dir = self.message_store_config.store_path_root_dir.as_str();
+            let consume_queue_dir =
+                PathBuf::from(get_store_path_consume_queue(root_dir)).join(topic.as_str());
+            let consume_queue_ext_dir =
+                PathBuf::from(get_store_path_consume_queue_ext(root_dir)).join(topic.as_str());
+            let batch_consume_queue_dir =
+                PathBuf::from(get_store_path_batch_consume_queue(root_dir)).join(topic.as_str());
+
+            util_all::delete_empty_directory(consume_queue_dir);
+            util_all::delete_empty_directory(consume_queue_ext_dir);
+            util_all::delete_empty_directory(batch_consume_queue_dir);
+            info!("DeleteTopic: Topic has been destroyed, topic={}", topic);
+            delete_count += 1;
+        }
+
+        delete_count
     }
 
     fn clean_unused_topic(&self, retain_topics: &HashSet<String>) -> i32 {
@@ -1460,12 +1536,33 @@ impl MessageStoreRefactor for LocalFileMessageStore {
 
     fn check_in_mem_by_consume_offset(
         &self,
-        topic: &str,
+        topic: &CheetahString,
         queue_id: i32,
         consume_offset: i64,
         batch_size: i32,
     ) -> bool {
-        todo!()
+        let consume_queue = self
+            .consume_queue_store
+            .find_or_create_consume_queue(topic, queue_id);
+        let first_cqitem = consume_queue.get(consume_offset);
+        if first_cqitem.is_none() {
+            return false;
+        }
+        let cq = first_cqitem.as_ref().unwrap();
+        let start_offset_py = cq.pos;
+        if batch_size <= 1 {
+            let size = cq.size;
+            return self.check_in_mem_by_commit_offset(start_offset_py, size);
+        }
+        let last_cqitem = consume_queue.get(consume_offset + batch_size as i64);
+        if last_cqitem.is_none() {
+            let size = cq.size;
+            return self.check_in_mem_by_commit_offset(start_offset_py, size);
+        }
+        let last_cqitem = last_cqitem.as_ref().unwrap();
+        let end_offset_py = last_cqitem.pos;
+        let size = (end_offset_py - start_offset_py) + last_cqitem.size as i64;
+        self.check_in_mem_by_commit_offset(start_offset_py, size as i32)
     }
 
     fn check_in_store_by_consume_offset(
@@ -1701,7 +1798,7 @@ impl MessageStoreRefactor for LocalFileMessageStore {
     }
 
     fn get_state_machine_version(&self) -> i64 {
-        todo!()
+        self.state_machine_version.load(Ordering::SeqCst)
     }
 
     fn check_message_and_return_size(
@@ -1727,7 +1824,7 @@ impl MessageStoreRefactor for LocalFileMessageStore {
     }
 
     fn is_shutdown(&self) -> bool {
-        todo!()
+        self.shutdown.load(Ordering::SeqCst)
     }
 
     fn estimate_message_count(
@@ -1741,12 +1838,26 @@ impl MessageStoreRefactor for LocalFileMessageStore {
         todo!()
     }
 
-    fn recover_topic_queue_table(&self) {
-        todo!()
+    fn recover_topic_queue_table(&mut self) {
+        let min_phy_offset = self.commit_log.get_min_offset();
+        self.consume_queue_store
+            .recover_offset_table(min_phy_offset);
     }
 
     fn notify_message_arrive_if_necessary(&self, dispatch_request: &mut DispatchRequest) {
-        todo!()
+        if self.broker_config.long_polling_enable && self.message_arriving_listener.is_some() {
+            self.message_arriving_listener.as_ref().unwrap().arriving(
+                dispatch_request.topic.as_ref(),
+                dispatch_request.queue_id,
+                dispatch_request.consume_queue_offset + 1,
+                Some(dispatch_request.tags_code),
+                dispatch_request.store_timestamp,
+                dispatch_request.bit_map.clone(),
+                dispatch_request.properties_map.as_ref(),
+            );
+            self.reput_message_service
+                .notify_message_arrive4multi_queue(dispatch_request);
+        }
     }
 }
 
