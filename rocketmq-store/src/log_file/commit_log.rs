@@ -77,6 +77,7 @@ use crate::message_store::default_message_store::CommitLogDispatcherDefault;
 use crate::message_store::default_message_store::DefaultMessageStore;
 use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
 use crate::queue::ConsumeQueueStoreTrait;
+use crate::store_error::StoreError;
 
 // Message's MAGIC CODE daa320a7
 pub const MESSAGE_MAGIC_CODE: i32 = -626843481;
@@ -1178,6 +1179,16 @@ impl CommitLog {
 
     pub fn pickup_store_timestamp(&self, offset: i64, size: i32) -> i64 {
         unimplemented!("pickupStoreTimestamp not implemented")
+    }
+
+    pub fn append_data(
+        &self,
+        start_offset: i64,
+        data: &[u8],
+        data_start: i32,
+        data_length: i32,
+    ) -> Result<bool, StoreError> {
+        unimplemented!("append_data not implemented")
     }
 }
 
