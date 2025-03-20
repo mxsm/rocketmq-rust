@@ -44,10 +44,12 @@ use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::message::MessageConst;
+use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::is_lmq;
 use rocketmq_common::common::mix_all::is_sys_consumer_group_for_no_cold_read_limit;
 use rocketmq_common::common::mix_all::MULTI_DISPATCH_QUEUE_SPLITTER;
 use rocketmq_common::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
+use rocketmq_common::common::running::running_stats::RunningStats;
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::common::system_clock::SystemClock;
 use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
@@ -139,7 +141,7 @@ pub struct LocalFileMessageStore {
     notify_message_arrive_in_batch: bool,
     store_stats_service: Arc<StoreStatsService>,
     compaction_store: Arc<CompactionStore>,
-    timer_message_store: Arc<TimerMessageStore>,
+    timer_message_store: Option<Arc<TimerMessageStore>>,
     transient_store_pool: TransientStorePool,
     message_store_arc: Option<ArcMut<LocalFileMessageStore>>,
     ha_service: Option<ArcMut<GeneralHAService>>,
@@ -1127,13 +1129,13 @@ impl MessageStoreRefactor for LocalFileMessageStore {
     }
 
     #[inline]
-    fn get_timer_message_store(&self) -> &Arc<TimerMessageStore> {
-        &self.timer_message_store
+    fn get_timer_message_store(&self) -> Option<&Arc<TimerMessageStore>> {
+        self.timer_message_store.as_ref()
     }
 
     #[inline]
     fn set_timer_message_store(&mut self, timer_message_store: Arc<TimerMessageStore>) {
-        self.timer_message_store = timer_message_store;
+        self.timer_message_store = Some(timer_message_store);
     }
 
     fn get_commit_log_offset_in_queue(
@@ -1207,15 +1209,72 @@ impl MessageStoreRefactor for LocalFileMessageStore {
     }
 
     fn get_running_data_info(&self) -> String {
-        todo!()
+        format!("{}", self.store_stats_service)
     }
 
-    fn get_timing_message_count(&self, topic: &str) -> i64 {
-        todo!()
+    fn get_timing_message_count(&self, topic: &CheetahString) -> i64 {
+        if let Some(timer_message_store) = self.timer_message_store.as_ref() {
+            timer_message_store.timer_metrics.get_timing_count(topic)
+        } else {
+            0
+        }
     }
 
     fn get_runtime_info(&self) -> HashMap<String, String> {
-        todo!()
+        // First get the base runtime info from the store stats service
+        let mut result = self.store_stats_service.get_runtime_info();
+
+        // Add disk space usage for commit log
+        {
+            let mut min_physics_used_ratio = f64::MAX;
+            let commit_log_store_path = Self::get_store_path_physic(&self.message_store_config);
+            let paths = commit_log_store_path.split(mix_all::MULTI_PATH_SPLITTER.as_str());
+
+            for cl_path in paths {
+                let cl_path = cl_path.trim();
+                let physic_ratio = if util_all::is_path_exists(cl_path) {
+                    util_all::get_disk_partition_space_used_percent(cl_path)
+                } else {
+                    -1.0
+                };
+
+                result.insert(
+                    format!("{}_{}", RunningStats::CommitLogDiskRatio.as_str(), cl_path),
+                    physic_ratio.to_string(),
+                );
+
+                min_physics_used_ratio = min_physics_used_ratio.min(physic_ratio);
+            }
+
+            result.insert(
+                RunningStats::CommitLogDiskRatio.as_str().to_string(),
+                min_physics_used_ratio.to_string(),
+            );
+        }
+
+        // Add disk space usage for consume queue
+        {
+            let logics_ratio = util_all::get_disk_partition_space_used_percent(
+                Self::get_store_path_logic(&self.message_store_config).as_str(),
+            );
+            result.insert(
+                RunningStats::ConsumeQueueDiskRatio.as_str().to_string(),
+                logics_ratio.to_string(),
+            );
+        }
+
+        // Add commit log offset info
+        result.insert(
+            RunningStats::CommitLogMinOffset.as_str().to_string(),
+            self.get_min_phy_offset().to_string(),
+        );
+
+        result.insert(
+            RunningStats::CommitLogMaxOffset.as_str().to_string(),
+            self.get_max_phy_offset().to_string(),
+        );
+
+        result
     }
 
     fn get_max_phy_offset(&self) -> i64 {

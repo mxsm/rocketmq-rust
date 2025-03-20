@@ -17,6 +17,7 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::LinkedList;
+use std::fmt;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -500,6 +501,58 @@ impl StoreStatsService {
             "[ {} days, {} hours, {} minutes, {} seconds ]",
             days, hours, minutes, seconds
         )
+    }
+}
+
+impl fmt::Display for StoreStatsService {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let total_times = self.get_put_message_times_total();
+        let total_times_adj = if total_times == 0 { 1 } else { total_times };
+
+        writeln!(f, "\truntime: {}", self.get_format_runtime())?;
+        writeln!(
+            f,
+            "\tputMessageEntireTimeMax: {}",
+            self.put_message_entire_time_max.load(Ordering::Relaxed)
+        )?;
+        writeln!(f, "\tputMessageTimesTotal: {}", total_times_adj)?;
+        writeln!(
+            f,
+            "\tgetPutMessageFailedTimes: {}",
+            self.get_put_message_failed_times().load(Ordering::Relaxed)
+        )?;
+        writeln!(
+            f,
+            "\tputMessageSizeTotal: {}",
+            self.get_put_message_size_total()
+        )?;
+        writeln!(
+            f,
+            "\tputMessageDistributeTime: {}",
+            self.get_put_message_distribute_time_string_info(total_times_adj)
+        )?;
+        writeln!(
+            f,
+            "\tputMessageAverageSize: {:.2}",
+            self.get_put_message_size_total() as f64 / total_times_adj as f64
+        )?;
+        writeln!(
+            f,
+            "\tdispatchMaxBuffer: {}",
+            self.dispatch_max_buffer.load(Ordering::Relaxed)
+        )?;
+        writeln!(
+            f,
+            "\tgetMessageEntireTimeMax: {}",
+            self.get_message_entire_time_max.load(Ordering::Relaxed)
+        )?;
+        writeln!(f, "\tputTps: {}", self.get_put_tps())?;
+        writeln!(f, "\tgetFoundTps: {}", self.get_get_found_tps())?;
+        writeln!(f, "\tgetMissTps: {}", self.get_get_miss_tps())?;
+        writeln!(f, "\tgetTotalTps: {}", self.get_get_total_tps())?;
+        write!(f, "\tgetTransferredTps: {}", self.get_get_transferred_tps())?;
+
+        Ok(())
     }
 }
 

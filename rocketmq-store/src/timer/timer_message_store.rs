@@ -24,6 +24,7 @@ use tracing::warn;
 
 use crate::log_file::MessageStore;
 use crate::message_store::default_message_store::DefaultMessageStore;
+use crate::timer::timer_metrics::TimerMetrics;
 
 pub const TIMER_TOPIC: &str = concat!("rmq_sys_", "wheel_timer");
 pub const TIMER_OUT_MS: &str = MessageConst::PROPERTY_TIMER_OUT_MS;
@@ -50,6 +51,7 @@ pub struct TimerMessageStore {
     pub curr_read_time_ms: AtomicI64,
     pub curr_queue_offset: AtomicI64,
     pub default_message_store: Option<ArcMut<DefaultMessageStore>>,
+    pub timer_metrics: TimerMetrics,
 }
 
 impl Clone for TimerMessageStore {
@@ -64,6 +66,7 @@ impl Clone for TimerMessageStore {
                     .load(std::sync::atomic::Ordering::Relaxed),
             ),
             default_message_store: self.default_message_store.clone(),
+            timer_metrics: TimerMetrics,
         }
     }
 }
@@ -133,6 +136,7 @@ impl TimerMessageStore {
             curr_read_time_ms: AtomicI64::new(0),
             curr_queue_offset: AtomicI64::new(0),
             default_message_store,
+            timer_metrics: TimerMetrics,
         }
     }
 
@@ -141,6 +145,7 @@ impl TimerMessageStore {
             curr_read_time_ms: AtomicI64::new(0),
             curr_queue_offset: AtomicI64::new(0),
             default_message_store: None,
+            timer_metrics: TimerMetrics,
         }
     }
 
