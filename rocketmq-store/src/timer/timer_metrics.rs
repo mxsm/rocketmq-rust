@@ -14,6 +14,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use rocketmq_common::common::config_manager::ConfigManager;
 
-pub mod timer_message_store;
-pub mod timer_metrics;
+pub struct TimerMetrics;
+
+impl ConfigManager for TimerMetrics {
+    fn config_file_path(&self) -> String {
+        todo!()
+    }
+
+    fn encode_pretty(&self, pretty_format: bool) -> String {
+        todo!()
+    }
+
+    fn decode(&self, json_string: &str) {
+        todo!()
+    }
+}
