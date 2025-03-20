@@ -14,6 +14,27 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use cheetah_string::CheetahString;
+use rocketmq_common::common::config_manager::ConfigManager;
 
-pub mod timer_message_store;
-pub mod timer_metrics;
+pub struct TimerMetrics;
+
+impl ConfigManager for TimerMetrics {
+    fn config_file_path(&self) -> String {
+        todo!()
+    }
+
+    fn encode_pretty(&self, pretty_format: bool) -> String {
+        todo!()
+    }
+
+    fn decode(&self, json_string: &str) {
+        todo!()
+    }
+}
+
+impl TimerMetrics {
+    pub fn get_timing_count(&self, key: &CheetahString) -> i64 {
+        unimplemented!("get_timing_count is not implemented")
+    }
+}
