@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use bytes::BytesMut;
+use cheetah_string::CheetahString;
 use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_ext::MessageExt;
@@ -46,6 +47,7 @@ use crate::hook::put_message_hook::PutMessageHook;
 use crate::hook::send_message_back_hook::SendMessageBackHook;
 use crate::log_file::commit_log::CommitLog;
 use crate::log_file::mapped_file::MappedFile;
+use crate::queue::ArcConsumeQueue;
 use crate::queue::ConsumeQueueStoreTrait;
 use crate::queue::ConsumeQueueTrait;
 use crate::stats::broker_stats_manager::BrokerStatsManager;
@@ -126,40 +128,40 @@ pub trait MessageStoreInner {
     ///
     /// # Returns
     /// Matched messages
-    fn get_message(
+    async fn get_message(
         &self,
-        group: &str,
-        topic: &str,
+        group: &CheetahString,
+        topic: &CheetahString,
         queue_id: i32,
         offset: i64,
         max_msg_nums: i32,
-        message_filter: &dyn MessageFilter,
-    ) -> Result<GetMessageResult, StoreError>;
+        message_filter: Option<Arc<Box<dyn MessageFilter>>>,
+    ) -> Option<GetMessageResult>;
 
-    /// Asynchronous get message
+    /*    /// Asynchronous get message
     async fn get_message_async(
-        &self,
-        group: &str,
-        topic: &str,
-        queue_id: i32,
-        offset: i64,
-        max_msg_nums: i32,
-        message_filter: &dyn MessageFilter,
-    ) -> Result<GetMessageResult, StoreError>;
+         &self,
+         group: &str,
+         topic: &str,
+         queue_id: i32,
+         offset: i64,
+         max_msg_nums: i32,
+         message_filter: &dyn MessageFilter,
+     ) -> Result<GetMessageResult, StoreError>;*/
 
     /// Get message with size constraint
-    fn get_message_with_size_limit(
+    async fn get_message_with_size_limit(
         &self,
-        group: &str,
-        topic: &str,
+        group: &CheetahString,
+        topic: &CheetahString,
         queue_id: i32,
         offset: i64,
         max_msg_nums: i32,
         max_total_msg_size: i32,
-        message_filter: &dyn MessageFilter,
-    ) -> Result<GetMessageResult, StoreError>;
+        message_filter: Option<Arc<Box<dyn MessageFilter>>>,
+    ) -> Option<GetMessageResult>;
 
-    /// Asynchronous get message with size constraint
+    /*    /// Asynchronous get message with size constraint
     async fn get_message_with_size_limit_async(
         &self,
         group: &str,
@@ -169,7 +171,7 @@ pub trait MessageStoreInner {
         max_msg_nums: i32,
         max_total_msg_size: i32,
         message_filter: &dyn MessageFilter,
-    ) -> Result<GetMessageResult, StoreError>;
+    ) -> Result<GetMessageResult, StoreError>;*/
 
     /// Get maximum offset of the topic queue.
     fn get_max_offset_in_queue(&self, topic: &str, queue_id: i32) -> i64;
@@ -394,7 +396,7 @@ pub trait MessageStoreInner {
     fn get_consume_queue(&self, topic: &str, queue_id: i32) -> Option<Arc<dyn ConsumeQueueTrait>>;
 
     /// Get consume queue of the topic/queue. If not exist, creates one.
-    fn find_consume_queue(&self, topic: &str, queue_id: i32) -> Arc<dyn ConsumeQueueTrait>;
+    fn find_consume_queue(&self, topic: &str, queue_id: i32) -> Option<ArcConsumeQueue>;
 
     /// Get BrokerStatsManager of the messageStore.
     fn get_broker_stats_manager(&self) -> Arc<BrokerStatsManager>;
