@@ -49,7 +49,6 @@ use crate::log_file::commit_log::CommitLog;
 use crate::log_file::mapped_file::MappedFile;
 use crate::queue::ArcConsumeQueue;
 use crate::queue::ConsumeQueueStoreTrait;
-use crate::queue::ConsumeQueueTrait;
 use crate::stats::broker_stats_manager::BrokerStatsManager;
 use crate::store::running_flags::RunningFlags;
 use crate::store_error::StoreError;
@@ -254,22 +253,22 @@ pub trait MessageStoreInner {
     fn get_min_phy_offset(&self) -> i64;
 
     /// Get the store time of the earliest message in the given queue.
-    fn get_earliest_message_time(&self, topic: &str, queue_id: i32) -> i64;
+    fn get_earliest_message_time(&self, topic: &CheetahString, queue_id: i32) -> i64;
 
     /// Get the store time of the earliest message in this store.
     fn get_earliest_message_time_store(&self) -> i64;
 
-    /// Asynchronous get the store time of the earliest message in this store.
+    /*    /// Asynchronous get the store time of the earliest message in this store.
     async fn get_earliest_message_time_async(
         &self,
         topic: &str,
         queue_id: i32,
-    ) -> Result<i64, StoreError>;
+    ) -> Result<i64, StoreError>;*/
 
     /// Get the store time of the message specified.
     fn get_message_store_time_stamp(
         &self,
-        topic: &str,
+        topic: &CheetahString,
         queue_id: i32,
         consume_queue_offset: i64,
     ) -> i64;
@@ -277,7 +276,7 @@ pub trait MessageStoreInner {
     /// Asynchronous get the store time of the message specified.
     async fn get_message_store_time_stamp_async(
         &self,
-        topic: &str,
+        topic: &CheetahString,
         queue_id: i32,
         consume_queue_offset: i64,
     ) -> Result<i64, StoreError>;
@@ -397,10 +396,10 @@ pub trait MessageStoreInner {
     fn add_dispatcher(&self, dispatcher: Arc<dyn CommitLogDispatcher>);
 
     /// Get consume queue of the topic/queue. If not exist, returns None.
-    fn get_consume_queue(&self, topic: &str, queue_id: i32) -> Option<Arc<dyn ConsumeQueueTrait>>;
+    fn get_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue>;
 
     /// Get consume queue of the topic/queue. If not exist, creates one.
-    fn find_consume_queue(&self, topic: &str, queue_id: i32) -> Option<ArcConsumeQueue>;
+    fn find_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue>;
 
     /// Get BrokerStatsManager of the messageStore.
     fn get_broker_stats_manager(&self) -> Arc<BrokerStatsManager>;

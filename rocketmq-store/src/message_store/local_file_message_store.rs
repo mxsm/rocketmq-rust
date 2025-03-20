@@ -22,6 +22,7 @@ use std::collections::HashSet;
 use std::error::Error;
 use std::fs;
 use std::future::Future;
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
@@ -1277,46 +1278,81 @@ impl MessageStoreRefactor for LocalFileMessageStore {
         result
     }
 
+    #[inline]
     fn get_max_phy_offset(&self) -> i64 {
-        todo!()
+        self.commit_log.get_max_offset()
     }
 
+    #[inline]
     fn get_min_phy_offset(&self) -> i64 {
-        todo!()
+        self.commit_log.get_min_offset()
     }
 
-    fn get_earliest_message_time(&self, topic: &str, queue_id: i32) -> i64 {
-        todo!()
+    fn get_earliest_message_time(&self, topic: &CheetahString, queue_id: i32) -> i64 {
+        if let Some(logic_queue) = self.get_consume_queue(topic, queue_id) {
+            if let Some(cq) = logic_queue.get_earliest_unit_and_store_time() {
+                return cq.1;
+            }
+        }
+        -1
     }
 
     fn get_earliest_message_time_store(&self) -> i64 {
-        todo!()
+        let min_phy_offset = self.get_min_phy_offset();
+
+        //Rust not support DLedgerCommitLog
+        /*if (this.getCommitLog() instanceof DLedgerCommitLog) {
+            minPhyOffset += DLedgerEntry.BODY_OFFSET;
+        }*/
+
+        let mut size = MessageDecoder::MESSAGE_STORE_TIMESTAMP_POSITION + 8;
+        let result = self
+            .broker_config
+            .broker_ip1
+            .to_string()
+            .parse::<IpAddr>()
+            .unwrap();
+        if result.is_ipv6() {
+            size = MessageDecoder::MESSAGE_STORE_TIMESTAMP_POSITION + 20;
+        }
+        self.commit_log
+            .pickup_store_timestamp(min_phy_offset, size as i32)
     }
 
-    async fn get_earliest_message_time_async(
+    /*    async fn get_earliest_message_time_async(
         &self,
         topic: &str,
         queue_id: i32,
     ) -> Result<i64, StoreError> {
-        todo!()
-    }
+
+    }*/
 
     fn get_message_store_time_stamp(
         &self,
-        topic: &str,
+        topic: &CheetahString,
         queue_id: i32,
         consume_queue_offset: i64,
     ) -> i64 {
-        todo!()
+        if let Some(logic_queue) = self.get_consume_queue(topic, queue_id) {
+            if let Some(cq) = logic_queue.get_cq_unit_and_store_time(consume_queue_offset) {
+                return cq.1;
+            }
+        }
+        -1
     }
 
     async fn get_message_store_time_stamp_async(
         &self,
-        topic: &str,
+        topic: &CheetahString,
         queue_id: i32,
         consume_queue_offset: i64,
     ) -> Result<i64, StoreError> {
-        todo!()
+        if let Some(logic_queue) = self.get_consume_queue(topic, queue_id) {
+            if let Some(cq) = logic_queue.get_cq_unit_and_store_time(consume_queue_offset) {
+                return Ok(cq.1);
+            }
+        }
+        Ok(-1)
     }
 
     fn get_message_total_in_queue(&self, topic: &str, queue_id: i32) -> i64 {
@@ -1454,11 +1490,11 @@ impl MessageStoreRefactor for LocalFileMessageStore {
         todo!()
     }
 
-    fn get_consume_queue(&self, topic: &str, queue_id: i32) -> Option<Arc<dyn ConsumeQueueTrait>> {
+    fn get_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue> {
         todo!()
     }
 
-    fn find_consume_queue(&self, topic: &str, queue_id: i32) -> Option<ArcConsumeQueue> {
+    fn find_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue> {
         todo!()
     }
 
