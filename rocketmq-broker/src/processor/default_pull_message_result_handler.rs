@@ -43,9 +43,9 @@ use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerCon
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
+use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::filter::MessageFilter;
-use rocketmq_store::log_file::MessageStore;
-use rocketmq_store::message_store::default_message_store::DefaultMessageStore;
+use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use rocketmq_store::stats::stats_type::StatsType;
 use tracing::debug;
@@ -103,7 +103,7 @@ impl<MS> DefaultPullMessageResultHandler<MS> {
     pub fn set_pull_request_hold_service(
         &mut self,
         //pull_request_hold_service: Option<ArcMut<PullRequestHoldService<DefaultMessageStore>>>,
-        _inner: ArcMut<BrokerRuntimeInner<DefaultMessageStore>>,
+        _inner: ArcMut<BrokerRuntimeInner<LocalFileMessageStore>>,
     ) {
         //self.pull_request_hold_service = pull_request_hold_service;
     }

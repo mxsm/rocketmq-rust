@@ -28,7 +28,7 @@ use rocketmq_remoting::protocol::header::check_transaction_state_request_header:
 use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
-use rocketmq_store::log_file::MessageStore;
+use rocketmq_store::base::message_store::MessageStore;
 use tracing::error;
 use tracing::info;
 use tracing::warn;

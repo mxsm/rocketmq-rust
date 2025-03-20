@@ -39,7 +39,7 @@ use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_rust::ArcMut;
 use tracing::error;
 
-use crate::base::message_store::MessageStoreRefactor;
+use crate::base::message_store::MessageStore;
 use crate::ha::ha_client::HAClient;
 use crate::ha::ha_connection::HAConnection;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
@@ -51,7 +51,7 @@ use crate::store_error::HAResult;
 pub struct DefaultHAService;
 
 impl HAService for DefaultHAService {
-    fn init<MS: MessageStoreRefactor>(&mut self, message_store: ArcMut<MS>) -> HAResult<()> {
+    fn init<MS: MessageStore>(&mut self, message_store: ArcMut<MS>) -> HAResult<()> {
         error!("DefaultHAService init not implemented");
         Ok(())
     }

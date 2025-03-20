@@ -30,7 +30,7 @@ use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::RocketMQTokioMutex;
-use rocketmq_store::log_file::MessageStore;
+use rocketmq_store::base::message_store::MessageStore;
 use tracing::info;
 use tracing::warn;
 

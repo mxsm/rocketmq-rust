@@ -22,8 +22,8 @@ use rocketmq_common::common::system_clock::SystemClock;
 use rocketmq_rust::ArcMut;
 use tracing::warn;
 
-use crate::log_file::MessageStore;
-use crate::message_store::default_message_store::DefaultMessageStore;
+use crate::base::message_store::MessageStore;
+use crate::message_store::local_file_message_store::LocalFileMessageStore;
 use crate::timer::timer_metrics::TimerMetrics;
 
 pub const TIMER_TOPIC: &str = concat!("rmq_sys_", "wheel_timer");
@@ -50,7 +50,7 @@ pub const MAGIC_DELETE: i32 = 1 << 2;
 pub struct TimerMessageStore {
     pub curr_read_time_ms: AtomicI64,
     pub curr_queue_offset: AtomicI64,
-    pub default_message_store: Option<ArcMut<DefaultMessageStore>>,
+    pub default_message_store: Option<ArcMut<LocalFileMessageStore>>,
     pub timer_metrics: TimerMetrics,
 }
 
@@ -131,7 +131,7 @@ impl TimerMessageStore {
         0.0
     }
 
-    pub fn new(default_message_store: Option<ArcMut<DefaultMessageStore>>) -> Self {
+    pub fn new(default_message_store: Option<ArcMut<LocalFileMessageStore>>) -> Self {
         Self {
             curr_read_time_ms: AtomicI64::new(0),
             curr_queue_offset: AtomicI64::new(0),
@@ -151,7 +151,7 @@ impl TimerMessageStore {
 
     pub fn set_default_message_store(
         &mut self,
-        default_message_store: Option<ArcMut<DefaultMessageStore>>,
+        default_message_store: Option<ArcMut<LocalFileMessageStore>>,
     ) {
         self.default_message_store = default_message_store;
     }

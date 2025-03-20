@@ -21,7 +21,7 @@ use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerCon
 use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_remoting::Result;
 use rocketmq_rust::ArcMut;
-use rocketmq_store::log_file::MessageStore;
+use rocketmq_store::base::message_store::MessageStore;
 use tracing::info;
 
 use self::client_manage_processor::ClientManageProcessor;

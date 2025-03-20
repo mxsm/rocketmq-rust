@@ -49,7 +49,6 @@ use rocketmq_common::CleanupPolicyUtils::get_delete_policy;
 use rocketmq_common::FileUtils::string_to_file;
 use rocketmq_common::MessageDecoder;
 use rocketmq_common::TimeUtils::get_current_millis;
-use rocketmq_common::UtilAll::ensure_dir_ok;
 use rocketmq_rust::ArcMut;
 use tokio::runtime::Handle;
 use tokio::sync::Notify;
@@ -82,7 +81,7 @@ use crate::kv::compaction_store::CompactionStore;
 use crate::log_file::commit_log;
 use crate::log_file::commit_log::CommitLog;
 use crate::log_file::mapped_file::MappedFile;
-use crate::log_file::MessageStore;
+use crate::log_file::MessageStoreOld;
 use crate::log_file::MAX_PULL_MSG_SIZE;
 use crate::queue::build_consume_queue::CommitLogDispatcherBuildConsumeQueue;
 use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
@@ -165,7 +164,7 @@ impl DefaultMessageStore {
             dispatcher_vec: Arc::new(vec![Box::new(build_consume_queue), Box::new(build_index)]),
         };
 
-        let commit_log = CommitLog::new(
+        /*let commit_log = CommitLog::new(
             message_store_config.clone(),
             broker_config.clone(),
             &dispatcher,
@@ -218,7 +217,8 @@ impl DefaultMessageStore {
             timer_message_store: Arc::new(TimerMessageStore::new_empty()),
             transient_store_pool,
             message_store_arc: None,
-        }
+        }*/
+        unimplemented!("DefaultMessageStore::new")
     }
 
     pub fn get_store_path_physic(message_store_config: &Arc<MessageStoreConfig>) -> String {
@@ -338,21 +338,21 @@ impl DefaultMessageStore {
     }
 
     pub async fn recover_normally(&mut self, max_phy_offset_of_consume_queue: i64) {
-        self.commit_log
-            .recover_normally(
-                max_phy_offset_of_consume_queue,
-                self.message_store_arc.clone().unwrap(),
-            )
-            .await;
+        /*self.commit_log
+        .recover_normally(
+            max_phy_offset_of_consume_queue,
+            self.message_store_arc.clone().unwrap(),
+        )
+        .await;*/
     }
 
     pub async fn recover_abnormally(&mut self, max_phy_offset_of_consume_queue: i64) {
-        self.commit_log
-            .recover_abnormally(
-                max_phy_offset_of_consume_queue,
-                self.message_store_arc.clone().unwrap(),
-            )
-            .await;
+        /*        self.commit_log
+        .recover_abnormally(
+            max_phy_offset_of_consume_queue,
+            self.message_store_arc.clone().unwrap(),
+        )
+        .await;*/
     }
 
     fn is_recover_concurrently(&self) -> bool {
@@ -542,7 +542,7 @@ fn is_the_batch_full(
 
 #[allow(unused_variables)]
 #[allow(unused_assignments)]
-impl MessageStore for DefaultMessageStore {
+impl MessageStoreOld for DefaultMessageStore {
     async fn load(&mut self) -> bool {
         let last_exit_ok = !self.is_temp_file_exist();
         info!(

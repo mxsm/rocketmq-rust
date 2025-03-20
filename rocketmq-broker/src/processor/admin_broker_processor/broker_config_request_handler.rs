@@ -26,7 +26,7 @@ use rocketmq_remoting::protocol::body::kv_table::KVTable;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_rust::ArcMut;
-use rocketmq_store::log_file::MessageStore;
+use rocketmq_store::base::message_store::MessageStore;
 use sysinfo::Disks;
 
 use crate::broker_runtime::BrokerRuntimeInner;
@@ -187,7 +187,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
                 .message_store()
                 .as_ref()
                 .unwrap()
-                .lock_time_mills()
+                .lock_time_millis()
                 .to_string(),
         );
         runtime_info.insert(
@@ -196,7 +196,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
                 .message_store()
                 .as_ref()
                 .unwrap()
-                .get_earliest_message_time()
+                .get_earliest_message_time_store()
                 .to_string(),
         );
         runtime_info.insert(
@@ -218,6 +218,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
                     .as_ref()
                     .unwrap()
                     .get_timer_message_store()
+                    .unwrap()
                     .get_dequeue_behind()
                     .to_string(),
             );
@@ -228,6 +229,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
                     .as_ref()
                     .unwrap()
                     .get_timer_message_store()
+                    .unwrap()
                     .get_enqueue_behind_messages()
                     .to_string(),
             );
@@ -238,6 +240,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
                     .as_ref()
                     .unwrap()
                     .get_timer_message_store()
+                    .unwrap()
                     .get_all_congest_num()
                     .to_string(),
             );
@@ -248,6 +251,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
                     .as_ref()
                     .unwrap()
                     .get_timer_message_store()
+                    .unwrap()
                     .get_enqueue_tps()
                     .to_string(),
             );
@@ -258,6 +262,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
                     .as_ref()
                     .unwrap()
                     .get_timer_message_store()
+                    .unwrap()
                     .get_dequeue_tps()
                     .to_string(),
             );
@@ -272,7 +277,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
         runtime_info.insert(
             "remainTransientStoreBufferNumbs".to_string(),
             default_message_store
-                .remain_transient_store_buffer_nums()
+                .remain_transient_store_buffer_numbs()
                 .to_string(),
         );
         if default_message_store

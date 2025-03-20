@@ -43,7 +43,7 @@ use rocketmq_rust::ArcMut;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::AppendMessageStatus;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
-use rocketmq_store::log_file::MessageStore;
+use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::pop::ack_msg::AckMsg;
 use rocketmq_store::pop::batch_ack_msg::BatchAckMsg;
 use rocketmq_store::pop::pop_check_point::PopCheckPoint;
@@ -433,6 +433,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
                     .as_ref()
                     .unwrap()
                     .get_timer_message_store()
+                    .unwrap() // may be need to unwrap
                     .get_dequeue_behind();
                 let commit_log_delay = self
                     .broker_runtime_inner
@@ -440,6 +441,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
                     .as_ref()
                     .unwrap()
                     .get_timer_message_store()
+                    .unwrap() // may be need to unwrap
                     .get_enqueue_behind();
                 if end_time != 0
                     && get_current_millis() - end_time > (3 * PopAckConstants::SECOND) as u64

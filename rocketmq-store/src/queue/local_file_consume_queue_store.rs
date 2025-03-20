@@ -100,7 +100,7 @@ impl ConsumeQueueStore {
 impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     #[inline]
     fn start(&self) {
-        todo!()
+        info!("Default ConsumeQueueStore start!");
     }
 
     #[inline]
@@ -143,7 +143,7 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
 
     #[inline]
     fn shutdown(&self) -> bool {
-        todo!()
+        true
     }
 
     #[inline]
