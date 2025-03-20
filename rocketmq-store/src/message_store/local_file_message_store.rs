@@ -76,7 +76,7 @@ use crate::base::message_result::AppendMessageResult;
 use crate::base::message_result::PutMessageResult;
 use crate::base::message_status_enum::GetMessageStatus;
 use crate::base::message_status_enum::PutMessageStatus;
-use crate::base::message_store::MessageStoreRefactor;
+use crate::base::message_store::MessageStore;
 use crate::base::query_message_result::QueryMessageResult;
 use crate::base::select_result::SelectMappedBufferResult;
 use crate::base::store_checkpoint::StoreCheckpoint;
@@ -98,7 +98,6 @@ use crate::kv::compaction_store::CompactionStore;
 use crate::log_file::commit_log;
 use crate::log_file::commit_log::CommitLog;
 use crate::log_file::mapped_file::MappedFile;
-use crate::log_file::MessageStore;
 use crate::log_file::MAX_PULL_MSG_SIZE;
 use crate::queue::build_consume_queue::CommitLogDispatcherBuildConsumeQueue;
 use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
@@ -179,7 +178,7 @@ impl LocalFileMessageStore {
         let build_consume_queue =
             CommitLogDispatcherBuildConsumeQueue::new(consume_queue_store.clone());
 
-        /*let dispatcher = CommitLogDispatcherDefault {
+        let dispatcher = CommitLogDispatcherDefault {
             dispatcher_vec: Arc::new(vec![Box::new(build_consume_queue), Box::new(build_index)]),
         };
 
@@ -233,11 +232,12 @@ impl LocalFileMessageStore {
             notify_message_arrive_in_batch,
             store_stats_service: Arc::new(StoreStatsService::new(Some(identity))),
             compaction_store: Arc::new(CompactionStore),
-            timer_message_store: Arc::new(TimerMessageStore::new_empty()),
+            timer_message_store: None,
             transient_store_pool,
             message_store_arc: None,
-        }*/
-        unimplemented!("LocalFileMessageStore::new not implemented yet")
+            ha_service: None,
+            flush_consume_queue_service: FlushConsumeQueueService,
+        }
     }
 
     pub fn get_store_path_physic(message_store_config: &Arc<MessageStoreConfig>) -> String {
@@ -351,23 +351,21 @@ impl LocalFileMessageStore {
     }
 
     pub async fn recover_normally(&mut self, max_phy_offset_of_consume_queue: i64) {
-        unimplemented!("recover_normally not implemented yet");
-        /*self.commit_log
-        .recover_normally(
-            max_phy_offset_of_consume_queue,
-            self.message_store_arc.clone().unwrap(),
-        )
-        .await;*/
+        self.commit_log
+            .recover_normally(
+                max_phy_offset_of_consume_queue,
+                self.message_store_arc.clone().unwrap(),
+            )
+            .await;
     }
 
     pub async fn recover_abnormally(&mut self, max_phy_offset_of_consume_queue: i64) {
-        unimplemented!("recover_abnormally not implemented yet");
-        /*self.commit_log
-        .recover_abnormally(
-            max_phy_offset_of_consume_queue,
-            self.message_store_arc.clone().unwrap(),
-        )
-        .await;*/
+        self.commit_log
+            .recover_abnormally(
+                max_phy_offset_of_consume_queue,
+                self.message_store_arc.clone().unwrap(),
+            )
+            .await;
     }
 
     fn is_recover_concurrently(&self) -> bool {
@@ -561,7 +559,7 @@ fn is_the_batch_full(
 
 #[allow(unused_variables)]
 #[allow(unused_assignments)]
-impl MessageStoreRefactor for LocalFileMessageStore {
+impl MessageStore for LocalFileMessageStore {
     async fn load(&mut self) -> bool {
         let last_exit_ok = !self.is_temp_file_exist();
         info!(
@@ -1321,7 +1319,7 @@ impl MessageStoreRefactor for LocalFileMessageStore {
 
     }*/
 
-    fn get_message_store_time_stamp(
+    fn get_message_store_timestamp(
         &self,
         topic: &CheetahString,
         queue_id: i32,
@@ -1335,7 +1333,7 @@ impl MessageStoreRefactor for LocalFileMessageStore {
         -1
     }
 
-    async fn get_message_store_time_stamp_async(
+    async fn get_message_store_timestamp_async(
         &self,
         topic: &CheetahString,
         queue_id: i32,
@@ -1575,7 +1573,8 @@ impl MessageStoreRefactor for LocalFileMessageStore {
     }
 
     fn dispatch_behind_bytes(&self) -> i64 {
-        todo!()
+        error!("DefaultMessageStore#dispatchBehindBytes: not implemented");
+        0
     }
 
     fn flush(&self) -> i64 {
@@ -1594,16 +1593,18 @@ impl MessageStoreRefactor for LocalFileMessageStore {
         todo!()
     }
 
-    fn set_confirm_offset(&self, phy_offset: i64) {
-        todo!()
+    fn set_confirm_offset(&mut self, phy_offset: i64) {
+        self.commit_log.set_confirm_offset(phy_offset);
     }
 
     fn is_os_page_cache_busy(&self) -> bool {
-        todo!()
+        let begin = self.commit_log.begin_time_in_lock().load(Ordering::Relaxed);
+        let diff = get_current_millis() - begin;
+        diff < 10000000 && diff > self.message_store_config.os_page_cache_busy_timeout_mills
     }
 
     fn lock_time_millis(&self) -> i64 {
-        todo!()
+        self.commit_log.lock_time_mills()
     }
 
     fn is_transient_store_pool_deficient(&self) -> bool {
@@ -1626,7 +1627,7 @@ impl MessageStoreRefactor for LocalFileMessageStore {
         todo!()
     }
 
-    fn get_broker_stats_manager(&self) -> Arc<BrokerStatsManager> {
+    fn get_broker_stats_manager(&self) -> Option<&Arc<BrokerStatsManager>> {
         todo!()
     }
 
@@ -1674,8 +1675,8 @@ impl MessageStoreRefactor for LocalFileMessageStore {
         todo!()
     }
 
-    fn get_running_flags(&self) -> Arc<RunningFlags> {
-        todo!()
+    fn get_running_flags(&self) -> &RunningFlags {
+        self.running_flags.as_ref()
     }
 
     fn get_transient_store_pool(&self) -> Arc<TransientStorePool> {
@@ -1714,14 +1715,11 @@ impl MessageStoreRefactor for LocalFileMessageStore {
         todo!()
     }
 
-    fn get_master_store_in_process<M: MessageStoreRefactor>(&self) -> Option<Arc<M>> {
+    fn get_master_store_in_process<M: MessageStore>(&self) -> Option<Arc<M>> {
         todo!()
     }
 
-    fn set_master_store_in_process<M: MessageStoreRefactor>(
-        &self,
-        master_store_in_process: Arc<M>,
-    ) {
+    fn set_master_store_in_process<M: MessageStore>(&self, master_store_in_process: Arc<M>) {
         todo!()
     }
 
@@ -1753,8 +1751,9 @@ impl MessageStoreRefactor for LocalFileMessageStore {
         todo!()
     }
 
-    fn set_broker_init_max_offset(&self, broker_init_max_offset: i64) {
-        todo!()
+    fn set_broker_init_max_offset(&mut self, broker_init_max_offset: i64) {
+        self.broker_init_max_offset
+            .store(broker_init_max_offset, Ordering::SeqCst);
     }
 
     fn calc_delta_checksum(&self, from: i64, to: i64) -> Vec<u8> {
@@ -1858,6 +1857,10 @@ impl MessageStoreRefactor for LocalFileMessageStore {
             self.reput_message_service
                 .notify_message_arrive4multi_queue(dispatch_request);
         }
+    }
+
+    fn set_put_message_hook(&self, put_message_hook: BoxedPutMessageHook) {
+        self.put_message_hook_list.write().push(put_message_hook);
     }
 }
 
@@ -2200,7 +2203,7 @@ struct CleanConsumeQueueService {}
 
 impl CleanConsumeQueueService {
     fn run(&self) {
-        println!("clean consume queue service run unimplemented!")
+        error!("clean consume queue service run unimplemented!")
     }
 }
 
@@ -2208,7 +2211,7 @@ struct CorrectLogicOffsetService {}
 
 impl CorrectLogicOffsetService {
     fn run(&self) {
-        println!("correct logic offset service run unimplemented!")
+        error!("correct logic offset service run unimplemented!")
     }
 }
 

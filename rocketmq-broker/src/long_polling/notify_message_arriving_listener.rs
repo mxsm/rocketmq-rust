@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use cheetah_string::CheetahString;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_arriving_listener::MessageArrivingListener;
-use rocketmq_store::log_file::MessageStore;
+use rocketmq_store::base::message_store::MessageStore;
 
 use crate::broker_runtime::BrokerRuntimeInner;
 

@@ -76,7 +76,7 @@ use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_rust::ArcMut;
-use rocketmq_store::log_file::MessageStore;
+use rocketmq_store::base::message_store::MessageStore;
 use tracing::debug;
 use tracing::error;
 use tracing::info;

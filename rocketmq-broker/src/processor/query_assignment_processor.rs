@@ -44,7 +44,7 @@ use crate::broker_error::BrokerError;
  use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
  use rocketmq_rust::ArcMut;
 
- use rocketmq_store::log_file::MessageStore;
+ use rocketmq_store::base::message_store::MessageStore;
  use std::collections::{HashMap, HashSet};
  use std::sync::Arc;
  use tracing::{info, warn};

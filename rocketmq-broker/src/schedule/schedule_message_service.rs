@@ -42,7 +42,7 @@ use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
-use rocketmq_store::log_file::MessageStore;
+use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::store_path_config_helper::get_delay_offset_store_path;
 use tokio::sync::oneshot;
 use tokio::sync::Mutex;
@@ -386,11 +386,13 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
 impl<MS: MessageStore> ConfigManager for ScheduleMessageService<MS> {
     #[allow(unconditional_recursion)]
     fn load(&self) -> bool {
-        let result = ConfigManager::load(self);
+        /*let result = ConfigManager::load(self);
         let parse_result = self.parse_delay_level();
         let correct_result = self.correct_delay_offset();
 
-        result && parse_result && correct_result
+        result && parse_result && correct_result*/
+        error!("load schedule message service unimplemented");
+        true
     }
 
     fn stop(&mut self) -> bool {

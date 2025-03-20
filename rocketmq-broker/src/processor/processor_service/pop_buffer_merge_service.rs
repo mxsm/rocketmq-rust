@@ -39,7 +39,7 @@ use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
-use rocketmq_store::log_file::MessageStore;
+use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::pop::ack_msg::AckMsg;
 use rocketmq_store::pop::batch_ack_msg::BatchAckMsg;
 use rocketmq_store::pop::pop_check_point::PopCheckPoint;

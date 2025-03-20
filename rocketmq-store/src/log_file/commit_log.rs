@@ -73,8 +73,8 @@ use crate::log_file::flush_manager_impl::defalut_flush_manager::DefaultFlushMana
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
 use crate::message_encoder::message_ext_encoder::MessageExtEncoder;
-use crate::message_store::default_message_store::CommitLogDispatcherDefault;
-use crate::message_store::default_message_store::DefaultMessageStore;
+use crate::message_store::local_file_message_store::CommitLogDispatcherDefault;
+use crate::message_store::local_file_message_store::LocalFileMessageStore;
 use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
 use crate::queue::ConsumeQueueStoreTrait;
 use crate::store_error::StoreError;
@@ -811,7 +811,7 @@ impl CommitLog {
     pub async fn recover_normally(
         &mut self,
         max_phy_offset_of_consume_queue: i64,
-        mut message_store: ArcMut<DefaultMessageStore>,
+        mut message_store: ArcMut<LocalFileMessageStore>,
     ) {
         let check_crc_on_recover = self.message_store_config.check_crc_on_recover;
         let check_dup_info = self.message_store_config.duplication_enable;
@@ -953,7 +953,7 @@ impl CommitLog {
     pub async fn recover_abnormally(
         &mut self,
         max_phy_offset_of_consume_queue: i64,
-        mut message_store: ArcMut<DefaultMessageStore>,
+        mut message_store: ArcMut<LocalFileMessageStore>,
     ) {
         let check_crc_on_recover = self.message_store_config.check_crc_on_recover;
         let check_dup_info = self.message_store_config.duplication_enable;

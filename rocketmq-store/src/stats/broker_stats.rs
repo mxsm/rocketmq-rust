@@ -21,7 +21,7 @@ use rocketmq_rust::ArcMut;
 use tracing::error;
 use tracing::info;
 
-use crate::log_file::MessageStore;
+use crate::base::message_store::MessageStore;
 
 pub struct BrokerStats<MS> {
     default_message_store: ArcMut<MS>,

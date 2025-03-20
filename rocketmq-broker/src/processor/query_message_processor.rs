@@ -25,7 +25,7 @@ use rocketmq_remoting::protocol::header::view_message_request_header::ViewMessag
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_rust::ArcMut;
-use rocketmq_store::log_file::MessageStore;
+use rocketmq_store::base::message_store::MessageStore;
 
 use crate::broker_runtime::BrokerRuntimeInner;
 
@@ -137,8 +137,7 @@ where
             .message_store()
             .as_ref()
             .unwrap()
-            .select_one_message_by_offset(request_header.offset)
-            .await;
+            .select_one_message_by_offset(request_header.offset);
         if let Some(result) = select_mapped_buffer_result {
             let message_data = result.get_bytes();
             if let Some(body) = message_data {

@@ -30,8 +30,8 @@ use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_rust::ArcMut;
-use rocketmq_store::log_file::MessageStore;
-use rocketmq_store::message_store::default_message_store::DefaultMessageStore;
+use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
 use serde::de;
 use serde::de::MapAccess;
 use serde::de::Visitor;
@@ -50,13 +50,13 @@ pub const TOPIC_GROUP_SEPARATOR: &str = "@";
 pub(crate) struct ConsumerOffsetManager {
     pub(crate) broker_config: Arc<BrokerConfig>,
     consumer_offset_wrapper: ConsumerOffsetWrapper,
-    message_store: Option<ArcMut<DefaultMessageStore>>,
+    message_store: Option<ArcMut<LocalFileMessageStore>>,
 }
 
 impl ConsumerOffsetManager {
     pub fn new(
         broker_config: Arc<BrokerConfig>,
-        message_store: Option<ArcMut<DefaultMessageStore>>,
+        message_store: Option<ArcMut<LocalFileMessageStore>>,
     ) -> Self {
         ConsumerOffsetManager {
             broker_config,
@@ -70,7 +70,7 @@ impl ConsumerOffsetManager {
             message_store,
         }
     }
-    pub fn set_message_store(&mut self, message_store: Option<ArcMut<DefaultMessageStore>>) {
+    pub fn set_message_store(&mut self, message_store: Option<ArcMut<LocalFileMessageStore>>) {
         self.message_store = message_store;
     }
 }

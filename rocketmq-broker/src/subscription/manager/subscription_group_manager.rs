@@ -26,7 +26,7 @@ use rocketmq_remoting::protocol::subscription::subscription_group_config::Subscr
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_rust::ArcMut;
-use rocketmq_store::log_file::MessageStore;
+use rocketmq_store::base::message_store::MessageStore;
 use serde::Deserialize;
 use serde::Serialize;
 use tracing::info;

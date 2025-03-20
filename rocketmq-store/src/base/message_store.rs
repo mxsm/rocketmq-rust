@@ -43,6 +43,7 @@ use crate::base::store_stats_service::StoreStatsService;
 use crate::base::transient_store_pool::TransientStorePool;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::filter::MessageFilter;
+use crate::hook::put_message_hook::BoxedPutMessageHook;
 use crate::hook::put_message_hook::PutMessageHook;
 use crate::hook::send_message_back_hook::SendMessageBackHook;
 use crate::log_file::commit_log::CommitLog;
@@ -56,8 +57,8 @@ use crate::timer::timer_message_store::TimerMessageStore;
 
 type AsyncResult<T> = Pin<Box<dyn Future<Output = Result<T, StoreError>> + Send>>;
 
-#[trait_variant::make(MessageStoreRefactor: Send)]
-pub trait MessageStoreInner {
+#[trait_variant::make(MessageStore: Send)]
+pub trait MessageStoreInner: Sync + 'static {
     /// Load previously stored messages.
     ///
     /// Returns true if successful, false otherwise.
@@ -266,7 +267,7 @@ pub trait MessageStoreInner {
     ) -> Result<i64, StoreError>;*/
 
     /// Get the store time of the message specified.
-    fn get_message_store_time_stamp(
+    fn get_message_store_timestamp(
         &self,
         topic: &CheetahString,
         queue_id: i32,
@@ -274,7 +275,7 @@ pub trait MessageStoreInner {
     ) -> i64;
 
     /// Asynchronous get the store time of the message specified.
-    async fn get_message_store_time_stamp_async(
+    async fn get_message_store_timestamp_async(
         &self,
         topic: &CheetahString,
         queue_id: i32,
@@ -382,7 +383,7 @@ pub trait MessageStoreInner {
     fn get_confirm_offset(&self) -> i64;
 
     /// Set confirm offset.
-    fn set_confirm_offset(&self, phy_offset: i64);
+    fn set_confirm_offset(&mut self, phy_offset: i64);
 
     /// Check if the operating system page cache is busy.
     fn is_os_page_cache_busy(&self) -> bool;
@@ -406,7 +407,7 @@ pub trait MessageStoreInner {
     fn find_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue>;
 
     /// Get BrokerStatsManager of the messageStore.
-    fn get_broker_stats_manager(&self) -> Arc<BrokerStatsManager>;
+    fn get_broker_stats_manager(&self) -> Option<&Arc<BrokerStatsManager>>;
 
     /// Will be triggered when a new message is appended to commit log.
     fn on_commit_log_append<MF: MappedFile>(
@@ -446,7 +447,7 @@ pub trait MessageStoreInner {
     fn get_commit_log(&self) -> Arc<CommitLog>;
 
     /// Get running flags
-    fn get_running_flags(&self) -> Arc<RunningFlags>;
+    fn get_running_flags(&self) -> &RunningFlags;
 
     /// Get the transient store pool
     fn get_transient_store_pool(&self) -> Arc<TransientStorePool>;
@@ -482,10 +483,10 @@ pub trait MessageStoreInner {
     fn increase_offset(&self, msg: &MessageExtBrokerInner, message_num: i16);
 
     /// Get master broker message store in process in broker container
-    fn get_master_store_in_process<M: MessageStoreRefactor>(&self) -> Option<Arc<M>>;
+    fn get_master_store_in_process<M: MessageStore>(&self) -> Option<Arc<M>>;
 
     /// Set master broker message store in process
-    fn set_master_store_in_process<M: MessageStoreRefactor>(&self, master_store_in_process: Arc<M>);
+    fn set_master_store_in_process<M: MessageStore>(&self, master_store_in_process: Arc<M>);
 
     /// Use FileChannel to get data
     fn get_data(&self, offset: i64, size: i32, byte_buffer: &mut BytesMut) -> bool;
@@ -509,7 +510,7 @@ pub trait MessageStoreInner {
     fn set_master_flushed_offset(&self, master_flushed_offset: i64);
 
     /// Set broker init max offset.
-    fn set_broker_init_max_offset(&self, broker_init_max_offset: i64);
+    fn set_broker_init_max_offset(&mut self, broker_init_max_offset: i64);
 
     /// Calculate the checksum of a certain range of data.
     fn calc_delta_checksum(&self, from: i64, to: i64) -> Vec<u8>;
@@ -589,4 +590,11 @@ pub trait MessageStoreInner {
 
     /// Notify message arrive if necessary
     fn notify_message_arrive_if_necessary(&self, dispatch_request: &mut DispatchRequest);
+
+    /// Set a put message hook.
+    ///
+    /// # Arguments
+    ///
+    /// * `put_message_hook` - The hook to set.
+    fn set_put_message_hook(&self, put_message_hook: BoxedPutMessageHook);
 }

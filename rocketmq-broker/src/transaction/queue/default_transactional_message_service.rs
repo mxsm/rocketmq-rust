@@ -25,7 +25,7 @@ use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
 use rocketmq_store::base::message_result::PutMessageResult;
-use rocketmq_store::log_file::MessageStore;
+use rocketmq_store::base::message_store::MessageStore;
 use tokio::sync::Mutex;
 use tracing::error;
 use tracing::warn;

@@ -26,7 +26,7 @@ use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_rust::ArcMut;
-use rocketmq_store::log_file::MessageStore;
+use rocketmq_store::base::message_store::MessageStore;
 use serde::Deserialize;
 use serde::Serialize;
 use tracing::info;
