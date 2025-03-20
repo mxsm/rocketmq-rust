@@ -1490,11 +1490,11 @@ impl MessageStoreRefactor for LocalFileMessageStore {
         todo!()
     }
 
-    fn get_consume_queue(&self, topic: &str, queue_id: i32) -> Option<Arc<dyn ConsumeQueueTrait>> {
+    fn get_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue> {
         todo!()
     }
 
-    fn find_consume_queue(&self, topic: &str, queue_id: i32) -> Option<ArcConsumeQueue> {
+    fn find_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue> {
         todo!()
     }
 
