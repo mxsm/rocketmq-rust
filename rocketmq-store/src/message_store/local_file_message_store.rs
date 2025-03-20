@@ -1159,31 +1159,51 @@ impl MessageStoreRefactor for LocalFileMessageStore {
         todo!()
     }
 
-    fn look_message_by_offset(&self, commit_log_offset: i64) -> Result<MessageExt, StoreError> {
-        todo!()
+    fn look_message_by_offset(&self, commit_log_offset: i64) -> Option<MessageExt> {
+        if let Some(sbr) = self.commit_log.get_message(commit_log_offset, 4) {
+            let size = sbr.get_buffer().get_i32();
+            self.look_message_by_offset_with_size(commit_log_offset, size)
+        } else {
+            None
+        }
     }
 
-    fn look_message_by_offset_and_size(
+    fn look_message_by_offset_with_size(
         &self,
         commit_log_offset: i64,
         size: i32,
-    ) -> Result<MessageExt, StoreError> {
-        todo!()
+    ) -> Option<MessageExt> {
+        let sbr = self.commit_log.get_message(commit_log_offset, size);
+        if let Some(sbr) = sbr {
+            if let Some(mut value) = sbr.get_bytes() {
+                MessageDecoder::decode(&mut value, true, false, false, false, false)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
     }
 
     fn select_one_message_by_offset(
         &self,
         commit_log_offset: i64,
-    ) -> Result<SelectMappedBufferResult, StoreError> {
-        todo!()
+    ) -> Option<SelectMappedBufferResult> {
+        let sbr = self.commit_log.get_message(commit_log_offset, 4);
+        if let Some(sbr) = sbr {
+            let size = sbr.get_buffer().get_i32();
+            self.commit_log.get_message(commit_log_offset, size)
+        } else {
+            None
+        }
     }
 
-    fn select_one_message_by_offset_and_size(
+    fn select_one_message_by_offset_with_size(
         &self,
         commit_log_offset: i64,
         msg_size: i32,
-    ) -> Result<SelectMappedBufferResult, StoreError> {
-        todo!()
+    ) -> Option<SelectMappedBufferResult> {
+        self.commit_log.get_message(commit_log_offset, msg_size)
     }
 
     fn get_running_data_info(&self) -> String {
