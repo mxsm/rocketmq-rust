@@ -1387,11 +1387,29 @@ impl MessageStoreRefactor for LocalFileMessageStore {
         data_start: i32,
         data_length: i32,
     ) -> Result<bool, StoreError> {
-        todo!()
+        if self.shutdown.load(Ordering::Acquire) {
+            warn!("message store has shutdown, so appendToCommitLog is forbidden");
+            return Ok(false);
+        }
+
+        let result = self
+            .commit_log
+            .append_data(start_offset, data, data_start, data_length)?;
+        if result {
+            // weak up to do commit log flush TODO
+        } else {
+            error!(
+                "DefaultMessageStore#appendToCommitLog: failed to append data to commitLog, \
+                 physical offset={}, data length={}",
+                start_offset, data_length
+            )
+        }
+        Ok(result)
     }
 
     fn execute_delete_files_manually(&self) {
-        todo!()
+        self.clean_commit_log_service
+            .execute_delete_files_manually()
     }
 
     fn query_message(
@@ -2059,7 +2077,11 @@ struct CleanCommitLogService {}
 
 impl CleanCommitLogService {
     fn run(&self) {
-        info!("clean commit log service run unimplemented!")
+        error!("clean commit log service run unimplemented!")
+    }
+
+    fn execute_delete_files_manually(&self) {
+        error!("execute delete files manually unimplemented!")
     }
 }
 
