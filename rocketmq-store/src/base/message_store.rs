@@ -188,7 +188,7 @@ pub trait MessageStoreInner {
     fn get_min_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64;
 
     /// Get the timer message store.
-    fn get_timer_message_store(&self) -> &Arc<TimerMessageStore>;
+    fn get_timer_message_store(&self) -> Option<&Arc<TimerMessageStore>>;
 
     /// Set the timer message store.
     fn set_timer_message_store(&mut self, timer_message_store: Arc<TimerMessageStore>);
@@ -240,7 +240,7 @@ pub trait MessageStoreInner {
     fn get_running_data_info(&self) -> String;
 
     /// Get timing message count for a topic.
-    fn get_timing_message_count(&self, topic: &str) -> i64;
+    fn get_timing_message_count(&self, topic: &CheetahString) -> i64;
 
     /// Message store runtime information.
     fn get_runtime_info(&self) -> HashMap<String, String>;
