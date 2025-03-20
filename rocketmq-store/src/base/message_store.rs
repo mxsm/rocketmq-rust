@@ -71,7 +71,7 @@ pub trait MessageStoreInner {
     /// Destroy this message store.
     /// Generally, all persistent files should be removed after invocation.
     fn destroy(&mut self);
-
+    /*
     /// Store a message into the store in async manner.
     ///
     /// # Parameters
@@ -80,11 +80,11 @@ pub trait MessageStoreInner {
     /// # Returns
     /// A Future with the result of the store operation
     async fn async_put_message(
-        &self,
+        &mut self,
         msg: MessageExtBrokerInner,
-    ) -> Result<PutMessageResult, StoreError>;
+    ) -> PutMessageResult;*/
 
-    /// Store a batch of messages in async manner.
+    /*    /// Store a batch of messages in async manner.
     ///
     /// # Parameters
     /// * `message_ext_batch` - The message batch
@@ -94,7 +94,7 @@ pub trait MessageStoreInner {
     async fn async_put_messages(
         &self,
         message_ext_batch: MessageExtBatch,
-    ) -> Result<PutMessageResult, StoreError>;
+    ) -> Result<PutMessageResult, StoreError>;*/
 
     /// Store a message into store.
     ///
@@ -103,8 +103,7 @@ pub trait MessageStoreInner {
     ///
     /// # Returns
     /// Result of store operation
-    async fn put_message(&self, msg: MessageExtBrokerInner)
-        -> Result<PutMessageResult, StoreError>;
+    async fn put_message(&mut self, msg: MessageExtBrokerInner) -> PutMessageResult;
 
     /// Store a batch of messages.
     ///
@@ -113,10 +112,7 @@ pub trait MessageStoreInner {
     ///
     /// # Returns
     /// Result of storing batch messages
-    async fn put_messages(
-        &self,
-        message_ext_batch: MessageExtBatch,
-    ) -> Result<PutMessageResult, StoreError>;
+    async fn put_messages(&mut self, message_ext_batch: MessageExtBatch) -> PutMessageResult;
 
     /// Query messages belonging to a topic at a queue starting from given offset.
     ///

@@ -717,32 +717,68 @@ impl MessageStoreRefactor for LocalFileMessageStore {
             self.message_store_config.store_path_root_dir.as_str(),
         ));
     }
-
-    async fn async_put_message(
-        &self,
+    /*    async fn async_put_message(
+        &mut self,
         msg: MessageExtBrokerInner,
-    ) -> Result<PutMessageResult, StoreError> {
-        todo!()
-    }
+    ) ->PutMessageResult {
 
-    async fn async_put_messages(
+    }*/
+
+    /*    async fn async_put_messages(
         &self,
         message_ext_batch: MessageExtBatch,
     ) -> Result<PutMessageResult, StoreError> {
-        todo!()
+
+    }*/
+
+    async fn put_message(&mut self, msg: MessageExtBrokerInner) -> PutMessageResult {
+        for hook in self.put_message_hook_list.read().iter() {
+            if let Some(result) = hook.execute_before_put_message(&msg.message_ext_inner) {
+                return result;
+            }
+        }
+
+        if msg
+            .message_ext_inner
+            .properties()
+            .contains_key(MessageConst::PROPERTY_INNER_NUM)
+            && !MessageSysFlag::check(msg.sys_flag(), MessageSysFlag::INNER_BATCH_FLAG)
+        {
+            warn!(
+                "[BUG]The message had property {} but is not an inner batch",
+                MessageConst::PROPERTY_INNER_NUM
+            );
+            return PutMessageResult::new_default(PutMessageStatus::MessageIllegal);
+        }
+
+        if MessageSysFlag::check(msg.sys_flag(), MessageSysFlag::INNER_BATCH_FLAG) {
+            let topic_config = self.get_topic_config(msg.topic());
+            if !QueueTypeUtils::is_batch_cq(&topic_config) {
+                error!("[BUG]The message is an inner batch but cq type is not batch cq");
+                return PutMessageResult::new_default(PutMessageStatus::MessageIllegal);
+            }
+        }
+        let begin_time = Instant::now();
+        //put message to commit log
+        let result = self.commit_log.put_message(msg).await;
+        let elapsed_time = begin_time.elapsed().as_millis();
+        if elapsed_time > 500 {
+            warn!(
+                "DefaultMessageStore#putMessage: CommitLog#putMessage cost {}ms",
+                elapsed_time,
+            );
+        }
+        self.store_stats_service
+            .set_put_message_entire_time_max(elapsed_time as u64);
+        if !result.is_ok() {
+            self.store_stats_service
+                .get_put_message_failed_times()
+                .fetch_add(1, Ordering::AcqRel);
+        }
+        result
     }
 
-    async fn put_message(
-        &self,
-        msg: MessageExtBrokerInner,
-    ) -> Result<PutMessageResult, StoreError> {
-        todo!()
-    }
-
-    async fn put_messages(
-        &self,
-        message_ext_batch: MessageExtBatch,
-    ) -> Result<PutMessageResult, StoreError> {
+    async fn put_messages(&mut self, message_ext_batch: MessageExtBatch) -> PutMessageResult {
         todo!()
     }
 
