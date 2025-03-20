@@ -214,27 +214,27 @@ pub trait MessageStoreInner {
     ) -> i64;
 
     /// Look up the message by given commit log offset.
-    fn look_message_by_offset(&self, commit_log_offset: i64) -> Result<MessageExt, StoreError>;
+    fn look_message_by_offset(&self, commit_log_offset: i64) -> Option<MessageExt>;
 
     /// Look up the message by given commit log offset and size.
-    fn look_message_by_offset_and_size(
+    fn look_message_by_offset_with_size(
         &self,
         commit_log_offset: i64,
         size: i32,
-    ) -> Result<MessageExt, StoreError>;
+    ) -> Option<MessageExt>;
 
     /// Get one message from the specified commit log offset.
     fn select_one_message_by_offset(
         &self,
         commit_log_offset: i64,
-    ) -> Result<SelectMappedBufferResult, StoreError>;
+    ) -> Option<SelectMappedBufferResult>;
 
     /// Get one message from the specified commit log offset and message size.
-    fn select_one_message_by_offset_and_size(
+    fn select_one_message_by_offset_with_size(
         &self,
         commit_log_offset: i64,
         msg_size: i32,
-    ) -> Result<SelectMappedBufferResult, StoreError>;
+    ) -> Option<SelectMappedBufferResult>;
 
     /// Get the running information of this store.
     fn get_running_data_info(&self) -> String;
