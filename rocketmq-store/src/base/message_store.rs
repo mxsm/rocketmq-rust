@@ -282,13 +282,17 @@ pub trait MessageStoreInner {
     ) -> Result<i64, StoreError>;
 
     /// Get the total number of the messages in the specified queue.
-    fn get_message_total_in_queue(&self, topic: &str, queue_id: i32) -> i64;
+    fn get_message_total_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64;
 
     /// Get the raw commit log data starting from the given offset.
-    fn get_commit_log_data(&self, offset: i64) -> Result<SelectMappedBufferResult, StoreError>;
+    fn get_commit_log_data(&self, offset: i64) -> Option<SelectMappedBufferResult>;
 
     /// Get the raw commit log data starting from the given offset, across multiple mapped files.
-    fn get_bulk_commit_log_data(&self, offset: i64, size: i32) -> Vec<SelectMappedBufferResult>;
+    fn get_bulk_commit_log_data(
+        &self,
+        offset: i64,
+        size: i32,
+    ) -> Option<Vec<SelectMappedBufferResult>>;
 
     /// Append data to commit log.
     fn append_to_commit_log(
