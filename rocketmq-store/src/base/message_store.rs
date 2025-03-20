@@ -174,20 +174,24 @@ pub trait MessageStoreInner {
     ) -> Result<GetMessageResult, StoreError>;*/
 
     /// Get maximum offset of the topic queue.
-    fn get_max_offset_in_queue(&self, topic: &str, queue_id: i32) -> i64;
+    fn get_max_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64;
 
     /// Get maximum offset of the topic queue.
-    fn get_max_offset_in_queue_committed(&self, topic: &str, queue_id: i32, committed: bool)
-        -> i64;
+    fn get_max_offset_in_queue_committed(
+        &self,
+        topic: &CheetahString,
+        queue_id: i32,
+        committed: bool,
+    ) -> i64;
 
     /// Get the minimum offset of the topic queue.
-    fn get_min_offset_in_queue(&self, topic: &str, queue_id: i32) -> i64;
+    fn get_min_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64;
 
     /// Get the timer message store.
-    fn get_timer_message_store(&self) -> Option<Arc<TimerMessageStore>>;
+    fn get_timer_message_store(&self) -> &Arc<TimerMessageStore>;
 
     /// Set the timer message store.
-    fn set_timer_message_store(&self, timer_message_store: Arc<TimerMessageStore>);
+    fn set_timer_message_store(&mut self, timer_message_store: Arc<TimerMessageStore>);
 
     /// Get the offset of the message in the commit log (physical offset).
     fn get_commit_log_offset_in_queue(

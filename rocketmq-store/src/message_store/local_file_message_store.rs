@@ -1097,29 +1097,43 @@ impl MessageStoreRefactor for LocalFileMessageStore {
 
     }*/
 
-    fn get_max_offset_in_queue(&self, topic: &str, queue_id: i32) -> i64 {
-        todo!()
+    fn get_max_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64 {
+        self.get_max_offset_in_queue_committed(topic, queue_id, true)
     }
 
     fn get_max_offset_in_queue_committed(
         &self,
-        topic: &str,
+        topic: &CheetahString,
         queue_id: i32,
         committed: bool,
     ) -> i64 {
-        todo!()
+        if committed {
+            let queue = self
+                .consume_queue_store
+                .find_or_create_consume_queue(topic, queue_id);
+
+            queue.get_max_offset_in_queue()
+        } else {
+            self.consume_queue_store
+                .get_max_offset(topic, queue_id)
+                .unwrap_or_default()
+        }
     }
 
-    fn get_min_offset_in_queue(&self, topic: &str, queue_id: i32) -> i64 {
-        todo!()
+    #[inline]
+    fn get_min_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64 {
+        self.consume_queue_store
+            .get_min_offset_in_queue(topic, queue_id)
     }
 
-    fn get_timer_message_store(&self) -> Option<Arc<TimerMessageStore>> {
-        todo!()
+    #[inline]
+    fn get_timer_message_store(&self) -> &Arc<TimerMessageStore> {
+        &self.timer_message_store
     }
 
-    fn set_timer_message_store(&self, timer_message_store: Arc<TimerMessageStore>) {
-        todo!()
+    #[inline]
+    fn set_timer_message_store(&mut self, timer_message_store: Arc<TimerMessageStore>) {
+        self.timer_message_store = timer_message_store;
     }
 
     fn get_commit_log_offset_in_queue(
