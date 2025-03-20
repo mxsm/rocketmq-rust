@@ -779,7 +779,29 @@ impl MessageStoreRefactor for LocalFileMessageStore {
     }
 
     async fn put_messages(&mut self, message_ext_batch: MessageExtBatch) -> PutMessageResult {
-        todo!()
+        for hook in self.put_message_hook_list.read().iter() {
+            if let Some(result) = hook.execute_before_put_message(
+                &message_ext_batch.message_ext_broker_inner.message_ext_inner,
+            ) {
+                return result;
+            }
+        }
+
+        let begin_time = Instant::now();
+        //put message to commit log
+        let result = self.commit_log.put_messages(message_ext_batch).await;
+        let elapsed_time = begin_time.elapsed().as_millis();
+        if elapsed_time > 500 {
+            warn!("not in lock eclipse time(ms) {}ms", elapsed_time,);
+        }
+        self.store_stats_service
+            .set_put_message_entire_time_max(elapsed_time as u64);
+        if !result.is_ok() {
+            self.store_stats_service
+                .get_put_message_failed_times()
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        result
     }
 
     fn get_message(
