@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use cheetah_string::CheetahString;
 use rocketmq_common::common::config_manager::ConfigManager;
 
 pub struct TimerMetrics;
