@@ -50,7 +50,7 @@ use crate::base::select_result::SelectMappedBufferResult;
 use crate::base::transient_store_pool::TransientStorePool;
 use crate::config::flush_disk_type::FlushDiskType;
 use crate::log_file::mapped_file::reference_resource::ReferenceResource;
-use crate::log_file::mapped_file::reference_resource_impl::ReferenceResourceImpl;
+use crate::log_file::mapped_file::reference_resource_counter::ReferenceResourceCounter;
 use crate::log_file::mapped_file::MappedFile;
 
 pub const OS_PAGE_SIZE: u64 = 1024 * 4;
@@ -59,7 +59,7 @@ static TOTAL_MAPPED_VIRTUAL_MEMORY: AtomicI64 = AtomicI64::new(0);
 static TOTAL_MAPPED_FILES: AtomicI32 = AtomicI32::new(0);
 
 pub struct DefaultMappedFile {
-    reference_resource: ReferenceResourceImpl,
+    reference_resource: ReferenceResourceCounter,
     file: File,
     mmapped_file: SyncUnsafeCellWrapper<MmapMut>,
     transient_store_pool: Option<TransientStorePool>,
@@ -124,7 +124,7 @@ impl DefaultMappedFile {
 
         let mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
         Self {
-            reference_resource: ReferenceResourceImpl::new(),
+            reference_resource: ReferenceResourceCounter::new(),
             file,
             mmapped_file: SyncUnsafeCellWrapper::new(mmap),
             file_name,
@@ -191,7 +191,7 @@ impl DefaultMappedFile {
 
         let mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
         Self {
-            reference_resource: ReferenceResourceImpl::new(),
+            reference_resource: ReferenceResourceCounter::new(),
             file,
             file_name,
             file_from_offset,

@@ -32,7 +32,7 @@ use crate::config::flush_disk_type::FlushDiskType;
 
 pub mod default_mapped_file_impl;
 pub(crate) mod reference_resource;
-mod reference_resource_impl;
+mod reference_resource_counter;
 
 pub trait MappedFile {
     /// Returns the file name of the mapped file.

@@ -24,14 +24,14 @@ use rocketmq_common::TimeUtils::get_current_millis;
 
 use crate::log_file::mapped_file::reference_resource::ReferenceResource;
 
-pub struct ReferenceResourceImpl {
+pub struct ReferenceResourceCounter {
     ref_count: AtomicI64,
     available: AtomicBool,
     cleanup_over: AtomicBool,
     first_shutdown_timestamp: AtomicU64,
 }
 
-impl ReferenceResourceImpl {
+impl ReferenceResourceCounter {
     pub fn new() -> Self {
         Self {
             ref_count: AtomicI64::new(1),
@@ -42,7 +42,7 @@ impl ReferenceResourceImpl {
     }
 }
 
-impl ReferenceResource for ReferenceResourceImpl {
+impl ReferenceResource for ReferenceResourceCounter {
     fn hold(&self) -> bool {
         if self.is_available() {
             if self.ref_count.fetch_add(1, Ordering::SeqCst) > 0 {
@@ -104,7 +104,7 @@ mod tests {
 
     #[test]
     fn reference_resource_impl_initializes_correctly() {
-        let resource = ReferenceResourceImpl::new();
+        let resource = ReferenceResourceCounter::new();
         assert_eq!(resource.get_ref_count(), 1);
         assert!(resource.is_available());
         assert!(!resource.is_cleanup_over());
@@ -112,14 +112,14 @@ mod tests {
 
     #[test]
     fn hold_increases_ref_count_when_available() {
-        let resource = ReferenceResourceImpl::new();
+        let resource = ReferenceResourceCounter::new();
         assert!(resource.hold());
         assert_eq!(resource.get_ref_count(), 2);
     }
 
     #[test]
     fn hold_does_not_increase_ref_count_when_not_available() {
-        let resource = ReferenceResourceImpl::new();
+        let resource = ReferenceResourceCounter::new();
         resource.shutdown(0);
         assert!(!resource.hold());
         assert_eq!(resource.get_ref_count(), 0);
@@ -127,7 +127,7 @@ mod tests {
 
     #[test]
     fn shutdown_sets_unavailable_and_releases() {
-        let resource = ReferenceResourceImpl::new();
+        let resource = ReferenceResourceCounter::new();
         resource.shutdown(0);
         assert!(!resource.is_available());
         assert_eq!(resource.get_ref_count(), 0);
@@ -135,7 +135,7 @@ mod tests {
 
     #[test]
     fn release_decreases_ref_count() {
-        let resource = ReferenceResourceImpl::new();
+        let resource = ReferenceResourceCounter::new();
         resource.hold();
         resource.release();
         assert_eq!(resource.get_ref_count(), 1);
@@ -143,7 +143,7 @@ mod tests {
 
     #[test]
     fn release_triggers_cleanup_when_ref_count_zero() {
-        let resource = Arc::new(ReferenceResourceImpl::new());
+        let resource = Arc::new(ReferenceResourceCounter::new());
         let resource_clone = Arc::clone(&resource);
         resource_clone.release();
         assert!(resource.is_cleanup_over());
@@ -151,7 +151,7 @@ mod tests {
 
     #[test]
     fn is_cleanup_over_returns_true_when_cleanup_complete() {
-        let resource = ReferenceResourceImpl::new();
+        let resource = ReferenceResourceCounter::new();
         resource.release();
         assert!(resource.is_cleanup_over());
     }
