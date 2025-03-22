@@ -1624,7 +1624,10 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn find_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue> {
-        todo!()
+        Some(
+            self.consume_queue_store
+                .find_or_create_consume_queue(topic, queue_id),
+        )
     }
 
     fn get_broker_stats_manager(&self) -> Option<&Arc<BrokerStatsManager>> {
