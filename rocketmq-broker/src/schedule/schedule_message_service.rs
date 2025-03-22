@@ -27,7 +27,6 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
-use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
