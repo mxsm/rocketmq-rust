@@ -462,7 +462,7 @@ impl MappedFile for DefaultMappedFile {
     #[inline]
     fn flush(&self, flush_least_pages: i32) -> i32 {
         if self.is_able_to_flush(flush_least_pages) {
-            if self.hold() {
+            if MappedFile::hold(self) {
                 let value = self.get_read_position();
                 self.mapped_byte_buffer_access_count_since_last_swap
                     .fetch_add(1, Ordering::AcqRel);
