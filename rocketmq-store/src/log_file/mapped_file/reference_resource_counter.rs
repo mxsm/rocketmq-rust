@@ -45,52 +45,60 @@ impl ReferenceResourceCounter {
 impl ReferenceResource for ReferenceResourceCounter {
     fn hold(&self) -> bool {
         if self.is_available() {
-            if self.ref_count.fetch_add(1, Ordering::SeqCst) > 0 {
+            if self.ref_count.fetch_add(1, Ordering::AcqRel) > 0 {
                 return true;
             } else {
-                self.ref_count.fetch_sub(1, Ordering::SeqCst);
+                self.ref_count.fetch_sub(1, Ordering::AcqRel);
             }
         }
         false
     }
 
+    #[inline]
     fn is_available(&self) -> bool {
         self.available.load(Ordering::SeqCst)
     }
 
     fn shutdown(&self, interval_forcibly: u64) {
-        if self.available.swap(false, Ordering::SeqCst) {
+        if self
+            .available
+            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Relaxed)
+            == Ok(true)
+        {
             self.first_shutdown_timestamp
-                .store(get_current_millis(), Ordering::SeqCst);
+                .store(get_current_millis(), Ordering::Release);
             self.release();
         } else if self.get_ref_count() > 0
-            && get_current_millis() - self.first_shutdown_timestamp.load(Ordering::SeqCst)
+            && get_current_millis() - self.first_shutdown_timestamp.load(Ordering::Acquire)
                 >= interval_forcibly
         {
             self.ref_count
-                .store(-1000 - self.get_ref_count(), Ordering::SeqCst);
+                .store(-1000 - self.get_ref_count(), Ordering::Release);
             self.release();
         }
     }
 
     fn release(&self) {
-        let value = self.ref_count.fetch_sub(1, Ordering::SeqCst) - 1;
+        let value = self.ref_count.fetch_sub(1, Ordering::AcqRel) - 1;
         if value > 0 {
             return;
         }
 
         let cleanup_over = self.cleanup(value);
-        self.cleanup_over.store(cleanup_over, Ordering::SeqCst);
+        self.cleanup_over.store(cleanup_over, Ordering::Release);
     }
 
+    #[inline]
     fn get_ref_count(&self) -> i64 {
-        self.ref_count.load(Ordering::SeqCst)
+        self.ref_count.load(Ordering::Acquire)
     }
 
+    #[inline]
     fn cleanup(&self, _current_ref: i64) -> bool {
         true
     }
 
+    #[inline]
     fn is_cleanup_over(&self) -> bool {
         self.get_ref_count() <= 0 && self.cleanup_over.load(Ordering::SeqCst)
     }
