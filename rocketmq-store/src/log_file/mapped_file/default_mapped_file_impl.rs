@@ -112,14 +112,21 @@ impl DefaultMappedFile {
     pub fn new(file_name: CheetahString, file_size: u64) -> Self {
         let file_from_offset = Self::get_file_from_offset(&file_name);
         let path_buf = PathBuf::from(file_name.as_str());
-        ensure_dir_ok(path_buf.parent().unwrap().to_str().unwrap());
+        if path_buf.parent().is_none() {
+            panic!("file path is invalid: {}", file_name);
+        }
+        let dir = path_buf.parent().unwrap().to_str();
+        if dir.is_none() {
+            panic!("file path is invalid: {}", file_name);
+        }
+        ensure_dir_ok(dir.unwrap());
         let file = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .truncate(false)
             .open(path_buf)
-            .unwrap();
+            .expect("Create file failed");
         file.set_len(file_size).unwrap();
 
         let mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
@@ -153,7 +160,7 @@ impl DefaultMappedFile {
             .to_str()
             .unwrap()
             .parse::<u64>()
-            .unwrap();
+            .expect("File name parse to offset is invalid");
         file_from_offset
     }
 
@@ -166,7 +173,7 @@ impl DefaultMappedFile {
             .create(true)
             .truncate(true)
             .open(path)
-            .unwrap();
+            .expect("Open file failed");
         file.set_len(file_size)
             .unwrap_or_else(|_| panic!("failed to set file size: {}", file_name));
         file
@@ -186,8 +193,8 @@ impl DefaultMappedFile {
             .create(true)
             .truncate(false)
             .open(path_buf)
-            .unwrap();
-        file.set_len(file_size).unwrap();
+            .expect("Open file failed");
+        file.set_len(file_size).expect("Set file size failed");
 
         let mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
         Self {
@@ -455,10 +462,11 @@ impl MappedFile for DefaultMappedFile {
     #[inline]
     fn flush(&self, flush_least_pages: i32) -> i32 {
         if self.is_able_to_flush(flush_least_pages) {
-            if self.reference_resource.hold() {
+            if MappedFile::hold(self) {
                 let value = self.get_read_position();
                 self.mapped_byte_buffer_access_count_since_last_swap
                     .fetch_add(1, Ordering::AcqRel);
+
                 if self.transient_store_pool.is_none() {
                     if let Err(e) = self.mmapped_file.flush() {
                         error!("Error occurred when force data to disk: {:?}", e);
@@ -854,7 +862,7 @@ impl DefaultMappedFile {
         if self.is_full() {
             return true;
         }
-        let flush = self.flushed_position.load(Ordering::Relaxed);
+        let flush = self.flushed_position.load(Ordering::Acquire);
         let write = self.get_read_position();
         if flush_least_pages > 0 {
             return (write - flush) / OS_PAGE_SIZE as i32 >= flush_least_pages;
