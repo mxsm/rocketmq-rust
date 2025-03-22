@@ -466,7 +466,7 @@ pub trait MessageStoreInner: Sync + 'static {
     //fn get_perf_counter(&self) -> Arc<PerfCounterTicks>;
 
     /// Get the queue store
-    fn get_queue_store(&self) -> Arc<dyn ConsumeQueueStoreTrait>;
+    fn get_queue_store(&self) -> &dyn ConsumeQueueStoreTrait;
 
     /// If 'sync disk flush' is configured in this message store
     fn is_sync_disk_flush(&self) -> bool;

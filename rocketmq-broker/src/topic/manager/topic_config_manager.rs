@@ -497,7 +497,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         );
         self.persist_with_topic(
             topic_config.topic_name.as_ref().unwrap().as_str(),
-            topic_config.clone(),
+            Box::new(topic_config.clone()),
         );
     }
 

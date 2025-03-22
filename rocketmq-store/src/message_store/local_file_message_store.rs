@@ -1695,8 +1695,8 @@ impl MessageStore for LocalFileMessageStore {
         todo!()
     }
 
-    fn get_queue_store(&self) -> Arc<dyn ConsumeQueueStoreTrait> {
-        todo!()
+    fn get_queue_store(&self) -> &dyn ConsumeQueueStoreTrait {
+        &self.consume_queue_store as &dyn ConsumeQueueStoreTrait
     }
 
     fn is_sync_disk_flush(&self) -> bool {
