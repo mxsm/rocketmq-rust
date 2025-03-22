@@ -27,6 +27,7 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
@@ -64,7 +65,7 @@ const DELAY_FOR_A_SLEEP: u64 = 10;
 pub type DeliverPendingTable<MS> = Arc<DashMap<i32, Arc<Mutex<VecDeque<PutResultProcess<MS>>>>>>;
 
 pub struct ScheduleMessageService<MS> {
-    delay_level_table: ArcMut<BTreeMap<i32, i64>>,
+    delay_level_table: ArcMut<BTreeMap<i32 /* level */, i64 /* delay timeMillis */>>,
     offset_table: ArcMut<DashMap<i32, i64>>,
     started: AtomicBool,
     max_delay_level: AtomicI32,
@@ -167,15 +168,14 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
             this.load();
 
             for (level, _time_delay) in this.delay_level_table.iter() {
-                let level = *level;
                 let offset = {
                     this.offset_table
-                        .get(&level)
+                        .get(level)
                         .map_or(0, |key_value| *key_value.value())
                 };
 
                 if this.enable_async_deliver {
-                    let level_copy = level;
+                    let level_copy = *level;
                     let service = this.clone();
 
                     tokio::spawn(async move {
@@ -185,7 +185,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
                     });
                 }
 
-                let level_copy = level;
+                let level_copy = *level;
                 let offset_copy = offset;
                 let service = this.clone();
 
@@ -958,10 +958,6 @@ impl<MS: MessageStore> PutResultProcess<MS> {
         if result.put_message_status() == PutMessageStatus::PutOk {
             self.on_success(result);
         } else {
-            /*            warn!(
-                "ScheduleMessageService put message failed. info: {}.",
-                result
-            );*/
             self.on_exception();
         }
     }
@@ -1103,11 +1099,11 @@ impl<MS: MessageStore> PutResultProcess<MS> {
         info!("Resend message, info: {}", self);
 
         // Gradually increase the resend interval
-        let _sleep_time = std::cmp::min(
-            self.resend_count.fetch_add(1, Ordering::SeqCst) * 100,
+        let sleep_time = std::cmp::min(
+            (self.resend_count.fetch_add(1, Ordering::SeqCst) + 1) * 100,
             60 * 1000,
         );
-        //  thread::sleep(Duration::from_millis(sleep_time as u64));
+        tokio::time::sleep(Duration::from_millis(sleep_time as u64)).await;
 
         // Look up the message and resend it
         match self
