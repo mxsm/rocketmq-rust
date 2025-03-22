@@ -161,7 +161,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
         if this
             .started
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
-            .is_ok()
+            == Ok(false)
         {
             // maybe need to optimize
             this.load();
