@@ -211,17 +211,15 @@ impl ClientMetadata {
                     TopicQueueMappingUtils::get_mock_broker_name(&scope),
                     i,
                 );
-                if !mq_endpoints.contains_key(&mq) {
-                    mq_end_points_of_broker.insert(
-                        mq,
+                let broker_name = mq_endpoints
+                    .get(&mq)
+                    .map(|info| info.bname.clone().unwrap())
+                    .unwrap_or_else(|| {
                         CheetahString::from_static_str(
                             mix_all::LOGICAL_QUEUE_MOCK_BROKER_NAME_NOT_EXIST,
-                        ),
-                    );
-                } else {
-                    let broker_name = mq_endpoints.get(&mq).unwrap().bname.clone().unwrap();
-                    mq_end_points_of_broker.insert(mq, broker_name);
-                }
+                        )
+                    });
+                mq_end_points_of_broker.insert(mq, broker_name);
             }
         }
 
