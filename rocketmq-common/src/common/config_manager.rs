@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+use std::any::Any;
 use std::collections::HashMap;
 
 use tracing::error;
@@ -82,7 +82,7 @@ pub trait ConfigManager {
     ///
     /// This method persists the configuration with a given topic.
     /// The actual implementation is delegated to the `persist` method.
-    fn persist_with_topic<T>(&mut self, _topic_name: &str, _t: T) {
+    fn persist_with_topic(&mut self, _topic_name: &str, _t: Box<dyn Any>) {
         self.persist()
     }
 
@@ -90,7 +90,7 @@ pub trait ConfigManager {
     ///
     /// This method persists the configuration with a given map.
     /// The actual implementation is delegated to the `persist` method.
-    fn persist_map<T>(&mut self, _m: &HashMap<String, T>) {
+    fn persist_map(&mut self, _m: &HashMap<String, Box<dyn Any>>) {
         self.persist()
     }
 

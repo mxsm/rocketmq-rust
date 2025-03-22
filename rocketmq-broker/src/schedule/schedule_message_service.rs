@@ -36,6 +36,7 @@ use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBroker
 use rocketmq_common::common::running::running_stats::RunningStats;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
+use rocketmq_common::FileUtils;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingSerializable;
@@ -386,13 +387,28 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
 impl<MS: MessageStore> ConfigManager for ScheduleMessageService<MS> {
     #[allow(unconditional_recursion)]
     fn load(&self) -> bool {
-        /*let result = ConfigManager::load(self);
+        let result = {
+            // Mock implementation for the parent class load method
+            let file_name = self.config_file_path();
+            let result = FileUtils::file_to_string(file_name.as_str());
+            match result {
+                Ok(ref content) => {
+                    if content.is_empty() {
+                        warn!("load bak config file");
+                        self.load_bak()
+                    } else {
+                        self.decode(content);
+                        info!("load Config file: {} -----OK", file_name);
+                        true
+                    }
+                }
+                Err(_) => self.load_bak(),
+            }
+        };
         let parse_result = self.parse_delay_level();
         let correct_result = self.correct_delay_offset();
 
-        result && parse_result && correct_result*/
-        error!("load schedule message service unimplemented");
-        true
+        result && parse_result && correct_result
     }
 
     fn stop(&mut self) -> bool {
