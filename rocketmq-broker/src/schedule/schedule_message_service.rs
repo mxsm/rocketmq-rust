@@ -33,10 +33,15 @@ use dashmap::DashMap;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_common::common::message::message_single;
+use rocketmq_common::common::message::MessageConst;
+use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::running::running_stats::RunningStats;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::FileUtils;
+use rocketmq_common::MessageAccessor::MessageAccessor;
+use rocketmq_common::MessageDecoder;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingSerializable;
@@ -417,9 +422,50 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
         true
     }
 
-    fn message_time_up(&self, _msg_ext: &MessageExt) -> MessageExtBrokerInner {
+    fn message_time_up(&self, msg_ext: MessageExt) -> MessageExtBrokerInner {
+        let mut inner = MessageExtBrokerInner::default();
+        let sys_flag = msg_ext.sys_flag();
+        let born_timestamp = msg_ext.born_timestamp();
+        let born_host = msg_ext.born_host();
+        let store_host = msg_ext.store_host();
+        let reconsume_times = msg_ext.reconsume_times();
+        let message = msg_ext.message;
+        if let Some(body) = message.body {
+            inner.set_body(body);
+        }
+        inner.set_flag(message.flag);
+        MessageAccessor::set_properties(&mut inner, message.properties);
+        let topic_filter_type = message_single::parse_topic_filter_type(inner.sys_flag());
+        let tags_code = MessageExtBrokerInner::tags_string2tags_code(
+            &topic_filter_type,
+            inner.get_tags().as_ref().unwrap_or(&CheetahString::empty()),
+        );
+        inner.tags_code = tags_code;
+        inner.properties_string =
+            MessageDecoder::message_properties_to_string(inner.get_properties());
+        inner.message_ext_inner.sys_flag = sys_flag;
+        inner.message_ext_inner.born_timestamp = born_timestamp;
+        inner.message_ext_inner.born_host = born_host;
+        inner.message_ext_inner.store_host = store_host;
+        inner.message_ext_inner.reconsume_times = reconsume_times;
+        inner.set_wait_store_msg_ok(false);
+        MessageAccessor::clear_property(&mut inner, MessageConst::PROPERTY_DELAY_TIME_LEVEL);
+        MessageAccessor::clear_property(&mut inner, MessageConst::PROPERTY_TIMER_DELIVER_MS);
+        MessageAccessor::clear_property(&mut inner, MessageConst::PROPERTY_TIMER_DELAY_SEC);
+        let topic = inner.get_property(&CheetahString::from_static_str(
+            MessageConst::PROPERTY_REAL_TOPIC,
+        ));
+        if let Some(topic) = topic {
+            inner.set_topic(topic);
+        }
+        let queue_id = inner.get_property(&CheetahString::from_static_str(
+            MessageConst::PROPERTY_REAL_QUEUE_ID,
+        ));
+        if let Some(queue_id) = queue_id {
+            inner.message_ext_inner.queue_id = queue_id.parse::<i32>().unwrap();
+        }
         // Mock implementation of converting a MessageExt to MessageExtBrokerInner
-        unimplemented!(" messageTimeUp not implemented")
+        inner
     }
 
     /// Gets a copy of the current offset table.
@@ -675,9 +721,9 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
                 Some(msg) => msg,
                 None => continue,
             };
-
+            let msg_id = msg_ext.msg_id().clone();
             // Process the message for delivery
-            let msg_inner = self.schedule_service.message_time_up(&msg_ext);
+            let msg_inner = self.schedule_service.message_time_up(msg_ext);
 
             // Check for transaction half messages which should be discarded
             if msg_inner.get_topic() == TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC {
@@ -691,10 +737,10 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
 
             // Deliver the message
             let deliver_suc = if self.schedule_service.enable_async_deliver {
-                self.async_deliver(msg_inner, msg_ext.msg_id(), curr_offset, offset_py, size_py)
+                self.async_deliver(msg_inner, msg_id, curr_offset, offset_py, size_py)
                     .await?
             } else {
-                self.sync_deliver(msg_inner, msg_ext.msg_id(), curr_offset, offset_py, size_py)
+                self.sync_deliver(msg_inner, msg_id, curr_offset, offset_py, size_py)
                     .await?
             };
 
@@ -730,7 +776,7 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
     async fn sync_deliver(
         &self,
         msg_inner: MessageExtBrokerInner,
-        msg_id: &str,
+        msg_id: CheetahString,
         offset: i64,
         offset_py: i64,
         size_py: i32,
@@ -755,7 +801,7 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
     async fn async_deliver(
         &self,
         msg_inner: MessageExtBrokerInner,
-        msg_id: &str,
+        msg_id: CheetahString,
         offset: i64,
         offset_py: i64,
         size_py: i32,
@@ -807,7 +853,7 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
     async fn deliver_message(
         &self,
         msg_inner: MessageExtBrokerInner,
-        msg_id: &str,
+        msg_id: CheetahString,
         offset: i64,
         offset_py: i64,
         size_py: i32,
@@ -1168,7 +1214,7 @@ impl<MS: MessageStore> PutResultProcess<MS> {
             Some(msg_ext) => {
                 // Convert to inner message
                 let schedule_service = self.broker_controller.schedule_message_service();
-                let msg_inner = schedule_service.message_time_up(&msg_ext);
+                let msg_inner = schedule_service.message_time_up(msg_ext);
 
                 // Try to put the message
                 let result = self
