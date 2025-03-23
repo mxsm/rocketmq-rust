@@ -844,12 +844,12 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
 
 /// Process for handling the result of putting a message
 pub struct PutResultProcess<MS> {
-    topic: String,
+    topic: CheetahString,
     offset: i64,
     physic_offset: i64,
     physic_size: i32,
     delay_level: i32,
-    msg_id: String,
+    msg_id: CheetahString,
     auto_resend: bool,
     future: Option<oneshot::Receiver<PutMessageResult>>,
     result_sender: Option<oneshot::Sender<PutMessageResult>>,
@@ -864,12 +864,12 @@ impl<MS: MessageStore> PutResultProcess<MS> {
     pub fn new(broker_controller: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
         let (tx, rx) = oneshot::channel();
         Self {
-            topic: String::new(),
+            topic: CheetahString::empty(),
             offset: 0,
             physic_offset: 0,
             physic_size: 0,
             delay_level: 0,
-            msg_id: String::new(),
+            msg_id: CheetahString::empty(),
             auto_resend: false,
             future: Some(rx),
             result_sender: Some(tx),
@@ -880,7 +880,7 @@ impl<MS: MessageStore> PutResultProcess<MS> {
     }
 
     /// Set the topic for this process
-    pub fn set_topic(mut self, topic: impl Into<String>) -> Self {
+    pub fn set_topic(mut self, topic: impl Into<CheetahString>) -> Self {
         self.topic = topic.into();
         self
     }
@@ -910,7 +910,7 @@ impl<MS: MessageStore> PutResultProcess<MS> {
     }
 
     /// Set the message ID for this process
-    pub fn set_msg_id(mut self, msg_id: impl Into<String>) -> Self {
+    pub fn set_msg_id(mut self, msg_id: impl Into<CheetahString>) -> Self {
         self.msg_id = msg_id.into();
         self
     }
