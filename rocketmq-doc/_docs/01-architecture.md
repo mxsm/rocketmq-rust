@@ -9,4 +9,4 @@ toc: false
 classes: wide
 ---
 
-WIP
+![Architecture](/assets/images/architecture.png)
