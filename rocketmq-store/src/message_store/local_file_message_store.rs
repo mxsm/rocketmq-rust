@@ -281,7 +281,7 @@ impl Drop for LocalFileMessageStore {
 
 impl LocalFileMessageStore {
     #[inline]
-    pub fn get_topic_config(&self, topic: &str) -> Option<TopicConfig> {
+    pub fn get_topic_config(&self, topic: &CheetahString) -> Option<TopicConfig> {
         if self.topic_config_table.lock().is_empty() {
             return None;
         }
@@ -1133,20 +1133,25 @@ impl MessageStore for LocalFileMessageStore {
 
     fn get_commit_log_offset_in_queue(
         &self,
-        topic: &str,
+        topic: &CheetahString,
         queue_id: i32,
         consume_queue_offset: i64,
     ) -> i64 {
         todo!()
     }
 
-    fn get_offset_in_queue_by_time(&self, topic: &str, queue_id: i32, timestamp: i64) -> i64 {
+    fn get_offset_in_queue_by_time(
+        &self,
+        topic: &CheetahString,
+        queue_id: i32,
+        timestamp: i64,
+    ) -> i64 {
         todo!()
     }
 
     fn get_offset_in_queue_by_time_with_boundary(
         &self,
-        topic: &str,
+        topic: &CheetahString,
         queue_id: i32,
         timestamp: i64,
         boundary_type: BoundaryType,
@@ -1466,11 +1471,11 @@ impl MessageStore for LocalFileMessageStore {
 
     }*/
 
-    fn update_ha_master_address(&self, new_addr: &str) {
+    fn update_ha_master_address(&self, new_addr: &CheetahString) {
         todo!()
     }
 
-    fn update_master_address(&self, new_addr: &str) {
+    fn update_master_address(&self, new_addr: &CheetahString) {
         todo!()
     }
 
@@ -1565,7 +1570,7 @@ impl MessageStore for LocalFileMessageStore {
 
     fn check_in_store_by_consume_offset(
         &self,
-        topic: &str,
+        topic: &CheetahString,
         queue_id: i32,
         consume_offset: i64,
     ) -> bool {
@@ -1831,7 +1836,7 @@ impl MessageStore for LocalFileMessageStore {
 
     fn estimate_message_count(
         &self,
-        topic: &str,
+        topic: &CheetahString,
         queue_id: i32,
         from: i64,
         to: i64,

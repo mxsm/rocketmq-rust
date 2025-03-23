@@ -196,18 +196,23 @@ pub trait MessageStoreInner: Sync + 'static {
     /// Get the offset of the message in the commit log (physical offset).
     fn get_commit_log_offset_in_queue(
         &self,
-        topic: &str,
+        topic: &CheetahString,
         queue_id: i32,
         consume_queue_offset: i64,
     ) -> i64;
 
     /// Look up the physical offset of the message by timestamp.
-    fn get_offset_in_queue_by_time(&self, topic: &str, queue_id: i32, timestamp: i64) -> i64;
+    fn get_offset_in_queue_by_time(
+        &self,
+        topic: &CheetahString,
+        queue_id: i32,
+        timestamp: i64,
+    ) -> i64;
 
     /// Look up the physical offset of the message by timestamp with boundary type.
     fn get_offset_in_queue_by_time_with_boundary(
         &self,
-        topic: &str,
+        topic: &CheetahString,
         queue_id: i32,
         timestamp: i64,
         boundary_type: BoundaryType,
@@ -328,10 +333,10 @@ pub trait MessageStoreInner: Sync + 'static {
     ) -> Result<QueryMessageResult, StoreError>;*/
 
     /// Update HA master address.
-    fn update_ha_master_address(&self, new_addr: &str);
+    fn update_ha_master_address(&self, new_addr: &CheetahString);
 
     /// Update master address.
-    fn update_master_address(&self, new_addr: &str);
+    fn update_master_address(&self, new_addr: &CheetahString);
 
     /// Return how much the slave falls behind.
     fn slave_fall_behind_much(&self) -> i64;
@@ -362,7 +367,7 @@ pub trait MessageStoreInner: Sync + 'static {
     /// Check if the given message is in store.
     fn check_in_store_by_consume_offset(
         &self,
-        topic: &str,
+        topic: &CheetahString,
         queue_id: i32,
         consume_offset: i64,
     ) -> bool;
@@ -569,7 +574,7 @@ pub trait MessageStoreInner: Sync + 'static {
     /// Estimate number of messages, within [from, to], which match given filter
     fn estimate_message_count(
         &self,
-        topic: &str,
+        topic: &CheetahString,
         queue_id: i32,
         from: i64,
         to: i64,
