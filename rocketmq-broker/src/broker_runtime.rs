@@ -1331,6 +1331,11 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
+    pub fn topic_config_manager_unchecked_mut(&mut self) -> &mut TopicConfigManager<MS> {
+        unsafe { self.topic_config_manager.as_mut().unwrap_unchecked() }
+    }
+
+    #[inline]
     pub fn topic_queue_mapping_manager_mut(&mut self) -> &mut TopicQueueMappingManager {
         &mut self.topic_queue_mapping_manager
     }
@@ -1346,13 +1351,32 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
+    pub fn subscription_group_manager_unchecked_mut(
+        &mut self,
+    ) -> &mut SubscriptionGroupManager<MS> {
+        unsafe { self.subscription_group_manager.as_mut().unwrap_unchecked() }
+    }
+
+    #[inline]
     pub fn consumer_filter_manager_mut(&mut self) -> &mut ConsumerFilterManager {
         self.consumer_filter_manager.as_mut().unwrap()
     }
 
     #[inline]
+    pub fn consumer_filter_manager_unchecked_mut(&mut self) -> &mut ConsumerFilterManager {
+        unsafe { self.consumer_filter_manager.as_mut().unwrap_unchecked() }
+    }
+
+    #[inline]
     pub fn consumer_order_info_manager_mut(&mut self) -> &mut ConsumerOrderInfoManager<MS> {
         self.consumer_order_info_manager.as_mut().unwrap()
+    }
+
+    #[inline]
+    pub fn consumer_order_info_manager_unchecked_mut(
+        &mut self,
+    ) -> &mut ConsumerOrderInfoManager<MS> {
+        unsafe { self.consumer_order_info_manager.as_mut().unwrap_unchecked() }
     }
 
     #[inline]
@@ -1368,6 +1392,13 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     #[inline]
     pub fn schedule_message_service_mut(&mut self) -> &mut ArcMut<ScheduleMessageService<MS>> {
         self.schedule_message_service.as_mut().unwrap()
+    }
+
+    #[inline]
+    pub fn schedule_message_service_unchecked_mut(
+        &mut self,
+    ) -> &mut ArcMut<ScheduleMessageService<MS>> {
+        unsafe { self.schedule_message_service.as_mut().unwrap_unchecked() }
     }
 
     #[inline]
@@ -1472,8 +1503,18 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
+    pub fn topic_route_info_manager_unchecked_mut(&mut self) -> &mut TopicRouteInfoManager<MS> {
+        unsafe { self.topic_route_info_manager.as_mut().unwrap_unchecked() }
+    }
+
+    #[inline]
     pub fn escape_bridge_mut(&mut self) -> &mut EscapeBridge<MS> {
         self.escape_bridge.as_mut().unwrap()
+    }
+
+    #[inline]
+    pub fn escape_bridge_unchecked_mut(&mut self) -> &mut EscapeBridge<MS> {
+        unsafe { self.escape_bridge.as_mut().unwrap_unchecked() }
     }
 
     #[inline]
@@ -1507,6 +1548,11 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
+    pub fn topic_config_manager_unchecked(&self) -> &TopicConfigManager<MS> {
+        unsafe { self.topic_config_manager.as_ref().unwrap_unchecked() }
+    }
+
+    #[inline]
     pub fn topic_queue_mapping_manager(&self) -> &TopicQueueMappingManager {
         &self.topic_queue_mapping_manager
     }
@@ -1522,13 +1568,28 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
+    pub fn subscription_group_manager_unchecked(&self) -> &SubscriptionGroupManager<MS> {
+        unsafe { self.subscription_group_manager.as_ref().unwrap_unchecked() }
+    }
+
+    #[inline]
     pub fn consumer_filter_manager(&self) -> &ConsumerFilterManager {
         self.consumer_filter_manager.as_ref().unwrap()
     }
 
     #[inline]
+    pub fn consumer_filter_manager_unchecked(&self) -> &ConsumerFilterManager {
+        unsafe { self.consumer_filter_manager.as_ref().unwrap_unchecked() }
+    }
+
+    #[inline]
     pub fn consumer_order_info_manager(&self) -> &ConsumerOrderInfoManager<MS> {
         self.consumer_order_info_manager.as_ref().unwrap()
+    }
+
+    #[inline]
+    pub fn consumer_order_info_manager_unchecked(&self) -> &ConsumerOrderInfoManager<MS> {
+        unsafe { self.consumer_order_info_manager.as_ref().unwrap_unchecked() }
     }
 
     #[inline]
@@ -1552,8 +1613,18 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
+    pub fn schedule_message_service_unchecked(&self) -> &ArcMut<ScheduleMessageService<MS>> {
+        unsafe { self.schedule_message_service.as_ref().unwrap_unchecked() }
+    }
+
+    #[inline]
     pub fn timer_message_store(&self) -> &Option<TimerMessageStore> {
         &self.timer_message_store
+    }
+
+    #[inline]
+    pub fn timer_message_store_unchecked(&self) -> &TimerMessageStore {
+        unsafe { self.timer_message_store.as_ref().unwrap_unchecked() }
     }
 
     #[inline]
@@ -1582,8 +1653,22 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
+    pub fn broker_stats_manager_unchecked(&self) -> &BrokerStatsManager {
+        unsafe { self.broker_stats_manager.as_ref().unwrap_unchecked() }
+    }
+
+    #[inline]
     pub fn topic_queue_mapping_clean_service(&self) -> &Option<TopicQueueMappingCleanService> {
         &self.topic_queue_mapping_clean_service
+    }
+
+    #[inline]
+    pub fn topic_queue_mapping_clean_service_unchecked(&self) -> &TopicQueueMappingCleanService {
+        unsafe {
+            self.topic_queue_mapping_clean_service
+                .as_ref()
+                .unwrap_unchecked()
+        }
     }
 
     #[inline]
@@ -1607,6 +1692,11 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
+    pub fn pull_request_hold_service_unchecked(&self) -> &PullRequestHoldService<MS> {
+        unsafe { self.pull_request_hold_service.as_ref().unwrap_unchecked() }
+    }
+
+    #[inline]
     pub fn rebalance_lock_manager(&self) -> &RebalanceLockManager {
         &self.rebalance_lock_manager
     }
@@ -1615,11 +1705,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     pub fn broker_member_group(&self) -> &BrokerMemberGroup {
         &self.broker_member_group
     }
-
-    /*    #[inline]
-    pub fn transactional_message_service(&self) -> &Option<DefaultTransactionalMessageService<MS>> {
-        &self.transactional_message_service
-    }*/
 
     #[inline]
     pub fn transactional_message_check_listener(
