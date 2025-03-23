@@ -63,6 +63,48 @@ const DELAY_FOR_A_SLEEP: u64 = 10;
 
 pub type DeliverPendingTable<MS> = Arc<DashMap<i32, Arc<Mutex<VecDeque<PutResultProcess<MS>>>>>>;
 
+/// `ScheduleMessageService` is the core service in RocketMQ specifically designed to manage and
+/// deliver delayed messages (scheduled messages). It supports the consumption of messages after a
+/// specified time through predefined delay levels, making it suitable for scenarios such as order
+/// timeouts and triggering scheduled tasks.
+///
+/// ### Core Features
+///
+/// #### 1. Storage Management of Delayed Messages
+///
+/// **Receiving Delayed Messages**:
+/// When a producer sends a delayed message, the Broker temporarily stores the message in a special
+/// internal Topic (`SCHEDULE_TOPIC_XXXX`) instead of directly writing it to the target Topic. Each
+/// delay level corresponds to a queue (e.g., Queue 0 of `SCHEDULE_TOPIC_XXXX` corresponds to a 1 -
+/// second delay).
+///
+/// **Storage Structure**:
+/// - The original Topic and queue information of the message are stored in the message attributes.
+/// - The delay time is specified by the `delayTimeLevel` parameter (e.g., Level 3 corresponds to a
+///   10 - second delay).
+///
+/// #### 2. Periodic Scanning and Message Redelivery
+///
+/// **Scheduled Task Scheduling**:
+/// An independent scheduled task is created for each delay level to periodically scan the messages
+/// in the corresponding queue.
+///
+/// **Delay Time Check**:
+/// When the preset delay time of a message arrives, it is retrieved from `SCHEDULE_TOPIC_XXXX` and
+/// redelivered to the queue of the original target Topic.
+///
+/// **Consumption Visibility**:
+/// After delivery, the message can be normally pulled by the consumer, ensuring the delay takes
+/// effect.
+///
+/// #### 3. Exception Recovery and Consistency Assurance
+///
+/// **Crash Recovery**:
+/// When the Broker restarts, it recovers the unprocessed delayed messages to avoid message loss.
+///
+/// **Duplicate Delivery Prevention**:
+/// Duplicate delivery is prevented through the unique message key (`uniqKey`) and the storage
+/// offset (`commitLogOffset`).
 pub struct ScheduleMessageService<MS> {
     delay_level_table: ArcMut<BTreeMap<i32 /* level */, i64 /* delay timeMillis */>>,
     offset_table: ArcMut<DashMap<i32, i64>>,
@@ -258,6 +300,14 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
         Ok(result && parse_result)
     }
 
+    /// Corrects delay offsets based on actual consume queue state.
+    ///
+    /// Ensures all offsets are within valid bounds for their respective consume queues.
+    /// If an offset is out of bounds, it's corrected and logged.
+    ///
+    /// # Returns
+    ///
+    /// `true` if corrections were successful, `false` otherwise
     pub fn correct_delay_offset(&self) -> bool {
         let topic = CheetahString::from_static_str(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC);
         for delay_level in self.delay_level_table.keys() {
@@ -372,6 +422,11 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
         unimplemented!(" messageTimeUp not implemented")
     }
 
+    /// Gets a copy of the current offset table.
+    ///
+    /// # Returns
+    ///
+    /// A HashMap containing all delay levels and their current offsets
     pub fn get_offset_table(&self) -> HashMap<i32, i64> {
         self.offset_table
             .as_ref()
