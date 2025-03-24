@@ -129,7 +129,9 @@ where
     }
 
     pub fn set_pop_revive_service_status(&mut self, status: bool) {
-        error!("set_pop_revive_service_status is not implemented");
+        for pop_revive_service in self.pop_revive_services.iter_mut() {
+            pop_revive_service.set_should_run_pop_revive(status);
+        }
     }
 }
 

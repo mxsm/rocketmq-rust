@@ -813,6 +813,10 @@ impl<MS: MessageStore> PopReviveService<MS> {
         // Implement the logic to revive message from checkpoint
         unimplemented!()
     }
+
+    pub fn set_should_run_pop_revive(&mut self, should_run_pop_revive: bool) {
+        self.should_run_pop_revive = should_run_pop_revive;
+    }
 }
 
 fn reach_tail(pull_result: &PullResult, offset: i64) -> bool {
