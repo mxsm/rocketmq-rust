@@ -19,6 +19,7 @@ use std::sync::atomic::AtomicI64;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::system_clock::SystemClock;
+use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_rust::ArcMut;
 use tracing::error;
 use tracing::warn;
@@ -51,6 +52,8 @@ pub const MAGIC_DELETE: i32 = 1 << 2;
 pub struct TimerMessageStore {
     pub curr_read_time_ms: AtomicI64,
     pub curr_queue_offset: AtomicI64,
+    pub last_enqueue_but_expired_time: u64,
+    pub last_enqueue_but_expired_store_time: u64,
     pub default_message_store: Option<ArcMut<LocalFileMessageStore>>,
     pub timer_metrics: TimerMetrics,
 }
@@ -66,6 +69,8 @@ impl Clone for TimerMessageStore {
                 self.curr_queue_offset
                     .load(std::sync::atomic::Ordering::Relaxed),
             ),
+            last_enqueue_but_expired_time: self.last_enqueue_but_expired_time,
+            last_enqueue_but_expired_store_time: self.last_enqueue_but_expired_store_time,
             default_message_store: self.default_message_store.clone(),
             timer_metrics: TimerMetrics,
         }
@@ -97,7 +102,11 @@ impl TimerMessageStore {
     }
 
     pub fn get_enqueue_behind_millis(&self) -> i64 {
-        unimplemented!("getEnqueueBehindMillis")
+        if get_current_millis() - self.last_enqueue_but_expired_time < 2000 {
+            ((get_current_millis() - self.last_enqueue_but_expired_store_time) / 1000) as i64
+        } else {
+            0
+        }
     }
 
     pub fn get_enqueue_behind(&self) -> i64 {
@@ -136,6 +145,8 @@ impl TimerMessageStore {
         Self {
             curr_read_time_ms: AtomicI64::new(0),
             curr_queue_offset: AtomicI64::new(0),
+            last_enqueue_but_expired_time: 0,
+            last_enqueue_but_expired_store_time: 0,
             default_message_store,
             timer_metrics: TimerMetrics,
         }
@@ -145,6 +156,8 @@ impl TimerMessageStore {
         Self {
             curr_read_time_ms: AtomicI64::new(0),
             curr_queue_offset: AtomicI64::new(0),
+            last_enqueue_but_expired_time: 0,
+            last_enqueue_but_expired_store_time: 0,
             default_message_store: None,
             timer_metrics: TimerMetrics,
         }
