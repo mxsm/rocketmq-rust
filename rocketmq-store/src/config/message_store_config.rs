@@ -311,7 +311,7 @@ impl Default for MessageStoreConfig {
             slave_timeout: 0,
             message_delay_level: "1s 5s 10s 30s 1m 2m 3m 4m 5m 6m 7m 8m 9m 10m 20m 30m 1h 2h"
                 .to_string(),
-            flush_delay_offset_interval: 0,
+            flush_delay_offset_interval: 10_000,
             clean_file_forcibly_enable: false,
             warm_mapped_file_enable: false,
             offset_check_in_slave: false,
