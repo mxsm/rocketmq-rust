@@ -1663,8 +1663,8 @@ impl MessageStore for LocalFileMessageStore {
         todo!()
     }
 
-    fn get_message_store_config(&self) -> Arc<MessageStoreConfig> {
-        todo!()
+    fn get_message_store_config(&self) -> &MessageStoreConfig {
+        self.message_store_config.as_ref()
     }
 
     fn get_store_stats_service(&self) -> Arc<StoreStatsService> {

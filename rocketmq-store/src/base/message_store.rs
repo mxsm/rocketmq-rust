@@ -437,7 +437,7 @@ pub trait MessageStoreInner: Sync + 'static {
     fn finish_commit_log_dispatch(&self);
 
     /// Get the message store config
-    fn get_message_store_config(&self) -> Arc<MessageStoreConfig>;
+    fn get_message_store_config(&self) -> &MessageStoreConfig;
 
     /// Get the statistics service
     fn get_store_stats_service(&self) -> Arc<StoreStatsService>;
