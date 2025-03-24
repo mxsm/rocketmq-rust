@@ -48,7 +48,6 @@ use rocketmq_store::message_store::local_file_message_store::LocalFileMessageSto
 use rocketmq_store::stats::broker_stats::BrokerStats;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use rocketmq_store::timer::timer_message_store::TimerMessageStore;
-use tracing::error;
 use tracing::info;
 use tracing::warn;
 
