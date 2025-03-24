@@ -15,13 +15,16 @@
  * limitations under the License.
  */
 
-use tracing::warn;
+use tracing::error;
 
 #[derive(Clone)]
 pub struct TransactionalMessageCheckService;
 
 impl TransactionalMessageCheckService {
+    pub fn start(&mut self) {
+        error!("TransactionalMessageCheckService start not implemented");
+    }
     pub fn shutdown(&mut self) {
-        warn!("TransactionalMessageCheckService shutdown not implemented");
+        error!("TransactionalMessageCheckService shutdown not implemented");
     }
 }
