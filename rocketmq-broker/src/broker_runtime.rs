@@ -880,8 +880,7 @@ impl BrokerRuntime {
         {
             let is_master =
                 self.inner.broker_config.broker_identity.broker_id == mix_all::MASTER_ID;
-            self.inner
-                .change_transaction_check_service_status(is_master);
+            self.inner.change_special_service_status(is_master);
             self.register_broker_all(true, false, true).await;
         }
 
@@ -1023,8 +1022,7 @@ impl BrokerRuntime {
                 .get_canonical_name()
         );
         let is_master = self.inner.broker_config.broker_identity.broker_id == mix_all::MASTER_ID;
-        self.inner
-            .change_transaction_check_service_status(is_master);
+        self.inner.change_special_service_status(is_master);
         self.register_broker_all(true, false, self.inner.broker_config.force_register)
             .await;
         self.inner.is_isolated.store(false, Ordering::Release);
