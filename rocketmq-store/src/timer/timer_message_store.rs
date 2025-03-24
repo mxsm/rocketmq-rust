@@ -20,6 +20,7 @@ use cheetah_string::CheetahString;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::system_clock::SystemClock;
 use rocketmq_rust::ArcMut;
+use tracing::error;
 use tracing::warn;
 
 use crate::base::message_store::MessageStore;
@@ -158,5 +159,12 @@ impl TimerMessageStore {
 
     pub fn shutdown(&mut self) {
         warn!("TimerMessageStore shutdown unimplemented, do nothing");
+    }
+
+    pub fn sync_last_read_time_ms(&mut self) {
+        error!("sync_last_read_time_ms unimplemented");
+    }
+    pub fn set_should_running_dequeue(&mut self, _should_start: bool) {
+        error!("set_should_running_dequeue unimplemented");
     }
 }

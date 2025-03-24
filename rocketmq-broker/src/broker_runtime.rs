@@ -194,6 +194,7 @@ impl BrokerRuntime {
             broker_fast_failure: BrokerFastFailure,
             cold_data_pull_request_hold_service: None,
             cold_data_cg_ctr_service: None,
+            is_schedule_service_start: Arc::new(Default::default()),
             pop_message_processor: None,
             ack_message_processor: None,
             notification_processor: None,
@@ -1300,6 +1301,7 @@ pub(crate) struct BrokerRuntimeInner<MS> {
     broker_fast_failure: BrokerFastFailure,
     cold_data_pull_request_hold_service: Option<ColdDataPullRequestHoldService>,
     cold_data_cg_ctr_service: Option<ColdDataCgCtrService>,
+    is_schedule_service_start: Arc<AtomicBool>,
 
     //Processor
     pop_message_processor: Option<ArcMut<PopMessageProcessor<MS>>>,
@@ -2133,8 +2135,25 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         }
     }
 
-    pub fn change_schedule_service_status(&mut self, _should_start: bool) {
-        error!("change_schedule_service_status not implemented");
+    pub fn change_schedule_service_status(&mut self, should_start: bool) {
+        if self.is_schedule_service_start.load(Ordering::Relaxed) != should_start {
+            info!("change_schedule_service_status changed to {}", should_start);
+            if should_start {
+                if let Some(schedule_message_service) = &self.schedule_message_service {
+                    let _ = ScheduleMessageService::start(schedule_message_service.clone());
+                }
+            } else if let Some(schedule_message_service) = &mut self.schedule_message_service {
+                schedule_message_service.stop();
+            }
+
+            self.is_schedule_service_start
+                .store(should_start, Ordering::Release);
+
+            if let Some(timer) = &mut self.timer_message_store {
+                timer.sync_last_read_time_ms();
+                timer.set_should_running_dequeue(should_start);
+            }
+        }
     }
 
     pub fn change_transaction_check_service_status(&mut self, _should_start: bool) {
