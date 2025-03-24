@@ -195,6 +195,7 @@ impl BrokerRuntime {
             cold_data_pull_request_hold_service: None,
             cold_data_cg_ctr_service: None,
             is_schedule_service_start: Arc::new(Default::default()),
+            is_transaction_check_service_start: Arc::new(Default::default()),
             pop_message_processor: None,
             ack_message_processor: None,
             notification_processor: None,
@@ -1302,6 +1303,7 @@ pub(crate) struct BrokerRuntimeInner<MS> {
     cold_data_pull_request_hold_service: Option<ColdDataPullRequestHoldService>,
     cold_data_cg_ctr_service: Option<ColdDataCgCtrService>,
     is_schedule_service_start: Arc<AtomicBool>,
+    is_transaction_check_service_start: Arc<AtomicBool>,
 
     //Processor
     pop_message_processor: Option<ArcMut<PopMessageProcessor<MS>>>,
@@ -2156,8 +2158,28 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         }
     }
 
-    pub fn change_transaction_check_service_status(&mut self, _should_start: bool) {
-        error!("change_transaction_check_service_status not implemented");
+    pub fn change_transaction_check_service_status(&mut self, should_start: bool) {
+        if self
+            .is_transaction_check_service_start
+            .load(Ordering::Relaxed)
+            != should_start
+        {
+            info!("TransactionCheckService status changed to {}", should_start);
+            if should_start {
+                if let Some(transactional_message_check_service) =
+                    &mut self.transactional_message_check_service
+                {
+                    transactional_message_check_service.start();
+                }
+            } else if let Some(transactional_message_check_service) =
+                &mut self.transactional_message_check_service
+            {
+                transactional_message_check_service.shutdown();
+            }
+
+            self.is_transaction_check_service_start
+                .store(should_start, Ordering::Release);
+        }
     }
 }
 
