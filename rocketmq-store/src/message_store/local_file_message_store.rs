@@ -1625,7 +1625,10 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn get_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue> {
-        todo!()
+        let binding = self.consume_queue_store.get_consume_queue_table();
+        let table = binding.lock();
+        let map = table.get(topic)?;
+        map.get(&queue_id).cloned()
     }
 
     fn find_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue> {
