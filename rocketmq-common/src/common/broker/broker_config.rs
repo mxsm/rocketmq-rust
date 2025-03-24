@@ -102,6 +102,18 @@ impl BrokerIdentity {
             is_in_broker_container,
         }
     }
+
+    pub fn get_canonical_name(&self) -> String {
+        match self.is_broker_container {
+            true => "BrokerContainer".to_string(),
+            false => {
+                format!(
+                    "{}_{}_{}",
+                    self.broker_cluster_name, self.broker_name, self.broker_id
+                )
+            }
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
