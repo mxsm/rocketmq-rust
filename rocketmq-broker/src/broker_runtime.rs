@@ -27,6 +27,7 @@ use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::common::constant::PermName;
+use rocketmq_common::common::mix_all;
 use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_common::common::statistics::state_getter::StateGetter;
 use rocketmq_common::TimeUtils::get_current_millis;
@@ -877,6 +878,10 @@ impl BrokerRuntime {
             && !self.inner.message_store_config.enable_dledger_commit_log
             && !self.inner.broker_config.duplication_enable
         {
+            let is_master =
+                self.inner.broker_config.broker_identity.broker_id == mix_all::MASTER_ID;
+            self.inner
+                .change_transaction_check_service_status(is_master);
             self.register_broker_all(true, false, true).await;
         }
 
@@ -968,7 +973,7 @@ impl BrokerRuntime {
         }
 
         if self.inner.broker_config.skip_pre_online {
-            self.start_service_without_condition();
+            self.start_service_without_condition().await;
         }
 
         let broker_out_api_inner = self.inner.clone();
@@ -1009,7 +1014,21 @@ impl BrokerRuntime {
 
     pub(crate) fn schedule_send_heartbeat(&mut self) {}
 
-    pub(crate) fn start_service_without_condition(&mut self) {}
+    pub(crate) async fn start_service_without_condition(&mut self) {
+        info!(
+            "{} start service",
+            self.inner
+                .broker_config
+                .broker_identity
+                .get_canonical_name()
+        );
+        let is_master = self.inner.broker_config.broker_identity.broker_id == mix_all::MASTER_ID;
+        self.inner
+            .change_transaction_check_service_status(is_master);
+        self.register_broker_all(true, false, self.inner.broker_config.force_register)
+            .await;
+        self.inner.is_isolated.store(false, Ordering::Release);
+    }
 
     /// Register broker to name remoting_server
     pub(crate) async fn register_broker_all(
@@ -2179,6 +2198,20 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             self.is_transaction_check_service_start
                 .store(should_start, Ordering::Release);
         }
+    }
+
+    pub fn start_service(&mut self, _min_broker_id: u64, _min_broker_addr: CheetahString) {
+        unimplemented!("BrokerRuntimeInner#start_service");
+    }
+
+    fn on_min_broker_change(
+        &mut self,
+        _min_broker_id: i64,
+        _min_broker_addr: CheetahString,
+        _offline_broker_addr: Option<CheetahString>,
+        _master_ha_addr: Option<CheetahString>,
+    ) {
+        unimplemented!("BrokerRuntimeInner#on_min_broker_change");
     }
 }
 
