@@ -127,6 +127,10 @@ where
             PopReviveService::start(pop_revive_service.clone());
         }
     }
+
+    pub fn set_pop_revive_service_status(&mut self, status: bool) {
+        error!("set_pop_revive_service_status is not implemented");
+    }
 }
 
 impl<MS> AckMessageProcessor<MS>
