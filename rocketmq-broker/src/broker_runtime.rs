@@ -48,6 +48,7 @@ use rocketmq_store::message_store::local_file_message_store::LocalFileMessageSto
 use rocketmq_store::stats::broker_stats::BrokerStats;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use rocketmq_store::timer::timer_message_store::TimerMessageStore;
+use tracing::error;
 use tracing::info;
 use tracing::warn;
 
@@ -73,6 +74,7 @@ use crate::offset::manager::broadcast_offset_manager::BroadcastOffsetManager;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
 use crate::offset::manager::consumer_order_info_manager::ConsumerOrderInfoManager;
 use crate::out_api::broker_outer_api::BrokerOuterAPI;
+use crate::plugin::broker_attached_plugin::BrokerAttachedPlugin;
 use crate::processor::ack_message_processor::AckMessageProcessor;
 use crate::processor::admin_broker_processor::AdminBrokerProcessor;
 use crate::processor::change_invisible_time_processor::ChangeInvisibleTimeProcessor;
@@ -195,6 +197,7 @@ impl BrokerRuntime {
             pop_message_processor: None,
             ack_message_processor: None,
             notification_processor: None,
+            broker_attached_plugins: vec![],
         });
         let mut stats_manager = BrokerStatsManager::new(Arc::new(inner.broker_config.clone()));
         stats_manager.set_producer_state_getter(Arc::new(ProducerStateGetter {
@@ -1302,6 +1305,7 @@ pub(crate) struct BrokerRuntimeInner<MS> {
     pop_message_processor: Option<ArcMut<PopMessageProcessor<MS>>>,
     ack_message_processor: Option<ArcMut<AckMessageProcessor<MS>>>,
     notification_processor: Option<ArcMut<NotificationProcessor>>,
+    broker_attached_plugins: Vec<Arc<dyn BrokerAttachedPlugin>>,
 }
 
 impl<MS: MessageStore> BrokerRuntimeInner<MS> {
@@ -2114,6 +2118,27 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
     pub fn notification_processor_unchecked(&self) -> &ArcMut<NotificationProcessor> {
         unsafe { self.notification_processor.as_ref().unwrap_unchecked() }
+    }
+
+    pub fn change_special_service_status(&mut self, should_start: bool) {
+        for plugin in self.broker_attached_plugins.iter() {
+            plugin.status_changed(should_start);
+        }
+        self.change_schedule_service_status(should_start);
+        self.change_transaction_check_service_status(should_start);
+
+        if let Some(ack_message_processor) = &mut self.ack_message_processor {
+            info!("Set PopReviveService Status to {}", should_start);
+            ack_message_processor.set_pop_revive_service_status(should_start);
+        }
+    }
+
+    pub fn change_schedule_service_status(&mut self, _should_start: bool) {
+        error!("change_schedule_service_status not implemented");
+    }
+
+    pub fn change_transaction_check_service_status(&mut self, _should_start: bool) {
+        error!("change_transaction_check_service_status not implemented");
     }
 }
 
