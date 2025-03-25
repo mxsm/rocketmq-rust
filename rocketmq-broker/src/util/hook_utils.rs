@@ -32,6 +32,7 @@ use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
 use rocketmq_common::MessageDecoder::message_properties_to_string;
 use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
@@ -41,6 +42,7 @@ use rocketmq_store::timer::timer_message_store::TimerMessageStore;
 use tracing::error;
 use tracing::warn;
 
+use crate::broker_runtime::BrokerRuntimeInner;
 use crate::out_api::broker_outer_api::BrokerOuterAPI;
 use crate::schedule::schedule_message_service::ScheduleMessageService;
 
@@ -166,9 +168,10 @@ impl HookUtils {
     }
 
     pub fn handle_schedule_message<MS: MessageStore>(
-        timer_message_store: &TimerMessageStore,
+        /*timer_message_store: &TimerMessageStore,
         schedule_message_service: &ScheduleMessageService<MS>,
-        message_store_config: &Arc<MessageStoreConfig>,
+        message_store_config: &Arc<MessageStoreConfig>,*/
+        broker_runtime_inner: &ArcMut<BrokerRuntimeInner<MS>>,
         msg: &mut MessageExtBrokerInner,
     ) -> Option<PutMessageResult> {
         let tran_type = MessageSysFlag::get_transaction_value(msg.sys_flag());
@@ -176,21 +179,26 @@ impl HookUtils {
             || tran_type == MessageSysFlag::TRANSACTION_COMMIT_TYPE
         {
             if !Self::is_rolled_timer_message(msg) && Self::check_if_timer_message(msg) {
-                if !message_store_config.timer_wheel_enable {
+                if !broker_runtime_inner
+                    .message_store_config()
+                    .timer_wheel_enable
+                {
                     // wheel timer is not enabled, reject the message
                     return Some(PutMessageResult::new_default(
                         PutMessageStatus::WheelTimerNotEnable,
                     ));
                 }
-                if let Some(transform_res) =
-                    Self::transform_timer_message(timer_message_store, message_store_config, msg)
-                {
+                if let Some(transform_res) = Self::transform_timer_message(
+                    broker_runtime_inner.timer_message_store_unchecked(),
+                    broker_runtime_inner.message_store_config(),
+                    msg,
+                ) {
                     return Some(transform_res);
                 }
             }
             // Delay Delivery
             if msg.message_ext_inner.message.get_delay_time_level() > 0 {
-                Self::transform_delay_level_message(schedule_message_service, msg);
+                Self::transform_delay_level_message(broker_runtime_inner, msg);
             }
         }
         None
@@ -257,7 +265,7 @@ impl HookUtils {
 
     fn transform_timer_message(
         timer_message_store: &TimerMessageStore,
-        message_store_config: &Arc<MessageStoreConfig>,
+        message_store_config: &MessageStoreConfig,
         msg: &mut MessageExtBrokerInner,
     ) -> Option<PutMessageResult> {
         let delay_level = msg.message_ext_inner.message.get_delay_time_level();
@@ -330,9 +338,10 @@ impl HookUtils {
     }
 
     pub fn transform_delay_level_message<MS: MessageStore>(
-        schedule_message_service: &ScheduleMessageService<MS>,
+        broker_runtime_inner: &ArcMut<BrokerRuntimeInner<MS>>,
         msg: &mut MessageExtBrokerInner,
     ) {
+        let schedule_message_service = broker_runtime_inner.schedule_message_service();
         if msg.message_ext_inner.message.get_delay_time_level()
             > schedule_message_service.get_max_delay_level()
         {
