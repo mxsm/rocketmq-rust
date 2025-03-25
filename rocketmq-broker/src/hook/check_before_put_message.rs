@@ -17,7 +17,7 @@
 use std::ops::Deref;
 use std::sync::Arc;
 
-use rocketmq_common::common::message::MessageTrait;
+use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_store::MessageStore;
@@ -45,11 +45,14 @@ impl<MS: MessageStore> PutMessageHook for CheckBeforePutMessageHook<MS> {
         "checkBeforePutMessage".to_string()
     }
 
-    fn execute_before_put_message(&self, msg: &mut dyn MessageTrait) -> Option<PutMessageResult> {
+    fn execute_before_put_message(
+        &self,
+        msg: &mut MessageExtBrokerInner,
+    ) -> Option<PutMessageResult> {
         HookUtils::check_before_put_message(
             self.message_store.deref(),
             &self.message_store_config,
-            msg.as_any().downcast_ref().unwrap(),
+            &msg.message_ext_inner,
         )
     }
 }
