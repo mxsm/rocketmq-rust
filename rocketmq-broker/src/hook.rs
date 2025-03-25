@@ -16,3 +16,4 @@
  */
 pub(crate) mod batch_check_before_put_message;
 pub(crate) mod check_before_put_message;
+pub(crate) mod schedule_message_hook;
