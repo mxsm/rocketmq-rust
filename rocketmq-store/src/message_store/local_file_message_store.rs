@@ -726,9 +726,9 @@ impl MessageStore for LocalFileMessageStore {
 
     }*/
 
-    async fn put_message(&mut self, msg: MessageExtBrokerInner) -> PutMessageResult {
+    async fn put_message(&mut self, mut msg: MessageExtBrokerInner) -> PutMessageResult {
         for hook in self.put_message_hook_list.read().iter() {
-            if let Some(result) = hook.execute_before_put_message(&msg.message_ext_inner) {
+            if let Some(result) = hook.execute_before_put_message(&mut msg) {
                 return result;
             }
         }
@@ -773,11 +773,11 @@ impl MessageStore for LocalFileMessageStore {
         result
     }
 
-    async fn put_messages(&mut self, message_ext_batch: MessageExtBatch) -> PutMessageResult {
+    async fn put_messages(&mut self, mut message_ext_batch: MessageExtBatch) -> PutMessageResult {
         for hook in self.put_message_hook_list.read().iter() {
-            if let Some(result) = hook.execute_before_put_message(
-                &message_ext_batch.message_ext_broker_inner.message_ext_inner,
-            ) {
+            if let Some(result) =
+                hook.execute_before_put_message(&mut message_ext_batch.message_ext_broker_inner)
+            {
                 return result;
             }
         }

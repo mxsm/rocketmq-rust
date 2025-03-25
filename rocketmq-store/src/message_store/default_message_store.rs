@@ -646,9 +646,9 @@ impl MessageStoreOld for DefaultMessageStore {
         self.state_machine_version.load(Ordering::Relaxed)
     }
 
-    async fn put_message(&mut self, msg: MessageExtBrokerInner) -> PutMessageResult {
+    async fn put_message(&mut self, mut msg: MessageExtBrokerInner) -> PutMessageResult {
         for hook in self.put_message_hook_list.read().iter() {
-            if let Some(result) = hook.execute_before_put_message(&msg.message_ext_inner) {
+            if let Some(result) = hook.execute_before_put_message(&mut msg) {
                 return result;
             }
         }
@@ -693,10 +693,10 @@ impl MessageStoreOld for DefaultMessageStore {
         result
     }
 
-    async fn put_messages(&mut self, msg_batch: MessageExtBatch) -> PutMessageResult {
+    async fn put_messages(&mut self, mut msg_batch: MessageExtBatch) -> PutMessageResult {
         for hook in self.put_message_hook_list.read().iter() {
-            if let Some(result) = hook
-                .execute_before_put_message(&msg_batch.message_ext_broker_inner.message_ext_inner)
+            if let Some(result) =
+                hook.execute_before_put_message(&mut msg_batch.message_ext_broker_inner)
             {
                 return result;
             }
