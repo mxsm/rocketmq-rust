@@ -28,6 +28,14 @@ pub struct ScheduleMessageHook<MS> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
+impl<MS: MessageStore> ScheduleMessageHook<MS> {
+    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
+        Self {
+            broker_runtime_inner,
+        }
+    }
+}
+
 impl<MS: MessageStore> PutMessageHook for ScheduleMessageHook<MS> {
     fn hook_name(&self) -> String {
         "ScheduleMessageHook".to_string()

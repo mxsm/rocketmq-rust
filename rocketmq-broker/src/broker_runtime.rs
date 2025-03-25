@@ -67,6 +67,7 @@ use crate::failover::escape_bridge::EscapeBridge;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
 use crate::hook::batch_check_before_put_message::BatchCheckBeforePutMessageHook;
 use crate::hook::check_before_put_message::CheckBeforePutMessageHook;
+use crate::hook::schedule_message_hook::ScheduleMessageHook;
 use crate::latency::broker_fast_failure::BrokerFastFailure;
 use crate::long_polling::long_polling_service::pull_request_hold_service::PullRequestHoldService;
 use crate::long_polling::notify_message_arriving_listener::NotifyMessageArrivingListener;
@@ -492,12 +493,15 @@ impl BrokerRuntime {
     pub fn register_message_store_hook(&mut self) {
         let config = self.inner.message_store_config.clone();
         let arc = self.inner.topic_config_manager().topic_config_table();
+        let broker_runtime_inner = ArcMut::clone(&self.inner);
         if let Some(ref mut message_store) = self.inner.message_store {
             message_store.set_put_message_hook(Box::new(CheckBeforePutMessageHook::new(
                 message_store.clone(),
                 Arc::new(config),
             )));
             message_store.set_put_message_hook(Box::new(BatchCheckBeforePutMessageHook::new(arc)));
+            message_store
+                .set_put_message_hook(Box::new(ScheduleMessageHook::new(broker_runtime_inner)))
         }
     }
 
