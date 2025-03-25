@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::common::message::message_ext::MessageExt;
+use rocketmq_common::common::message::MessageTrait;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::hook::put_message_hook::PutMessageHook;
 
@@ -42,7 +42,10 @@ impl PutMessageHook for BatchCheckBeforePutMessageHook {
         "batchCheckBeforePutMessage".to_string()
     }
 
-    fn execute_before_put_message(&self, msg: &MessageExt) -> Option<PutMessageResult> {
-        HookUtils::check_inner_batch(&self.topic_config_table, msg)
+    fn execute_before_put_message(&self, msg: &mut dyn MessageTrait) -> Option<PutMessageResult> {
+        HookUtils::check_inner_batch(
+            &self.topic_config_table,
+            msg.as_any().downcast_ref().unwrap(),
+        )
     }
 }
