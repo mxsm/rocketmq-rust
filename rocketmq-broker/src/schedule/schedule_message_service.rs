@@ -862,7 +862,8 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
 
         let topic = msg_inner.get_topic().clone();
         // Send the message asynchronously
-        self.schedule_service
+        let result = self
+            .schedule_service
             .broker_controller
             .mut_from_ref()
             .escape_bridge_mut()
@@ -879,7 +880,7 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
                 .set_physic_size(size_py)
                 .set_msg_id(msg_id.to_string())
                 .set_auto_resend(auto_resend)
-                // .set_future(rx)
+                .set_put_message_result(result)
                 .then_process()
                 .await;
 
@@ -1015,8 +1016,13 @@ impl<MS: MessageStore> PutResultProcess<MS> {
 
     /// Handle the processing after completing the future
     pub async fn then_process(self) -> Self {
-        /*        // Create a clone of self that will be captured in the async closure
-        let this = Arc::new(self);
+        // Create a clone of self that will be captured in the async closure
+        if let Some(put_message_result) = &self.put_message_result {
+            self.handle_result(put_message_result);
+        }
+
+        self
+        /*let this = Arc::new(self);
         let this_clone = Arc::clone(&this);
 
         // Handle the future completion
@@ -1043,11 +1049,10 @@ impl<MS: MessageStore> PutResultProcess<MS> {
             Ok(this) => this,
             Err(_) => panic!("Failed to unwrap Arc in then_process"),
         }*/
-        unimplemented!("then_process not implemented")
     }
 
     /// Handle the result of a put operation
-    fn handle_result(&self, result: PutMessageResult) {
+    fn handle_result(&self, result: &PutMessageResult) {
         if result.put_message_status() == PutMessageStatus::PutOk {
             self.on_success(result);
         } else {
@@ -1056,7 +1061,7 @@ impl<MS: MessageStore> PutResultProcess<MS> {
     }
 
     /// Handle a successful put operation
-    pub fn on_success(&self, result: PutMessageResult) {
+    pub fn on_success(&self, result: &PutMessageResult) {
         *self.status.mut_from_ref() = ProcessStatus::Success;
 
         if self
@@ -1213,7 +1218,7 @@ impl<MS: MessageStore> PutResultProcess<MS> {
                     .put_message(msg_inner)
                     .await;
 
-                self.handle_result(result);
+                self.handle_result(&result);
             }
             None => {
                 warn!(
