@@ -337,6 +337,23 @@ impl HookUtils {
         None
     }
 
+    /// Transforms a message with delay level into a scheduled message format.
+    ///
+    /// This function prepares a message for delayed processing by:
+    /// 1. Capping the delay time level to the maximum supported level if necessary
+    /// 2. Backing up the original topic and queue ID in message properties
+    /// 3. Updating the message's topic to the system schedule topic
+    /// 4. Setting the queue ID based on the delay time level
+    ///
+    /// # Arguments
+    ///
+    /// * `broker_runtime_inner` - Reference to the broker runtime that contains the schedule
+    ///   message service
+    /// * `msg` - Mutable reference to the message to be transformed
+    ///
+    /// # Type Parameters
+    ///
+    /// * `MS` - A type that implements the `MessageStore` trait
     pub fn transform_delay_level_message<MS: MessageStore>(
         broker_runtime_inner: &ArcMut<BrokerRuntimeInner<MS>>,
         msg: &mut MessageExtBrokerInner,
@@ -352,7 +369,7 @@ impl HookUtils {
 
         // Backup real topic, queueId
         msg.message_ext_inner.message.properties.insert(
-            CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC),
+            CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC),// real topic: %RETRY% + consumerGroup
             CheetahString::from_string(msg.topic().to_string()),
         );
         msg.message_ext_inner.message.properties.insert(
