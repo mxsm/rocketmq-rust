@@ -17,6 +17,7 @@
 
 #![allow(clippy::missing_const_for_thread_local)]
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::mem;
 use std::sync::atomic::AtomicU64;
@@ -38,6 +39,7 @@ use rocketmq_common::common::message::MessageVersion;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::common::system_clock::SystemClock;
+use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
 use rocketmq_common::utils::time_utils;
 use rocketmq_common::CRC32Utils::crc32;
@@ -188,7 +190,7 @@ pub struct CommitLog {
     message_store_config: Arc<MessageStoreConfig>,
     broker_config: Arc<BrokerConfig>,
     enabled_append_prop_crc: bool,
-    //local_file_message_store: Option<Weak<Mutex<LocalFileMessageStore>>>,
+    local_file_message_store: Option<ArcMut<LocalFileMessageStore>>,
     dispatcher: CommitLogDispatcherDefault,
     confirm_offset: i64,
     store_checkpoint: Arc<StoreCheckpoint>,
@@ -220,7 +222,7 @@ impl CommitLog {
             message_store_config: message_store_config.clone(),
             broker_config,
             enabled_append_prop_crc,
-            //local_file_message_store: None,
+            local_file_message_store: None,
             dispatcher: dispatcher.clone(),
             confirm_offset: -1,
             store_checkpoint: store_checkpoint.clone(),
@@ -849,6 +851,14 @@ impl CommitLog {
                     check_dup_info,
                     true,
                     &message_store_config,
+                    self.local_file_message_store
+                        .as_ref()
+                        .unwrap()
+                        .max_delay_level(),
+                    self.local_file_message_store
+                        .as_ref()
+                        .unwrap()
+                        .delay_level_table_ref(),
                 );
                 current_pos += size;
                 if dispatch_request.success && dispatch_request.msg_size > 0 {
@@ -910,7 +920,7 @@ impl CommitLog {
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
-                                       files"
+                                        files"
             );
             self.mapped_file_queue.set_flushed_where(0);
             self.mapped_file_queue.set_committed_where(0);
@@ -1003,6 +1013,14 @@ impl CommitLog {
                     check_dup_info,
                     true,
                     &self.message_store_config,
+                    self.local_file_message_store
+                        .as_ref()
+                        .unwrap()
+                        .max_delay_level(),
+                    self.local_file_message_store
+                        .as_ref()
+                        .unwrap()
+                        .delay_level_table_ref(),
                 );
                 current_pos += size;
                 if dispatch_request.success && dispatch_request.msg_size > 0 {
@@ -1090,7 +1108,7 @@ impl CommitLog {
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
-                                       files"
+                                        files"
             );
             self.mapped_file_queue.set_flushed_where(0);
             self.mapped_file_queue.set_committed_where(0);
@@ -1190,6 +1208,13 @@ impl CommitLog {
     ) -> Result<bool, StoreError> {
         unimplemented!("append_data not implemented")
     }
+
+    pub fn set_local_file_message_store(
+        &mut self,
+        local_file_message_store: ArcMut<LocalFileMessageStore>,
+    ) {
+        self.local_file_message_store = Some(local_file_message_store);
+    }
 }
 
 pub fn check_message_and_return_size(
@@ -1198,28 +1223,47 @@ pub fn check_message_and_return_size(
     check_dup_info: bool,
     read_body: bool,
     message_store_config: &Arc<MessageStoreConfig>,
+    max_delay_level: i32,
+    delay_level_table: &BTreeMap<i32 /* level */, i64 /* delay timeMillis */>,
 ) -> DispatchRequest {
+    // Total size
     let total_size = bytes.get_i32();
+
+    // message magic code
     let magic_code = bytes.get_i32();
-    if magic_code == MESSAGE_MAGIC_CODE || magic_code == MESSAGE_MAGIC_CODE_V2 {
-    } else if magic_code == BLANK_MAGIC_CODE {
-        return DispatchRequest {
-            msg_size: 0,
-            success: true,
-            ..Default::default()
-        };
-    } else {
-        warn!(
-            "found a illegal magic code 0x{}",
-            format!("{:X}", magic_code),
-        );
-        return DispatchRequest {
-            msg_size: -1,
-            success: false,
-            ..Default::default()
-        };
+    match magic_code {
+        MESSAGE_MAGIC_CODE | MESSAGE_MAGIC_CODE_V2 => {
+            // Continue processing the message
+        }
+        BLANK_MAGIC_CODE => {
+            return DispatchRequest {
+                msg_size: 0,
+                success: true,
+                ..Default::default()
+            };
+        }
+        _ => {
+            warn!(
+                "found a illegal magic code 0x{}",
+                format!("{:X}", magic_code),
+            );
+            return DispatchRequest {
+                msg_size: -1,
+                success: false,
+                ..Default::default()
+            };
+        }
     }
-    let message_version = MessageVersion::value_of_magic_code(magic_code).unwrap();
+    let message_version = match MessageVersion::value_of_magic_code(magic_code) {
+        Ok(value) => value,
+        Err(_) => {
+            return DispatchRequest {
+                msg_size: -1,
+                success: false,
+                ..Default::default()
+            }
+        }
+    };
     let body_crc = bytes.get_i32();
     let queue_id = bytes.get_i32();
     let flag = bytes.get_i32();
@@ -1246,6 +1290,7 @@ pub fn check_message_and_return_size(
     let body_len = bytes.get_i32();
     if body_len > 0 {
         if read_body {
+            //body content
             let body = bytes.copy_to_bytes(body_len as usize);
             if check_crc && !message_store_config.force_verify_prop_crc {
                 let crc = crc32(body.as_ref());
@@ -1259,6 +1304,7 @@ pub fn check_message_and_return_size(
                 }
             }
         } else {
+            //skip body content
             bytes.advance(body_len as usize);
         }
     }
@@ -1299,11 +1345,28 @@ pub fn check_message_and_return_size(
                 }
             }
         }
+        let tags = properties_map.get(MessageConst::PROPERTY_TAGS);
+        let mut tags_code = tags_string2tags_code(tags);
+
         {
             // Timing message processing
+            let delay_time_level = properties_map.get(&CheetahString::from_static_str(
+                MessageConst::PROPERTY_DELAY_TIME_LEVEL,
+            ));
+            if delay_time_level.is_some() && TopicValidator::RMQ_SYS_SCHEDULE_TOPIC == topic {
+                let mut delay_level = delay_time_level.unwrap().parse::<i32>().unwrap();
+                if delay_level > max_delay_level {
+                    delay_level = max_delay_level;
+                }
+                if delay_level > 0 {
+                    if let Some(delay_level) = delay_level_table.get(&delay_level) {
+                        tags_code = *delay_level + store_timestamp;
+                    } else {
+                        tags_code = store_timestamp + 1000;
+                    }
+                }
+            }
         }
-        let tags = properties_map.get(MessageConst::PROPERTY_TAGS);
-        let tags_code = tags_string2tags_code(tags);
         (
             tags_code,
             keys.unwrap_or_default(),
@@ -1314,9 +1377,24 @@ pub fn check_message_and_return_size(
         (0, CheetahString::new(), None, HashMap::new())
     };
 
-    if check_crc && !message_store_config.force_verify_prop_crc {
-        let _expected_crc = -1i32;
-        if !properties_map.is_empty() {}
+    if check_crc && message_store_config.force_verify_prop_crc {
+        let mut expected_crc = -1i32;
+        if !properties_map.is_empty() {
+            let crc_32 = properties_map.get(&CheetahString::from_static_str(
+                MessageConst::PROPERTY_CRC32,
+            ));
+            if let Some(crc_32) = crc_32 {
+                expected_crc = 0;
+                for ch in crc_32.chars().rev() {
+                    let num = (ch as u8 - b'0') as i32;
+                    expected_crc *= 10;
+                    expected_crc += num;
+                }
+            }
+        }
+        if expected_crc > 0 {
+            unimplemented!("check_crc not implemented")
+        }
     }
 
     let read_length = MessageExtEncoder::cal_msg_length(

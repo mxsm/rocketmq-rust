@@ -433,7 +433,7 @@ impl BrokerRuntime {
                 false,
             ));
             let message_store_clone = message_store.clone();
-            message_store.set_message_store_arc(Some(message_store_clone));
+            message_store.set_message_store_arc(message_store_clone);
             if self.inner.message_store_config.is_timer_wheel_enable() {
                 let time_message_store = TimerMessageStore::new(Some(message_store.clone()));
                 message_store.set_timer_message_store(Arc::new(time_message_store));
