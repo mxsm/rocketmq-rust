@@ -17,14 +17,17 @@
 #![allow(unused_variables)]
 #![allow(unused_imports)]
 
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::error::Error;
 use std::fs;
 use std::future::Future;
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -62,6 +65,7 @@ use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_common::UtilAll::ensure_dir_ok;
 use rocketmq_rust::ArcMut;
 use tokio::runtime::Handle;
+use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tracing::error;
 use tracing::info;
@@ -146,6 +150,8 @@ pub struct LocalFileMessageStore {
     message_store_arc: Option<ArcMut<LocalFileMessageStore>>,
     ha_service: Option<ArcMut<GeneralHAService>>,
     flush_consume_queue_service: FlushConsumeQueueService,
+    delay_level_table: ArcMut<BTreeMap<i32 /* level */, i64 /* delay timeMillis */>>,
+    max_delay_level: i32,
 }
 
 impl LocalFileMessageStore {
@@ -156,6 +162,8 @@ impl LocalFileMessageStore {
         broker_stats_manager: Option<Arc<BrokerStatsManager>>,
         notify_message_arrive_in_batch: bool,
     ) -> Self {
+        let (delay_level_table, max_delay_level) =
+            parse_delay_level(message_store_config.message_delay_level.as_str());
         let running_flags = Arc::new(RunningFlags::new());
         let store_checkpoint = Arc::new(
             StoreCheckpoint::new(get_store_checkpoint(
@@ -237,6 +245,8 @@ impl LocalFileMessageStore {
             message_store_arc: None,
             ha_service: None,
             flush_consume_queue_service: FlushConsumeQueueService,
+            delay_level_table: ArcMut::new(delay_level_table),
+            max_delay_level,
         }
     }
 
@@ -263,11 +273,22 @@ impl LocalFileMessageStore {
                 || self.message_store_config().broker_role != BrokerRole::Slave)
     }
 
-    pub fn set_message_store_arc(
-        &mut self,
-        message_store_arc: Option<ArcMut<LocalFileMessageStore>>,
-    ) {
-        self.message_store_arc = message_store_arc;
+    pub fn set_message_store_arc(&mut self, message_store_arc: ArcMut<LocalFileMessageStore>) {
+        self.message_store_arc = Some(message_store_arc.clone());
+        self.commit_log
+            .set_local_file_message_store(message_store_arc);
+    }
+
+    pub fn delay_level_table(&self) -> &ArcMut<BTreeMap<i32, i64>> {
+        &self.delay_level_table
+    }
+
+    pub fn delay_level_table_ref(&self) -> &BTreeMap<i32, i64> {
+        self.delay_level_table.as_ref()
+    }
+
+    pub fn max_delay_level(&self) -> i32 {
+        self.max_delay_level
     }
 }
 
@@ -2125,6 +2146,8 @@ impl ReputMessageServiceInner {
                     false,
                     false,
                     &self.message_store_config,
+                    self.message_store.max_delay_level,
+                    self.message_store.delay_level_table.as_ref(),
                 );
                 if self.reput_from_offset.load(Ordering::Acquire) + dispatch_request.msg_size as i64
                     > self.commit_log.get_confirm_offset()
@@ -2236,4 +2259,44 @@ impl FlushConsumeQueueService {
     fn shutdown(&self) {
         error!("flush consume queue service run unimplemented!")
     }
+}
+
+pub fn parse_delay_level(level_string: &str) -> (BTreeMap<i32, i64>, i32) {
+    let mut time_unit_table = HashMap::new();
+    time_unit_table.insert("s", 1000);
+    time_unit_table.insert("m", 1000 * 60);
+    time_unit_table.insert("h", 1000 * 60 * 60);
+    time_unit_table.insert("d", 1000 * 60 * 60 * 24);
+
+    let mut delay_level_table = BTreeMap::new();
+
+    let level_array: Vec<&str> = level_string.split(' ').collect();
+    let mut max_delay_level = 0;
+
+    for (i, value) in level_array.iter().enumerate() {
+        let ch = value.chars().last().unwrap().to_string();
+        let tu = time_unit_table
+            .get(&ch.as_str())
+            .ok_or(format!("Unknown time unit: {}", ch));
+        if tu.is_err() {
+            continue;
+        }
+        let tu = *tu.unwrap();
+
+        let level = i as i32 + 1;
+        if level > max_delay_level {
+            max_delay_level = level;
+        }
+
+        let num_str = &value[0..value.len() - 1];
+        let num = num_str.parse::<i64>();
+        if num.is_err() {
+            continue;
+        }
+        let num = num.unwrap();
+        let delay_time_millis = tu * num;
+        delay_level_table.insert(level, delay_time_millis);
+    }
+
+    (delay_level_table, max_delay_level)
 }

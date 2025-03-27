@@ -16,6 +16,7 @@
  */
 #![allow(unused_variables)]
 
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
@@ -1570,6 +1571,8 @@ impl ReputMessageServiceInner {
                     false,
                     false,
                     &self.message_store_config,
+                    0,
+                    &BTreeMap::new(),
                 );
                 if self.reput_from_offset.load(Ordering::Acquire) + dispatch_request.msg_size as i64
                     > self.commit_log.get_confirm_offset()
