@@ -14,6 +14,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::collections::BTreeMap;
+use std::collections::HashMap;
+
 use cheetah_string::CheetahString;
 
 pub struct StringUtils;
@@ -32,6 +35,45 @@ impl StringUtils {
     #[inline]
     pub fn is_not_empty_ch_string(s: Option<&CheetahString>) -> bool {
         s.is_some_and(|s| !s.is_empty())
+    }
+
+    pub fn parse_delay_level(level_string: &str) -> Result<(BTreeMap<i32, i64>, i32), String> {
+        let time_unit_table = HashMap::from([
+            ('s', 1000),
+            ('m', 1000 * 60),
+            ('h', 1000 * 60 * 60),
+            ('d', 1000 * 60 * 60 * 24),
+        ]);
+
+        let mut delay_level_table = BTreeMap::new();
+
+        let level_array: Vec<&str> = level_string.split(' ').collect();
+        let mut max_delay_level = 0;
+
+        for (i, value) in level_array.iter().enumerate() {
+            // let ch = value.chars().last().unwrap().to_string();
+            let ch = match value.chars().last() {
+                None => {
+                    return Err("Empty time unit".to_string());
+                }
+                Some(value) => value,
+            };
+            let tu = *time_unit_table
+                .get(&ch)
+                .ok_or(format!("Unknown time unit: {}", ch))?;
+
+            let level = i as i32 + 1;
+            if level > max_delay_level {
+                max_delay_level = level;
+            }
+
+            let num_str = &value[0..value.len() - 1];
+            let num = num_str.parse::<i64>().map_err(|e| e.to_string())?;
+            let delay_time_millis = tu * num;
+            delay_level_table.insert(level, delay_time_millis);
+        }
+
+        Ok((delay_level_table, max_delay_level))
     }
 }
 
@@ -67,5 +109,36 @@ mod tests {
     #[test]
     fn is_not_empty_string_with_none() {
         assert!(!StringUtils::is_not_empty_string(None));
+    }
+
+    #[test]
+    fn parse_delay_level_with_valid_input() {
+        let result = StringUtils::parse_delay_level("1s 2m 3h 4d").unwrap();
+        let (delay_level_table, max_delay_level) = result;
+        assert_eq!(delay_level_table[&1], 1000);
+        assert_eq!(delay_level_table[&2], 2 * 60 * 1000);
+        assert_eq!(delay_level_table[&3], 3 * 60 * 60 * 1000);
+        assert_eq!(delay_level_table[&4], 4 * 24 * 60 * 60 * 1000);
+        assert_eq!(max_delay_level, 4);
+    }
+
+    #[test]
+    fn parse_delay_level_with_unknown_time_unit() {
+        let result = StringUtils::parse_delay_level("1x");
+        assert!(result.is_err());
+        assert_eq!(result.err().unwrap(), "Unknown time unit: x");
+    }
+
+    #[test]
+    fn parse_delay_level_with_invalid_number() {
+        let result = StringUtils::parse_delay_level("1s 2m 3h 4d 5z");
+        assert!(result.is_err());
+        assert_eq!(result.err().unwrap(), "Unknown time unit: z");
+    }
+
+    #[test]
+    fn parse_delay_level_with_empty_string() {
+        let result = StringUtils::parse_delay_level("");
+        assert!(result.is_err());
     }
 }
