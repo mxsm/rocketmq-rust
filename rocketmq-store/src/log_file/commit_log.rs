@@ -1315,7 +1315,7 @@ pub fn check_message_and_return_size(
     let properties_length = bytes.get_i16();
     let (tags_code, keys, uniq_key, properties_map) = if properties_length > 0 {
         let properties = bytes.copy_to_bytes(properties_length as usize);
-        let properties_content = String::from_utf8_lossy(topic_bytes.as_ref()).to_string();
+        let properties_content = String::from_utf8_lossy(properties.as_ref()).to_string();
         //need to optimize
         let properties_map =
             string_to_message_properties(Some(&CheetahString::from_string(properties_content)));
