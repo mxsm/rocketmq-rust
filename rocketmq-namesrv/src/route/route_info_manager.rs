@@ -159,7 +159,7 @@ impl RouteInfoManager {
         broker_id: u64,
         ha_server_addr: CheetahString,
         zone_name: Option<CheetahString>,
-        _timeout_millis: Option<i64>,
+        timeout_millis: Option<i64>,
         enable_acting_master: Option<bool>,
         topic_config_serialize_wrapper: TopicConfigAndMappingSerializeWrapper,
         filter_server_list: Vec<CheetahString>,
@@ -264,7 +264,7 @@ impl RouteInfoManager {
             .broker_addrs_mut()
             .insert(broker_id, broker_addr.clone());
 
-        register_first |= old_addr.is_none();
+        register_first |= old_addr.is_none() || old_addr.as_ref().unwrap().is_empty();
         let is_master = mix_all::MASTER_ID == broker_id;
 
         let is_prime_slave = enable_acting_master.is_some()
@@ -361,12 +361,12 @@ impl RouteInfoManager {
             broker_addr_info.clone(),
             BrokerLiveInfo::new(
                 get_current_millis() as i64,
-                DEFAULT_BROKER_CHANNEL_EXPIRED_TIME,
+                timeout_millis.unwrap_or(DEFAULT_BROKER_CHANNEL_EXPIRED_TIME),
                 topic_config_serialize_wrapper
                     .topic_config_serialize_wrapper
                     .data_version()
                     .clone(),
-                ha_server_addr.clone(),
+                ha_server_addr,
                 remote_addr,
             ),
         );
@@ -385,7 +385,7 @@ impl RouteInfoManager {
             if let Some(master_addr) = master_address {
                 let master_livie_info = self
                     .broker_live_table
-                    .get(BrokerAddrInfo::new(cluster_name.clone(), master_addr.clone()).as_ref());
+                    .get(BrokerAddrInfo::new(cluster_name, master_addr.clone()).as_ref());
                 if let Some(info) = master_livie_info {
                     result.ha_server_addr = info.ha_server_addr().clone();
                     result.master_addr = info.ha_server_addr().clone();
