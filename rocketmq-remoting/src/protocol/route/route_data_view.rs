@@ -113,7 +113,7 @@ impl BrokerData {
     }
 
     #[inline]
-    pub fn remove_broker_by_addr(&mut self, broker_id: u64, broker_addr: &str) {
+    pub fn remove_broker_by_addr(&mut self, broker_id: u64, broker_addr: &CheetahString) {
         self.broker_addrs
             .retain(|key, value| value != broker_addr || *key == broker_id);
     }
@@ -257,7 +257,7 @@ mod tests {
             None,
         );
 
-        broker_data.remove_broker_by_addr(1, "127.0.0.1");
+        broker_data.remove_broker_by_addr(1, &"127.0.0.1".into());
         //assert!(broker_data.broker_addrs.get(&1).is_none());
         assert!(broker_data.broker_addrs.get(&2).is_some());
     }
