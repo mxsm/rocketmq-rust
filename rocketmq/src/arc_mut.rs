@@ -101,17 +101,20 @@ impl<T: Hash> Hash for ArcMut<T> {
 impl<T: PartialEq> Eq for ArcMut<T> {}
 
 impl<T> ArcMut<T> {
+    #[inline]
     #[allow(clippy::mut_from_ref)]
     pub fn mut_from_ref(&self) -> &mut T {
         unsafe { &mut *self.inner.get() }
     }
 
+    #[inline]
     pub fn downgrade(this: &Self) -> WeakArcMut<T> {
         WeakArcMut {
             inner: Arc::downgrade(&this.inner),
         }
     }
 
+    #[inline]
     pub fn get_inner(&self) -> &Arc<SyncUnsafeCell<T>> {
         &self.inner
     }
