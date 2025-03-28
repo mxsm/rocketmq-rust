@@ -34,6 +34,19 @@ const END_PHY_OFFSET_INDEX: usize = 24;
 const HASH_SLOT_COUNT_INDEX: usize = 32;
 const INDEX_COUNT_INDEX: usize = 36;
 
+/// Index File Header. Format
+/// ```text
+/// ┌───────────────────────────────┬───────────────────────────────┬───────────────────────────────┬───────────────────────────────┬───────────────────┬───────────────────┐
+/// │        Begin Timestamp        │          End Timestamp        │     Begin Physical Offset     │       End Physical Offset     │  Hash Slot Count  │    Index Count    │
+/// │           (8 Bytes)           │            (8 Bytes)          │           (8 Bytes)           │           (8 Bytes)           │      (4 Bytes)    │      (4 Bytes)    │
+/// ├───────────────────────────────┴───────────────────────────────┴───────────────────────────────┴───────────────────────────────┴───────────────────┴───────────────────┤
+/// │                                                                      Index File Header                                                                                │
+/// │
+/// ```
+///
+/// Index File Header. Size:
+/// Begin Timestamp(8) + End Timestamp(8) + Begin Physical Offset(8) + End Physical Offset(8) + Hash
+/// Slot Count(4) + Index Count(4) = 40 Bytes
 pub struct IndexHeader {
     mapped_file: Arc<DefaultMappedFile>,
     begin_timestamp: AtomicI64,
