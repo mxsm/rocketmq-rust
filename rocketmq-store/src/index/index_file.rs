@@ -30,23 +30,20 @@ use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
 
 const HASH_SLOT_SIZE: usize = 4;
-
-/**
- * Each index's store unit. Format:
- * <pre>
- * ┌───────────────┬───────────────────────────────┬───────────────┬───────────────┐
- * │ Key HashCode  │        Physical Offset        │   Time Diff   │ Next Index Pos│
- * │   (4 Bytes)   │          (8 Bytes)            │   (4 Bytes)   │   (4 Bytes)   │
- * ├───────────────┴───────────────────────────────┴───────────────┴───────────────┤
- * │                                 Index Store Unit                              │
- * │                                                                               │
- * </pre>
- * Each index's store unit. Size:
- * Key HashCode(4) + Physical Offset(8) + Time Diff(4) + Next Index Pos(4) = 20 Bytes
- */
 const INDEX_SIZE: usize = 20;
 const INVALID_INDEX: i32 = 0;
 
+/// Each index's store unit. Format:
+/// ```text
+/// ┌───────────────┬───────────────────────────────┬───────────────┬───────────────┐
+/// │ Key HashCode  │        Physical Offset        │   Time Diff   │ Next Index Pos│
+/// │   (4 Bytes)   │          (8 Bytes)            │   (4 Bytes)   │   (4 Bytes)   │
+/// ├───────────────┴───────────────────────────────┴───────────────┴───────────────┤
+/// │                                 Index Store Unit                              │
+/// │                                                                               │
+/// ```
+/// Each index's store unit. Size:
+/// Key HashCode(4) + Physical Offset(8) + Time Diff(4) + Next Index Pos(4) = 20 Bytes
 pub struct IndexFile {
     hash_slot_num: usize,
     index_num: usize,
@@ -62,7 +59,6 @@ impl PartialEq for IndexFile {
 }
 
 impl IndexFile {
-    #[inline]
     pub fn new(
         file_name: &str,
         hash_slot_num: usize,
@@ -118,7 +114,6 @@ impl IndexFile {
         self.flush();
     }
 
-    #[inline]
     pub fn flush(&self) {
         let begin_time = std::time::Instant::now();
         if self.mapped_file.hold() {
@@ -142,7 +137,6 @@ impl IndexFile {
         self.mapped_file.destroy(interval_forcibly)
     }
 
-    #[inline]
     pub fn put_key(&self, key: &str, phy_offset: i64, store_timestamp: i64) -> bool {
         if self.index_header.get_index_count() < self.index_num as i32 {
             let key_hash = self.index_key_hash_method(key);
@@ -221,7 +215,6 @@ impl IndexFile {
         }
     }
 
-    #[inline]
     pub fn index_key_hash_method(&self, key: &str) -> i32 {
         let key_hash = JavaStringHasher::new().hash_str(key);
         let key_hash_positive = key_hash.abs();
@@ -247,7 +240,6 @@ impl IndexFile {
         self.index_header.get_end_phy_offset()
     }
 
-    #[inline]
     pub fn is_time_matched(&self, begin: i64, end: i64) -> bool {
         let begin_timestamp = self.index_header.get_begin_timestamp();
         let end_timestamp = self.index_header.get_end_timestamp();
@@ -256,7 +248,6 @@ impl IndexFile {
             || end >= begin_timestamp && end <= end_timestamp
     }
 
-    #[inline]
     pub fn select_phy_offset(
         &self,
         phy_offsets: &mut Vec<i64>,
