@@ -269,34 +269,35 @@ impl IndexFile {
         let slot_pos = key_hash as usize % self.hash_slot_num;
         let abs_slot_pos = INDEX_HEADER_SIZE + slot_pos * HASH_SLOT_SIZE;
 
-        let mut buffer = self
-            .mapped_file
-            .get_data(abs_slot_pos, abs_slot_pos + 4)
-            .unwrap();
+        let mut buffer = match self.mapped_file.get_slice(abs_slot_pos, abs_slot_pos + 4) {
+            None => {
+                return;
+            }
+            Some(value) => value,
+        };
         let slot_value = buffer.get_i32();
         if slot_value <= INVALID_INDEX
             || slot_value > self.index_header.get_index_count()
             || self.index_header.get_index_count() <= 1
         {
+            //nothing to do
             return;
         }
-
         let mut next_index_to_read = slot_value;
         while phy_offsets.len() < max_num {
             let abs_index_pos = INDEX_HEADER_SIZE
                 + self.hash_slot_num * HASH_SLOT_SIZE
                 + next_index_to_read as usize * INDEX_SIZE;
 
-            let key_hash_read = buffer.slice(abs_index_pos..abs_index_pos + 4).get_i32();
-            let phy_offset_read = buffer
-                .slice(abs_index_pos + 4..abs_index_pos + 12)
-                .get_i64();
-            let time_diff = buffer
-                .slice(abs_index_pos + 12..abs_index_pos + 16)
-                .get_i32();
-            let prev_index_read = buffer
-                .slice(abs_index_pos + 16..abs_index_pos + 20)
-                .get_i32();
+            let buffer = self
+                .mapped_file
+                .get_slice(abs_index_pos, abs_index_pos + INDEX_SIZE)
+                .unwrap();
+
+            let key_hash_read = (&buffer[abs_index_pos..abs_index_pos + 4]).get_i32();
+            let phy_offset_read = (&buffer[abs_index_pos + 4..abs_index_pos + 12]).get_i64();
+            let time_diff = (&buffer[abs_index_pos + 12..abs_index_pos + 16]).get_i32();
+            let prev_index_read = (&buffer[abs_index_pos + 16..abs_index_pos + 20]).get_i32();
 
             if time_diff < 0 {
                 break;
