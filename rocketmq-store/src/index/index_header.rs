@@ -123,9 +123,10 @@ impl IndexHeader {
     pub fn set_begin_timestamp(&self, begin_timestamp: i64) {
         self.begin_timestamp
             .store(begin_timestamp, Ordering::Release);
-        self.mapped_file.append_message_offset_length(
+        self.mapped_file.write_bytes_segment(
             begin_timestamp.to_be_bytes().as_ref(),
             BEGIN_TIMESTAMP_INDEX,
+            0,
             mem::size_of::<i64>(),
         );
     }
@@ -137,9 +138,10 @@ impl IndexHeader {
 
     pub fn set_end_timestamp(&self, end_timestamp: i64) {
         self.end_timestamp.store(end_timestamp, Ordering::Release);
-        self.mapped_file.append_message_offset_length(
+        self.mapped_file.write_bytes_segment(
             end_timestamp.to_be_bytes().as_ref(),
             END_TIMESTAMP_INDEX,
+            0,
             mem::size_of::<i64>(),
         );
     }
@@ -152,9 +154,10 @@ impl IndexHeader {
     pub fn set_begin_phy_offset(&self, begin_phy_offset: i64) {
         self.begin_phy_offset
             .store(begin_phy_offset, Ordering::Release);
-        self.mapped_file.append_message_offset_length(
+        self.mapped_file.write_bytes_segment(
             begin_phy_offset.to_be_bytes().as_ref(),
             BEGIN_PHY_OFFSET_INDEX,
+            0,
             mem::size_of::<i64>(),
         );
     }
@@ -166,9 +169,10 @@ impl IndexHeader {
 
     pub fn set_end_phy_offset(&self, end_phy_offset: i64) {
         self.end_phy_offset.store(end_phy_offset, Ordering::SeqCst);
-        self.mapped_file.append_message_offset_length(
+        self.mapped_file.write_bytes_segment(
             end_phy_offset.to_be_bytes().as_ref(),
             END_PHY_OFFSET_INDEX,
+            0,
             mem::size_of::<i64>(),
         );
     }
@@ -180,9 +184,10 @@ impl IndexHeader {
 
     pub fn inc_hash_slot_count(&self) {
         let result = self.hash_slot_count.fetch_add(1, Ordering::AcqRel) + 1;
-        self.mapped_file.append_message_offset_length(
+        self.mapped_file.write_bytes_segment(
             result.to_be_bytes().as_ref(),
             HASH_SLOT_COUNT_INDEX,
+            0,
             mem::size_of::<i32>(),
         );
     }
@@ -194,9 +199,10 @@ impl IndexHeader {
 
     pub fn inc_index_count(&self) {
         let count = self.index_count.fetch_add(1, Ordering::AcqRel) + 1;
-        self.mapped_file.append_message_offset_length(
+        self.mapped_file.write_bytes_segment(
             count.to_be_bytes().as_ref(),
             INDEX_COUNT_INDEX,
+            0,
             mem::size_of::<i32>(),
         );
     }
