@@ -14,11 +14,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+use std::mem;
 use std::sync::Arc;
 
 use bytes::Buf;
-use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::hasher::string_hasher::JavaStringHasher;
 use tracing::info;
@@ -139,15 +138,18 @@ impl IndexFile {
 
     pub fn put_key(&self, key: &str, phy_offset: i64, store_timestamp: i64) -> bool {
         if self.index_header.get_index_count() < self.index_num as i32 {
-            let key_hash = self.index_key_hash_method(key);
-            let slot_pos = key_hash as usize % self.hash_slot_num;
+            let hash_code = self.index_key_hash_method(key);
+            let slot_pos = hash_code as usize % self.hash_slot_num;
+            // Calculate the absolute position of the slot
             let abs_slot_pos = INDEX_HEADER_SIZE + slot_pos * HASH_SLOT_SIZE;
 
-            let mut buffer = self
-                .mapped_file
-                .get_data(abs_slot_pos, abs_slot_pos + 4)
-                .unwrap();
-            let mut slot_value = buffer.get_i32();
+            let mapped_file = self.mapped_file.get_mapped_file_mut();
+
+            let mut slot_value = mapped_file
+                .get(abs_slot_pos..abs_slot_pos + 4)
+                .unwrap()
+                .get_i32();
+
             if slot_value <= INVALID_INDEX || slot_value > self.index_header.get_index_count() {
                 slot_value = INVALID_INDEX;
             }
@@ -166,30 +168,35 @@ impl IndexFile {
                 + self.hash_slot_num * HASH_SLOT_SIZE
                 + self.index_header.get_index_count() as usize * INDEX_SIZE;
 
-            self.mapped_file.append_message_offset_length(
-                &Bytes::copy_from_slice(&key_hash.to_be_bytes()),
+            self.mapped_file.write_bytes_segment(
+                &hash_code.to_be_bytes(),
                 abs_index_pos,
-                4,
+                0,
+                mem::size_of::<i32>(),
             );
-            self.mapped_file.append_message_offset_length(
-                &Bytes::copy_from_slice(&phy_offset.to_be_bytes()),
-                abs_index_pos,
-                8,
+            self.mapped_file.write_bytes_segment(
+                &phy_offset.to_be_bytes(),
+                abs_index_pos + 4,
+                0,
+                mem::size_of::<i64>(),
             );
-            self.mapped_file.append_message_offset_length(
-                &Bytes::copy_from_slice(&(time_diff as i32).to_be_bytes()),
-                abs_index_pos,
-                4,
+            self.mapped_file.write_bytes_segment(
+                &(time_diff as i32).to_be_bytes(),
+                abs_index_pos + 4 + 8,
+                0,
+                mem::size_of::<i32>(),
             );
-            self.mapped_file.append_message_offset_length(
-                &Bytes::copy_from_slice(&slot_value.to_be_bytes()),
-                abs_index_pos,
-                4,
+            self.mapped_file.write_bytes_segment(
+                &slot_value.to_be_bytes(),
+                abs_index_pos + 4 + 8 + 4,
+                0,
+                mem::size_of::<i32>(),
             );
-            self.mapped_file.append_message_offset_length(
-                &Bytes::copy_from_slice(&self.index_header.get_index_count().to_be_bytes()),
+            self.mapped_file.write_bytes_segment(
+                &self.index_header.get_index_count().to_be_bytes(),
                 abs_slot_pos,
-                4,
+                0,
+                mem::size_of::<i32>(),
             );
 
             if self.index_header.get_index_count() <= 1 {
@@ -203,7 +210,6 @@ impl IndexFile {
             self.index_header.inc_index_count();
             self.index_header.set_end_phy_offset(phy_offset);
             self.index_header.set_end_timestamp(store_timestamp);
-
             true
         } else {
             warn!(
