@@ -49,7 +49,7 @@ lazy_static! {
     static ref FIX_STRING: Vec<char> = {
         let ip = util_all::get_ip().unwrap_or_else(|_| create_fake_ip());
         let pid = std::process::id() as i16;
-        let class_loader_hash = JavaStringHasher::new().hash_str("MessageClientIDSetter");
+        let class_loader_hash = JavaStringHasher::hash_str("MessageClientIDSetter");
         let mut bytes = BytesMut::with_capacity(ip.len() + 2 + 4);
         bytes.put(ip.as_slice());
         bytes.put_i16(pid);

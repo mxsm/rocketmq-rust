@@ -216,7 +216,7 @@ impl IndexFile {
     }
 
     pub fn index_key_hash_method(&self, key: &str) -> i32 {
-        let key_hash = JavaStringHasher::new().hash_str(key);
+        let key_hash = JavaStringHasher::hash_str(key);
         let key_hash_positive = key_hash.abs();
         if key_hash_positive < 0 {
             0

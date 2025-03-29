@@ -416,5 +416,5 @@ pub fn tags_string2tags_code(tags: Option<&CheetahString>) -> i64 {
     if tags.is_empty() {
         return 0;
     }
-    JavaStringHasher::new().hash_str(tags.as_str()) as i64
+    JavaStringHasher::hash_str(tags.as_str()) as i64
 }
