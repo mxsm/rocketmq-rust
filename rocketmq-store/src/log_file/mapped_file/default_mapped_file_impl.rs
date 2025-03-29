@@ -842,6 +842,13 @@ impl MappedFile for DefaultMappedFile {
     ) -> std::io::Result<()> {
         unimplemented!("init")
     }
+
+    fn get_slice(&self, pos: usize, size: usize) -> Option<&[u8]> {
+        if pos >= self.file_size as usize || pos + size >= self.file_size as usize {
+            return None;
+        }
+        Some(&self.get_mapped_file()[pos..pos + size])
+    }
 }
 
 #[allow(unused_variables)]

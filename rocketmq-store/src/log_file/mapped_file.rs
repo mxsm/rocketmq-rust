@@ -402,6 +402,21 @@ pub trait MappedFile {
     /// requested slice goes beyond the store boundaries or the store is not available.
     fn get_data(&self, pos: usize, size: usize) -> Option<bytes::Bytes>;
 
+    /// Retrieves a slice of the mapped file.
+    ///
+    /// This method returns a byte slice starting from the specified position and of the specified
+    /// size. It is useful for reading parts of the file without loading the entire file into
+    /// memory.
+    ///
+    /// # Arguments
+    /// * `pos` - The starting position from where bytes should be read.
+    /// * `size` - The number of bytes to read from the starting position.
+    ///
+    /// # Returns
+    /// An `Option<&[u8]>` containing the requested byte slice if available, or `None` if the
+    /// requested slice goes beyond the file boundaries or the file is not available.
+    fn get_slice(&self, pos: usize, size: usize) -> Option<&[u8]>;
+
     /// Destroys the store after a specified interval.
     ///
     /// # Arguments
