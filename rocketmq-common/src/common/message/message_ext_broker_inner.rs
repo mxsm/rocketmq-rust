@@ -172,7 +172,7 @@ impl MessageExtBrokerInner {
         if tags.is_empty() {
             return 0;
         }
-        JavaStringHasher::new().hash_str(tags) as i64
+        JavaStringHasher::hash_str(tags) as i64
     }
 
     #[inline]
@@ -180,7 +180,7 @@ impl MessageExtBrokerInner {
         if tags.is_empty() {
             return 0;
         }
-        JavaStringHasher::new().hash_str(tags) as i64
+        JavaStringHasher::hash_str(tags) as i64
     }
 
     #[inline]

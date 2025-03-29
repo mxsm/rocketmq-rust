@@ -421,7 +421,7 @@ where
                 message_ext.get_topic(),
                 message_ext.message_ext_inner.store_host
             );
-            let code = JavaStringHasher::new().hash_str(id.as_str());
+            let code = JavaStringHasher::hash_str(id.as_str());
             let index = code as usize % topic_publish_info.message_queue_list.len();
             let message_queue = topic_publish_info.message_queue_list[index].clone();
             message_ext.message_ext_inner.queue_id = message_queue.get_queue_id();

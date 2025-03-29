@@ -14,43 +14,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::hash::Hasher;
-
-//Compatible with Java String's hash code
-pub struct JavaStringHasher {
-    state: i32,
-}
-
-impl Default for JavaStringHasher {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+pub struct JavaStringHasher;
 
 impl JavaStringHasher {
-    pub fn new() -> Self {
-        JavaStringHasher { state: 0 }
-    }
-
-    pub fn hash_str(&mut self, s: &str) -> i32 {
-        if self.state == 0 && !s.is_empty() {
+    pub fn hash_str(s: &str) -> i32 {
+        let mut state = 0i32;
+        if !s.is_empty() {
             for c in s.chars() {
-                self.state = self.state.wrapping_mul(31).wrapping_add(c as i32);
+                state = state.wrapping_mul(31).wrapping_add(c as i32);
             }
         }
-        self.state
-    }
-}
-
-impl Hasher for JavaStringHasher {
-    fn finish(&self) -> u64 {
-        self.state as u64
-    }
-
-    fn write(&mut self, bytes: &[u8]) {
-        for &byte in bytes {
-            self.state = self.state.wrapping_mul(31).wrapping_add(byte as i32);
-        }
+        state
     }
 }
 
@@ -58,9 +32,26 @@ impl Hasher for JavaStringHasher {
 mod tests {
     use super::*;
     #[test]
-    fn test_java_string_hasher() {
-        let mut hasher = JavaStringHasher::new();
-        let i = hasher.hash_str("hello world");
-        assert_eq!(i, 1794106052);
+    fn hash_str_with_non_empty_string() {
+        let result = JavaStringHasher::hash_str("hello");
+        assert_eq!(result, 99162322);
+    }
+
+    #[test]
+    fn hash_str_with_empty_string() {
+        let result = JavaStringHasher::hash_str("");
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn hash_str_with_special_characters() {
+        let result = JavaStringHasher::hash_str("!@#");
+        assert_eq!(result, 33732);
+    }
+
+    #[test]
+    fn hash_str_with_long_string() {
+        let result = JavaStringHasher::hash_str("a".repeat(1000).as_str());
+        assert_eq!(result, 904019584);
     }
 }

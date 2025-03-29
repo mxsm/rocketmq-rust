@@ -50,7 +50,7 @@ impl FilterAPI {
                 subscription_data.tags_set.insert(trimmed_tag.into());
                 subscription_data
                     .code_set
-                    .insert(JavaStringHasher::new().hash_str(tag));
+                    .insert(JavaStringHasher::hash_str(tag));
             }
         }
 
