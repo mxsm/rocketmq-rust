@@ -35,6 +35,7 @@ use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::index::index_file::IndexFile;
 use crate::index::query_offset_result::QueryOffsetResult;
+use crate::store::running_flags::RunningFlags;
 use crate::store_path_config_helper::get_store_path_index;
 
 const MAX_TRY_IDX_CREATE: i32 = 3;
@@ -47,13 +48,14 @@ pub struct IndexService {
     index_file_list: Arc<RwLock<Vec<Arc<IndexFile>>>>,
     message_store_config: Arc<MessageStoreConfig>,
     store_checkpoint: Arc<StoreCheckpoint>,
+    running_flags: Arc<RunningFlags>,
 }
 
 impl IndexService {
-    #[inline]
     pub fn new(
         message_store_config: Arc<MessageStoreConfig>,
         store_checkpoint: Arc<StoreCheckpoint>,
+        running_flags: Arc<RunningFlags>,
     ) -> Self {
         Self {
             hash_slot_num: message_store_config.max_hash_slot_num,
@@ -62,6 +64,7 @@ impl IndexService {
             index_file_list: Arc::new(Default::default()),
             message_store_config,
             store_checkpoint,
+            running_flags,
         }
     }
 
@@ -210,15 +213,15 @@ impl IndexService {
                 match tran_type {
                     MessageSysFlag::TRANSACTION_NOT_TYPE
                     | MessageSysFlag::TRANSACTION_PREPARED_TYPE
-                    | MessageSysFlag::TRANSACTION_COMMIT_TYPE => (),
+                    | MessageSysFlag::TRANSACTION_COMMIT_TYPE => {}
                     MessageSysFlag::TRANSACTION_ROLLBACK_TYPE => return,
-                    _ => (),
+                    _ => {}
                 }
 
-                let mut index_file_new = None;
+                let mut index_file_new = Some(index_file_inner);
                 if let Some(ref uniq_key) = dispatch_request.uniq_key {
                     index_file_new = self.put_key(
-                        index_file_inner,
+                        index_file_new.take().unwrap(),
                         dispatch_request,
                         build_key(topic, uniq_key.as_str()).as_str(),
                     );
@@ -235,12 +238,12 @@ impl IndexService {
                     let keyset = keys.split(MessageConst::KEY_SEPARATOR);
                     for key in keyset {
                         if !key.is_empty() {
-                            let index_file = self.put_key(
+                            index_file_new = self.put_key(
                                 index_file_new.take().unwrap(),
                                 dispatch_request,
                                 build_key(topic, key).as_str(),
                             );
-                            if index_file.is_none() {
+                            if index_file_new.is_none() {
                                 error!(
                                     "putKey error commitlog {} uniqkey {}",
                                     dispatch_request.commit_log_offset,
@@ -298,6 +301,7 @@ impl IndexService {
         }
 
         if index_file.is_none() {
+            self.running_flags.make_index_file_error();
             error!("Mark index file cannot build flag");
         }
 
@@ -345,12 +349,10 @@ impl IndexService {
             }
 
             if let Some(ref _index_file) = index_file {
-                let flush_this_file = prev_index_file.clone();
                 let index_service = self.clone();
-                tokio::spawn(async move {
-                    index_service.flush(flush_this_file);
+                tokio::task::spawn_blocking(move || {
+                    index_service.flush(prev_index_file);
                 });
-                //flush_thread.join().unwrap();
             }
         }
         index_file

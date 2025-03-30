@@ -171,8 +171,11 @@ impl LocalFileMessageStore {
             ))
             .unwrap(),
         );
-        let index_service =
-            IndexService::new(message_store_config.clone(), store_checkpoint.clone());
+        let index_service = IndexService::new(
+            message_store_config.clone(),
+            store_checkpoint.clone(),
+            running_flags.clone(),
+        );
         let build_index =
             CommitLogDispatcherBuildIndex::new(index_service.clone(), message_store_config.clone());
         // let topic_config_table = Arc::new(parking_lot::Mutex::new(HashMap::new()));
