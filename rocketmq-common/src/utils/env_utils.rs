@@ -35,6 +35,23 @@ impl EnvUtils {
         std::env::var(key.into()).ok()
     }
 
+    /// Sets the value of the specified environment variable.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The name of the environment variable to set.
+    /// * `value` - The value to set the environment variable to.
+    ///
+    /// # Safety
+    ///
+    /// This function uses `unsafe` because it modifies the environment variables,
+    /// which can have side effects on the entire process.
+    pub fn put_property(key: impl Into<String>, value: impl Into<String>) {
+        unsafe {
+            std::env::set_var(key.into(), value.into());
+        }
+    }
+
     /// Gets the value of the ROCKETMQ_HOME environment variable.
     ///
     /// If ROCKETMQ_HOME is not set, it defaults to the current directory and sets ROCKETMQ_HOME
@@ -44,7 +61,7 @@ impl EnvUtils {
     ///
     /// The value of the ROCKETMQ_HOME environment variable as a `String`.
     pub fn get_rocketmq_home() -> String {
-        std::env::var(ROCKETMQ_HOME_ENV).unwrap_or_else(|_| {
+        std::env::var(ROCKETMQ_HOME_ENV).unwrap_or_else(|_| unsafe {
             // If ROCKETMQ_HOME is not set, use the current directory as the default value
             let rocketmq_home_dir = std::env::current_dir()
                 .unwrap()
@@ -71,7 +88,9 @@ mod tests {
         let key = "HOME";
         let expected_value = "/home/user";
 
-        std::env::set_var(key, expected_value);
+        unsafe {
+            std::env::set_var(key, expected_value);
+        }
 
         // Test
         let result = EnvUtils::get_property(key);
@@ -109,7 +128,9 @@ mod tests {
     #[test]
     fn test_get_rocketmq_home_non_existing_variable() {
         // Set up
-        std::env::remove_var(ROCKETMQ_HOME_ENV);
+        unsafe {
+            std::env::remove_var(ROCKETMQ_HOME_ENV);
+        }
 
         // Test
         let result = EnvUtils::get_rocketmq_home();
@@ -122,5 +143,43 @@ mod tests {
                 .to_string_lossy()
                 .to_string()
         );
+    }
+
+    #[test]
+    fn put_property_sets_value() {
+        let key = "TEST_ENV_VAR";
+        let value = "test_value";
+
+        EnvUtils::put_property(key, value);
+
+        let result = std::env::var(key).unwrap();
+        assert_eq!(result, value);
+    }
+
+    #[test]
+    fn put_property_overwrites_existing_value() {
+        let key = "TEST_ENV_VAR";
+        let initial_value = "initial_value";
+        let new_value = "new_value";
+
+        unsafe {
+            std::env::set_var(key, initial_value);
+        }
+
+        EnvUtils::put_property(key, new_value);
+
+        let result = std::env::var(key).unwrap();
+        assert_eq!(result, new_value);
+    }
+
+    #[test]
+    fn put_property_handles_empty_value() {
+        let key = "TEST_ENV_VAR";
+        let value = "";
+
+        EnvUtils::put_property(key, value);
+
+        let result = std::env::var(key).unwrap();
+        assert_eq!(result, value);
     }
 }
