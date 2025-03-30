@@ -18,27 +18,55 @@
 use std::path::PathBuf;
 
 use clap::Parser;
+use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_common::EnvUtils::EnvUtils;
 use rocketmq_common::ParseConfigFile;
 use rocketmq_namesrv::bootstrap::Builder;
+use rocketmq_remoting::protocol::remoting_command;
 use rocketmq_rust::rocketmq;
 use tracing::info;
+use tracing::warn;
 
 #[rocketmq::main]
 async fn main() -> anyhow::Result<()> {
+    // Initialize the logger
     rocketmq_common::log::init_logger();
+    // parse command line arguments
     let args = Args::parse();
-    let home = EnvUtils::get_rocketmq_home();
 
+    EnvUtils::put_property(
+        remoting_command::REMOTING_VERSION_KEY,
+        RocketMqVersion::CURRENT_VERSION.to_string(),
+    );
+
+    let home = EnvUtils::get_rocketmq_home();
     info!("Rocketmq(Rust) home: {}", home);
+
+    let config_file = if let Some(config) = args.config_file {
+        if config.exists() {
+            Some(config)
+        } else {
+            panic!("Config file not found: {:?}", config);
+        }
+    } else {
+        None
+    };
+
+    let namesrv_config = if let Some(config_file) = config_file {
+        let config = ParseConfigFile::parse_config_file::<NamesrvConfig>(config_file)?;
+        info!("Parsed namesrv config: {:?}", config);
+        config
+    } else {
+        warn!("Config file not found, using default");
+        NamesrvConfig::default()
+    };
+
     info!(
         "Rocketmq name remoting_server(Rust) running on: {}:{}",
         args.ip, args.port
     );
-    let config_file = PathBuf::from(home).join("conf").join("namesrv.toml");
-    let namesrv_config = ParseConfigFile::parse_config_file::<NamesrvConfig>(config_file.clone())?;
     Builder::new()
         .set_name_server_config(namesrv_config)
         .set_server_config(ServerConfig {
@@ -79,7 +107,13 @@ struct Args {
         required = false
     )]
     ip: String,
-    /// rocketmq name remoting_server config file
-    #[arg(short, long, value_name = "FILE", default_missing_value = "None")]
-    config: Option<PathBuf>,
+
+    /// Name server config properties file
+    #[arg(
+        short,
+        long,
+        value_name = "CONFIG FILE",
+        default_missing_value = "None"
+    )]
+    config_file: Option<PathBuf>,
 }
