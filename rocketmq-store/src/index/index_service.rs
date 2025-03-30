@@ -157,42 +157,35 @@ impl IndexService {
         begin: i64,
         end: i64,
     ) -> QueryOffsetResult {
-        let mut phy_offsets = Vec::new();
+        let mut phy_offsets = Vec::with_capacity(max_num as usize);
         let mut index_last_update_timestamp = 0;
         let mut index_last_update_phyoffset = 0;
         let max_num = max_num.min(self.message_store_config.max_msgs_num_batch as i32);
 
         let index_file_list = self.index_file_list.read();
-        let mut index = 0;
+
         if !index_file_list.is_empty() {
-            for f in index_file_list.iter() {
-                let last_file = index == index_file_list.len() - 1;
+            for i in (1..=index_file_list.len()).rev() {
+                let f = &index_file_list[i - 1];
+                let last_file = i == index_file_list.len();
+
                 if last_file {
-                    // Assuming IndexFile has methods to get end timestamp and phy offset
                     index_last_update_timestamp = f.get_end_timestamp();
                     index_last_update_phyoffset = f.get_end_phy_offset();
                 }
 
-                // Assuming IndexFile has a method to check if the file's timestamps match the query
                 if f.is_time_matched(begin, end) {
-                    // Assuming IndexFile has a method to select physical offsets based on the query
-                    f.select_phy_offset(
-                        &mut phy_offsets,
-                        build_key(topic, key).as_str(),
-                        max_num as usize,
-                        begin,
-                        end,
-                    );
+                    let build_key = build_key(topic, key);
+                    f.select_phy_offset(&mut phy_offsets, &build_key, max_num as usize, begin, end);
                 }
 
                 if f.get_begin_timestamp() < begin {
                     break;
                 }
 
-                if phy_offsets.len() as i32 >= max_num {
+                if phy_offsets.len() >= max_num as usize {
                     break;
                 }
-                index += 1;
             }
         }
         QueryOffsetResult::new(
@@ -384,9 +377,5 @@ impl IndexService {
 
 #[inline]
 fn build_key(topic: &str, key: &str) -> String {
-    let mut keys = String::new();
-    keys.push_str(topic);
-    keys.push('#');
-    keys.push_str(key);
-    keys
+    format!("{}#{}", topic, key)
 }
