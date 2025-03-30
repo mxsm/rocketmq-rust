@@ -111,11 +111,14 @@ impl IndexService {
     }
 
     pub fn get_total_size(&self) -> u64 {
-        if self.index_file_list.read().is_empty() {
+        let index_file_list = self.index_file_list.read();
+        if index_file_list.is_empty() {
             0
         } else {
-            let read_guard = self.index_file_list.read();
-            (read_guard.first().unwrap().get_file_size() * read_guard.len()) as u64
+            (index_file_list
+                .first()
+                .map_or(0, |index_file| index_file.get_file_size())
+                * index_file_list.len()) as u64
         }
     }
 
