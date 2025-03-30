@@ -135,8 +135,9 @@ impl IndexService {
                 break;
             }
         }
-        if !files.is_empty() {
-            index_file_list_lock.retain(|index_file| !files.contains(index_file));
+        for index_file in files.iter() {
+            index_file.destroy(3000);
+            index_file_list_lock.retain(|f| f.get_file_name() != index_file.get_file_name());
         }
     }
 
