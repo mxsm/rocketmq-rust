@@ -77,7 +77,6 @@ impl IndexService {
         list.clear();
     }
 
-    #[inline]
     pub fn load(&mut self, last_exit_ok: bool) -> bool {
         let dir = Path::new(&self.store_path);
         if let Ok(ls) = fs::read_dir(dir) {
@@ -88,6 +87,7 @@ impl IndexService {
             let mut files = files;
             files.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
 
+            let mut write_list = self.index_file_list.write();
             for file in files {
                 let index_file = IndexFile::new(
                     file.to_str().unwrap(),
@@ -104,7 +104,7 @@ impl IndexService {
                     index_file.destroy(0);
                     continue;
                 }
-                self.index_file_list.write().push(Arc::new(index_file));
+                write_list.push(Arc::new(index_file));
             }
         }
         true
