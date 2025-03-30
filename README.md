@@ -39,15 +39,16 @@ language.
   ```cmd
   cargo run --bin rocketmq-namesrv-rust -- --help
   
-  RocketMQ Name server(Rust)
+  RocketMQ Name remoting_server(Rust)
   
   Usage: rocketmq-namesrv-rust.exe [OPTIONS]
   
   Options:
-    -p, --port <PORT>  rocketmq name server port [default: 9876]
-    -i, --ip <IP>      rocketmq name server ip [default: 127.0.0.1]
-    -h, --help         Print help
-    -V, --version      Print version
+    -p, --port <PORT>                rocketmq name remoting_server port [default: 9876]
+    -i, --ip <IP>                    rocketmq name remoting_server ip [default: 0.0.0.0]
+    -c, --config-file <CONFIG FILE>  Name server config properties file
+    -h, --help                       Print help
+    -V, --version                    Print version
   ```
 
 - **Linux platform**
@@ -60,10 +61,11 @@ language.
   Usage: rocketmq-namesrv-rust [OPTIONS]
   
   Options:
-    -p, --port <PORT>  rocketmq name server port [default: 9876]
-    -i, --ip <IP>      rocketmq name server ip [default: 127.0.0.1]
-    -h, --help         Print help
-    -V, --version      Print version
+    -p, --port <PORT>                rocketmq name remoting_server port [default: 9876]
+    -i, --ip <IP>                    rocketmq name remoting_server ip [default: 0.0.0.0]
+    -c, --config-file <CONFIG FILE>  Name server config properties file
+    -h, --help                       Print help
+    -V, --version                    Print version
   ```
 
 Run the following command to start the name server

@@ -4,6 +4,56 @@
 
 Here is the rust implementation of the **name server** for [Apache RocketMQ](https://rocketmq.apache.org/). 
 
+## Getting Started
+
+### Requirements
+
+1. rust toolchain MSRV is 1.75.(stable,nightly)
+
+### Run name server
+
+**Run the following command to see usage：**
+
+- **windows platform**
+
+  ```cmd
+  cargo run --bin rocketmq-namesrv-rust -- --help
+  
+  RocketMQ Name remoting_server(Rust)
+  
+  Usage: rocketmq-namesrv-rust.exe [OPTIONS]
+  
+  Options:
+    -p, --port <PORT>                rocketmq name remoting_server port [default: 9876]
+    -i, --ip <IP>                    rocketmq name remoting_server ip [default: 0.0.0.0]
+    -c, --config-file <CONFIG FILE>  Name server config properties file
+    -h, --help                       Print help
+    -V, --version                    Print version
+  ```
+
+- **Linux platform**
+
+  ```shell
+  $ cargo run --bin rocketmq-namesrv-rust -- --help
+  
+  RocketMQ Name remoting_server(Rust)
+  
+  Usage: rocketmq-namesrv-rust [OPTIONS]
+  
+  Options:
+    -p, --port <PORT>                rocketmq name remoting_server port [default: 9876]
+    -i, --ip <IP>                    rocketmq name remoting_server ip [default: 0.0.0.0]
+    -c, --config-file <CONFIG FILE>  Name server config properties file
+    -h, --help                       Print help
+    -V, --version                    Print version
+  ```
+
+Run the following command to start the name server
+
+```shell
+cargo run --bin rocketmq-namesrv-rust
+```
+
 ## Feature
 
 Feature list:
@@ -38,52 +88,3 @@ Feature list:
 | Get has unit sub ununit topic list     | 313          | :sparkling_heart: :white_check_mark: |        |
 | Update name server config              | 318          | :broken_heart: :x:                   |        |
 | Get name server config                 | 319          | :broken_heart: :x:                   |        |
-
-## Getting Started
-
-### Requirements
-
-1. rust toolchain MSRV is 1.75.(stable,nightly)
-
-### Run name server
-
-**Run the following command to see usage：**
-
-- **windows platform**
-
-  ```cmd
-  cargo run --bin rocketmq-namesrv-rust -- --help
-  
-  RocketMQ Name server(Rust)
-  
-  Usage: rocketmq-namesrv-rust.exe [OPTIONS]
-  
-  Options:
-    -p, --port <PORT>  rocketmq name server port [default: 9876]
-    -i, --ip <IP>      rocketmq name server ip [default: 127.0.0.1]
-    -h, --help         Print help
-    -V, --version      Print version
-  ```
-
-- **Linux platform**
-
-  ```shell
-  $ cargo run --bin rocketmq-namesrv-rust -- --help
-  
-  RocketMQ Name remoting_server(Rust)
-  
-  Usage: rocketmq-namesrv-rust [OPTIONS]
-  
-  Options:
-    -p, --port <PORT>  rocketmq name remoting_server port [default: 9876]
-    -i, --ip <IP>      rocketmq name remoting_server ip [default: 127.0.0.1]
-    -h, --help         Print help
-    -V, --version      Print version
-  ```
-
-Run the following command to start the name server
-
-```shell
-cargo run --bin rocketmq-namesrv-rust
-```
-
