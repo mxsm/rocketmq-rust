@@ -70,7 +70,11 @@ impl IndexService {
     }
 
     pub fn shutdown(&self) {
-        error!("StoreStatsService shutdown not implemented");
+        let mut list = self.index_file_list.write();
+        for index_file in list.iter() {
+            index_file.shutdown();
+        }
+        list.clear();
     }
 
     #[inline]
