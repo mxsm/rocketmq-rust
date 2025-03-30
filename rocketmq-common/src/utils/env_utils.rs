@@ -158,7 +158,7 @@ mod tests {
 
     #[test]
     fn put_property_overwrites_existing_value() {
-        let key = "TEST_ENV_VAR";
+        let key = "TEST_ENV_VAR1";
         let initial_value = "initial_value";
         let new_value = "new_value";
 
@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn put_property_handles_empty_value() {
-        let key = "TEST_ENV_VAR";
+        let key = "TEST_ENV_VAR2";
         let value = "";
 
         EnvUtils::put_property(key, value);
