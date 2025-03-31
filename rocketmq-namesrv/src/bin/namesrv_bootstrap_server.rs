@@ -16,6 +16,7 @@
  */
 
 use std::path::PathBuf;
+use std::process::exit;
 
 use clap::Parser;
 use rocketmq_common::common::mq_version::RocketMqVersion;
@@ -45,10 +46,11 @@ async fn main() -> anyhow::Result<()> {
     info!("Rocketmq(Rust) home: {}", home);
 
     let config_file = if let Some(config) = args.config_file {
-        if config.exists() {
+        if config.exists() && config.is_file() {
             Some(config)
         } else {
-            panic!("Config file not found: {:?}", config);
+            eprintln!("Config file not found: {:?}", config);
+            exit(1);
         }
     } else {
         None
