@@ -1663,7 +1663,7 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn get_broker_stats_manager(&self) -> Option<&Arc<BrokerStatsManager>> {
-        todo!()
+        self.broker_stats_manager.as_ref()
     }
 
     fn on_commit_log_append<MF: MappedFile>(
