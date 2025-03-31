@@ -796,7 +796,8 @@ impl RouteInfoManager {
             if broker_names.is_none() || broker_names.unwrap().is_empty() {
                 return;
             }
-            if let Some(queue_data_map) = self.topic_queue_table.mut_from_ref().get_mut(&topic) {
+            let topic_queue_table_ = self.topic_queue_table.mut_from_ref();
+            if let Some(queue_data_map) = topic_queue_table_.get_mut(&topic) {
                 for broker_name in broker_names.unwrap() {
                     if let Some(remove_qd) = queue_data_map.remove(broker_name) {
                         info!(
@@ -804,6 +805,9 @@ impl RouteInfoManager {
                             broker_name, &topic, remove_qd
                         )
                     }
+                }
+                if queue_data_map.is_empty() {
+                    topic_queue_table_.remove(&topic);
                 }
             }
         } else {
