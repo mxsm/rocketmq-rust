@@ -138,9 +138,9 @@ impl DefaultRequestProcessor {
         self.name_server_runtime_inner
             .kvconfig_manager_mut()
             .put_kv_config(
-                request_header.namespace.clone(),
-                request_header.key.clone(),
-                request_header.value.clone(),
+                request_header.namespace,
+                request_header.key,
+                request_header.value,
             );
         Ok(RemotingCommand::create_response_command())
     }
