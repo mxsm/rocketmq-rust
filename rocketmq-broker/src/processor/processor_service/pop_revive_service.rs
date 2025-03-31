@@ -336,10 +336,12 @@ impl<MS: MessageStore> PopReviveService<MS> {
                     info!("skip revive topic because timerWheelEnable is false");
                     continue;
                 }
-                info!(
-                    "start revive topic={}, reviveQueueId={}",
-                    this.revive_topic, this.queue_id
-                );
+                if this.broker_runtime_inner.broker_config().enable_pop_log {
+                    info!(
+                        "start revive topic={}, reviveQueueId={}",
+                        this.revive_topic, this.queue_id
+                    );
+                }
                 let mut consume_revive_obj = ConsumeReviveObj::new();
                 this.consume_revive_message(&mut consume_revive_obj).await;
                 if !this.should_run_pop_revive {
@@ -364,14 +366,16 @@ impl<MS: MessageStore> PopReviveService<MS> {
                 } else {
                     this.current_revive_message_timestamp = get_current_millis() as i64;
                 }
-                info!(
-                    "reviveQueueId={}, revive finish,old offset is {}, new offset is {}, \
-                     ckDelay={}  ",
-                    this.queue_id,
-                    consume_revive_obj.old_offset,
-                    consume_revive_obj.new_offset,
-                    delay
-                );
+                if this.broker_runtime_inner.broker_config().enable_pop_log {
+                    info!(
+                        "reviveQueueId={}, revive finish,old offset is {}, new offset is {}, \
+                         ckDelay={}  ",
+                        this.queue_id,
+                        consume_revive_obj.old_offset,
+                        consume_revive_obj.new_offset,
+                        delay
+                    );
+                }
 
                 if consume_revive_obj.sort_list.is_none()
                     || consume_revive_obj.sort_list.as_ref().unwrap().is_empty()
@@ -407,10 +411,12 @@ impl<MS: MessageStore> PopReviveService<MS> {
             );
         let old_offset = self.revive_offset.max(consume_offset);
         consume_revive_obj.old_offset = old_offset;
-        info!(
-            "reviveQueueId={}, old offset is {}",
-            self.queue_id, old_offset
-        );
+        if self.broker_runtime_inner.broker_config().enable_pop_log {
+            info!(
+                "reviveQueueId={}, old offset is {}",
+                self.queue_id, old_offset
+            );
+        }
         let mut offset = old_offset + 1;
         let mut no_msg_count = 0;
         let mut first_rt = 0;
@@ -450,11 +456,14 @@ impl<MS: MessageStore> PopReviveService<MS> {
                 {
                     end_time = get_current_millis();
                 }
-                info!(
-                    "reviveQueueId={}, offset is {}, can not get new msg, old endTime {}, new \
-                     endTime {}, timerDelay={}, commitLogDelay={}",
-                    self.queue_id, offset, old, end_time, timer_delay, commit_log_delay
-                );
+                if self.broker_runtime_inner.broker_config().enable_pop_log {
+                    info!(
+                        "reviveQueueId={}, offset is {}, can not get new msg, old endTime {}, new \
+                         endTime {}, timerDelay={}, commitLogDelay={}",
+                        self.queue_id, offset, old, end_time, timer_delay, commit_log_delay
+                    );
+                }
+
                 if end_time - first_rt
                     > (PopAckConstants::ACK_TIME_INTERVAL + PopAckConstants::SECOND) as u64
                 {
@@ -479,11 +488,13 @@ impl<MS: MessageStore> PopReviveService<MS> {
             for message_ext in message_exts.unwrap() {
                 if PopAckConstants::CK_TAG == message_ext.get_tags().unwrap_or_default() {
                     // let raw = String::from_utf8(message_ext.get_body().to_vec()).unwrap();
+                    if self.broker_runtime_inner.broker_config().enable_pop_log {
+                        info!(
+                            "reviveQueueId={},find ck, offset:{}",
+                            message_ext.queue_id, message_ext.queue_offset
+                        );
+                    }
 
-                    info!(
-                        "reviveQueueId={},find ck, offset:{}",
-                        message_ext.queue_id, message_ext.queue_offset
-                    );
                     let mut point: PopCheckPoint =
                         SerdeJsonUtils::decode(message_ext.get_body().unwrap()).unwrap();
                     if point.topic.is_empty() || point.cid.is_empty() {
@@ -551,10 +562,12 @@ impl<MS: MessageStore> PopReviveService<MS> {
                     == message_ext.get_tags().unwrap_or_default()
                 {
                     //let raw = String::from_utf8(message_ext.get_body().to_vec()).unwrap();
-                    info!(
-                        "reviveQueueId={}, find batch ack, offset:{},",
-                        message_ext.queue_id, message_ext.queue_offset,
-                    );
+                    if self.broker_runtime_inner.broker_config().enable_pop_log {
+                        info!(
+                            "reviveQueueId={}, find batch ack, offset:{},",
+                            message_ext.queue_id, message_ext.queue_offset,
+                        );
+                    }
                     let b_ack_msg: BatchAckMsg =
                         SerdeJsonUtils::decode(message_ext.get_body().unwrap()).unwrap();
                     // PopMetricsManager::inc_pop_revive_ack_get_count(&b_ack_msg, self.queue_id);
@@ -577,7 +590,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
                                     true,
                                 );
                             } else {
-                                info!("invalid batch ack index, {}, {}", b_ack_msg, point);
+                                error!("invalid batch ack index, {}, {}", b_ack_msg, point);
                             }
                         }
                     } else {
@@ -628,11 +641,13 @@ impl<MS: MessageStore> PopReviveService<MS> {
         let mut new_offset = consume_revive_obj.old_offset;
         let end_time = consume_revive_obj.end_time;
         let sort_list = consume_revive_obj.gen_sort_list();
-        info!(
-            "reviveQueueId={}, ck listSize={}",
-            self.queue_id,
-            sort_list.len()
-        );
+        if self.broker_runtime_inner.broker_config().enable_pop_log {
+            info!(
+                "reviveQueueId={}, ck listSize={}",
+                self.queue_id,
+                sort_list.len()
+            );
+        }
         if !sort_list.is_empty() {
             let last = sort_list.last().unwrap();
             info!(
