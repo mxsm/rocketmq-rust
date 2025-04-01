@@ -375,8 +375,8 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             {
                 self.delete_topic_in_broker(pop_retry_topic_v1.as_ref());
             }
-            self.delete_topic_in_broker(topic);
         }
+        self.delete_topic_in_broker(topic);
         Some(response.set_code(ResponseCode::Success))
     }
 
