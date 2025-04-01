@@ -409,7 +409,13 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
 
     #[inline]
     fn get_total_size(&self) -> i64 {
-        todo!()
+        let mut total_size = 0;
+        for consume_queue_table in self.inner.consume_queue_table.lock().values() {
+            for consume_queue in consume_queue_table.values() {
+                total_size += consume_queue.get_total_size();
+            }
+        }
+        total_size
     }
 
     #[inline]
