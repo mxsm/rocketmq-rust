@@ -16,6 +16,8 @@
  */
 
 #[cfg(feature = "local_file_store")]
+#[cfg(not(test))]
 pub mod default_message_store;
 
+#[cfg(not(test))]
 pub mod local_file_message_store;
