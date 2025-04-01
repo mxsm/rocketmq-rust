@@ -404,7 +404,7 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
         &self,
         topic: &CheetahString,
     ) -> Option<HashMap<i32, ArcConsumeQueue>> {
-        todo!()
+        self.inner.consume_queue_table.lock().get(topic).cloned()
     }
 
     #[inline]
