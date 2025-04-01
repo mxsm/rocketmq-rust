@@ -43,6 +43,7 @@ use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
 use rocketmq_common::utils::time_utils;
 use rocketmq_common::CRC32Utils::crc32;
+use rocketmq_common::MessageDecoder;
 use rocketmq_common::MessageDecoder::string_to_message_properties;
 use rocketmq_common::MessageDecoder::MESSAGE_MAGIC_CODE_POSITION;
 use rocketmq_common::MessageDecoder::MESSAGE_MAGIC_CODE_V2;
@@ -1196,7 +1197,23 @@ impl CommitLog {
     }
 
     pub fn pickup_store_timestamp(&self, offset: i64, size: i32) -> i64 {
-        unimplemented!("pickupStoreTimestamp not implemented")
+        if offset >= self.get_min_offset() && (offset + size as i64) <= self.get_max_offset() {
+            let result = self.get_message(offset, size);
+            if let Some(result) = result {
+                let buffer = result.get_buffer();
+                let sys_flag = (&buffer[MessageDecoder::SYSFLAG_POSITION..]).get_i32();
+                let born_host_length = if sys_flag & MessageSysFlag::BORNHOST_V6_FLAG == 0 {
+                    4 + 4 + 4 + 4 + 4 + 8 + 8 + 4 + 8 + 8
+                } else {
+                    4 + 4 + 4 + 4 + 4 + 8 + 8 + 4 + 8 + 20
+                };
+                (&buffer[born_host_length..]).get_i64()
+            } else {
+                -1
+            }
+        } else {
+            -1
+        }
     }
 
     pub fn append_data(
