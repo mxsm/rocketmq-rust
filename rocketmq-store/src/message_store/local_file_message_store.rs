@@ -1636,8 +1636,9 @@ impl MessageStore for LocalFileMessageStore {
         self.commit_log.lock_time_mills()
     }
 
+    #[inline]
     fn is_transient_store_pool_deficient(&self) -> bool {
-        todo!()
+        self.remain_transient_store_buffer_numbs() == 0
     }
 
     fn get_dispatcher_list(&self) -> Vec<Arc<dyn CommitLogDispatcher>> {
@@ -1844,17 +1845,22 @@ impl MessageStore for LocalFileMessageStore {
     ) -> DispatchRequest {
         todo!()
     }
-
+    #[inline]
     fn remain_transient_store_buffer_numbs(&self) -> i32 {
-        todo!()
+        if self.is_transient_store_pool_enable() {
+            return self.transient_store_pool.available_buffer_nums() as i32;
+        }
+        i32::MAX
     }
 
+    #[inline]
     fn remain_how_many_data_to_commit(&self) -> i64 {
-        todo!()
+        self.commit_log.remain_how_many_data_to_commit()
     }
 
+    #[inline]
     fn remain_how_many_data_to_flush(&self) -> i64 {
-        todo!()
+        self.commit_log.remain_how_many_data_to_flush()
     }
 
     fn is_shutdown(&self) -> bool {
