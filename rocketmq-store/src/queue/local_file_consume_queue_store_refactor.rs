@@ -19,6 +19,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -29,6 +30,7 @@ use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
 use rocketmq_rust::ArcMut;
+use tracing::error;
 use tracing::info;
 
 use crate::base::dispatch_request::DispatchRequest;
@@ -43,6 +45,8 @@ use crate::queue::ArcConsumeQueue;
 use crate::queue::ConsumeQueueTable;
 use crate::queue::ConsumeQueueTrait;
 use crate::queue::CqUnit;
+use crate::store_path_config_helper::get_store_path_batch_consume_queue;
+use crate::store_path_config_helper::get_store_path_consume_queue;
 
 pub struct ConsumeQueueStore {
     inner: ArcMut<Inner>,
@@ -86,12 +90,25 @@ impl ConsumeQueueStore {
 
 #[allow(unused_variables)]
 impl ConsumeQueueStoreTrait for ConsumeQueueStore {
-    async fn start(&self) {
-        todo!()
+    fn start(&self) {
+        //nothing to do
+        info!("consume queue store start");
     }
 
-    fn load(&self) -> bool {
-        todo!()
+    fn load(&mut self) -> bool {
+        self.load_consume_queues(
+            get_store_path_consume_queue(
+                self.inner.message_store_config.store_path_root_dir.as_str(),
+            )
+            .as_str(),
+            CQType::SimpleCQ,
+        ) & self.load_consume_queues(
+            get_store_path_batch_consume_queue(
+                self.inner.message_store_config.store_path_root_dir.as_str(),
+            )
+            .as_str(),
+            CQType::BatchCQ,
+        )
     }
 
     fn load_after_destroy(&self) -> bool {
@@ -304,47 +321,104 @@ impl ConsumeQueueStore {
             .set_batch_topic_queue_table(batch_topic_queue_table)
     }
 
-    #[inline]
-    fn load_consume_queues(&mut self, store_path: CheetahString, cq_type: CQType) -> bool {
-        let dir = Path::new(store_path.as_str());
-        if let Ok(ls) = fs::read_dir(dir) {
-            let dirs: Vec<_> = ls
-                .filter_map(Result::ok)
-                .map(|entry| entry.path())
-                .collect();
-            for dir in dirs {
-                let topic = CheetahString::from_string(
-                    dir.file_name().unwrap().to_str().unwrap().to_string(),
-                );
-                if let Ok(ls) = fs::read_dir(&dir) {
-                    let file_queue_id_list: Vec<_> = ls
-                        .filter_map(Result::ok)
-                        .map(|entry| entry.path())
-                        .collect();
-                    for file_queue_id in file_queue_id_list {
-                        let queue_id = file_queue_id
-                            .file_name()
-                            .unwrap()
-                            .to_str()
-                            .unwrap()
-                            .parse::<i32>()
-                            .unwrap();
-                        self.queue_type_should_be(&topic, cq_type);
-                        let logic = self.create_consume_queue_by_type(
-                            topic.as_ref(),
-                            queue_id,
-                            cq_type,
-                            store_path.clone(),
-                        );
-                        self.put_consume_queue(topic.clone(), queue_id, logic);
-                        if !self.load_logic(&topic, queue_id) {
+    /// Load consume queues from the given directory path for a specific queue type
+    ///
+    /// # Arguments
+    ///
+    /// * `store_path` - Base path where queue directories are stored
+    /// * `cq_type` - Type of consume queue to load (SimpleCQ or BatchCQ)
+    ///
+    /// # Returns
+    ///
+    /// Returns true if loading was successful, false otherwise
+    fn load_consume_queues(&mut self, store_path: &str, cq_type: CQType) -> bool {
+        let dir_logic = Path::new(store_path);
+
+        // Check if directory exists
+        if !dir_logic.exists() || !dir_logic.is_dir() {
+            info!(
+                "Directory {} doesn't exist or is not a directory",
+                store_path
+            );
+            return true; // Return true as this is not an error case
+        }
+
+        // Iterate through topic directories
+        match fs::read_dir(dir_logic) {
+            Ok(topic_entries) => {
+                for topic_dir in topic_entries.flatten() {
+                    let topic_path = topic_dir.path();
+                    if !topic_path.is_dir() {
+                        continue;
+                    }
+
+                    // Get topic name from directory name
+                    let topic = match topic_path.file_name().and_then(|n| n.to_str()) {
+                        Some(name) => CheetahString::from_string(name.to_string()),
+                        None => continue,
+                    };
+
+                    // Iterate through queue ID directories
+                    match fs::read_dir(topic_path) {
+                        Ok(queue_id_entries) => {
+                            for queue_id_dir in queue_id_entries.flatten() {
+                                if !queue_id_dir.path().is_dir() {
+                                    continue;
+                                }
+
+                                // Parse queue ID from directory name
+                                let os_string = queue_id_dir.file_name();
+                                let queue_id_op = os_string.to_str();
+                                let queue_id_str = match queue_id_op {
+                                    Some(name) => name,
+                                    None => continue,
+                                };
+
+                                let queue_id = match i32::from_str(queue_id_str) {
+                                    Ok(id) => id,
+                                    Err(_) => {
+                                        // Skip non-numeric directory names
+                                        continue;
+                                    }
+                                };
+
+                                // Verify queue type matches expected type
+                                self.queue_type_should_be(&topic, cq_type);
+
+                                // Create consume queue based on type
+                                let logic = self.create_consume_queue_by_type(
+                                    &topic,
+                                    queue_id,
+                                    cq_type,
+                                    store_path.into(),
+                                );
+
+                                // Store the queue in memory table
+                                self.put_consume_queue(topic.clone(), queue_id, logic);
+
+                                // Load the queue data
+                                if !self.load_logic(&topic, queue_id) {
+                                    return false;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!(
+                                "Failed to read queue ID directories for topic {}: {}",
+                                topic, e
+                            );
                             return false;
                         }
                     }
                 }
             }
+            Err(e) => {
+                error!("Failed to read topic directories: {}", e);
+                return false;
+            }
         }
-        info!("load {:?} all over, OK", cq_type);
+
+        info!("load {} all over, OK", cq_type);
         true
     }
 
@@ -426,7 +500,8 @@ impl ConsumeQueueStore {
                 Box::new(consume_queue)
             }
             _ => {
-                unimplemented!()
+                error!("Unsupported consume queue type: {:?}", cq_type);
+                panic!("Unsupported consume queue type: {:?}", cq_type);
             }
         }
     }

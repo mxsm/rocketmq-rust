@@ -32,13 +32,13 @@ use crate::queue::CqUnit;
 #[trait_variant::make(ConsumeQueueStoreTrait: Send)]
 pub trait ConsumeQueueStoreInterface: Sync {
     /// Start the consume queue store
-    async fn start(&self);
+    fn start(&self);
 
     /// Load from file
     ///
     /// # Returns
     /// `true` if loaded successfully
-    fn load(&self) -> bool;
+    fn load(&mut self) -> bool;
 
     /// Load after destroy
     ///
