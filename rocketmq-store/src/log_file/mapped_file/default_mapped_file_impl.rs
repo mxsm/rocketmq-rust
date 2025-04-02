@@ -177,7 +177,6 @@ impl DefaultMappedFile {
             .expect("File name parse to offset is invalid")
     }
 
-    #[inline]
     fn build_file(file_name: &CheetahString, file_size: u64) -> File {
         let path = PathBuf::from(file_name.as_str());
         let file = OpenOptions::new()
@@ -192,7 +191,6 @@ impl DefaultMappedFile {
         file
     }
 
-    #[inline]
     pub fn new_with_transient_store_pool(
         file_name: CheetahString,
         file_size: u64,
@@ -240,7 +238,6 @@ impl MappedFile for DefaultMappedFile {
         &self.file_name
     }
 
-    #[inline]
     fn rename_to(&mut self, file_name: &str) -> bool {
         let new_file = Path::new(file_name);
         match std::fs::rename(self.file_name.as_str(), new_file) {
@@ -273,7 +270,6 @@ impl MappedFile for DefaultMappedFile {
         self.reference_resource.is_available()
     }
 
-    #[inline]
     fn append_message<AMC: AppendMessageCallback>(
         &self,
         message: &mut MessageExtBrokerInner,
@@ -305,7 +301,6 @@ impl MappedFile for DefaultMappedFile {
         result
     }
 
-    #[inline]
     fn append_messages<AMC: AppendMessageCallback>(
         &self,
         message: &mut MessageExtBatch,
@@ -334,10 +329,8 @@ impl MappedFile for DefaultMappedFile {
         );
         self.wrote_position
             .fetch_add(result.wrote_bytes, Ordering::AcqRel);
-        self.store_timestamp.store(
-            message.message_ext_broker_inner.store_timestamp() as u64,
-            Ordering::Release,
-        );
+        self.store_timestamp
+            .store(result.store_timestamp as u64, Ordering::Release);
         result
     }
 
@@ -360,7 +353,6 @@ impl MappedFile for DefaultMappedFile {
         ))
     }
 
-    #[inline]
     fn append_message_offset_length(&self, data: &[u8], offset: usize, length: usize) -> bool {
         let current_pos = self.wrote_position.load(Ordering::Acquire) as usize;
 
@@ -382,7 +374,6 @@ impl MappedFile for DefaultMappedFile {
         false
     }
 
-    #[inline]
     fn append_message_no_position_update(&self, data: &[u8], offset: usize, length: usize) -> bool {
         let current_pos = self.wrote_position.load(Ordering::Relaxed) as usize;
 
@@ -403,7 +394,6 @@ impl MappedFile for DefaultMappedFile {
         false
     }
 
-    #[inline]
     fn append_message_offset_no_position_update(
         &self,
         data: &[u8],
@@ -429,7 +419,6 @@ impl MappedFile for DefaultMappedFile {
         false
     }
 
-    #[inline]
     fn write_bytes_segment(&self, data: &[u8], start: usize, offset: usize, length: usize) -> bool {
         if start + length <= self.file_size as usize {
             let mut mapped_file = &mut self.get_mapped_file_mut()[start..start + length];
@@ -452,7 +441,6 @@ impl MappedFile for DefaultMappedFile {
         false
     }
 
-    #[inline]
     fn put_slice(&self, data: &[u8], index: usize) -> bool {
         let length = data.len();
         let end_index = index + length;
@@ -472,7 +460,6 @@ impl MappedFile for DefaultMappedFile {
         self.file_from_offset
     }
 
-    #[inline]
     fn flush(&self, flush_least_pages: i32) -> i32 {
         if self.is_able_to_flush(flush_least_pages) {
             if MappedFile::hold(self) {
@@ -515,7 +502,6 @@ impl MappedFile for DefaultMappedFile {
         )
     }
 
-    #[inline]
     fn select_mapped_buffer(&self, pos: i32, size: i32) -> Option<SelectMappedBufferResult> {
         let read_position = self.get_read_position();
         if pos + size <= read_position {
@@ -577,7 +563,6 @@ impl MappedFile for DefaultMappedFile {
             .as_millis() as u64
     }
 
-    #[inline]
     fn get_data(&self, pos: usize, size: usize) -> Option<bytes::Bytes> {
         let read_position = self.get_read_position();
         let read_end_position = pos + size;
