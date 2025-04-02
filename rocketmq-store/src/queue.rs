@@ -34,6 +34,7 @@ mod batch_consume_queue;
 pub mod build_consume_queue;
 mod consume_queue;
 mod consume_queue_ext;
+mod consume_queue_store;
 mod file_queue_life_cycle;
 pub mod local_file_consume_queue_store;
 mod queue_offset_operator;
