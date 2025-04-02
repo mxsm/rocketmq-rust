@@ -34,8 +34,8 @@ use crate::config::message_store_config::MessageStoreConfig;
 use crate::filter::MessageFilter;
 use crate::hook::put_message_hook::BoxedPutMessageHook;
 use crate::log_file::commit_log::CommitLog;
+use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
 use crate::queue::ArcConsumeQueue;
-use crate::queue::ConsumeQueueStoreTrait;
 use crate::stats::broker_stats_manager::BrokerStatsManager;
 use crate::store::running_flags::RunningFlags;
 use crate::timer::timer_message_store::TimerMessageStore;
@@ -319,7 +319,7 @@ pub trait RocketMQMessageStore: Sync + 'static {
     /// An `Option` containing an `Arc` to the consume queue, if it exists.
     fn find_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue>;
 
-    fn get_queue_store(&self) -> Arc<Box<dyn ConsumeQueueStoreTrait>>;
+    fn get_queue_store(&self) -> Arc<dyn ConsumeQueueStoreTrait>;
 
     /// Delete topics from the message store.
     ///

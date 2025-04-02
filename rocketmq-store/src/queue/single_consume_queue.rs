@@ -43,9 +43,10 @@ use crate::consume_queue::mapped_file_queue::MappedFileQueue;
 use crate::filter::MessageFilter;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
+use crate::queue::consume_queue::ConsumeQueueTrait;
 use crate::queue::consume_queue_ext::ConsumeQueueExt;
 use crate::queue::queue_offset_operator::QueueOffsetOperator;
-use crate::queue::ConsumeQueueTrait;
+use crate::queue::referred_iterator::ReferredIterator;
 use crate::queue::CqUnit;
 use crate::queue::FileQueueLifeCycle;
 use crate::store::running_flags::RunningFlags;
@@ -550,12 +551,12 @@ impl ConsumeQueueTrait for ConsumeQueue {
     }
 
     #[inline]
-    fn get_earliest_unit(&self) -> CqUnit {
+    fn get_earliest_unit(&self) -> Option<CqUnit> {
         todo!()
     }
 
     #[inline]
-    fn get_latest_unit(&self) -> CqUnit {
+    fn get_latest_unit(&self) -> Option<CqUnit> {
         todo!()
     }
 
@@ -581,15 +582,6 @@ impl ConsumeQueueTrait for ConsumeQueue {
 
     #[inline]
     fn get_offset_in_queue_by_time(&self, timestamp: i64) -> i64 {
-        todo!()
-    }
-
-    #[inline]
-    fn get_offset_in_queue_by_time_boundary(
-        &self,
-        timestamp: i64,
-        boundary_type: BoundaryType,
-    ) -> i64 {
         todo!()
     }
 
@@ -862,13 +854,29 @@ impl ConsumeQueueTrait for ConsumeQueue {
         }
     }
 
-    #[inline]
+    /*    #[inline]
     fn iterate_from_inner(
         &self,
         start_index: i64,
         _count: i32,
     ) -> Option<Box<dyn Iterator<Item = CqUnit> + Send>> {
         self.iterate_from(start_index)
+    }*/
+
+    fn iterate_from_with_count(
+        &self,
+        start_index: i64,
+        count: i32,
+    ) -> Option<Box<dyn ReferredIterator<CqUnit>>> {
+        todo!()
+    }
+
+    fn get_offset_in_queue_by_time_with_boundary(
+        &self,
+        timestamp: i64,
+        boundary_type: BoundaryType,
+    ) -> i64 {
+        todo!()
     }
 }
 

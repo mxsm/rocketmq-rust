@@ -24,7 +24,7 @@ use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBroker
 use rocketmq_rust::ArcMut;
 
 use crate::base::dispatch_request::DispatchRequest;
-use crate::queue::consume_queue::ConsumeQueue;
+use crate::queue::consume_queue::ConsumeQueueTrait;
 use crate::queue::ArcConsumeQueue;
 use crate::queue::ConsumeQueueTable;
 use crate::queue::CqUnit;
@@ -71,7 +71,7 @@ pub trait ConsumeQueueStoreInterface: Sync {
     ///
     /// # Returns
     /// Result indicating success or failure
-    async fn destroy_queue(&self, consume_queue: ArcMut<dyn ConsumeQueue>);
+    async fn destroy_queue(&self, consume_queue: ArcMut<dyn ConsumeQueueTrait>);
 
     /// Flush cache to file
     ///
@@ -81,7 +81,7 @@ pub trait ConsumeQueueStoreInterface: Sync {
     ///
     /// # Returns
     /// `true` if any data has been flushed
-    fn flush(&self, consume_queue: ArcMut<dyn ConsumeQueue>, flush_least_pages: i32) -> bool;
+    fn flush(&self, consume_queue: ArcMut<dyn ConsumeQueueTrait>, flush_least_pages: i32) -> bool;
 
     /// Clean expired data from min physical offset
     ///
@@ -102,7 +102,7 @@ pub trait ConsumeQueueStoreInterface: Sync {
     /// Number of deleted files
     fn delete_expired_file(
         &self,
-        consume_queue: ArcMut<dyn ConsumeQueue>,
+        consume_queue: ArcMut<dyn ConsumeQueueTrait>,
         min_commit_log_pos: i64,
     ) -> i32;
 
@@ -113,7 +113,7 @@ pub trait ConsumeQueueStoreInterface: Sync {
     ///
     /// # Returns
     /// `true` if the first file is available
-    fn is_first_file_available(&self, consume_queue: ArcMut<dyn ConsumeQueue>) -> bool;
+    fn is_first_file_available(&self, consume_queue: ArcMut<dyn ConsumeQueueTrait>) -> bool;
 
     /// Check if the first file exists
     ///
@@ -122,7 +122,7 @@ pub trait ConsumeQueueStoreInterface: Sync {
     ///
     /// # Returns
     /// `true` if the first file exists
-    fn is_first_file_exist(&self, consume_queue: ArcMut<dyn ConsumeQueue>) -> bool;
+    fn is_first_file_exist(&self, consume_queue: ArcMut<Box<dyn ConsumeQueueTrait>>) -> bool;
 
     /// Roll to next file
     ///
@@ -132,7 +132,8 @@ pub trait ConsumeQueueStoreInterface: Sync {
     ///
     /// # Returns
     /// The beginning offset of the next file
-    fn roll_next_file(&self, consume_queue: ArcMut<dyn ConsumeQueue>, offset: i64) -> i64;
+    fn roll_next_file(&self, consume_queue: ArcMut<Box<dyn ConsumeQueueTrait>>, offset: i64)
+        -> i64;
 
     /// Truncate dirty data
     ///
@@ -150,9 +151,9 @@ pub trait ConsumeQueueStoreInterface: Sync {
     /// # Parameters
     /// * `consume_queue` - The consume queue
     /// * `request` - The dispatch request
-    fn put_message_position_info_wrapper(
+    fn put_message_position_info_wrapper_with_cq(
         &self,
-        consume_queue: ArcMut<dyn ConsumeQueue>,
+        consume_queue: ArcMut<Box<dyn ConsumeQueueTrait>>,
         request: &DispatchRequest,
     );
 
@@ -165,7 +166,7 @@ pub trait ConsumeQueueStoreInterface: Sync {
     ///
     /// # Returns
     /// Result indicating success or failure
-    fn put_message_position_info_wrapper_for_request(&self, request: &DispatchRequest);
+    fn put_message_position_info_wrapper(&self, request: &DispatchRequest);
 
     /// Range query consume queue units in RocksDB
     ///
@@ -343,11 +344,8 @@ pub trait ConsumeQueueStoreInterface: Sync {
     ///
     /// # Returns
     /// The consume queue
-    fn find_or_create_consume_queue(
-        &self,
-        topic: &CheetahString,
-        queue_id: i32,
-    ) -> ArcMut<dyn ConsumeQueue>;
+    fn find_or_create_consume_queue(&self, topic: &CheetahString, queue_id: i32)
+        -> ArcConsumeQueue;
 
     /// Find the consume queue map for a topic
     ///

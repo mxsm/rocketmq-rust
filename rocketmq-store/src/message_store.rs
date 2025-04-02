@@ -14,8 +14,5 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #[cfg(feature = "local_file_store")]
-pub mod default_message_store;
-
 pub mod local_file_message_store;

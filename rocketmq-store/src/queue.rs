@@ -15,31 +15,26 @@
  * limitations under the License.
  */
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::attribute::cq_type::CQType;
-use rocketmq_common::common::boundary_type::BoundaryType;
-use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_rust::ArcMut;
 
-use crate::base::dispatch_request::DispatchRequest;
 use crate::consume_queue::consume_queue_ext::CqExtUnit;
 use crate::filter::MessageFilter;
+use crate::queue::consume_queue::ConsumeQueueTrait;
 use crate::queue::consume_queue_ext::ConsumeQueueExt;
 use crate::queue::file_queue_life_cycle::FileQueueLifeCycle;
-use crate::queue::queue_offset_operator::QueueOffsetOperator;
 
 mod batch_consume_queue;
 pub mod build_consume_queue;
-mod consume_queue;
+pub mod consume_queue;
 mod consume_queue_ext;
-mod consume_queue_store;
+pub mod consume_queue_store;
 mod file_queue_life_cycle;
 pub mod local_file_consume_queue_store;
-mod local_file_consume_queue_store_refactor;
+mod local_file_consume_queue_store_bak;
 mod queue_offset_operator;
-mod referred_iterator;
+pub mod referred_iterator;
 pub mod single_consume_queue;
 
 pub type ArcConsumeQueue = ArcMut<Box<dyn ConsumeQueueTrait>>;
@@ -85,8 +80,8 @@ impl CqUnit {
     }
 }
 
-/// Trait representing ConsumeQueueStoreInterface.
-pub trait ConsumeQueueStoreTrait: Send + Sync {
+/*/// Trait representing ConsumeQueueStoreInterface.
+pub trait ConsumeQueueStoreTraitBak: Send + Sync {
     /// Initializes the consume queue store.
     ///
     /// This method should be called to initialize the consume queue store before performing any
@@ -153,7 +148,7 @@ pub trait ConsumeQueueStoreTrait: Send + Sync {
     /// # Arguments
     /// * `consume_queue` - A reference to the consume queue trait implementation that should be
     ///   destroyed.
-    fn destroy_consume_queue(&self, consume_queue: &dyn ConsumeQueueTrait);
+    fn destroy_consume_queue(&self, consume_queue: &dyn ConsumeQueueTraitBak);
 
     /// Flushes the consume queue to persistent storage.
     ///
@@ -168,7 +163,7 @@ pub trait ConsumeQueueStoreTrait: Send + Sync {
     ///
     /// # Returns
     /// `true` if the flush operation was successful, `false` otherwise.
-    fn flush(&self, consume_queue: &dyn ConsumeQueueTrait, flush_least_pages: i32) -> bool;
+    fn flush(&self, consume_queue: &dyn ConsumeQueueTraitBak, flush_least_pages: i32) -> bool;
 
     /// Cleans up expired data based on the minimum physical offset.
     ///
@@ -200,7 +195,7 @@ pub trait ConsumeQueueStoreTrait: Send + Sync {
     /// The number of files deleted.
     fn delete_expired_file(
         &self,
-        consume_queue: &dyn ConsumeQueueTrait,
+        consume_queue: &dyn ConsumeQueueTraitBak,
         min_commit_log_pos: i64,
     ) -> i32;
 
@@ -215,7 +210,7 @@ pub trait ConsumeQueueStoreTrait: Send + Sync {
     ///
     /// # Returns
     /// `true` if the first file is available, `false` otherwise.
-    fn is_first_file_available(&self, consume_queue: &dyn ConsumeQueueTrait) -> bool;
+    fn is_first_file_available(&self, consume_queue: &dyn ConsumeQueueTraitBak) -> bool;
 
     /// Checks if the first file in the consume queue exists on the storage medium.
     ///
@@ -228,7 +223,7 @@ pub trait ConsumeQueueStoreTrait: Send + Sync {
     ///
     /// # Returns
     /// `true` if the first file exists, `false` otherwise.
-    fn is_first_file_exist(&self, consume_queue: &dyn ConsumeQueueTrait) -> bool;
+    fn is_first_file_exist(&self, consume_queue: &dyn ConsumeQueueTraitBak) -> bool;
 
     /// Rolls over to the next file in the consume queue, based on the provided offset.
     ///
@@ -242,7 +237,7 @@ pub trait ConsumeQueueStoreTrait: Send + Sync {
     ///
     /// # Returns
     /// The offset at which the next file begins.
-    fn roll_next_file(&self, consume_queue: &dyn ConsumeQueueTrait, offset: i64) -> i64;
+    fn roll_next_file(&self, consume_queue: &dyn ConsumeQueueTraitBak, offset: i64) -> i64;
 
     /// Truncates dirty logic files beyond a specified offset.
     ///
@@ -277,7 +272,7 @@ pub trait ConsumeQueueStoreTrait: Send + Sync {
     /// * `request` - The dispatch request containing information about the message to be stored.
     fn put_message_position_info_wrapper_with_cq(
         &self,
-        consume_queue: &mut dyn ConsumeQueueTrait,
+        consume_queue: &mut dyn ConsumeQueueTraitBak,
         request: &DispatchRequest,
     );
 
@@ -535,7 +530,7 @@ pub trait ConsumeQueueStoreTrait: Send + Sync {
 }
 
 /// Trait representing ConsumeQueueInterface.
-pub trait ConsumeQueueTrait: Send + Sync + FileQueueLifeCycle {
+pub trait ConsumeQueueTraitBak: Send + Sync + FileQueueLifeCycle {
     /// Retrieves the topic of the consume queue.
     ///
     /// This method returns a reference to the string slice that represents the topic associated
@@ -790,4 +785,4 @@ pub trait ConsumeQueueTrait: Send + Sync + FileQueueLifeCycle {
         start_index: i64,
         count: i32,
     ) -> Option<Box<dyn Iterator<Item = CqUnit> + Send>>;
-}
+}*/

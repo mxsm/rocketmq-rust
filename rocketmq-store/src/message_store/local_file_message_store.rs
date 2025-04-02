@@ -104,10 +104,9 @@ use crate::log_file::commit_log::CommitLog;
 use crate::log_file::mapped_file::MappedFile;
 use crate::log_file::MAX_PULL_MSG_SIZE;
 use crate::queue::build_consume_queue::CommitLogDispatcherBuildConsumeQueue;
+use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
 use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
 use crate::queue::ArcConsumeQueue;
-use crate::queue::ConsumeQueueStoreTrait;
-use crate::queue::ConsumeQueueTrait;
 use crate::stats::broker_stats_manager::BrokerStatsManager;
 use crate::store::running_flags::RunningFlags;
 use crate::store_error::StoreError;
@@ -179,13 +178,8 @@ impl LocalFileMessageStore {
         let build_index =
             CommitLogDispatcherBuildIndex::new(index_service.clone(), message_store_config.clone());
         // let topic_config_table = Arc::new(parking_lot::Mutex::new(HashMap::new()));
-        let consume_queue_store = ConsumeQueueStore::new(
-            message_store_config.clone(),
-            broker_config.clone(),
-            topic_config_table.clone(),
-            running_flags.clone(),
-            store_checkpoint.clone(),
-        );
+        let consume_queue_store =
+            ConsumeQueueStore::new(message_store_config.clone(), broker_config.clone());
         let build_consume_queue =
             CommitLogDispatcherBuildConsumeQueue::new(consume_queue_store.clone());
 
@@ -343,7 +337,7 @@ impl LocalFileMessageStore {
         self.recover_consume_queue().await;
         let max_phy_offset_of_consume_queue = self
             .consume_queue_store
-            .get_max_phy_offset_in_consume_queue();
+            .get_max_phy_offset_in_consume_queue_global();
         let recover_consume_queue = Instant::now()
             .saturating_duration_since(recover_consume_queue_start)
             .as_millis();
@@ -1519,8 +1513,7 @@ impl MessageStore for LocalFileMessageStore {
             }
             let queue_table = queue_table.unwrap();
             for (queue_id, consume_queue) in queue_table {
-                self.consume_queue_store
-                    .destroy_consume_queue(consume_queue.as_ref().as_ref());
+                self.consume_queue_store.destroy_queue(consume_queue);
                 self.consume_queue_store
                     .remove_topic_queue_table(topic, queue_id);
             }
@@ -1735,8 +1728,8 @@ impl MessageStore for LocalFileMessageStore {
         todo!()
     }
 
-    fn get_queue_store(&self) -> &dyn ConsumeQueueStoreTrait {
-        &self.consume_queue_store as &dyn ConsumeQueueStoreTrait
+    fn get_queue_store(&self) -> &Box<dyn ConsumeQueueStoreTrait> {
+        &self.consume_queue_store as &Box<dyn ConsumeQueueStoreTrait>
     }
 
     fn is_sync_disk_flush(&self) -> bool {
