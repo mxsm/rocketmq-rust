@@ -36,7 +36,6 @@ use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::queue::batch_consume_queue::BatchConsumeQueue;
 use crate::queue::queue_offset_operator::QueueOffsetOperator;
-use crate::queue::single_consume_queue::ConsumeQueue;
 use crate::queue::ArcConsumeQueue;
 use crate::queue::ConsumeQueueStoreTrait;
 use crate::queue::ConsumeQueueTable;
@@ -366,7 +365,8 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
         let consume_queue = topic_map.entry(queue_id).or_insert_with(|| {
             let option = self.topic_config_table.lock().get(topic).cloned();
             match QueueTypeUtils::get_cq_type(&option) {
-                CQType::SimpleCQ => ArcMut::new(Box::new(ConsumeQueue::new(
+                CQType::SimpleCQ =>
+                /*ArcMut::new(Box::new(ConsumeQueue::new(
                     topic.clone(),
                     queue_id,
                     CheetahString::from_string(get_store_path_consume_queue(
@@ -378,7 +378,10 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
                     self.inner.message_store_config.clone(),
                     self.running_flags.clone(),
                     self.store_checkpoint.clone(),
-                ))),
+                )))*/
+                {
+                    unimplemented!("SimpleCQ")
+                }
                 CQType::BatchCQ => ArcMut::new(Box::new(BatchConsumeQueue::new(
                     topic.clone(),
                     queue_id,
@@ -566,7 +569,7 @@ impl ConsumeQueueStore {
     ) -> Box<dyn ConsumeQueueTrait> {
         match cq_type {
             CQType::SimpleCQ => {
-                let consume_queue = ConsumeQueue::new(
+                /*let consume_queue = ConsumeQueue::new(
                     topic.clone(),
                     queue_id,
                     store_path,
@@ -577,7 +580,8 @@ impl ConsumeQueueStore {
                     self.running_flags.clone(),
                     self.store_checkpoint.clone(),
                 );
-                Box::new(consume_queue)
+                Box::new(consume_queue)*/
+                unimplemented!()
             }
             CQType::BatchCQ => {
                 let consume_queue = BatchConsumeQueue::new(
