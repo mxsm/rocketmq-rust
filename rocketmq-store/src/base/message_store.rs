@@ -454,6 +454,8 @@ pub trait MessageStoreInner: Sync + 'static {
     /// Get running flags
     fn get_running_flags(&self) -> &RunningFlags;
 
+    fn get_running_flags_arc(&self) -> Arc<RunningFlags>;
+
     /// Get the transient store pool
     fn get_transient_store_pool(&self) -> Arc<TransientStorePool>;
 

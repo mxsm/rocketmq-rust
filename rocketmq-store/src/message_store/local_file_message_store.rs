@@ -1715,6 +1715,10 @@ impl MessageStore for LocalFileMessageStore {
         self.running_flags.as_ref()
     }
 
+    fn get_running_flags_arc(&self) -> Arc<RunningFlags> {
+        self.running_flags.clone()
+    }
+
     fn get_transient_store_pool(&self) -> Arc<TransientStorePool> {
         todo!()
     }
