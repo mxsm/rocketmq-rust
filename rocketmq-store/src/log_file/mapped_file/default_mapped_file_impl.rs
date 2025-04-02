@@ -110,7 +110,6 @@ impl Default for DefaultMappedFile {
 impl DefaultMappedFile {
     #[inline]
     pub fn new(file_name: CheetahString, file_size: u64) -> Self {
-        let file_from_offset = Self::get_file_from_offset(&file_name);
         let path_buf = PathBuf::from(file_name.as_str());
         if path_buf.parent().is_none() {
             panic!("file path is invalid: {}", file_name);
@@ -120,6 +119,7 @@ impl DefaultMappedFile {
             panic!("file path is invalid: {}", file_name);
         }
         ensure_dir_ok(dir.unwrap());
+        let file_from_offset = Self::parse_file_from_offset(&path_buf);
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -152,16 +152,42 @@ impl DefaultMappedFile {
         }
     }
 
+    /// Extracts the file offset from the given file name.
+    ///
+    /// This function takes a `CheetahString` representing the file name,
+    /// parses it to extract the offset, and returns it as a `u64`.
+    ///
+    /// # Arguments
+    ///
+    /// * `file_name` - A `CheetahString` representing the name of the file.
+    ///
+    /// # Returns
+    ///
+    /// A `u64` representing the file offset extracted from the file name.
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if the file name cannot be parsed to a valid `u64` offset.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::path::PathBuf;
+    ///
+    /// use cheetah_string::CheetahString;
+    /// use rocketmq_store::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
+    ///
+    /// let file_name = PathBuf::from(CheetahString::from("/temp/00000000000000000000"));
+    /// let offset = DefaultMappedFile::parse_file_from_offset(file_name.as_ref());
+    /// assert_eq!(offset, 0);
+    /// ```
     #[inline]
-    fn get_file_from_offset(file_name: &CheetahString) -> u64 {
-        let file_from_offset = PathBuf::from(file_name.as_str())
+    pub fn parse_file_from_offset(file_name: &PathBuf) -> u64 {
+        file_name
             .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .parse::<u64>()
-            .expect("File name parse to offset is invalid");
-        file_from_offset
+            .and_then(|name| name.to_str())
+            .and_then(|s| s.parse::<u64>().ok())
+            .expect("File name parse to offset is invalid")
     }
 
     #[inline]
@@ -185,8 +211,8 @@ impl DefaultMappedFile {
         file_size: u64,
         transient_store_pool: TransientStorePool,
     ) -> Self {
-        let file_from_offset = Self::get_file_from_offset(&file_name);
         let path_buf = PathBuf::from(file_name.as_str());
+        let file_from_offset = Self::parse_file_from_offset(&path_buf);
         let file = OpenOptions::new()
             .read(true)
             .write(true)
