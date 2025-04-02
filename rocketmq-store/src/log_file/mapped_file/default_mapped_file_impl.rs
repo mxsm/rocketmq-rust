@@ -172,12 +172,12 @@ impl DefaultMappedFile {
     /// # Examples
     ///
     /// ```rust
-    /// use std::path::PathBuf;
+    /// use std::path::Path;
     ///
     /// use cheetah_string::CheetahString;
     /// use rocketmq_store::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
     ///
-    /// let file_name = PathBuf::from(CheetahString::from("/temp/00000000000000000000"));
+    /// let file_name = Path::from(CheetahString::from("/temp/00000000000000000000"));
     /// let offset = DefaultMappedFile::parse_file_from_offset(file_name.as_ref());
     /// assert_eq!(offset, 0);
     /// ```
