@@ -32,6 +32,7 @@ use rocketmq_rust::ArcMut;
 use tracing::info;
 
 use crate::base::dispatch_request::DispatchRequest;
+use crate::base::message_store::MessageStore;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::message_store::local_file_message_store::LocalFileMessageStore;
 use crate::queue::batch_consume_queue::BatchConsumeQueue;
@@ -45,9 +46,6 @@ use crate::queue::CqUnit;
 
 pub struct ConsumeQueueStore {
     inner: ArcMut<Inner>,
-    /*running_flags: Arc<RunningFlags>,
-    store_checkpoint: Arc<StoreCheckpoint>,
-    topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,*/
 }
 
 struct Inner {
@@ -400,6 +398,7 @@ impl ConsumeQueueStore {
     ) -> Box<dyn ConsumeQueueTrait> {
         match cq_type {
             CQType::SimpleCQ => {
+                let ms_ref = self.inner.message_store.as_ref().unwrap();
                 let consume_queue = ConsumeQueue::new(
                     topic.clone(),
                     queue_id,
@@ -408,7 +407,8 @@ impl ConsumeQueueStore {
                         .message_store_config
                         .get_mapped_file_size_consume_queue(),
                     self.inner.message_store_config.clone(),
-                    self.inner.message_store.clone().unwrap(),
+                    ms_ref.get_running_flags_arc(),
+                    ms_ref.get_store_checkpoint(),
                 );
                 Box::new(consume_queue)
             }

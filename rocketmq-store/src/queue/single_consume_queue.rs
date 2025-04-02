@@ -28,15 +28,14 @@ use rocketmq_common::common::attribute::cq_type::CQType;
 use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_rust::ArcMut;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
 
 use crate::base::dispatch_request::DispatchRequest;
-use crate::base::message_store::MessageStore;
 use crate::base::select_result::SelectMappedBufferResult;
+use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::base::swappable::Swappable;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::consume_queue::consume_queue_ext::CqExtUnit;
@@ -49,6 +48,7 @@ use crate::queue::queue_offset_operator::QueueOffsetOperator;
 use crate::queue::ConsumeQueueTrait;
 use crate::queue::CqUnit;
 use crate::queue::FileQueueLifeCycle;
+use crate::store::running_flags::RunningFlags;
 use crate::store_path_config_helper::get_store_path_consume_queue_ext;
 
 pub const CQ_STORE_UNIT_SIZE: i32 = 20;
@@ -67,7 +67,7 @@ pub const MSG_TAG_OFFSET_INDEX: i32 = 12;
 /// ConsumeQueue's store unit. Size: CommitLog Physical Offset(8) + Body Size(4) + Tag HashCode(8) =
 /// 20 Bytes
 #[derive(Clone)]
-pub struct ConsumeQueue<MS> {
+pub struct ConsumeQueue {
     message_store_config: Arc<MessageStoreConfig>,
     mapped_file_queue: MappedFileQueue,
     topic: CheetahString,
@@ -77,10 +77,11 @@ pub struct ConsumeQueue<MS> {
     max_physic_offset: Arc<AtomicI64>,
     min_logic_offset: Arc<AtomicI64>,
     consume_queue_ext: Option<ConsumeQueueExt>,
-    message_store: ArcMut<MS>,
+    running_flags: Arc<RunningFlags>,
+    store_checkpoint: Arc<StoreCheckpoint>,
 }
 
-impl<MS: MessageStore> ConsumeQueue<MS> {
+impl ConsumeQueue {
     #[inline]
     pub fn new(
         topic: CheetahString,
@@ -88,7 +89,8 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
         store_path: CheetahString,
         mapped_file_size: i32,
         message_store_config: Arc<MessageStoreConfig>,
-        message_store: ArcMut<MS>,
+        running_flags: Arc<RunningFlags>,
+        store_checkpoint: Arc<StoreCheckpoint>,
     ) -> Self {
         let queue_dir = PathBuf::from(store_path.as_str())
             .join(topic.as_str())
@@ -121,12 +123,13 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
             max_physic_offset: Arc::new(AtomicI64::new(-1)),
             min_logic_offset: Arc::new(AtomicI64::new(0)),
             consume_queue_ext,
-            message_store,
+            running_flags,
+            store_checkpoint,
         }
     }
 }
 
-impl<MS: MessageStore> ConsumeQueue<MS> {
+impl ConsumeQueue {
     #[inline]
     pub fn set_max_physic_offset(&self, max_physic_offset: i64) {
         self.max_physic_offset
@@ -346,7 +349,7 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
     }
 }
 
-impl<MS: MessageStore> FileQueueLifeCycle for ConsumeQueue<MS> {
+impl FileQueueLifeCycle for ConsumeQueue {
     #[inline]
     fn load(&mut self) -> bool {
         let mut result = self.mapped_file_queue.load();
@@ -499,7 +502,7 @@ impl<MS: MessageStore> FileQueueLifeCycle for ConsumeQueue<MS> {
     }
 }
 
-impl<MS: MessageStore> Swappable for ConsumeQueue<MS> {
+impl Swappable for ConsumeQueue {
     #[inline]
     fn swap_map(
         &self,
@@ -517,7 +520,7 @@ impl<MS: MessageStore> Swappable for ConsumeQueue<MS> {
 }
 
 #[allow(unused_variables)]
-impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
+impl ConsumeQueueTrait for ConsumeQueue {
     #[inline]
     fn get_topic(&self) -> &CheetahString {
         &self.topic
@@ -763,7 +766,7 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
     #[inline]
     fn put_message_position_info_wrapper(&mut self, request: &DispatchRequest) {
         let max_retries = 30i32;
-        let can_write = self.message_store.get_running_flags().is_cq_writeable();
+        let can_write = self.running_flags.is_cq_writeable();
         let mut i = 0i32;
         while i < max_retries && can_write {
             let mut tags_code = request.tags_code;
@@ -795,8 +798,7 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
                 {
                     unimplemented!("slave or dledger commit log not support")
                 }
-                self.message_store
-                    .get_store_checkpoint()
+                self.store_checkpoint
                     .set_logics_msg_timestamp(request.store_timestamp as u64);
                 //if (MultiDispatchUtils.checkMultiDispatchQueue(this.messageStore.
                 // getMessageStoreConfig(), request)) {
@@ -814,9 +816,7 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
             "[BUG]consume queue can not write, {} {}",
             self.topic, self.queue_id
         );
-        self.message_store
-            .get_running_flags()
-            .make_logics_queue_error();
+        self.running_flags.make_logics_queue_error();
     }
 
     #[inline]
