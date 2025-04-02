@@ -168,19 +168,6 @@ impl DefaultMappedFile {
     /// # Panics
     ///
     /// This function will panic if the file name cannot be parsed to a valid `u64` offset.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use std::path::Path;
-    ///
-    /// use cheetah_string::CheetahString;
-    /// use rocketmq_store::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
-    ///
-    /// let file_name = Path::from(CheetahString::from("/temp/00000000000000000000"));
-    /// let offset = DefaultMappedFile::parse_file_from_offset(file_name.as_ref());
-    /// assert_eq!(offset, 0);
-    /// ```
     #[inline]
     pub fn parse_file_from_offset(file_name: &Path) -> u64 {
         file_name
