@@ -182,7 +182,7 @@ impl DefaultMappedFile {
     /// assert_eq!(offset, 0);
     /// ```
     #[inline]
-    pub fn parse_file_from_offset(file_name: &PathBuf) -> u64 {
+    pub fn parse_file_from_offset(file_name: &Path) -> u64 {
         file_name
             .file_name()
             .and_then(|name| name.to_str())
