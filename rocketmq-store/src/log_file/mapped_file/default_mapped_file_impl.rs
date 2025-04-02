@@ -177,6 +177,25 @@ impl DefaultMappedFile {
             .expect("File name parse to offset is invalid")
     }
 
+    /// Creates and initializes a new file with the specified name and size.
+    ///
+    /// This function takes a `CheetahString` representing the file name and a `u64`
+    /// representing the file size. It creates a new file at the specified path,
+    /// truncates it to the specified size, and returns the file handle.
+    ///
+    /// # Arguments
+    ///
+    /// * `file_name` - A `CheetahString` representing the name of the file.
+    /// * `file_size` - A `u64` representing the size of the file to be created.
+    ///
+    /// # Returns
+    ///
+    /// A `File` handle to the newly created file.
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if the file cannot be opened or if the file size
+    /// cannot be set.
     fn build_file(file_name: &CheetahString, file_size: u64) -> File {
         let path = PathBuf::from(file_name.as_str());
         let file = OpenOptions::new()
@@ -340,11 +359,12 @@ impl MappedFile for DefaultMappedFile {
         byte_buffer_msg: &mut Bytes,
         cb: &dyn CompactionAppendMsgCallback,
     ) -> AppendMessageResult {
-        todo!()
+        unimplemented!("append_message_compaction not implemented")
     }
 
     #[inline]
     fn get_bytes(&self, pos: usize, size: usize) -> Option<bytes::Bytes> {
+        // not check can read position, so maybe read invalid data in the file
         if pos + size > self.file_size as usize {
             return None;
         }
@@ -353,9 +373,21 @@ impl MappedFile for DefaultMappedFile {
         ))
     }
 
+    #[inline]
+    fn get_bytes_readable_checked(&self, pos: usize, size: usize) -> Option<bytes::Bytes> {
+        //check can read position
+        let max_readable_position = self.get_read_position() as usize;
+        let end_position = pos + size;
+        if max_readable_position < end_position || end_position > self.file_size as usize {
+            return None;
+        }
+        Some(Bytes::copy_from_slice(
+            &self.get_mapped_file()[pos..end_position],
+        ))
+    }
+
     fn append_message_offset_length(&self, data: &[u8], offset: usize, length: usize) -> bool {
         let current_pos = self.wrote_position.load(Ordering::Acquire) as usize;
-
         if current_pos + length <= self.file_size as usize {
             let mut mapped_file =
                 &mut self.get_mapped_file_mut()[current_pos..current_pos + length];
@@ -380,32 +412,6 @@ impl MappedFile for DefaultMappedFile {
         if current_pos + length <= self.file_size as usize {
             let mut mapped_file =
                 &mut self.get_mapped_file_mut()[current_pos..current_pos + length];
-
-            if let Some(data_slice) = data.get(offset..offset + length) {
-                if mapped_file.write_all(data_slice).is_ok() {
-                    return true;
-                } else {
-                    error!("append_message_offset_length write_all error");
-                }
-            } else {
-                error!("Invalid data slice");
-            }
-        }
-        false
-    }
-
-    fn append_message_offset_no_position_update(
-        &self,
-        data: &[u8],
-        offset: usize,
-        length: usize,
-    ) -> bool {
-        let current_pos = self.wrote_position.load(Ordering::Relaxed) as usize;
-
-        if current_pos + length <= self.file_size as usize {
-            let mut mapped_file =
-                &mut self.get_mapped_file_mut()[current_pos..current_pos + length];
-
             if let Some(data_slice) = data.get(offset..offset + length) {
                 if mapped_file.write_all(data_slice).is_ok() {
                     return true;
@@ -652,6 +658,11 @@ impl MappedFile for DefaultMappedFile {
         self.wrote_position.store(wrote_position, Ordering::SeqCst)
     }
 
+    /// Return The max position which have valid data
+    ///
+    /// # Returns
+    ///
+    /// An `i32` representing the current read position.
     #[inline]
     fn get_read_position(&self) -> i32 {
         match self.transient_store_pool {
@@ -711,7 +722,7 @@ impl MappedFile for DefaultMappedFile {
 
     #[inline]
     fn get_file(&self) -> &File {
-        todo!()
+        &self.file
     }
 
     #[inline]
@@ -725,8 +736,8 @@ impl MappedFile for DefaultMappedFile {
     }
 
     #[inline]
-    fn get_last_flush_time(&self) -> i64 {
-        todo!()
+    fn get_last_flush_time(&self) -> u64 {
+        self.last_flush_time.load(Ordering::Relaxed)
     }
 
     #[inline]

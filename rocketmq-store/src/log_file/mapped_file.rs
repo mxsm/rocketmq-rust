@@ -219,6 +219,23 @@ pub trait MappedFile {
     /// requested slice goes beyond the file boundaries or the file is not available.
     fn get_bytes(&self, pos: usize, size: usize) -> Option<bytes::Bytes>;
 
+    /// Retrieves a byte slice from the mapped file with readable bounds checking.
+    ///
+    /// This method returns a byte slice starting from the specified position and of the specified
+    /// size. It performs bounds checking to ensure the requested slice is within the file
+    /// boundaries.
+    ///
+    /// # Arguments
+    ///
+    /// * `pos` - The starting position from where bytes should be read.
+    /// * `size` - The number of bytes to read from the starting position.
+    ///
+    /// # Returns
+    ///
+    /// An `Option<bytes::Bytes>` containing the requested byte slice if available, or `None` if the
+    /// requested slice goes beyond the file boundaries or the file is not available.
+    fn get_bytes_readable_checked(&self, pos: usize, size: usize) -> Option<bytes::Bytes>;
+
     /// Appends a byte array to the mapped file without updating the write position.
     ///
     /// This method appends the given byte array to the mapped file without updating the internal
@@ -261,40 +278,6 @@ pub trait MappedFile {
     /// # Returns
     /// `true` if the append operation was successful, `false` otherwise.
     fn append_message_no_position_update(&self, data: &[u8], offset: usize, length: usize) -> bool;
-
-    /// Appends a byte array to the mapped file without updating the write position.
-    ///
-    /// This method appends a specified portion of the given byte array to the mapped file without
-    /// updating the internal write position. It allows for more controlled appending by specifying
-    /// an offset and length.
-    ///
-    /// # Arguments
-    /// * `data` - A reference to the byte array to be appended.
-    /// * `offset` - The starting offset in the byte array from where bytes should be appended.
-    /// * `length` - The number of bytes to append starting from the offset.
-    ///
-    /// # Returns
-    /// `true` if the append operation was successful, `false` otherwise.
-    fn append_message_offset_no_position_update(
-        &self,
-        data: &[u8],
-        offset: usize,
-        length: usize,
-    ) -> bool;
-
-    /// Appends a byte array to the mapped file without updating the write position.
-    ///
-    /// This method appends the given byte array to the mapped file without updating the internal
-    /// write position. It is useful for scenarios where the write position should remain unchanged.
-    ///
-    /// # Arguments
-    /// * `data` - A reference to the byte array to be appended.
-    ///
-    /// # Returns
-    /// `true` if the append operation was successful, `false` otherwise.
-    fn append_message_ref_no_position_update(&self, data: &[u8]) -> bool {
-        self.append_message_offset_no_position_update(data, 0, data.len())
-    }
 
     /// Writes a segment of bytes to the mapped file.
     ///
@@ -587,12 +570,12 @@ pub trait MappedFile {
     /// Retrieves the timestamp of the last flush operation.
     ///
     /// This method returns the time at which the last flush operation was completed for the mapped
-    /// file. The timestamp is represented as an `i64`, measuring milliseconds since the Unix
+    /// file. The timestamp is represented as an `u64`, measuring milliseconds since the Unix
     /// epoch.
     ///
     /// # Returns
-    /// An `i64` representing the timestamp of the last flush operation.
-    fn get_last_flush_time(&self) -> i64;
+    /// An `u64` representing the timestamp of the last flush operation.
+    fn get_last_flush_time(&self) -> u64;
 
     /// Checks if a specific portion of the mapped file is loaded into memory.
     ///
