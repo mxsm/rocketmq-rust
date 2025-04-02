@@ -19,5 +19,5 @@ pub trait ReferredIterator<T>: Iterator<Item = T> {
     /// Release resources associated with this iterator
     fn release(&mut self);
 
-    fn next_and_release(&mut self) -> Self::Item;
+    fn next_and_release(&mut self) -> Option<Self::Item>;
 }
