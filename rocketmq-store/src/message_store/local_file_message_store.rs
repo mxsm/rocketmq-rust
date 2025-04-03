@@ -17,6 +17,7 @@
 #![allow(unused_variables)]
 #![allow(unused_imports)]
 
+use std::any::Any;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -25,6 +26,7 @@ use std::error::Error;
 use std::fs;
 use std::future::Future;
 use std::net::IpAddr;
+use std::ops::Deref;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
@@ -104,10 +106,9 @@ use crate::log_file::commit_log::CommitLog;
 use crate::log_file::mapped_file::MappedFile;
 use crate::log_file::MAX_PULL_MSG_SIZE;
 use crate::queue::build_consume_queue::CommitLogDispatcherBuildConsumeQueue;
+use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
 use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
 use crate::queue::ArcConsumeQueue;
-use crate::queue::ConsumeQueueStoreTrait;
-use crate::queue::ConsumeQueueTrait;
 use crate::stats::broker_stats_manager::BrokerStatsManager;
 use crate::store::running_flags::RunningFlags;
 use crate::store_error::StoreError;
@@ -179,13 +180,8 @@ impl LocalFileMessageStore {
         let build_index =
             CommitLogDispatcherBuildIndex::new(index_service.clone(), message_store_config.clone());
         // let topic_config_table = Arc::new(parking_lot::Mutex::new(HashMap::new()));
-        let consume_queue_store = ConsumeQueueStore::new(
-            message_store_config.clone(),
-            broker_config.clone(),
-            topic_config_table.clone(),
-            running_flags.clone(),
-            store_checkpoint.clone(),
-        );
+        let consume_queue_store =
+            ConsumeQueueStore::new(message_store_config.clone(), broker_config.clone());
         let build_consume_queue =
             CommitLogDispatcherBuildConsumeQueue::new(consume_queue_store.clone());
 
@@ -279,7 +275,9 @@ impl LocalFileMessageStore {
     pub fn set_message_store_arc(&mut self, message_store_arc: ArcMut<LocalFileMessageStore>) {
         self.message_store_arc = Some(message_store_arc.clone());
         self.commit_log
-            .set_local_file_message_store(message_store_arc);
+            .set_local_file_message_store(message_store_arc.clone());
+        self.consume_queue_store
+            .set_message_store(message_store_arc);
     }
 
     pub fn delay_level_table(&self) -> &ArcMut<BTreeMap<i32, i64>> {
@@ -343,7 +341,7 @@ impl LocalFileMessageStore {
         self.recover_consume_queue().await;
         let max_phy_offset_of_consume_queue = self
             .consume_queue_store
-            .get_max_phy_offset_in_consume_queue();
+            .get_max_phy_offset_in_consume_queue_global();
         let recover_consume_queue = Instant::now()
             .saturating_duration_since(recover_consume_queue_start)
             .as_millis();
@@ -399,9 +397,9 @@ impl LocalFileMessageStore {
 
     async fn recover_consume_queue(&mut self) {
         if self.is_recover_concurrently() {
-            self.consume_queue_store.recover_concurrently();
+            self.consume_queue_store.recover_concurrently().await;
         } else {
-            self.consume_queue_store.recover();
+            self.consume_queue_store.recover().await;
         }
     }
 
@@ -942,7 +940,7 @@ impl MessageStore for LocalFileMessageStore {
                 {
                     cq_file_num += 1;
                     let buffer_consume_queue =
-                        consume_queue.iterate_from_inner(next_begin_offset, max_msg_nums);
+                        consume_queue.iterate_from_with_count(next_begin_offset, max_msg_nums);
                     if buffer_consume_queue.is_none() {
                         status = GetMessageStatus::OffsetFoundNull;
                         next_begin_offset = self.next_offset_correction(
@@ -1520,7 +1518,7 @@ impl MessageStore for LocalFileMessageStore {
             let queue_table = queue_table.unwrap();
             for (queue_id, consume_queue) in queue_table {
                 self.consume_queue_store
-                    .destroy_consume_queue(consume_queue.as_ref().as_ref());
+                    .destroy_queue(consume_queue.as_ref().deref());
                 self.consume_queue_store
                     .remove_topic_queue_table(topic, queue_id);
             }
@@ -1700,7 +1698,7 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn get_store_checkpoint(&self) -> Arc<StoreCheckpoint> {
-        todo!()
+        self.store_checkpoint.clone().unwrap()
     }
 
     fn get_system_clock(&self) -> Arc<SystemClock> {
@@ -1735,9 +1733,14 @@ impl MessageStore for LocalFileMessageStore {
         todo!()
     }
 
-    fn get_queue_store(&self) -> &dyn ConsumeQueueStoreTrait {
-        &self.consume_queue_store as &dyn ConsumeQueueStoreTrait
+    fn get_queue_store(&self) -> &dyn Any {
+        self.consume_queue_store.as_any()
     }
+
+    /*fn get_queue_store(&self) -> &Box<dyn ConsumeQueueStoreTrait> {
+        /*&self.consume_queue_store as &Box<dyn ConsumeQueueStoreTrait>*/
+        unimplemented!("get_queue_store")
+    }*/
 
     fn is_sync_disk_flush(&self) -> bool {
         todo!()

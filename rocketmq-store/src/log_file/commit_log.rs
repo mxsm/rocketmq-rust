@@ -78,8 +78,8 @@ use crate::log_file::mapped_file::MappedFile;
 use crate::message_encoder::message_ext_encoder::MessageExtEncoder;
 use crate::message_store::local_file_message_store::CommitLogDispatcherDefault;
 use crate::message_store::local_file_message_store::LocalFileMessageStore;
+use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
 use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
-use crate::queue::ConsumeQueueStoreTrait;
 use crate::store_error::StoreError;
 
 // Message's MAGIC CODE daa320a7

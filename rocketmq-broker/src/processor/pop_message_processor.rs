@@ -1681,7 +1681,7 @@ impl QueueLockManager {
 #[cfg(test)]
 mod tests {
     use cheetah_string::CheetahString;
-    use rocketmq_store::message_store::default_message_store::DefaultMessageStore;
+    use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
     use rocketmq_store::pop::ack_msg::AckMsg;
 
     use super::*;
@@ -1697,7 +1697,7 @@ mod tests {
             pop_time: 789,
             broker_name: CheetahString::from_static_str("test_broker"),
         };
-        let result = PopMessageProcessor::<DefaultMessageStore>::gen_ack_unique_id(&ack_msg);
+        let result = PopMessageProcessor::<LocalFileMessageStore>::gen_ack_unique_id(&ack_msg);
         let expected = "test_topic@1@123@test_group@789@test_broker@ack";
         assert_eq!(result, expected);
     }
@@ -1718,7 +1718,7 @@ mod tests {
             ack_offset_list: vec![1, 2, 3],
         };
         let result =
-            PopMessageProcessor::<DefaultMessageStore>::gen_batch_ack_unique_id(&batch_ack_msg);
+            PopMessageProcessor::<LocalFileMessageStore>::gen_batch_ack_unique_id(&batch_ack_msg);
         let expected = "test_topic@1@[1, 2, 3]@test_group@789@bAck";
         assert_eq!(result, expected);
     }
@@ -1739,7 +1739,7 @@ mod tests {
             queue_offset_diff: vec![],
             re_put_times: None,
         };
-        let result = PopMessageProcessor::<DefaultMessageStore>::gen_ck_unique_id(&ck);
+        let result = PopMessageProcessor::<LocalFileMessageStore>::gen_ck_unique_id(&ck);
         let expected = "test_topic@1@456@test_cid@789@test_broker@ck";
         assert_eq!(result, expected);
     }

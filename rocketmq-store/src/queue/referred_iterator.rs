@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-pub trait ReferredIterator<T>: Iterator<Item = T> {
+pub trait ReferredIterator<T>: Iterator<Item = T> + Send {
     /// Release resources associated with this iterator
     fn release(&mut self);
 

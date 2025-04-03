@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -21,16 +22,15 @@ use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_rust::ArcMut;
 
 use crate::base::dispatch_request::DispatchRequest;
-use crate::queue::consume_queue::ConsumeQueue;
+use crate::queue::consume_queue::ConsumeQueueTrait;
 use crate::queue::ArcConsumeQueue;
 use crate::queue::ConsumeQueueTable;
 use crate::queue::CqUnit;
 
 #[trait_variant::make(ConsumeQueueStoreTrait: Send)]
-pub trait ConsumeQueueStoreInterface: Sync {
+pub trait ConsumeQueueStoreInterface: Sync + Any {
     /// Start the consume queue store
     fn start(&self);
 
@@ -59,10 +59,10 @@ pub trait ConsumeQueueStoreInterface: Sync {
     ///
     /// # Returns
     /// `true` if shutdown successfully
-    async fn shutdown(&self) -> bool;
+    fn shutdown(&self) -> bool;
 
     /// Destroy all consume queues
-    async fn destroy(&self);
+    fn destroy(&self);
 
     /// Destroy the specific consume queue
     ///
@@ -71,7 +71,7 @@ pub trait ConsumeQueueStoreInterface: Sync {
     ///
     /// # Returns
     /// Result indicating success or failure
-    async fn destroy_queue(&self, consume_queue: ArcMut<dyn ConsumeQueue>);
+    fn destroy_queue(&self, consume_queue: &dyn ConsumeQueueTrait);
 
     /// Flush cache to file
     ///
@@ -81,7 +81,7 @@ pub trait ConsumeQueueStoreInterface: Sync {
     ///
     /// # Returns
     /// `true` if any data has been flushed
-    fn flush(&self, consume_queue: ArcMut<dyn ConsumeQueue>, flush_least_pages: i32) -> bool;
+    fn flush(&self, consume_queue: &dyn ConsumeQueueTrait, flush_least_pages: i32) -> bool;
 
     /// Clean expired data from min physical offset
     ///
@@ -90,7 +90,7 @@ pub trait ConsumeQueueStoreInterface: Sync {
     async fn clean_expired(&self, min_phy_offset: i64);
 
     /// Check file integrity
-    async fn check_self(&self);
+    fn check_self(&self);
 
     /// Delete expired files ending at min commit log position
     ///
@@ -102,7 +102,7 @@ pub trait ConsumeQueueStoreInterface: Sync {
     /// Number of deleted files
     fn delete_expired_file(
         &self,
-        consume_queue: ArcMut<dyn ConsumeQueue>,
+        consume_queue: &dyn ConsumeQueueTrait,
         min_commit_log_pos: i64,
     ) -> i32;
 
@@ -113,7 +113,7 @@ pub trait ConsumeQueueStoreInterface: Sync {
     ///
     /// # Returns
     /// `true` if the first file is available
-    fn is_first_file_available(&self, consume_queue: ArcMut<dyn ConsumeQueue>) -> bool;
+    fn is_first_file_available(&self, consume_queue: &dyn ConsumeQueueTrait) -> bool;
 
     /// Check if the first file exists
     ///
@@ -122,7 +122,7 @@ pub trait ConsumeQueueStoreInterface: Sync {
     ///
     /// # Returns
     /// `true` if the first file exists
-    fn is_first_file_exist(&self, consume_queue: ArcMut<dyn ConsumeQueue>) -> bool;
+    fn is_first_file_exist(&self, consume_queue: &dyn ConsumeQueueTrait) -> bool;
 
     /// Roll to next file
     ///
@@ -132,7 +132,7 @@ pub trait ConsumeQueueStoreInterface: Sync {
     ///
     /// # Returns
     /// The beginning offset of the next file
-    fn roll_next_file(&self, consume_queue: ArcMut<dyn ConsumeQueue>, offset: i64) -> i64;
+    fn roll_next_file(&self, consume_queue: &dyn ConsumeQueueTrait, offset: i64) -> i64;
 
     /// Truncate dirty data
     ///
@@ -141,7 +141,7 @@ pub trait ConsumeQueueStoreInterface: Sync {
     ///
     /// # Returns
     /// Result indicating success or failure
-    async fn truncate_dirty(&self, offset_to_truncate: i64);
+    fn truncate_dirty(&self, offset_to_truncate: i64);
 
     /// Apply the dispatched request and build the consume queue
     ///
@@ -150,9 +150,9 @@ pub trait ConsumeQueueStoreInterface: Sync {
     /// # Parameters
     /// * `consume_queue` - The consume queue
     /// * `request` - The dispatch request
-    fn put_message_position_info_wrapper(
+    fn put_message_position_info_wrapper_with_cq(
         &self,
-        consume_queue: ArcMut<dyn ConsumeQueue>,
+        consume_queue: &mut dyn ConsumeQueueTrait,
         request: &DispatchRequest,
     );
 
@@ -165,7 +165,7 @@ pub trait ConsumeQueueStoreInterface: Sync {
     ///
     /// # Returns
     /// Result indicating success or failure
-    fn put_message_position_info_wrapper_for_request(&self, request: &DispatchRequest);
+    fn put_message_position_info_wrapper(&self, request: &DispatchRequest);
 
     /// Range query consume queue units in RocksDB
     ///
@@ -179,7 +179,7 @@ pub trait ConsumeQueueStoreInterface: Sync {
     /// List of Bytes for the topic-queueId in RocksDB
     async fn range_query(
         &self,
-        topic: &str,
+        topic: &CheetahString,
         queue_id: i32,
         start_index: i64,
         num: i32,
@@ -194,7 +194,7 @@ pub trait ConsumeQueueStoreInterface: Sync {
     ///
     /// # Returns
     /// Bytes for the topic-queueId in RocksDB
-    async fn get(&self, topic: &str, queue_id: i32, start_index: i64) -> Bytes;
+    async fn get(&self, topic: &CheetahString, queue_id: i32, start_index: i64) -> Bytes;
 
     /// Get the consume queue table
     ///
@@ -238,7 +238,7 @@ pub trait ConsumeQueueStoreInterface: Sync {
     ///
     /// # Parameters
     /// * `min_phy_offset` - The minimum physical offset
-    async fn recover_offset_table(&self, min_phy_offset: i64);
+    fn recover_offset_table(&mut self, min_phy_offset: i64);
 
     /// Sets the topic queue table with the provided mapping.
     ///
@@ -275,7 +275,11 @@ pub trait ConsumeQueueStoreInterface: Sync {
     ///
     /// # Returns
     /// The max physical offset, or None if not found
-    fn get_max_phy_offset_in_consume_queue(&self, topic: &str, queue_id: i32) -> Option<i64>;
+    fn get_max_phy_offset_in_consume_queue(
+        &self,
+        topic: &CheetahString,
+        queue_id: i32,
+    ) -> Option<i64>;
 
     /// Get max offset of specific topic-queueId in topic queue table
     ///
@@ -285,7 +289,7 @@ pub trait ConsumeQueueStoreInterface: Sync {
     ///
     /// # Returns
     /// The max offset, or None if not found
-    fn get_max_offset(&self, topic: &str, queue_id: i32) -> Option<i64>;
+    fn get_max_offset(&self, topic: &CheetahString, queue_id: i32) -> Option<i64>;
 
     /// Get max physical offset across all consume queues
     ///
@@ -301,7 +305,7 @@ pub trait ConsumeQueueStoreInterface: Sync {
     ///
     /// # Returns
     /// The min logical offset
-    fn get_min_offset_in_queue(&self, topic: &str, queue_id: i32) -> i64;
+    fn get_min_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64;
 
     /// Get max logical offset for a specific topic-queue
     ///
@@ -311,7 +315,7 @@ pub trait ConsumeQueueStoreInterface: Sync {
     ///
     /// # Returns
     /// The max logical offset
-    fn get_max_offset_in_queue(&self, topic: &str, queue_id: i32) -> i64;
+    fn get_max_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64;
 
     /// Get the offset in queue by timestamp
     ///
@@ -343,11 +347,8 @@ pub trait ConsumeQueueStoreInterface: Sync {
     ///
     /// # Returns
     /// The consume queue
-    fn find_or_create_consume_queue(
-        &self,
-        topic: &CheetahString,
-        queue_id: i32,
-    ) -> ArcMut<dyn ConsumeQueue>;
+    fn find_or_create_consume_queue(&self, topic: &CheetahString, queue_id: i32)
+        -> ArcConsumeQueue;
 
     /// Find the consume queue map for a topic
     ///
@@ -356,7 +357,10 @@ pub trait ConsumeQueueStoreInterface: Sync {
     ///
     /// # Returns
     /// The consume queue map for the topic, or None if not found
-    fn find_consume_queue_map(&self, topic: &str) -> Option<HashMap<i32, ArcConsumeQueue>>;
+    fn find_consume_queue_map(
+        &self,
+        topic: &CheetahString,
+    ) -> Option<HashMap<i32, ArcConsumeQueue>>;
 
     /// Get the total size of all consume queues
     ///
@@ -372,4 +376,7 @@ pub trait ConsumeQueueStoreInterface: Sync {
     /// # Returns
     /// The store time
     fn get_store_time(&self, cq_unit: &CqUnit) -> i64;
+
+    fn as_any(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 }

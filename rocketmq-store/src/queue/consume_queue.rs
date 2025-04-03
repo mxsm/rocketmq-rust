@@ -26,7 +26,7 @@ use crate::queue::queue_offset_operator::QueueOffsetOperator;
 use crate::queue::referred_iterator::ReferredIterator;
 use crate::queue::CqUnit;
 
-pub trait ConsumeQueue: FileQueueLifeCycle {
+pub trait ConsumeQueueTrait: FileQueueLifeCycle {
     /// Get the topic name
     ///
     /// # Returns
@@ -193,7 +193,7 @@ pub trait ConsumeQueue: FileQueueLifeCycle {
     ///
     /// # Parameters
     /// * `request` - The dispatch request
-    fn put_message_position_info_wrapper(&self, request: &DispatchRequest);
+    fn put_message_position_info_wrapper(&mut self, request: &DispatchRequest);
 
     /// Assign a queue offset to a message
     ///
