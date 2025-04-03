@@ -1681,7 +1681,8 @@ impl QueueLockManager {
 #[cfg(test)]
 mod tests {
     use cheetah_string::CheetahString;
-    use rocketmq_store::{message_store::local_file_message_store::LocalFileMessageStore, pop::ack_msg::AckMsg};
+    use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
+    use rocketmq_store::pop::ack_msg::AckMsg;
 
     use super::*;
 
