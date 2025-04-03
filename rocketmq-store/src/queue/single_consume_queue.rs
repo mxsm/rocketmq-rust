@@ -842,7 +842,7 @@ impl ConsumeQueueTrait for ConsumeQueue {
     }
 
     #[inline]
-    fn iterate_from(&self, start_index: i64) -> Option<Box<dyn Iterator<Item = CqUnit> + Send>> {
+    fn iterate_from(&self, start_index: i64) -> Option<Box<dyn ReferredIterator<CqUnit>>> {
         match self.get_index_buffer(start_index) {
             None => None,
             Some(value) => Some(Box::new(ConsumeQueueIterator {
@@ -853,15 +853,6 @@ impl ConsumeQueueTrait for ConsumeQueue {
             })),
         }
     }
-
-    /*    #[inline]
-    fn iterate_from_inner(
-        &self,
-        start_index: i64,
-        _count: i32,
-    ) -> Option<Box<dyn Iterator<Item = CqUnit> + Send>> {
-        self.iterate_from(start_index)
-    }*/
 
     fn iterate_from_with_count(
         &self,
@@ -893,6 +884,20 @@ impl ConsumeQueueIterator {
             None => false,
             Some(value) => value.get(offset, cq_ext_unit),
         }
+    }
+}
+
+impl ReferredIterator<CqUnit> for ConsumeQueueIterator {
+    fn release(&mut self) {
+        if let Some(mapped_file) = &mut self.smbr {
+            mapped_file.release();
+        }
+    }
+
+    fn next_and_release(&mut self) -> Option<Self::Item> {
+        let cq_unit = self.next();
+        self.release();
+        cq_unit
     }
 }
 

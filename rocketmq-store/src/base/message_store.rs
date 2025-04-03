@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::any::Any;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::future::Future;
@@ -48,7 +49,6 @@ use crate::hook::put_message_hook::PutMessageHook;
 use crate::hook::send_message_back_hook::SendMessageBackHook;
 use crate::log_file::commit_log::CommitLog;
 use crate::log_file::mapped_file::MappedFile;
-use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
 use crate::queue::ArcConsumeQueue;
 use crate::stats::broker_stats_manager::BrokerStatsManager;
 use crate::store::running_flags::RunningFlags;
@@ -473,7 +473,7 @@ pub trait MessageStoreInner: Sync + 'static {
     //fn get_perf_counter(&self) -> Arc<PerfCounterTicks>;
 
     /// Get the queue store
-    fn get_queue_store(&self) -> &Box<dyn ConsumeQueueStoreTrait>;
+    fn get_queue_store(&self) -> &dyn Any;
 
     /// If 'sync disk flush' is configured in this message store
     fn is_sync_disk_flush(&self) -> bool;

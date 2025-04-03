@@ -17,6 +17,7 @@
 #![allow(unused_variables)]
 #![allow(unused_imports)]
 
+use std::any::Any;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -25,6 +26,7 @@ use std::error::Error;
 use std::fs;
 use std::future::Future;
 use std::net::IpAddr;
+use std::ops::Deref;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
@@ -273,7 +275,9 @@ impl LocalFileMessageStore {
     pub fn set_message_store_arc(&mut self, message_store_arc: ArcMut<LocalFileMessageStore>) {
         self.message_store_arc = Some(message_store_arc.clone());
         self.commit_log
-            .set_local_file_message_store(message_store_arc);
+            .set_local_file_message_store(message_store_arc.clone());
+        self.consume_queue_store
+            .set_message_store(message_store_arc);
     }
 
     pub fn delay_level_table(&self) -> &ArcMut<BTreeMap<i32, i64>> {
@@ -393,9 +397,9 @@ impl LocalFileMessageStore {
 
     async fn recover_consume_queue(&mut self) {
         if self.is_recover_concurrently() {
-            self.consume_queue_store.recover_concurrently();
+            self.consume_queue_store.recover_concurrently().await;
         } else {
-            self.consume_queue_store.recover();
+            self.consume_queue_store.recover().await;
         }
     }
 
@@ -936,7 +940,7 @@ impl MessageStore for LocalFileMessageStore {
                 {
                     cq_file_num += 1;
                     let buffer_consume_queue =
-                        consume_queue.iterate_from_inner(next_begin_offset, max_msg_nums);
+                        consume_queue.iterate_from_with_count(next_begin_offset, max_msg_nums);
                     if buffer_consume_queue.is_none() {
                         status = GetMessageStatus::OffsetFoundNull;
                         next_begin_offset = self.next_offset_correction(
@@ -1513,7 +1517,8 @@ impl MessageStore for LocalFileMessageStore {
             }
             let queue_table = queue_table.unwrap();
             for (queue_id, consume_queue) in queue_table {
-                self.consume_queue_store.destroy_queue(consume_queue);
+                self.consume_queue_store
+                    .destroy_queue(consume_queue.as_ref().deref());
                 self.consume_queue_store
                     .remove_topic_queue_table(topic, queue_id);
             }
@@ -1693,7 +1698,7 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn get_store_checkpoint(&self) -> Arc<StoreCheckpoint> {
-        todo!()
+        self.store_checkpoint.clone().unwrap()
     }
 
     fn get_system_clock(&self) -> Arc<SystemClock> {
@@ -1728,9 +1733,14 @@ impl MessageStore for LocalFileMessageStore {
         todo!()
     }
 
-    fn get_queue_store(&self) -> &Box<dyn ConsumeQueueStoreTrait> {
-        &self.consume_queue_store as &Box<dyn ConsumeQueueStoreTrait>
+    fn get_queue_store(&self) -> &dyn Any {
+        self.consume_queue_store.as_any()
     }
+
+    /*fn get_queue_store(&self) -> &Box<dyn ConsumeQueueStoreTrait> {
+        /*&self.consume_queue_store as &Box<dyn ConsumeQueueStoreTrait>*/
+        unimplemented!("get_queue_store")
+    }*/
 
     fn is_sync_disk_flush(&self) -> bool {
         todo!()

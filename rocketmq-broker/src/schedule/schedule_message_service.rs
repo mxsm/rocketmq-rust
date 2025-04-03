@@ -49,6 +49,8 @@ use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::queue::consume_queue_store::ConsumeQueueStoreTrait;
+use rocketmq_store::queue::local_file_consume_queue_store::ConsumeQueueStore;
 use rocketmq_store::store_path_config_helper::get_delay_offset_store_path;
 use tokio::sync::Mutex;
 use tracing::error;
@@ -320,12 +322,11 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
                 .broker_controller
                 .message_store_unchecked()
                 .get_queue_store()
+                .downcast_ref::<ConsumeQueueStore>()
+                .expect("Failed to downcast to ConsumeQueueStore")
                 .find_or_create_consume_queue(&topic, queue_id);
 
             if let Some(current_delay_offset) = self.offset_table.get(delay_level) {
-                /*                if cq.is_none() {
-                    continue;
-                }*/
                 let mut correct_delay_offset = *current_delay_offset;
                 let cq_min_offset = cq.get_min_offset_in_queue();
                 let cq_max_offset = cq.get_max_offset_in_queue();
