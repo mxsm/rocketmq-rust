@@ -371,7 +371,7 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
             let message_store = self.inner.message_store.as_ref().unwrap();
             let option = message_store.get_topic_config(topic);
             match QueueTypeUtils::get_cq_type(&option) {
-                CQType::SimpleCQ => ArcMut::new(Box::new(ConsumeQueue::new(
+                CQType::SimpleCQ | CQType::RocksDBCQ => ArcMut::new(Box::new(ConsumeQueue::new(
                     topic.clone(),
                     queue_id,
                     CheetahString::from_string(get_store_path_consume_queue(
@@ -396,9 +396,6 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
                     None,
                     self.inner.message_store_config.clone(),
                 ))),
-                CQType::RocksDBCQ => {
-                    unimplemented!()
-                }
             }
         });
         consume_queue.clone()
