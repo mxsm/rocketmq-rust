@@ -1739,7 +1739,7 @@ mod tests {
             queue_offset_diff: vec![],
             re_put_times: None,
         };
-        let result = PopMessageProcessor::<DefaultMessageStore>::gen_ck_unique_id(&ck);
+        let result = PopMessageProcessor::<LocalFileMessageStore>::gen_ck_unique_id(&ck);
         let expected = "test_topic@1@456@test_cid@789@test_broker@ck";
         assert_eq!(result, expected);
     }
