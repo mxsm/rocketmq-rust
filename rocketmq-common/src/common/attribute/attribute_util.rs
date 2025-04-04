@@ -201,6 +201,10 @@ impl AttributeUtil {
             return Err(AttributeError::KvStringFormatWrong);
         }
 
+        let prefix = key.chars().next().unwrap();
+        if prefix != '+' && prefix != '-' {
+            return Err(AttributeError::WrongFormatKey(key.to_string()));
+        }
         Ok(key[1..].to_string().into())
     }
 }
