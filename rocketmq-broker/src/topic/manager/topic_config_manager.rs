@@ -472,7 +472,16 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             &new_attributes,
             &current_attributes,
         );
-        topic_config.attributes = final_attributes.unwrap_or_default();
+        match final_attributes_result {
+            Ok(final_attributes) => {
+                topic_config.attributes = final_attributes;
+            }
+            Err(e) => {
+                error!("Failed to alter current attributes: {:?}", e);
+                // Decide on an appropriate fallback action, e.g., using default attributes
+                topic_config.attributes = Default::default();
+            }
+        }
         match self.put_topic_config(topic_config.clone()) {
             None => {
                 info!("create new topic [{:?}]", topic_config)
