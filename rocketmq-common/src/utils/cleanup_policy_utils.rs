@@ -18,8 +18,9 @@
 use std::str::FromStr;
 
 use crate::common::attribute::cleanup_policy::CleanupPolicy;
+use crate::common::attribute::Attribute;
 use crate::common::config::TopicConfig;
-use crate::TopicAttributes;
+use crate::TopicAttributes::TopicAttributes;
 
 pub fn is_compaction(topic_config: &Option<TopicConfig>) -> bool {
     match topic_config {
@@ -31,17 +32,17 @@ pub fn is_compaction(topic_config: &Option<TopicConfig>) -> bool {
 pub fn get_delete_policy(topic_config: Option<&TopicConfig>) -> CleanupPolicy {
     match topic_config {
         Some(config) => {
-            let attribute_name = TopicAttributes::CLEANUP_POLICY_ATTRIBUTE.get_name();
+            let attribute_name = TopicAttributes::cleanup_policy_attribute().name();
             match config.attributes.get(attribute_name) {
                 Some(value) => CleanupPolicy::from_str(value.as_str()).unwrap(),
                 None => CleanupPolicy::from_str(
-                    TopicAttributes::CLEANUP_POLICY_ATTRIBUTE.get_default_value(),
+                    TopicAttributes::cleanup_policy_attribute().default_value(),
                 )
                 .unwrap(),
             }
         }
         None => {
-            CleanupPolicy::from_str(TopicAttributes::CLEANUP_POLICY_ATTRIBUTE.get_default_value())
+            CleanupPolicy::from_str(TopicAttributes::cleanup_policy_attribute().default_value())
                 .unwrap()
         }
     }
@@ -57,7 +58,7 @@ mod tests {
     fn is_compaction_returns_true_when_cleanup_policy_is_compaction() {
         let mut topic_config = TopicConfig::default();
         topic_config.attributes.insert(
-            TopicAttributes::CLEANUP_POLICY_ATTRIBUTE.get_name().into(),
+            TopicAttributes::cleanup_policy_attribute().name().into(),
             CleanupPolicy::COMPACTION.to_string().into(),
         );
         assert_eq!(is_compaction(&Some(topic_config)), true);
@@ -67,8 +68,8 @@ mod tests {
     fn is_compaction_returns_false_when_cleanup_policy_is_not_compaction() {
         let mut topic_config = TopicConfig::default();
         topic_config.attributes.insert(
-            TopicAttributes::CLEANUP_POLICY_ATTRIBUTE
-                .get_name()
+            TopicAttributes::cleanup_policy_attribute()
+                .name()
                 .to_string()
                 .into(),
             CleanupPolicy::DELETE.to_string().into(),
@@ -85,8 +86,8 @@ mod tests {
     fn get_delete_policy_returns_cleanup_policy_from_topic_config() {
         let mut topic_config = TopicConfig::default();
         topic_config.attributes.insert(
-            TopicAttributes::CLEANUP_POLICY_ATTRIBUTE
-                .get_name()
+            TopicAttributes::cleanup_policy_attribute()
+                .name()
                 .to_string()
                 .into(),
             CleanupPolicy::DELETE.to_string().into(),
@@ -102,7 +103,7 @@ mod tests {
         let topic_config = TopicConfig::default();
         assert_eq!(
             get_delete_policy(Some(&topic_config)),
-            CleanupPolicy::from_str(TopicAttributes::CLEANUP_POLICY_ATTRIBUTE.get_default_value())
+            CleanupPolicy::from_str(TopicAttributes::cleanup_policy_attribute().default_value())
                 .unwrap()
         );
     }
@@ -111,7 +112,7 @@ mod tests {
     fn get_delete_policy_returns_default_cleanup_policy_when_topic_config_is_none() {
         assert_eq!(
             get_delete_policy(None),
-            CleanupPolicy::from_str(TopicAttributes::CLEANUP_POLICY_ATTRIBUTE.get_default_value())
+            CleanupPolicy::from_str(TopicAttributes::cleanup_policy_attribute().default_value())
                 .unwrap()
         );
     }

@@ -24,8 +24,9 @@ use serde::Serialize;
 
 use super::TopicFilterType;
 use crate::common::attribute::topic_message_type::TopicMessageType;
+use crate::common::attribute::Attribute;
 use crate::common::constant::PermName;
-use crate::TopicAttributes::TOPIC_MESSAGE_TYPE_ATTRIBUTE;
+use crate::TopicAttributes::TopicAttributes;
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -82,7 +83,9 @@ impl TopicConfig {
         if self.attributes.is_empty() {
             return TopicMessageType::Normal;
         }
-        let content = self.attributes.get(TOPIC_MESSAGE_TYPE_ATTRIBUTE.get_name());
+        let content = self
+            .attributes
+            .get(TopicAttributes::topic_message_type_attribute().name());
         if let Some(content) = content {
             return TopicMessageType::from(content.to_string());
         }
@@ -294,7 +297,7 @@ mod tests {
     fn get_topic_message_type_from_attributes() {
         let mut config = TopicConfig::default();
         config.attributes.insert(
-            CheetahString::from(TOPIC_MESSAGE_TYPE_ATTRIBUTE.get_name()),
+            CheetahString::from(TopicAttributes::topic_message_type_attribute().name()),
             CheetahString::from("Normal"),
         );
         assert_eq!(config.get_topic_message_type(), TopicMessageType::Normal);

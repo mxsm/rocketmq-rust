@@ -14,43 +14,104 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod attribute_enum;
+use cheetah_string::CheetahString;
+
 pub mod attribute_parser;
 pub mod attribute_util;
+pub mod bool_attribute;
 pub mod cleanup_policy;
 pub mod cq_type;
+pub mod enum_attribute;
+pub mod long_range_attribute;
 pub mod topic_attributes;
 pub mod topic_message_type;
 
-/// `AttributeTrait` defines a common interface for attributes.
+/// Trait representing an attribute with name and changeability properties.
 ///
-/// This trait specifies the operations that can be performed on an attribute object.
-/// It is designed to be implemented by any struct that represents an attribute, providing
-/// a standardized way to interact with attribute data.
-pub trait AttributeTrait {
-    /// Retrieves the name of the attribute.
-    ///
-    /// # Returns
-    /// A `String` representing the name of the attribute.
-    fn name(&self) -> String;
+/// This trait is the Rust equivalent of the Java abstract class Attribute.
+/// It defines common functionality for all attribute types.
+pub trait Attribute: Send + Sync {
+    /// Verify that the provided string value is valid for this attribute.
+    /// Implementations should validate according to their specific rules.
+    fn verify(&self, value: &str) -> Result<(), String>;
 
-    /// Checks if the attribute is changeable.
-    ///
-    /// # Returns
-    /// A `bool` indicating whether the attribute can be changed after its initial set up.
-    fn changeable(&self) -> bool;
+    /// Get the name of this attribute.
+    fn name(&self) -> &CheetahString;
 
-    /// Verifies if the provided value is valid for the attribute.
-    ///
-    /// Implementations should define the criteria for a value to be considered valid.
-    ///
-    /// # Arguments
-    /// * `value` - A string slice representing the value to be verified.
-    fn verify(&self, value: &str);
+    /// Check if this attribute can be changed after creation.
+    fn is_changeable(&self) -> bool;
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Attribute {
-    pub(crate) name: String,
-    pub(crate) changeable: bool,
+/// Base implementation of the Attribute trait that can be extended by concrete attribute types.
+#[derive(Debug, Clone)]
+pub struct AttributeBase {
+    /// The name of the attribute.
+    name: CheetahString,
+
+    /// Whether the attribute can be changed after creation.
+    changeable: bool,
+}
+
+impl AttributeBase {
+    /// Create a new attribute base with the given name and changeability.
+    pub fn new(name: CheetahString, changeable: bool) -> Self {
+        Self { name, changeable }
+    }
+
+    /// Get the name of this attribute.
+    pub fn name(&self) -> &CheetahString {
+        &self.name
+    }
+
+    /// Set a new name for this attribute.
+    pub fn set_name(&mut self, name: CheetahString) {
+        self.name = name;
+    }
+
+    /// Check if this attribute can be changed after creation.
+    pub fn is_changeable(&self) -> bool {
+        self.changeable
+    }
+
+    /// Set whether this attribute can be changed.
+    pub fn set_changeable(&mut self, changeable: bool) {
+        self.changeable = changeable;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cheetah_string::CheetahString;
+
+    use super::*;
+
+    #[test]
+    fn create_new_attribute_base() {
+        let name = CheetahString::from_static_str("test_attribute");
+        let attribute = AttributeBase::new(name.clone(), true);
+        assert_eq!(attribute.name(), &name);
+        assert!(attribute.is_changeable());
+    }
+
+    #[test]
+    fn set_attribute_name() {
+        let mut attribute = AttributeBase::new(CheetahString::from_static_str("old_name"), true);
+        let new_name = CheetahString::from_static_str("new_name");
+        attribute.set_name(new_name.clone());
+        assert_eq!(attribute.name(), &new_name);
+    }
+
+    #[test]
+    fn set_attribute_changeable() {
+        let mut attribute =
+            AttributeBase::new(CheetahString::from_static_str("test_attribute"), false);
+        attribute.set_changeable(true);
+        assert!(attribute.is_changeable());
+    }
+
+    #[test]
+    fn attribute_not_changeable() {
+        let attribute = AttributeBase::new(CheetahString::from_static_str("test_attribute"), false);
+        assert!(!attribute.is_changeable());
+    }
 }

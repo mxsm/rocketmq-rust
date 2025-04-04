@@ -21,14 +21,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::attribute::attribute_util::alter_current_attributes;
+use rocketmq_common::common::attribute::attribute_util::AttributeUtil;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
-use rocketmq_common::TopicAttributes::ALL;
+use rocketmq_common::TopicAttributes::TopicAttributes;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper;
 use rocketmq_remoting::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
@@ -466,16 +466,13 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             .get(topic_config.topic_name.as_ref().unwrap().as_str())
             .is_none();
 
-        let final_attributes = alter_current_attributes(
+        let final_attributes = AttributeUtil::alter_current_attributes(
             create,
-            ALL.clone()
-                .into_iter()
-                .map(|(k, v)| (k.into(), v))
-                .collect(),
-            new_attributes,
-            current_attributes,
+            TopicAttributes::all(),
+            &new_attributes,
+            &current_attributes,
         );
-        topic_config.attributes = final_attributes;
+        topic_config.attributes = final_attributes.unwrap_or_default();
         match self.put_topic_config(topic_config.clone()) {
             None => {
                 info!("create new topic [{:?}]", topic_config)

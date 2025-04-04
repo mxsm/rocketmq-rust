@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
 use crate::common::attribute::cq_type::CQType;
+use crate::common::attribute::Attribute;
 use crate::common::config::TopicConfig;
-use crate::TopicAttributes;
+use crate::TopicAttributes::TopicAttributes;
 
 pub struct QueueTypeUtils;
 
@@ -14,9 +15,9 @@ impl QueueTypeUtils {
     pub fn get_cq_type(topic_config: &Option<TopicConfig>) -> CQType {
         match topic_config {
             Some(config) => {
-                let default_value = TopicAttributes::QUEUE_TYPE_ATTRIBUTE.get_default_value();
+                let default_value = TopicAttributes::queue_type_attribute().default_value();
 
-                let attribute_name = TopicAttributes::QUEUE_TYPE_ATTRIBUTE.get_name();
+                let attribute_name = TopicAttributes::queue_type_attribute().name();
                 match config.attributes.get(attribute_name) {
                     Some(value) => value
                         .parse()
@@ -24,8 +25,8 @@ impl QueueTypeUtils {
                     None => default_value.parse().unwrap_or(CQType::SimpleCQ),
                 }
             }
-            None => TopicAttributes::QUEUE_TYPE_ATTRIBUTE
-                .get_default_value()
+            None => TopicAttributes::queue_type_attribute()
+                .default_value()
                 .parse()
                 .unwrap_or(CQType::SimpleCQ),
         }
@@ -49,8 +50,8 @@ mod tests {
 
         let topic_config = Some(TopicConfig {
             attributes: HashMap::from_iter([(
-                TopicAttributes::QUEUE_TYPE_ATTRIBUTE
-                    .get_name()
+                TopicAttributes::queue_type_attribute()
+                    .name()
                     .to_string()
                     .into(),
                 "BatchCQ".to_string().into(),
@@ -61,8 +62,8 @@ mod tests {
 
         let topic_config = Some(TopicConfig {
             attributes: HashMap::from_iter([(
-                TopicAttributes::QUEUE_TYPE_ATTRIBUTE
-                    .get_name()
+                TopicAttributes::queue_type_attribute()
+                    .name()
                     .to_string()
                     .into(),
                 "InvalidCQ".to_string().into(),
@@ -85,8 +86,8 @@ mod tests {
 
         let topic_config = Some(TopicConfig {
             attributes: HashMap::from_iter([(
-                TopicAttributes::QUEUE_TYPE_ATTRIBUTE
-                    .get_name()
+                TopicAttributes::queue_type_attribute()
+                    .name()
                     .to_string()
                     .into(),
                 "BatchCQ".to_string().into(),
@@ -97,8 +98,8 @@ mod tests {
 
         let topic_config = Some(TopicConfig {
             attributes: HashMap::from_iter([(
-                TopicAttributes::QUEUE_TYPE_ATTRIBUTE
-                    .get_name()
+                TopicAttributes::queue_type_attribute()
+                    .name()
                     .to_string()
                     .into(),
                 "InvalidCQ".to_string().into(),
