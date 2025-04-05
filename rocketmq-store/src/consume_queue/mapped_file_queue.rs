@@ -146,17 +146,17 @@ impl MappedFileQueue {
             }
 
             if metadata.len() == 0 && i == files.len() - 1 {
-                match fs::remove_file(file.path()) {
-                    Ok(_) => warn!("{} size is 0, auto deleted.", file.path().display()),
-                    Err(e) => warn!("Failed to delete file {}: {}", file.path().display(), e),
+                match fs::remove_file(file) {
+                    Ok(_) => warn!("{} size is 0, auto deleted.", file.display()),
+                    Err(e) => warn!("Failed to delete file {}: {}", file.display(), e),
                 }
                 continue;
             }
 
-            if metadata.len() as usize != self.mapped_file_size {
+            if metadata.len() != self.mapped_file_size {
                 warn!(
                     "{} length not matched message store config value, please check it manually",
-                    file.path().display()
+                    file.display()
                 );
                 return false;
             }
