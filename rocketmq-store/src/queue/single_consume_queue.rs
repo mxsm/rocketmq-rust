@@ -249,10 +249,10 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
             );
             return true;
         }
-        let mut bytes = BytesMut::with_capacity(CQ_STORE_UNIT_SIZE as usize);
-        bytes.put_i64(offset);
-        bytes.put_i32(size);
-        bytes.put_i64(tags_code);
+        self.byte_buffer_index.clear();
+        self.byte_buffer_index.put_i64(offset);
+        self.byte_buffer_index.put_i32(size);
+        self.byte_buffer_index.put_i64(tags_code);
 
         let expect_logic_offset = cq_offset * CQ_STORE_UNIT_SIZE as i64;
         if let Some(mapped_file) = self
@@ -264,7 +264,7 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
                 && mapped_file.get_wrote_position() == 0
             {
                 self.min_logic_offset
-                    .store(expect_logic_offset, Ordering::SeqCst);
+                    .store(expect_logic_offset, Ordering::Release);
                 self.mapped_file_queue
                     .set_flushed_where(expect_logic_offset);
                 self.mapped_file_queue
@@ -307,7 +307,7 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
                 }
             }
             self.set_max_physic_offset(offset + size as i64);
-            mapped_file.append_message_bytes(&bytes.freeze())
+            mapped_file.append_message_bytes(self.byte_buffer_index.as_ref())
         } else {
             false
         }
