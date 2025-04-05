@@ -268,18 +268,7 @@ pub fn string_to_bytes(hex_string: impl Into<String>) -> Option<Vec<u8>> {
 ///
 /// The byte value of the hexadecimal character. If the character is not a valid
 /// hexadecimal digit, returns 0.
-///
-/// # Examples
-///
-/// ```no_run
-/// pub fn main() {
-///     assert_eq!(char_to_byte('A'), 10);
-///     assert_eq!(char_to_byte('0'), 0);
-///     assert_eq!(char_to_byte('G'), 0); // Invalid character
-/// }
-/// ```
 #[inline]
-#[doc(hidden)]
 fn char_to_byte(c: char) -> u8 {
     match c {
         '0'..='9' => c as u8 - b'0',
