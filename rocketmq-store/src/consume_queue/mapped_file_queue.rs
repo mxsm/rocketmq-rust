@@ -25,6 +25,7 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use parking_lot::RwLock;
 use rocketmq_common::UtilAll::offset_to_file_name;
+use tracing::error;
 use tracing::info;
 use tracing::warn;
 
@@ -105,7 +106,27 @@ impl MappedFileQueue {
 
     #[inline]
     pub fn check_self(&self) {
-        println!("mapped_file_queue check self unimplemented")
+        let mapped_files = self.mapped_files.read();
+        if !mapped_files.is_empty() {
+            let mut iter = mapped_files.iter();
+            let mut pre = iter.next();
+
+            for cur in iter {
+                if let Some(pre_file) = pre {
+                    if cur.get_file_from_offset() - pre_file.get_file_from_offset()
+                        != self.mapped_file_size as u64
+                    {
+                        error!(
+                            "[BUG] The mappedFile queue's data is damaged, the adjacent \
+                             mappedFile's offset don't match. pre file {}, cur file {}",
+                            pre_file.get_file_name(),
+                            cur.get_file_name()
+                        );
+                    }
+                }
+                pre = Some(cur);
+            }
+        }
     }
 
     #[inline]
