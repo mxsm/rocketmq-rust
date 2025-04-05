@@ -258,11 +258,43 @@ pub fn string_to_bytes(hex_string: impl Into<String>) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
+/// Converts a hexadecimal character to its corresponding byte value.
+///
+/// # Arguments
+///
+/// * `c` - A character representing a hexadecimal digit (0-9, A-F).
+///
+/// # Returns
+///
+/// The byte value of the hexadecimal character. If the character is not a valid
+/// hexadecimal digit, returns 0.
+#[inline]
 fn char_to_byte(c: char) -> u8 {
-    let hex_chars = "0123456789ABCDEF";
-    hex_chars.find(c).unwrap_or(0) as u8
+    match c {
+        '0'..='9' => c as u8 - b'0',
+        'A'..='F' => c as u8 - b'A' + 10,
+        _ => 0,
+    }
 }
 
+/// Converts an offset value to a zero-padded string of length 20.
+///
+/// # Arguments
+///
+/// * `offset` - A 64-bit unsigned integer representing the offset.
+///
+/// # Returns
+///
+/// A string representation of the offset, zero-padded to a length of 20 characters.
+///
+/// # Examples
+///
+/// ```rust
+/// use rocketmq_common::UtilAll::offset_to_file_name;
+/// assert_eq!(offset_to_file_name(123), "00000000000000000123");
+/// assert_eq!(offset_to_file_name(0), "00000000000000000000");
+/// ```
+#[inline]
 pub fn offset_to_file_name(offset: u64) -> String {
     format!("{:020}", offset)
 }
