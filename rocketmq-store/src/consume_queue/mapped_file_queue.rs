@@ -104,7 +104,6 @@ impl MappedFileQueue {
         self.committed_where.load(Ordering::Acquire) as i64
     }
 
-    #[inline]
     pub fn check_self(&self) {
         let mapped_files = self.mapped_files.read();
         if !mapped_files.is_empty() {
