@@ -443,7 +443,9 @@ pub trait MessageStoreInner: Sync + 'static {
     fn get_store_stats_service(&self) -> Arc<StoreStatsService>;
 
     /// Get the store checkpoint component
-    fn get_store_checkpoint(&self) -> Arc<StoreCheckpoint>;
+    fn get_store_checkpoint(&self) -> &StoreCheckpoint;
+
+    fn get_store_checkpoint_arc(&self) -> Arc<StoreCheckpoint>;
 
     /// Get the system clock
     fn get_system_clock(&self) -> Arc<SystemClock>;

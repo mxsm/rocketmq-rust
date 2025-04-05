@@ -1697,7 +1697,11 @@ impl MessageStore for LocalFileMessageStore {
         todo!()
     }
 
-    fn get_store_checkpoint(&self) -> Arc<StoreCheckpoint> {
+    fn get_store_checkpoint(&self) -> &StoreCheckpoint {
+        self.store_checkpoint.as_ref().unwrap()
+    }
+
+    fn get_store_checkpoint_arc(&self) -> Arc<StoreCheckpoint> {
         self.store_checkpoint.clone().unwrap()
     }
 
