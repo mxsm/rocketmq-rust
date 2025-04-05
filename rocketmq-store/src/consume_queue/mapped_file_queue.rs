@@ -112,7 +112,9 @@ impl MappedFileQueue {
 
             for cur in iter {
                 if let Some(pre_file) = pre {
-                    if cur.get_file_from_offset() - pre_file.get_file_from_offset() {
+                    if cur.get_file_from_offset() - pre_file.get_file_from_offset()
+                        != self.mapped_file_size
+                    {
                         error!(
                             "[BUG] The mappedFile queue's data is damaged, the adjacent \
                              mappedFile's offset don't match. pre file {}, cur file {}",
