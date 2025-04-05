@@ -264,7 +264,7 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
                 && mapped_file.get_wrote_position() == 0
             {
                 self.min_logic_offset
-                    .store(expect_logic_offset, Ordering::Acquire);
+                    .store(expect_logic_offset, Ordering::Release);
                 self.mapped_file_queue
                     .set_flushed_where(expect_logic_offset);
                 self.mapped_file_queue
