@@ -17,6 +17,7 @@
 use std::path::PathBuf;
 
 use cheetah_string::CheetahString;
+use rocketmq_rust::ArcMut;
 use tracing::info;
 
 use crate::consume_queue::consume_queue_ext::CqExtUnit;
@@ -30,7 +31,7 @@ const MAX_REAL_OFFSET: i64 = MAX_ADDR - i64::MIN;
 
 #[derive(Clone)]
 pub struct ConsumeQueueExt {
-    mapped_file_queue: MappedFileQueue,
+    mapped_file_queue: ArcMut<MappedFileQueue>,
     topic: CheetahString,
     queue_id: i32,
     store_path: CheetahString,
@@ -48,11 +49,11 @@ impl ConsumeQueueExt {
         let queue_dir = PathBuf::from(store_path.as_str())
             .join(topic.as_str())
             .join(queue_id.to_string());
-        let mapped_file_queue = MappedFileQueue::new(
+        let mapped_file_queue = ArcMut::new(MappedFileQueue::new(
             queue_dir.to_string_lossy().to_string(),
             mapped_file_size as u64,
             None,
-        );
+        ));
         Self {
             mapped_file_queue,
             topic,
