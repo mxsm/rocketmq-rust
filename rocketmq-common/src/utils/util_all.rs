@@ -271,7 +271,7 @@ pub fn string_to_bytes(hex_string: impl Into<String>) -> Option<Vec<u8>> {
 ///
 /// # Examples
 ///
-/// ```no_run
+/// ```rust,no_run
 /// assert_eq!(char_to_byte('A'), 10);
 /// assert_eq!(char_to_byte('0'), 0);
 /// assert_eq!(char_to_byte('G'), 0); // Invalid character
