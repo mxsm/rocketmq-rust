@@ -128,40 +128,35 @@ impl MappedFileQueue {
         }
     }
 
-    #[inline]
-    pub fn do_load(&mut self, files: Vec<std::path::PathBuf>) -> bool {
+    pub fn do_load(&mut self, mut files: Vec<std::path::PathBuf>) -> bool {
         // Ascending order sorting
-        let mut files = files;
         files.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
 
-        let mut index = 0;
-        for file in &files {
-            index += 1;
-            if file.is_dir() {
+        for (i, file) in files.iter().enumerate() {
+            let metadata = match file.metadata() {
+                Ok(meta) => meta,
+                Err(e) => {
+                    error!("Failed to get metadata for file {:?}: {}", file, e);
+                    return false;
+                }
+            };
+
+            if metadata.is_dir() {
                 continue;
             }
 
-            if file.metadata().map(|metadata| metadata.len()).unwrap_or(0) == 0
-                && files.len() == index
-            {
-                if let Err(err) = fs::remove_file(file) {
-                    warn!(
-                        "{} size is 0, auto delete. is_ok: false, err: {}",
-                        file.display(),
-                        err
-                    );
-                } else {
-                    warn!("{} size is 0, auto delete. is_ok: true", file.display());
+            if metadata.len() == 0 && i == files.len() - 1 {
+                match fs::remove_file(file) {
+                    Ok(_) => warn!("{} size is 0, auto deleted.", file.display()),
+                    Err(e) => warn!("Failed to delete file {}: {}", file.display(), e),
                 }
                 continue;
             }
 
-            let file_size = file.metadata().map(|metadata| metadata.len()).unwrap_or(0);
-            if file_size != self.mapped_file_size {
+            if metadata.len() != self.mapped_file_size {
                 warn!(
-                    "{} {} length not matched message store config value, please check it manually",
-                    file.display(),
-                    file_size
+                    "{} length not matched message store config value, please check it manually",
+                    file.display()
                 );
                 return false;
             }
@@ -175,11 +170,7 @@ impl MappedFileQueue {
             mapped_file.set_flushed_position(self.mapped_file_size as i32);
             mapped_file.set_committed_position(self.mapped_file_size as i32);
             self.mapped_files.write().push(Arc::new(mapped_file));
-            // self.mapped_files
-            //     .push(mapped_file);
-            info!("load {} OK", file.display());
         }
-
         true
     }
 
