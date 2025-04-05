@@ -36,6 +36,7 @@ use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
+use tracing::error;
 use tracing::info;
 use tracing::warn;
 
@@ -466,7 +467,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             .get(topic_config.topic_name.as_ref().unwrap().as_str())
             .is_none();
 
-        let final_attributes = AttributeUtil::alter_current_attributes(
+        let final_attributes_result = AttributeUtil::alter_current_attributes(
             create,
             TopicAttributes::all(),
             &new_attributes,
