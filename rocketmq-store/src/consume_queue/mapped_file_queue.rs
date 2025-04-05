@@ -32,17 +32,14 @@ use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
 use crate::services::allocate_mapped_file_service::AllocateMappedFileService;
 
-#[derive(Default, Clone)]
+#[derive(Default)]
 pub struct MappedFileQueue {
     pub(crate) store_path: String,
 
     pub(crate) mapped_file_size: u64,
-    //pub(crate) mapped_files: Arc<Mutex<Vec<LocalMappedFile>>>,
-    //pub(crate) mapped_files: Vec<Arc<Mutex<LocalMappedFile>>>,
-    //pub(crate) mapped_files: Vec<Arc<LocalMappedFile>>,
-    //pub(crate) mapped_files: Vec<Arc<DefaultMappedFile>>,
+
     pub(crate) mapped_files: Arc<RwLock<Vec<Arc<DefaultMappedFile>>>>,
-    //  pub(crate) mapped_files: Vec<LocalMappedFile>,
+
     pub(crate) allocate_mapped_file_service: Option<AllocateMappedFileService>,
 
     pub(crate) flushed_where: Arc<AtomicU64>,

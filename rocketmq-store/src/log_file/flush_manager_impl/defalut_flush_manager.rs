@@ -19,6 +19,7 @@ use std::sync::Weak;
 
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_rust::ArcMut;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::time;
@@ -37,13 +38,13 @@ pub struct DefaultFlushManager {
     flush_real_time_service: Option<FlushRealTimeService>,
     commit_real_time_service: Option<CommitRealTimeService>,
     message_store_config: Arc<MessageStoreConfig>,
-    mapped_file_queue: Option<MappedFileQueue>,
+    mapped_file_queue: Option<ArcMut<MappedFileQueue>>,
 }
 
 impl DefaultFlushManager {
     pub fn new(
         message_store_config: Arc<MessageStoreConfig>,
-        mapped_file_queue: MappedFileQueue,
+        mapped_file_queue: ArcMut<MappedFileQueue>,
         store_checkpoint: Arc<StoreCheckpoint>,
     ) -> Self {
         let (group_commit_service, flush_real_time_service) =
@@ -202,7 +203,7 @@ impl GroupCommitService {
         }
     }
 
-    fn start(&mut self, mapped_file_queue: MappedFileQueue) {
+    fn start(&mut self, mapped_file_queue: ArcMut<MappedFileQueue>) {
         let (tx_in, mut rx_in) = tokio::sync::mpsc::channel::<GroupCommitRequest>(1024);
         self.tx_in = Some(tx_in);
         let (tx_out, rx_out) = tokio::sync::mpsc::channel::<GroupCommitRequest>(1024);
@@ -249,7 +250,7 @@ struct FlushRealTimeService {
 }
 
 impl FlushRealTimeService {
-    fn start(&mut self, mapped_file_queue: MappedFileQueue) {
+    fn start(&mut self, mapped_file_queue: ArcMut<MappedFileQueue>) {
         let message_store_config = self.message_store_config.clone();
         let store_checkpoint = self.store_checkpoint.clone();
         let notified = self.notified.clone();
@@ -312,7 +313,7 @@ impl CommitRealTimeService {
         tokio::spawn(async move { notified.notified().await });
     }
 
-    fn start(&mut self, mapped_file_queue: MappedFileQueue) {
+    fn start(&mut self, mapped_file_queue: ArcMut<MappedFileQueue>) {
         let message_store_config = self.message_store_config.clone();
         let store_checkpoint = self.store_checkpoint.clone();
         let notified = self.notified.clone();

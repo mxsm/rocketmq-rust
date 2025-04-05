@@ -185,9 +185,8 @@ pub fn get_message_num(
     message_num
 }
 
-#[derive(Clone)]
 pub struct CommitLog {
-    mapped_file_queue: MappedFileQueue,
+    mapped_file_queue: ArcMut<MappedFileQueue>,
     message_store_config: Arc<MessageStoreConfig>,
     broker_config: Arc<BrokerConfig>,
     enabled_append_prop_crc: bool,
@@ -217,7 +216,11 @@ impl CommitLog {
         let enabled_append_prop_crc = message_store_config.enabled_append_prop_crc;
         let store_path = message_store_config.get_store_path_commit_log();
         let mapped_file_size = message_store_config.mapped_file_size_commit_log;
-        let mapped_file_queue = MappedFileQueue::new(store_path, mapped_file_size as u64, None);
+        let mapped_file_queue = ArcMut::new(MappedFileQueue::new(
+            store_path,
+            mapped_file_size as u64,
+            None,
+        ));
         Self {
             mapped_file_queue: mapped_file_queue.clone(),
             message_store_config: message_store_config.clone(),
@@ -303,7 +306,11 @@ impl CommitLog {
             .set_confirm_phy_offset(phy_offset as u64);
     }
 
-    pub async fn put_messages(&mut self, mut msg_batch: MessageExtBatch) -> PutMessageResult {
+    pub async fn put_messages(
+        &mut self,
+        mut msg_batch: MessageExtBatch,
+        this: ArcMut<Self>,
+    ) -> PutMessageResult {
         msg_batch
             .message_ext_broker_inner
             .message_ext_inner
@@ -480,7 +487,8 @@ impl CommitLog {
                 put_message_context.get_batch_size() as i16,
             );
             drop(topic_queue_lock);
-            self.handle_disk_flush_and_ha(
+            CommitLog::handle_disk_flush_and_ha(
+                this,
                 put_message_result,
                 msg_batch.message_ext_broker_inner,
                 need_ack_nums,
@@ -492,7 +500,11 @@ impl CommitLog {
         }
     }
 
-    pub async fn put_message(&mut self, mut msg: MessageExtBrokerInner) -> PutMessageResult {
+    pub async fn put_message(
+        &mut self,
+        mut msg: MessageExtBrokerInner,
+        this: ArcMut<Self>,
+    ) -> PutMessageResult {
         // Set the storage time
         if !self.message_store_config.duplication_enable {
             msg.message_ext_inner.store_timestamp = time_utils::get_current_millis() as i64;
@@ -672,8 +684,14 @@ impl CommitLog {
             let message_num = get_message_num(&self.topic_config_table, &msg);
             self.increase_offset(&msg, message_num);
             drop(topic_queue_lock);
-            self.handle_disk_flush_and_ha(put_message_result, msg, need_ack_nums, need_handle_ha)
-                .await
+            CommitLog::handle_disk_flush_and_ha(
+                this,
+                put_message_result,
+                msg,
+                need_ack_nums,
+                need_handle_ha,
+            )
+            .await
         } else {
             put_message_result
         }
@@ -701,14 +719,13 @@ impl CommitLog {
     }
 
     async fn handle_disk_flush_and_ha(
-        &mut self,
+        this: ArcMut<Self>,
         mut put_message_result: PutMessageResult,
         msg: MessageExtBrokerInner,
         need_ack_nums: u32,
         need_handle_ha: bool,
     ) -> PutMessageResult {
-        let commit_log = Arc::new(self.clone());
-        let commit_log_cloned = commit_log.clone();
+        let commit_log = this.clone();
         let put_message_result_clone =
             Arc::new(put_message_result.append_message_result().unwrap().clone());
         let put_message_result_cloned = put_message_result_clone.clone();
@@ -720,8 +737,7 @@ impl CommitLog {
 
         let replica_result_handle = tokio::spawn(async move {
             if need_handle_ha {
-                commit_log_cloned
-                    .handle_ha(put_message_result_cloned.as_ref(), need_ack_nums)
+                this.handle_ha(put_message_result_cloned.as_ref(), need_ack_nums)
                     .await
             } else {
                 PutMessageStatus::PutOk

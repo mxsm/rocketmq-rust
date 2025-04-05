@@ -124,7 +124,7 @@ pub struct LocalFileMessageStore {
     broker_config: Arc<BrokerConfig>,
     put_message_hook_list: Arc<parking_lot::RwLock<Vec<BoxedPutMessageHook>>>,
     topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
-    commit_log: CommitLog,
+    commit_log: ArcMut<CommitLog>,
     compaction_service: Option<CompactionService>,
     store_checkpoint: Option<Arc<StoreCheckpoint>>,
     master_flushed_offset: Arc<AtomicI64>,
@@ -189,14 +189,14 @@ impl LocalFileMessageStore {
             dispatcher_vec: Arc::new(vec![Box::new(build_consume_queue), Box::new(build_index)]),
         };
 
-        let commit_log = CommitLog::new(
+        let commit_log = ArcMut::new(CommitLog::new(
             message_store_config.clone(),
             broker_config.clone(),
             &dispatcher,
             store_checkpoint.clone(),
             topic_config_table.clone(),
             consume_queue_store.clone(),
-        );
+        ));
 
         ensure_dir_ok(message_store_config.store_path_root_dir.as_str());
         ensure_dir_ok(Self::get_store_path_physic(&message_store_config).as_str());
@@ -658,7 +658,7 @@ impl MessageStore for LocalFileMessageStore {
         self.reput_message_service
             .set_reput_from_offset(self.commit_log.get_confirm_offset());
         self.reput_message_service.start(
-            Arc::new(self.commit_log.clone()),
+            self.commit_log.clone(),
             self.message_store_config.clone(),
             self.dispatcher.clone(),
             self.notify_message_arrive_in_batch,
@@ -777,7 +777,8 @@ impl MessageStore for LocalFileMessageStore {
         }
         let begin_time = Instant::now();
         //put message to commit log
-        let result = self.commit_log.put_message(msg).await;
+        let commit_log_this = self.commit_log.clone();
+        let result = self.commit_log.put_message(msg, commit_log_this).await;
         let elapsed_time = begin_time.elapsed().as_millis();
         if elapsed_time > 500 {
             warn!(
@@ -806,7 +807,11 @@ impl MessageStore for LocalFileMessageStore {
 
         let begin_time = Instant::now();
         //put message to commit log
-        let result = self.commit_log.put_messages(message_ext_batch).await;
+        let commit_log_this = self.commit_log.clone();
+        let result = self
+            .commit_log
+            .put_messages(message_ext_batch, commit_log_this)
+            .await;
         let elapsed_time = begin_time.elapsed().as_millis();
         if elapsed_time > 500 {
             warn!("not in lock eclipse time(ms) {}ms", elapsed_time,);
@@ -2002,7 +2007,7 @@ impl ReputMessageService {
 
     pub fn start(
         &mut self,
-        commit_log: Arc<CommitLog>,
+        commit_log: ArcMut<CommitLog>,
         message_store_config: Arc<MessageStoreConfig>,
         dispatcher: CommitLogDispatcherDefault,
         notify_message_arrive_in_batch: bool,
@@ -2062,7 +2067,7 @@ impl ReputMessageService {
 #[derive(Clone)]
 struct ReputMessageServiceInner {
     reput_from_offset: Arc<AtomicI64>,
-    commit_log: Arc<CommitLog>,
+    commit_log: ArcMut<CommitLog>,
     message_store_config: Arc<MessageStoreConfig>,
     dispatcher: CommitLogDispatcherDefault,
     notify_message_arrive_in_batch: bool,
