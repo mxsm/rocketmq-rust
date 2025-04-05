@@ -28,16 +28,16 @@ use rocketmq_common::common::attribute::cq_type::CQType;
 use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_rust::ArcMut;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
 
 use crate::base::dispatch_request::DispatchRequest;
+use crate::base::message_store::MessageStore;
 use crate::base::select_result::SelectMappedBufferResult;
-use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::base::swappable::Swappable;
-use crate::config::message_store_config::MessageStoreConfig;
 use crate::consume_queue::consume_queue_ext::CqExtUnit;
 use crate::consume_queue::mapped_file_queue::MappedFileQueue;
 use crate::filter::MessageFilter;
@@ -49,7 +49,6 @@ use crate::queue::queue_offset_operator::QueueOffsetOperator;
 use crate::queue::referred_iterator::ReferredIterator;
 use crate::queue::CqUnit;
 use crate::queue::FileQueueLifeCycle;
-use crate::store::running_flags::RunningFlags;
 use crate::store_path_config_helper::get_store_path_consume_queue_ext;
 
 pub const CQ_STORE_UNIT_SIZE: i32 = 20;
@@ -67,32 +66,29 @@ pub const MSG_TAG_OFFSET_INDEX: i32 = 12;
 /// </pre>
 /// ConsumeQueue's store unit. Size: CommitLog Physical Offset(8) + Body Size(4) + Tag HashCode(8) =
 /// 20 Bytes
-#[derive(Clone)]
-pub struct ConsumeQueue {
-    message_store_config: Arc<MessageStoreConfig>,
+pub struct ConsumeQueue<MS> {
+    message_store: ArcMut<MS>,
     mapped_file_queue: MappedFileQueue,
     topic: CheetahString,
     queue_id: i32,
+    byte_buffer_index: BytesMut,
     store_path: CheetahString,
     mapped_file_size: i32,
     max_physic_offset: Arc<AtomicI64>,
     min_logic_offset: Arc<AtomicI64>,
     consume_queue_ext: Option<ConsumeQueueExt>,
-    running_flags: Arc<RunningFlags>,
-    store_checkpoint: Arc<StoreCheckpoint>,
 }
 
-impl ConsumeQueue {
+impl<MS: MessageStore> ConsumeQueue<MS> {
     #[inline]
     pub fn new(
         topic: CheetahString,
         queue_id: i32,
         store_path: CheetahString,
         mapped_file_size: i32,
-        message_store_config: Arc<MessageStoreConfig>,
-        running_flags: Arc<RunningFlags>,
-        store_checkpoint: Arc<StoreCheckpoint>,
+        message_store: ArcMut<MS>,
     ) -> Self {
+        let message_store_config = message_store.get_message_store_config();
         let queue_dir = PathBuf::from(store_path.as_str())
             .join(topic.as_str())
             .join(queue_id.to_string());
@@ -115,22 +111,21 @@ impl ConsumeQueue {
             None
         };
         Self {
-            message_store_config,
+            message_store,
             mapped_file_queue,
             topic,
             queue_id,
+            byte_buffer_index: BytesMut::with_capacity(CQ_STORE_UNIT_SIZE as usize),
             store_path,
             mapped_file_size,
             max_physic_offset: Arc::new(AtomicI64::new(-1)),
             min_logic_offset: Arc::new(AtomicI64::new(0)),
             consume_queue_ext,
-            running_flags,
-            store_checkpoint,
         }
     }
 }
 
-impl ConsumeQueue {
+impl<MS: MessageStore> ConsumeQueue<MS> {
     #[inline]
     pub fn set_max_physic_offset(&self, max_physic_offset: i64) {
         self.max_physic_offset
@@ -229,7 +224,11 @@ impl ConsumeQueue {
 
     #[inline]
     pub fn is_ext_write_enable(&self) -> bool {
-        self.consume_queue_ext.is_some() && self.message_store_config.enable_consume_queue_ext
+        self.consume_queue_ext.is_some()
+            && self
+                .message_store
+                .get_message_store_config()
+                .enable_consume_queue_ext
     }
 
     #[inline]
@@ -350,7 +349,7 @@ impl ConsumeQueue {
     }
 }
 
-impl FileQueueLifeCycle for ConsumeQueue {
+impl<MS: MessageStore> FileQueueLifeCycle for ConsumeQueue<MS> {
     #[inline]
     fn load(&mut self) -> bool {
         let mut result = self.mapped_file_queue.load();
@@ -400,7 +399,7 @@ impl FileQueueLifeCycle for ConsumeQueue {
                     mapped_file_offset =
                         (index * CQ_STORE_UNIT_SIZE) as i64 + CQ_STORE_UNIT_SIZE as i64;
                     self.set_max_physic_offset(offset + size as i64);
-                    if Self::is_ext_addr(tags_code) {
+                    if ConsumeQueue::<MS>::is_ext_addr(tags_code) {
                         max_ext_addr = tags_code;
                     }
                     //println!("offset {}, size {}, tags_code {}", offset, size, tags_code);
@@ -503,7 +502,7 @@ impl FileQueueLifeCycle for ConsumeQueue {
     }
 }
 
-impl Swappable for ConsumeQueue {
+impl<MS: MessageStore> Swappable for ConsumeQueue<MS> {
     #[inline]
     fn swap_map(
         &self,
@@ -521,7 +520,7 @@ impl Swappable for ConsumeQueue {
 }
 
 #[allow(unused_variables)]
-impl ConsumeQueueTrait for ConsumeQueue {
+impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
     #[inline]
     fn get_topic(&self) -> &CheetahString {
         &self.topic
@@ -738,7 +737,7 @@ impl ConsumeQueueTrait for ConsumeQueue {
                         mapped.get_file_from_offset() as i64 + i as i64 + start,
                         Ordering::SeqCst,
                     );
-                    if Self::is_ext_addr(tags_code) {
+                    if ConsumeQueue::<MS>::is_ext_addr(tags_code) {
                         min_ext_addr = tags_code;
                     }
                     break;
@@ -758,7 +757,7 @@ impl ConsumeQueueTrait for ConsumeQueue {
     #[inline]
     fn put_message_position_info_wrapper(&mut self, request: &DispatchRequest) {
         let max_retries = 30i32;
-        let can_write = self.running_flags.is_cq_writeable();
+        let can_write = self.message_store.get_running_flags().is_cq_writeable();
         let mut i = 0i32;
         while i < max_retries && can_write {
             let mut tags_code = request.tags_code;
@@ -769,7 +768,7 @@ impl ConsumeQueueTrait for ConsumeQueue {
                     request.bit_map.clone(),
                 ));
 
-                if Self::is_ext_addr(ext_addr) {
+                if ConsumeQueue::<MS>::is_ext_addr(ext_addr) {
                     tags_code = ext_addr;
                 } else {
                     warn!(
@@ -779,19 +778,21 @@ impl ConsumeQueueTrait for ConsumeQueue {
                     )
                 }
             }
+
             if self.put_message_position_info(
                 request.commit_log_offset,
                 request.msg_size,
                 tags_code,
                 request.consume_queue_offset,
             ) {
-                if self.message_store_config.broker_role == BrokerRole::Slave
-                    || self.message_store_config.enable_dledger_commit_log
+                let message_store_config = self.message_store.get_message_store_config();
+                if message_store_config.broker_role == BrokerRole::Slave
+                    || message_store_config.enable_dledger_commit_log
                 {
                     unimplemented!("slave or dledger commit log not support")
                 }
-                self.store_checkpoint
-                    .set_logics_msg_timestamp(request.store_timestamp as u64);
+                let store_checkpoint = self.message_store.get_store_checkpoint();
+                store_checkpoint.set_logics_msg_timestamp(request.store_timestamp as u64);
                 //if (MultiDispatchUtils.checkMultiDispatchQueue(this.messageStore.
                 // getMessageStoreConfig(), request)) {
                 // multiDispatchLmqQueue(request, maxRetries);                 }
@@ -808,7 +809,9 @@ impl ConsumeQueueTrait for ConsumeQueue {
             "[BUG]consume queue can not write, {} {}",
             self.topic, self.queue_id
         );
-        self.running_flags.make_logics_queue_error();
+        self.message_store
+            .get_running_flags()
+            .make_logics_queue_error();
     }
 
     #[inline]

@@ -35,7 +35,6 @@ use tracing::error;
 use tracing::info;
 
 use crate::base::dispatch_request::DispatchRequest;
-use crate::base::message_store::MessageStore;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::message_store::local_file_message_store::LocalFileMessageStore;
 use crate::queue::batch_consume_queue::BatchConsumeQueue;
@@ -380,9 +379,7 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
                     self.inner
                         .message_store_config
                         .get_mapped_file_size_consume_queue(),
-                    self.inner.message_store_config.clone(),
-                    message_store.get_running_flags_arc(),
-                    message_store.get_store_checkpoint(),
+                    self.inner.message_store.clone().unwrap(),
                 ))),
                 CQType::BatchCQ => ArcMut::new(Box::new(BatchConsumeQueue::new(
                     topic.clone(),
@@ -610,9 +607,7 @@ impl ConsumeQueueStore {
                     self.inner
                         .message_store_config
                         .get_mapped_file_size_consume_queue(),
-                    self.inner.message_store_config.clone(),
-                    ms_ref.get_running_flags_arc(),
-                    ms_ref.get_store_checkpoint(),
+                    self.inner.message_store.clone().unwrap(),
                 );
                 ArcMut::new(Box::new(consume_queue))
             }
