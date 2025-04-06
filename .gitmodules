@@ -1,0 +1,3 @@
+[submodule "rocketmq-rust-site"]
+	path = rocketmq-rust-site
+	url = https://github.com/mxsm/rocketmq-rust-site
