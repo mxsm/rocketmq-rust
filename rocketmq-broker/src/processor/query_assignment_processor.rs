@@ -49,9 +49,23 @@ use crate::broker_error::BrokerError;
  use std::sync::Arc;
  use tracing::{info, warn};
 
+/// A processor for handling query assignments in the RocketMQ broker.
+///
+/// This struct manages the message request modes and load balancing strategies
+/// for message queues. It interacts with the broker runtime to process assignment
+/// requests and allocate message queues to consumers.
+///
+/// # Type Parameters
+///
+/// * `MS` - A type that implements the `MessageStore` trait, representing the message store used by
+///   the broker.
 pub struct QueryAssignmentProcessor<MS> {
+    // Manages the message request modes for different topics and consumer groups.
     message_request_mode_manager: MessageRequestModeManager,
+
+    // A map of load balancing strategies for message queue allocation.
     load_strategy: HashMap<CheetahString, Arc<dyn AllocateMessageQueueStrategy>>,
+
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
