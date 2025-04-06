@@ -129,9 +129,11 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
         }
         let request_body = QueryAssignmentRequestBody::decode(request.get_body().unwrap())
             .map_err(BrokerCommonError)?;
+
         let set_message_request_mode_request_body = self
             .message_request_mode_manager
             .get_message_request_mode(&request_body.topic, &request_body.consumer_group);
+
         let set_message_request_mode_request_body =
             if let Some(set_message_request_mode_request_body) =
                 set_message_request_mode_request_body
@@ -196,6 +198,29 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
         )))
     }
 
+    /// Performs load balancing to allocate message queues to consumers.
+    ///
+    /// This function handles both broadcasting and clustering message models.
+    /// For broadcasting, it returns all message queues. For clustering, it uses
+    /// the specified load balancing strategy to allocate message queues to consumers.
+    ///
+    /// # Arguments
+    ///
+    /// * `topic` - A reference to a `CheetahString` representing the topic name.
+    /// * `consumer_group` - A reference to a `CheetahString` representing the consumer group name.
+    /// * `client_id` - A reference to a `CheetahString` representing the client ID.
+    /// * `message_model` - A `MessageModel` enum indicating the message model (Broadcasting or
+    ///   Clustering).
+    /// * `strategy_name` - A reference to a `CheetahString` representing the name of the load
+    ///   balancing strategy.
+    /// * `set_message_request_mode_request_body` - A `SetMessageRequestModeRequestBody` containing
+    ///   the message request mode settings.
+    /// * `channel` - A `Channel` representing the network channel.
+    ///
+    /// # Returns
+    ///
+    /// An `Option<HashSet<MessageQueue>>` containing the allocated message queues, or `None` if no
+    /// queues are allocated.
     async fn do_load_balance(
         &mut self,
         topic: &CheetahString,
@@ -331,7 +356,7 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
         if pop_share_queue_num <= 0 || pop_share_queue_num >= cid_all.len() as i32 - 1 {
             //Each consumer can consume all queues, return all queues. Queue ID -1 means consume
             // all queues when consuming in Pop mode
-            //each client pop all messagequeue
+            //each client pop all message queue
             Ok(mq_all
                 .iter()
                 .map(|mq| {
@@ -345,9 +370,8 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
         } else if cid_all.len() <= mq_all.len() {
             //consumer working in pop mode could share the MessageQueues assigned to
             // the N (N = popWorkGroupSize) consumer following it in the cid list
-            let mut allocate_result = strategy
-                .allocate(consumer_group, current_cid, mq_all, cid_all)
-                .unwrap();
+            let mut allocate_result =
+                strategy.allocate(consumer_group, current_cid, mq_all, cid_all)?;
             let index = cid_all.iter().position(|cid| cid == current_cid);
             if let Some(mut index) = index {
                 for _i in 1..pop_share_queue_num {
