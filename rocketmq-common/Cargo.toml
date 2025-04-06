@@ -16,8 +16,11 @@ rocketmq-rust = { workspace = true }
 
 anyhow.workspace = true
 tokio.workspace = true
+
 tracing.workspace = true
 tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+
 crc32fast = "1.4.2"
 
 #json spupport
