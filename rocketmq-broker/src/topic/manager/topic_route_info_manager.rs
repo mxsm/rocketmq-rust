@@ -314,7 +314,7 @@ impl<MS: MessageStore> TopicRouteInfoManager<MS> {
         topic: &CheetahString,
     ) -> Option<HashSet<MessageQueue>> {
         let mut queues = self.topic_subscribe_info_table.get(topic).cloned();
-        if queues.is_none() || queues.as_ref().unwrap().is_empty() {
+        if queues.as_ref().map_or(true, |q| q.is_empty()) {
             self.update_topic_route_info_from_name_server_ext(topic, false, true)
                 .await;
             queues = self.topic_subscribe_info_table.get(topic).cloned();
