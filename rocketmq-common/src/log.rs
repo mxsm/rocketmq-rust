@@ -15,9 +15,14 @@
  * limitations under the License.
  */
 use std::fmt;
+use std::path::Path;
 use std::str::FromStr;
 
-use tracing::metadata::LevelFilter;
+use tracing_appender::rolling;
+use tracing_subscriber::fmt::writer::MakeWriterExt;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::Layer;
 
 /// Initializes the logger with the specified configuration.
 ///
@@ -36,6 +41,19 @@ pub fn init_logger() {
         .init();
 }
 
+/// Initializes the logger with the specified log level.
+///
+/// This function sets up the logger using the `tracing_subscriber` crate.
+/// It configures the logger to include thread names, log levels, line numbers, and thread IDs
+/// in the log output. The maximum log level is set based on the provided `level`.
+///
+/// # Arguments
+///
+/// * `level` - A `Level` representing the desired log level.
+///
+/// # Panics
+///
+/// This function will panic if the provided log level is invalid.
 pub fn init_logger_with_level(level: Level) {
     tracing_subscriber::fmt()
         .with_thread_names(true)
@@ -43,6 +61,64 @@ pub fn init_logger_with_level(level: Level) {
         .with_line_number(true)
         .with_thread_ids(true)
         .with_max_level(tracing::Level::from_str(level.as_str()).expect("Invalid log level"))
+        .init();
+}
+
+/// Initializes the logger with both file and console output.
+///
+/// This function configures logging to output to both a file and the console simultaneously.
+/// The file logger uses daily rotation to create new log files each day.
+///
+/// # Arguments
+///
+/// * `level` - The logging level to use for both outputs.
+/// * `directory` - The directory where log files will be stored.
+/// * `file_name_prefix` - The prefix to use for log filenames.
+///
+/// # Notes
+///
+/// This function creates a non-blocking file writer to improve performance.
+/// The returned guard should be stored in a static or long-lived variable to prevent
+/// premature flushing of logs when the guard is dropped.
+///
+/// # Panics
+///
+/// This function will panic if the provided log level is invalid.
+pub fn init_logger_with_file(
+    level: Level,
+    directory: impl AsRef<Path>,
+    file_name_prefix: impl AsRef<Path>,
+) {
+    // log file output (daily rolling)
+    let file_appender = rolling::daily(directory, file_name_prefix);
+    let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
+    let max_level = tracing_subscriber::filter::LevelFilter::from_str(level.as_str())
+        .expect("Invalid log level");
+
+    // console layer (colorful output)
+    let console_layer = tracing_subscriber::fmt::layer()
+        .with_writer(std::io::stdout)
+        .with_thread_names(true)
+        .with_thread_ids(true)
+        .with_line_number(true)
+        .with_level(true)
+        .with_ansi(true)
+        .with_filter(max_level);
+
+    // file layer(non-color output)
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_writer(file_writer)
+        .with_thread_names(true)
+        .with_thread_ids(true)
+        .with_line_number(true)
+        .with_level(true)
+        .with_ansi(false)
+        .with_filter(max_level);
+
+    // Register two layers
+    tracing_subscriber::registry()
+        .with(console_layer)
+        .with(file_layer)
         .init();
 }
 
