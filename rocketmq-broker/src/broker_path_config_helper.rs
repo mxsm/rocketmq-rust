@@ -116,7 +116,18 @@ pub fn get_consumer_filter_path(root_dir: &str) -> String {
         .into_owned()
 }
 
-// Message request mode path
+/// Returns the path to the message request mode configuration file.
+///
+/// This function constructs the full path to the configuration file by joining
+/// the given root directory with the specific configuration subdirectory and filename.
+///
+/// # Arguments
+///
+/// * `root_dir` - A string slice representing the root directory.
+///
+/// # Returns
+///
+/// A `String` containing the full path to the "messageRequestMode.json" file.
 pub fn get_message_request_mode_path(root_dir: &str) -> String {
     PathBuf::from(root_dir)
         .join("config")
