@@ -92,6 +92,7 @@ pub fn init_logger_with_file(
     // log file output (daily rolling)
     let file_appender = rolling::daily(directory, file_name_prefix);
     let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
+
     let max_level = tracing_subscriber::filter::LevelFilter::from_str(level.as_str())
         .expect("Invalid log level");
 
@@ -120,6 +121,9 @@ pub fn init_logger_with_file(
         .with(console_layer)
         .with(file_layer)
         .init();
+
+    // Store the guard in a static variable to prevent it from being dropped
+    Box::leak(Box::new(guard));
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
