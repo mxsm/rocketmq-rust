@@ -209,25 +209,25 @@ impl GetMessageResult {
     #[inline]
     pub fn add_message(
         &mut self,
-        maped_buffer: SelectMappedBufferResult,
+        mapped_buffer: SelectMappedBufferResult,
         queue_offset: u64,
         batch_num: i32,
     ) {
-        let slice = maped_buffer.get_buffer();
-        // self.message_buffer_list.push(Bytes::copy_from_slice(slice));
-        self.buffer_total_size += maped_buffer.size;
+        self.buffer_total_size += mapped_buffer.size;
         self.message_count += batch_num;
+        self.msg_count4_commercial +=
+            (mapped_buffer.size as f64 / self.commercial_size_per_msg as f64).ceil() as i32;
         self.message_queue_offset.push(queue_offset);
-        self.message_mapped_list.push(maped_buffer);
+        self.message_mapped_list.push(mapped_buffer);
     }
 
     #[inline]
-    pub fn add_message_inner(&mut self, maped_buffer: SelectMappedBufferResult) {
-        let slice = maped_buffer.get_buffer();
-        // self.message_buffer_list.push(Bytes::copy_from_slice(slice));
-        self.buffer_total_size += maped_buffer.bytes.as_ref().map_or(0, |b| b.len() as i32);
+    pub fn add_message_inner(&mut self, mapped_buffer: SelectMappedBufferResult) {
+        self.buffer_total_size += mapped_buffer.size;
+        self.msg_count4_commercial +=
+            (mapped_buffer.size as f64 / self.commercial_size_per_msg as f64).ceil() as i32;
         self.message_count += 1;
-        self.message_mapped_list.push(maped_buffer);
+        self.message_mapped_list.push(mapped_buffer);
     }
 
     #[inline]
