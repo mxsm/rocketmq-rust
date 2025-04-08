@@ -59,10 +59,11 @@ use crate::coldctr::cold_data_pull_request_hold_service::NO_SUSPEND_KEY;
 use crate::filter::expression_for_retry_message_filter::ExpressionForRetryMessageFilter;
 use crate::filter::expression_message_filter::ExpressionMessageFilter;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
+use crate::processor::default_pull_message_result_handler::DefaultPullMessageResultHandler;
 use crate::processor::pull_message_result_handler::PullMessageResultHandler;
 
 pub struct PullMessageProcessor<MS> {
-    pull_message_result_handler: ArcMut<Box<dyn PullMessageResultHandler>>,
+    pull_message_result_handler: ArcMut<DefaultPullMessageResultHandler<MS>>,
     // write message to consume client runtime
     cold_data_cg_ctr_service: Arc<ColdDataCgCtrService>,
     write_message_runtime: Arc<RocketMQRuntime>,
@@ -71,9 +72,12 @@ pub struct PullMessageProcessor<MS> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
-impl<MS: MessageStore> PullMessageProcessor<MS> {
+impl<MS> PullMessageProcessor<MS>
+where
+    MS: MessageStore,
+{
     pub fn new(
-        pull_message_result_handler: ArcMut<Box<dyn PullMessageResultHandler>>,
+        pull_message_result_handler: ArcMut<DefaultPullMessageResultHandler<MS>>,
         broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> Self {
         let cpus = num_cpus::get();
@@ -766,20 +770,23 @@ where
             }
         };
         if let Some(get_message_result) = get_message_result {
-            return self.pull_message_result_handler.handle(
-                get_message_result,
-                request,
-                request_header,
-                channel,
-                ctx,
-                subscription_data,
-                subscription_group_config.unwrap(),
-                broker_allow_suspend,
-                message_filter,
-                response,
-                topic_queue_mapping_context,
-                begin_time_mills,
-            );
+            return self
+                .pull_message_result_handler
+                .handle(
+                    get_message_result,
+                    request,
+                    request_header,
+                    channel,
+                    ctx,
+                    subscription_data,
+                    subscription_group_config.unwrap(),
+                    broker_allow_suspend,
+                    message_filter,
+                    response,
+                    topic_queue_mapping_context,
+                    begin_time_mills,
+                )
+                .await;
         }
         None
     }
