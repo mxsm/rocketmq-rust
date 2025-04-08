@@ -490,7 +490,6 @@ where
             (subscription_data, None)
         };
 
-        let randomq = rand::rng().random_range(0..100);
         let revive_qid = if request_header.order.unwrap_or(false) {
             POP_ORDER_REVIVE_QUEUE
         } else {
@@ -502,6 +501,15 @@ where
             request_header.max_msg_nums as usize,
         ));
 
+        // Due to the design of the fields startOffsetInfo, msgOffsetInfo, and orderCountInfo,
+        // a single POP request could only invoke the popMsgFromQueue method once
+        // for either a normal topic or a retry topic's queue. Retry topics v1 and v2 are
+        // considered the same type because they share the same retry flag in previous fields.
+        // Therefore, needRetryV1 is designed as a subset of needRetry, and within a single request,
+        // only one type of retry topic is able to call popMsgFromQueue.
+        //Determine whether to pull a message from the retry queue using a random number and a set
+        // probability
+        let randomq = rand::rng().random_range(0..100);
         let need_retry = randomq
             < self
                 .broker_runtime_inner
