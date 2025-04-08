@@ -61,42 +61,18 @@ use crate::processor::pull_message_processor::rewrite_response_for_static_topic;
 use crate::processor::pull_message_result_handler::PullMessageResultHandler;
 
 pub struct DefaultPullMessageResultHandler<MS> {
-    /*    topic_config_manager: Arc<TopicConfigManager>,
-    message_store_config: Arc<MessageStoreConfig>,
-    consumer_offset_manager: Arc<ConsumerOffsetManager>,
-    consumer_manager: Arc<ConsumerManager>,
-    broadcast_offset_manager: Arc<BroadcastOffsetManager>,
-    broker_stats_manager: Arc<BrokerStatsManager>,
-    broker_config: Arc<BrokerConfig>,*/
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     consume_message_hook_list: Arc<Vec<Box<dyn ConsumeMessageHook>>>,
-    //pull_request_hold_service: Option<ArcMut<PullRequestHoldService<DefaultMessageStore>>>,
 }
 
 impl<MS> DefaultPullMessageResultHandler<MS> {
     pub fn new(
-        /* message_store_config: Arc<MessageStoreConfig>,
-        topic_config_manager: Arc<TopicConfigManager>,
-        consumer_offset_manager: Arc<ConsumerOffsetManager>,
-        consumer_manager: Arc<ConsumerManager>,
-        broadcast_offset_manager: Arc<BroadcastOffsetManager>,
-        broker_stats_manager: Arc<BrokerStatsManager>,
-        broker_config: Arc<BrokerConfig>,
-        consume_message_hook_list: Arc<Vec<Box<dyn ConsumeMessageHook>>>,*/
         consume_message_hook_list: Arc<Vec<Box<dyn ConsumeMessageHook>>>,
         broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> Self {
         Self {
-            /*topic_config_manager,
-            message_store_config,
-            consumer_offset_manager,
-            consumer_manager,
-            broadcast_offset_manager,
-            broker_stats_manager,
-            broker_config,*/
             broker_runtime_inner,
             consume_message_hook_list,
-            // pull_request_hold_service: None,
         }
     }
 
@@ -110,12 +86,12 @@ impl<MS> DefaultPullMessageResultHandler<MS> {
 }
 
 impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHandler<MS> {
-    fn handle(
+    async fn handle(
         &self,
-        get_message_result: GetMessageResult,
+        mut get_message_result: GetMessageResult,
         request: RemotingCommand,
         request_header: PullMessageRequestHeader,
-        channel: Channel,
+        mut channel: Channel,
         ctx: ConnectionHandlerContext,
         subscription_data: SubscriptionData,
         subscription_group_config: SubscriptionGroupConfig,
@@ -216,6 +192,15 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
                     }
                     Some(response)
                 } else {
+                    //zero copy is not implemented
+                    if let Some(header_bytes) = response.encode_header() {
+                        let _ = channel.connection_mut().send_bytes(header_bytes).await;
+                    }
+                    for select_result in get_message_result.message_mapped_list_mut() {
+                        if let Some(message) = select_result.bytes.take() {
+                            let _ = channel.connection_mut().send_bytes(message).await;
+                        }
+                    }
                     None
                 }
             }

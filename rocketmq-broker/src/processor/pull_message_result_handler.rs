@@ -58,7 +58,7 @@ pub trait PullMessageResultHandler: Sync + Send + Any + 'static {
     /// # Returns
     /// An optional `RemotingCommand` representing the response to the pull message request.
     /// If `None`, it indicates that no response should be sent back to the client.
-    fn handle(
+    async fn handle(
         &self,
         get_message_result: GetMessageResult,
         request: RemotingCommand,

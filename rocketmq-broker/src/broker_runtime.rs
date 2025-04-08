@@ -87,7 +87,6 @@ use crate::processor::notification_processor::NotificationProcessor;
 use crate::processor::pop_inflight_message_counter::PopInflightMessageCounter;
 use crate::processor::pop_message_processor::PopMessageProcessor;
 use crate::processor::pull_message_processor::PullMessageProcessor;
-use crate::processor::pull_message_result_handler::PullMessageResultHandler;
 use crate::processor::query_assignment_processor::QueryAssignmentProcessor;
 use crate::processor::query_message_processor::QueryMessageProcessor;
 use crate::processor::reply_message_processor::ReplyMessageProcessor;
@@ -528,31 +527,21 @@ impl BrokerRuntime {
             self.transactional_message_service.as_ref().unwrap().clone(),
             self.inner.clone(),
         );
-        let mut pull_message_result_handler =
-            ArcMut::new(Box::new(DefaultPullMessageResultHandler::new(
-                Arc::new(Default::default()), //optimize
-                self.inner.clone(),
-            )) as Box<dyn PullMessageResultHandler>);
-        //let message_store = self.message_store.clone().unwrap();
+        let pull_message_result_handler = ArcMut::new(DefaultPullMessageResultHandler::new(
+            Arc::new(Default::default()), //optimize
+            self.inner.clone(),
+        ));
+
         let pull_message_processor = ArcMut::new(PullMessageProcessor::new(
-            pull_message_result_handler.clone(),
+            pull_message_result_handler,
             self.inner.clone(),
         ));
 
         let consumer_manage_processor = ConsumerManageProcessor::new(self.inner.clone());
         self.inner.pull_request_hold_service = Some(PullRequestHoldService::new(
-            /* message_store.clone(), */
             pull_message_processor.clone(),
-            /* self.broker_config.clone(), */
             self.inner.clone(),
         ));
-
-        let pull_message_result_handler = pull_message_result_handler.as_mut().as_mut();
-        pull_message_result_handler
-            .as_any_mut()
-            .downcast_mut::<DefaultPullMessageResultHandler<LocalFileMessageStore>>()
-            .expect("downcast DefaultPullMessageResultHandler failed")
-            .set_pull_request_hold_service(self.inner.clone());
 
         let inner = self.inner.clone();
         self.inner
@@ -562,11 +551,7 @@ impl BrokerRuntime {
             .set_message_arriving_listener(Some(Arc::new(Box::new(
                 NotifyMessageArrivingListener::new(inner),
             ))));
-        let query_message_processor = QueryMessageProcessor::new(
-            /*self.inner.message_store_config.clone(),
-            message_store.clone(),*/
-            self.inner.clone(),
-        );
+        let query_message_processor = QueryMessageProcessor::new(self.inner.clone());
 
         let admin_broker_processor = AdminBrokerProcessor::new(self.inner.clone());
         let pop_message_processor = PopMessageProcessor::new_arc_mut(self.inner.clone());
