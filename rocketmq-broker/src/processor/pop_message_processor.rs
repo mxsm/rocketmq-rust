@@ -66,8 +66,8 @@ use rocketmq_store::pop::batch_ack_msg::BatchAckMsg;
 use rocketmq_store::pop::pop_check_point::PopCheckPoint;
 use rocketmq_store::pop::AckMessage;
 use tokio::select;
-use tokio::sync::Mutex;
 use tokio::sync::Notify;
+use tokio::sync::RwLock;
 use tracing::info;
 use tracing::warn;
 
@@ -1597,18 +1597,19 @@ impl TimedLock {
 
 #[derive(Clone)]
 pub struct QueueLockManager {
-    expired_local_cache: Arc<Mutex<HashMap<CheetahString, TimedLock>>>,
+    expired_local_cache: Arc<RwLock<HashMap<CheetahString, TimedLock>>>,
     shutdown: Arc<Notify>,
 }
 
 impl QueueLockManager {
     pub fn new() -> Self {
         QueueLockManager {
-            expired_local_cache: Arc::new(Mutex::new(HashMap::with_capacity(4096))),
+            expired_local_cache: Arc::new(RwLock::new(HashMap::with_capacity(4096))),
             shutdown: Arc::new(Notify::new()),
         }
     }
 
+    #[inline]
     pub fn build_lock_key(
         topic: &CheetahString,
         consumer_group: &CheetahString,
@@ -1636,7 +1637,12 @@ impl QueueLockManager {
     }
 
     pub async fn try_lock_with_key(&self, key: CheetahString) -> bool {
-        let mut cache = self.expired_local_cache.lock().await;
+        let cache = self.expired_local_cache.read().await;
+        if let Some(lock) = cache.get(&key) {
+            return lock.try_lock();
+        }
+        drop(cache);
+        let mut cache = self.expired_local_cache.write().await;
         let lock = cache.entry(key).or_insert(TimedLock::new());
         lock.try_lock()
     }
@@ -1652,14 +1658,14 @@ impl QueueLockManager {
     }
 
     pub async fn unlock_with_key(&self, key: CheetahString) {
-        let cache = self.expired_local_cache.lock().await;
+        let cache = self.expired_local_cache.read().await;
         if let Some(lock) = cache.get(&key) {
             lock.unlock();
         }
     }
 
     pub async fn clean_unused_locks(&self, used_expire_millis: u64) -> usize {
-        let mut cache = self.expired_local_cache.lock().await;
+        let mut cache = self.expired_local_cache.write().await;
         let count = cache.len();
         cache.retain(|_, lock| get_current_millis() - lock.get_lock_time() <= used_expire_millis);
         count
@@ -1792,7 +1798,7 @@ mod tests {
     #[tokio::test]
     async fn new_queue_lock_manager_has_empty_cache() {
         let manager = QueueLockManager::new();
-        let cache = manager.expired_local_cache.lock().await;
+        let cache = manager.expired_local_cache.read().await;
         assert!(cache.is_empty());
     }
 
