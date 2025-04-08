@@ -174,9 +174,7 @@ impl ConsumerOffsetManager {
                 .read()
                 .get(key.as_str())
             {
-                if value.contains_key(&queue_id) {
-                    return value.get(&queue_id).cloned().unwrap_or(-1);
-                }
+                return *value.get(&queue_id).unwrap_or(&-1);
             }
         }
         if let Some(value) = self
@@ -185,9 +183,7 @@ impl ConsumerOffsetManager {
             .read()
             .get(key.as_str())
         {
-            if value.contains_key(&queue_id) {
-                return value.get(&queue_id).cloned().unwrap_or(-1);
-            }
+            return *value.get(&queue_id).unwrap_or(&-1);
         }
         -1
     }
