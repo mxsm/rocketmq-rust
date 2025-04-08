@@ -18,7 +18,6 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use bytes::BytesMut;
 
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
@@ -27,9 +26,7 @@ use crate::log_file::mapped_file::MappedFile;
 pub struct SelectMappedBufferResult {
     /// The start offset.
     pub start_offset: u64,
-
     pub bytes: Option<Bytes>,
-
     /// The size.
     pub size: i32,
     /// The mapped file.
@@ -64,11 +61,14 @@ impl SelectMappedBufferResult {
             .as_mut()
     }
 
+    #[inline]
     pub fn get_bytes(&self) -> Option<Bytes> {
-        if self.size <= 0 || self.mapped_file.is_none() {
-            return None;
-        }
-        Some(BytesMut::from(self.get_buffer()).freeze())
+        self.bytes.clone()
+    }
+
+    #[inline]
+    pub fn get_bytes_ref(&self) -> Option<&Bytes> {
+        self.bytes.as_ref()
     }
 
     pub fn is_in_mem(&self) -> bool {
