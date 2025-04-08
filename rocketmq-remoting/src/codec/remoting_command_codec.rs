@@ -16,6 +16,7 @@
  */
 
 use bytes::BufMut;
+use bytes::Bytes;
 use bytes::BytesMut;
 use tokio_util::codec::BytesCodec;
 use tokio_util::codec::Decoder;
@@ -152,10 +153,10 @@ impl Decoder for CompositeCodec {
     }
 }
 
-impl Encoder<BytesMut> for CompositeCodec {
+impl Encoder<Bytes> for CompositeCodec {
     type Error = RemotingError;
 
-    fn encode(&mut self, item: BytesMut, dst: &mut BytesMut) -> Result<(), Self::Error> {
+    fn encode(&mut self, item: Bytes, dst: &mut BytesMut) -> Result<(), Self::Error> {
         self.bytes_codec.encode(item, dst).map_err(|error| {
             RemotingError::RemotingCommandEncoderError(format!("Error encoding bytes: {}", error))
         })
