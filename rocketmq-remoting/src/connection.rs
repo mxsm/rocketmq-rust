@@ -18,6 +18,7 @@ use std::hash::Hash;
 use std::hash::Hasher;
 
 use bytes::BufMut;
+use bytes::Bytes;
 use bytes::BytesMut;
 use futures_util::stream::SplitSink;
 use futures_util::stream::SplitStream;
@@ -46,7 +47,7 @@ pub struct Connection {
     /// The `Framed` instance used for reading from and writing to the TCP stream.
     /// It leverages the `RemotingCommandCodec` for encoding and decoding frames.
     //pub(crate) framed: Framed<TcpStream, RemotingCommandCodec>,
-    writer: SplitSink<Framed<TcpStream, CompositeCodec>, BytesMut>,
+    writer: SplitSink<Framed<TcpStream, CompositeCodec>, Bytes>,
     reader: SplitStream<Framed<TcpStream, CompositeCodec>>,
 
     /// A boolean flag indicating the current state of the connection.
@@ -64,8 +65,8 @@ impl Hash for Connection {
 
         // Use the addr: *const _ess of writer and reader to hash them (they serve as a unique
         // identifier for these components)
-        let writer_addr: *const SplitSink<Framed<TcpStream, CompositeCodec>, BytesMut> =
-            &self.writer as *const SplitSink<Framed<TcpStream, CompositeCodec>, BytesMut>;
+        let writer_addr: *const SplitSink<Framed<TcpStream, CompositeCodec>, Bytes> =
+            &self.writer as *const SplitSink<Framed<TcpStream, CompositeCodec>, Bytes>;
         let reader_addr: *const SplitStream<Framed<TcpStream, CompositeCodec>> =
             &self.reader as *const SplitStream<Framed<TcpStream, CompositeCodec>>;
 
@@ -114,7 +115,7 @@ impl Connection {
     }
 
     #[inline]
-    pub fn writer(&self) -> &SplitSink<Framed<TcpStream, CompositeCodec>, BytesMut> {
+    pub fn writer(&self) -> &SplitSink<Framed<TcpStream, CompositeCodec>, Bytes> {
         &self.writer
     }
 
@@ -145,7 +146,7 @@ impl Connection {
         if let Some(body_inner) = command.take_body() {
             self.buf.put(body_inner);
         }
-        self.writer.send(self.buf.clone()).await?;
+        self.writer.send(self.buf.clone().freeze()).await?;
         Ok(())
     }
 }
