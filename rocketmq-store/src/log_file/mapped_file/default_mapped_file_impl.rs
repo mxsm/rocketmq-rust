@@ -62,6 +62,7 @@ pub struct DefaultMappedFile {
     reference_resource: ReferenceResourceCounter,
     file: File,
     mmapped_file: SyncUnsafeCellWrapper<MmapMut>,
+    mapped_bytes: Bytes,
     transient_store_pool: Option<TransientStorePool>,
     file_name: CheetahString,
     file_from_offset: u64,
@@ -130,6 +131,10 @@ impl DefaultMappedFile {
         file.set_len(file_size).unwrap();
 
         let mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
+        let mapped_slice: &'static [u8] =
+            unsafe { std::mem::transmute::<&[u8], &'static [u8]>(mmap.as_ref()) };
+        let mapped_bytes = Bytes::from_static(mapped_slice);
+
         Self {
             reference_resource: ReferenceResourceCounter::new(),
             file,
@@ -149,6 +154,7 @@ impl DefaultMappedFile {
             start_timestamp: 0,
             transient_store_pool: None,
             stop_timestamp: 0,
+            mapped_bytes,
         }
     }
 
@@ -227,6 +233,9 @@ impl DefaultMappedFile {
         file.set_len(file_size).expect("Set file size failed");
 
         let mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
+        let mapped_slice: &'static [u8] =
+            unsafe { std::mem::transmute::<&[u8], &'static [u8]>(mmap.as_ref()) };
+        let mapped_bytes = Bytes::from_static(mapped_slice);
         Self {
             reference_resource: ReferenceResourceCounter::new(),
             file,
@@ -246,6 +255,7 @@ impl DefaultMappedFile {
             transient_store_pool: Some(transient_store_pool),
             stop_timestamp: 0,
             mmapped_file: SyncUnsafeCellWrapper::new(mmap),
+            mapped_bytes,
         }
     }
 }
