@@ -527,7 +527,7 @@ impl MappedFile for DefaultMappedFile {
                 Some(SelectMappedBufferResult {
                     start_offset: self.file_from_offset + pos as u64,
                     size,
-                    mapped_file: None,
+                    bytes: Some(self.mapped_bytes.slice(pos as usize..(pos + size) as usize)),
                     is_in_cache: true,
                     ..Default::default()
                 })
@@ -841,10 +841,14 @@ impl MappedFile for DefaultMappedFile {
         if pos < read_position && pos >= 0 && MappedFile::hold(self) {
             self.mapped_byte_buffer_access_count_since_last_swap
                 .fetch_add(1, Ordering::AcqRel);
+            let size = read_position - pos;
             Some(SelectMappedBufferResult {
                 start_offset: self.get_file_from_offset() + pos as u64,
-                size: read_position - pos,
-                mapped_file: None,
+                size,
+                bytes: Some(
+                    self.mapped_bytes
+                        .slice(pos as usize..read_position as usize),
+                ),
                 is_in_cache: true,
                 ..Default::default()
             })
