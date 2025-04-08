@@ -149,4 +149,47 @@ impl Connection {
         self.writer.send(self.buf.clone().freeze()).await?;
         Ok(())
     }
+
+    /// Sends a `Bytes` object over the connection.
+    ///
+    /// # Arguments
+    ///
+    /// * `bytes` - The `Bytes` object to send.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` indicating success (`Ok(())`) or failure (`Err(RemotingError)`).
+    ///
+    /// # Errors
+    ///
+    /// This function returns a `RemotingError` if the underlying writer fails to send the data.
+    pub async fn send_bytes(&mut self, bytes: Bytes) -> Result<(), RemotingError> {
+        self.writer.send(bytes).await?;
+        Ok(())
+    }
+
+    /// Sends a static byte slice (`&'static [u8]`) over the connection.
+    ///
+    /// # Arguments
+    ///
+    /// * `slice` - A static byte slice to send.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` indicating success (`Ok(())`) or failure (`Err(RemotingError)`).
+    ///
+    /// # Errors
+    ///
+    /// This function returns a `RemotingError` if the underlying writer fails to send the data.
+    ///
+    /// # Notes
+    ///
+    /// The static lifetime of the slice ensures that the data is valid for the entire duration
+    /// of the program, making it suitable for scenarios where the data does not need to be
+    /// dynamically allocated or modified.
+    pub async fn send_slice(&mut self, slice: &'static [u8]) -> Result<(), RemotingError> {
+        let bytes = slice.into();
+        self.writer.send(bytes).await?;
+        Ok(())
+    }
 }
