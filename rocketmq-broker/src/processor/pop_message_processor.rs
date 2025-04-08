@@ -184,7 +184,7 @@ where
 {
     pub async fn _process_request(
         &mut self,
-        channel: Channel,
+        mut channel: Channel,
         ctx: ConnectionHandlerContext,
         request_code: RequestCode,
         mut request: RemotingCommand,
@@ -205,6 +205,7 @@ where
                 begin_time_mills.to_string(),
             );
         }
+        let opaque = request.opaque();
         let request_header = request
             .decode_command_custom_header::<PopMessageRequestHeader>()
             .map_err(BrokerError::BrokerRemotingError)?;
@@ -679,6 +680,7 @@ where
             };
         }
         let mut final_response = RemotingCommand::create_response_command();
+        final_response.set_opaque_mut(opaque);
         if !get_message_result.message_mapped_list().is_empty() {
             get_message_result.set_status(Some(GetMessageStatus::Found));
             if rest_num > 0 {
@@ -759,7 +761,15 @@ where
                     Ok(Some(final_response))
                 } else {
                     //zero copy is not implemented
-                    unimplemented!("transfer_msg_by_heap is false")
+                    if let Some(header_bytes) = final_response.encode_header() {
+                        channel.connection_mut().send_bytes(header_bytes).await?;
+                    }
+                    for select_result in get_message_result.message_mapped_list_mut() {
+                        if let Some(message) = select_result.bytes.take() {
+                            channel.connection_mut().send_bytes(message).await?;
+                        }
+                    }
+                    Ok(None)
                 }
             }
             _ => Ok(Some(final_response)),

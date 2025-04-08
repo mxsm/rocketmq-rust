@@ -236,6 +236,11 @@ impl GetMessageResult {
     }
 
     #[inline]
+    pub fn message_mapped_list_mut(&mut self) -> &mut [SelectMappedBufferResult] {
+        self.message_mapped_list.as_mut()
+    }
+
+    #[inline]
     pub fn message_mapped_vec(self) -> Vec<SelectMappedBufferResult> {
         self.message_mapped_list
     }
