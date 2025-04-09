@@ -760,8 +760,10 @@ where
                     final_response.set_command_custom_header_ref(response_header);
                     Ok(Some(final_response))
                 } else {
-                    //zero copy is not implemented
-                    if let Some(header_bytes) = final_response.encode_header() {
+                    //zero copy transfer
+                    if let Some(header_bytes) = final_response.encode_header_with_body_length(
+                        get_message_result.buffer_total_size() as usize,
+                    ) {
                         channel.connection_mut().send_bytes(header_bytes).await?;
                     }
                     for select_result in get_message_result.message_mapped_list_mut() {
