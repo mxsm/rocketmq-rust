@@ -106,7 +106,7 @@ impl RocketMQSerializable {
         buf.len() - begin_index
     }
 
-    fn rocket_mq_protocol_encode_bytes(cmd: &RemotingCommand) -> Bytes {
+    pub fn rocket_mq_protocol_encode_bytes(cmd: &RemotingCommand) -> Bytes {
         let remark_bytes = cmd.remark().map(|remark| remark.as_bytes().to_vec());
         let remark_len = remark_bytes.as_ref().map_or(0, |v| v.len());
 
