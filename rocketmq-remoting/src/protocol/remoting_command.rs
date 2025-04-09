@@ -38,6 +38,7 @@ use serde::Serialize;
 use tracing::error;
 
 use super::RemotingCommandType;
+use super::RemotingSerializable;
 use super::SerializeType;
 use crate::code::response_code::RemotingSysResponseCode;
 use crate::protocol::command_custom_header::CommandCustomHeader;
@@ -386,23 +387,30 @@ impl RemotingCommand {
         self.serialize_type
     }
 
-    pub fn header_encode(&self) -> Option<Bytes> {
-        self.command_custom_header.as_ref().and_then(|header| {
-            header
-                .to_map()
-                .as_ref()
-                .map(|val| Bytes::from(serde_json::to_vec(val).unwrap()))
-        })
+    pub fn header_encode(&mut self) -> Option<Bytes> {
+        self.make_custom_header_to_net();
+        if SerializeType::ROCKETMQ == self.serialize_type {
+            Some(RocketMQSerializable::rocket_mq_protocol_encode_bytes(self))
+        } else {
+            match self.encode() {
+                Ok(value) => Some(Bytes::from(value)),
+                Err(e) => {
+                    error!("Failed to encode generic: {}", e);
+                    None
+                }
+            }
+        }
     }
 
-    pub fn encode_header(&self) -> Option<Bytes> {
+    pub fn encode_header(&mut self) -> Option<Bytes> {
         if let Some(body) = &self.body {
-            self.encode_header_with_body_length(body.len())
+            let size = body.len();
+            self.encode_header_with_body_length(size)
         } else {
             self.encode_header_with_body_length(0)
         }
     }
-    pub fn encode_header_with_body_length(&self, body_length: usize) -> Option<Bytes> {
+    pub fn encode_header_with_body_length(&mut self, body_length: usize) -> Option<Bytes> {
         //for zero copy
         // 1> header length size
         let mut length = 4;
