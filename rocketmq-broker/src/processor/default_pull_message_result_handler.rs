@@ -192,8 +192,10 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
                     }
                     Some(response)
                 } else {
-                    //zero copy is not implemented
-                    if let Some(header_bytes) = response.encode_header() {
+                    //zero copy transfer
+                    if let Some(header_bytes) = response.encode_header_with_body_length(
+                        get_message_result.buffer_total_size() as usize,
+                    ) {
                         let _ = channel.connection_mut().send_bytes(header_bytes).await;
                     }
                     for select_result in get_message_result.message_mapped_list_mut() {
