@@ -860,9 +860,9 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
     fn iterate_from_with_count(
         &self,
         start_index: i64,
-        count: i32,
+        _count: i32,
     ) -> Option<Box<dyn ReferredIterator<CqUnit>>> {
-        todo!()
+        self.iterate_from(start_index)
     }
 
     fn get_offset_in_queue_by_time_with_boundary(
