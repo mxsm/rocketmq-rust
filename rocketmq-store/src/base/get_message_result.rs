@@ -20,7 +20,6 @@ use crate::base::message_status_enum::GetMessageStatus;
 use crate::base::select_result::SelectMappedBufferResult;
 
 /// Represents the result of getting a message.
-#[derive(Default)]
 pub struct GetMessageResult {
     /// The list of mapped buffer results.
     message_mapped_list: Vec<SelectMappedBufferResult>,
@@ -49,6 +48,25 @@ pub struct GetMessageResult {
     commercial_size_per_msg: i32,
     /// The sum of cold data.
     cold_data_sum: i64,
+}
+
+impl Default for GetMessageResult {
+    fn default() -> Self {
+        Self {
+            message_mapped_list: vec![],
+            message_queue_offset: vec![],
+            status: None,
+            next_begin_offset: 0,
+            min_offset: 0,
+            max_offset: 0,
+            buffer_total_size: 0,
+            message_count: 0,
+            suggest_pulling_from_slave: false,
+            msg_count4_commercial: 0,
+            commercial_size_per_msg: 4 * 1024,
+            cold_data_sum: 0,
+        }
+    }
 }
 
 impl fmt::Display for GetMessageResult {
@@ -86,6 +104,32 @@ impl GetMessageResult {
             //  message_buffer_list: Vec::with_capacity(result_size),
             message_queue_offset: Vec::with_capacity(result_size),
             ..Default::default()
+        }
+    }
+
+    fn new_with_params(
+        status: GetMessageStatus,
+        next_begin_offset: i64,
+        min_offset: i64,
+        max_offset: i64,
+        message_mapped_list: Vec<SelectMappedBufferResult>,
+        //message_buffer_list: Vec<ByteBuffer>,
+        message_queue_offset: Vec<u64>,
+    ) -> Self {
+        GetMessageResult {
+            status: Some(status),
+            next_begin_offset,
+            min_offset,
+            max_offset,
+            message_mapped_list,
+            message_queue_offset,
+            // Other fields would be initialized with default values
+            buffer_total_size: 0,
+            message_count: 0,
+            suggest_pulling_from_slave: false,
+            msg_count4_commercial: 0,
+            commercial_size_per_msg: 4 * 1024,
+            cold_data_sum: 0,
         }
     }
 }
