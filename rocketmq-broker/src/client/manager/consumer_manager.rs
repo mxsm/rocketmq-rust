@@ -24,6 +24,7 @@ use cheetah_string::CheetahString;
 use parking_lot::RwLock;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
+use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
@@ -85,7 +86,11 @@ impl ConsumerManager {
         self.broker_stats_manager = Some(broker_stats_manager);
     }
 
-    pub fn find_channel_by_client_id(&self, group: &str, client_id: &str) -> Option<ClientChannelInfo> {
+    pub fn find_channel_by_client_id(
+        &self,
+        group: &str,
+        client_id: &str,
+    ) -> Option<ClientChannelInfo> {
         let consumer_table = self.consumer_table.read();
         if let Some(consumer_group_info) = consumer_table.get(group) {
             return consumer_group_info.find_channel_by_client_id(client_id);
@@ -93,7 +98,11 @@ impl ConsumerManager {
         None
     }
 
-    pub fn find_channel_by_channel(&self, group: &str, channel: &Channel) -> Option<ClientChannelInfo> {
+    pub fn find_channel_by_channel(
+        &self,
+        group: &str,
+        channel: &Channel,
+    ) -> Option<ClientChannelInfo> {
         let consumer_table = self.consumer_table.read();
         if let Some(consumer_group_info) = consumer_table.get(group) {
             return consumer_group_info.find_channel_by_channel(channel);
