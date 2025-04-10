@@ -33,6 +33,7 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
+use crate::base::channel_event_listener::ChannelEventListener;
 use crate::base::response_future::ResponseFuture;
 use crate::code::response_code::ResponseCode;
 use crate::connection::Connection;
@@ -289,6 +290,8 @@ struct ConnectionListener<RP> {
     request_processor: RP,
 
     rpc_hooks: Arc<Vec<Box<dyn RPCHook>>>,
+
+    channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
 }
 
 impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
@@ -408,6 +411,34 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
             request_processor,
             Some(notify_conn_disconnect),
             vec![],
+            None,
+        )
+        .await;
+    }
+
+    pub async fn run_channel_event_listener(
+        &self,
+        request_processor: RP,
+        channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
+    ) {
+        let listener = TcpListener::bind(&format!(
+            "{}:{}",
+            self.config.bind_address, self.config.listen_port
+        ))
+        .await
+        .unwrap();
+        info!(
+            "Bind local address: {}",
+            format!("{}:{}", self.config.bind_address, self.config.listen_port)
+        );
+        let (notify_conn_disconnect, _) = broadcast::channel::<SocketAddr>(100);
+        run(
+            listener,
+            wait_for_signal(),
+            request_processor,
+            Some(notify_conn_disconnect),
+            vec![],
+            channel_event_listener,
         )
         .await;
     }
@@ -419,6 +450,7 @@ pub async fn run<RP: RequestProcessor + Sync + 'static + Clone>(
     request_processor: RP,
     conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
     rpc_hooks: Vec<Box<dyn RPCHook>>,
+    channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
 ) {
     let (notify_shutdown, _) = broadcast::channel(1);
     let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::channel(1);
@@ -431,6 +463,7 @@ pub async fn run<RP: RequestProcessor + Sync + 'static + Clone>(
         limit_connections: Arc::new(Semaphore::new(DEFAULT_MAX_CONNECTIONS)),
         request_processor,
         rpc_hooks: Arc::new(rpc_hooks),
+        channel_event_listener,
     };
 
     tokio::select! {

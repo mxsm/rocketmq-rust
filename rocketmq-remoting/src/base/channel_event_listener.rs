@@ -16,7 +16,7 @@
  */
 use crate::net::channel::Channel;
 
-pub trait ChannelEventListener {
+pub trait ChannelEventListener: Sync + Send {
     fn on_channel_connect(&self, remote_addr: &str, channel: &Channel);
 
     fn on_channel_close(&self, remote_addr: &str, channel: &Channel);
