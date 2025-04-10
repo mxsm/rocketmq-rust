@@ -39,7 +39,7 @@ pub struct ConsumerManager {
     consumer_compensation_table: Arc<RwLock<HashMap<CheetahString, ConsumerGroupInfo>>>,
     consumer_ids_change_listener_list:
         Vec<Arc<Box<dyn ConsumerIdsChangeListener + Send + Sync + 'static>>>,
-    broker_stats_manager: Arc<RwLock<Option<Weak<BrokerStatsManager>>>>,
+    broker_stats_manager: Option<Weak<BrokerStatsManager>>,
     channel_expired_timeout: u64,
     subscription_expired_timeout: u64,
 }
@@ -56,7 +56,7 @@ impl ConsumerManager {
             consumer_table: Arc::new(RwLock::new(HashMap::new())),
             consumer_compensation_table: Arc::new(RwLock::new(HashMap::new())),
             consumer_ids_change_listener_list,
-            broker_stats_manager: Arc::new(Default::default()),
+            broker_stats_manager: None,
             channel_expired_timeout: expired_timeout,
             subscription_expired_timeout: expired_timeout,
         }
@@ -73,7 +73,7 @@ impl ConsumerManager {
             consumer_table: Arc::new(RwLock::new(HashMap::new())),
             consumer_compensation_table: Arc::new(RwLock::new(HashMap::new())),
             consumer_ids_change_listener_list,
-            broker_stats_manager: Arc::new(Default::default()),
+            broker_stats_manager: None,
             channel_expired_timeout: broker_config.channel_expired_timeout,
             subscription_expired_timeout: broker_config.subscription_expired_timeout,
         }
@@ -81,12 +81,10 @@ impl ConsumerManager {
 }
 
 impl ConsumerManager {
-    pub fn set_broker_stats_manager(&self, broker_stats_manager: Option<Weak<BrokerStatsManager>>) {
-        *self.broker_stats_manager.write() = broker_stats_manager;
+    pub fn set_broker_stats_manager(&mut self, broker_stats_manager: Weak<BrokerStatsManager>) {
+        self.broker_stats_manager = Some(broker_stats_manager);
     }
-}
 
-impl ConsumerManager {
     pub fn find_subscription_data(
         &self,
         group: &CheetahString,
