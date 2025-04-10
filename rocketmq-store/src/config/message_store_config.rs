@@ -208,6 +208,7 @@ pub struct MessageStoreConfig {
     pub max_filter_message_size: i32,
     pub enable_dleger_commit_log: bool,
     pub rocksdb_cq_double_write_enable: bool,
+    pub read_uncommitted: bool,
 }
 
 impl Default for MessageStoreConfig {
@@ -397,6 +398,7 @@ impl Default for MessageStoreConfig {
             max_filter_message_size: 16000,
             enable_dleger_commit_log: false,
             rocksdb_cq_double_write_enable: false,
+            read_uncommitted: false,
         }
     }
 }

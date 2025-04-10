@@ -2125,7 +2125,7 @@ impl ReputMessageServiceInner {
     }
 
     pub async fn do_reput(&mut self) {
-        let reput_from_offset = self.reput_from_offset.load(Ordering::Acquire);
+        let reput_from_offset = self.reput_from_offset.load(Ordering::Relaxed);
         if reput_from_offset < self.commit_log.get_min_offset() {
             warn!(
                 "The reputFromOffset={} is smaller than minPyOffset={}, this usually indicate \
@@ -2144,29 +2144,16 @@ impl ReputMessageServiceInner {
             if result.is_none() {
                 break;
             }
-            let result = result.unwrap();
+            let mut result = result.unwrap();
             self.reput_from_offset
-                .store(result.start_offset as i64, Ordering::SeqCst);
+                .store(result.start_offset as i64, Ordering::Release);
             let mut read_size = 0i32;
-            let mapped_file = result.mapped_file.as_ref().unwrap();
-            let start_pos = (result.start_offset % mapped_file.get_file_size()) as i32;
-            loop {
-                let size = mapped_file.get_bytes((start_pos + read_size) as usize, 4);
-                if size.is_none() {
-                    do_next = false;
-                    break;
-                }
-                let mut bytes = mapped_file.get_data(
-                    (start_pos + read_size) as usize,
-                    size.unwrap().get_i32() as usize,
-                );
-                if bytes.is_none() {
-                    do_next = false;
-                    break;
-                }
-
+            while read_size < result.size
+                && self.reput_from_offset.load(Ordering::Acquire) < self.get_reput_end_offset()
+                && do_next
+            {
                 let mut dispatch_request = commit_log::check_message_and_return_size(
-                    bytes.as_mut().unwrap(),
+                    result.bytes.as_mut().unwrap(),
                     false,
                     false,
                     false,
@@ -2174,8 +2161,13 @@ impl ReputMessageServiceInner {
                     self.message_store.max_delay_level,
                     self.message_store.delay_level_table.as_ref(),
                 );
-                if self.reput_from_offset.load(Ordering::Acquire) + dispatch_request.msg_size as i64
-                    > self.commit_log.get_confirm_offset()
+                let size = if dispatch_request.buffer_size == -1 {
+                    dispatch_request.msg_size
+                } else {
+                    dispatch_request.buffer_size
+                };
+                if self.reput_from_offset.load(Ordering::Acquire) + size as i64
+                    > self.get_reput_end_offset()
                 {
                     do_next = false;
                     break;
@@ -2189,8 +2181,8 @@ impl ReputMessageServiceInner {
                                     .notify_message_arrive_if_necessary(&mut dispatch_request);
                             }
                             self.reput_from_offset
-                                .fetch_add(dispatch_request.msg_size as i64, Ordering::AcqRel);
-                            read_size += dispatch_request.msg_size;
+                                .fetch_add(size as i64, Ordering::AcqRel);
+                            read_size += size;
                             if !self.message_store_config.duplication_enable
                                 && self.message_store_config.broker_role == BrokerRole::Slave
                             {
@@ -2207,33 +2199,33 @@ impl ReputMessageServiceInner {
                         }
                         std::cmp::Ordering::Less => {}
                     }
-                } else if dispatch_request.msg_size > 0 {
+                } else if size > 0 {
                     error!(
                         "[BUG]read total count not equals msg total size. reputFromOffset={}",
                         self.reput_from_offset.load(Ordering::Relaxed)
                     );
                     self.reput_from_offset
-                        .fetch_add(dispatch_request.msg_size as i64, Ordering::SeqCst);
+                        .fetch_add(size as i64, Ordering::SeqCst);
                 } else {
                     do_next = false;
                     if self.message_store_config.enable_dledger_commit_log {
                         unimplemented!()
                     }
                 }
-
-                if !(read_size < result.size
-                    && self.reput_from_offset.load(Ordering::Acquire)
-                        < self.commit_log.get_confirm_offset()
-                    && do_next)
-                {
-                    break;
-                }
             }
+            result.release();
         }
     }
 
     fn is_commit_log_available(&self) -> bool {
-        self.reput_from_offset.load(Ordering::Relaxed) < self.commit_log.get_confirm_offset()
+        self.reput_from_offset.load(Ordering::Relaxed) < self.get_reput_end_offset()
+    }
+
+    fn get_reput_end_offset(&self) -> i64 {
+        match self.message_store_config.read_uncommitted {
+            true => self.commit_log.get_max_offset(),
+            false => self.commit_log.get_confirm_offset(),
+        }
     }
 
     pub fn reput_from_offset(&self) -> i64 {
