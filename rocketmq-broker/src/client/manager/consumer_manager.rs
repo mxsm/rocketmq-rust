@@ -85,6 +85,22 @@ impl ConsumerManager {
         self.broker_stats_manager = Some(broker_stats_manager);
     }
 
+    pub fn find_channel_by_client_id(&self, group: &str, client_id: &str) -> Option<ClientChannelInfo> {
+        let consumer_table = self.consumer_table.read();
+        if let Some(consumer_group_info) = consumer_table.get(group) {
+            return consumer_group_info.find_channel_by_client_id(client_id);
+        }
+        None
+    }
+
+    pub fn find_channel_by_channel(&self, group: &str, channel: &Channel) -> Option<ClientChannelInfo> {
+        let consumer_table = self.consumer_table.read();
+        if let Some(consumer_group_info) = consumer_table.get(group) {
+            return consumer_group_info.find_channel_by_channel(channel);
+        }
+        None
+    }
+
     pub fn find_subscription_data(
         &self,
         group: &CheetahString,
