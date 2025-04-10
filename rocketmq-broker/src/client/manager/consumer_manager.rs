@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Weak;
+use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use parking_lot::RwLock;
@@ -216,7 +217,7 @@ impl ConsumerManager {
         )
     }
 
-    fn register_consumer_ext(
+    pub fn register_consumer_ext(
         &self,
         group: &CheetahString,
         client_channel_info: ClientChannelInfo,
@@ -227,6 +228,7 @@ impl ConsumerManager {
         is_notify_consumer_ids_changed_enable: bool,
         update_subscription: bool,
     ) -> bool {
+        let start = Instant::now();
         let mut write_guard = self.consumer_table.write();
         let consumer_group_info = write_guard.entry(group.clone()).or_insert_with(|| {
             ConsumerGroupInfo::new(
@@ -242,13 +244,27 @@ impl ConsumerManager {
             message_model,
             consume_from_where,
         );
+
+        if r1 {
+            let topics: HashSet<CheetahString> =
+                sub_list.iter().map(|item| item.topic.clone()).collect();
+            self.call_consumer_ids_change_listener(
+                ConsumerGroupEvent::ClientRegister,
+                group,
+                &[&client_channel_info as &dyn Any, &topics as &dyn Any],
+            );
+        }
+
         let r2 = if update_subscription {
             consumer_group_info.update_subscription(&sub_list)
         } else {
             false
         };
 
-        if (r1 || r2) && is_notify_consumer_ids_changed_enable {
+        if (r1 || r2)
+            && is_notify_consumer_ids_changed_enable
+            && consumer_group_info.get_message_model() != MessageModel::Broadcasting
+        {
             let all_channel = consumer_group_info.get_all_channels();
             self.call_consumer_ids_change_listener(
                 ConsumerGroupEvent::Change,
@@ -257,10 +273,11 @@ impl ConsumerManager {
             );
         }
 
-        /*if (null != this.brokerStatsManager) {
-            this.brokerStatsManager.incConsumerRegisterTime((int) (System.currentTimeMillis() - start));
-        }*/
-
+        if let Some(broker_stats_manager) = self.broker_stats_manager.as_ref() {
+            if let Some(broker_stats_manager) = broker_stats_manager.upgrade() {
+                broker_stats_manager.inc_consumer_register_time(start.elapsed().as_millis() as i32);
+            }
+        }
         self.call_consumer_ids_change_listener(
             ConsumerGroupEvent::Register,
             group,

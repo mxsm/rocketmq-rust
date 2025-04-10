@@ -543,6 +543,8 @@ impl BrokerStatsManager {
     pub fn shutdown(&self) {
         warn!("BrokerStatsManager shutdown unimplemented");
     }
+
+    pub fn inc_consumer_register_time(&self, inc_value: i32) {}
 }
 
 #[inline]
