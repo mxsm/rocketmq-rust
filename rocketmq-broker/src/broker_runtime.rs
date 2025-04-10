@@ -214,6 +214,9 @@ impl BrokerRuntime {
         inner.escape_bridge = Some(EscapeBridge::new(inner.clone()));
         inner.subscription_group_manager = Some(SubscriptionGroupManager::new(inner.clone()));
         inner.consumer_order_info_manager = Some(ConsumerOrderInfoManager::new(inner.clone()));
+        inner
+            .consumer_manager
+            .set_broker_stats_manager(Arc::downgrade(&stats_manager));
         inner.broker_stats_manager = Some(stats_manager);
         inner.schedule_message_service =
             Some(ArcMut::new(ScheduleMessageService::new(inner.clone())));
