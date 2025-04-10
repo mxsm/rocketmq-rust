@@ -14,8 +14,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod channel_event_listener;
-pub mod connection_net_event;
-pub mod remoting_fn;
-pub mod request_task;
-pub mod response_future;
+use crate::net::channel::Channel;
+
+pub trait ChannelEventListener {
+    fn on_channel_connect(&self, remote_addr: &str, channel: &Channel);
+
+    fn on_channel_close(&self, remote_addr: &str, channel: &Channel);
+
+    fn on_channel_exception(&self, remote_addr: &str, channel: &Channel);
+
+    fn on_channel_idle(&self, remote_addr: &str, channel: &Channel);
+
+    fn on_channel_active(&self, remote_addr: &str, channel: &Channel);
+}
