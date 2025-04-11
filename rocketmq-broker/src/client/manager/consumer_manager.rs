@@ -30,6 +30,7 @@ use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
+use tracing::info;
 
 use crate::client::client_channel_info::ClientChannelInfo;
 use crate::client::consumer_group_event::ConsumerGroupEvent;
@@ -307,4 +308,53 @@ impl ConsumerManager {
         }
         groups
     }
+
+    pub fn unregister_consumer(
+        &self,
+        group: &str,
+        client_channel_info: &ClientChannelInfo,
+        is_notify_consumer_ids_changed_enable: bool,
+    ) {
+        let mut consumer_table = self.consumer_table.write();
+        let consumer_group_info = consumer_table.get_mut(group);
+        if consumer_group_info.is_none() {
+            return;
+        }
+        let consumer_group_info = consumer_group_info.unwrap();
+        let removed = consumer_group_info.unregister_channel(client_channel_info);
+        if removed {
+            self.call_consumer_ids_change_listener(
+                ConsumerGroupEvent::ClientUnregister,
+                group,
+                &[
+                    client_channel_info as &dyn Any,
+                    &consumer_group_info.get_subscribe_topics() as &dyn Any,
+                ],
+            );
+        }
+        let message_model = consumer_group_info.get_message_model();
+        let channels = consumer_group_info.get_all_channels();
+        if consumer_group_info.get_channel_info_table().is_empty()
+            && consumer_table.remove(group).is_some()
+        {
+            info!(
+                "unregister consumer ok, no any connection, and remove consumer group, {}",
+                group
+            );
+
+            self.call_consumer_ids_change_listener(ConsumerGroupEvent::Unregister, group, &[]);
+        }
+
+        if is_notify_consumer_ids_changed_enable && !is_broadcast_mode(message_model) {
+            self.call_consumer_ids_change_listener(
+                ConsumerGroupEvent::Change,
+                group,
+                &[&channels as &dyn Any],
+            );
+        }
+    }
+}
+
+fn is_broadcast_mode(message_model: MessageModel) -> bool {
+    message_model == MessageModel::Broadcasting
 }
