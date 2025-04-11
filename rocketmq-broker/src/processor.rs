@@ -134,9 +134,11 @@ where
             RequestCode::HeartBeat
             | RequestCode::UnregisterClient
             | RequestCode::CheckClientConfig => {
-                self.client_manage_processor
+                return self
+                    .client_manage_processor
                     .process_request(channel, ctx, request_code, request)
                     .await
+                    .map_err(Into::into);
             }
             RequestCode::PullMessage | RequestCode::LitePullMessage => {
                 self.pull_message_processor
