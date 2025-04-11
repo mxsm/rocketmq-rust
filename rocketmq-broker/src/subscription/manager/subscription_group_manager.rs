@@ -171,7 +171,7 @@ where
         subscription_group_config
     }
 
-    pub fn find_subscription_group_config_inner(
+    fn find_subscription_group_config_inner(
         &self,
         group: &CheetahString,
     ) -> Option<SubscriptionGroupConfig> {
