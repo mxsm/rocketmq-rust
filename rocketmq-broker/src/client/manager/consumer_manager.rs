@@ -25,12 +25,14 @@ use cheetah_string::CheetahString;
 use parking_lot::RwLock;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
+use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use tracing::info;
+use tracing::warn;
 
 use crate::client::client_channel_info::ClientChannelInfo;
 use crate::client::consumer_group_event::ConsumerGroupEvent;
@@ -398,6 +400,98 @@ impl ConsumerManager {
                 &[&channels as &dyn Any],
             );
         }
+    }
+
+    pub fn remove_expire_consumer_group_info(&self) {
+        let mut remove_list = Vec::new();
+
+        // Using entries() to get mutable access to the map values
+        let mut consumer_compensation_table = self.consumer_compensation_table.write();
+        for (group, consumer_group_info) in &mut consumer_compensation_table.iter_mut() {
+            let mut remove_topic_list = Vec::new();
+            let subscription_table = consumer_group_info.get_subscription_table();
+
+            // First collect topics that need to be removed
+            for subscription_data in subscription_table.iter() {
+                let diff = get_current_millis() as i64 - subscription_data.sub_version;
+
+                if diff > self.subscription_expired_timeout as i64 {
+                    remove_topic_list.push(subscription_data.key().clone());
+                }
+            }
+
+            // Then remove topics and check if the group should be removed
+            for topic in remove_topic_list {
+                subscription_table.remove(&topic);
+                if subscription_table.is_empty() {
+                    remove_list.push(group.clone());
+                }
+            }
+        }
+
+        // Finally remove groups
+        for group in remove_list {
+            consumer_compensation_table.remove(&group);
+        }
+    }
+
+    pub fn scan_not_active_channel(&mut self) {
+        // Use drain_filter pattern for outer map
+        let mut groups_to_remove = Vec::new();
+
+        let mut consumer_table = self.consumer_table.write();
+        for (group, consumer_group_info) in consumer_table.iter_mut() {
+            let channel_info_table = consumer_group_info.get_channel_info_table();
+
+            // Use drain_filter pattern for inner map
+            let mut channels_to_remove = Vec::new();
+            for client_channel_info in channel_info_table.iter() {
+                let diff = get_current_millis() as i64
+                    - client_channel_info.last_update_timestamp() as i64;
+
+                if diff > self.channel_expired_timeout as i64 {
+                    warn!(
+                        "SCAN: remove expired channel from ConsumerManager consumerTable. \
+                         channel={}, consumerGroup={}",
+                        client_channel_info.key().channel_id(),
+                        group
+                    );
+
+                    self.call_consumer_ids_change_listener(
+                        ConsumerGroupEvent::ClientUnregister,
+                        group,
+                        &[
+                            client_channel_info.key() as &dyn Any,
+                            &consumer_group_info.get_subscribe_topics() as &dyn Any,
+                        ],
+                    );
+                    // Remove the channel from the consumer group info
+                    channels_to_remove.push(client_channel_info.key().clone());
+                }
+            }
+
+            // Remove expired channels
+            for channel in channels_to_remove {
+                channel_info_table.remove(&channel);
+            }
+
+            // If group has no channels, mark for removal
+            if channel_info_table.is_empty() {
+                warn!(
+                    "SCAN: remove expired channel from ConsumerManager consumerTable, all clear, \
+                     consumerGroup={}",
+                    group
+                );
+                groups_to_remove.push(group.clone());
+            }
+        }
+
+        // Remove empty groups
+        for group in groups_to_remove {
+            consumer_table.remove(&group);
+        }
+
+        self.remove_expire_consumer_group_info();
     }
 }
 
