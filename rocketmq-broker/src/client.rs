@@ -23,5 +23,6 @@ pub(crate) mod consumer_ids_change_listener;
 pub(crate) mod default_consumer_ids_change_listener;
 pub(crate) mod manager;
 pub(crate) mod net;
+pub(crate) mod producer_change_listener;
 pub(crate) mod producer_group_event;
 pub(crate) mod rebalance;
