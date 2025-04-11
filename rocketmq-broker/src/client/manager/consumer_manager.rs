@@ -494,7 +494,52 @@ impl ConsumerManager {
         self.remove_expire_consumer_group_info();
     }
 
-    pub fn do_channel_close_event(&self, _remote_addr: &str, _channel: &Channel) {}
+    pub fn do_channel_close_event(&self, _remote_addr: &str, channel: &Channel) -> bool {
+        let mut removed = false;
+        let mut consumer_table = self.consumer_table.write();
+        let mut remove_list = Vec::new();
+        for (group, info) in consumer_table.iter_mut() {
+            if let Some(client_channel_info) = info.handle_channel_close_event(channel) {
+                self.call_consumer_ids_change_listener(
+                    ConsumerGroupEvent::ClientUnregister,
+                    group,
+                    &[
+                        &client_channel_info as &dyn Any,
+                        &info.get_subscribe_topics() as &dyn Any,
+                    ],
+                );
+
+                if info.get_channel_info_table().is_empty() {
+                    remove_list.push(group.clone());
+                }
+
+                if !is_broadcast_mode(info.get_message_model()) {
+                    self.call_consumer_ids_change_listener(
+                        ConsumerGroupEvent::Change,
+                        group,
+                        &[&info.get_all_channels() as &dyn Any],
+                    );
+                }
+
+                removed = true;
+            }
+        }
+        for group in remove_list {
+            if consumer_table.remove(&group).is_some() {
+                info!(
+                    "unregister consumer ok, no any connection, and remove consumer group, {}",
+                    group
+                );
+                self.call_consumer_ids_change_listener(
+                    ConsumerGroupEvent::Unregister,
+                    group.as_str(),
+                    &[],
+                );
+            }
+        }
+
+        removed
+    }
 }
 
 fn is_broadcast_mode(message_model: MessageModel) -> bool {
