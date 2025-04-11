@@ -215,6 +215,9 @@ impl BrokerRuntime {
         inner.subscription_group_manager = Some(SubscriptionGroupManager::new(inner.clone()));
         inner.consumer_order_info_manager = Some(ConsumerOrderInfoManager::new(inner.clone()));
         inner
+            .producer_manager
+            .set_broker_stats_manager(stats_manager.clone());
+        inner
             .consumer_manager
             .set_broker_stats_manager(Arc::downgrade(&stats_manager));
         inner.broker_stats_manager = Some(stats_manager);

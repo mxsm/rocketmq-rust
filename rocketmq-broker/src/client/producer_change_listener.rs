@@ -17,6 +17,8 @@
 use crate::client::client_channel_info::ClientChannelInfo;
 use crate::client::producer_group_event::ProducerGroupEvent;
 
+pub type ArcProducerChangeListener = std::sync::Arc<dyn ProducerChangeListener>;
+
 /// A trait for handling producer group change events.
 ///
 /// This trait is implemented by types that need to respond to changes
