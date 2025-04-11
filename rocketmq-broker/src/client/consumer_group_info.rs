@@ -32,7 +32,7 @@ use tracing::warn;
 
 use crate::client::client_channel_info::ClientChannelInfo;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ConsumerGroupInfo {
     group_name: CheetahString,
     subscription_table: Arc<DashMap<CheetahString, SubscriptionData>>,
@@ -130,9 +130,9 @@ impl ConsumerGroupInfo {
     pub fn handle_channel_close_event(&self, channel: &Channel) -> Option<ClientChannelInfo> {
         if let Some((_, info)) = self.channel_info_table.remove(channel) {
             warn!(
-                "NETTY EVENT: remove not active channel [{:?}] from ConsumerGroupInfo \
+                "NETTY EVENT: remove not active channel [{}] from ConsumerGroupInfo \
                  groupChannelTable, consumer group: {}",
-                info.channel(),
+                info.channel().remote_address(),
                 self.group_name
             );
             Some(info)
@@ -172,9 +172,9 @@ impl ConsumerGroupInfo {
             self.channel_info_table
                 .insert(info_new.channel().clone(), info_new.clone());
             info!(
-                "New consumer connected, group: {} channel: {:?}",
+                "New consumer connected, group: {} channel: {}",
                 self.group_name,
-                info_new.channel()
+                info_new.channel().remote_address()
             );
             updated = true;
         }

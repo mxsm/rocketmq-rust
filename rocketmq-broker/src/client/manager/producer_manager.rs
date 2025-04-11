@@ -77,7 +77,7 @@ impl ProducerManager {
     pub fn unregister_producer(
         &self,
         group: &str,
-        client_channel_info: &ClientChannelInfo,
+        _client_channel_info: &ClientChannelInfo,
         ctx: &ConnectionHandlerContext,
     ) {
         let mut mutex_guard = self.group_channel_table.lock();
@@ -87,10 +87,11 @@ impl ProducerManager {
                 let old = ct.remove(ctx.channel());
                 //let old = ct.remove(client_channel_info.channel());
                 if old.is_some() {
-                    info!(
+                    /*info!(
                         "unregister a producer[{}] from groupChannelTable {:?}",
                         group, client_channel_info
-                    );
+                    );*/
+                    info!("unregister a producer[{}] from groupChannelTable", group);
                 }
             }
             if ct.is_empty() {

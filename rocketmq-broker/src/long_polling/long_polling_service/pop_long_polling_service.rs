@@ -480,10 +480,11 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
                     match response {
                         Ok(result) => {
                             if let Some(response) = result {
-                                let _ = pop_request
-                                    .get_channel()
-                                    .send_one_way(response.set_opaque(opaque), 1000)
-                                    .await;
+                                if let Some(channel) = pop_request.get_channel().upgrade() {
+                                    let _ = channel
+                                        .send_one_way(response.set_opaque(opaque), 1000)
+                                        .await;
+                                }
                             }
                         }
                         Err(e) => {
@@ -519,7 +520,14 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
             }
 
             self.total_polling_num.fetch_sub(1, Ordering::AcqRel);
-            if pop_request.is_some() && !pop_request.as_ref().unwrap().get_channel().is_ok() {
+            if pop_request.is_some()
+                && !pop_request
+                    .as_ref()
+                    .unwrap()
+                    .get_channel()
+                    .upgrade()
+                    .is_some_and(|item| item.is_ok())
+            {
                 continue;
             } else {
                 break;

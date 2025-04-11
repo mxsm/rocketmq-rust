@@ -39,15 +39,24 @@ impl ConnectionHandlerContextWrapper {
         }
     }
 
-    pub fn connection(&self) -> &Connection {
-        self.channel.connection_ref()
+    pub fn connection(&self) -> Option<&Connection> {
+        /*match self.channel.upgrade() {
+            None => None,
+            Some(channel) => Some(channel.connection_ref()),
+        }*/
+        unimplemented!("connection() is not implemented");
     }
 
     pub async fn write(&mut self, cmd: RemotingCommand) {
-        match self.channel.connection_mut().send_command(cmd).await {
-            Ok(_) => {}
-            Err(error) => {
-                error!("send response failed: {}", error);
+        match self.channel.upgrade() {
+            Some(mut channel) => match channel.connection_mut().send_command(cmd).await {
+                Ok(_) => {}
+                Err(error) => {
+                    error!("send response failed: {}", error);
+                }
+            },
+            None => {
+                error!("channel is closed");
             }
         }
     }
