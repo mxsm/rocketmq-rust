@@ -23,18 +23,21 @@ use cheetah_string::CheetahString;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use tracing::error;
 use tracing::info;
 
 use crate::client::client_channel_info::ClientChannelInfo;
+use crate::client::producer_change_listener::ArcProducerChangeListener;
 
-#[derive(Default)]
 pub struct ProducerManager {
     group_channel_table: parking_lot::Mutex<
         HashMap<CheetahString /* group name */, HashMap<Channel, ClientChannelInfo>>,
     >,
     client_channel_table: parking_lot::Mutex<HashMap<CheetahString, Channel /* client ip:port */>>,
     positive_atomic_counter: Arc<AtomicI32>,
+    producer_change_listener_vec: Vec<ArcProducerChangeListener>,
+    broker_stats_manager: Option<Arc<BrokerStatsManager>>,
 }
 
 impl ProducerManager {
@@ -43,7 +46,21 @@ impl ProducerManager {
             group_channel_table: parking_lot::Mutex::new(HashMap::new()),
             client_channel_table: parking_lot::Mutex::new(HashMap::new()),
             positive_atomic_counter: Arc::new(Default::default()),
+            producer_change_listener_vec: vec![],
+            broker_stats_manager: None,
         }
+    }
+
+    pub fn set_broker_stats_manager(&mut self, broker_stats_manager: Arc<BrokerStatsManager>) {
+        self.broker_stats_manager = Some(broker_stats_manager);
+    }
+
+    pub fn append_producer_change_listener_vec(
+        &mut self,
+        producer_change_listener: ArcProducerChangeListener,
+    ) {
+        self.producer_change_listener_vec
+            .push(producer_change_listener);
     }
 }
 
