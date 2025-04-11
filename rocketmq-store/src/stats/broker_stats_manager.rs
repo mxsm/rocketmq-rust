@@ -545,6 +545,14 @@ impl BrokerStatsManager {
     }
 
     pub fn inc_consumer_register_time(&self, inc_value: i32) {}
+
+    pub fn inc_channel_idle_num(&self) {}
+
+    pub fn inc_channel_exception_num(&self) {}
+
+    pub fn inc_channel_close_num(&self) {}
+
+    pub fn inc_channel_connect_num(&self) {}
 }
 
 #[inline]
