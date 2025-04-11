@@ -435,7 +435,7 @@ impl ConsumerManager {
         }
     }
 
-    pub fn scan_not_active_channel(&mut self) {
+    pub fn scan_not_active_channel(&self) {
         // Use drain_filter pattern for outer map
         let mut groups_to_remove = Vec::new();
 
@@ -493,6 +493,8 @@ impl ConsumerManager {
 
         self.remove_expire_consumer_group_info();
     }
+
+    pub fn do_channel_close_event(&self, _remote_addr: &str, _channel: &Channel) {}
 }
 
 fn is_broadcast_mode(message_model: MessageModel) -> bool {

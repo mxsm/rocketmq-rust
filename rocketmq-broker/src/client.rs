@@ -16,6 +16,7 @@
  */
 
 pub(crate) mod client_channel_info;
+pub(crate) mod client_housekeeping_service;
 pub(crate) mod consumer_group_event;
 pub(crate) mod consumer_group_info;
 pub(crate) mod consumer_ids_change_listener;

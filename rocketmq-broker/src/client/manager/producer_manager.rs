@@ -23,6 +23,7 @@ use cheetah_string::CheetahString;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use tracing::error;
 use tracing::info;
 
 use crate::client::client_channel_info::ClientChannelInfo;
@@ -137,4 +138,10 @@ impl ProducerManager {
         }
         None
     }
+
+    pub fn scan_not_active_channel(&self) {
+        error!("scan_not_active_channel not implemented");
+    }
+
+    pub fn do_channel_close_event(&self, _remote_addr: &str, _channel: &Channel) {}
 }
