@@ -25,12 +25,14 @@ use cheetah_string::CheetahString;
 use parking_lot::RwLock;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
+use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use tracing::info;
+use tracing::warn;
 
 use crate::client::client_channel_info::ClientChannelInfo;
 use crate::client::consumer_group_event::ConsumerGroupEvent;
