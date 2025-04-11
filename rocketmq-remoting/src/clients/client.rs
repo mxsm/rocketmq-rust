@@ -26,6 +26,7 @@ use crate::base::response_future::ResponseFuture;
 use crate::code::response_code::ResponseCode;
 use crate::connection::Connection;
 use crate::net::channel::Channel;
+use crate::net::channel::ChannelInner;
 use crate::protocol::remoting_command::RemotingCommand;
 use crate::protocol::RemotingCommandType;
 use crate::remoting_error::RemotingError::ConnectionInvalid;
@@ -52,7 +53,7 @@ pub struct Client {
 
 struct ClientInner {
     response_table: ArcMut<HashMap<i32, ResponseFuture>>,
-    channel: Channel,
+    channel: (ArcMut<ChannelInner>, Channel),
     ctx: ConnectionHandlerContext,
     tx: tokio::sync::mpsc::Sender<SendMessage>,
 }
@@ -70,14 +71,14 @@ async fn run_send(mut client: ArcMut<ClientInner>, mut rx: Receiver<SendMessage>
 }
 
 async fn run_recv<PR: RequestProcessor>(mut client: ArcMut<ClientInner>, mut processor: PR) {
-    while let Some(response) = client.ctx.channel.connection.receive_command().await {
+    while let Some(response) = client.channel.0.connection.receive_command().await {
         match response {
             Ok(msg) => match msg.get_type() {
                 // handle request
                 RemotingCommandType::REQUEST => {
                     let opaque = msg.opaque();
                     let process_result = processor
-                        .process_request(client.channel.clone(), client.ctx.clone(), msg)
+                        .process_request(client.channel.1.clone(), client.ctx.clone(), msg)
                         .await;
                     match process_result {
                         Ok(response) => {
@@ -107,14 +108,14 @@ async fn run_recv<PR: RequestProcessor>(mut client: ArcMut<ClientInner>, mut pro
                         warn!(
                             "receive response, cmd={}, but not matched any request, address={}",
                             msg,
-                            client.channel.remote_address()
+                            client.channel.0.remote_address()
                         )
                     }
                 }
             },
             Err(error) => match error {
                 Io(value) => {
-                    client.ctx.channel.connection.ok = false;
+                    client.channel.0.connection.ok = false;
                     error!("error: {:?}", value);
                     return;
                 }
@@ -145,13 +146,19 @@ impl ClientInner {
         let remote_address = stream.peer_addr()?;
         let connection = Connection::new(stream);
         let response_table = ArcMut::new(HashMap::with_capacity(128));
-        let channel = Channel::new(
+        let channel_inner = ArcMut::new(ChannelInner::new(
             local_addr,
             remote_address,
             connection,
             response_table.clone(),
+        ));
+        let weak_channel = ArcMut::downgrade(&channel_inner);
+        let channel = Channel::new(
+            weak_channel,
+            local_addr,
+            remote_address,
+            channel_inner.channel_id().into(),
         );
-
         let (tx_, rx) = tokio::sync::mpsc::channel(1024);
         let client = ClientInner {
             ctx: ArcMut::new(ConnectionHandlerContextWrapper::new(
@@ -159,7 +166,7 @@ impl ClientInner {
                 channel.clone(),
             )),
             response_table,
-            channel,
+            channel: (channel_inner, channel),
             tx: tx_.clone(),
         };
         let client = ArcMut::new(client);
@@ -168,7 +175,7 @@ impl ClientInner {
         tokio::spawn(run_send(client.clone(), rx));
         if let Some(tx) = tx {
             let _ = tx.send(ConnectionNetEvent::CONNECTED(
-                client.channel.remote_address(),
+                client.channel.0.remote_address(),
                 //client.channel.clone(),
             ));
         }
@@ -188,12 +195,12 @@ impl ClientInner {
                 ResponseFuture::new(opaque, timeout_millis.unwrap_or(0), true, tx),
             );
         }
-        match self.ctx.channel.connection.send_command(request).await {
+        match self.channel.0.connection.send_command(request).await {
             Ok(_) => Ok(()),
             Err(error) => match error {
                 Io(value) => {
                     self.response_table.remove(&opaque);
-                    self.ctx.channel.connection.ok = false;
+                    self.channel.0.connection.ok = false;
                     Err(ConnectionInvalid(value.to_string()))
                 }
                 _ => {
@@ -224,13 +231,6 @@ impl Client {
         T: tokio::net::ToSocketAddrs,
         PR: RequestProcessor + 'static,
     {
-        /*let tcp_stream = tokio::net::TcpStream::connect(addr).await;
-        if tcp_stream.is_err() {
-            return Err(Io(tcp_stream.err().unwrap()));
-        }
-        Ok(Client {
-            connection: Connection::new(tcp_stream?),
-        })*/
         let (tx, inner) = ClientInner::connect(addr, processor, tx).await?;
         Ok(Client {
             //connection: inner.connection.clone(),
@@ -321,16 +321,16 @@ impl Client {
     /// The `RemotingCommand` representing the response, wrapped in a `Result`. Returns an error if
     /// reading the response fails.
     async fn read(&mut self) -> Result<RemotingCommand> {
-        match self.inner.ctx.channel.connection.receive_command().await {
+        match self.inner.channel.0.connection.receive_command().await {
             None => {
-                self.inner.ctx.channel.connection.ok = false;
+                self.inner.channel.0.connection.ok = false;
                 Err(ConnectionInvalid("connection disconnection".to_string()))
             }
             Some(result) => match result {
                 Ok(response) => Ok(response),
                 Err(error) => match error {
                     Io(value) => {
-                        self.inner.ctx.channel.connection.ok = false;
+                        self.inner.channel.0.connection.ok = false;
                         Err(ConnectionInvalid(value.to_string()))
                     }
                     _ => Err(error),
@@ -340,10 +340,10 @@ impl Client {
     }
 
     pub fn connection(&self) -> &Connection {
-        self.inner.ctx.channel.connection_ref()
+        self.inner.channel.0.connection_ref()
     }
 
     pub fn connection_mut(&mut self) -> &mut Connection {
-        self.inner.ctx.channel.connection_mut()
+        self.inner.channel.0.connection_mut()
     }
 }

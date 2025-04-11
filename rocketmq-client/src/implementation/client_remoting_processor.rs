@@ -204,6 +204,7 @@ impl ClientRemotingProcessor {
         let request_header = request
             .decode_command_custom_header::<NotifyConsumerIdsChangedRequestHeader>()
             .unwrap();
+
         info!(
             "receive broker's notification[{}], the consumer group: {} changed, rebalance \
              immediately",

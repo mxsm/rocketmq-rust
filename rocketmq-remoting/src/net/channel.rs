@@ -23,7 +23,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use cheetah_string::CheetahString;
 use rocketmq_rust::ArcMut;
+use rocketmq_rust::WeakArcMut;
 use tokio::sync::mpsc::Receiver;
 use tokio::time::timeout;
 use tracing::error;
@@ -37,11 +39,50 @@ use crate::remoting_error::RemotingError::ChannelSendRequestFailed;
 use crate::remoting_error::RemotingError::Io;
 use crate::Result;
 
-#[derive(Clone)]
+#[derive(Clone, Eq, PartialEq, Hash)]
 pub struct Channel {
+    inner: WeakArcMut<ChannelInner>,
     local_address: SocketAddr,
     remote_address: SocketAddr,
-    channel_id: String,
+    channel_id: CheetahString,
+}
+
+impl Channel {
+    pub fn new(
+        inner: WeakArcMut<ChannelInner>,
+        local_address: SocketAddr,
+        remote_address: SocketAddr,
+        channel_id: CheetahString,
+    ) -> Self {
+        Self {
+            inner,
+            local_address,
+            remote_address,
+            channel_id,
+        }
+    }
+
+    pub fn local_address(&self) -> SocketAddr {
+        self.local_address
+    }
+
+    pub fn remote_address(&self) -> SocketAddr {
+        self.remote_address
+    }
+
+    pub fn upgrade(&self) -> Option<ArcMut<ChannelInner>> {
+        self.inner.upgrade()
+    }
+
+    pub fn channel_id(&self) -> &CheetahString {
+        &self.channel_id
+    }
+}
+
+pub struct ChannelInner {
+    local_address: SocketAddr,
+    remote_address: SocketAddr,
+    channel_id: CheetahString,
     tx: tokio::sync::mpsc::Sender<ChannelMessage>,
     pub(crate) connection: ArcMut<Connection>,
     pub(crate) response_table: ArcMut<HashMap<i32, ResponseFuture>>,
@@ -83,7 +124,7 @@ pub(crate) async fn run_send(
     }
 }
 
-impl PartialEq for Channel {
+impl PartialEq for ChannelInner {
     fn eq(&self, other: &Self) -> bool {
         self.local_address == other.local_address
             && self.remote_address == other.remote_address
@@ -96,9 +137,9 @@ impl PartialEq for Channel {
     }
 }
 
-impl Eq for Channel {}
+impl Eq for ChannelInner {}
 
-impl Hash for Channel {
+impl Hash for ChannelInner {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.local_address.hash(state);
         self.remote_address.hash(state);
@@ -108,7 +149,7 @@ impl Hash for Channel {
     }
 }
 
-impl Debug for Channel {
+impl Debug for ChannelInner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -118,7 +159,7 @@ impl Debug for Channel {
     }
 }
 
-impl Display for Channel {
+impl Display for ChannelInner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -128,14 +169,14 @@ impl Display for Channel {
     }
 }
 
-impl Channel {
+impl ChannelInner {
     pub fn new(
         local_address: SocketAddr,
         remote_address: SocketAddr,
         connection: Connection,
         response_table: ArcMut<HashMap<i32, ResponseFuture>>,
     ) -> Self {
-        let channel_id = Uuid::new_v4().to_string();
+        let channel_id = Uuid::new_v4().to_string().into();
         let (tx, rx) = tokio::sync::mpsc::channel(1024);
         //let response_table = ArcMut::new(HashMap::with_capacity(32));
         let connection = ArcMut::new(connection);
@@ -151,7 +192,7 @@ impl Channel {
     }
 }
 
-impl Channel {
+impl ChannelInner {
     #[inline]
     pub fn set_local_address(&mut self, local_address: SocketAddr) {
         self.local_address = local_address;
@@ -163,8 +204,8 @@ impl Channel {
     }
 
     #[inline]
-    pub fn set_channel_id(&mut self, channel_id: String) {
-        self.channel_id = channel_id;
+    pub fn set_channel_id(&mut self, channel_id: impl Into<CheetahString>) {
+        self.channel_id = channel_id.into();
     }
 
     #[inline]
@@ -253,38 +294,5 @@ impl Channel {
     #[inline]
     pub fn is_ok(&self) -> bool {
         self.connection.ok
-    }
-}
-
-#[cfg(test)]
-mod tests {
-
-    #[test]
-    fn channel_creation_with_new() {
-        /*let local_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
-        let remote_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 0, 1)), 8080);
-        let channel = Channel::new(local_address, remote_address);
-
-        assert_eq!(channel.local_address(), local_address);
-        assert_eq!(channel.remote_address(), remote_address);
-        assert!(Uuid::parse_str(channel.channel_id()).is_ok());*/
-    }
-
-    #[test]
-    fn channel_setters_work_correctly() {
-        /* let local_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
-        let remote_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 0, 1)), 8080);
-        let new_local_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)), 8080);
-        let new_remote_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(172, 16, 0, 1)), 8080);
-        let new_channel_id = Uuid::new_v4().to_string();
-
-        let mut channel = Channel::new(local_address, remote_address);
-        channel.set_local_address(new_local_address);
-        channel.set_remote_address(new_remote_address);
-        channel.set_channel_id(new_channel_id.clone());
-
-        assert_eq!(channel.local_address(), new_local_address);
-        assert_eq!(channel.remote_address(), new_remote_address);
-        assert_eq!(channel.channel_id(), new_channel_id);*/
     }
 }

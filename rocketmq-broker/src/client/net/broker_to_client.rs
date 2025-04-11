@@ -36,9 +36,14 @@ impl Broker2Client {
         request: RemotingCommand,
         timeout_millis: u64,
     ) -> Result<RemotingCommand> {
-        match channel.send_wait_response(request, timeout_millis).await {
-            Ok(value) => Ok(value),
-            Err(e) => Err(BrokerRemotingError(e)),
+        match channel.upgrade() {
+            None => {
+                unimplemented!("channel is closed");
+            }
+            Some(mut channel) => match channel.send_wait_response(request, timeout_millis).await {
+                Ok(value) => Ok(value),
+                Err(e) => Err(BrokerRemotingError(e)),
+            },
         }
     }
 
@@ -61,9 +66,14 @@ impl Broker2Client {
                 return Err(BrokerCommonError(e));
             }
         }
-        match channel.send_one_way(request, 100).await {
-            Ok(_) => Ok(()),
-            Err(e) => Err(BrokerRemotingError(e)),
+        match channel.upgrade() {
+            None => {
+                unimplemented!("channel is closed");
+            }
+            Some(channel) => match channel.send_one_way(request, 100).await {
+                Ok(_) => Ok(()),
+                Err(e) => Err(BrokerRemotingError(e)),
+            },
         }
     }
 }

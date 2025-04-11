@@ -184,7 +184,7 @@ where
 {
     pub async fn _process_request(
         &mut self,
-        mut channel: Channel,
+        channel: Channel,
         ctx: ConnectionHandlerContext,
         request_code: RequestCode,
         mut request: RemotingCommand,
@@ -761,14 +761,16 @@ where
                     Ok(Some(final_response))
                 } else {
                     //zero copy transfer
-                    if let Some(header_bytes) = final_response.encode_header_with_body_length(
-                        get_message_result.buffer_total_size() as usize,
-                    ) {
-                        channel.connection_mut().send_bytes(header_bytes).await?;
-                    }
-                    for select_result in get_message_result.message_mapped_list_mut() {
-                        if let Some(message) = select_result.bytes.take() {
-                            channel.connection_mut().send_bytes(message).await?;
+                    if let Some(mut channel) = channel.upgrade() {
+                        if let Some(header_bytes) = final_response.encode_header_with_body_length(
+                            get_message_result.buffer_total_size() as usize,
+                        ) {
+                            channel.connection_mut().send_bytes(header_bytes).await?;
+                        }
+                        for select_result in get_message_result.message_mapped_list_mut() {
+                            if let Some(message) = select_result.bytes.take() {
+                                channel.connection_mut().send_bytes(message).await?;
+                            }
                         }
                     }
                     Ok(None)

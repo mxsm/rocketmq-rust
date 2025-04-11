@@ -234,8 +234,8 @@ where
             if let Some(request_list) = mpr.clone_list_and_clear() {
                 for request in request_list {
                     info!(
-                        "notify master online, wakeup {} {}",
-                        request.client_channel(),
+                        "notify master online, wakeup {}",
+                        //  request.client_channel(),
                         request.request_command()
                     );
                     let pull_message_this = self.pull_message_processor.clone();
