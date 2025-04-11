@@ -288,6 +288,52 @@ impl ConsumerManager {
         r1 || r2
     }
 
+    pub fn register_consumer_without_sub(
+        &self,
+        group: &CheetahString,
+        client_channel_info: ClientChannelInfo,
+        consume_type: ConsumeType,
+        message_model: MessageModel,
+        consume_from_where: ConsumeFromWhere,
+        is_notify_consumer_ids_changed_enable: bool,
+    ) -> bool {
+        let start = Instant::now();
+        let mut write_guard = self.consumer_table.write();
+        let consumer_group_info = write_guard.entry(group.clone()).or_insert_with(|| {
+            ConsumerGroupInfo::new(
+                group.clone(),
+                consume_type,
+                message_model,
+                consume_from_where,
+            )
+        });
+        let r1 = consumer_group_info.update_channel(
+            client_channel_info.clone(),
+            consume_type,
+            message_model,
+            consume_from_where,
+        );
+
+        if r1
+            && is_notify_consumer_ids_changed_enable
+            && is_broadcast_mode(consumer_group_info.get_message_model())
+        {
+            let channels = consumer_group_info.get_all_channels();
+            self.call_consumer_ids_change_listener(
+                ConsumerGroupEvent::Change,
+                group,
+                &[&channels as &dyn Any],
+            );
+        }
+
+        if let Some(broker_stats_manager) = self.broker_stats_manager.as_ref() {
+            if let Some(broker_stats_manager) = broker_stats_manager.upgrade() {
+                broker_stats_manager.inc_consumer_register_time(start.elapsed().as_millis() as i32);
+            }
+        }
+        r1
+    }
+
     pub fn call_consumer_ids_change_listener(
         &self,
         event: ConsumerGroupEvent,
