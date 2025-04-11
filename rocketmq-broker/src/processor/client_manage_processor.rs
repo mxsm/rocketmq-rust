@@ -107,8 +107,24 @@ where
                 .unregister_producer(group, &client_channel_info, &ctx);
         }
 
-        if let Some(ref _group) = request_header.consumer_group {
-            unimplemented!()
+        if let Some(ref group) = request_header.consumer_group {
+            let subscription_group_config = self
+                .broker_runtime_inner
+                .subscription_group_manager()
+                .find_subscription_group_config(group);
+            let is_notify_consumer_ids_changed_enable =
+                if let Some(ref subscription_group_config) = subscription_group_config {
+                    subscription_group_config.notify_consumer_ids_changed_enable()
+                } else {
+                    true
+                };
+            self.broker_runtime_inner
+                .consumer_manager()
+                .unregister_consumer(
+                    group,
+                    &client_channel_info,
+                    is_notify_consumer_ids_changed_enable,
+                );
         }
 
         Ok(Some(RemotingCommand::create_response_command()))
