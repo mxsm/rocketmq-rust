@@ -36,6 +36,7 @@ use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use tracing::info;
 
+use crate::broker_error::BrokerError::BrokerRemotingError;
 use crate::broker_runtime::BrokerRuntimeInner;
 use crate::client::client_channel_info::ClientChannelInfo;
 
@@ -70,7 +71,7 @@ where
         ctx: ConnectionHandlerContext,
         request_code: RequestCode,
         request: RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> crate::Result<Option<RemotingCommand>> {
         match request_code {
             RequestCode::HeartBeat => self.heart_beat(channel, ctx, request),
             RequestCode::UnregisterClient => self.unregister_client(channel, ctx, request),
@@ -88,10 +89,10 @@ where
         channel: Channel,
         ctx: ConnectionHandlerContext,
         request: RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> crate::Result<Option<RemotingCommand>> {
         let request_header = request
             .decode_command_custom_header::<UnregisterClientRequestHeader>()
-            .expect("decode UnregisterClientRequestHeader failed");
+            .map_err(BrokerRemotingError)?;
 
         let client_channel_info = ClientChannelInfo::new(
             channel.clone(),
@@ -110,7 +111,7 @@ where
             unimplemented!()
         }
 
-        Some(RemotingCommand::create_response_command())
+        Ok(Some(RemotingCommand::create_response_command()))
     }
 
     fn heart_beat(
@@ -118,7 +119,7 @@ where
         channel: Channel,
         ctx: ConnectionHandlerContext,
         request: RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> crate::Result<Option<RemotingCommand>> {
         let heartbeat_data = SerdeJsonUtils::decode::<HeartbeatData>(
             request.body().as_ref().map(|v| v.as_ref()).unwrap(),
         )
@@ -130,7 +131,7 @@ where
             request.version(),
         );
         if heartbeat_data.heartbeat_fingerprint != 0 {
-            return self.heart_beat_v2(&channel, &ctx, heartbeat_data, client_channel_info);
+            return Ok(self.heart_beat_v2(&channel, &ctx, heartbeat_data, client_channel_info));
         }
 
         //do consumer data handle
@@ -215,7 +216,7 @@ where
         let mut response_command = RemotingCommand::create_response_command();
         response_command.add_ext_field(IS_SUPPORT_HEART_BEAT_V2.to_string(), true.to_string());
         response_command.add_ext_field(IS_SUB_CHANGE.to_string(), true.to_string());
-        Some(response_command)
+        Ok(Some(response_command))
     }
 
     fn heart_beat_v2(
