@@ -2394,6 +2394,7 @@ dependencies = [
 name = "rocketmq-rust"
 version = "0.5.0"
 dependencies = [
+ "anyhow",
  "tokio",
  "tracing",
 ]

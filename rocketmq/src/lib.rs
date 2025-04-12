@@ -25,6 +25,7 @@ pub use netty_rust::timer::Timer;
 pub mod rocketmq_tokio_lock;
 mod shutdown;
 
+pub use anyhow::Result as RocketMQResult;
 pub use arc_mut::ArcMut;
 pub use arc_mut::SyncUnsafeCellWrapper;
 pub use arc_mut::WeakArcMut;
