@@ -428,30 +428,7 @@ impl<RP> RocketMQServer<RP> {
 }
 
 impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
-    pub async fn run(&self, request_processor: RP) {
-        let listener = TcpListener::bind(&format!(
-            "{}:{}",
-            self.config.bind_address, self.config.listen_port
-        ))
-        .await
-        .unwrap();
-        info!(
-            "Bind local address: {}",
-            format!("{}:{}", self.config.bind_address, self.config.listen_port)
-        );
-        let (notify_conn_disconnect, _) = broadcast::channel::<SocketAddr>(100);
-        run(
-            listener,
-            wait_for_signal(),
-            request_processor,
-            Some(notify_conn_disconnect),
-            vec![],
-            None,
-        )
-        .await;
-    }
-
-    pub async fn run_channel_event_listener(
+    pub async fn run(
         &self,
         request_processor: RP,
         channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
