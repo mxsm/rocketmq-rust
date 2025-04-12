@@ -34,7 +34,9 @@ use tracing::info;
 use tracing::warn;
 
 use crate::base::channel_event_listener::ChannelEventListener;
+use crate::base::connection_net_event::ConnectionNetEvent;
 use crate::base::response_future::ResponseFuture;
+use crate::base::tokio_event::TokioEvent;
 use crate::code::response_code::ResponseCode;
 use crate::connection::Connection;
 use crate::net::channel::Channel;
@@ -298,6 +300,30 @@ struct ConnectionListener<RP> {
 impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
     async fn run(&mut self) -> anyhow::Result<()> {
         info!("Prepare accepting connection");
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<TokioEvent>();
+        let listener = self.channel_event_listener.take().unwrap();
+
+        tokio::spawn(async move {
+            loop {
+                if let Some(event) = rx.recv().await {
+                    info!("Accepting connection event: {:?}", event);
+                    let addr = event.remote_addr();
+                    match event.type_() {
+                        ConnectionNetEvent::CONNECTED(_) => {
+                            listener.on_channel_connect(addr.to_string().as_str(), event.channel());
+                        }
+                        ConnectionNetEvent::DISCONNECTED => {
+                            listener.on_channel_close(addr.to_string().as_str(), event.channel());
+                        }
+                        ConnectionNetEvent::EXCEPTION => {
+                            listener
+                                .on_channel_exception(addr.to_string().as_str(), event.channel());
+                        }
+                    }
+                }
+            }
+        });
+
         loop {
             let permit = self
                 .limit_connections
@@ -321,6 +347,11 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
             //create per connection handler state
             let weak_channel = ArcMut::downgrade(&channel_inner);
             let channel = Channel::new(weak_channel, local_addr, remote_addr);
+            let _ = tx.send(TokioEvent::new(
+                ConnectionNetEvent::CONNECTED(remote_addr),
+                remote_addr,
+                channel.clone(),
+            ));
             let mut handler = ConnectionHandler {
                 request_processor: self.request_processor.clone(),
                 connection_handler_context: ArcMut::new(ConnectionHandlerContextWrapper {
@@ -333,11 +364,16 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
                 rpc_hooks: self.rpc_hooks.clone(),
                 response_table,
             };
-
+            let sender = tx.clone();
             tokio::spawn(async move {
                 if let Err(err) = handler.handle().await {
                     error!(cause = ?err, "connection error");
                 }
+                let _ = sender.send(TokioEvent::new(
+                    ConnectionNetEvent::DISCONNECTED,
+                    remote_addr,
+                    handler.channel_inner.1.clone(),
+                ));
                 warn!(
                     "The client[IP={}] disconnected from the remoting_server.",
                     remote_addr
