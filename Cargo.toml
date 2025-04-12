@@ -5,6 +5,7 @@ members = [
     "rocketmq-cli",
     "rocketmq-client",
     "rocketmq-common",
+    "rocketmq-error",
     "rocketmq-example",
     "rocketmq-filter",
     "rocketmq-macros",
@@ -39,6 +40,7 @@ rocketmq-store = { version = "0.5.0", path = "./rocketmq-store", default-feature
 rocketmq-remoting = { version = "0.5.0", path = "./rocketmq-remoting" }
 rocketmq-client-rust = { version = "0.5.0", path = "./rocketmq-client" }
 rocketmq-tools = { version = "0.5.0", path = "./rocketmq-tools" }
+rocketmq-error = { version = "0.5.0", path = "./rocketmq-error" }
 
 tokio = { version = "1.44", features = ["full"] }
 tokio-util = { version = "0.7.14", features = ["full"] }
