@@ -20,7 +20,6 @@ use std::fmt::Display;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
@@ -39,7 +38,7 @@ use crate::remoting_error::RemotingError::ChannelSendRequestFailed;
 use crate::remoting_error::RemotingError::Io;
 use crate::Result;
 
-#[derive(Clone, Eq, PartialEq, Hash)]
+#[derive(Clone)]
 pub struct Channel {
     inner: WeakArcMut<ChannelInner>,
     local_address: SocketAddr,
@@ -52,8 +51,8 @@ impl Channel {
         inner: WeakArcMut<ChannelInner>,
         local_address: SocketAddr,
         remote_address: SocketAddr,
-        channel_id: CheetahString,
     ) -> Self {
+        let channel_id = Uuid::new_v4().to_string().into();
         Self {
             inner,
             local_address,
@@ -62,27 +61,81 @@ impl Channel {
         }
     }
 
+    #[inline]
+    pub fn set_local_address(&mut self, local_address: SocketAddr) {
+        self.local_address = local_address;
+    }
+
+    #[inline]
+    pub fn set_remote_address(&mut self, remote_address: SocketAddr) {
+        self.remote_address = remote_address;
+    }
+
+    #[inline]
+    pub fn set_channel_id(&mut self, channel_id: impl Into<CheetahString>) {
+        self.channel_id = channel_id.into();
+    }
+
+    #[inline]
     pub fn local_address(&self) -> SocketAddr {
         self.local_address
     }
 
+    #[inline]
     pub fn remote_address(&self) -> SocketAddr {
         self.remote_address
     }
 
+    #[inline]
+    pub fn channel_id(&self) -> &str {
+        self.channel_id.as_str()
+    }
+
+    #[inline]
     pub fn upgrade(&self) -> Option<ArcMut<ChannelInner>> {
         self.inner.upgrade()
     }
+}
 
-    pub fn channel_id(&self) -> &CheetahString {
-        &self.channel_id
+impl PartialEq for Channel {
+    fn eq(&self, other: &Self) -> bool {
+        self.local_address == other.local_address
+            && self.remote_address == other.remote_address
+            && self.channel_id == other.channel_id
+    }
+}
+
+impl Eq for Channel {}
+
+impl Hash for Channel {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.local_address.hash(state);
+        self.remote_address.hash(state);
+        self.channel_id.hash(state);
+    }
+}
+
+impl Debug for Channel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Channel {{ local_address: {:?}, remote_address: {:?}, channel_id: {} }}",
+            self.local_address, self.remote_address, self.channel_id
+        )
+    }
+}
+
+impl Display for Channel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Channel {{ local_address: {}, remote_address: {}, channel_id: {} }}",
+            self.local_address, self.remote_address, self.channel_id
+        )
     }
 }
 
 pub struct ChannelInner {
-    local_address: SocketAddr,
-    remote_address: SocketAddr,
-    channel_id: CheetahString,
     tx: tokio::sync::mpsc::Sender<ChannelMessage>,
     pub(crate) connection: ArcMut<Connection>,
     pub(crate) response_table: ArcMut<HashMap<i32, ResponseFuture>>,
@@ -124,67 +177,16 @@ pub(crate) async fn run_send(
     }
 }
 
-impl PartialEq for ChannelInner {
-    fn eq(&self, other: &Self) -> bool {
-        self.local_address == other.local_address
-            && self.remote_address == other.remote_address
-            && self.channel_id == other.channel_id
-            && Arc::ptr_eq(self.connection.get_inner(), other.connection.get_inner())
-            && Arc::ptr_eq(
-                self.response_table.get_inner(),
-                other.response_table.get_inner(),
-            )
-    }
-}
-
-impl Eq for ChannelInner {}
-
-impl Hash for ChannelInner {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.local_address.hash(state);
-        self.remote_address.hash(state);
-        self.channel_id.hash(state);
-        Arc::as_ptr(self.connection.get_inner()).hash(state);
-        Arc::as_ptr(self.response_table.get_inner()).hash(state);
-    }
-}
-
-impl Debug for ChannelInner {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Channel {{ local_address: {:?}, remote_address: {:?}, channel_id: {} }}",
-            self.local_address, self.remote_address, self.channel_id
-        )
-    }
-}
-
-impl Display for ChannelInner {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Channel {{ local_address: {}, remote_address: {}, channel_id: {} }}",
-            self.local_address, self.remote_address, self.channel_id
-        )
-    }
-}
-
 impl ChannelInner {
     pub fn new(
-        local_address: SocketAddr,
-        remote_address: SocketAddr,
         connection: Connection,
         response_table: ArcMut<HashMap<i32, ResponseFuture>>,
     ) -> Self {
-        let channel_id = Uuid::new_v4().to_string().into();
         let (tx, rx) = tokio::sync::mpsc::channel(1024);
         //let response_table = ArcMut::new(HashMap::with_capacity(32));
         let connection = ArcMut::new(connection);
         tokio::spawn(run_send(connection.clone(), rx, response_table.clone()));
         Self {
-            local_address,
-            remote_address,
-            channel_id,
             tx,
             connection,
             response_table,
@@ -193,36 +195,6 @@ impl ChannelInner {
 }
 
 impl ChannelInner {
-    #[inline]
-    pub fn set_local_address(&mut self, local_address: SocketAddr) {
-        self.local_address = local_address;
-    }
-
-    #[inline]
-    pub fn set_remote_address(&mut self, remote_address: SocketAddr) {
-        self.remote_address = remote_address;
-    }
-
-    #[inline]
-    pub fn set_channel_id(&mut self, channel_id: impl Into<CheetahString>) {
-        self.channel_id = channel_id.into();
-    }
-
-    #[inline]
-    pub fn local_address(&self) -> SocketAddr {
-        self.local_address
-    }
-
-    #[inline]
-    pub fn remote_address(&self) -> SocketAddr {
-        self.remote_address
-    }
-
-    #[inline]
-    pub fn channel_id(&self) -> &str {
-        self.channel_id.as_str()
-    }
-
     #[inline]
     pub fn connection(&self) -> ArcMut<Connection> {
         self.connection.clone()

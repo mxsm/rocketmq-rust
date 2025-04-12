@@ -108,7 +108,7 @@ async fn run_recv<PR: RequestProcessor>(mut client: ArcMut<ClientInner>, mut pro
                         warn!(
                             "receive response, cmd={}, but not matched any request, address={}",
                             msg,
-                            client.channel.0.remote_address()
+                            client.channel.1.remote_address()
                         )
                     }
                 }
@@ -146,19 +146,9 @@ impl ClientInner {
         let remote_address = stream.peer_addr()?;
         let connection = Connection::new(stream);
         let response_table = ArcMut::new(HashMap::with_capacity(128));
-        let channel_inner = ArcMut::new(ChannelInner::new(
-            local_addr,
-            remote_address,
-            connection,
-            response_table.clone(),
-        ));
+        let channel_inner = ArcMut::new(ChannelInner::new(connection, response_table.clone()));
         let weak_channel = ArcMut::downgrade(&channel_inner);
-        let channel = Channel::new(
-            weak_channel,
-            local_addr,
-            remote_address,
-            channel_inner.channel_id().into(),
-        );
+        let channel = Channel::new(weak_channel, local_addr, remote_address);
         let (tx_, rx) = tokio::sync::mpsc::channel(1024);
         let client = ClientInner {
             ctx: ArcMut::new(ConnectionHandlerContextWrapper::new(
@@ -175,7 +165,7 @@ impl ClientInner {
         tokio::spawn(run_send(client.clone(), rx));
         if let Some(tx) = tx {
             let _ = tx.send(ConnectionNetEvent::CONNECTED(
-                client.channel.0.remote_address(),
+                client.channel.1.remote_address(),
                 //client.channel.clone(),
             ));
         }
