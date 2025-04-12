@@ -32,6 +32,7 @@ use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_common::common::statistics::state_getter::StateGetter;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_common::UtilAll::compute_next_morning_time_millis;
+use rocketmq_remoting::base::channel_event_listener::ChannelEventListener;
 use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper;
@@ -54,6 +55,7 @@ use tracing::warn;
 
 use crate::broker::broker_hook::BrokerShutdownHook;
 use crate::broker::broker_pre_online_service::BrokerPreOnlineService;
+use crate::client::client_housekeeping_service::ClientHousekeepingService;
 use crate::client::consumer_ids_change_listener::ConsumerIdsChangeListener;
 use crate::client::default_consumer_ids_change_listener::DefaultConsumerIdsChangeListener;
 use crate::client::manager::consumer_manager::ConsumerManager;
@@ -196,6 +198,7 @@ impl BrokerRuntime {
             cold_data_cg_ctr_service: None,
             is_schedule_service_start: Arc::new(Default::default()),
             is_transaction_check_service_start: Arc::new(Default::default()),
+            client_housekeeping_service: None,
             pop_message_processor: None,
             ack_message_processor: None,
             notification_processor: None,
@@ -223,6 +226,8 @@ impl BrokerRuntime {
         inner.broker_stats_manager = Some(stats_manager);
         inner.schedule_message_service =
             Some(ArcMut::new(ScheduleMessageService::new(inner.clone())));
+        inner.client_housekeeping_service =
+            Some(Arc::new(ClientHousekeepingService::new(inner.clone())));
 
         Self {
             inner,
@@ -251,6 +256,10 @@ impl BrokerRuntime {
 
         if let Some(runtime) = self.broker_runtime.take() {
             runtime.shutdown();
+        }
+
+        if let Some(client_housekeeping_service) = self.inner.client_housekeeping_service.take() {
+            client_housekeeping_service.shutdown();
         }
         /* if let Some(message_store) = &mut self.inner.message_store {
             message_store.shutdown()
@@ -743,27 +752,16 @@ impl BrokerRuntime {
         cfg_if::cfg_if! {
             if #[cfg(feature = "local_file_store")] {
                 let bridge = TransactionalMessageBridge::new(
-                    /*self.message_store.as_ref().unwrap().clone(),
-                    self.broker_stats_manager.clone(),
-                    self.consumer_offset_manager.clone(),
-                    self.broker_config.clone(),
-                    self.topic_config_manager.clone(),
-                    self.store_host*/
+
                     self.inner.clone()
                 );
                 let service = DefaultTransactionalMessageService::new(bridge);
                 self.transactional_message_service = Some(ArcMut::new(service));
             }
         }
-        self.inner.transactional_message_check_listener =
-            Some(DefaultTransactionalMessageCheckListener::new(
-                /*self.broker_config.clone(),
-                self.producer_manager.clone(),*/
-                Broker2Client,
-                /* self.topic_config_manager.clone(),
-                self.message_store.as_ref().cloned().unwrap(),*/
-                self.inner.clone(),
-            ));
+        self.inner.transactional_message_check_listener = Some(
+            DefaultTransactionalMessageCheckListener::new(Broker2Client, self.inner.clone()),
+        );
         self.inner.transactional_message_check_service = Some(TransactionalMessageCheckService);
         self.inner.transaction_metrics_flush_service = Some(TransactionMetricsFlushService);
     }
@@ -795,12 +793,29 @@ impl BrokerRuntime {
 
         let server = RocketMQServer::new(Arc::new(self.inner.server_config.clone()));
         //start nomarl broker remoting_server
-        tokio::spawn(async move { server.run(request_processor).await });
+        let client_housekeeping_service_main = self
+            .inner
+            .client_housekeeping_service
+            .clone()
+            .map(|item| item as Arc<dyn ChannelEventListener>);
+        let client_housekeeping_service_fast = client_housekeeping_service_main.clone();
+        tokio::spawn(async move {
+            server
+                .run_channel_event_listener(request_processor, client_housekeeping_service_main)
+                .await
+        });
         //start fast broker remoting_server
         let mut fast_server_config = self.inner.server_config.clone();
         fast_server_config.listen_port = self.inner.server_config.listen_port - 2;
         let fast_server = RocketMQServer::new(Arc::new(fast_server_config));
-        tokio::spawn(async move { fast_server.run(fast_request_processor).await });
+        tokio::spawn(async move {
+            fast_server
+                .run_channel_event_listener(
+                    fast_request_processor,
+                    client_housekeeping_service_fast,
+                )
+                .await
+        });
 
         if let Some(pop_message_processor) = self.inner.pop_message_processor.as_mut() {
             pop_message_processor.start();
@@ -847,6 +862,10 @@ impl BrokerRuntime {
         }
         if let Some(cold_data_cg_ctr_service) = self.inner.cold_data_cg_ctr_service.as_mut() {
             cold_data_cg_ctr_service.start();
+        }
+
+        if let Some(client_housekeeping_service) = self.inner.client_housekeeping_service.as_mut() {
+            client_housekeeping_service.start();
         }
     }
 
@@ -1315,7 +1334,7 @@ pub(crate) struct BrokerRuntimeInner<MS> {
     cold_data_cg_ctr_service: Option<ColdDataCgCtrService>,
     is_schedule_service_start: Arc<AtomicBool>,
     is_transaction_check_service_start: Arc<AtomicBool>,
-
+    client_housekeeping_service: Option<Arc<ClientHousekeepingService<MS>>>,
     //Processor
     pop_message_processor: Option<ArcMut<PopMessageProcessor<MS>>>,
     ack_message_processor: Option<ArcMut<AckMessageProcessor<MS>>>,
