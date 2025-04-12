@@ -16,3 +16,4 @@
  */
 
 pub(crate) mod broker_addr_info;
+pub(crate) mod broker_housekeeping_service;

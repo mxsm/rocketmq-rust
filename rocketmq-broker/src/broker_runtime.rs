@@ -801,7 +801,7 @@ impl BrokerRuntime {
         let client_housekeeping_service_fast = client_housekeeping_service_main.clone();
         tokio::spawn(async move {
             server
-                .run_channel_event_listener(request_processor, client_housekeeping_service_main)
+                .run(request_processor, client_housekeeping_service_main)
                 .await
         });
         //start fast broker remoting_server
@@ -810,10 +810,7 @@ impl BrokerRuntime {
         let fast_server = RocketMQServer::new(Arc::new(fast_server_config));
         tokio::spawn(async move {
             fast_server
-                .run_channel_event_listener(
-                    fast_request_processor,
-                    client_housekeeping_service_fast,
-                )
+                .run(fast_request_processor, client_housekeeping_service_fast)
                 .await
         });
 

@@ -22,6 +22,7 @@ use cheetah_string::CheetahString;
 use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_common::utils::network_util::NetworkUtil;
+use rocketmq_remoting::base::channel_event_listener::ChannelEventListener;
 use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
 use rocketmq_remoting::remoting::RemotingService;
@@ -36,6 +37,7 @@ use tracing::info;
 
 use crate::processor::ClientRequestProcessor;
 use crate::processor::NameServerRequestProcessor;
+use crate::route_info::broker_housekeeping_service::BrokerHousekeepingService;
 use crate::KVConfigManager;
 use crate::RouteInfoManager;
 
@@ -83,8 +85,13 @@ impl NameServerRuntime {
         let receiver = notify_conn_disconnect.subscribe();
         let request_processor = self.init_processors(receiver);
         let server = RocketMQServer::new(Arc::new(self.inner.server_config.clone()));
+        let channel_event_listener = self
+            .inner
+            .broker_housekeeping_service
+            .take()
+            .map(|item| item as Arc<dyn ChannelEventListener>);
         tokio::spawn(async move {
-            server.run(request_processor).await;
+            server.run(request_processor, channel_event_listener).await;
         });
         let namesrv = CheetahString::from_string(format!(
             "{}:{}",
@@ -206,6 +213,7 @@ impl Builder {
             route_info_manager: None,
             kvconfig_manager: None,
             remoting_client,
+            broker_housekeeping_service: None,
         });
 
         let route_info_manager = RouteInfoManager::new(inner.clone());
@@ -213,6 +221,8 @@ impl Builder {
 
         inner.kvconfig_manager = Some(kv_config_manager);
         inner.route_info_manager = Some(route_info_manager);
+        inner.broker_housekeeping_service =
+            Some(Arc::new(BrokerHousekeepingService::new(inner.clone())));
 
         NameServerBootstrap {
             name_server_runtime: NameServerRuntime {
@@ -231,6 +241,7 @@ pub(crate) struct NameServerRuntimeInner {
     route_info_manager: Option<RouteInfoManager>,
     kvconfig_manager: Option<KVConfigManager>,
     remoting_client: ArcMut<RocketmqDefaultClient>,
+    broker_housekeeping_service: Option<Arc<BrokerHousekeepingService>>,
 }
 
 impl NameServerRuntimeInner {
