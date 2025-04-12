@@ -12,6 +12,7 @@ PROJECTS=(
     "rocketmq-common"
     "rocketmq-runtime"
     "rocketmq-macros"
+    "rocketmq-error"
     "rocketmq"
     "rocketmq-filter"
     "rocketmq-store"
