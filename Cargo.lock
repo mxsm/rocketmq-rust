@@ -2301,6 +2301,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rocketmq-error"
+version = "0.5.0"
+
+[[package]]
 name = "rocketmq-example"
 version = "0.5.0"
 dependencies = [
