@@ -71,7 +71,7 @@ pub struct ConnectionHandler<RP> {
 impl<RP> Drop for ConnectionHandler<RP> {
     fn drop(&mut self) {
         if let Some(ref sender) = self.conn_disconnect_notify {
-            let socket_addr = self.channel_inner.0.remote_address();
+            let socket_addr = self.channel_inner.1.remote_address();
             warn!(
                 "connection[{}] disconnected, Send notify message.",
                 socket_addr
@@ -84,7 +84,7 @@ impl<RP> Drop for ConnectionHandler<RP> {
 impl<RP> ConnectionHandler<RP> {
     pub fn do_before_rpc_hooks(
         &self,
-        channel: &ChannelInner,
+        channel: &Channel,
         request: Option<&mut RemotingCommand>,
     ) -> Result<()> {
         if let Some(request) = request {
@@ -97,7 +97,7 @@ impl<RP> ConnectionHandler<RP> {
 
     pub fn do_after_rpc_hooks(
         &self,
-        channel: &ChannelInner,
+        channel: &Channel,
         response: Option<&mut RemotingCommand>,
     ) -> Result<()> {
         if let Some(response) = response {
@@ -138,7 +138,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                     warn!(
                         "receive response, cmd={}, but not matched any request, address={}",
                         cmd,
-                        self.channel_inner.0.remote_address()
+                        self.channel_inner.1.remote_address()
                     )
                 }
                 continue;
@@ -148,7 +148,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
             //before handle request hooks
 
             let exception = self
-                .do_before_rpc_hooks(&(self.channel_inner.0), Some(&mut cmd))
+                .do_before_rpc_hooks(&(self.channel_inner.1), Some(&mut cmd))
                 .err();
             //handle error if return have
             match self.handle_error(oneway_rpc, opaque, exception).await {
@@ -171,7 +171,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
             };
 
             let exception = self
-                .do_after_rpc_hooks(&self.channel_inner.0, response.as_mut())
+                .do_after_rpc_hooks(&self.channel_inner.1, response.as_mut())
                 .err();
 
             match self.handle_error(oneway_rpc, opaque, exception).await {
@@ -312,22 +312,15 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
             let (socket, remote_addr) = self.accept().await?;
             info!("Accepted connection, client ip:{}", remote_addr);
             socket.set_nodelay(true).expect("set nodelay failed");
-
+            let local_addr = socket.local_addr()?;
             let response_table = ArcMut::new(HashMap::with_capacity(128));
             let channel_inner = ArcMut::new(ChannelInner::new(
-                socket.local_addr()?,
-                remote_addr,
                 Connection::new(socket),
                 response_table.clone(),
             ));
             //create per connection handler state
             let weak_channel = ArcMut::downgrade(&channel_inner);
-            let channel = Channel::new(
-                weak_channel,
-                channel_inner.local_address(),
-                channel_inner.remote_address(),
-                channel_inner.channel_id().into(),
-            );
+            let channel = Channel::new(weak_channel, local_addr, remote_addr);
             let mut handler = ConnectionHandler {
                 request_processor: self.request_processor.clone(),
                 connection_handler_context: ArcMut::new(ConnectionHandlerContextWrapper {
