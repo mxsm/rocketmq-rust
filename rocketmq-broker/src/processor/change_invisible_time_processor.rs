@@ -32,7 +32,7 @@ use rocketmq_remoting::protocol::header::change_invisible_time_response_header::
 use rocketmq_remoting::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingSerializable;
-use rocketmq_remoting::remoting_error::RemotingError::RemotingCommandError;
+use rocketmq_remoting::remoting_error::RocketmqError::DeserializeHeaderError;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_result::PutMessageResult;

@@ -18,14 +18,13 @@ use std::hash::Hash;
 use std::hash::Hasher;
 
 use crate::protocol::remoting_command::RemotingCommand;
-use crate::Result;
 
 pub struct ResponseFuture {
     pub(crate) opaque: i32,
     pub(crate) timeout_millis: u64,
     pub(crate) send_request_ok: bool,
     //pub(crate) response_command: Option<RemotingCommand>,
-    pub(crate) tx: tokio::sync::oneshot::Sender<Result<RemotingCommand>>,
+    pub(crate) tx: tokio::sync::oneshot::Sender<rocketmq_error::RocketMQResult<RemotingCommand>>,
 }
 
 impl PartialEq for ResponseFuture {
@@ -52,7 +51,7 @@ impl ResponseFuture {
         timeout_millis: u64,
         send_request_ok: bool,
         //response_command: Option<RemotingCommand>,
-        tx: tokio::sync::oneshot::Sender<Result<RemotingCommand>>,
+        tx: tokio::sync::oneshot::Sender<rocketmq_error::RocketMQResult<RemotingCommand>>,
     ) -> Self {
         Self {
             opaque,

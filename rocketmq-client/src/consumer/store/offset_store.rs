@@ -22,7 +22,6 @@ use rocketmq_common::common::message::message_queue::MessageQueue;
 use crate::consumer::store::local_file_offset_store::LocalFileOffsetStore;
 use crate::consumer::store::read_offset_type::ReadOffsetType;
 use crate::consumer::store::remote_broker_offset_store::RemoteBrokerOffsetStore;
-use crate::Result;
 
 pub struct OffsetStore {
     remote_broker_offset_store: Option<RemoteBrokerOffsetStore>,
@@ -54,7 +53,7 @@ impl OffsetStore {
         }
     }
 
-    pub async fn load(&self) -> Result<()> {
+    pub async fn load(&self) -> rocketmq_error::RocketMQResult<()> {
         if let Some(store) = &self.remote_broker_offset_store {
             store.load().await?;
         }
@@ -133,7 +132,7 @@ impl OffsetStore {
         mq: &MessageQueue,
         offset: i64,
         is_oneway: bool,
-    ) -> Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         if let Some(ref mut store) = self.remote_broker_offset_store {
             store
                 .update_consume_offset_to_broker(mq, offset, is_oneway)
@@ -149,7 +148,7 @@ impl OffsetStore {
 }
 
 pub trait OffsetStoreTrait {
-    async fn load(&self) -> Result<()>;
+    async fn load(&self) -> rocketmq_error::RocketMQResult<()>;
 
     async fn update_offset(&self, mq: &MessageQueue, offset: i64, increase_only: bool);
 
@@ -169,5 +168,5 @@ pub trait OffsetStoreTrait {
         mq: &MessageQueue,
         offset: i64,
         is_oneway: bool,
-    ) -> Result<()>;
+    ) -> rocketmq_error::RocketMQResult<()>;
 }

@@ -59,7 +59,7 @@ impl CommandCustomHeader for QueryTopicsByConsumerRequestHeader {
 }
 
 impl FromMap for QueryTopicsByConsumerRequestHeader {
-    type Error = crate::remoting_error::RemotingError;
+    type Error = rocketmq_error::RocketmqError;
 
     type Target = Self;
 

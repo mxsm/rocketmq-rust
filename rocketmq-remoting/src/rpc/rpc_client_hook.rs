@@ -20,21 +20,23 @@ use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use crate::rpc::rpc_request::RpcRequest;
 use crate::rpc::rpc_response::RpcResponse;
-use crate::Result;
 
 pub trait RpcClientHook {
     fn before_request<H: CommandCustomHeader + TopicRequestHeaderTrait>(
         &self,
         rpc_request: &RpcRequest<H>,
-    ) -> Result<Option<RpcResponse>>;
-    fn after_response(&self, rpc_response: &RpcResponse) -> Result<Option<RpcResponse>>;
+    ) -> rocketmq_error::RocketMQResult<Option<RpcResponse>>;
+    fn after_response(
+        &self,
+        rpc_response: &RpcResponse,
+    ) -> rocketmq_error::RocketMQResult<Option<RpcResponse>>;
 }
 
 pub type RpcClientHookFn = Arc<
     dyn Fn(
             Option<&dyn TopicRequestHeaderTrait>,
             Option<&RpcResponse>,
-        ) -> Result<Option<RpcResponse>>
+        ) -> rocketmq_error::RocketMQResult<Option<RpcResponse>>
         + Send
         + Sync,
 >;

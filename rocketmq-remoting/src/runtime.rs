@@ -17,7 +17,6 @@
 use std::net::SocketAddr;
 
 use crate::protocol::remoting_command::RemotingCommand;
-use crate::Result;
 
 pub mod config;
 pub mod connection_handler_context;
@@ -51,7 +50,7 @@ pub trait RPCHook: Send + Sync + 'static {
         &self,
         remote_addr: SocketAddr,
         request: &mut RemotingCommand,
-    ) -> Result<()>;
+    ) -> rocketmq_error::RocketMQResult<()>;
 
     /// Executes custom logic after an RPC response has been prepared.
     ///
@@ -72,5 +71,5 @@ pub trait RPCHook: Send + Sync + 'static {
         &self,
         remote_addr: SocketAddr,
         response: &mut RemotingCommand,
-    ) -> Result<()>;
+    ) -> rocketmq_error::RocketMQResult<()>;
 }

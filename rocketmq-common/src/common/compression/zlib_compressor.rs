@@ -20,16 +20,15 @@ use bytes::Bytes;
 
 use crate::common::compression::compression_type::CompressionType;
 use crate::common::compression::compressor::Compressor;
-use crate::Result;
 
 pub struct ZlibCompressor;
 
 impl Compressor for ZlibCompressor {
-    fn compress(&self, src: &[u8], level: i32) -> Result<Bytes> {
+    fn compress(&self, src: &[u8], level: i32) -> rocketmq_error::RocketMQResult<Bytes> {
         Ok(CompressionType::Zlib.compression(src))
     }
 
-    fn decompress(&self, src: &[u8]) -> Result<Bytes> {
+    fn decompress(&self, src: &[u8]) -> rocketmq_error::RocketMQResult<Bytes> {
         Ok(CompressionType::Zlib.decompression(src))
     }
 }

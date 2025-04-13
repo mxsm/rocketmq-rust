@@ -32,6 +32,7 @@ use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::MESSAGE_COMPRESS_LEVEL;
 use rocketmq_common::common::mix_all::MESSAGE_COMPRESS_TYPE;
 use rocketmq_common::common::topic::TopicValidator;
+use rocketmq_error::mq_client_err;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_rust::ArcMut;
@@ -39,7 +40,6 @@ use tracing::error;
 
 use crate::base::client_config::ClientConfig;
 use crate::base::validators::Validators;
-use crate::mq_client_err;
 use crate::producer::default_mq_produce_builder::DefaultMQProducerBuilder;
 use crate::producer::mq_producer::MQProducer;
 use crate::producer::produce_accumulator::ProduceAccumulator;
@@ -52,7 +52,6 @@ use crate::trace::hook::end_transaction_trace_hook_impl::EndTransactionTraceHook
 use crate::trace::hook::send_message_trace_hook_impl::SendMessageTraceHookImpl;
 use crate::trace::trace_dispatcher::TraceDispatcher;
 use crate::trace::trace_dispatcher::Type;
-use crate::Result;
 
 #[derive(Clone)]
 pub struct ProducerConfig {
@@ -475,7 +474,7 @@ impl DefaultMQProducer {
         }
     }
 
-    fn batch(&mut self, messages: Vec<Message>) -> Result<MessageBatch> {
+    fn batch(&mut self, messages: Vec<Message>) -> rocketmq_error::RocketMQResult<MessageBatch> {
         match MessageBatch::generate_from_vec(messages) {
             Ok(mut msg_batch) => {
                 for message in msg_batch.messages.as_mut().unwrap() {
@@ -505,7 +504,7 @@ impl DefaultMQProducer {
         mut msg: M,
         mq: Option<MessageQueue>,
         send_callback: Option<SendMessageCallback>,
-    ) -> Result<Option<SendResult>>
+    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
         M: MessageTrait + Clone + Send + Sync,
     {
@@ -545,7 +544,7 @@ impl DefaultMQProducer {
         mut msg: M,
         mq: Option<MessageQueue>,
         send_callback: Option<SendMessageCallback>,
-    ) -> Result<Option<SendResult>>
+    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
         M: MessageTrait + Send + std::clone::Clone + std::marker::Sync + 'static,
     {
@@ -623,7 +622,7 @@ impl DefaultMQProducer {
 }
 
 impl MQProducer for DefaultMQProducer {
-    async fn start(&mut self) -> Result<()> {
+    async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
         let producer_group =
             self.with_namespace(self.producer_config.producer_group.clone().as_str());
         self.set_producer_group(producer_group);
@@ -670,7 +669,10 @@ impl MQProducer for DefaultMQProducer {
         }
     }
 
-    async fn fetch_publish_message_queues(&mut self, topic: &str) -> Result<Vec<MessageQueue>> {
+    async fn fetch_publish_message_queues(
+        &mut self,
+        topic: &str,
+    ) -> rocketmq_error::RocketMQResult<Vec<MessageQueue>> {
         let topic = self.with_namespace(topic);
         self.default_mqproducer_impl
             .as_mut()
@@ -679,7 +681,7 @@ impl MQProducer for DefaultMQProducer {
             .await
     }
 
-    async fn send<M>(&mut self, mut msg: M) -> Result<SendResult>
+    async fn send<M>(&mut self, mut msg: M) -> rocketmq_error::RocketMQResult<SendResult>
     where
         M: MessageTrait + Clone + Send + Sync,
     {
@@ -694,7 +696,11 @@ impl MQProducer for DefaultMQProducer {
         Ok(result.expect("SendResult should not be None"))
     }
 
-    async fn send_with_timeout(&mut self, mut msg: Message, timeout: u64) -> Result<SendResult> {
+    async fn send_with_timeout(
+        &mut self,
+        mut msg: Message,
+        timeout: u64,
+    ) -> rocketmq_error::RocketMQResult<SendResult> {
         msg.topic = self.with_namespace(msg.topic.as_str());
         let result = self
             .default_mqproducer_impl
@@ -705,7 +711,11 @@ impl MQProducer for DefaultMQProducer {
         Ok(result.expect("SendResult should not be None"))
     }
 
-    async fn send_with_callback<M, F>(&mut self, mut msg: M, send_callback: F) -> Result<()>
+    async fn send_with_callback<M, F>(
+        &mut self,
+        mut msg: M,
+        send_callback: F,
+    ) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Clone + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
@@ -731,7 +741,7 @@ impl MQProducer for DefaultMQProducer {
         mut msg: Message,
         send_callback: F,
         timeout: u64,
-    ) -> Result<()>
+    ) -> rocketmq_error::RocketMQResult<()>
     where
         F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
     {
@@ -744,7 +754,7 @@ impl MQProducer for DefaultMQProducer {
         Ok(())
     }
 
-    async fn send_oneway<M>(&mut self, mut msg: M) -> Result<()>
+    async fn send_oneway<M>(&mut self, mut msg: M) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Clone + Send + Sync,
     {
@@ -757,7 +767,11 @@ impl MQProducer for DefaultMQProducer {
         Ok(())
     }
 
-    async fn send_to_queue<M>(&mut self, mut msg: M, mq: MessageQueue) -> Result<SendResult>
+    async fn send_to_queue<M>(
+        &mut self,
+        mut msg: M,
+        mq: MessageQueue,
+    ) -> rocketmq_error::RocketMQResult<SendResult>
     where
         M: MessageTrait + Clone + Send + Sync,
     {
@@ -777,7 +791,7 @@ impl MQProducer for DefaultMQProducer {
         mut msg: M,
         mq: MessageQueue,
         timeout: u64,
-    ) -> Result<SendResult>
+    ) -> rocketmq_error::RocketMQResult<SendResult>
     where
         M: MessageTrait + Clone + Send + Sync,
     {
@@ -797,7 +811,7 @@ impl MQProducer for DefaultMQProducer {
         mut msg: M,
         mq: MessageQueue,
         send_callback: F,
-    ) -> Result<()>
+    ) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Clone + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
@@ -822,7 +836,7 @@ impl MQProducer for DefaultMQProducer {
         mq: MessageQueue,
         send_callback: F,
         timeout: u64,
-    ) -> Result<()>
+    ) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Clone + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
@@ -840,7 +854,11 @@ impl MQProducer for DefaultMQProducer {
             .await
     }
 
-    async fn send_oneway_to_queue<M>(&mut self, mut msg: M, mq: MessageQueue) -> Result<()>
+    async fn send_oneway_to_queue<M>(
+        &mut self,
+        mut msg: M,
+        mq: MessageQueue,
+    ) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Clone + Send + Sync,
     {
@@ -858,7 +876,7 @@ impl MQProducer for DefaultMQProducer {
         mut msg: M,
         selector: S,
         arg: T,
-    ) -> Result<SendResult>
+    ) -> rocketmq_error::RocketMQResult<SendResult>
     where
         M: MessageTrait + Clone + Send + Sync,
         S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue>
@@ -896,7 +914,7 @@ impl MQProducer for DefaultMQProducer {
         selector: S,
         arg: T,
         timeout: u64,
-    ) -> Result<SendResult>
+    ) -> rocketmq_error::RocketMQResult<SendResult>
     where
         M: MessageTrait + Clone + Send + Sync,
         S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue>
@@ -919,7 +937,7 @@ impl MQProducer for DefaultMQProducer {
         selector: S,
         arg: T,
         send_callback: Option<SendMessageCallback>,
-    ) -> Result<()>
+    ) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Clone + Send + Sync,
         S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue>
@@ -956,7 +974,7 @@ impl MQProducer for DefaultMQProducer {
         arg: T,
         send_callback: Option<SendMessageCallback>,
         timeout: u64,
-    ) -> Result<()>
+    ) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Clone + Send + Sync,
         S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue>
@@ -984,7 +1002,7 @@ impl MQProducer for DefaultMQProducer {
         mut msg: M,
         selector: S,
         arg: T,
-    ) -> Result<()>
+    ) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Clone + Send + Sync,
         S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue>
@@ -1005,14 +1023,17 @@ impl MQProducer for DefaultMQProducer {
         &mut self,
         msg: Message,
         arg: Option<T>,
-    ) -> Result<TransactionSendResult>
+    ) -> rocketmq_error::RocketMQResult<TransactionSendResult>
     where
         T: std::any::Any + Sync + Send,
     {
         unimplemented!("DefaultMQProducer not support send_message_in_transaction")
     }
 
-    async fn send_batch(&mut self, msgs: Vec<Message>) -> Result<SendResult> {
+    async fn send_batch(
+        &mut self,
+        msgs: Vec<Message>,
+    ) -> rocketmq_error::RocketMQResult<SendResult> {
         let mut batch = self.batch(msgs)?;
         let result = self
             .default_mqproducer_impl
@@ -1027,7 +1048,7 @@ impl MQProducer for DefaultMQProducer {
         &mut self,
         msgs: Vec<Message>,
         timeout: u64,
-    ) -> Result<SendResult> {
+    ) -> rocketmq_error::RocketMQResult<SendResult> {
         let mut batch = self.batch(msgs)?;
         let result = self
             .default_mqproducer_impl
@@ -1042,7 +1063,7 @@ impl MQProducer for DefaultMQProducer {
         &mut self,
         msgs: Vec<Message>,
         mq: MessageQueue,
-    ) -> Result<SendResult> {
+    ) -> rocketmq_error::RocketMQResult<SendResult> {
         let batch = self.batch(msgs)?;
         let result = self
             .default_mqproducer_impl
@@ -1058,7 +1079,7 @@ impl MQProducer for DefaultMQProducer {
         msgs: Vec<Message>,
         mq: MessageQueue,
         timeout: u64,
-    ) -> Result<SendResult> {
+    ) -> rocketmq_error::RocketMQResult<SendResult> {
         let batch = self.batch(msgs)?;
         let result = self
             .default_mqproducer_impl
@@ -1069,7 +1090,11 @@ impl MQProducer for DefaultMQProducer {
         Ok(result.expect("SendResult should not be None"))
     }
 
-    async fn send_batch_with_callback<F>(&mut self, msgs: Vec<Message>, f: F) -> Result<()>
+    async fn send_batch_with_callback<F>(
+        &mut self,
+        msgs: Vec<Message>,
+        f: F,
+    ) -> rocketmq_error::RocketMQResult<()>
     where
         F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
     {
@@ -1087,7 +1112,7 @@ impl MQProducer for DefaultMQProducer {
         msgs: Vec<Message>,
         f: F,
         timeout: u64,
-    ) -> Result<()>
+    ) -> rocketmq_error::RocketMQResult<()>
     where
         F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
     {
@@ -1105,7 +1130,7 @@ impl MQProducer for DefaultMQProducer {
         msgs: Vec<Message>,
         mq: MessageQueue,
         f: F,
-    ) -> Result<()>
+    ) -> rocketmq_error::RocketMQResult<()>
     where
         F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
     {
@@ -1123,7 +1148,7 @@ impl MQProducer for DefaultMQProducer {
         mq: MessageQueue,
         f: F,
         timeout: u64,
-    ) -> Result<()>
+    ) -> rocketmq_error::RocketMQResult<()>
     where
         F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
     {
@@ -1135,7 +1160,11 @@ impl MQProducer for DefaultMQProducer {
             .await
     }
 
-    async fn request<M>(&mut self, mut msg: M, timeout: u64) -> Result<Box<dyn MessageTrait + Send>>
+    async fn request<M>(
+        &mut self,
+        mut msg: M,
+        timeout: u64,
+    ) -> rocketmq_error::RocketMQResult<Box<dyn MessageTrait + Send>>
     where
         M: MessageTrait + Clone + Send + Sync,
     {
@@ -1152,7 +1181,7 @@ impl MQProducer for DefaultMQProducer {
         mut msg: M,
         request_callback: F,
         timeout: u64,
-    ) -> Result<()>
+    ) -> rocketmq_error::RocketMQResult<()>
     where
         F: Fn(Option<&dyn MessageTrait>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
         M: MessageTrait + Clone + Send + Sync,
@@ -1171,7 +1200,7 @@ impl MQProducer for DefaultMQProducer {
         selector: S,
         arg: T,
         timeout: u64,
-    ) -> Result<Box<dyn MessageTrait + Send>>
+    ) -> rocketmq_error::RocketMQResult<Box<dyn MessageTrait + Send>>
     where
         S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue>
             + Send
@@ -1195,7 +1224,7 @@ impl MQProducer for DefaultMQProducer {
         arg: T,
         request_callback: F,
         timeout: u64,
-    ) -> Result<()>
+    ) -> rocketmq_error::RocketMQResult<()>
     where
         S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue>
             + Send
@@ -1218,7 +1247,7 @@ impl MQProducer for DefaultMQProducer {
         mut msg: M,
         mq: MessageQueue,
         timeout: u64,
-    ) -> Result<Box<dyn MessageTrait + Send>>
+    ) -> rocketmq_error::RocketMQResult<Box<dyn MessageTrait + Send>>
     where
         M: MessageTrait + Clone + Send + Sync,
     {
@@ -1236,7 +1265,7 @@ impl MQProducer for DefaultMQProducer {
         mq: MessageQueue,
         request_callback: F,
         timeout: u64,
-    ) -> Result<()>
+    ) -> rocketmq_error::RocketMQResult<()>
     where
         F: Fn(Option<&dyn MessageTrait>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
         M: MessageTrait + Clone + Send + Sync,

@@ -12,3 +12,4 @@ readme = "README.md"
 description = "Rocketmq rust error module"
 
 [dependencies]
+thiserror.workspace = true

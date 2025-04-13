@@ -52,7 +52,7 @@ impl From<BrokerError> for rocketmq_remoting::remoting_error::RemotingError {
                 rocketmq_remoting::remoting_error::RemotingError::RemoteError(e)
             }
             BrokerError::ClientError(e) => {
-                rocketmq_remoting::remoting_error::RemotingError::RemotingCommandError(format!(
+                rocketmq_remoting::remoting_error::RocketmqError::DeserializeHeaderError(format!(
                     "{}",
                     e
                 ))

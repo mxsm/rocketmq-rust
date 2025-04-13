@@ -96,7 +96,7 @@ impl GetBrokerMemberGroupRequestHeader {
 }
 
 impl FromMap for GetBrokerMemberGroupRequestHeader {
-    type Error = crate::remoting_error::RemotingError;
+    type Error = rocketmq_error::RocketmqError;
     type Target = Self;
 
     fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {

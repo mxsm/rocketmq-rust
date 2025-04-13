@@ -23,7 +23,6 @@ use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
 use crate::consumer::consumer_impl::pop_request::PopRequest;
 use crate::consumer::consumer_impl::process_queue::ProcessQueue;
 use crate::consumer::consumer_impl::pull_request::PullRequest;
-use crate::Result;
 
 pub(crate) mod rebalance_impl;
 pub(crate) mod rebalance_push_impl;
@@ -102,7 +101,10 @@ pub trait RebalanceLocal {
     /// # Returns
     ///
     /// A result containing the pull offset or an error.
-    async fn compute_pull_from_where_with_exception(&mut self, mq: &MessageQueue) -> Result<i64>;
+    async fn compute_pull_from_where_with_exception(
+        &mut self,
+        mq: &MessageQueue,
+    ) -> rocketmq_error::RocketMQResult<i64>;
 
     /// Computes the pull offset.
     ///

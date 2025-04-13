@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_error::mq_client_err;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_rust::ArcMut;
 
@@ -22,8 +23,6 @@ use crate::base::client_config::ClientConfig;
 use crate::factory::mq_client_instance;
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::implementation::mq_client_api_impl::MQClientAPIImpl;
-use crate::mq_client_err;
-use crate::Result;
 
 pub struct MQAdminImpl {
     timeout_millis: u64,
@@ -71,7 +70,7 @@ impl MQAdminImpl {
         topic: &str,
         mq_client_api_impl: ArcMut<MQClientAPIImpl>,
         client_config: &mut ClientConfig,
-    ) -> Result<Vec<MessageQueue>> {
+    ) -> rocketmq_error::RocketMQResult<Vec<MessageQueue>> {
         let topic_route_data = mq_client_api_impl
             .get_topic_route_info_from_name_server_detail(topic, self.timeout_millis, true)
             .await?;
@@ -93,7 +92,7 @@ impl MQAdminImpl {
         ))
     }
 
-    pub async fn max_offset(&mut self, mq: &MessageQueue) -> Result<i64> {
+    pub async fn max_offset(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
         let client = self.client.as_mut().expect("client is None");
         let broker_name = client.get_broker_name_from_message_queue(mq).await;
         let mut broker_addr = client
@@ -120,7 +119,11 @@ impl MQAdminImpl {
 
         unimplemented!("max_offset")
     }
-    pub async fn search_offset(&mut self, mq: &MessageQueue, timestamp: u64) -> Result<i64> {
+    pub async fn search_offset(
+        &mut self,
+        mq: &MessageQueue,
+        timestamp: u64,
+    ) -> rocketmq_error::RocketMQResult<i64> {
         unimplemented!("max_offset")
     }
 }

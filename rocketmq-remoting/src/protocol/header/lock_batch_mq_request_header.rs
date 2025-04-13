@@ -44,7 +44,7 @@ impl CommandCustomHeader for LockBatchMqRequestHeader {
 }
 
 impl FromMap for LockBatchMqRequestHeader {
-    type Error = crate::remoting_error::RemotingError;
+    type Error = rocketmq_error::RocketmqError;
 
     type Target = Self;
 

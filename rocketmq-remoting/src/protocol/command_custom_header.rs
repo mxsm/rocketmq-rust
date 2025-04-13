@@ -18,8 +18,8 @@ use std::any::Any;
 use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
+use rocketmq_error::RocketmqError;
 
-use crate::remoting_error::RemotingError;
 use crate::rocketmq_serializable::RocketMQSerializable;
 
 pub trait CommandCustomHeader: AsAny {
@@ -74,7 +74,7 @@ pub trait CommandCustomHeader: AsAny {
     fn decode_fast(
         &mut self,
         _fields: &HashMap<CheetahString, CheetahString>,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         Ok(())
     }
 
@@ -98,22 +98,22 @@ pub trait CommandCustomHeader: AsAny {
     /// # Returns
     ///
     /// * `Ok(CheetahString)` - If the field is found in the map, returns the associated value.
-    /// * `Err(RemotingError::RemotingCommandError)` - If the field is not found in the map, returns
-    ///   an error indicating the field is required.
+    /// * `Err(RocketmqError::DeserializeHeaderError)` - If the field is not found in the map,
+    ///   returns an error indicating the field is required.
     ///
     /// # Errors
     ///
-    /// This function returns a `RemotingError::RemotingCommandError` if the specified field is not
-    /// found in the map.
+    /// This function returns a `RocketmqError::DeserializeHeaderError` if the specified field is
+    /// not found in the map.
     #[inline(always)]
     fn get_and_check_not_none(
         &self,
         map: &HashMap<CheetahString, CheetahString>,
         field: &CheetahString,
-    ) -> crate::Result<CheetahString> {
+    ) -> rocketmq_error::RocketMQResult<CheetahString> {
         match map.get(field) {
             Some(value) => Ok(value.clone()),
-            None => Err(crate::remoting_error::RemotingError::RemotingCommandError(
+            None => Err(rocketmq_error::RocketmqError::DeserializeHeaderError(
                 format!("The field {} is required.", field),
             )),
         }
@@ -137,7 +137,7 @@ impl<T: CommandCustomHeader> AsAny for T {
 }
 
 pub trait FromMap {
-    type Error: From<RemotingError>;
+    type Error: From<RocketmqError>;
 
     type Target;
     /// Converts the implementing type from a map.

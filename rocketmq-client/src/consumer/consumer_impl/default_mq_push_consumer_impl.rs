@@ -38,6 +38,8 @@ use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
 use rocketmq_common::common::FAQUrl;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_error::mq_client_err;
+use rocketmq_error::ClientErr;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_remoting::protocol::body::consumer_running_info::ConsumerRunningInfo;
 use rocketmq_remoting::protocol::filter::filter_api::FilterAPI;
@@ -60,8 +62,6 @@ use tracing::warn;
 
 use crate::base::client_config::ClientConfig;
 use crate::base::validators::Validators;
-use crate::client_error::ClientErr;
-use crate::client_error::MQClientError;
 use crate::consumer::ack_callback::AckCallback;
 use crate::consumer::ack_result::AckResult;
 use crate::consumer::consumer_impl::consume_message_concurrently_service::ConsumeMessageConcurrentlyService;
@@ -94,9 +94,7 @@ use crate::hook::filter_message_context::FilterMessageContext;
 use crate::hook::filter_message_hook::FilterMessageHook;
 use crate::implementation::communication_mode::CommunicationMode;
 use crate::implementation::mq_client_manager::MQClientManager;
-use crate::mq_client_err;
 use crate::producer::mq_producer::MQProducer;
-use crate::Result;
 
 const PULL_TIME_DELAY_MILLS_WHEN_CACHE_FLOW_CONTROL: u64 = 50;
 pub(crate) const PULL_TIME_DELAY_MILLS_WHEN_BROKER_FLOW_CONTROL: u64 = 20;
@@ -204,7 +202,7 @@ impl DefaultMQPushConsumerImpl {
 }
 
 impl DefaultMQPushConsumerImpl {
-    pub async fn start(&mut self) -> Result<()> {
+    pub async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
         match *self.service_state {
             ServiceState::CreateJust => {
                 info!(
@@ -462,7 +460,7 @@ impl DefaultMQPushConsumerImpl {
         }
     }
 
-    fn check_config(&mut self) -> Result<()> {
+    fn check_config(&mut self) -> rocketmq_error::RocketMQResult<()> {
         Validators::check_group(self.consumer_config.consumer_group.as_str())?;
         if self.consumer_config.consumer_group.is_empty() {
             return mq_client_err!(format!(
@@ -631,13 +629,13 @@ impl DefaultMQPushConsumerImpl {
         Ok(())
     }
 
-    async fn copy_subscription(&mut self) -> Result<()> {
+    async fn copy_subscription(&mut self) -> rocketmq_error::RocketMQResult<()> {
         let sub = self.consumer_config.subscription();
         if !sub.is_empty() {
             for (topic, sub_expression) in sub.as_ref() {
                 let subscription_data = FilterAPI::build_subscription_data(topic, sub_expression)
                     .map_err(|e| {
-                    MQClientError::MQClientErr(ClientErr::new(format!(
+                    rocketmq_error::RocketmqError::MQClientErr(ClientErr::new(format!(
                         "buildSubscriptionData exception, {}",
                         e
                     )))
@@ -662,7 +660,7 @@ impl DefaultMQPushConsumerImpl {
                     &CheetahString::from_static_str(SubscriptionData::SUB_ALL),
                 )
                 .map_err(|e| {
-                    MQClientError::MQClientErr(ClientErr::new(format!(
+                    rocketmq_error::RocketmqError::MQClientErr(ClientErr::new(format!(
                         "buildSubscriptionData exception, {}",
                         e
                     )))
@@ -687,7 +685,7 @@ impl DefaultMQPushConsumerImpl {
         &mut self,
         topic: CheetahString,
         sub_expression: CheetahString,
-    ) -> Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         let subscription_data = FilterAPI::build_subscription_data(&topic, &sub_expression);
         if let Err(e) = subscription_data {
             return mq_client_err!(format!("buildSubscriptionData exception, {}", e));
@@ -1159,7 +1157,7 @@ impl DefaultMQPushConsumerImpl {
     }
 
     #[inline]
-    fn make_sure_state_ok(&self) -> Result<()> {
+    fn make_sure_state_ok(&self) -> rocketmq_error::RocketMQResult<()> {
         if *self.service_state != ServiceState::Running {
             return mq_client_err!(format!(
                 "The consumer service state not OK, {},{}",
@@ -1252,7 +1250,7 @@ impl DefaultMQPushConsumerImpl {
         msg: &mut MessageExt,
         delay_level: i32,
         mq: &MessageQueue,
-    ) -> Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         self.send_message_back_with_broker_name(msg, delay_level, None, Some(mq))
             .await
     }
@@ -1262,7 +1260,7 @@ impl DefaultMQPushConsumerImpl {
         delay_level: i32,
         broker_name: Option<CheetahString>,
         mq: Option<&MessageQueue>,
-    ) -> Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         let need_retry = true;
         if broker_name.is_some()
             && broker_name
@@ -1323,7 +1321,10 @@ impl DefaultMQPushConsumerImpl {
         Ok(())
     }
 
-    async fn send_message_back_as_normal_message(&mut self, msg: &MessageExt) -> Result<()> {
+    async fn send_message_back_as_normal_message(
+        &mut self,
+        msg: &MessageExt,
+    ) -> rocketmq_error::RocketMQResult<()> {
         let topic = mix_all::get_retry_topic(self.consumer_config.consumer_group());
         let body = msg.get_body().cloned();
         let mut new_msg = Message::new_body(topic.as_str(), body);
@@ -1476,7 +1477,7 @@ impl DefaultMQPushConsumerImpl {
         extra_info: &CheetahString,
         invisible_time: u64,
         callback: impl AckCallback,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         let extra_info_strs = ExtraInfoUtil::split(extra_info)?;
         let broker_name =
             CheetahString::from_string(ExtraInfoUtil::get_broker_name(extra_info_strs.as_slice())?);
@@ -1590,7 +1591,7 @@ impl MQConsumerInner for DefaultMQPushConsumerImpl {
         todo!()
     }
 
-    async fn try_rebalance(&self) -> Result<bool> {
+    async fn try_rebalance(&self) -> rocketmq_error::RocketMQResult<bool> {
         if !self.pause.load(Ordering::Acquire) {
             return Ok(self
                 .rebalance_impl

@@ -26,25 +26,24 @@ use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use tracing::info;
 
-use crate::client_error::MQClientError::IllegalArgumentError;
-use crate::Result;
-
 pub fn check(
     consumer_group: &CheetahString,
     current_cid: &CheetahString,
     mq_all: &[MessageQueue],
     cid_all: &[CheetahString],
-) -> Result<bool> {
+) -> rocketmq_error::RocketMQResult<bool> {
     if current_cid.is_empty() {
-        return Err(IllegalArgumentError("currentCID is empty".to_string()));
+        return Err(rocketmq_error::RocketmqError::IllegalArgumentError(
+            "currentCID is empty".to_string(),
+        ));
     }
     if mq_all.is_empty() {
-        return Err(IllegalArgumentError(
+        return Err(rocketmq_error::RocketmqError::IllegalArgumentError(
             "mqAll is null or mqAll empty".to_string(),
         ));
     }
     if cid_all.is_empty() {
-        return Err(IllegalArgumentError(
+        return Err(rocketmq_error::RocketmqError::IllegalArgumentError(
             "cidAll is null or cidAll empty".to_string(),
         ));
     }

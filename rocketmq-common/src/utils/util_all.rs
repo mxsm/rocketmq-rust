@@ -42,8 +42,6 @@ use tracing::error;
 use tracing::info;
 
 use crate::common::mix_all::MULTI_PATH_SPLITTER;
-use crate::error::Error::RuntimeException;
-use crate::Result;
 
 pub const YYYY_MM_DD_HH_MM_SS: &str = "%Y-%m-%d %H:%M:%S%";
 pub const YYYY_MM_DD_HH_MM_SS_SSS: &str = "%Y-%m-%d %H:%M:%S%.f";
@@ -361,7 +359,7 @@ pub fn delete_empty_directory<P: AsRef<Path>>(path: P) {
     }
 }
 
-pub fn get_ip() -> Result<Vec<u8>> {
+pub fn get_ip() -> rocketmq_error::RocketMQResult<Vec<u8>> {
     match local_ip_address::local_ip() {
         Ok(value) => match value {
             IpAddr::V4(ip) => Ok(ip.octets().to_vec()),
@@ -372,7 +370,7 @@ pub fn get_ip() -> Result<Vec<u8>> {
                 IpAddr::V4(ip) => Ok(ip.octets().to_vec()),
                 IpAddr::V6(ip) => Ok(ip.octets().to_vec()),
             },
-            Err(value) => Err(RuntimeException(value.to_string())),
+            Err(value) => Err(rocketmq_error::RocketmqError::IpError(value.to_string())),
         },
     }
 }

@@ -37,6 +37,10 @@ use rocketmq_common::common::namesrv::top_addressing::TopAddressing;
 use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::MessageDecoder;
+use rocketmq_error::client_broker_err;
+use rocketmq_error::mq_client_err;
+use rocketmq_error::MQBrokerErr;
+use rocketmq_error::RocketmqError::MQClientBrokerError;
 use rocketmq_remoting::base::connection_net_event::ConnectionNetEvent;
 use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
@@ -93,11 +97,6 @@ use tracing::error;
 use tracing::warn;
 
 use crate::base::client_config::ClientConfig;
-use crate::client_broker_err;
-use crate::client_error::MQBrokerErr;
-use crate::client_error::MQClientError;
-use crate::client_error::MQClientError::MQClientBrokerError;
-use crate::client_error::MQClientError::RemotingError;
 use crate::consumer::ack_callback::AckCallback;
 use crate::consumer::ack_result::AckResult;
 use crate::consumer::ack_status::AckStatus;
@@ -112,13 +111,11 @@ use crate::factory::mq_client_instance::MQClientInstance;
 use crate::hook::send_message_context::SendMessageContext;
 use crate::implementation::client_remoting_processor::ClientRemotingProcessor;
 use crate::implementation::communication_mode::CommunicationMode;
-use crate::mq_client_err;
 use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl;
 use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
 use crate::producer::send_callback::SendMessageCallback;
 use crate::producer::send_result::SendResult;
 use crate::producer::send_status::SendStatus;
-use crate::Result;
 
 lazy_static! {
     static ref sendSmartMsg: bool = std::env::var("org.apache.rocketmq.client.sendSmartMsg")
@@ -207,7 +204,7 @@ impl MQClientAPIImpl {
     pub async fn get_default_topic_route_info_from_name_server(
         &self,
         timeout_millis: u64,
-    ) -> Result<Option<TopicRouteData>> {
+    ) -> rocketmq_error::RocketMQResult<Option<TopicRouteData>> {
         self.get_topic_route_info_from_name_server_detail(
             TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC,
             timeout_millis,
@@ -221,7 +218,7 @@ impl MQClientAPIImpl {
         &self,
         topic: &str,
         timeout_millis: u64,
-    ) -> Result<Option<TopicRouteData>> {
+    ) -> rocketmq_error::RocketMQResult<Option<TopicRouteData>> {
         self.get_topic_route_info_from_name_server_detail(topic, timeout_millis, true)
             .await
     }
@@ -232,7 +229,7 @@ impl MQClientAPIImpl {
         topic: &str,
         timeout_millis: u64,
         allow_topic_not_exist: bool,
-    ) -> Result<Option<TopicRouteData>> {
+    ) -> rocketmq_error::RocketMQResult<Option<TopicRouteData>> {
         let request_header = GetRouteInfoRequestHeader {
             topic: CheetahString::from_slice(topic),
             accept_standard_json_only: None,
@@ -281,7 +278,7 @@ impl MQClientAPIImpl {
                     result.remark().cloned().unwrap_or_default().to_string()
                 )
             }
-            Err(err) => Err(MQClientError::RemotingError(err)),
+            Err(err) => Err(err),
         }
     }
 
@@ -303,7 +300,7 @@ impl MQClientAPIImpl {
         retry_times_when_send_failed: u32,
         context: &mut Option<SendMessageContext<'_>>,
         producer: &DefaultMQProducerImpl,
-    ) -> Result<Option<SendResult>>
+    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
         T: MessageTrait,
     {
@@ -357,7 +354,7 @@ impl MQClientAPIImpl {
             CommunicationMode::Sync => {
                 let cost_time_sync = (Instant::now() - begin_start_time).as_millis() as u64;
                 if cost_time_sync > timeout_millis {
-                    return Err(MQClientError::RemotingTooMuchRequestError(
+                    return Err(rocketmq_error::RocketmqError::RemotingTooMuchRequestError(
                         "sendMessage call timeout".to_string(),
                     ));
                 }
@@ -376,7 +373,7 @@ impl MQClientAPIImpl {
                 let times = AtomicU32::new(0);
                 let cost_time_sync = (Instant::now() - begin_start_time).as_millis() as u64;
                 if cost_time_sync > timeout_millis {
-                    return Err(MQClientError::RemotingTooMuchRequestError(
+                    return Err(rocketmq_error::RocketmqError::RemotingTooMuchRequestError(
                         "sendMessage call timeout".to_string(),
                     ));
                 }
@@ -416,7 +413,7 @@ impl MQClientAPIImpl {
         communication_mode: CommunicationMode,
         context: &mut Option<SendMessageContext<'_>>,
         producer: &DefaultMQProducerImpl,
-    ) -> Result<Option<SendResult>>
+    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
         T: MessageTrait,
     {
@@ -444,7 +441,7 @@ impl MQClientAPIImpl {
         msg: &T,
         timeout_millis: u64,
         request: RemotingCommand,
-    ) -> Result<SendResult>
+    ) -> rocketmq_error::RocketMQResult<SendResult>
     where
         T: MessageTrait,
     {
@@ -543,7 +540,7 @@ impl MQClientAPIImpl {
         msg: &T,
         response: &RemotingCommand,
         addr: &CheetahString,
-    ) -> Result<SendResult>
+    ) -> rocketmq_error::RocketMQResult<SendResult>
     where
         T: MessageTrait,
     {
@@ -554,8 +551,8 @@ impl MQClientAPIImpl {
             ResponseCode::SlaveNotAvailable => SendStatus::SlaveNotAvailable,
             ResponseCode::Success => SendStatus::SendOk,
             _ => {
-                return Err(MQClientError::MQClientBrokerError(
-                    MQBrokerErr::new_with_broker(
+                return Err(rocketmq_error::RocketmqError::MQClientBrokerError(
+                    rocketmq_error::MQBrokerErr::new_with_broker(
                         response.code(),
                         response.remark().map_or("".to_string(), |s| s.to_string()),
                         addr.to_string(),
@@ -625,7 +622,7 @@ impl MQClientAPIImpl {
         instance: Option<ArcMut<MQClientInstance>>,
         times_total: u32,
         cur_times: &AtomicU32,
-        e: MQClientError,
+        e: rocketmq_error::RocketmqError,
         context: &mut Option<SendMessageContext<'_>>,
         need_retry: bool,
         producer: &DefaultMQProducerImpl,
@@ -686,7 +683,7 @@ impl MQClientAPIImpl {
         addr: &CheetahString,
         heartbeat_data: &HeartbeatData,
         timeout_millis: u64,
-    ) -> Result<i32> {
+    ) -> rocketmq_error::RocketMQResult<i32> {
         let request = RemotingCommand::create_request_command(
             RequestCode::HeartBeat,
             HeartbeatRequestHeader::default(),
@@ -718,7 +715,7 @@ impl MQClientAPIImpl {
         client_id: &str,
         subscription_data: &SubscriptionData,
         timeout_millis: u64,
-    ) -> Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         let mut request = RemotingCommand::create_remoting_command(RequestCode::CheckClientConfig);
         let body = CheckClientRequestBody::new(
             client_id.to_string(),
@@ -754,7 +751,7 @@ impl MQClientAPIImpl {
         addr: &str,
         consumer_group: &str,
         timeout_millis: u64,
-    ) -> Result<Vec<CheetahString>> {
+    ) -> rocketmq_error::RocketMQResult<Vec<CheetahString>> {
         let request_header = GetConsumerListByGroupRequestHeader {
             consumer_group: CheetahString::from_slice(consumer_group),
             rpc: None,
@@ -787,7 +784,7 @@ impl MQClientAPIImpl {
                 }
             }
             _ => {
-                return Err(MQClientError::MQClientBrokerError(
+                return Err(rocketmq_error::RocketmqError::MQClientBrokerError(
                     MQBrokerErr::new_with_broker(
                         response.code(),
                         response.remark().map_or("".to_string(), |s| s.to_string()),
@@ -808,7 +805,7 @@ impl MQClientAPIImpl {
         addr: &str,
         request_header: UpdateConsumerOffsetRequestHeader,
         timeout_millis: u64,
-    ) -> Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         let request = RemotingCommand::create_request_command(
             RequestCode::UpdateConsumerOffset,
             request_header,
@@ -828,7 +825,7 @@ impl MQClientAPIImpl {
         addr: &CheetahString,
         request_header: UpdateConsumerOffsetRequestHeader,
         timeout_millis: u64,
-    ) -> Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         let request = RemotingCommand::create_request_command(
             RequestCode::UpdateConsumerOffset,
             request_header,
@@ -838,7 +835,7 @@ impl MQClientAPIImpl {
             .invoke_async(Some(addr), request, timeout_millis)
             .await?;
         if ResponseCode::from(response.code()) != ResponseCode::Success {
-            Err(MQClientError::MQClientBrokerError(
+            Err(rocketmq_error::RocketmqError::MQClientBrokerError(
                 MQBrokerErr::new_with_broker(
                     response.code(),
                     response.remark().map_or("".to_string(), |s| s.to_string()),
@@ -855,7 +852,7 @@ impl MQClientAPIImpl {
         addr: &str,
         request_header: QueryConsumerOffsetRequestHeader,
         timeout_millis: u64,
-    ) -> Result<i64> {
+    ) -> rocketmq_error::RocketMQResult<i64> {
         let request = RemotingCommand::create_request_command(
             RequestCode::QueryConsumerOffset,
             request_header,
@@ -879,7 +876,7 @@ impl MQClientAPIImpl {
                 return Ok(response_header.offset.unwrap());
             }
             ResponseCode::QueryNotFound => {
-                return Err(MQClientError::OffsetNotFoundError(
+                return Err(rocketmq_error::RocketmqError::OffsetNotFoundError(
                     response.code(),
                     response.remark().map_or("".to_string(), |s| s.to_string()),
                     addr.to_string(),
@@ -901,7 +898,7 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
         communication_mode: CommunicationMode,
         pull_callback: PCB,
-    ) -> Result<Option<PullResultExt>>
+    ) -> rocketmq_error::RocketMQResult<Option<PullResultExt>>
     where
         PCB: PullCallback + 'static,
     {
@@ -935,7 +932,7 @@ impl MQClientAPIImpl {
         addr: &CheetahString,
         request: RemotingCommand,
         timeout_millis: u64,
-    ) -> Result<PullResultExt> {
+    ) -> rocketmq_error::RocketMQResult<PullResultExt> {
         let response = self
             .remoting_client
             .invoke_async(Some(addr), request, timeout_millis)
@@ -949,7 +946,7 @@ impl MQClientAPIImpl {
         request: RemotingCommand,
         timeout_millis: u64,
         mut pull_callback: PCB,
-    ) -> Result<()>
+    ) -> rocketmq_error::RocketMQResult<()>
     where
         PCB: PullCallback,
     {
@@ -980,7 +977,7 @@ impl MQClientAPIImpl {
         &mut self,
         mut response: RemotingCommand,
         addr: &CheetahString,
-    ) -> Result<PullResultExt> {
+    ) -> rocketmq_error::RocketMQResult<PullResultExt> {
         let pull_status = match ResponseCode::from(response.code()) {
             ResponseCode::Success => PullStatus::Found,
             ResponseCode::PullNotFound => PullStatus::NoNewMsg,
@@ -1021,7 +1018,7 @@ impl MQClientAPIImpl {
         delay_level: i32,
         timeout_millis: u64,
         max_consume_retry_times: i32,
-    ) -> Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         let header = ConsumerSendMsgBackRequestHeader {
             offset: msg.commit_log_offset,
             group: CheetahString::from_slice(consumer_group),
@@ -1069,7 +1066,7 @@ impl MQClientAPIImpl {
         producer_group: Option<CheetahString>,
         consumer_group: Option<CheetahString>,
         timeout_millis: u64,
-    ) -> Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         let request_header = UnregisterClientRequestHeader {
             client_id,
             producer_group,
@@ -1099,7 +1096,7 @@ impl MQClientAPIImpl {
         request_body: UnlockBatchRequestBody,
         timeout_millis: u64,
         oneway: bool,
-    ) -> Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         let mut request = RemotingCommand::create_request_command(
             RequestCode::UnlockBatchMq,
             UnlockBatchMqRequestHeader::default(),
@@ -1143,7 +1140,7 @@ impl MQClientAPIImpl {
         addr: &str,
         request_body: LockBatchRequestBody,
         timeout_millis: u64,
-    ) -> Result<HashSet<MessageQueue>> {
+    ) -> rocketmq_error::RocketMQResult<HashSet<MessageQueue>> {
         let mut request = RemotingCommand::create_request_command(
             RequestCode::LockBatchMq,
             LockBatchMqRequestHeader::default(),
@@ -1197,7 +1194,7 @@ impl MQClientAPIImpl {
         request_header: EndTransactionRequestHeader,
         remark: CheetahString,
         timeout_millis: u64,
-    ) -> Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         let request =
             RemotingCommand::create_request_command(RequestCode::EndTransaction, request_header)
                 .set_remark(remark);
@@ -1213,7 +1210,7 @@ impl MQClientAPIImpl {
         addr: &str,
         message_queue: &MessageQueue,
         timeout_millis: u64,
-    ) -> Result<i64> {
+    ) -> rocketmq_error::RocketMQResult<i64> {
         let request_header = GetMaxOffsetRequestHeader {
             topic: CheetahString::from_slice(message_queue.get_topic()),
             queue_id: message_queue.get_queue_id(),
@@ -1262,7 +1259,7 @@ impl MQClientAPIImpl {
         mode: MessageRequestMode,
         pop_share_queue_num: i32,
         timeout_millis: u64,
-    ) -> Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         let body = SetMessageRequestModeRequestBody {
             topic: topic.clone(),
             consumer_group: consumer_group.clone(),
@@ -1303,7 +1300,7 @@ impl MQClientAPIImpl {
         strategy_name: CheetahString,
         message_model: MessageModel,
         timeout: u64,
-    ) -> Result<Option<HashSet<MessageQueueAssignment>>> {
+    ) -> rocketmq_error::RocketMQResult<Option<HashSet<MessageQueueAssignment>>> {
         let request_body = QueryAssignmentRequestBody {
             topic,
             consumer_group,
@@ -1354,7 +1351,7 @@ impl MQClientAPIImpl {
         request_header: ChangeInvisibleTimeRequestHeader,
         timeout_millis: u64,
         ack_callback: impl AckCallback,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         let offset = request_header.offset;
         let topic = request_header.topic.clone();
         let queue_id = request_header.queue_id;
@@ -1368,9 +1365,8 @@ impl MQClientAPIImpl {
             .await
         {
             Ok(response) => {
-                let response_header = response
-                    .decode_command_custom_header::<ChangeInvisibleTimeResponseHeader>()
-                    .map_err(RemotingError)?;
+                let response_header =
+                    response.decode_command_custom_header::<ChangeInvisibleTimeResponseHeader>()?;
                 let ack_result = if ResponseCode::from(response.code()) == ResponseCode::Success {
                     AckResult {
                         status: AckStatus::Ok,
@@ -1412,7 +1408,7 @@ impl MQClientAPIImpl {
         request_header: PopMessageRequestHeader,
         timeout_millis: u64,
         mut pop_callback: PC,
-    ) -> Result<()>
+    ) -> rocketmq_error::RocketMQResult<()>
     where
         PC: PopCallback + 'static,
     {
@@ -1449,7 +1445,7 @@ impl MQClientAPIImpl {
         mut response: RemotingCommand,
         topic: &CheetahString,
         is_order: bool,
-    ) -> Result<PopResult> {
+    ) -> rocketmq_error::RocketMQResult<PopResult> {
         let response_code = ResponseCode::from(response.code());
         let (pop_status, msg_found_list) = match response_code {
             ResponseCode::Success => {
@@ -1476,9 +1472,8 @@ impl MQClientAPIImpl {
             msg_found_list: Some(msg_found_list),
             ..Default::default()
         };
-        let response_header = response
-            .decode_command_custom_header::<PopMessageResponseHeader>()
-            .map_err(RemotingError)?;
+        let response_header =
+            response.decode_command_custom_header::<PopMessageResponseHeader>()?;
         pop_result.rest_num = response_header.rest_num;
         if pop_result.pop_status != PopStatus::Found {
             return Ok(pop_result);
@@ -1492,22 +1487,19 @@ impl MQClientAPIImpl {
                 .start_offset_info
                 .as_ref()
                 .unwrap_or(&CheetahString::from_slice("")),
-        )
-        .map_err(RemotingError)?;
+        )?;
         let msg_offset_info = ExtraInfoUtil::parse_msg_offset_info(
             response_header
                 .msg_offset_info
                 .as_ref()
                 .unwrap_or(&CheetahString::from_slice("")),
-        )
-        .map_err(RemotingError)?;
+        )?;
         let order_count_info = ExtraInfoUtil::parse_order_count_info(
             response_header
                 .order_count_info
                 .as_ref()
                 .unwrap_or(&CheetahString::from_slice("")),
-        )
-        .map_err(RemotingError)?;
+        )?;
         let sort_map = build_queue_offset_sorted_map(
             topic.as_str(),
             pop_result.msg_found_list.as_ref().map_or(&[], |v| v),
@@ -1697,7 +1689,7 @@ impl MQClientAPIImpl {
         request_header: AckMessageRequestHeader,
         timeout_millis: u64,
         ack_callback: impl AckCallback,
-    ) -> Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         self.ack_message_async_inner(
             addr,
             Some(request_header),
@@ -1715,15 +1707,12 @@ impl MQClientAPIImpl {
         request_body: Option<BatchAckMessageRequestBody>,
         timeout_millis: u64,
         ack_callback: impl AckCallback,
-    ) -> Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         let request = if let Some(header) = request_header {
             RemotingCommand::create_request_command(RequestCode::AckMessage, header)
         } else {
             let body = request_body.unwrap();
-            RemotingCommand::new_request(
-                RequestCode::BatchAckMessage,
-                body.encode().map_err(MQClientError::CommonError)?,
-            )
+            RemotingCommand::new_request(RequestCode::BatchAckMessage, body.encode()?)
         };
         match self
             .remoting_client

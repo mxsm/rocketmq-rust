@@ -35,7 +35,6 @@ use tokio::sync::Mutex;
 use crate::producer::default_mq_producer::DefaultMQProducer;
 use crate::producer::send_callback::SendMessageCallback;
 use crate::producer::send_result::SendResult;
-use crate::Result;
 
 #[derive(Default)]
 pub struct ProduceAccumulator {
@@ -96,7 +95,7 @@ impl ProduceAccumulator {
         message: M,
         mq: Option<MessageQueue>,
         default_mq_producer: DefaultMQProducer,
-    ) -> Result<Option<SendResult>> {
+    ) -> rocketmq_error::RocketMQResult<Option<SendResult>> {
         unimplemented!("send")
     }
 
@@ -106,7 +105,7 @@ impl ProduceAccumulator {
         mq: Option<MessageQueue>,
         send_callback: Option<SendMessageCallback>,
         default_mq_producer: DefaultMQProducer,
-    ) -> Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         let partition_key = AggregateKey::new_from_message_queue(&message, mq);
         loop {
             let batch =
@@ -226,7 +225,7 @@ impl MessageAccumulation {
         &mut self,
         msg: M,
         send_callback: Option<SendMessageCallback>,
-    ) -> Result<bool> {
+    ) -> rocketmq_error::RocketMQResult<bool> {
         unimplemented!()
     }
 
@@ -245,7 +244,7 @@ impl MessageAccumulation {
         &mut self,
         msg: Message,
         send_callback: SendCallback,
-    ) -> Result<bool, ()> {
+    ) -> rocketmq_error::RocketMQResult<bool, ()> {
         if self.closed.load(Ordering::SeqCst) {
             return Err(());
         }
@@ -267,7 +266,7 @@ impl MessageAccumulation {
         // Implementation for splitting send results
     }
 
-    pub fn send(&mut self) -> Result<(), ()> {
+    pub fn send(&mut self) -> rocketmq_error::RocketMQResult<(), ()> {
         if self.closed.swap(true, Ordering::SeqCst) {
             return Ok(());
         }
@@ -279,7 +278,7 @@ impl MessageAccumulation {
         Ok(())
     }
 
-    pub fn send_with_callback(&mut self, send_callback: SendCallback) -> Result<(), ()> {
+    pub fn send_with_callback(&mut self, send_callback: SendCallback) -> rocketmq_error::RocketMQResult<(), ()> {
         if self.closed.swap(true, Ordering::SeqCst) {
             return Ok(());
         }

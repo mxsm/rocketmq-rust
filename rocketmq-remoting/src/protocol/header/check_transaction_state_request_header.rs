@@ -85,7 +85,7 @@ impl CommandCustomHeader for CheckTransactionStateRequestHeader {
 }
 
 impl FromMap for CheckTransactionStateRequestHeader {
-    type Error = crate::remoting_error::RemotingError;
+    type Error = rocketmq_error::RocketmqError;
 
     type Target = Self;
 

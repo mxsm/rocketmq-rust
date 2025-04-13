@@ -22,8 +22,7 @@ use rocketmq_common::common::key_builder::KeyBuilder;
 use rocketmq_common::common::key_builder::POP_ORDER_REVIVE_QUEUE;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::mix_all;
-
-use crate::remoting_error::RemotingError::IllegalArgument;
+use rocketmq_error::RocketmqError::IllegalArgument;
 
 pub struct ExtraInfoUtil;
 
@@ -33,14 +32,14 @@ const RETRY_TOPIC_V2: &str = "2";
 const QUEUE_OFFSET: &str = "qo";
 
 impl ExtraInfoUtil {
-    pub fn split(extra_info: &str) -> crate::Result<Vec<String>> {
+    pub fn split(extra_info: &str) -> rocketmq_error::RocketMQResult<Vec<String>> {
         if extra_info.is_empty() {
             return Err(IllegalArgument("split extraInfo is empty".to_string()));
         }
         Ok(extra_info.split('|').map(String::from).collect())
     }
 
-    pub fn get_ck_queue_offset(extra_info_strs: &[String]) -> crate::Result<i64> {
+    pub fn get_ck_queue_offset(extra_info_strs: &[String]) -> rocketmq_error::RocketMQResult<i64> {
         if extra_info_strs.is_empty() {
             return Err(IllegalArgument(format!(
                 "getCkQueueOffset fail, extraInfoStrs length {}",
@@ -52,7 +51,7 @@ impl ExtraInfoUtil {
             .map_err(|_| IllegalArgument("parse ck_queue_offset error".to_string()))
     }
 
-    pub fn get_pop_time(extra_info_strs: &[String]) -> crate::Result<i64> {
+    pub fn get_pop_time(extra_info_strs: &[String]) -> rocketmq_error::RocketMQResult<i64> {
         if extra_info_strs.len() < 2 {
             return Err(IllegalArgument(format!(
                 "getPopTime fail, extraInfoStrs length {}",
@@ -64,7 +63,7 @@ impl ExtraInfoUtil {
             .map_err(|_| IllegalArgument("parse pop_time error".to_string()))
     }
 
-    pub fn get_invisible_time(extra_info_strs: &[String]) -> crate::Result<i64> {
+    pub fn get_invisible_time(extra_info_strs: &[String]) -> rocketmq_error::RocketMQResult<i64> {
         if extra_info_strs.len() < 3 {
             return Err(IllegalArgument(format!(
                 "getInvisibleTime fail, extraInfoStrs length {}",
@@ -76,7 +75,7 @@ impl ExtraInfoUtil {
             .map_err(|_| IllegalArgument("parse invisible_time error".to_string()))
     }
 
-    pub fn get_revive_qid(extra_info_strs: &[String]) -> crate::Result<i32> {
+    pub fn get_revive_qid(extra_info_strs: &[String]) -> rocketmq_error::RocketMQResult<i32> {
         if extra_info_strs.len() < 4 {
             return Err(IllegalArgument(format!(
                 "getReviveQid fail, extraInfoStrs length {}",
@@ -92,7 +91,7 @@ impl ExtraInfoUtil {
         extra_info_strs: &[String],
         topic: &str,
         cid: &str,
-    ) -> crate::Result<String> {
+    ) -> rocketmq_error::RocketMQResult<String> {
         if extra_info_strs.len() < 5 {
             return Err(IllegalArgument(format!(
                 "getRealTopic fail, extraInfoStrs length {}",
@@ -106,7 +105,11 @@ impl ExtraInfoUtil {
         }
     }
 
-    pub fn get_real_topic_with_retry(topic: &str, cid: &str, retry: &str) -> crate::Result<String> {
+    pub fn get_real_topic_with_retry(
+        topic: &str,
+        cid: &str,
+        retry: &str,
+    ) -> rocketmq_error::RocketMQResult<String> {
         match retry {
             NORMAL_TOPIC => Ok(topic.to_string()),
             RETRY_TOPIC => Ok(KeyBuilder::build_pop_retry_topic_v1(topic, cid)),
@@ -117,7 +120,7 @@ impl ExtraInfoUtil {
         }
     }
 
-    pub fn get_retry_slice(extra_info_strs: &[String]) -> crate::Result<String> {
+    pub fn get_retry_slice(extra_info_strs: &[String]) -> rocketmq_error::RocketMQResult<String> {
         if extra_info_strs.len() < 5 {
             return Err(IllegalArgument(format!(
                 "getRetry fail, extraInfoStrs length {}",
@@ -127,7 +130,7 @@ impl ExtraInfoUtil {
         Ok(extra_info_strs[4].clone())
     }
 
-    pub fn get_broker_name(extra_info_strs: &[String]) -> crate::Result<String> {
+    pub fn get_broker_name(extra_info_strs: &[String]) -> rocketmq_error::RocketMQResult<String> {
         if extra_info_strs.len() < 6 {
             return Err(IllegalArgument(format!(
                 "getBrokerName fail, extraInfoStrs length {}",
@@ -137,7 +140,7 @@ impl ExtraInfoUtil {
         Ok(extra_info_strs[5].clone())
     }
 
-    pub fn get_queue_id(extra_info_strs: &[String]) -> crate::Result<i32> {
+    pub fn get_queue_id(extra_info_strs: &[String]) -> rocketmq_error::RocketMQResult<i32> {
         if extra_info_strs.len() < 7 {
             return Err(IllegalArgument(format!(
                 "getQueueId fail, extraInfoStrs length {}",
@@ -149,7 +152,7 @@ impl ExtraInfoUtil {
             .map_err(|_| IllegalArgument("parse queue_id error".to_string()))
     }
 
-    pub fn get_queue_offset(extra_info_strs: &[String]) -> crate::Result<i64> {
+    pub fn get_queue_offset(extra_info_strs: &[String]) -> rocketmq_error::RocketMQResult<i64> {
         if extra_info_strs.len() < 8 {
             return Err(IllegalArgument(format!(
                 "getQueueOffset fail, extraInfoStrs length {}",
@@ -307,7 +310,7 @@ impl ExtraInfoUtil {
 
     pub fn parse_msg_offset_info(
         msg_offset_info: &str,
-    ) -> crate::Result<HashMap<String, Vec<i64>>> {
+    ) -> rocketmq_error::RocketMQResult<HashMap<String, Vec<i64>>> {
         let mut msg_offset_map = HashMap::new();
         let entries: Vec<&str> = msg_offset_info.split(';').collect();
 
@@ -329,7 +332,9 @@ impl ExtraInfoUtil {
         Ok(msg_offset_map)
     }
 
-    pub fn parse_start_offset_info(start_offset_info: &str) -> crate::Result<HashMap<String, i64>> {
+    pub fn parse_start_offset_info(
+        start_offset_info: &str,
+    ) -> rocketmq_error::RocketMQResult<HashMap<String, i64>> {
         let mut start_offset_map = HashMap::new();
         let entries: Vec<&str> = start_offset_info.split(';').collect();
 
@@ -349,7 +354,9 @@ impl ExtraInfoUtil {
         Ok(start_offset_map)
     }
 
-    pub fn parse_order_count_info(order_count_info: &str) -> crate::Result<HashMap<String, i32>> {
+    pub fn parse_order_count_info(
+        order_count_info: &str,
+    ) -> rocketmq_error::RocketMQResult<HashMap<String, i32>> {
         let mut start_offset_map = HashMap::new();
         if order_count_info.is_empty() {
             return Ok(start_offset_map); // return None if the input is empty
@@ -462,9 +469,9 @@ impl ExtraInfoUtil {
 #[cfg(test)]
 mod tests {
     use rocketmq_common::common::key_builder::KeyBuilder;
+    use rocketmq_error::RocketmqError::IllegalArgument;
 
     use super::*;
-    use crate::remoting_error::RemotingError::IllegalArgument;
 
     #[test]
     fn split_with_valid_string() {

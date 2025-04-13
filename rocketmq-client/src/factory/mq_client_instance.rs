@@ -32,6 +32,7 @@ use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_error::mq_client_err;
 use rocketmq_remoting::base::connection_net_event::ConnectionNetEvent;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_remoting::protocol::heartbeat::consumer_data::ConsumerData;
@@ -53,7 +54,6 @@ use tracing::warn;
 
 use crate::admin::mq_admin_ext_async_inner::MQAdminExtInnerImpl;
 use crate::base::client_config::ClientConfig;
-use crate::client_error::MQClientError::MQClientErr;
 use crate::consumer::consumer_impl::pull_message_service::PullMessageService;
 use crate::consumer::consumer_impl::re_balance::rebalance_service::RebalanceService;
 use crate::consumer::mq_consumer_inner::MQConsumerInner;
@@ -62,12 +62,10 @@ use crate::implementation::client_remoting_processor::ClientRemotingProcessor;
 use crate::implementation::find_broker_result::FindBrokerResult;
 use crate::implementation::mq_admin_impl::MQAdminImpl;
 use crate::implementation::mq_client_api_impl::MQClientAPIImpl;
-use crate::mq_client_err;
 use crate::producer::default_mq_producer::DefaultMQProducer;
 use crate::producer::default_mq_producer::ProducerConfig;
 use crate::producer::producer_impl::mq_producer_inner::MQProducerInnerImpl;
 use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
-use crate::Result;
 
 const LOCK_TIMEOUT_MILLIS: u64 = 3000;
 
@@ -294,7 +292,7 @@ impl MQClientInstance {
         }
     }
 
-    pub async fn start(&mut self, this: ArcMut<Self>) -> Result<()> {
+    pub async fn start(&mut self, this: ArcMut<Self>) -> rocketmq_error::RocketMQResult<()> {
         match self.service_state {
             ServiceState::CreateJust => {
                 self.service_state = ServiceState::StartFailed;
@@ -958,7 +956,7 @@ impl MQClientInstance {
         true
     }
 
-    pub async fn check_client_in_broker(&mut self) -> Result<()> {
+    pub async fn check_client_in_broker(&mut self) -> rocketmq_error::RocketMQResult<()> {
         let consumer_table = self.consumer_table.read().await;
         for (key, value) in consumer_table.iter() {
             let subscription_inner = value.subscriptions();
@@ -988,8 +986,8 @@ impl MQClientInstance {
                     {
                         Ok(_) => {}
                         Err(e) => match e {
-                            MQClientErr(err) => {
-                                return Err(MQClientErr(err));
+                            rocketmq_error::RocketmqError(err) => {
+                                return Err(rocketmq_error::RocketmqError::MQClientErr(err));
                             }
                             _ => {
                                 let desc = format!(
@@ -1194,7 +1192,7 @@ impl MQClientInstance {
         strategy_name: &CheetahString,
         message_model: MessageModel,
         timeout: u64,
-    ) -> Result<Option<HashSet<MessageQueueAssignment>>> {
+    ) -> rocketmq_error::RocketMQResult<Option<HashSet<MessageQueueAssignment>>> {
         // Try to find broker address
         let mut broker_addr = self.find_broker_addr_by_topic(topic).await;
 

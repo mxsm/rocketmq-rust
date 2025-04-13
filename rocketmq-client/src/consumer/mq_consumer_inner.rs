@@ -31,7 +31,6 @@ use rocketmq_rust::ArcMut;
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
 use crate::consumer::consumer_impl::pop_request::PopRequest;
 use crate::consumer::consumer_impl::pull_request::PullRequest;
-use crate::Result;
 
 /// The `MQConsumerInnerLocal` trait defines the core functionalities required for a local MQ
 /// consumer. It extends the `MQConsumerInnerAny` trait and requires implementations to be `Sync`
@@ -59,7 +58,7 @@ pub trait MQConsumerInnerLocal: MQConsumerInnerAny + Sync + 'static {
 
     /// Attempts to perform rebalancing asynchronously and returns a `Result` indicating success or
     /// failure.
-    async fn try_rebalance(&self) -> Result<bool>;
+    async fn try_rebalance(&self) -> rocketmq_error::RocketMQResult<bool>;
 
     /// Persists the consumer offset asynchronously.
     async fn persist_consumer_offset(&self);
@@ -167,7 +166,7 @@ impl MQConsumerInner for MQConsumerInnerImpl {
     }
 
     #[inline]
-    async fn try_rebalance(&self) -> Result<bool> {
+    async fn try_rebalance(&self) -> rocketmq_error::RocketMQResult<bool> {
         MQConsumerInner::try_rebalance(self.default_mqpush_consumer_impl.as_ref()).await
     }
 

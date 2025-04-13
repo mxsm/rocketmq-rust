@@ -19,7 +19,6 @@ use rocketmq_common::common::message::message_queue::MessageQueue;
 
 use crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
 use crate::consumer::rebalance_strategy::check;
-use crate::Result;
 
 pub struct AllocateMessageQueueAveragely;
 
@@ -30,7 +29,7 @@ impl AllocateMessageQueueStrategy for AllocateMessageQueueAveragely {
         current_cid: &CheetahString,
         mq_all: &[MessageQueue],
         cid_all: &[CheetahString],
-    ) -> Result<Vec<MessageQueue>> {
+    ) -> rocketmq_error::RocketMQResult<Vec<MessageQueue>> {
         let mut result = Vec::new();
         if !check(consumer_group, current_cid, mq_all, cid_all)? {
             return Ok(result);

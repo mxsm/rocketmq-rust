@@ -32,7 +32,6 @@ use std::sync::Weak;
 pub use crate::common::attribute::topic_attributes as TopicAttributes;
 pub use crate::common::message::message_accessor as MessageAccessor;
 pub use crate::common::message::message_decoder as MessageDecoder;
-use crate::error::Error;
 pub use crate::thread_pool::FuturesExecutorService;
 pub use crate::thread_pool::FuturesExecutorServiceBuilder;
 pub use crate::thread_pool::ScheduledExecutorService;
@@ -47,9 +46,6 @@ pub use crate::utils::time_utils as TimeUtils;
 pub use crate::utils::util_all as UtilAll;
 
 pub mod common;
-pub mod error;
 pub mod log;
 mod thread_pool;
 pub mod utils;
-
-pub type Result<T> = std::result::Result<T, Error>;

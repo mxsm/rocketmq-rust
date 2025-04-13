@@ -18,16 +18,15 @@ use bytes::Bytes;
 
 use crate::common::compression::compression_type::CompressionType;
 use crate::common::compression::compressor::Compressor;
-use crate::Result;
 
 pub struct Lz4Compressor;
 
 impl Compressor for Lz4Compressor {
-    fn compress(&self, src: &[u8], level: i32) -> Result<Bytes> {
+    fn compress(&self, src: &[u8], level: i32) -> rocketmq_error::RocketMQResult<Bytes> {
         Ok(CompressionType::LZ4.compression(src))
     }
 
-    fn decompress(&self, src: &[u8]) -> Result<Bytes> {
+    fn decompress(&self, src: &[u8]) -> rocketmq_error::RocketMQResult<Bytes> {
         Ok(CompressionType::LZ4.decompression(src))
     }
 }

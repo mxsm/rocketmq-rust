@@ -25,9 +25,6 @@ pub use self::route::route_info_manager::RouteInfoManager;
 pub mod bootstrap;
 mod kvconfig;
 mod namesrv_config_parse;
-pub(crate) mod namesrv_error;
 pub mod processor;
 mod route;
 mod route_info;
-
-pub type Result<T> = std::result::Result<T, namesrv_error::NamesrvError>;

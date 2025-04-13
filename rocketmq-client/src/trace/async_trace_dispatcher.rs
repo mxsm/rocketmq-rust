@@ -41,7 +41,11 @@ impl AsyncTraceDispatcher {
 }
 
 impl TraceDispatcher for AsyncTraceDispatcher {
-    fn start(&self, name_srv_addr: &str, access_channel: AccessChannel) -> crate::Result<()> {
+    fn start(
+        &self,
+        name_srv_addr: &str,
+        access_channel: AccessChannel,
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
@@ -49,7 +53,7 @@ impl TraceDispatcher for AsyncTraceDispatcher {
         todo!()
     }
 
-    fn flush(&self) -> crate::Result<()> {
+    fn flush(&self) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 

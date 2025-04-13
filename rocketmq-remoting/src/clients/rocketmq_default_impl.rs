@@ -38,12 +38,10 @@ use crate::clients::Client;
 use crate::clients::RemotingClient;
 use crate::protocol::remoting_command::RemotingCommand;
 use crate::remoting::RemotingService;
-use crate::remoting_error::RemotingError;
 use crate::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
 use crate::runtime::config::client_config::TokioClientConfig;
 use crate::runtime::processor::RequestProcessor;
 use crate::runtime::RPCHook;
-use crate::Result;
 
 const LOCK_TIMEOUT_MILLIS: u64 = 3000;
 
@@ -347,10 +345,12 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
         addr: Option<&CheetahString>,
         request: RemotingCommand,
         timeout_millis: u64,
-    ) -> Result<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         let client = self.get_and_create_client(addr).await;
         match client {
-            None => Err(RemotingError::RemoteError("get client failed".to_string())),
+            None => Err(rocketmq_error::RocketmqError::RemoteError(
+                "get client failed".to_string(),
+            )),
             Some(mut client) => {
                 match self
                     .client_runtime
@@ -368,11 +368,15 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
                     Ok(result) => match result {
                         Ok(response) => match response {
                             Ok(value) => Ok(value),
-                            Err(e) => Err(RemotingError::RemoteError(e.to_string())),
+                            Err(e) => {
+                                Err(rocketmq_error::RocketmqError::RemoteError(e.to_string()))
+                            }
                         },
-                        Err(err) => Err(RemotingError::RemoteError(err.to_string())),
+                        Err(err) => {
+                            Err(rocketmq_error::RocketmqError::RemoteError(err.to_string()))
+                        }
                     },
-                    Err(err) => Err(RemotingError::RemoteError(err.to_string())),
+                    Err(err) => Err(rocketmq_error::RocketmqError::RemoteError(err.to_string())),
                 }
             }
         }
@@ -403,7 +407,9 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
                         .await
                         {
                             Ok(_) => Ok(()),
-                            Err(err) => Err(RemotingError::RemoteError(err.to_string())),
+                            Err(err) => {
+                                Err(rocketmq_error::RocketmqError::RemoteError(err.to_string()))
+                            }
                         }
                     });
             }

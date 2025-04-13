@@ -19,13 +19,13 @@ use std::collections::HashMap;
 
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
+use rocketmq_error::RocketmqError;
+use rocketmq_error::RocketmqError::DeserializeHeaderError;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::FromMap;
-use crate::remoting_error::RemotingError;
-use crate::remoting_error::RemotingError::RemotingCommandError;
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -133,7 +133,10 @@ impl CommandCustomHeader for PullMessageResponseHeader {
         }
     }
 
-    fn decode_fast(&mut self, fields: &HashMap<CheetahString, CheetahString>) -> crate::Result<()> {
+    fn decode_fast(
+        &mut self,
+        fields: &HashMap<CheetahString, CheetahString>,
+    ) -> rocketmq_error::RocketMQResult<()> {
         self.suggest_which_broker_id = self
             .get_and_check_not_none(
                 fields,
@@ -141,7 +144,7 @@ impl CommandCustomHeader for PullMessageResponseHeader {
             )?
             .parse()
             .map_err(|_| {
-                RemotingError::RemotingCommandError(
+                RocketmqError::DeserializeHeaderError(
                     "Parse field suggestWhichBrokerId error".to_string(),
                 )
             })?;
@@ -152,19 +155,21 @@ impl CommandCustomHeader for PullMessageResponseHeader {
             )?
             .parse()
             .map_err(|_| {
-                RemotingError::RemotingCommandError("Parse field nextBeginOffset error".to_string())
+                RocketmqError::DeserializeHeaderError(
+                    "Parse field nextBeginOffset error".to_string(),
+                )
             })?;
         self.min_offset = self
             .get_and_check_not_none(fields, &CheetahString::from_static_str(Self::MIN_OFFSET))?
             .parse()
             .map_err(|_| {
-                RemotingError::RemotingCommandError("Parse field minOffset error".to_string())
+                RocketmqError::DeserializeHeaderError("Parse field minOffset error".to_string())
             })?;
         self.max_offset = self
             .get_and_check_not_none(fields, &CheetahString::from_static_str(Self::MAX_OFFSET))?
             .parse()
             .map_err(|_| {
-                RemotingError::RemotingCommandError("Parse field maxOffset error".to_string())
+                RocketmqError::DeserializeHeaderError("Parse field maxOffset error".to_string())
             })?;
 
         self.offset_delta = fields
@@ -192,7 +197,7 @@ impl CommandCustomHeader for PullMessageResponseHeader {
 }
 
 impl FromMap for PullMessageResponseHeader {
-    type Error = crate::remoting_error::RemotingError;
+    type Error = rocketmq_error::RocketmqError;
 
     type Target = Self;
 
@@ -224,19 +229,19 @@ impl FromMap for PullMessageResponseHeader {
 
         Ok(PullMessageResponseHeader {
             suggest_which_broker_id: suggest_which_broker_id.and_then(|v| v.parse().ok()).ok_or(
-                RemotingCommandError("Parse field suggestWhichBrokerId error".to_string()),
+                DeserializeHeaderError("Parse field suggestWhichBrokerId error".to_string()),
             )?,
             next_begin_offset: next_begin_offset.and_then(|v| v.parse().ok()).ok_or(
-                RemotingCommandError("Parse field nextBeginOffset error".to_string()),
+                DeserializeHeaderError("Parse field nextBeginOffset error".to_string()),
             )?,
             min_offset: min_offset
                 .and_then(|v| v.parse().ok())
-                .ok_or(RemotingCommandError(
+                .ok_or(DeserializeHeaderError(
                     "Parse field minOffset error".to_string(),
                 ))?,
             max_offset: max_offset
                 .and_then(|v| v.parse().ok())
-                .ok_or(RemotingCommandError(
+                .ok_or(DeserializeHeaderError(
                     "Parse field maxOffset error".to_string(),
                 ))?,
             offset_delta: offset_delta.and_then(|v| v.parse().ok()),

@@ -18,12 +18,12 @@
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
+use rocketmq_error::RocketmqError;
 use tokio_util::codec::BytesCodec;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
 use crate::protocol::remoting_command::RemotingCommand;
-use crate::remoting_error::RemotingError;
 
 /// Encodes a `RemotingCommand` into a `BytesMut` buffer.
 ///
@@ -61,7 +61,7 @@ impl RemotingCommandCodec {
 }
 
 impl Decoder for RemotingCommandCodec {
-    type Error = RemotingError;
+    type Error = rocketmq_error::RocketmqError;
     type Item = RemotingCommand;
 
     /// Decodes a `RemotingCommand` from a `BytesMut` buffer.
@@ -96,7 +96,7 @@ impl Decoder for RemotingCommandCodec {
 }
 
 impl Encoder<RemotingCommand> for RemotingCommandCodec {
-    type Error = RemotingError;
+    type Error = rocketmq_error::RocketmqError;
 
     /// Encodes a `RemotingCommand` into a `BytesMut` buffer.
     ///
@@ -145,7 +145,7 @@ impl CompositeCodec {
 }
 
 impl Decoder for CompositeCodec {
-    type Error = RemotingError;
+    type Error = rocketmq_error::RocketmqError;
     type Item = RemotingCommand;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
@@ -154,11 +154,11 @@ impl Decoder for CompositeCodec {
 }
 
 impl Encoder<Bytes> for CompositeCodec {
-    type Error = RemotingError;
+    type Error = rocketmq_error::RocketmqError;
 
     fn encode(&mut self, item: Bytes, dst: &mut BytesMut) -> Result<(), Self::Error> {
         self.bytes_codec.encode(item, dst).map_err(|error| {
-            RemotingError::RemotingCommandEncoderError(format!("Error encoding bytes: {}", error))
+            RocketmqError::RemotingCommandEncoderError(format!("Error encoding bytes: {}", error))
         })
     }
 }

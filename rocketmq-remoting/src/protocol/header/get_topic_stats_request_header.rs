@@ -52,7 +52,7 @@ impl CommandCustomHeader for GetTopicStatsRequestHeader {
 }
 
 impl FromMap for GetTopicStatsRequestHeader {
-    type Error = crate::remoting_error::RemotingError;
+    type Error = rocketmq_error::RocketmqError;
 
     type Target = Self;
 

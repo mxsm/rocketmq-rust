@@ -40,7 +40,7 @@ impl AllocateMessageQueueStrategy for AllocateMessageQueueByMachineRoom {
         current_cid: &CheetahString,
         mq_all: &[MessageQueue],
         cid_all: &[CheetahString],
-    ) -> crate::Result<Vec<MessageQueue>> {
+    ) -> rocketmq_error::RocketMQResult<Vec<MessageQueue>> {
         let mut result = Vec::new();
 
         if !check(consumer_group, current_cid, mq_all, cid_all)? {

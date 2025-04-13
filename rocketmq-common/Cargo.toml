@@ -13,6 +13,7 @@ description = "Rust implementation of Apache rocketmq common"
 
 [dependencies]
 rocketmq-rust = { workspace = true }
+rocketmq-error = { workspace = true }
 
 anyhow.workspace = true
 tokio.workspace = true

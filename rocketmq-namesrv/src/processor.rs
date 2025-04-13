@@ -20,7 +20,6 @@ use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
-use rocketmq_remoting::Result;
 use rocketmq_rust::ArcMut;
 use tracing::info;
 
@@ -44,7 +43,7 @@ impl RequestProcessor for NameServerRequestProcessor {
         channel: Channel,
         ctx: ConnectionHandlerContext,
         request: RemotingCommand,
-    ) -> Result<Option<RemotingCommand>> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         info!("Name server Received request code: {:?}", request_code);
         let result = match request_code {

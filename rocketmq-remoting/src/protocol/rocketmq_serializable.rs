@@ -23,11 +23,10 @@ use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
+use rocketmq_error::RocketmqError;
 
 use crate::protocol::remoting_command::RemotingCommand;
 use crate::protocol::LanguageCode;
-use crate::remoting_error::RemotingError;
-use crate::Result;
 
 pub struct RocketMQSerializable;
 
@@ -51,7 +50,7 @@ impl RocketMQSerializable {
         buf: &mut BytesMut,
         use_short_length: bool,
         limit: usize,
-    ) -> Result<Option<CheetahString>> {
+    ) -> rocketmq_error::RocketMQResult<Option<CheetahString>> {
         let len = if use_short_length {
             buf.get_u16() as usize
         } else {
@@ -63,7 +62,7 @@ impl RocketMQSerializable {
         }
 
         if len > limit {
-            return Err(RemotingError::DecodingError(len, limit));
+            return Err(RocketmqError::DecodingError(len, limit));
         }
 
         let bytes = buf.split_to(len).freeze(); // Convert BytesMut to Bytes
@@ -209,7 +208,7 @@ impl RocketMQSerializable {
     pub fn rocket_mq_protocol_decode(
         header_buffer: &mut BytesMut,
         header_len: usize,
-    ) -> Result<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         let cmd = RemotingCommand::default()
             .set_code(header_buffer.get_i16())
             .set_language(LanguageCode::value_of(header_buffer.get_u8()).unwrap())
@@ -223,7 +222,7 @@ impl RocketMQSerializable {
         let ext_fields_length = header_buffer.get_i32() as usize;
         let ext = if ext_fields_length > 0 {
             if ext_fields_length > header_len {
-                return Err(RemotingError::DecodingError(ext_fields_length, header_len));
+                return Err(RocketmqError::DecodingError(ext_fields_length, header_len));
             }
             Self::map_deserialize(header_buffer, ext_fields_length)?
         } else {
@@ -236,7 +235,7 @@ impl RocketMQSerializable {
     pub fn map_deserialize(
         buffer: &mut BytesMut,
         len: usize,
-    ) -> Result<HashMap<CheetahString, CheetahString>> {
+    ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, CheetahString>> {
         let mut map = HashMap::new();
         let end_index = buffer.len() - len;
 

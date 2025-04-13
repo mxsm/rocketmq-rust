@@ -42,7 +42,7 @@ impl GetConsumerConnectionListRequestHeader {
 }
 
 impl FromMap for GetConsumerConnectionListRequestHeader {
-    type Error = crate::remoting_error::RemotingError;
+    type Error = rocketmq_error::RocketmqError;
 
     type Target = Self;
 

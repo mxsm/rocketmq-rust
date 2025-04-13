@@ -21,6 +21,7 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
+use rocketmq_error::mq_client_err;
 use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
 use rocketmq_remoting::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
 use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
@@ -31,13 +32,10 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-use crate::client_error::MQClientError;
 use crate::consumer::store::controllable_offset::ControllableOffset;
 use crate::consumer::store::offset_store::OffsetStoreTrait;
 use crate::consumer::store::read_offset_type::ReadOffsetType;
 use crate::factory::mq_client_instance::MQClientInstance;
-use crate::mq_client_err;
-use crate::Result;
 
 pub struct RemoteBrokerOffsetStore {
     client_instance: ArcMut<MQClientInstance>,
@@ -54,7 +52,10 @@ impl RemoteBrokerOffsetStore {
         }
     }
 
-    async fn fetch_consume_offset_from_broker(&self, mq: &MessageQueue) -> Result<i64> {
+    async fn fetch_consume_offset_from_broker(
+        &self,
+        mq: &MessageQueue,
+    ) -> rocketmq_error::RocketMQResult<i64> {
         let broker_name = self
             .client_instance
             .get_broker_name_from_message_queue(mq)
@@ -116,7 +117,7 @@ impl RemoteBrokerOffsetStore {
 }
 
 impl OffsetStoreTrait for RemoteBrokerOffsetStore {
-    async fn load(&self) -> crate::Result<()> {
+    async fn load(&self) -> rocketmq_error::RocketMQResult<()> {
         Ok(())
     }
 
@@ -157,7 +158,7 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
                         value
                     }
                     Err(e) => match e {
-                        MQClientError::OffsetNotFoundError(_, _, _) => -1,
+                        rocketmq_error::RocketmqError::OffsetNotFoundError(_, _, _) => -1,
                         _ => {
                             warn!("fetchConsumeOffsetFromBroker exception: {:?}", mq);
                             -2
@@ -254,7 +255,7 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
         mq: &MessageQueue,
         offset: i64,
         is_oneway: bool,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         let broker_name = self
             .client_instance
             .get_broker_name_from_message_queue(mq)

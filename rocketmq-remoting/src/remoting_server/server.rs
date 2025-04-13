@@ -21,6 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rocketmq_common::common::server::config::ServerConfig;
+use rocketmq_error::RocketmqError;
 use rocketmq_rust::wait_for_signal;
 use rocketmq_rust::ArcMut;
 use tokio::net::TcpListener;
@@ -43,12 +44,10 @@ use crate::net::channel::Channel;
 use crate::net::channel::ChannelInner;
 use crate::protocol::remoting_command::RemotingCommand;
 use crate::protocol::RemotingCommandType;
-use crate::remoting_error::RemotingError;
 use crate::runtime::connection_handler_context::ConnectionHandlerContext;
 use crate::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 use crate::runtime::processor::RequestProcessor;
 use crate::runtime::RPCHook;
-use crate::Result;
 
 /// Default limit the max number of connections.
 const DEFAULT_MAX_CONNECTIONS: usize = 1000;
@@ -88,7 +87,7 @@ impl<RP> ConnectionHandler<RP> {
         &self,
         channel: &Channel,
         request: Option<&mut RemotingCommand>,
-    ) -> Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         if let Some(request) = request {
             for hook in self.rpc_hooks.iter() {
                 hook.do_before_request(channel.remote_address(), request)?;
@@ -101,7 +100,7 @@ impl<RP> ConnectionHandler<RP> {
         &self,
         channel: &Channel,
         response: Option<&mut RemotingCommand>,
-    ) -> Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         if let Some(response) = response {
             for hook in self.rpc_hooks.iter() {
                 hook.do_after_response(channel.remote_address(), response)?;
@@ -112,7 +111,7 @@ impl<RP> ConnectionHandler<RP> {
 }
 
 impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
-    async fn handle(&mut self) -> Result<()> {
+    async fn handle(&mut self) -> rocketmq_error::RocketMQResult<()> {
         while !self.shutdown.is_shutdown {
             //Get the next frame from the connection.
             let frame = tokio::select! {
@@ -190,7 +189,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                     Ok(_) =>{},
                     Err(err) => {
                         match err {
-                            RemotingError::Io(io_error) => {
+                            RocketmqError::Io(io_error) => {
                                 error!("connection disconnect: {}", io_error);
                                 return Ok(())
                             }
@@ -207,11 +206,11 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
         &mut self,
         oneway_rpc: bool,
         opaque: i32,
-        exception: Option<RemotingError>,
+        exception: Option<RocketmqError>,
     ) -> HandleErrorResult {
         if let Some(exception_inner) = exception {
             match exception_inner {
-                RemotingError::AbortProcessError(code, message) => {
+                RocketmqError::AbortProcessError(code, message) => {
                     if oneway_rpc {
                         return HandleErrorResult::Continue;
                     }
@@ -222,7 +221,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                             Ok(_) =>{},
                             Err(err) => {
                                 match err {
-                                    RemotingError::Io(io_error) => {
+                                    RocketmqError::Io(io_error) => {
                                         error!("send response failed: {}", io_error);
                                         return HandleErrorResult::ReturnMethod;
                                     }
@@ -243,7 +242,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                                 Ok(_) =>{},
                                 Err(err) => {
                                     match err {
-                                        RemotingError::Io(io_error) => {
+                                        RocketmqError::Io(io_error) => {
                                             error!("send response failed: {}", io_error);
                                             return HandleErrorResult::ReturnMethod;
                                         }
