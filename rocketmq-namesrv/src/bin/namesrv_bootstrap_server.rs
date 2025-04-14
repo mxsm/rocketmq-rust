@@ -24,6 +24,7 @@ use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_common::EnvUtils::EnvUtils;
 use rocketmq_common::ParseConfigFile;
+use rocketmq_error::RocketMQResult;
 use rocketmq_namesrv::bootstrap::Builder;
 use rocketmq_remoting::protocol::remoting_command;
 use rocketmq_rust::rocketmq;
@@ -31,7 +32,7 @@ use tracing::info;
 use tracing::warn;
 
 #[rocketmq::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> RocketMQResult<()> {
     // Initialize the logger
     rocketmq_common::log::init_logger();
     // parse command line arguments

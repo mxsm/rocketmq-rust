@@ -112,7 +112,6 @@ pub enum RocketmqError {
     #[error("{0}")]
     IllegalArgumentError(String),
 
-    //
     #[error("Serialization error: {0}")]
     JsonError(String),
 
@@ -133,6 +132,9 @@ pub enum RocketmqError {
 
     #[error("{0}")]
     TokioHandlerError(String),
+
+    #[error("{0}")]
+    ConfigError(String),
 }
 
 #[derive(Error, Debug)]
