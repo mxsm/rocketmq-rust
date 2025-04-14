@@ -2317,6 +2317,7 @@ dependencies = [
  "cheetah-string",
  "rocketmq-client-rust",
  "rocketmq-common",
+ "rocketmq-error",
  "rocketmq-rust",
  "rocketmq-tools",
  "tokio",
