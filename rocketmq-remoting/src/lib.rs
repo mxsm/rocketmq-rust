@@ -25,10 +25,8 @@ pub mod codec;
 pub mod connection;
 pub mod net;
 pub mod protocol;
-pub mod remoting_error;
 
 pub use crate::protocol::rocketmq_serializable;
-use crate::remoting_error::RemotingError;
 
 pub mod base;
 pub mod remoting;
@@ -36,5 +34,3 @@ pub mod remoting_server;
 pub mod request_processor;
 pub mod rpc;
 pub mod runtime;
-
-pub type Result<T, E = RemotingError> = std::result::Result<T, E>;

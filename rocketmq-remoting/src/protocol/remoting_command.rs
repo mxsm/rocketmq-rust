@@ -32,6 +32,7 @@ use cheetah_string::CheetahString;
 use lazy_static::lazy_static;
 use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
+use rocketmq_error::RocketmqError;
 use rocketmq_rust::ArcMut;
 use serde::Deserialize;
 use serde::Serialize;
@@ -44,7 +45,6 @@ use crate::code::response_code::RemotingSysResponseCode;
 use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::FromMap;
 use crate::protocol::LanguageCode;
-use crate::remoting_error::RemotingError;
 use crate::rocketmq_serializable::RocketMQSerializable;
 
 pub const SERIALIZE_TYPE_PROPERTY: &str = "rocketmq.serialize.type";
@@ -506,7 +506,7 @@ impl RemotingCommand {
         }
     }
 
-    pub fn decode(src: &mut BytesMut) -> crate::Result<Option<RemotingCommand>> {
+    pub fn decode(src: &mut BytesMut) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let read_to = src.len();
         if read_to < 4 {
             // Wait for more data when there are less than 4 bytes.
@@ -530,7 +530,7 @@ impl RemotingCommand {
         let ori_header_length = cmd_data.get_i32();
         let header_length = parse_header_length(ori_header_length);
         if header_length > total_size - 4 {
-            return Err(RemotingError::RemotingCommandDecoderError(format!(
+            return Err(RocketmqError::RemotingCommandDecoderError(format!(
                 "Header length {} is greater than total size {}",
                 header_length, total_size
             )));
@@ -554,13 +554,13 @@ impl RemotingCommand {
         src: &mut BytesMut,
         header_length: usize,
         type_: SerializeType,
-    ) -> crate::Result<Option<RemotingCommand>> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         match type_ {
             SerializeType::JSON => {
                 let cmd =
                     SerdeJsonUtils::from_json_slice::<RemotingCommand>(src).map_err(|error| {
                         // Handle deserialization error gracefully
-                        RemotingError::RemotingCommandDecoderError(format!(
+                        RocketmqError::RemotingCommandDecoderError(format!(
                             "Deserialization error: {}",
                             error
                         ))
@@ -645,25 +645,25 @@ impl RemotingCommand {
         self.serialize_type
     }
 
-    pub fn decode_command_custom_header<T>(&self) -> crate::Result<T>
+    pub fn decode_command_custom_header<T>(&self) -> rocketmq_error::RocketMQResult<T>
     where
-        T: FromMap<Target = T, Error = RemotingError>,
+        T: FromMap<Target = T, Error = RocketmqError>,
     {
         match self.ext_fields {
-            None => Err(RemotingError::RemotingCommandError(
+            None => Err(RocketmqError::DeserializeHeaderError(
                 "ExtFields is None".to_string(),
             )),
             Some(ref header) => T::from(header),
         }
     }
 
-    pub fn decode_command_custom_header_fast<T>(&self) -> crate::Result<T>
+    pub fn decode_command_custom_header_fast<T>(&self) -> rocketmq_error::RocketMQResult<T>
     where
-        T: FromMap<Target = T, Error = RemotingError>,
+        T: FromMap<Target = T, Error = RocketmqError>,
         T: Default + CommandCustomHeader,
     {
         match self.ext_fields {
-            None => Err(RemotingError::RemotingCommandError(
+            None => Err(RocketmqError::DeserializeHeaderError(
                 "ExtFields is None".to_string(),
             )),
             Some(ref header) => {
@@ -820,10 +820,10 @@ pub fn mark_protocol_type(source: i32, serialize_type: SerializeType) -> i32 {
     ((serialize_type.get_code() as i32) << 24) | (source & 0x00FFFFFF)
 }
 
-pub fn parse_serialize_type(size: i32) -> crate::Result<SerializeType> {
+pub fn parse_serialize_type(size: i32) -> rocketmq_error::RocketMQResult<SerializeType> {
     let code = (size >> 24) as u8;
     match SerializeType::value_of(code) {
-        None => Err(RemotingError::NotSupportSerializeType(code)),
+        None => Err(RocketmqError::NotSupportSerializeType(code)),
         Some(value) => Ok(value),
     }
 }

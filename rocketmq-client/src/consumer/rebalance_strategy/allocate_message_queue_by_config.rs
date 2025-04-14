@@ -37,7 +37,7 @@ impl AllocateMessageQueueStrategy for AllocateMessageQueueByConfig {
         current_cid: &CheetahString,
         mq_all: &[MessageQueue],
         cid_all: &[CheetahString],
-    ) -> crate::Result<Vec<MessageQueue>> {
+    ) -> rocketmq_error::RocketMQResult<Vec<MessageQueue>> {
         Ok(self.message_queue_list.clone())
     }
 

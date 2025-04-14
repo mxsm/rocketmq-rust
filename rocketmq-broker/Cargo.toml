@@ -24,6 +24,7 @@ rocketmq-store = { workspace = true }
 rocketmq-filter = { workspace = true }
 rocketmq-runtime = { workspace = true }
 rocketmq-client-rust = { workspace = true }
+rocketmq-error = { workspace = true }
 
 anyhow.workspace = true
 

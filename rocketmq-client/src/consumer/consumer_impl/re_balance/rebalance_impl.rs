@@ -40,7 +40,6 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-use crate::client_error::MQClientError;
 use crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
 use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
 use crate::consumer::consumer_impl::pop_request::PopRequest;
@@ -208,7 +207,7 @@ where
                     return true;
                 }
                 Err(e) => match e {
-                    MQClientError::RequestTimeoutError(_) => {
+                    rocketmq_error::RocketmqError::RequestTimeoutError(_) => {
                         // Continue to retry on timeout errors
                     }
                     _ => {

@@ -18,12 +18,12 @@
 use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
+use rocketmq_error::RocketmqError;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::FromMap;
-use crate::remoting_error::RemotingError;
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct RpcRequestHeader {
@@ -63,7 +63,7 @@ impl RpcRequestHeader {
 }
 
 impl FromMap for RpcRequestHeader {
-    type Error = RemotingError;
+    type Error = RocketmqError;
     type Target = Self;
 
     fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {

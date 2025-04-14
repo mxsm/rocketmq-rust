@@ -437,14 +437,14 @@ impl MQConsumer for DefaultMQPushConsumer {
         msg: MessageExt,
         delay_level: i32,
         broker_name: &str,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
     async fn fetch_subscribe_message_queues(
         &mut self,
         topic: &str,
-    ) -> crate::Result<Vec<MessageQueue>> {
+    ) -> rocketmq_error::RocketMQResult<Vec<MessageQueue>> {
         todo!()
     }
 }
@@ -456,7 +456,7 @@ impl MQAdmin for DefaultMQPushConsumer {
         new_topic: &str,
         queue_num: i32,
         attributes: HashMap<String, String>,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         panic!("This method is not implemented for DefaultMQPushConsumer");
     }
 
@@ -467,23 +467,27 @@ impl MQAdmin for DefaultMQPushConsumer {
         queue_num: i32,
         topic_sys_flag: i32,
         attributes: HashMap<String, String>,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         panic!("This method is not implemented for DefaultMQPushConsumer");
     }
 
-    fn search_offset(&self, mq: &MessageQueue, timestamp: u64) -> crate::Result<i64> {
+    fn search_offset(
+        &self,
+        mq: &MessageQueue,
+        timestamp: u64,
+    ) -> rocketmq_error::RocketMQResult<i64> {
         panic!("This method is not implemented for DefaultMQPushConsumer");
     }
 
-    fn max_offset(&self, mq: &MessageQueue) -> crate::Result<i64> {
+    fn max_offset(&self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
         panic!("This method is not implemented for DefaultMQPushConsumer");
     }
 
-    fn min_offset(&self, mq: &MessageQueue) -> crate::Result<i64> {
+    fn min_offset(&self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
         panic!("This method is not implemented for DefaultMQPushConsumer");
     }
 
-    fn earliest_msg_store_time(&self, mq: &MessageQueue) -> crate::Result<u64> {
+    fn earliest_msg_store_time(&self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<u64> {
         panic!("This method is not implemented for DefaultMQPushConsumer");
     }
 
@@ -494,17 +498,21 @@ impl MQAdmin for DefaultMQPushConsumer {
         max_num: i32,
         begin: u64,
         end: u64,
-    ) -> crate::Result<QueryResult> {
+    ) -> rocketmq_error::RocketMQResult<QueryResult> {
         panic!("This method is not implemented for DefaultMQPushConsumer");
     }
 
-    fn view_message(&self, topic: &str, msg_id: &str) -> crate::Result<MessageExt> {
+    fn view_message(
+        &self,
+        topic: &str,
+        msg_id: &str,
+    ) -> rocketmq_error::RocketMQResult<MessageExt> {
         panic!("This method is not implemented for DefaultMQPushConsumer");
     }
 }
 
 impl MQPushConsumer for DefaultMQPushConsumer {
-    async fn start(&mut self) -> crate::Result<()> {
+    async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
         let consumer_group = NamespaceUtil::wrap_namespace(
             self.client_config
                 .get_namespace()
@@ -554,7 +562,7 @@ impl MQPushConsumer for DefaultMQPushConsumer {
         MLCFN: Fn(
                 Vec<MessageExt>,
                 ConsumeConcurrentlyContext,
-            ) -> crate::Result<ConsumeConcurrentlyStatus>
+            ) -> rocketmq_error::RocketMQResult<ConsumeConcurrentlyStatus>
             + Send
             + Sync,
     {
@@ -578,7 +586,10 @@ impl MQPushConsumer for DefaultMQPushConsumer {
 
     async fn register_message_listener_orderly_fn<MLOFN>(&mut self, message_listener: MLOFN)
     where
-        MLOFN: Fn(Vec<MessageExt>, ConsumeOrderlyContext) -> crate::Result<ConsumeOrderlyStatus>
+        MLOFN: Fn(
+                Vec<MessageExt>,
+                ConsumeOrderlyContext,
+            ) -> rocketmq_error::RocketMQResult<ConsumeOrderlyStatus>
             + Send
             + Sync,
     {
@@ -600,7 +611,11 @@ impl MQPushConsumer for DefaultMQPushConsumer {
             .register_message_listener(self.consumer_config.message_listener.clone());
     }
 
-    fn subscribe(&mut self, topic: &str, sub_expression: &str) -> crate::Result<()> {
+    fn subscribe(
+        &mut self,
+        topic: &str,
+        sub_expression: &str,
+    ) -> rocketmq_error::RocketMQResult<()> {
         let handle = Handle::current();
         let mut default_mqpush_consumer_impl = self.default_mqpush_consumer_impl.clone();
         let topic = topic.to_string();
@@ -627,7 +642,7 @@ impl MQPushConsumer for DefaultMQPushConsumer {
         &mut self,
         topic: &str,
         selector: Option<MessageSelector>,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 

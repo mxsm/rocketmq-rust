@@ -23,7 +23,6 @@ use rocketmq_common::common::message::message_queue::MessageQueue;
 use crate::consumer::message_queue_listener::MessageQueueListener;
 use crate::consumer::message_selector::MessageSelector;
 use crate::consumer::topic_message_queue_change_listener::TopicMessageQueueChangeListener;
-use crate::Result;
 
 #[trait_variant::make(LitePullConsumer: Send)]
 pub trait LitePullConsumerLocal: Sync {
@@ -31,8 +30,8 @@ pub trait LitePullConsumerLocal: Sync {
     ///
     /// # Returns
     ///
-    /// * `Result<()>` - An empty result indicating success or failure.
-    async fn start(&self) -> Result<()>;
+    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
+    async fn start(&self) -> rocketmq_error::RocketMQResult<()>;
 
     /// Shuts down the LitePullConsumer.
     async fn shutdown(&self);
@@ -52,8 +51,8 @@ pub trait LitePullConsumerLocal: Sync {
     ///
     /// # Returns
     ///
-    /// * `Result<()>` - An empty result indicating success or failure.
-    async fn subscribe(&self, topic: &str) -> Result<()>;
+    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
+    async fn subscribe(&self, topic: &str) -> rocketmq_error::RocketMQResult<()>;
 
     /// Subscribes to a topic with a subscription expression.
     ///
@@ -64,8 +63,12 @@ pub trait LitePullConsumerLocal: Sync {
     ///
     /// # Returns
     ///
-    /// * `Result<()>` - An empty result indicating success or failure.
-    async fn subscribe_with_expression(&self, topic: &str, sub_expression: &str) -> Result<()>;
+    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
+    async fn subscribe_with_expression(
+        &self,
+        topic: &str,
+        sub_expression: &str,
+    ) -> rocketmq_error::RocketMQResult<()>;
 
     /// Subscribes to a topic with a subscription expression and a message queue listener.
     ///
@@ -77,13 +80,13 @@ pub trait LitePullConsumerLocal: Sync {
     ///
     /// # Returns
     ///
-    /// * `Result<()>` - An empty result indicating success or failure.
+    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
     async fn subscribe_with_listener<MQL>(
         &self,
         topic: &str,
         sub_expression: &str,
         listener: MQL,
-    ) -> Result<()>
+    ) -> rocketmq_error::RocketMQResult<()>
     where
         MQL: MessageQueueListener;
 
@@ -96,12 +99,12 @@ pub trait LitePullConsumerLocal: Sync {
     ///
     /// # Returns
     ///
-    /// * `Result<()>` - An empty result indicating success or failure.
+    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
     async fn subscribe_with_selector(
         &self,
         topic: &str,
         selector: Option<MessageSelector>,
-    ) -> Result<()>;
+    ) -> rocketmq_error::RocketMQResult<()>;
     /// Unsubscribes from a topic.
     ///
     /// # Arguments
@@ -113,8 +116,9 @@ pub trait LitePullConsumerLocal: Sync {
     ///
     /// # Returns
     ///
-    /// * `Result<HashSet<MessageQueue>>` - A set of assigned message queues or an error.
-    async fn assignment(&self) -> Result<HashSet<MessageQueue>>;
+    /// * `rocketmq_error::RocketMQResult<HashSet<MessageQueue>>` - A set of assigned message queues
+    ///   or an error.
+    async fn assignment(&self) -> rocketmq_error::RocketMQResult<HashSet<MessageQueue>>;
 
     /// Assigns a list of message queues to the consumer.
     ///
@@ -158,8 +162,12 @@ pub trait LitePullConsumerLocal: Sync {
     ///
     /// # Returns
     ///
-    /// * `Result<()>` - An empty result indicating success or failure.
-    async fn seek(&self, message_queue: &MessageQueue, offset: i64) -> Result<()>;
+    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
+    async fn seek(
+        &self,
+        message_queue: &MessageQueue,
+        offset: i64,
+    ) -> rocketmq_error::RocketMQResult<()>;
 
     /// Pauses message consumption for the specified message queues.
     ///
@@ -197,8 +205,12 @@ pub trait LitePullConsumerLocal: Sync {
     ///
     /// # Returns
     ///
-    /// * `Result<Vec<MessageQueue>>` - A vector of message queues or an error.
-    async fn fetch_message_queues(&self, topic: &str) -> Result<Vec<MessageQueue>>;
+    /// * `rocketmq_error::RocketMQResult<Vec<MessageQueue>>` - A vector of message queues or an
+    ///   error.
+    async fn fetch_message_queues(
+        &self,
+        topic: &str,
+    ) -> rocketmq_error::RocketMQResult<Vec<MessageQueue>>;
     /// Retrieves the offset for a given timestamp in a message queue.
     ///
     /// # Arguments
@@ -208,12 +220,13 @@ pub trait LitePullConsumerLocal: Sync {
     ///
     /// # Returns
     ///
-    /// * `Result<i64>` - The offset corresponding to the given timestamp or an error.
+    /// * `rocketmq_error::RocketMQResult<i64>` - The offset corresponding to the given timestamp or
+    ///   an error.
     async fn offset_for_timestamp(
         &self,
         message_queue: &MessageQueue,
         timestamp: u64,
-    ) -> Result<i64>;
+    ) -> rocketmq_error::RocketMQResult<i64>;
 
     /// Commits the current offsets synchronously.
     async fn commit_sync(&self);
@@ -253,8 +266,8 @@ pub trait LitePullConsumerLocal: Sync {
     ///
     /// # Returns
     ///
-    /// * `Result<i64>` - The committed offset or an error.
-    async fn committed(&self, message_queue: &MessageQueue) -> Result<i64>;
+    /// * `rocketmq_error::RocketMQResult<i64>` - The committed offset or an error.
+    async fn committed(&self, message_queue: &MessageQueue) -> rocketmq_error::RocketMQResult<i64>;
 
     /// Registers a listener for changes to the message queues of a topic.
     ///
@@ -265,12 +278,12 @@ pub trait LitePullConsumerLocal: Sync {
     ///
     /// # Returns
     ///
-    /// * `Result<()>` - An empty result indicating success or failure.
+    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
     async fn register_topic_message_queue_change_listener<TL>(
         &self,
         topic: &str,
         listener: TL,
-    ) -> Result<()>
+    ) -> rocketmq_error::RocketMQResult<()>
     where
         TL: TopicMessageQueueChangeListener;
 
@@ -289,8 +302,11 @@ pub trait LitePullConsumerLocal: Sync {
     ///
     /// # Returns
     ///
-    /// * `Result<()>` - An empty result indicating success or failure.
-    async fn seek_to_begin(&self, message_queue: &MessageQueue) -> Result<()>;
+    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
+    async fn seek_to_begin(
+        &self,
+        message_queue: &MessageQueue,
+    ) -> rocketmq_error::RocketMQResult<()>;
 
     /// Seeks to the end of a message queue.
     ///
@@ -300,6 +316,7 @@ pub trait LitePullConsumerLocal: Sync {
     ///
     /// # Returns
     ///
-    /// * `Result<()>` - An empty result indicating success or failure.
-    async fn seek_to_end(&self, message_queue: &MessageQueue) -> Result<()>;
+    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
+    async fn seek_to_end(&self, message_queue: &MessageQueue)
+        -> rocketmq_error::RocketMQResult<()>;
 }

@@ -141,7 +141,10 @@ impl<MS: MessageStore> TransactionalMessageCheckListenerInner<MS> {
         }
     }
 
-    pub async fn send_check_message(&self, mut msg_ext: MessageExt) -> crate::Result<()> {
+    pub async fn send_check_message(
+        &self,
+        mut msg_ext: MessageExt,
+    ) -> rocketmq_error::RocketMQResult<()> {
         let msg_id = msg_ext.get_user_property(&CheetahString::from_static_str(
             MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
         ));
@@ -201,7 +204,7 @@ impl<MS: MessageStore> TransactionalMessageCheckListenerInner<MS> {
         Ok(())
     }
 
-    pub fn resolve_half_msg(&self, _msg_ext: MessageExt) -> crate::Result<()> {
+    pub fn resolve_half_msg(&self, _msg_ext: MessageExt) -> rocketmq_error::RocketMQResult<()> {
         /*let this = self.clone();
         tokio::spawn(async move {
             if let Err(e) = this.send_check_message(msg_ext).await {

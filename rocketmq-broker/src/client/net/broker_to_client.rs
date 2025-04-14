@@ -22,11 +22,6 @@ use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 
-use crate::broker_error::BrokerError;
-use crate::broker_error::BrokerError::BrokerCommonError;
-use crate::broker_error::BrokerError::BrokerRemotingError;
-use crate::Result;
-
 #[derive(Default, Clone)]
 pub struct Broker2Client;
 
@@ -36,14 +31,14 @@ impl Broker2Client {
         channel: &mut Channel,
         request: RemotingCommand,
         timeout_millis: u64,
-    ) -> Result<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         match channel.upgrade() {
-            None => Err(BrokerError::IllegalArgumentError(
+            None => Err(rocketmq_error::RocketmqError::ChannelError(
                 "Channel is closed".to_string(),
             )),
             Some(mut channel) => match channel.send_wait_response(request, timeout_millis).await {
                 Ok(value) => Ok(value),
-                Err(e) => Err(BrokerRemotingError(e)),
+                Err(e) => Err(e),
             },
         }
     }
@@ -54,7 +49,7 @@ impl Broker2Client {
         channel: &mut Channel,
         request_header: CheckTransactionStateRequestHeader,
         message_ext: MessageExt,
-    ) -> Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         let mut request = RemotingCommand::create_request_command(
             RequestCode::CheckTransactionState,
             request_header,
@@ -64,16 +59,16 @@ impl Broker2Client {
                 request.set_body_mut_ref(body);
             }
             Err(e) => {
-                return Err(BrokerCommonError(e));
+                return Err(e);
             }
         }
         match channel.upgrade() {
-            None => Err(BrokerError::IllegalArgumentError(
+            None => Err(rocketmq_error::RocketmqError::ChannelError(
                 "Channel is closed".to_string(),
             )),
             Some(channel) => match channel.send_one_way(request, 100).await {
                 Ok(_) => Ok(()),
-                Err(e) => Err(BrokerRemotingError(e)),
+                Err(e) => Err(e),
             },
         }
     }

@@ -20,18 +20,22 @@ use rocketmq_common::common::message::message_ext::MessageExt;
 
 use crate::consumer::listener::consume_orderly_context::ConsumeOrderlyContext;
 use crate::consumer::listener::consume_orderly_status::ConsumeOrderlyStatus;
-use crate::Result;
 
 pub trait MessageListenerOrderly: Sync + Send {
     fn consume_message(
         &self,
         msgs: &[&MessageExt],
         context: &mut ConsumeOrderlyContext,
-    ) -> Result<ConsumeOrderlyStatus>;
+    ) -> rocketmq_error::RocketMQResult<ConsumeOrderlyStatus>;
 }
 
 pub type ArcBoxMessageListenerOrderly = Arc<Box<dyn MessageListenerOrderly>>;
 
 pub type MessageListenerOrderlyFn = Arc<
-    dyn Fn(&[&MessageExt], &ConsumeOrderlyContext) -> Result<ConsumeOrderlyStatus> + Send + Sync,
+    dyn Fn(
+            &[&MessageExt],
+            &ConsumeOrderlyContext,
+        ) -> rocketmq_error::RocketMQResult<ConsumeOrderlyStatus>
+        + Send
+        + Sync,
 >;

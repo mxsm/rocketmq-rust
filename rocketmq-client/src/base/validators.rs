@@ -22,11 +22,10 @@ use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::topic::TopicValidator;
+use rocketmq_error::mq_client_err;
 use rocketmq_remoting::code::response_code::ResponseCode;
 
-use crate::mq_client_err;
 use crate::producer::default_mq_producer::ProducerConfig;
-use crate::Result;
 
 pub struct Validators;
 
@@ -34,7 +33,7 @@ impl Validators {
     pub const CHARACTER_MAX_LENGTH: usize = 255;
     pub const TOPIC_MAX_LENGTH: usize = 127;
 
-    pub fn check_group(group: &str) -> Result<()> {
+    pub fn check_group(group: &str) -> rocketmq_error::RocketMQResult<()> {
         if group.trim().is_empty() {
             return mq_client_err!("the specified group is blank");
         }
@@ -53,7 +52,10 @@ impl Validators {
         Ok(())
     }
 
-    pub fn check_message<M>(msg: Option<&M>, producer_config: &ProducerConfig) -> Result<()>
+    pub fn check_message<M>(
+        msg: Option<&M>,
+        producer_config: &ProducerConfig,
+    ) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait,
     {
@@ -111,7 +113,7 @@ impl Validators {
         Ok(())
     }
 
-    pub fn check_topic(topic: &str) -> Result<()> {
+    pub fn check_topic(topic: &str) -> rocketmq_error::RocketMQResult<()> {
         if topic.trim().is_empty() {
             return mq_client_err!("The specified topic is blank");
         }
@@ -134,7 +136,7 @@ impl Validators {
         Ok(())
     }
 
-    pub fn is_system_topic(topic: &str) -> Result<()> {
+    pub fn is_system_topic(topic: &str) -> rocketmq_error::RocketMQResult<()> {
         if TopicValidator::is_system_topic(topic) {
             return mq_client_err!(format!(
                 "The topic[{}] is conflict with system topic.",
@@ -144,7 +146,7 @@ impl Validators {
         Ok(())
     }
 
-    pub fn is_not_allowed_send_topic(topic: &str) -> Result<()> {
+    pub fn is_not_allowed_send_topic(topic: &str) -> rocketmq_error::RocketMQResult<()> {
         if TopicValidator::is_not_allowed_send_topic(topic) {
             return mq_client_err!(format!("Sending message to topic[{}] is forbidden.", topic));
         }
@@ -152,7 +154,7 @@ impl Validators {
         Ok(())
     }
 
-    pub fn check_topic_config(topic_config: &TopicConfig) -> Result<()> {
+    pub fn check_topic_config(topic_config: &TopicConfig) -> rocketmq_error::RocketMQResult<()> {
         if !PermName::is_valid(topic_config.perm) {
             return mq_client_err!(
                 ResponseCode::NoPermission as i32,
@@ -163,7 +165,9 @@ impl Validators {
         Ok(())
     }
 
-    pub fn check_broker_config(broker_config: &HashMap<String, String>) -> Result<()> {
+    pub fn check_broker_config(
+        broker_config: &HashMap<String, String>,
+    ) -> rocketmq_error::RocketMQResult<()> {
         if let Some(broker_permission) = broker_config.get("brokerPermission") {
             if !PermName::is_valid(broker_permission.parse().unwrap()) {
                 return mq_client_err!(format!(

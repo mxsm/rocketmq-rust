@@ -19,7 +19,6 @@ use crate::net::channel::Channel;
 use crate::protocol::remoting_command::RemotingCommand;
 use crate::runtime::connection_handler_context::ConnectionHandlerContext;
 use crate::runtime::processor::RequestProcessor;
-use crate::Result;
 
 #[derive(Clone)]
 pub struct DefaultRemotingRequestProcessor;
@@ -31,7 +30,7 @@ impl RequestProcessor for DefaultRemotingRequestProcessor {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         request: RemotingCommand,
-    ) -> Result<Option<RemotingCommand>> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         Ok(Some(request))
     }
 }

@@ -62,7 +62,7 @@ impl CommandCustomHeader for GetMinOffsetRequestHeader {
 }
 
 impl FromMap for GetMinOffsetRequestHeader {
-    type Error = crate::remoting_error::RemotingError;
+    type Error = rocketmq_error::RocketmqError;
 
     type Target = Self;
 

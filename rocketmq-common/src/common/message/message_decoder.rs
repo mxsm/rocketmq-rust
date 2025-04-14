@@ -47,7 +47,6 @@ use crate::utils::util_all;
 use crate::CRC32Utils::crc32;
 use crate::MessageAccessor::MessageAccessor;
 use crate::MessageUtils::build_message_id;
-use crate::Result;
 
 pub const CHARSET_UTF8: &str = "UTF-8";
 pub const MESSAGE_MAGIC_CODE_POSITION: usize = 4;
@@ -560,7 +559,10 @@ pub fn decode_message_id(msg_id: &str) -> MessageId {
     }
 }
 
-pub fn encode(message_ext: &MessageExt, need_compress: bool) -> Result<Bytes> {
+pub fn encode(
+    message_ext: &MessageExt,
+    need_compress: bool,
+) -> rocketmq_error::RocketMQResult<Bytes> {
     let body = message_ext.get_body().unwrap();
     let topics = message_ext.get_topic().as_bytes();
     let topic_len = topics.len();
@@ -688,7 +690,10 @@ pub fn encode(message_ext: &MessageExt, need_compress: bool) -> Result<Bytes> {
     Ok(byte_buffer.freeze())
 }
 
-pub fn encode_uniquely(message_ext: &MessageExt, need_compress: bool) -> Result<Bytes> {
+pub fn encode_uniquely(
+    message_ext: &MessageExt,
+    need_compress: bool,
+) -> rocketmq_error::RocketMQResult<Bytes> {
     let body = message_ext.get_body().unwrap();
     let topics = message_ext.get_topic().as_bytes();
     let topic_len = topics.len();

@@ -36,7 +36,6 @@ use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use tracing::info;
 
-use crate::broker_error::BrokerError::BrokerRemotingError;
 use crate::broker_runtime::BrokerRuntimeInner;
 use crate::client::client_channel_info::ClientChannelInfo;
 
@@ -71,7 +70,7 @@ where
         ctx: ConnectionHandlerContext,
         request_code: RequestCode,
         request: RemotingCommand,
-    ) -> crate::Result<Option<RemotingCommand>> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         match request_code {
             RequestCode::HeartBeat => self.heart_beat(channel, ctx, request),
             RequestCode::UnregisterClient => self.unregister_client(channel, ctx, request),
@@ -89,10 +88,9 @@ where
         channel: Channel,
         ctx: ConnectionHandlerContext,
         request: RemotingCommand,
-    ) -> crate::Result<Option<RemotingCommand>> {
-        let request_header = request
-            .decode_command_custom_header::<UnregisterClientRequestHeader>()
-            .map_err(BrokerRemotingError)?;
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let request_header =
+            request.decode_command_custom_header::<UnregisterClientRequestHeader>()?;
 
         let client_channel_info = ClientChannelInfo::new(
             channel.clone(),
@@ -135,7 +133,7 @@ where
         channel: Channel,
         ctx: ConnectionHandlerContext,
         request: RemotingCommand,
-    ) -> crate::Result<Option<RemotingCommand>> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let heartbeat_data = SerdeJsonUtils::decode::<HeartbeatData>(
             request.body().as_ref().map(|v| v.as_ref()).unwrap(),
         )

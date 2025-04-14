@@ -34,8 +34,6 @@ use rocketmq_rust::ArcMut;
 use tracing::warn;
 
 use crate::bootstrap::NameServerRuntimeInner;
-use crate::namesrv_error::NamesrvError::MQNamesrvError;
-use crate::namesrv_error::NamesrvRemotingErrorWithMessage;
 use crate::processor::NAMESPACE_ORDER_TOPIC_CONFIG;
 
 pub struct ClientRequestProcessor {
@@ -56,15 +54,8 @@ impl ClientRequestProcessor {
     fn get_route_info_by_topic(
         &self,
         request: RemotingCommand,
-    ) -> crate::Result<Option<RemotingCommand>> {
-        let request_header = request
-            .decode_command_custom_header::<GetRouteInfoRequestHeader>()
-            .map_err(|e| {
-                NamesrvRemotingErrorWithMessage::new(
-                    e,
-                    "decode GetRouteInfoRequestHeader fail".to_string(),
-                )
-            })?;
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let request_header = request.decode_command_custom_header::<GetRouteInfoRequestHeader>()?;
         let namesrv_ready = self.need_check_namesrv_ready.load(Ordering::Relaxed)
             && TimeUtils::get_current_millis() - self.startup_time_millis
                 >= Duration::from_secs(
@@ -132,9 +123,7 @@ impl ClientRequestProcessor {
                 } else {
                     topic_route_data.encode()
                 };*/
-                let content = topic_route_data
-                    .encode()
-                    .map_err(|_| MQNamesrvError("encode TopicRouteData failed".to_string()))?;
+                let content = topic_route_data.encode()?;
                 Ok(Some(
                     RemotingCommand::create_response_command_with_code(ResponseCode::Success)
                         .set_body(content),
@@ -151,7 +140,7 @@ impl ClientRequestProcessor {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: RemotingCommand,
-    ) -> crate::Result<Option<RemotingCommand>> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         self.get_route_info_by_topic(request)
     }
 }

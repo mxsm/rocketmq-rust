@@ -24,7 +24,6 @@ use crate::consumer::listener::message_listener_concurrently::MessageListenerCon
 use crate::consumer::listener::message_listener_orderly::MessageListenerOrderly;
 use crate::consumer::message_selector::MessageSelector;
 use crate::consumer::mq_consumer::MQConsumer;
-use crate::Result;
 
 /// The `MQPushConsumer` trait defines the interface for a push consumer in RocketMQ.
 /// A push consumer receives messages from the broker and processes them using registered listeners.
@@ -35,8 +34,8 @@ pub trait MQPushConsumerLocal: MQConsumer {
     ///
     /// # Returns
     ///
-    /// * `Result<()>` - An empty result indicating success or an error.
-    async fn start(&mut self) -> Result<()>;
+    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or an error.
+    async fn start(&mut self) -> rocketmq_error::RocketMQResult<()>;
 
     /// Shuts down the push consumer.
     async fn shutdown(&mut self);
@@ -52,7 +51,10 @@ pub trait MQPushConsumerLocal: MQConsumer {
     /// * `MLC` - The type of the message listener closure.
     fn register_message_listener_concurrently_fn<MLCFN>(&mut self, message_listener: MLCFN)
     where
-        MLCFN: Fn(Vec<MessageExt>, ConsumeConcurrentlyContext) -> Result<ConsumeConcurrentlyStatus>
+        MLCFN: Fn(
+                Vec<MessageExt>,
+                ConsumeConcurrentlyContext,
+            ) -> rocketmq_error::RocketMQResult<ConsumeConcurrentlyStatus>
             + Send
             + Sync;
 
@@ -71,7 +73,10 @@ pub trait MQPushConsumerLocal: MQConsumer {
     /// * `MLO` - The type of the message listener closure.
     async fn register_message_listener_orderly_fn<MLOFN>(&mut self, message_listener: MLOFN)
     where
-        MLOFN: Fn(Vec<MessageExt>, ConsumeOrderlyContext) -> Result<ConsumeOrderlyStatus>
+        MLOFN: Fn(
+                Vec<MessageExt>,
+                ConsumeOrderlyContext,
+            ) -> rocketmq_error::RocketMQResult<ConsumeOrderlyStatus>
             + Send
             + Sync;
 
@@ -88,8 +93,12 @@ pub trait MQPushConsumerLocal: MQConsumer {
     ///
     /// # Returns
     ///
-    /// * `Result<()>` - An empty result indicating success or an error.
-    fn subscribe(&mut self, topic: &str, sub_expression: &str) -> Result<()>;
+    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or an error.
+    fn subscribe(
+        &mut self,
+        topic: &str,
+        sub_expression: &str,
+    ) -> rocketmq_error::RocketMQResult<()>;
 
     /// Subscribes to a topic with an optional message selector.
     ///
@@ -100,12 +109,12 @@ pub trait MQPushConsumerLocal: MQConsumer {
     ///
     /// # Returns
     ///
-    /// * `Result<()>` - An empty result indicating success or an error.
+    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or an error.
     async fn subscribe_with_selector(
         &mut self,
         topic: &str,
         selector: Option<MessageSelector>,
-    ) -> Result<()>;
+    ) -> rocketmq_error::RocketMQResult<()>;
 
     /// Unsubscribes from a topic.
     ///

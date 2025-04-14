@@ -14,13 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use crate::broker_error::BrokerError;
- use crate::broker_error::BrokerError::{BrokerCommonError, IllegalArgumentError};
- use crate::broker_runtime::BrokerRuntimeInner;
+
+use crate::broker_runtime::BrokerRuntimeInner;
 
  use crate::load_balance::message_request_mode_manager::MessageRequestModeManager;
 
- use crate::Result;
+
  use cheetah_string::CheetahString;
  use rocketmq_client_rust::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
  use rocketmq_client_rust::consumer::rebalance_strategy::allocate_message_queue_averagely::AllocateMessageQueueAveragely;
@@ -103,7 +102,7 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
         ctx: ConnectionHandlerContext,
         request_code: RequestCode,
         request: RemotingCommand,
-    ) -> crate::Result<Option<RemotingCommand>> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         match request_code {
             RequestCode::QueryAssignment => self.query_assignment(channel, ctx, request).await,
             RequestCode::SetMessageRequestMode => {
@@ -118,7 +117,7 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
         channel: Channel,
         _ctx: ConnectionHandlerContext,
         request: RemotingCommand,
-    ) -> crate::Result<Option<RemotingCommand>> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         if request.get_body().is_none() {
             return Ok(Some(
                 RemotingCommand::create_response_command_with_code_remark(
@@ -127,8 +126,7 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
                 ),
             ));
         }
-        let request_body = QueryAssignmentRequestBody::decode(request.get_body().unwrap())
-            .map_err(BrokerCommonError)?;
+        let request_body = QueryAssignmentRequestBody::decode(request.get_body().unwrap())?;
 
         let set_message_request_mode_request_body = self
             .message_request_mode_manager
@@ -191,11 +189,9 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
         let body = QueryAssignmentResponseBody {
             message_queue_assignments: assignments,
         };
-        Ok(Some(RemotingCommand::create_response_command().set_body(
-            body.encode().map_err(|e| {
-                IllegalArgumentError(format!("encode QueryAssignmentResponseBody failed {:?}", e))
-            })?,
-        )))
+        Ok(Some(
+            RemotingCommand::create_response_command().set_body(body.encode()?),
+        ))
     }
 
     /// Performs load balancing to allocate message queues to consumers.
@@ -336,7 +332,7 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
                             cid_all.as_slice(),
                         ) {
                             Ok(value) => Ok(value.into_iter().collect::<HashSet<MessageQueue>>()),
-                            Err(e) => Err(BrokerError::ClientError(e)),
+                            Err(e) => Err(e),
                         }
                     };
                 result.ok()
@@ -352,7 +348,7 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
         mq_all: &[MessageQueue],
         cid_all: &[CheetahString],
         pop_share_queue_num: i32,
-    ) -> Result<HashSet<MessageQueue>> {
+    ) -> rocketmq_error::RocketMQResult<HashSet<MessageQueue>> {
         if pop_share_queue_num <= 0 || pop_share_queue_num >= cid_all.len() as i32 - 1 {
             //Each consumer can consume all queues, return all queues. Queue ID -1 means consume
             // all queues when consuming in Pop mode
@@ -397,7 +393,7 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         request: RemotingCommand,
-    ) -> crate::Result<Option<RemotingCommand>> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         if request.get_body().is_none() {
             return Ok(Some(
                 RemotingCommand::create_response_command_with_code_remark(
@@ -406,8 +402,7 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
                 ),
             ));
         }
-        let request_body = SetMessageRequestModeRequestBody::decode(request.get_body().unwrap())
-            .map_err(BrokerCommonError)?;
+        let request_body = SetMessageRequestModeRequestBody::decode(request.get_body().unwrap())?;
         if request_body.topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) {
             return Ok(Some(
                 RemotingCommand::create_response_command_with_code(ResponseCode::NoPermission)
@@ -433,17 +428,19 @@ fn allocate(
     current_cid: &CheetahString,
     mq_all: &[MessageQueue],
     cid_all: &[CheetahString],
-) -> Result<HashSet<MessageQueue>> {
+) -> rocketmq_error::RocketMQResult<HashSet<MessageQueue>> {
     if current_cid.is_empty() {
-        return Err(IllegalArgumentError("currentCID is empty".to_string()));
+        return Err(rocketmq_error::RocketmqError::IllegalArgumentError(
+            "currentCID is empty".to_string(),
+        ));
     }
     if mq_all.is_empty() {
-        return Err(IllegalArgumentError(
+        return Err(rocketmq_error::RocketmqError::IllegalArgumentError(
             "mqAll is null or mqAll empty".to_string(),
         ));
     }
     if cid_all.is_empty() {
-        return Err(IllegalArgumentError(
+        return Err(rocketmq_error::RocketmqError::IllegalArgumentError(
             "cidAll is null or cidAll empty".to_string(),
         ));
     }

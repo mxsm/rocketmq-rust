@@ -18,6 +18,7 @@ use std::collections::HashMap;
 
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
+use rocketmq_error::RocketmqError::DeserializeHeaderError;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -25,7 +26,6 @@ use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::FromMap;
 use crate::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
-use crate::remoting_error::RemotingError::RemotingCommandError;
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -146,30 +146,33 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
         }
     }
 
-    fn decode_fast(&mut self, fields: &HashMap<CheetahString, CheetahString>) -> crate::Result<()> {
+    fn decode_fast(
+        &mut self,
+        fields: &HashMap<CheetahString, CheetahString>,
+    ) -> rocketmq_error::RocketMQResult<()> {
         self.a = self.get_and_check_not_none(fields, &CheetahString::from_slice("a"))?; //producerGroup
         self.b = self.get_and_check_not_none(fields, &CheetahString::from_slice("b"))?; //topic
         self.c = self.get_and_check_not_none(fields, &CheetahString::from_slice("c"))?; //defaultTopic
         self.d = self
             .get_and_check_not_none(fields, &CheetahString::from_slice("d"))?
             .parse()
-            .map_err(|_| RemotingCommandError("Parse field d error".to_string()))?; //defaultTopicQueueNums
+            .map_err(|_| DeserializeHeaderError("Parse field d error".to_string()))?; //defaultTopicQueueNums
         self.e = self
             .get_and_check_not_none(fields, &CheetahString::from_slice("e"))?
             .parse()
-            .map_err(|_| RemotingCommandError("Parse field e error".to_string()))?; //queueId
+            .map_err(|_| DeserializeHeaderError("Parse field e error".to_string()))?; //queueId
         self.f = self
             .get_and_check_not_none(fields, &CheetahString::from_slice("f"))?
             .parse()
-            .map_err(|_| RemotingCommandError("Parse field f error".to_string()))?; //sysFlag
+            .map_err(|_| DeserializeHeaderError("Parse field f error".to_string()))?; //sysFlag
         self.g = self
             .get_and_check_not_none(fields, &CheetahString::from_slice("g"))?
             .parse()
-            .map_err(|_| RemotingCommandError("Parse field g error".to_string()))?; //bornTimestamp
+            .map_err(|_| DeserializeHeaderError("Parse field g error".to_string()))?; //bornTimestamp
         self.h = self
             .get_and_check_not_none(fields, &CheetahString::from_slice("h"))?
             .parse()
-            .map_err(|_| RemotingCommandError("Parse field h error".to_string()))?; //flag
+            .map_err(|_| DeserializeHeaderError("Parse field h error".to_string()))?; //flag
 
         if let Some(v) = fields.get(&CheetahString::from_slice("i")) {
             self.i = Some(v.clone());
@@ -182,21 +185,21 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
         if let Some(v) = fields.get(&CheetahString::from_slice("k")) {
             self.k = Some(
                 v.parse()
-                    .map_err(|_| RemotingCommandError("Parse field k error".to_string()))?,
+                    .map_err(|_| DeserializeHeaderError("Parse field k error".to_string()))?,
             );
         }
 
         if let Some(v) = fields.get(&CheetahString::from_slice("l")) {
             self.l = Some(
                 v.parse()
-                    .map_err(|_| RemotingCommandError("Parse field l error".to_string()))?,
+                    .map_err(|_| DeserializeHeaderError("Parse field l error".to_string()))?,
             );
         }
 
         if let Some(v) = fields.get(&CheetahString::from_slice("m")) {
             self.m = Some(
                 v.parse()
-                    .map_err(|_| RemotingCommandError("Parse field m error".to_string()))?,
+                    .map_err(|_| DeserializeHeaderError("Parse field m error".to_string()))?,
             );
         }
 
@@ -212,68 +215,68 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
 }
 
 impl FromMap for SendMessageRequestHeaderV2 {
-    type Error = crate::remoting_error::RemotingError;
+    type Error = rocketmq_error::RocketmqError;
 
     type Target = Self;
 
     fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
         Ok(SendMessageRequestHeaderV2 {
             a: map.get(&CheetahString::from_slice("a")).cloned().ok_or(
-                Self::Error::RemotingCommandError("Miss a field".to_string()),
+                Self::Error::DeserializeHeaderError("Miss a field".to_string()),
             )?,
             b: map.get(&CheetahString::from_slice("b")).cloned().ok_or(
-                Self::Error::RemotingCommandError("Miss b field".to_string()),
+                Self::Error::DeserializeHeaderError("Miss b field".to_string()),
             )?,
             c: map.get(&CheetahString::from_slice("c")).cloned().ok_or(
-                Self::Error::RemotingCommandError("Miss c field".to_string()),
+                Self::Error::DeserializeHeaderError("Miss c field".to_string()),
             )?,
             d: map
                 .get(&CheetahString::from_slice("d"))
                 .cloned()
-                .ok_or(Self::Error::RemotingCommandError(
+                .ok_or(Self::Error::DeserializeHeaderError(
                     "Miss d field".to_string(),
                 ))?
                 .parse()
                 .map_err(|_| {
-                    Self::Error::RemotingCommandError("Parse d field error".to_string())
+                    Self::Error::DeserializeHeaderError("Parse d field error".to_string())
                 })?,
             e: map
                 .get(&CheetahString::from_slice("e"))
                 .cloned()
-                .ok_or(Self::Error::RemotingCommandError(
+                .ok_or(Self::Error::DeserializeHeaderError(
                     "Miss e field".to_string(),
                 ))?
                 .parse()
                 .map_err(|_| {
-                    Self::Error::RemotingCommandError("Parse e field error".to_string())
+                    Self::Error::DeserializeHeaderError("Parse e field error".to_string())
                 })?,
             f: map
                 .get(&CheetahString::from_slice("f"))
                 .cloned()
-                .ok_or(Self::Error::RemotingCommandError(
+                .ok_or(Self::Error::DeserializeHeaderError(
                     "Miss f field".to_string(),
                 ))?
                 .parse()
                 .map_err(|_| {
-                    Self::Error::RemotingCommandError("Parse f field error".to_string())
+                    Self::Error::DeserializeHeaderError("Parse f field error".to_string())
                 })?,
             g: map
                 .get(&CheetahString::from_slice("g"))
-                .ok_or(Self::Error::RemotingCommandError(
+                .ok_or(Self::Error::DeserializeHeaderError(
                     "Miss g field".to_string(),
                 ))?
                 .parse()
                 .map_err(|_| {
-                    Self::Error::RemotingCommandError("Parse g field error".to_string())
+                    Self::Error::DeserializeHeaderError("Parse g field error".to_string())
                 })?,
             h: map
                 .get(&CheetahString::from_slice("h"))
-                .ok_or(Self::Error::RemotingCommandError(
+                .ok_or(Self::Error::DeserializeHeaderError(
                     "Miss h field".to_string(),
                 ))?
                 .parse()
                 .map_err(|_| {
-                    Self::Error::RemotingCommandError("Parse h field error".to_string())
+                    Self::Error::DeserializeHeaderError("Parse h field error".to_string())
                 })?,
             i: map.get(&CheetahString::from_slice("i")).cloned(),
             j: map

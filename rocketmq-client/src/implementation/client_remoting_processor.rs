@@ -36,10 +36,8 @@ use rocketmq_remoting::protocol::header::reply_message_request_header::ReplyMess
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingSerializable;
-use rocketmq_remoting::remoting_error::RemotingError::RemotingCommandError;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
-use rocketmq_remoting::Result;
 use rocketmq_rust::ArcMut;
 use tracing::debug;
 use tracing::info;
@@ -65,7 +63,7 @@ impl RequestProcessor for ClientRemotingProcessor {
         channel: Channel,
         ctx: ConnectionHandlerContext,
         request: RemotingCommand,
-    ) -> Result<Option<RemotingCommand>> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         info!("process_request: {:?}", request_code);
         match request_code {
@@ -103,7 +101,7 @@ impl ClientRemotingProcessor {
         &mut self,
         ctx: ConnectionHandlerContext,
         request: RemotingCommand,
-    ) -> Result<Option<RemotingCommand>> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let receive_time = get_current_millis();
         let response = RemotingCommand::create_response_command();
         let request_header = request
@@ -200,7 +198,7 @@ impl ClientRemotingProcessor {
         channel: Channel,
         ctx: ConnectionHandlerContext,
         request: RemotingCommand,
-    ) -> Result<Option<RemotingCommand>> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request
             .decode_command_custom_header::<NotifyConsumerIdsChangedRequestHeader>()
             .unwrap();
@@ -222,7 +220,7 @@ impl ClientRemotingProcessor {
         channel: Channel,
         ctx: ConnectionHandlerContext,
         mut request: RemotingCommand,
-    ) -> Result<Option<RemotingCommand>> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request
             .decode_command_custom_header::<CheckTransactionStateRequestHeader>()
             .unwrap();
@@ -279,14 +277,20 @@ impl ClientRemotingProcessor {
         channel: Channel,
         ctx: ConnectionHandlerContext,
         mut request: RemotingCommand,
-    ) -> Result<Option<RemotingCommand>> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header =
             request.decode_command_custom_header::<ConsumeMessageDirectlyResultRequestHeader>()?;
-        let body = request
-            .get_body_mut()
-            .ok_or(RemotingCommandError("body is empty".to_string()))?;
-        let msg = message_decoder::decode(body, true, true, false, false, false)
-            .ok_or(RemotingCommandError("decode message failed".to_string()))?;
+        let body =
+            request
+                .get_body_mut()
+                .ok_or(rocketmq_error::RocketmqError::IllegalArgumentError(
+                    "body is empty".to_string(),
+                ))?;
+        let msg = message_decoder::decode(body, true, true, false, false, false).ok_or(
+            rocketmq_error::RocketmqError::IllegalArgumentError(
+                "decode message failed".to_string(),
+            ),
+        )?;
 
         let result = self
             .client_instance
@@ -297,9 +301,11 @@ impl ClientRemotingProcessor {
             )
             .await;
         if let Some(result) = result {
-            let body = result
-                .encode()
-                .map_err(|_| RemotingCommandError("encode result failed".to_string()))?;
+            let body = result.encode().map_err(|_| {
+                rocketmq_error::RocketmqError::IllegalArgumentError(
+                    "encode result failed".to_string(),
+                )
+            })?;
             Ok(Some(
                 RemotingCommand::create_response_command().set_body(body),
             ))

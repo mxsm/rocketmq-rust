@@ -24,7 +24,6 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::error::Error;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::utils::time_utils;
 use serde::ser::SerializeStruct;
@@ -366,21 +365,21 @@ pub trait RemotingSerializable {
     /// # Returns
     /// A `Result` containing a vector of bytes representing the encoded object,
     /// or an error if encoding fails.
-    fn encode(&self) -> Result<Vec<u8>, rocketmq_common::error::Error>;
+    fn encode(&self) -> rocketmq_error::RocketMQResult<Vec<u8>>;
 
     /// Serializes the object into a JSON string.
     ///
     /// # Returns
     /// A `Result` containing a JSON string representing the object,
     /// or an error if serialization fails.
-    fn to_json(&self) -> Result<String, rocketmq_common::error::Error>;
+    fn to_json(&self) -> rocketmq_error::RocketMQResult<String>;
 
     /// Serializes the object into a pretty-printed JSON string.
     ///
     /// # Returns
     /// A `Result` containing a pretty-printed JSON string representing the object,
     /// or an error if serialization fails.
-    fn to_json_pretty(&self) -> Result<String, rocketmq_common::error::Error>;
+    fn to_json_pretty(&self) -> rocketmq_error::RocketMQResult<String>;
 }
 
 /// Trait for deserializing objects in a remoting context.
@@ -408,28 +407,28 @@ pub trait RemotingDeserializable {
     /// # Returns
     /// A `Result` containing either the deserialized object of type `Output` or an `Error` if
     /// deserialization fails.
-    fn decode(bytes: &[u8]) -> Result<Self::Output, Error>;
+    fn decode(bytes: &[u8]) -> rocketmq_error::RocketMQResult<Self::Output>;
 }
 
 pub trait JsonSerializable: Serialize + RemotingSerializable {}
 
 impl<T: Serialize> RemotingSerializable for T {
-    fn encode(&self) -> Result<Vec<u8>, rocketmq_common::error::Error> {
+    fn encode(&self) -> rocketmq_error::RocketMQResult<Vec<u8>> {
         SerdeJsonUtils::to_json_vec(self)
     }
 
-    fn to_json(&self) -> Result<String, rocketmq_common::error::Error> {
+    fn to_json(&self) -> rocketmq_error::RocketMQResult<String> {
         SerdeJsonUtils::to_json(self)
     }
 
-    fn to_json_pretty(&self) -> Result<String, rocketmq_common::error::Error> {
+    fn to_json_pretty(&self) -> rocketmq_error::RocketMQResult<String> {
         SerdeJsonUtils::to_json_pretty(self)
     }
 }
 
 impl<T: serde::de::DeserializeOwned> RemotingDeserializable for T {
     type Output = T;
-    fn decode(bytes: &[u8]) -> Result<Self::Output, Error> {
+    fn decode(bytes: &[u8]) -> rocketmq_error::RocketMQResult<Self::Output> {
         SerdeJsonUtils::decode(bytes)
     }
 }

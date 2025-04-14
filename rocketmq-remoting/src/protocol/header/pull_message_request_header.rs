@@ -19,6 +19,7 @@ use std::collections::HashMap;
 
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
+use rocketmq_error::RocketmqError::DeserializeHeaderError;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -26,7 +27,6 @@ use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::FromMap;
 use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use crate::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
-use crate::remoting_error::RemotingError::RemotingCommandError;
 use crate::rpc::rpc_request_header::RpcRequestHeader;
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -234,7 +234,10 @@ impl CommandCustomHeader for PullMessageRequestHeader {
         }
     }
 
-    fn decode_fast(&mut self, fields: &HashMap<CheetahString, CheetahString>) -> crate::Result<()> {
+    fn decode_fast(
+        &mut self,
+        fields: &HashMap<CheetahString, CheetahString>,
+    ) -> rocketmq_error::RocketMQResult<()> {
         self.consumer_group = self.get_and_check_not_none(
             fields,
             &CheetahString::from_static_str(Self::CONSUMER_GROUP),
@@ -244,28 +247,28 @@ impl CommandCustomHeader for PullMessageRequestHeader {
         self.queue_id = self
             .get_and_check_not_none(fields, &CheetahString::from_static_str(Self::QUEUE_ID))?
             .parse()
-            .map_err(|_| RemotingCommandError(format!("Parse field {} error", Self::QUEUE_ID)))?;
+            .map_err(|_| DeserializeHeaderError(format!("Parse field {} error", Self::QUEUE_ID)))?;
         self.queue_offset = self
             .get_and_check_not_none(fields, &CheetahString::from_static_str(Self::QUEUE_OFFSET))?
             .parse()
             .map_err(|_| {
-                RemotingCommandError(format!("Parse field {} error", Self::QUEUE_OFFSET))
+                DeserializeHeaderError(format!("Parse field {} error", Self::QUEUE_OFFSET))
             })?;
         self.max_msg_nums = self
             .get_and_check_not_none(fields, &CheetahString::from_static_str(Self::MAX_MSG_NUMS))?
             .parse()
             .map_err(|_| {
-                RemotingCommandError(format!("Parse field {} error", Self::MAX_MSG_NUMS))
+                DeserializeHeaderError(format!("Parse field {} error", Self::MAX_MSG_NUMS))
             })?;
         self.sys_flag = self
             .get_and_check_not_none(fields, &CheetahString::from_static_str(Self::SYS_FLAG))?
             .parse()
-            .map_err(|_| RemotingCommandError(format!("Parse field {} error", Self::SYS_FLAG)))?;
+            .map_err(|_| DeserializeHeaderError(format!("Parse field {} error", Self::SYS_FLAG)))?;
         self.commit_offset = self
             .get_and_check_not_none(fields, &CheetahString::from_static_str(Self::COMMIT_OFFSET))?
             .parse()
             .map_err(|_| {
-                RemotingCommandError(format!("Parse field {} error", Self::COMMIT_OFFSET))
+                DeserializeHeaderError(format!("Parse field {} error", Self::COMMIT_OFFSET))
             })?;
         self.suspend_timeout_millis = self
             .get_and_check_not_none(
@@ -274,7 +277,7 @@ impl CommandCustomHeader for PullMessageRequestHeader {
             )?
             .parse()
             .map_err(|_| {
-                RemotingCommandError(format!(
+                DeserializeHeaderError(format!(
                     "Parse field {} error",
                     Self::SUSPEND_TIMEOUT_MILLIS
                 ))
@@ -291,7 +294,7 @@ impl CommandCustomHeader for PullMessageRequestHeader {
         self.sub_version = self
             .get_and_check_not_none(fields, &CheetahString::from_static_str(Self::SUB_VERSION))?
             .parse()
-            .map_err(|_| RemotingCommandError(format!("Parse field {} error", Self::QUEUE_ID)))?;
+            .map_err(|_| DeserializeHeaderError(format!("Parse field {} error", Self::QUEUE_ID)))?;
 
         self.expression_type = fields
             .get(&CheetahString::from_static_str(Self::EXPRESSION_TYPE))
@@ -368,7 +371,7 @@ impl CommandCustomHeader for PullMessageRequestHeader {
 }
 
 impl FromMap for PullMessageRequestHeader {
-    type Error = crate::remoting_error::RemotingError;
+    type Error = rocketmq_error::RocketmqError;
 
     type Target = Self;
 
@@ -377,35 +380,37 @@ impl FromMap for PullMessageRequestHeader {
             consumer_group: map
                 .get(&CheetahString::from_static_str(Self::CONSUMER_GROUP))
                 .cloned()
-                .ok_or(RemotingCommandError(
+                .ok_or(DeserializeHeaderError(
                     "Missing field consumerGroup".to_string(),
                 ))?,
             topic: map
                 .get(&CheetahString::from_static_str(Self::TOPIC))
                 .cloned()
-                .ok_or(RemotingCommandError("Missing field topic".to_string()))?,
+                .ok_or(DeserializeHeaderError("Missing field topic".to_string()))?,
             queue_id: map
                 .get(&CheetahString::from_static_str(Self::QUEUE_ID))
                 .and_then(|value| value.parse::<i32>().ok())
-                .ok_or(RemotingCommandError("Missing field queueId".to_string()))?,
+                .ok_or(DeserializeHeaderError("Missing field queueId".to_string()))?,
             queue_offset: map
                 .get(&CheetahString::from_static_str(Self::QUEUE_OFFSET))
                 .and_then(|value| value.parse::<i64>().ok())
-                .ok_or(RemotingCommandError(
+                .ok_or(DeserializeHeaderError(
                     "Missing field queueOffset".to_string(),
                 ))?,
             max_msg_nums: map
                 .get(&CheetahString::from_static_str(Self::MAX_MSG_NUMS))
                 .and_then(|value| value.parse::<i32>().ok())
-                .ok_or(RemotingCommandError("Missing field maxMsgNums".to_string()))?,
+                .ok_or(DeserializeHeaderError(
+                    "Missing field maxMsgNums".to_string(),
+                ))?,
             sys_flag: map
                 .get(&CheetahString::from_static_str(Self::SYS_FLAG))
                 .and_then(|value| value.parse::<i32>().ok())
-                .ok_or(RemotingCommandError("Missing field sysFlag".to_string()))?,
+                .ok_or(DeserializeHeaderError("Missing field sysFlag".to_string()))?,
             commit_offset: map
                 .get(&CheetahString::from_static_str(Self::COMMIT_OFFSET))
                 .and_then(|value| value.parse::<i64>().ok())
-                .ok_or(RemotingCommandError(
+                .ok_or(DeserializeHeaderError(
                     "Missing field commitOffset".to_string(),
                 ))?,
             suspend_timeout_millis: map
@@ -413,7 +418,7 @@ impl FromMap for PullMessageRequestHeader {
                     Self::SUSPEND_TIMEOUT_MILLIS,
                 ))
                 .and_then(|value| value.parse::<u64>().ok())
-                .ok_or(RemotingCommandError(
+                .ok_or(DeserializeHeaderError(
                     "Missing field suspendTimeoutMillis".to_string(),
                 ))?,
             subscription: map
@@ -422,7 +427,9 @@ impl FromMap for PullMessageRequestHeader {
             sub_version: map
                 .get(&CheetahString::from_static_str(Self::SUB_VERSION))
                 .and_then(|value| value.parse::<i64>().ok())
-                .ok_or(RemotingCommandError("Missing field subVersion".to_string()))?,
+                .ok_or(DeserializeHeaderError(
+                    "Missing field subVersion".to_string(),
+                ))?,
             expression_type: map
                 .get(&CheetahString::from_static_str(Self::EXPRESSION_TYPE))
                 .cloned(),

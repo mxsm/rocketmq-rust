@@ -23,13 +23,10 @@
 pub use broker_bootstrap::BrokerBootstrap;
 pub use broker_bootstrap::Builder;
 
-use crate::broker_error::BrokerError;
-
 pub mod command;
 
 pub(crate) mod broker;
 pub(crate) mod broker_bootstrap;
-pub(crate) mod broker_error;
 pub(crate) mod broker_path_config_helper;
 pub(crate) mod broker_runtime;
 pub(crate) mod client;
@@ -51,6 +48,3 @@ pub(crate) mod subscription;
 pub(crate) mod topic;
 mod transaction;
 pub(crate) mod util;
-
-type RemotingError = rocketmq_remoting::remoting_error::RemotingError;
-type Result<T> = std::result::Result<T, BrokerError>;

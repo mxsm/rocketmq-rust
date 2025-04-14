@@ -52,7 +52,7 @@ impl CommandCustomHeader for NotifyConsumerIdsChangedRequestHeader {
 }
 
 impl FromMap for NotifyConsumerIdsChangedRequestHeader {
-    type Error = crate::remoting_error::RemotingError;
+    type Error = rocketmq_error::RocketmqError;
 
     type Target = Self;
 

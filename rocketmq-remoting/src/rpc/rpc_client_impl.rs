@@ -18,6 +18,7 @@ use std::any::Any;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_error::RocketmqError::RpcError;
 use rocketmq_rust::ArcMut;
 
 use crate::clients::rocketmq_default_impl::RocketmqDefaultClient;
@@ -33,7 +34,6 @@ use crate::protocol::header::pull_message_response_header::PullMessageResponseHe
 use crate::protocol::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader;
 use crate::protocol::header::search_offset_response_header::SearchOffsetResponseHeader;
 use crate::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetResponseHeader;
-use crate::remoting_error::RemotingError::RpcError;
 use crate::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
 use crate::rpc::client_metadata::ClientMetadata;
 use crate::rpc::rpc_client::RpcClient;
@@ -41,7 +41,6 @@ use crate::rpc::rpc_client_hook::RpcClientHookFn;
 use crate::rpc::rpc_client_utils::RpcClientUtils;
 use crate::rpc::rpc_request::RpcRequest;
 use crate::rpc::rpc_response::RpcResponse;
-use crate::Result;
 
 pub struct RpcClientImpl {
     client_metadata: ClientMetadata,
@@ -69,7 +68,10 @@ impl RpcClientImpl {
         self.client_hook_list.clear();
     }
 
-    fn get_broker_addr_by_name_or_exception(&self, broker_name: &str) -> Result<CheetahString> {
+    fn get_broker_addr_by_name_or_exception(
+        &self,
+        broker_name: &str,
+    ) -> rocketmq_error::RocketMQResult<CheetahString> {
         match self.client_metadata.find_master_broker_addr(broker_name) {
             None => Err(RpcError(
                 From::from(ResponseCode::SystemError),
@@ -84,7 +86,7 @@ impl RpcClientImpl {
         addr: &CheetahString,
         request: RpcRequest<H>,
         timeout_millis: u64,
-    ) -> Result<RpcResponse> {
+    ) -> rocketmq_error::RocketMQResult<RpcResponse> {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
@@ -96,9 +98,8 @@ impl RpcClientImpl {
                 | ResponseCode::PullNotFound
                 | ResponseCode::PullRetryImmediately
                 | ResponseCode::PullOffsetMoved => {
-                    let response_header = response
-                        .decode_command_custom_header::<PullMessageResponseHeader>()
-                        .unwrap();
+                    let response_header =
+                        response.decode_command_custom_header::<PullMessageResponseHeader>()?;
                     let body = response
                         .body()
                         .as_ref()
@@ -124,7 +125,7 @@ impl RpcClientImpl {
         addr: &CheetahString,
         request: RpcRequest<H>,
         timeout_millis: u64,
-    ) -> Result<RpcResponse> {
+    ) -> rocketmq_error::RocketMQResult<RpcResponse> {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
@@ -133,9 +134,8 @@ impl RpcClientImpl {
         {
             Ok(response) => match ResponseCode::from(response.code()) {
                 ResponseCode::Success => {
-                    let response_header = response
-                        .decode_command_custom_header::<GetMinOffsetResponseHeader>()
-                        .unwrap();
+                    let response_header =
+                        response.decode_command_custom_header::<GetMinOffsetResponseHeader>()?;
                     let body = response
                         .body()
                         .as_ref()
@@ -160,7 +160,7 @@ impl RpcClientImpl {
         addr: &CheetahString,
         request: RpcRequest<H>,
         timeout_millis: u64,
-    ) -> Result<RpcResponse> {
+    ) -> rocketmq_error::RocketMQResult<RpcResponse> {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
@@ -169,9 +169,8 @@ impl RpcClientImpl {
         {
             Ok(response) => match ResponseCode::from(response.code()) {
                 ResponseCode::Success => {
-                    let response_header = response
-                        .decode_command_custom_header::<GetMaxOffsetResponseHeader>()
-                        .unwrap();
+                    let response_header =
+                        response.decode_command_custom_header::<GetMaxOffsetResponseHeader>()?;
                     let body = response
                         .body()
                         .as_ref()
@@ -196,7 +195,7 @@ impl RpcClientImpl {
         addr: &CheetahString,
         request: RpcRequest<H>,
         timeout_millis: u64,
-    ) -> Result<RpcResponse> {
+    ) -> rocketmq_error::RocketMQResult<RpcResponse> {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
@@ -205,9 +204,8 @@ impl RpcClientImpl {
         {
             Ok(response) => match ResponseCode::from(response.code()) {
                 ResponseCode::Success => {
-                    let response_header = response
-                        .decode_command_custom_header::<SearchOffsetResponseHeader>()
-                        .unwrap();
+                    let response_header =
+                        response.decode_command_custom_header::<SearchOffsetResponseHeader>()?;
                     let body = response
                         .body()
                         .as_ref()
@@ -232,7 +230,7 @@ impl RpcClientImpl {
         addr: &CheetahString,
         request: RpcRequest<H>,
         timeout_millis: u64,
-    ) -> Result<RpcResponse> {
+    ) -> rocketmq_error::RocketMQResult<RpcResponse> {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
@@ -242,8 +240,7 @@ impl RpcClientImpl {
             Ok(response) => match ResponseCode::from(response.code()) {
                 ResponseCode::Success => {
                     let response_header = response
-                        .decode_command_custom_header::<GetEarliestMsgStoretimeResponseHeader>()
-                        .unwrap();
+                        .decode_command_custom_header::<GetEarliestMsgStoretimeResponseHeader>()?;
                     let body = response
                         .body()
                         .as_ref()
@@ -268,7 +265,7 @@ impl RpcClientImpl {
         addr: &CheetahString,
         request: RpcRequest<H>,
         timeout_millis: u64,
-    ) -> Result<RpcResponse> {
+    ) -> rocketmq_error::RocketMQResult<RpcResponse> {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
@@ -278,8 +275,7 @@ impl RpcClientImpl {
             Ok(response) => match ResponseCode::from(response.code()) {
                 ResponseCode::Success => {
                     let response_header = response
-                        .decode_command_custom_header::<QueryConsumerOffsetResponseHeader>()
-                        .unwrap();
+                        .decode_command_custom_header::<QueryConsumerOffsetResponseHeader>()?;
                     let body = response
                         .body()
                         .as_ref()
@@ -308,7 +304,7 @@ impl RpcClientImpl {
         addr: &CheetahString,
         request: RpcRequest<H>,
         timeout_millis: u64,
-    ) -> Result<RpcResponse> {
+    ) -> rocketmq_error::RocketMQResult<RpcResponse> {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
@@ -318,8 +314,7 @@ impl RpcClientImpl {
             Ok(response) => match ResponseCode::from(response.code()) {
                 ResponseCode::Success => {
                     let response_header = response
-                        .decode_command_custom_header::<UpdateConsumerOffsetResponseHeader>()
-                        .unwrap();
+                        .decode_command_custom_header::<UpdateConsumerOffsetResponseHeader>()?;
                     let body = response
                         .body()
                         .as_ref()
@@ -344,7 +339,7 @@ impl RpcClientImpl {
         addr: &CheetahString,
         request: RpcRequest<H>,
         timeout_millis: u64,
-    ) -> Result<RpcResponse> {
+    ) -> rocketmq_error::RocketMQResult<RpcResponse> {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
@@ -378,7 +373,7 @@ impl RpcClient for RpcClientImpl {
         &self,
         request: RpcRequest<H>,
         timeout_millis: u64,
-    ) -> Result<RpcResponse> {
+    ) -> rocketmq_error::RocketMQResult<RpcResponse> {
         if !self.client_hook_list.is_empty() {
             for hook in self.client_hook_list.iter() {
                 // let result = hook.before_request(&request)?;
@@ -445,7 +440,7 @@ impl RpcClient for RpcClientImpl {
         mq: MessageQueue,
         mut request: RpcRequest<H>,
         timeout_millis: u64,
-    ) -> Result<RpcResponse> {
+    ) -> rocketmq_error::RocketMQResult<RpcResponse> {
         if let Some(broker_name) = self.client_metadata.get_broker_name_from_message_queue(&mq) {
             request.header.set_broker_name(broker_name);
         }

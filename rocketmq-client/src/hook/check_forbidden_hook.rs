@@ -15,10 +15,12 @@
  * limitations under the License.
  */
 use crate::hook::check_forbidden_context::CheckForbiddenContext;
-use crate::Result;
 
 pub trait CheckForbiddenHook: Send + Sync {
     fn hook_name(&self) -> &str;
 
-    fn check_forbidden(&self, context: &CheckForbiddenContext<'_>) -> Result<()>;
+    fn check_forbidden(
+        &self,
+        context: &CheckForbiddenContext<'_>,
+    ) -> rocketmq_error::RocketMQResult<()>;
 }

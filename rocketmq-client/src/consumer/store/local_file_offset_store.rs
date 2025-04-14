@@ -25,6 +25,7 @@ use cheetah_string::CheetahString;
 use once_cell::sync::Lazy;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::utils::file_utils;
+use rocketmq_error::mq_client_err;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_rust::ArcMut;
@@ -38,8 +39,6 @@ use crate::consumer::store::offset_serialize_wrapper::OffsetSerializeWrapper;
 use crate::consumer::store::offset_store::OffsetStoreTrait;
 use crate::consumer::store::read_offset_type::ReadOffsetType;
 use crate::factory::mq_client_instance::MQClientInstance;
-use crate::mq_client_err;
-use crate::Result;
 
 static LOCAL_OFFSET_STORE_DIR: Lazy<PathBuf> = Lazy::new(|| {
     #[cfg(target_os = "windows")]
@@ -80,7 +79,7 @@ impl LocalFileOffsetStore {
         }
     }
 
-    fn read_local_offset(&self) -> Result<Option<OffsetSerializeWrapper>> {
+    fn read_local_offset(&self) -> rocketmq_error::RocketMQResult<Option<OffsetSerializeWrapper>> {
         let content =
             file_utils::file_to_string(&self.store_path).map_or("".to_string(), |content| content);
         if content.is_empty() {
@@ -92,7 +91,9 @@ impl LocalFileOffsetStore {
             }
         }
     }
-    fn read_local_offset_bak(&self) -> Result<Option<OffsetSerializeWrapper>> {
+    fn read_local_offset_bak(
+        &self,
+    ) -> rocketmq_error::RocketMQResult<Option<OffsetSerializeWrapper>> {
         let content = file_utils::file_to_string(&format!("{}{}", self.store_path, ".bak"))
             .map_or("".to_string(), |content| content);
         if content.is_empty() {
@@ -110,7 +111,7 @@ impl LocalFileOffsetStore {
 }
 
 impl OffsetStoreTrait for LocalFileOffsetStore {
-    async fn load(&self) -> crate::Result<()> {
+    async fn load(&self) -> rocketmq_error::RocketMQResult<()> {
         let offset_serialize_wrapper = self.read_local_offset()?;
         if let Some(offset_serialize_wrapper) = offset_serialize_wrapper {
             let offset_table = offset_serialize_wrapper.offset_table;
@@ -260,7 +261,7 @@ impl OffsetStoreTrait for LocalFileOffsetStore {
         mq: &MessageQueue,
         offset: i64,
         is_oneway: bool,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         Ok(())
     }
 }

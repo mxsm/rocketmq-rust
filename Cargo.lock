@@ -2208,6 +2208,7 @@ dependencies = [
  "rand",
  "rocketmq-client-rust",
  "rocketmq-common",
+ "rocketmq-error",
  "rocketmq-filter",
  "rocketmq-remoting",
  "rocketmq-runtime",
@@ -2248,6 +2249,7 @@ dependencies = [
  "parking_lot",
  "rand",
  "rocketmq-common",
+ "rocketmq-error",
  "rocketmq-remoting",
  "rocketmq-runtime",
  "rocketmq-rust",
@@ -2285,6 +2287,7 @@ dependencies = [
  "parking_lot",
  "regex",
  "reqwest",
+ "rocketmq-error",
  "rocketmq-rust",
  "serde",
  "serde_json",
@@ -2303,6 +2306,9 @@ dependencies = [
 [[package]]
 name = "rocketmq-error"
 version = "0.5.0"
+dependencies = [
+ "thiserror 2.0.12",
+]
 
 [[package]]
 name = "rocketmq-example"
@@ -2311,6 +2317,7 @@ dependencies = [
  "cheetah-string",
  "rocketmq-client-rust",
  "rocketmq-common",
+ "rocketmq-error",
  "rocketmq-rust",
  "rocketmq-tools",
  "tokio",
@@ -2344,6 +2351,7 @@ dependencies = [
  "config",
  "parking_lot",
  "rocketmq-common",
+ "rocketmq-error",
  "rocketmq-remoting",
  "rocketmq-runtime",
  "rocketmq-rust",
@@ -2372,6 +2380,7 @@ dependencies = [
  "parking_lot",
  "rand",
  "rocketmq-common",
+ "rocketmq-error",
  "rocketmq-macros",
  "rocketmq-runtime",
  "rocketmq-rust",
@@ -2398,7 +2407,6 @@ dependencies = [
 name = "rocketmq-rust"
 version = "0.5.0"
 dependencies = [
- "anyhow",
  "tokio",
  "tracing",
 ]
@@ -2437,6 +2445,7 @@ dependencies = [
  "cheetah-string",
  "rocketmq-client-rust",
  "rocketmq-common",
+ "rocketmq-error",
  "rocketmq-remoting",
  "rocketmq-rust",
  "serde",

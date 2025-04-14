@@ -19,9 +19,9 @@ use rocketmq_client_rust::consumer::listener::consume_concurrently_context::Cons
 use rocketmq_client_rust::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
 use rocketmq_client_rust::consumer::listener::message_listener_concurrently::MessageListenerConcurrently;
 use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
-use rocketmq_client_rust::Result;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_common::common::message::message_ext::MessageExt;
+use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_rust::rocketmq;
 use tracing::info;
@@ -34,7 +34,7 @@ pub const TOPIC: &str = "TopicTest";
 pub const SUB_EXPRESSION: &str = "*";
 
 #[rocketmq::main]
-pub async fn main() -> Result<()> {
+pub async fn main() -> RocketMQResult<()> {
     //init logger
     rocketmq_common::log::init_logger();
 
@@ -61,7 +61,7 @@ impl MessageListenerConcurrently for MyMessageListener {
         &self,
         msgs: &[&MessageExt],
         _context: &ConsumeConcurrentlyContext,
-    ) -> Result<ConsumeConcurrentlyStatus> {
+    ) -> RocketMQResult<ConsumeConcurrentlyStatus> {
         for msg in msgs {
             info!("Receive message: {:?}", msg);
         }

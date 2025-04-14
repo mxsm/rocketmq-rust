@@ -16,8 +16,8 @@
  */
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_client_rust::producer::mq_producer::MQProducer;
-use rocketmq_client_rust::Result;
 use rocketmq_common::common::message::message_single::Message;
+use rocketmq_error::RocketMQResult;
 use rocketmq_rust::rocketmq;
 
 pub const MESSAGE_COUNT: usize = 1;
@@ -27,7 +27,7 @@ pub const TOPIC: &str = "TopicTest";
 pub const TAG: &str = "TagA";
 
 #[rocketmq::main]
-pub async fn main() -> Result<()> {
+pub async fn main() -> RocketMQResult<()> {
     //init logger
     rocketmq_common::log::init_logger();
 

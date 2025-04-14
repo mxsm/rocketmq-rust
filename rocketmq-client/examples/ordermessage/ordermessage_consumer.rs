@@ -24,9 +24,9 @@ use rocketmq_client_rust::consumer::listener::consume_orderly_context::ConsumeOr
 use rocketmq_client_rust::consumer::listener::consume_orderly_status::ConsumeOrderlyStatus;
 use rocketmq_client_rust::consumer::listener::message_listener_orderly::MessageListenerOrderly;
 use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
-use rocketmq_client_rust::Result;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_common::common::message::message_ext::MessageExt;
+use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_rust::rocketmq;
 use tracing::info;
@@ -38,7 +38,7 @@ pub const TOPIC: &str = "TopicTest";
 pub const TAG: &str = "*";
 
 #[rocketmq::main]
-pub async fn main() -> Result<()> {
+pub async fn main() -> RocketMQResult<()> {
     //init logger
     rocketmq_common::log::init_logger();
 
@@ -75,7 +75,7 @@ impl MessageListenerOrderly for MyMessageListener {
         &self,
         msgs: &[&MessageExt],
         context: &mut ConsumeOrderlyContext,
-    ) -> Result<ConsumeOrderlyStatus> {
+    ) -> RocketMQResult<ConsumeOrderlyStatus> {
         context.set_auto_commit(true);
         for msg in msgs {
             println!("Receive message: {:?}", msg);

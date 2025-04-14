@@ -19,12 +19,12 @@ use std::sync::Arc;
 
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
+use rocketmq_error::RocketmqError;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_rust::ArcMut;
 use tracing::warn;
 
-use crate::client_error::MQClientError;
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::PULL_TIME_DELAY_MILLS_WHEN_BROKER_FLOW_CONTROL;
 use crate::consumer::consumer_impl::pull_request::PullRequest;
@@ -179,9 +179,9 @@ impl PullCallback for DefaultPullCallback {
         let pull_request = self.pull_request.take().unwrap();
         let topic = message_queue_inner.get_topic();
         if !topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
-            if let Some(er) = err.downcast_ref::<MQClientError>() {
+            if let Some(er) = err.downcast_ref::<RocketmqError>() {
                 match er {
-                    MQClientError::MQClientBrokerError(broker_error) => {
+                    RocketmqError::MQClientBrokerError(broker_error) => {
                         if ResponseCode::from(broker_error.response_code())
                             == ResponseCode::SubscriptionNotLatest
                         {
@@ -210,9 +210,9 @@ impl PullCallback for DefaultPullCallback {
                 );
             }
         }
-        let time_delay = if let Some(er) = err.downcast_ref::<MQClientError>() {
+        let time_delay = if let Some(er) = err.downcast_ref::<RocketmqError>() {
             match er {
-                MQClientError::MQClientBrokerError(broker_error) => {
+                RocketmqError::MQClientBrokerError(broker_error) => {
                     if ResponseCode::from(broker_error.response_code()) == ResponseCode::FlowControl
                     {
                         PULL_TIME_DELAY_MILLS_WHEN_BROKER_FLOW_CONTROL

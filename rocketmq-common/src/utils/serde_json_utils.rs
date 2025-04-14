@@ -14,58 +14,64 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use crate::error::Error;
 
 pub struct SerdeJsonUtils;
 
 impl SerdeJsonUtils {
-    pub fn decode<T>(bytes: &[u8]) -> Result<T, Error>
+    pub fn decode<T>(bytes: &[u8]) -> rocketmq_error::RocketMQResult<T>
     where
         T: serde::de::DeserializeOwned,
     {
-        serde_json::from_slice::<T>(bytes).map_err(Error::JsonError)
+        serde_json::from_slice::<T>(bytes)
+            .map_err(|error| rocketmq_error::RocketmqError::JsonError(error.to_string()))
     }
 
-    pub fn from_json_str<T>(json: &str) -> Result<T, Error>
+    pub fn from_json_str<T>(json: &str) -> rocketmq_error::RocketMQResult<T>
     where
         T: serde::de::DeserializeOwned,
     {
-        serde_json::from_str(json).map_err(Error::JsonError)
+        serde_json::from_str(json)
+            .map_err(|error| rocketmq_error::RocketmqError::JsonError(error.to_string()))
     }
 
-    pub fn from_json_slice<T>(json: &[u8]) -> Result<T, Error>
+    pub fn from_json_slice<T>(json: &[u8]) -> rocketmq_error::RocketMQResult<T>
     where
         T: serde::de::DeserializeOwned,
     {
-        serde_json::from_slice(json).map_err(Error::JsonError)
+        serde_json::from_slice(json)
+            .map_err(|error| rocketmq_error::RocketmqError::JsonError(error.to_string()))
     }
 
-    pub fn to_json<T>(value: &T) -> Result<String, Error>
+    pub fn to_json<T>(value: &T) -> rocketmq_error::RocketMQResult<String>
     where
         T: serde::Serialize,
     {
-        serde_json::to_string(value).map_err(Error::JsonError)
+        serde_json::to_string(value)
+            .map_err(|error| rocketmq_error::RocketmqError::JsonError(error.to_string()))
     }
 
-    pub fn to_json_pretty<T>(value: &T) -> Result<String, Error>
+    pub fn to_json_pretty<T>(value: &T) -> rocketmq_error::RocketMQResult<String>
     where
         T: serde::Serialize,
     {
-        serde_json::to_string_pretty(value).map_err(Error::JsonError)
+        serde_json::to_string_pretty(value)
+            .map_err(|error| rocketmq_error::RocketmqError::JsonError(error.to_string()))
     }
 
-    pub fn to_json_vec<T>(value: &T) -> Result<Vec<u8>, Error>
+    pub fn to_json_vec<T>(value: &T) -> rocketmq_error::RocketMQResult<Vec<u8>>
     where
         T: serde::Serialize,
     {
-        serde_json::to_vec(value).map_err(Error::JsonError)
+        serde_json::to_vec(value)
+            .map_err(|error| rocketmq_error::RocketmqError::JsonError(error.to_string()))
     }
 
-    pub fn to_json_vec_pretty<T>(value: &T) -> Result<Vec<u8>, Error>
+    pub fn to_json_vec_pretty<T>(value: &T) -> rocketmq_error::RocketMQResult<Vec<u8>>
     where
         T: serde::Serialize,
     {
-        serde_json::to_vec_pretty(value).map_err(Error::JsonError)
+        serde_json::to_vec_pretty(value)
+            .map_err(|error| rocketmq_error::RocketmqError::JsonError(error.to_string()))
     }
 }
 
@@ -134,10 +140,9 @@ mod tests {
 
     use std::fmt::Debug;
 
+    use rocketmq_error::RocketmqError;
     use serde::Deserialize;
     use serde::Serialize;
-
-    use crate::error::Error;
 
     #[derive(Serialize, Deserialize, Debug, PartialEq)]
     struct TestStruct {
@@ -159,7 +164,8 @@ mod tests {
     #[test]
     fn test_from_json_error() {
         let json_str = r#"{"name":"Alice","age":"thirty"}"#;
-        let result: Result<TestStruct, Error> = SerdeJsonUtils::from_json_str(json_str);
+        let result: rocketmq_error::RocketMQResult<TestStruct> =
+            SerdeJsonUtils::from_json_str(json_str);
         assert!(result.is_err());
     }
 
@@ -177,7 +183,8 @@ mod tests {
     #[test]
     fn test_from_json_slice_error() {
         let json_slice = r#"{"name":"Bob","age":"twenty-five"}"#.as_bytes();
-        let result: Result<TestStruct, Error> = SerdeJsonUtils::from_json_slice(json_slice);
+        let result: rocketmq_error::RocketMQResult<TestStruct> =
+            SerdeJsonUtils::from_json_slice(json_slice);
         assert!(result.is_err());
     }
 
@@ -202,7 +209,7 @@ mod tests {
             name: "Charlie".to_string(),
             age: 40,
         };
-        let result: Result<String, Error> = SerdeJsonUtils::to_json(&value);
+        let result: rocketmq_error::RocketMQResult<String> = SerdeJsonUtils::to_json(&value);
         assert!(result.is_ok());
     }
 }

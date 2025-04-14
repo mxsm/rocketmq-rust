@@ -21,15 +21,17 @@ use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::MessageAccessor::MessageAccessor;
+use rocketmq_error::mq_client_err;
 
 use crate::common::client_error_code::ClientErrorCode;
-use crate::mq_client_err;
-use crate::Result;
 
 pub struct MessageUtil;
 
 impl MessageUtil {
-    pub fn create_reply_message(request_message: &Message, body: &[u8]) -> Result<Message> {
+    pub fn create_reply_message(
+        request_message: &Message,
+        body: &[u8],
+    ) -> rocketmq_error::RocketMQResult<Message> {
         let mut reply_message = Message::default();
         let cluster = request_message.get_property(&CheetahString::from_static_str(
             MessageConst::PROPERTY_CLUSTER,

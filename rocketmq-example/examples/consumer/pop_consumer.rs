@@ -23,14 +23,13 @@ use rocketmq_client_rust::consumer::listener::consume_concurrently_context::Cons
 use rocketmq_client_rust::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
 use rocketmq_client_rust::consumer::listener::message_listener_concurrently::MessageListenerConcurrently;
 use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
-use rocketmq_client_rust::Result;
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_common::common::message::message_ext::MessageExt;
+use rocketmq_error::RocketMQResult;
 use rocketmq_rust::rocketmq;
 use rocketmq_rust::wait_for_signal;
 use rocketmq_tools::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use tracing::info;
-
 pub const MESSAGE_COUNT: usize = 1;
 pub const CONSUMER_GROUP: &str = "please_rename_unique_group_name_4";
 pub const DEFAULT_NAMESRVADDR: &str = "127.0.0.1:9876";
@@ -38,7 +37,7 @@ pub const TOPIC: &str = "TopicTest";
 pub const TAG: &str = "*";
 
 #[rocketmq::main]
-pub async fn main() -> Result<()> {
+pub async fn main() -> RocketMQResult<()> {
     //init logger
     rocketmq_common::log::init_logger();
 
@@ -60,7 +59,7 @@ pub async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn switch_pop_consumer() -> Result<()> {
+async fn switch_pop_consumer() -> RocketMQResult<()> {
     let mut mq_admin_ext = DefaultMQAdminExt::new();
     mq_admin_ext.client_config_mut().namesrv_addr =
         Some(CheetahString::from_static_str(DEFAULT_NAMESRVADDR));
@@ -102,7 +101,7 @@ impl MessageListenerConcurrently for MyMessageListener {
         &self,
         msgs: &[&MessageExt],
         _context: &ConsumeConcurrentlyContext,
-    ) -> Result<ConsumeConcurrentlyStatus> {
+    ) -> RocketMQResult<ConsumeConcurrentlyStatus> {
         for msg in msgs {
             info!("Receive message: {:?}", msg);
         }

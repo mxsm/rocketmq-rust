@@ -194,7 +194,7 @@ where
         &mut self,
         message_ext: MessageExtBrokerInner,
         mut broker_name_to_send: Option<CheetahString>,
-    ) -> crate::Result<Option<SendResult>> {
+    ) -> rocketmq_error::RocketMQResult<Option<SendResult>> {
         let broker_name = self
             .broker_runtime_inner
             .broker_config()

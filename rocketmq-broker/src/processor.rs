@@ -19,7 +19,6 @@ use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
-use rocketmq_remoting::Result;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use tracing::info;
@@ -110,7 +109,7 @@ where
         channel: Channel,
         ctx: ConnectionHandlerContext,
         request: RemotingCommand,
-    ) -> Result<Option<RemotingCommand>> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         info!("process_request: {:?}", request_code);
         let result = match request_code {
@@ -121,8 +120,7 @@ where
                 return self
                     .send_message_processor
                     .process_request(channel, ctx, request_code, request)
-                    .await
-                    .map_err(Into::into);
+                    .await;
             }
 
             RequestCode::SendReplyMessage | RequestCode::SendReplyMessageV2 => {
@@ -137,8 +135,7 @@ where
                 return self
                     .client_manage_processor
                     .process_request(channel, ctx, request_code, request)
-                    .await
-                    .map_err(Into::into);
+                    .await;
             }
             RequestCode::PullMessage | RequestCode::LitePullMessage => {
                 self.pull_message_processor
@@ -169,24 +166,21 @@ where
                 return self
                     .query_assignment_processor
                     .process_request(channel, ctx, request_code, request)
-                    .await
-                    .map_err(Into::into);
+                    .await;
             }
 
             RequestCode::ChangeMessageInvisibleTime => {
                 return self
                     .change_invisible_time_processor
                     .process_request(channel, ctx, request_code, request)
-                    .await
-                    .map_err(Into::into);
+                    .await;
             }
 
             RequestCode::AckMessage | RequestCode::BatchAckMessage => {
                 return self
                     .ack_message_processor
                     .process_request(channel, ctx, request_code, request)
-                    .await
-                    .map_err(Into::into);
+                    .await;
             }
 
             RequestCode::PopMessage => {

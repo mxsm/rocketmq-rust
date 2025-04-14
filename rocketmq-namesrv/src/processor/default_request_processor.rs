@@ -61,8 +61,6 @@ use rocketmq_rust::ArcMut;
 use tracing::warn;
 
 use crate::bootstrap::NameServerRuntimeInner;
-use crate::namesrv_error::NamesrvError::MQNamesrvError;
-use crate::namesrv_error::NamesrvRemotingErrorWithMessage;
 use crate::processor::NAMESPACE_ORDER_TOPIC_CONFIG;
 
 pub struct DefaultRequestProcessor {
@@ -76,7 +74,7 @@ impl DefaultRequestProcessor {
         _ctx: ConnectionHandlerContext,
         request_code: RequestCode,
         request: RemotingCommand,
-    ) -> crate::Result<Option<RemotingCommand>> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let response = match request_code {
             RequestCode::PutKvConfig => self.put_kv_config(request),
             RequestCode::GetKvConfig => self.get_kv_config(request),
@@ -118,15 +116,11 @@ impl DefaultRequestProcessor {
 
 ///implementation put KV config
 impl DefaultRequestProcessor {
-    fn put_kv_config(&mut self, request: RemotingCommand) -> crate::Result<RemotingCommand> {
-        let request_header = request
-            .decode_command_custom_header::<PutKVConfigRequestHeader>()
-            .map_err(|e| {
-                NamesrvRemotingErrorWithMessage::new(
-                    e,
-                    "decode PutKVConfigRequestHeader fail".to_string(),
-                )
-            })?;
+    fn put_kv_config(
+        &mut self,
+        request: RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+        let request_header = request.decode_command_custom_header::<PutKVConfigRequestHeader>()?;
         //check namespace and key, need?
         if request_header.namespace.is_empty() || request_header.key.is_empty() {
             return Ok(RemotingCommand::create_response_command_with_code(
@@ -145,15 +139,11 @@ impl DefaultRequestProcessor {
         Ok(RemotingCommand::create_response_command())
     }
 
-    fn get_kv_config(&self, request: RemotingCommand) -> crate::Result<RemotingCommand> {
-        let request_header = request
-            .decode_command_custom_header::<GetKVConfigRequestHeader>()
-            .map_err(|e| {
-                NamesrvRemotingErrorWithMessage::new(
-                    e,
-                    "decode GetKVConfigRequestHeader fail".to_string(),
-                )
-            })?;
+    fn get_kv_config(
+        &self,
+        request: RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+        let request_header = request.decode_command_custom_header::<GetKVConfigRequestHeader>()?;
 
         let value = self
             .name_server_runtime_inner
@@ -173,15 +163,12 @@ impl DefaultRequestProcessor {
         )
     }
 
-    fn delete_kv_config(&mut self, request: RemotingCommand) -> crate::Result<RemotingCommand> {
-        let request_header = request
-            .decode_command_custom_header::<DeleteKVConfigRequestHeader>()
-            .map_err(|e| {
-                NamesrvRemotingErrorWithMessage::new(
-                    e,
-                    "decode DeleteKVConfigRequestHeader fail".to_string(),
-                )
-            })?;
+    fn delete_kv_config(
+        &mut self,
+        request: RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+        let request_header =
+            request.decode_command_custom_header::<DeleteKVConfigRequestHeader>()?;
 
         self.name_server_runtime_inner
             .kvconfig_manager_mut()
@@ -192,15 +179,9 @@ impl DefaultRequestProcessor {
     fn query_broker_topic_config(
         &mut self,
         request: RemotingCommand,
-    ) -> crate::Result<RemotingCommand> {
-        let request_header = request
-            .decode_command_custom_header::<QueryDataVersionRequestHeader>()
-            .map_err(|e| {
-                NamesrvRemotingErrorWithMessage::new(
-                    e,
-                    "decode QueryDataVersionRequestHeader fail".to_string(),
-                )
-            })?;
+    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+        let request_header =
+            request.decode_command_custom_header::<QueryDataVersionRequestHeader>()?;
         let data_version = DataVersion::decode(request.get_body().expect("body is empty"))
             .expect("decode DataVersion failed");
         let changed = self
@@ -244,15 +225,9 @@ impl DefaultRequestProcessor {
         &mut self,
         remote_addr: SocketAddr,
         request: RemotingCommand,
-    ) -> crate::Result<RemotingCommand> {
-        let request_header = request
-            .decode_command_custom_header::<RegisterBrokerRequestHeader>()
-            .map_err(|e| {
-                NamesrvRemotingErrorWithMessage::new(
-                    e,
-                    "decode RegisterBrokerRequestHeader fail".to_string(),
-                )
-            })?;
+    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+        let request_header =
+            request.decode_command_custom_header::<RegisterBrokerRequestHeader>()?;
         if !check_sum_crc32(&request, &request_header) {
             return Ok(RemotingCommand::create_response_command_with_code(
                 RemotingSysResponseCode::SystemError,
@@ -322,15 +297,9 @@ impl DefaultRequestProcessor {
     fn process_unregister_broker(
         &mut self,
         request: RemotingCommand,
-    ) -> crate::Result<RemotingCommand> {
-        let request_header = request
-            .decode_command_custom_header::<UnRegisterBrokerRequestHeader>()
-            .map_err(|e| {
-                NamesrvRemotingErrorWithMessage::new(
-                    e,
-                    "decode UnRegisterBrokerRequestHeader fail".to_string(),
-                )
-            })?;
+    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+        let request_header =
+            request.decode_command_custom_header::<UnRegisterBrokerRequestHeader>()?;
         /*self.name_server_runtime_inner
         .route_info_manager_mut()
         .un_register_broker(vec![request_header]);*/
@@ -352,15 +321,9 @@ impl DefaultRequestProcessor {
     fn process_broker_heartbeat(
         &mut self,
         request: RemotingCommand,
-    ) -> crate::Result<RemotingCommand> {
-        let request_header = request
-            .decode_command_custom_header::<BrokerHeartbeatRequestHeader>()
-            .map_err(|e| {
-                NamesrvRemotingErrorWithMessage::new(
-                    e,
-                    "decode BrokerHeartbeatRequestHeader fail".to_string(),
-                )
-            })?;
+    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+        let request_header =
+            request.decode_command_custom_header::<BrokerHeartbeatRequestHeader>()?;
         self.name_server_runtime_inner
             .route_info_manager_mut()
             .update_broker_info_update_timestamp(
@@ -373,15 +336,9 @@ impl DefaultRequestProcessor {
     fn get_broker_member_group(
         &mut self,
         request: RemotingCommand,
-    ) -> crate::Result<RemotingCommand> {
-        let request_header = request
-            .decode_command_custom_header::<GetBrokerMemberGroupRequestHeader>()
-            .map_err(|e| {
-                NamesrvRemotingErrorWithMessage::new(
-                    e,
-                    "decode GetBrokerMemberGroupRequestHeader fail".to_string(),
-                )
-            })?;
+    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+        let request_header =
+            request.decode_command_custom_header::<GetBrokerMemberGroupRequestHeader>()?;
 
         let broker_member_group = self
             .name_server_runtime_inner
@@ -390,22 +347,19 @@ impl DefaultRequestProcessor {
         let response_body = GetBrokerMemberGroupResponseBody {
             broker_member_group,
         };
-        let body = response_body.encode().map_err(|e| {
-            MQNamesrvError(format!(
-                "encode GetBrokerMemberGroupResponseBody failed {:?}",
-                e
-            ))
-        })?;
+        let body = response_body.encode()?;
         Ok(RemotingCommand::create_response_command().set_body(body))
     }
 
-    fn get_broker_cluster_info(&self, _request: RemotingCommand) -> crate::Result<RemotingCommand> {
+    fn get_broker_cluster_info(
+        &self,
+        _request: RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         let vec = self
             .name_server_runtime_inner
             .route_info_manager()
             .get_all_cluster_info()
-            .encode()
-            .map_err(|e| MQNamesrvError(format!("encode ClusterInfo failed {:?}", e)))?;
+            .encode()?;
         Ok(
             RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::Success)
                 .set_body(vec),
@@ -415,15 +369,9 @@ impl DefaultRequestProcessor {
     fn wipe_write_perm_of_broker(
         &mut self,
         request: RemotingCommand,
-    ) -> crate::Result<RemotingCommand> {
-        let request_header = request
-            .decode_command_custom_header::<WipeWritePermOfBrokerRequestHeader>()
-            .map_err(|e| {
-                NamesrvRemotingErrorWithMessage::new(
-                    e,
-                    "decode WipeWritePermOfBrokerRequestHeader fail".to_string(),
-                )
-            })?;
+    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+        let request_header =
+            request.decode_command_custom_header::<WipeWritePermOfBrokerRequestHeader>()?;
         let wipe_topic_cnt = self
             .name_server_runtime_inner
             .route_info_manager_mut()
@@ -435,15 +383,9 @@ impl DefaultRequestProcessor {
     fn add_write_perm_of_broker(
         &mut self,
         request: RemotingCommand,
-    ) -> crate::Result<RemotingCommand> {
-        let request_header = request
-            .decode_command_custom_header::<AddWritePermOfBrokerRequestHeader>()
-            .map_err(|e| {
-                NamesrvRemotingErrorWithMessage::new(
-                    e,
-                    "decode AddWritePermOfBrokerRequestHeader fail".to_string(),
-                )
-            })?;
+    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+        let request_header =
+            request.decode_command_custom_header::<AddWritePermOfBrokerRequestHeader>()?;
         let add_topic_cnt = self
             .name_server_runtime_inner
             .route_info_manager_mut()
@@ -455,7 +397,7 @@ impl DefaultRequestProcessor {
     fn get_all_topic_list_from_nameserver(
         &self,
         _request: RemotingCommand,
-    ) -> crate::Result<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         if self
             .name_server_runtime_inner
             .name_server_config()
@@ -465,9 +407,7 @@ impl DefaultRequestProcessor {
                 .name_server_runtime_inner
                 .route_info_manager()
                 .get_all_topic_list();
-            let body = topics
-                .encode()
-                .map_err(|e| MQNamesrvError(format!("encode TopicList failed {:?}", e)))?;
+            let body = topics.encode()?;
             return Ok(RemotingCommand::create_response_command().set_body(body));
         }
         Ok(
@@ -481,15 +421,9 @@ impl DefaultRequestProcessor {
     fn delete_topic_in_name_srv(
         &mut self,
         request: RemotingCommand,
-    ) -> crate::Result<RemotingCommand> {
-        let request_header = request
-            .decode_command_custom_header::<DeleteTopicFromNamesrvRequestHeader>()
-            .map_err(|e| {
-                NamesrvRemotingErrorWithMessage::new(
-                    e,
-                    "decode DeleteTopicFromNamesrvRequestHeader fail".to_string(),
-                )
-            })?;
+    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+        let request_header =
+            request.decode_command_custom_header::<DeleteTopicFromNamesrvRequestHeader>()?;
         self.name_server_runtime_inner
             .route_info_manager_mut()
             .delete_topic(request_header.topic, request_header.cluster_name);
@@ -499,15 +433,9 @@ impl DefaultRequestProcessor {
     fn register_topic_to_name_srv(
         &mut self,
         request: RemotingCommand,
-    ) -> crate::Result<RemotingCommand> {
-        let request_header = request
-            .decode_command_custom_header::<RegisterTopicRequestHeader>()
-            .map_err(|e| {
-                NamesrvRemotingErrorWithMessage::new(
-                    e,
-                    "decode RegisterTopicRequestHeader fail".to_string(),
-                )
-            })?;
+    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+        let request_header =
+            request.decode_command_custom_header::<RegisterTopicRequestHeader>()?;
         if let Some(ref body) = request.body() {
             let topic_route_data = TopicRouteData::decode(body).unwrap_or_default();
             if !topic_route_data.queue_datas.is_empty() {
@@ -519,15 +447,12 @@ impl DefaultRequestProcessor {
         Ok(RemotingCommand::create_response_command())
     }
 
-    fn get_kv_list_by_namespace(&self, request: RemotingCommand) -> crate::Result<RemotingCommand> {
-        let request_header = request
-            .decode_command_custom_header::<GetKVListByNamespaceRequestHeader>()
-            .map_err(|e| {
-                NamesrvRemotingErrorWithMessage::new(
-                    e,
-                    "decode GetKVListByNamespaceRequestHeader fail".to_string(),
-                )
-            })?;
+    fn get_kv_list_by_namespace(
+        &self,
+        request: RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+        let request_header =
+            request.decode_command_custom_header::<GetKVListByNamespaceRequestHeader>()?;
         let value = self
             .name_server_runtime_inner
             .kvconfig_manager()
@@ -544,7 +469,10 @@ impl DefaultRequestProcessor {
         )
     }
 
-    fn get_topics_by_cluster(&self, request: RemotingCommand) -> crate::Result<RemotingCommand> {
+    fn get_topics_by_cluster(
+        &self,
+        request: RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         if !self
             .name_server_runtime_inner
             .name_server_config()
@@ -556,39 +484,32 @@ impl DefaultRequestProcessor {
             .set_remark(CheetahString::from_static_str("disable")));
         }
 
-        let request_header = request
-            .decode_command_custom_header::<GetTopicsByClusterRequestHeader>()
-            .map_err(|e| {
-                NamesrvRemotingErrorWithMessage::new(
-                    e,
-                    "decode GetTopicsByClusterRequestHeader fail".to_string(),
-                )
-            })?;
+        let request_header =
+            request.decode_command_custom_header::<GetTopicsByClusterRequestHeader>()?;
         let topics_by_cluster = self
             .name_server_runtime_inner
             .route_info_manager()
             .get_topics_by_cluster(&request_header.cluster);
-        let body = topics_by_cluster
-            .encode()
-            .map_err(|e| MQNamesrvError(format!("encode TopicList failed {:?}", e)))?;
+        let body = topics_by_cluster.encode()?;
         Ok(RemotingCommand::create_response_command().set_body(body))
     }
 
     fn get_system_topic_list_from_ns(
         &self,
         _request: RemotingCommand,
-    ) -> crate::Result<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         let topic_list = self
             .name_server_runtime_inner
             .route_info_manager()
             .get_system_topic_list();
-        let body = topic_list
-            .encode()
-            .map_err(|e| MQNamesrvError(format!("encode TopicList failed {:?}", e)))?;
+        let body = topic_list.encode()?;
         Ok(RemotingCommand::create_response_command().set_body(body))
     }
 
-    fn get_unit_topic_list(&self, _request: RemotingCommand) -> crate::Result<RemotingCommand> {
+    fn get_unit_topic_list(
+        &self,
+        _request: RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         if self
             .name_server_runtime_inner
             .name_server_config()
@@ -598,9 +519,7 @@ impl DefaultRequestProcessor {
                 .name_server_runtime_inner
                 .route_info_manager()
                 .get_unit_topics();
-            let body = topic_list
-                .encode()
-                .map_err(|e| MQNamesrvError(format!("encode TopicList failed {:?}", e)))?;
+            let body = topic_list.encode()?;
             return Ok(RemotingCommand::create_response_command().set_body(body));
         }
         Ok(
@@ -614,7 +533,7 @@ impl DefaultRequestProcessor {
     fn get_has_unit_sub_topic_list(
         &self,
         _request: RemotingCommand,
-    ) -> crate::Result<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         if self
             .name_server_runtime_inner
             .name_server_config()
@@ -624,9 +543,7 @@ impl DefaultRequestProcessor {
                 .name_server_runtime_inner
                 .route_info_manager()
                 .get_has_unit_sub_topic_list();
-            let body = topic_list
-                .encode()
-                .map_err(|e| MQNamesrvError(format!("encode TopicList failed {:?}", e)))?;
+            let body = topic_list.encode()?;
             return Ok(RemotingCommand::create_response_command().set_body(body));
         }
         Ok(
@@ -640,7 +557,7 @@ impl DefaultRequestProcessor {
     fn get_has_unit_sub_un_unit_topic_list(
         &self,
         _request: RemotingCommand,
-    ) -> crate::Result<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         if self
             .name_server_runtime_inner
             .name_server_config()
@@ -661,7 +578,10 @@ impl DefaultRequestProcessor {
         )
     }
 
-    fn update_config(&mut self, request: RemotingCommand) -> crate::Result<RemotingCommand> {
+    fn update_config(
+        &mut self,
+        request: RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         if let Some(body) = request.body() {
             let body_str = match str::from_utf8(body) {
                 Ok(s) => s,
@@ -713,7 +633,10 @@ impl DefaultRequestProcessor {
         )
     }
 
-    fn get_config(&mut self, _request: RemotingCommand) -> crate::Result<RemotingCommand> {
+    fn get_config(
+        &mut self,
+        _request: RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         let config = self.name_server_runtime_inner.name_server_config();
         let result = match config.get_all_configs_format_string() {
             Ok(content) => {

@@ -24,14 +24,13 @@ use std::path::Iter;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
+use rocketmq_error::RocketmqError::UnsupportedOperationException;
 
 use crate::common::message::message_decoder;
 use crate::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use crate::common::message::message_single::Message;
 use crate::common::message::MessageTrait;
 use crate::common::mix_all;
-use crate::error::Error::UnsupportedOperationException;
-use crate::Result;
 
 #[derive(Clone, Default, Debug)]
 pub struct MessageBatch {
@@ -63,7 +62,9 @@ impl MessageBatch {
         message_decoder::encode_messages(self.messages.as_ref().unwrap())
     }
 
-    pub fn generate_from_vec(messages: Vec<Message>) -> Result<MessageBatch> {
+    pub fn generate_from_vec(
+        messages: Vec<Message>,
+    ) -> rocketmq_error::RocketMQResult<MessageBatch> {
         if messages.is_empty() {
             return Err(UnsupportedOperationException(
                 "MessageBatch::generate_from_vec: messages is empty".to_string(),
@@ -72,9 +73,11 @@ impl MessageBatch {
         let mut first: Option<&Message> = None;
         for message in &messages {
             if message.get_delay_time_level() > 0 {
-                return Err(UnsupportedOperationException(
-                    "TimeDelayLevel is not supported for batching".to_string(),
-                ));
+                return Err(
+                    rocketmq_error::RocketmqError::UnsupportedOperationException(
+                        "TimeDelayLevel is not supported for batching".to_string(),
+                    ),
+                );
             }
             if message
                 .get_topic()

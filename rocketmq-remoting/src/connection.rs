@@ -29,7 +29,6 @@ use tokio_util::codec::Framed;
 
 use crate::codec::remoting_command_codec::CompositeCodec;
 use crate::protocol::remoting_command::RemotingCommand;
-use crate::remoting_error::RemotingError;
 
 /// Send and receive `Frame` values from a remote peer.
 ///
@@ -124,7 +123,9 @@ impl Connection {
     /// # Returns
     ///
     /// A result containing the received command or an error.
-    pub async fn receive_command(&mut self) -> Option<Result<RemotingCommand, RemotingError>> {
+    pub async fn receive_command(
+        &mut self,
+    ) -> Option<rocketmq_error::RocketMQResult<RemotingCommand>> {
         self.reader.next().await
     }
 
@@ -140,7 +141,7 @@ impl Connection {
     pub async fn send_command(
         &mut self,
         mut command: RemotingCommand,
-    ) -> Result<(), RemotingError> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         self.buf.clear();
         command.fast_header_encode(&mut self.buf);
         if let Some(body_inner) = command.take_body() {
@@ -163,7 +164,7 @@ impl Connection {
     /// # Errors
     ///
     /// This function returns a `RemotingError` if the underlying writer fails to send the data.
-    pub async fn send_bytes(&mut self, bytes: Bytes) -> Result<(), RemotingError> {
+    pub async fn send_bytes(&mut self, bytes: Bytes) -> rocketmq_error::RocketMQResult<()> {
         self.writer.send(bytes).await?;
         Ok(())
     }
@@ -187,7 +188,7 @@ impl Connection {
     /// The static lifetime of the slice ensures that the data is valid for the entire duration
     /// of the program, making it suitable for scenarios where the data does not need to be
     /// dynamically allocated or modified.
-    pub async fn send_slice(&mut self, slice: &'static [u8]) -> Result<(), RemotingError> {
+    pub async fn send_slice(&mut self, slice: &'static [u8]) -> rocketmq_error::RocketMQResult<()> {
         let bytes = slice.into();
         self.writer.send(bytes).await?;
         Ok(())

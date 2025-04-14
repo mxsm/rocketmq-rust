@@ -20,20 +20,22 @@ use rocketmq_common::common::message::message_ext::MessageExt;
 
 use crate::consumer::listener::consume_concurrently_context::ConsumeConcurrentlyContext;
 use crate::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
-use crate::Result;
 
 pub trait MessageListenerConcurrently: Sync + Send {
     fn consume_message(
         &self,
         msgs: &[&MessageExt],
         context: &ConsumeConcurrentlyContext,
-    ) -> Result<ConsumeConcurrentlyStatus>;
+    ) -> rocketmq_error::RocketMQResult<ConsumeConcurrentlyStatus>;
 }
 
 pub type ArcBoxMessageListenerConcurrently = Arc<Box<dyn MessageListenerConcurrently>>;
 
 pub type MessageListenerConcurrentlyFn = Arc<
-    dyn Fn(&[&MessageExt], &ConsumeConcurrentlyContext) -> Result<ConsumeConcurrentlyStatus>
+    dyn Fn(
+            &[&MessageExt],
+            &ConsumeConcurrentlyContext,
+        ) -> rocketmq_error::RocketMQResult<ConsumeConcurrentlyStatus>
         + Send
         + Sync,
 >;

@@ -15,6 +15,8 @@ rocketmq-rust = { workspace = true }
 rocketmq-common = { workspace = true }
 rocketmq-tools = { workspace = true }
 rocketmq-client-rust = { workspace = true }
+rocketmq-error = { workspace = true }
+
 tracing.workspace = true
 cheetah-string = { workspace = true }
 tokio =  { workspace = true }

@@ -34,7 +34,6 @@ use rocketmq_store::base::message_store::MessageStore;
 use tracing::info;
 use tracing::warn;
 
-use crate::broker_error::BrokerError::MQBrokerError;
 use crate::broker_runtime::BrokerRuntimeInner;
 
 const GET_TOPIC_ROUTE_TIMEOUT: u64 = 3000;
@@ -136,7 +135,7 @@ impl<MS: MessageStore> TopicRouteInfoManager<MS> {
                 .await;
             if let Err(e) = topic_route_data {
                 if !NamespaceUtil::is_retry_topic(topic) {
-                    if let MQBrokerError(a, _, _) = e {
+                    if let rocketmq_error::RocketmqError::MQBrokerError(a, _, _) = e {
                         if a == ResponseCode::TopicNotExist as i32 {
                             self.clean_none_route_topic(topic);
                             return;

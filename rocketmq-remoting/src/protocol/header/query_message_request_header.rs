@@ -83,7 +83,7 @@ impl CommandCustomHeader for QueryMessageRequestHeader {
 }
 
 impl FromMap for QueryMessageRequestHeader {
-    type Error = crate::remoting_error::RemotingError;
+    type Error = rocketmq_error::RocketmqError;
 
     type Target = Self;
 
@@ -94,46 +94,50 @@ impl FromMap for QueryMessageRequestHeader {
             topic: map
                 .get(&CheetahString::from_static_str(Self::TOPIC))
                 .cloned()
-                .ok_or(Self::Error::RemotingCommandError(
+                .ok_or(rocketmq_error::RocketmqError::DeserializeHeaderError(
                     "Miss topic field".to_string(),
                 ))?,
             key: map
                 .get(&CheetahString::from_static_str(Self::KEY))
                 .cloned()
-                .ok_or(Self::Error::RemotingCommandError(
+                .ok_or(rocketmq_error::RocketmqError::DeserializeHeaderError(
                     "Miss key field".to_string(),
                 ))?,
             max_num: map
                 .get(&CheetahString::from_static_str(Self::MAX_NUM))
                 .cloned()
-                .ok_or(Self::Error::RemotingCommandError(
+                .ok_or(rocketmq_error::RocketmqError::DeserializeHeaderError(
                     "Miss maxNum field".to_string(),
                 ))?
                 .parse()
                 .map_err(|_| {
-                    Self::Error::RemotingCommandError("Parse maxNum field error".to_string())
+                    rocketmq_error::RocketmqError::DeserializeHeaderError(
+                        "Parse maxNum field error".to_string(),
+                    )
                 })?,
             begin_timestamp: map
                 .get(&CheetahString::from_static_str(Self::BEGIN_TIMESTAMP))
                 .cloned()
-                .ok_or(Self::Error::RemotingCommandError(
+                .ok_or(rocketmq_error::RocketmqError::DeserializeHeaderError(
                     "Miss beginTimestamp field".to_string(),
                 ))?
                 .parse()
                 .map_err(|_| {
-                    Self::Error::RemotingCommandError(
+                    rocketmq_error::RocketmqError::DeserializeHeaderError(
                         "Parse beginTimestamp field error".to_string(),
                     )
                 })?,
             end_timestamp: map
                 .get(&CheetahString::from_static_str(Self::END_TIMESTAMP))
                 .cloned()
-                .ok_or(Self::Error::RemotingCommandError(
+                .ok_or(rocketmq_error::RocketmqError::DeserializeHeaderError(
                     "Miss endTimestamp field".to_string(),
                 ))?
                 .parse()
                 .map_err(|_| {
-                    Self::Error::RemotingCommandError("Parse endTimestamp field error".to_string())
+                    rocketmq_error::RocketmqError::DeserializeHeaderError(
+                        "Parse endTimestamp field error".to_string(),
+                    )
                 })?,
             topic_request_header: Some(<TopicRequestHeader as FromMap>::from(map)?),
         })

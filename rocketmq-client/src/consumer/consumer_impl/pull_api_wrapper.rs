@@ -31,6 +31,7 @@ use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_error::mq_client_err;
 use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
 use rocketmq_remoting::protocol::header::pop_message_request_header::PopMessageRequestHeader;
 use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
@@ -47,8 +48,6 @@ use crate::hook::filter_message_context::FilterMessageContext;
 use crate::hook::filter_message_hook::FilterMessageHook;
 use crate::implementation::communication_mode::CommunicationMode;
 use crate::implementation::mq_client_api_impl::MQClientAPIImpl;
-use crate::mq_client_err;
-use crate::Result;
 
 #[derive(Clone)]
 pub struct PullAPIWrapper {
@@ -254,7 +253,7 @@ impl PullAPIWrapper {
         timeout_millis: u64,
         communication_mode: CommunicationMode,
         pull_callback: PCB,
-    ) -> Result<Option<PullResultExt>>
+    ) -> rocketmq_error::RocketMQResult<Option<PullResultExt>>
     where
         PCB: PullCallback + 'static,
     {
@@ -357,7 +356,7 @@ impl PullAPIWrapper {
         &mut self,
         topic: &CheetahString,
         broker_addr: &CheetahString,
-    ) -> Result<CheetahString> {
+    ) -> rocketmq_error::RocketMQResult<CheetahString> {
         let topic_route_table = self.client_instance.topic_route_table.read().await;
         let topic_route_data = topic_route_table.get(topic);
         let vec = topic_route_data
@@ -392,7 +391,7 @@ impl PullAPIWrapper {
         order: bool,
         expression_type: CheetahString,
         expression: CheetahString,
-    ) -> Result<()>
+    ) -> rocketmq_error::RocketMQResult<()>
     where
         PC: PopCallback + 'static,
     {

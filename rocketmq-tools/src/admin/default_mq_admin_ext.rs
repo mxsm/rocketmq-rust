@@ -202,7 +202,7 @@ impl Default for DefaultMQAdminExt {
 #[allow(unused_variables)]
 #[allow(unused_mut)]
 impl MQAdminExt for DefaultMQAdminExt {
-    async fn start(&mut self) -> rocketmq_client_rust::Result<()> {
+    async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
         MQAdminExt::start(self.default_mqadmin_ext_impl.as_mut()).await
     }
 
@@ -214,7 +214,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         broker_container_addr: CheetahString,
         broker_config: CheetahString,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
@@ -224,7 +224,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         cluster_name: CheetahString,
         broker_name: CheetahString,
         broker_id: u64,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
@@ -232,14 +232,14 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         broker_addr: CheetahString,
         properties: HashMap<CheetahString, CheetahString>,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
     async fn get_broker_config(
         &self,
         broker_addr: CheetahString,
-    ) -> rocketmq_client_rust::Result<HashMap<CheetahString, CheetahString>> {
+    ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, CheetahString>> {
         todo!()
     }
 
@@ -247,7 +247,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         addr: CheetahString,
         config: TopicConfig,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
@@ -255,7 +255,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         addr: CheetahString,
         topic_config_list: Vec<TopicConfig>,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
@@ -263,7 +263,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         addr: CheetahString,
         config: PlainAccessConfig,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
@@ -271,7 +271,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         addr: CheetahString,
         access_key: CheetahString,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
@@ -280,14 +280,14 @@ impl MQAdminExt for DefaultMQAdminExt {
         addr: CheetahString,
         global_white_addrs: CheetahString,
         acl_file_full_path: Option<CheetahString>,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
     async fn examine_broker_cluster_acl_version_info(
         &self,
         addr: CheetahString,
-    ) -> rocketmq_client_rust::Result<CheetahString> {
+    ) -> rocketmq_error::RocketMQResult<CheetahString> {
         todo!()
     }
 
@@ -295,7 +295,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         addr: CheetahString,
         config: SubscriptionGroupConfig,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
@@ -303,7 +303,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         broker_addr: CheetahString,
         configs: Vec<SubscriptionGroupConfig>,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
@@ -311,7 +311,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         addr: CheetahString,
         group: CheetahString,
-    ) -> rocketmq_client_rust::Result<SubscriptionGroupConfig> {
+    ) -> rocketmq_error::RocketMQResult<SubscriptionGroupConfig> {
         todo!()
     }
 
@@ -319,7 +319,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         topic: CheetahString,
         broker_addr: Option<CheetahString>,
-    ) -> rocketmq_client_rust::Result<TopicStatsTable> {
+    ) -> rocketmq_error::RocketMQResult<TopicStatsTable> {
         todo!()
     }
 
@@ -330,21 +330,21 @@ impl MQAdminExt for DefaultMQAdminExt {
         todo!()
     }
 
-    async fn fetch_all_topic_list(&self) -> rocketmq_client_rust::Result<TopicList> {
+    async fn fetch_all_topic_list(&self) -> rocketmq_error::RocketMQResult<TopicList> {
         todo!()
     }
 
     async fn fetch_topics_by_cluster(
         &self,
         cluster_name: CheetahString,
-    ) -> rocketmq_client_rust::Result<TopicList> {
+    ) -> rocketmq_error::RocketMQResult<TopicList> {
         todo!()
     }
 
     async fn fetch_broker_runtime_stats(
         &self,
         broker_addr: CheetahString,
-    ) -> rocketmq_client_rust::Result<KVTable> {
+    ) -> rocketmq_error::RocketMQResult<KVTable> {
         todo!()
     }
 
@@ -355,18 +355,18 @@ impl MQAdminExt for DefaultMQAdminExt {
         cluster_name: Option<CheetahString>,
         broker_addr: Option<CheetahString>,
         timeout_millis: Option<u64>,
-    ) -> rocketmq_client_rust::Result<ConsumeStats> {
+    ) -> rocketmq_error::RocketMQResult<ConsumeStats> {
         todo!()
     }
 
-    async fn examine_broker_cluster_info(&self) -> rocketmq_client_rust::Result<ClusterInfo> {
+    async fn examine_broker_cluster_info(&self) -> rocketmq_error::RocketMQResult<ClusterInfo> {
         todo!()
     }
 
     async fn examine_topic_route_info(
         &self,
         topic: CheetahString,
-    ) -> rocketmq_client_rust::Result<Option<TopicRouteData>> {
+    ) -> rocketmq_error::RocketMQResult<Option<TopicRouteData>> {
         self.default_mqadmin_ext_impl
             .examine_topic_route_info(topic)
             .await
@@ -376,7 +376,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         consumer_group: CheetahString,
         broker_addr: Option<CheetahString>,
-    ) -> rocketmq_client_rust::Result<ConsumerConnection> {
+    ) -> rocketmq_error::RocketMQResult<ConsumerConnection> {
         todo!()
     }
 
@@ -384,7 +384,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         producer_group: CheetahString,
         topic: CheetahString,
-    ) -> rocketmq_client_rust::Result<ProducerConnection> {
+    ) -> rocketmq_error::RocketMQResult<ProducerConnection> {
         todo!()
     }
 
@@ -396,7 +396,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         namesrv_addr: CheetahString,
         broker_name: CheetahString,
-    ) -> rocketmq_client_rust::Result<i32> {
+    ) -> rocketmq_error::RocketMQResult<i32> {
         todo!()
     }
 
@@ -404,7 +404,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         namesrv_addr: CheetahString,
         broker_name: CheetahString,
-    ) -> rocketmq_client_rust::Result<i32> {
+    ) -> rocketmq_error::RocketMQResult<i32> {
         todo!()
     }
 
@@ -421,14 +421,14 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         namespace: CheetahString,
         key: CheetahString,
-    ) -> rocketmq_client_rust::Result<CheetahString> {
+    ) -> rocketmq_error::RocketMQResult<CheetahString> {
         todo!()
     }
 
     async fn get_kv_list_by_namespace(
         &self,
         namespace: CheetahString,
-    ) -> rocketmq_client_rust::Result<KVTable> {
+    ) -> rocketmq_error::RocketMQResult<KVTable> {
         todo!()
     }
 
@@ -436,7 +436,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         topic_name: CheetahString,
         cluster_name: CheetahString,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
@@ -444,7 +444,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         addrs: HashSet<CheetahString>,
         topic: CheetahString,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
@@ -453,7 +453,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         addrs: HashSet<CheetahString>,
         cluster_name: Option<CheetahString>,
         topic: CheetahString,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
@@ -462,7 +462,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         addr: CheetahString,
         group_name: CheetahString,
         remove_offset: Option<bool>,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
@@ -471,7 +471,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         namespace: CheetahString,
         key: CheetahString,
         value: CheetahString,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
@@ -479,7 +479,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         namespace: CheetahString,
         key: CheetahString,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
@@ -490,7 +490,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         group: CheetahString,
         timestamp: u64,
         is_force: bool,
-    ) -> rocketmq_client_rust::Result<HashMap<MessageQueue, u64>> {
+    ) -> rocketmq_error::RocketMQResult<HashMap<MessageQueue, u64>> {
         todo!()
     }
 
@@ -499,7 +499,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         consumer_group: CheetahString,
         topic: CheetahString,
         timestamp: u64,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
@@ -508,7 +508,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         topic: CheetahString,
         group: CheetahString,
         client_addr: CheetahString,
-    ) -> rocketmq_client_rust::Result<HashMap<CheetahString, HashMap<MessageQueue, u64>>> {
+    ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, HashMap<MessageQueue, u64>>> {
         todo!()
     }
 
@@ -517,21 +517,21 @@ impl MQAdminExt for DefaultMQAdminExt {
         key: CheetahString,
         value: CheetahString,
         is_cluster: bool,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
     async fn query_topic_consume_by_who(
         &self,
         topic: CheetahString,
-    ) -> rocketmq_client_rust::Result<GroupList> {
+    ) -> rocketmq_error::RocketMQResult<GroupList> {
         todo!()
     }
 
     async fn query_topics_by_consumer(
         &self,
         group: CheetahString,
-    ) -> rocketmq_client_rust::Result<TopicList> {
+    ) -> rocketmq_error::RocketMQResult<TopicList> {
         todo!()
     }
 
@@ -546,7 +546,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         group: CheetahString,
         topic: CheetahString,
-    ) -> rocketmq_client_rust::Result<SubscriptionData> {
+    ) -> rocketmq_error::RocketMQResult<SubscriptionData> {
         todo!()
     }
 
@@ -554,7 +554,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         cluster: Option<CheetahString>,
         addr: Option<CheetahString>,
-    ) -> rocketmq_client_rust::Result<bool> {
+    ) -> rocketmq_error::RocketMQResult<bool> {
         todo!()
     }
 
@@ -562,7 +562,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         cluster: Option<CheetahString>,
         addr: Option<CheetahString>,
-    ) -> rocketmq_client_rust::Result<bool> {
+    ) -> rocketmq_error::RocketMQResult<bool> {
         todo!()
     }
 
@@ -570,7 +570,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         cluster: Option<CheetahString>,
         addr: Option<CheetahString>,
-    ) -> rocketmq_client_rust::Result<bool> {
+    ) -> rocketmq_error::RocketMQResult<bool> {
         todo!()
     }
 
@@ -580,7 +580,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         client_id: CheetahString,
         jstack: bool,
         metrics: Option<bool>,
-    ) -> rocketmq_client_rust::Result<ConsumerRunningInfo> {
+    ) -> rocketmq_error::RocketMQResult<ConsumerRunningInfo> {
         todo!()
     }
 
@@ -590,7 +590,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         client_id: CheetahString,
         topic: CheetahString,
         msg_id: CheetahString,
-    ) -> rocketmq_client_rust::Result<ConsumeMessageDirectlyResult> {
+    ) -> rocketmq_error::RocketMQResult<ConsumeMessageDirectlyResult> {
         todo!()
     }
 
@@ -601,7 +601,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         client_id: CheetahString,
         topic: CheetahString,
         msg_id: CheetahString,
-    ) -> rocketmq_client_rust::Result<ConsumeMessageDirectlyResult> {
+    ) -> rocketmq_error::RocketMQResult<ConsumeMessageDirectlyResult> {
         todo!()
     }
 
@@ -611,21 +611,21 @@ impl MQAdminExt for DefaultMQAdminExt {
         dest_group: CheetahString,
         topic: CheetahString,
         is_offline: bool,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
     async fn get_cluster_list(
         &self,
         topic: String,
-    ) -> rocketmq_client_rust::Result<HashSet<CheetahString>> {
+    ) -> rocketmq_error::RocketMQResult<HashSet<CheetahString>> {
         todo!()
     }
 
     async fn get_topic_cluster_list(
         &self,
         topic: String,
-    ) -> rocketmq_client_rust::Result<HashSet<CheetahString>> {
+    ) -> rocketmq_error::RocketMQResult<HashSet<CheetahString>> {
         todo!()
     }
 
@@ -633,7 +633,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         broker_addr: CheetahString,
         timeout_millis: u64,
-    ) -> rocketmq_client_rust::Result<TopicConfigSerializeWrapper> {
+    ) -> rocketmq_error::RocketMQResult<TopicConfigSerializeWrapper> {
         todo!()
     }
 
@@ -642,7 +642,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         broker_addr: CheetahString,
         special_topic: bool,
         timeout_millis: u64,
-    ) -> rocketmq_client_rust::Result<TopicConfigSerializeWrapper> {
+    ) -> rocketmq_error::RocketMQResult<TopicConfigSerializeWrapper> {
         todo!()
     }
 
@@ -652,7 +652,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         consume_group: CheetahString,
         mq: MessageQueue,
         offset: u64,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
@@ -660,14 +660,14 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         properties: HashMap<CheetahString, CheetahString>,
         name_servers: Vec<CheetahString>,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
     async fn get_name_server_config(
         &self,
         name_servers: Vec<CheetahString>,
-    ) -> rocketmq_client_rust::Result<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>>
+    ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>>
     {
         todo!()
     }
@@ -676,7 +676,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         topic: CheetahString,
         msg_id: CheetahString,
-    ) -> rocketmq_client_rust::Result<bool> {
+    ) -> rocketmq_error::RocketMQResult<bool> {
         todo!()
     }
 
@@ -688,7 +688,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         mode: MessageRequestMode,
         pop_work_group_size: i32,
         timeout_millis: u64,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         MQAdminExt::set_message_request_mode(
             self.default_mqadmin_ext_impl.as_ref(),
             broker_addr,
@@ -708,7 +708,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         topic_name: CheetahString,
         queue_id: i32,
         reset_offset: u64,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
@@ -716,7 +716,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         addr: CheetahString,
         topic: CheetahString,
-    ) -> rocketmq_client_rust::Result<TopicConfig> {
+    ) -> rocketmq_error::RocketMQResult<TopicConfig> {
         todo!()
     }
 
@@ -727,7 +727,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         topic_config: TopicConfig,
         mapping_detail: TopicQueueMappingDetail,
         force: bool,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
@@ -735,14 +735,14 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         broker_addr: CheetahString,
         master_flush_offset: u64,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
     async fn get_controller_config(
         &self,
         controller_servers: Vec<CheetahString>,
-    ) -> rocketmq_client_rust::Result<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>>
+    ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>>
     {
         todo!()
     }
@@ -751,7 +751,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         properties: HashMap<CheetahString, CheetahString>,
         controllers: Vec<CheetahString>,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
@@ -762,7 +762,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         broker_name: CheetahString,
         broker_controller_ids_to_clean: Option<CheetahString>,
         is_clean_living_broker: bool,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
@@ -770,7 +770,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         broker_addr: CheetahString,
         properties: HashMap<CheetahString, CheetahString>,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
@@ -778,14 +778,14 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         broker_addr: CheetahString,
         consumer_group: CheetahString,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
     async fn get_cold_data_flow_ctr_info(
         &self,
         broker_addr: CheetahString,
-    ) -> rocketmq_client_rust::Result<CheetahString> {
+    ) -> rocketmq_error::RocketMQResult<CheetahString> {
         todo!()
     }
 
@@ -793,7 +793,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         broker_addr: CheetahString,
         mode: CheetahString,
-    ) -> rocketmq_client_rust::Result<CheetahString> {
+    ) -> rocketmq_error::RocketMQResult<CheetahString> {
         todo!()
     }
 
@@ -803,7 +803,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         username: CheetahString,
         password: CheetahString,
         user_type: CheetahString,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
@@ -814,7 +814,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         password: CheetahString,
         user_type: CheetahString,
         user_status: CheetahString,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
@@ -822,7 +822,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         broker_addr: CheetahString,
         username: CheetahString,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
@@ -834,7 +834,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         actions: Vec<CheetahString>,
         source_ips: Vec<CheetahString>,
         decision: CheetahString,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
@@ -846,7 +846,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         actions: Vec<CheetahString>,
         source_ips: Vec<CheetahString>,
         decision: CheetahString,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 
@@ -855,7 +855,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         broker_addr: CheetahString,
         subject: CheetahString,
         resource: CheetahString,
-    ) -> rocketmq_client_rust::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 }

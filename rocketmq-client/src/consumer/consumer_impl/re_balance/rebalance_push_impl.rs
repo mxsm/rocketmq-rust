@@ -27,6 +27,7 @@ use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::utils::util_all;
 use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_error::mq_client_err;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
@@ -51,8 +52,6 @@ use crate::consumer::consumer_impl::re_balance::Rebalance;
 use crate::consumer::default_mq_push_consumer::ConsumerConfig;
 use crate::consumer::store::read_offset_type::ReadOffsetType;
 use crate::factory::mq_client_instance::MQClientInstance;
-use crate::mq_client_err;
-use crate::Result;
 
 static UNLOCK_DELAY_TIME_MILLS: Lazy<u64> = Lazy::new(|| {
     std::env::var("rocketmq.client.unlockDelayTimeMills")
@@ -249,7 +248,10 @@ impl Rebalance for RebalancePushImpl {
     }
 
     #[allow(deprecated)]
-    async fn compute_pull_from_where_with_exception(&mut self, mq: &MessageQueue) -> Result<i64> {
+    async fn compute_pull_from_where_with_exception(
+        &mut self,
+        mq: &MessageQueue,
+    ) -> rocketmq_error::RocketMQResult<i64> {
         let consume_from_where = self.consumer_config.consume_from_where;
         let mut default_mqpush_consumer_impl =
             self.default_mqpush_consumer_impl.as_ref().unwrap().clone();

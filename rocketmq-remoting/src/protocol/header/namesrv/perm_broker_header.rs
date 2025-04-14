@@ -63,7 +63,7 @@ impl CommandCustomHeader for WipeWritePermOfBrokerResponseHeader {
 }
 
 impl FromMap for WipeWritePermOfBrokerResponseHeader {
-    type Error = crate::remoting_error::RemotingError;
+    type Error = rocketmq_error::RocketmqError;
 
     type Target = Self;
 
@@ -105,7 +105,7 @@ impl CommandCustomHeader for AddWritePermOfBrokerRequestHeader {
 }
 
 impl FromMap for AddWritePermOfBrokerRequestHeader {
-    type Error = crate::remoting_error::RemotingError;
+    type Error = rocketmq_error::RocketmqError;
 
     type Target = Self;
 
@@ -145,7 +145,7 @@ impl CommandCustomHeader for AddWritePermOfBrokerResponseHeader {
 }
 
 impl FromMap for AddWritePermOfBrokerResponseHeader {
-    type Error = crate::remoting_error::RemotingError;
+    type Error = rocketmq_error::RocketmqError;
 
     type Target = Self;
 

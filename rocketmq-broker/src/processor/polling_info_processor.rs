@@ -29,7 +29,7 @@ impl PollingInfoProcessor {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: RemotingCommand,
-    ) -> crate::Result<Option<RemotingCommand>> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         todo!()
     }
 }

@@ -17,8 +17,6 @@
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 
-use crate::Result;
-
 /// Trait for allocating message queues to consumers in a consumer group.
 /// This trait is implemented by different strategies for message queue allocation.
 pub trait AllocateMessageQueueStrategy: Send + Sync {
@@ -40,7 +38,7 @@ pub trait AllocateMessageQueueStrategy: Send + Sync {
         current_cid: &CheetahString,
         mq_all: &[MessageQueue],
         cid_all: &[CheetahString],
-    ) -> Result<Vec<MessageQueue>>;
+    ) -> rocketmq_error::RocketMQResult<Vec<MessageQueue>>;
 
     /// Returns the name of the allocation strategy.
     ///

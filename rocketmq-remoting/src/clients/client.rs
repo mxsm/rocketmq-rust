@@ -16,6 +16,10 @@
  */
 use std::collections::HashMap;
 
+use rocketmq_error::RocketMQResult;
+use rocketmq_error::RocketmqError::ConnectionInvalid;
+use rocketmq_error::RocketmqError::Io;
+use rocketmq_error::RocketmqError::RemoteError;
 use rocketmq_rust::ArcMut;
 use tokio::sync::mpsc::Receiver;
 use tracing::error;
@@ -29,13 +33,9 @@ use crate::net::channel::Channel;
 use crate::net::channel::ChannelInner;
 use crate::protocol::remoting_command::RemotingCommand;
 use crate::protocol::RemotingCommandType;
-use crate::remoting_error::RemotingError::ConnectionInvalid;
-use crate::remoting_error::RemotingError::Io;
-use crate::remoting_error::RemotingError::RemoteError;
 use crate::runtime::connection_handler_context::ConnectionHandlerContext;
 use crate::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 use crate::runtime::processor::RequestProcessor;
-use crate::Result;
 
 #[derive(Clone)]
 pub struct Client {
@@ -60,7 +60,7 @@ struct ClientInner {
 
 type SendMessage = (
     RemotingCommand,
-    Option<tokio::sync::oneshot::Sender<Result<RemotingCommand>>>,
+    Option<tokio::sync::oneshot::Sender<RocketMQResult<RemotingCommand>>>,
     Option<u64>,
 );
 
@@ -132,7 +132,7 @@ impl ClientInner {
         addr: T,
         processor: PR,
         tx: Option<&tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
-    ) -> Result<(tokio::sync::mpsc::Sender<SendMessage>, ArcMut<ClientInner>)>
+    ) -> RocketMQResult<(tokio::sync::mpsc::Sender<SendMessage>, ArcMut<ClientInner>)>
     where
         T: tokio::net::ToSocketAddrs,
         PR: RequestProcessor + 'static,
@@ -175,9 +175,9 @@ impl ClientInner {
     pub async fn send(
         &mut self,
         request: RemotingCommand,
-        tx: Option<tokio::sync::oneshot::Sender<Result<RemotingCommand>>>,
+        tx: Option<tokio::sync::oneshot::Sender<RocketMQResult<RemotingCommand>>>,
         timeout_millis: Option<u64>,
-    ) -> Result<()> {
+    ) -> RocketMQResult<()> {
         let opaque = request.opaque();
         if let Some(tx) = tx {
             self.response_table.insert(
@@ -216,7 +216,7 @@ impl Client {
         addr: T,
         processor: PR,
         tx: Option<&tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
-    ) -> Result<Client>
+    ) -> RocketMQResult<Client>
     where
         T: tokio::net::ToSocketAddrs,
         PR: RequestProcessor + 'static,
@@ -243,12 +243,12 @@ impl Client {
         &mut self,
         request: RemotingCommand,
         timeout_millis: u64,
-    ) -> Result<RemotingCommand> {
+    ) -> RocketMQResult<RemotingCommand> {
         /*self.send(request).await?;
         let response = self.read().await?;
         Ok(response)*/
 
-        let (tx, rx) = tokio::sync::oneshot::channel::<Result<RemotingCommand>>();
+        let (tx, rx) = tokio::sync::oneshot::channel::<RocketMQResult<RemotingCommand>>();
 
         if let Err(err) = self
             .tx
@@ -287,7 +287,7 @@ impl Client {
     /// # Returns
     ///
     /// A `Result` indicating success or failure in sending the request.
-    pub async fn send(&mut self, request: RemotingCommand) -> Result<()> {
+    pub async fn send(&mut self, request: RemotingCommand) -> RocketMQResult<()> {
         /*match self.inner.ctx.connection.writer.send(request).await {
             Ok(_) => Ok(()),
             Err(error) => match error {
@@ -310,7 +310,7 @@ impl Client {
     ///
     /// The `RemotingCommand` representing the response, wrapped in a `Result`. Returns an error if
     /// reading the response fails.
-    async fn read(&mut self) -> Result<RemotingCommand> {
+    async fn read(&mut self) -> RocketMQResult<RemotingCommand> {
         match self.inner.channel.0.connection.receive_command().await {
             None => {
                 self.inner.channel.0.connection.ok = false;

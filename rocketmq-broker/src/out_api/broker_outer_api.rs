@@ -40,6 +40,7 @@ use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::MessageDecoder;
 use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_error::RocketmqError;
 use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
 use rocketmq_remoting::code::request_code::RequestCode;
@@ -82,10 +83,7 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-use crate::broker_error::BrokerError;
-use crate::broker_error::BrokerError::BrokerRemotingError;
 use crate::broker_runtime::BrokerRuntimeInner;
-use crate::Result;
 
 pub struct BrokerOuterAPI {
     remoting_client: ArcMut<RocketmqDefaultClient<DefaultRemotingRequestProcessor>>,
@@ -360,7 +358,7 @@ impl BrokerOuterAPI {
         addr: &CheetahString,
         request_body: bytes::Bytes,
         timeout_millis: u64,
-    ) -> Result<HashSet<MessageQueue>> {
+    ) -> rocketmq_error::RocketMQResult<HashSet<MessageQueue>> {
         let mut request = RemotingCommand::create_request_command(
             RequestCode::LockBatchMq,
             LockBatchMqRequestHeader::default(),
@@ -377,7 +375,7 @@ impl BrokerOuterAPI {
                         LockBatchResponseBody::decode(response.get_body().unwrap()).unwrap();
                     Ok(lock_batch_response_body.lock_ok_mq_set)
                 } else {
-                    Err(BrokerError::MQBrokerError(
+                    Err(RocketmqError::MQBrokerError(
                         response.code(),
                         response
                             .remark()
@@ -389,7 +387,7 @@ impl BrokerOuterAPI {
                     ))
                 }
             }
-            Err(e) => Err(BrokerRemotingError(e)),
+            Err(e) => Err(e),
         }
     }
 
@@ -398,7 +396,7 @@ impl BrokerOuterAPI {
         addr: &CheetahString,
         request_body: bytes::Bytes,
         timeout_millis: u64,
-    ) -> Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         let mut request = RemotingCommand::create_request_command(
             RequestCode::UnlockBatchMq,
             UnlockBatchMqRequestHeader::default(),
@@ -413,7 +411,7 @@ impl BrokerOuterAPI {
                 if ResponseCode::from(response.code()) == ResponseCode::Success {
                     Ok(())
                 } else {
-                    Err(BrokerError::MQBrokerError(
+                    Err(RocketmqError::MQBrokerError(
                         response.code(),
                         response
                             .remark()
@@ -424,7 +422,7 @@ impl BrokerOuterAPI {
                     ))
                 }
             }
-            Err(e) => Err(BrokerRemotingError(e)),
+            Err(e) => Err(e),
         }
     }
 
@@ -433,7 +431,7 @@ impl BrokerOuterAPI {
         topic: &CheetahString,
         timeout_millis: u64,
         allow_topic_not_exist: bool,
-    ) -> Result<TopicRouteData> {
+    ) -> rocketmq_error::RocketMQResult<TopicRouteData> {
         let header = GetRouteInfoRequestHeader {
             topic: topic.clone(),
             ..Default::default()
@@ -461,7 +459,7 @@ impl BrokerOuterAPI {
             }
             _ => {}
         }
-        Err(BrokerError::MQBrokerError(
+        Err(RocketmqError::MQBrokerError(
             response.code(),
             response
                 .remark()
@@ -479,7 +477,7 @@ impl BrokerOuterAPI {
         msg: MessageExt,
         group: CheetahString,
         timeout_millis: u64,
-    ) -> Result<SendResult> {
+    ) -> rocketmq_error::RocketMQResult<SendResult> {
         let uniq_msg_id = MessageClientIDSetter::get_uniq_id(&msg);
         let queue_id = msg.queue_id;
         let topic = msg.get_topic().clone();
@@ -508,7 +506,7 @@ impl BrokerOuterAPI {
         offset: i64,
         max_nums: i32,
         timeout_millis: u64,
-    ) -> Result<(Option<PullResult>, String, bool)> {
+    ) -> rocketmq_error::RocketMQResult<(Option<PullResult>, String, bool)> {
         let request_header = PullMessageRequestHeader {
             consumer_group: consumer_group.clone(),
             topic: topic.clone(),
@@ -594,7 +592,7 @@ impl BrokerOuterAPI {
         broker_addr: &CheetahString,
         broker_name: &CheetahString,
         broker_id: u64,
-    ) -> Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         let request_header = UnRegisterBrokerRequestHeader {
             broker_name: broker_name.clone(),
             broker_addr: broker_addr.clone(),
@@ -610,7 +608,7 @@ impl BrokerOuterAPI {
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             Ok(())
         } else {
-            Err(BrokerError::MQBrokerError(
+            Err(RocketmqError::MQBrokerError(
                 response.code(),
                 response.remark().map_or("".to_string(), |s| s.to_string()),
                 broker_addr.to_string(),
@@ -660,23 +658,21 @@ fn process_pull_result(
 fn process_pull_response(
     mut response: RemotingCommand,
     addr: &CheetahString,
-) -> Result<PullResultExt> {
+) -> rocketmq_error::RocketMQResult<PullResultExt> {
     let pull_status = match ResponseCode::from(response.code()) {
         ResponseCode::Success => PullStatus::Found,
         ResponseCode::PullNotFound => PullStatus::NoNewMsg,
         ResponseCode::PullRetryImmediately => PullStatus::NoMatchedMsg,
         ResponseCode::PullOffsetMoved => PullStatus::OffsetIllegal,
         _ => {
-            return Err(BrokerError::MQBrokerError(
+            return Err(RocketmqError::MQBrokerError(
                 response.code(),
                 response.remark().map_or("".to_string(), |s| s.to_string()),
                 addr.to_string(),
             ))
         }
     };
-    let response_header = response
-        .decode_command_custom_header::<PullMessageResponseHeader>()
-        .map_err(BrokerRemotingError)?;
+    let response_header = response.decode_command_custom_header::<PullMessageResponseHeader>()?;
     let pull_result = PullResultExt {
         pull_result: PullResult::new(
             pull_status,
@@ -759,7 +755,7 @@ pub fn process_send_response(
     queue_id: i32,
     topic: CheetahString,
     response: &RemotingCommand,
-) -> Result<SendResult> {
+) -> rocketmq_error::RocketMQResult<SendResult> {
     let mut send_status: Option<SendStatus> = None;
 
     // Match the response code to the corresponding SendStatus
@@ -773,9 +769,8 @@ pub fn process_send_response(
 
     // If send_status is not None, process the response
     if let Some(status) = send_status {
-        let response_header = response
-            .decode_command_custom_header::<SendMessageResponseHeader>()
-            .map_err(BrokerRemotingError)?;
+        let response_header =
+            response.decode_command_custom_header::<SendMessageResponseHeader>()?;
 
         let message_queue = MessageQueue::from_parts(topic, broker_name, queue_id);
 
@@ -821,7 +816,7 @@ pub fn process_send_response(
     }
 
     // If send_status is None, we throw an error
-    Err(BrokerError::MQBrokerError(
+    Err(RocketmqError::MQBrokerError(
         response.code(),
         "".to_string(),
         response.remark().map_or("".to_string(), |s| s.to_string()),

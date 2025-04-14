@@ -21,8 +21,6 @@
 
 extern crate core;
 
-use crate::client_error::MQClientError;
-
 pub mod admin;
 pub mod base;
 pub mod client_error;
@@ -37,5 +35,3 @@ mod trace;
 pub mod utils;
 
 pub use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
-
-pub type Result<T> = std::result::Result<T, MQClientError>;

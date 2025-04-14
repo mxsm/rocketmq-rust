@@ -156,7 +156,7 @@ impl CommandCustomHeader for SendMessageRequestHeader {
 }
 
 impl FromMap for SendMessageRequestHeader {
-    type Error = crate::remoting_error::RemotingError;
+    type Error = rocketmq_error::RocketmqError;
 
     type Target = Self;
 
@@ -383,7 +383,7 @@ impl TopicRequestHeaderTrait for SendMessageRequestHeader {
 pub fn parse_request_header(
     request: &RemotingCommand,
     request_code: RequestCode,
-) -> crate::Result<SendMessageRequestHeader> {
+) -> rocketmq_error::RocketMQResult<SendMessageRequestHeader> {
     let mut request_header_v2 = None;
     if RequestCode::SendMessageV2 == request_code || RequestCode::SendBatchMessage == request_code {
         // Attempt to decode the command custom header as SendMessageRequestHeaderV2

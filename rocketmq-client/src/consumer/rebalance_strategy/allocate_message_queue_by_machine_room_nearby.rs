@@ -19,7 +19,6 @@ use std::collections::BTreeMap;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 
-use crate::client_error::MQClientError;
 use crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
 use crate::consumer::rebalance_strategy::check;
 
@@ -49,7 +48,7 @@ impl AllocateMessageQueueStrategy for AllocateMessageQueueByMachineRoomNearby {
         current_cid: &CheetahString,
         mq_all: &[MessageQueue],
         cid_all: &[CheetahString],
-    ) -> crate::Result<Vec<MessageQueue>> {
+    ) -> rocketmq_error::RocketMQResult<Vec<MessageQueue>> {
         let mut result = Vec::new();
 
         if !check(consumer_group, current_cid, mq_all, cid_all)? {
@@ -65,10 +64,9 @@ impl AllocateMessageQueueStrategy for AllocateMessageQueueByMachineRoomNearby {
                     .or_default()
                     .push(mq.clone());
             } else {
-                return Err(MQClientError::IllegalArgumentError(format!(
-                    "Machine room is null for mq {}",
-                    mq
-                )));
+                return Err(rocketmq_error::RocketmqError::IllegalArgumentError(
+                    format!("Machine room is null for mq {}", mq),
+                ));
             }
         }
 
@@ -80,10 +78,9 @@ impl AllocateMessageQueueStrategy for AllocateMessageQueueByMachineRoomNearby {
                     .or_default()
                     .push(cid.clone());
             } else {
-                return Err(MQClientError::IllegalArgumentError(format!(
-                    "Machine room is null for consumer id {}",
-                    cid
-                )));
+                return Err(rocketmq_error::RocketmqError::IllegalArgumentError(
+                    format!("Machine room is null for consumer id {}", cid),
+                ));
             }
         }
 
