@@ -48,8 +48,6 @@ use rocketmq_store::pop::AckMessage;
 use tracing::error;
 use tracing::warn;
 
-use crate::broker_error::BrokerError::BrokerCommonError;
-use crate::broker_error::BrokerError::BrokerRemotingError;
 use crate::broker_runtime::BrokerRuntimeInner;
 use crate::processor::pop_message_processor::PopMessageProcessor;
 use crate::processor::processor_service::pop_revive_service::PopReviveService;
@@ -97,7 +95,7 @@ where
         ctx: ConnectionHandlerContext,
         request_code: RequestCode,
         request: RemotingCommand,
-    ) -> crate::Result<Option<RemotingCommand>> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         match request_code {
             RequestCode::AckMessage => self.process_ack(channel, ctx, request, true).await,
             RequestCode::BatchAckMessage => {
@@ -145,10 +143,8 @@ where
         _ctx: ConnectionHandlerContext,
         request: RemotingCommand,
         _broker_allow_suspend: bool,
-    ) -> crate::Result<Option<RemotingCommand>> {
-        let request_header = request
-            .decode_command_custom_header::<AckMessageRequestHeader>()
-            .map_err(BrokerRemotingError)?;
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let request_header = request.decode_command_custom_header::<AckMessageRequestHeader>()?;
         let topic_config = self
             .broker_runtime_inner
             .topic_config_manager()
@@ -223,14 +219,13 @@ where
         _ctx: ConnectionHandlerContext,
         request: RemotingCommand,
         _broker_allow_suspend: bool,
-    ) -> crate::Result<Option<RemotingCommand>> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         if request.get_body().is_none() {
             return Ok(Some(RemotingCommand::create_response_command_with_code(
                 ResponseCode::NoMessage,
             )));
         }
-        let req_body = BatchAckMessageRequestBody::decode(request.get_body().unwrap())
-            .map_err(BrokerCommonError)?;
+        let req_body = BatchAckMessageRequestBody::decode(request.get_body().unwrap())?;
         if req_body.acks.is_empty() {
             return Ok(Some(RemotingCommand::create_response_command_with_code(
                 ResponseCode::NoMessage,

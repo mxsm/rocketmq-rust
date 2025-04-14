@@ -47,8 +47,6 @@ use rocketmq_remoting::protocol::header::view_message_request_header::ViewMessag
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 
-use crate::Result;
-
 #[trait_variant::make(MqClientAdmin: Send)]
 pub trait MqClientAdminInner: Sync {
     /// Queries messages based on the provided request header.
@@ -71,7 +69,7 @@ pub trait MqClientAdminInner: Sync {
         decompress_body: bool,
         request_header: QueryMessageRequestHeader,
         timeout_millis: u64,
-    ) -> Result<Vec<MessageExt>>;
+    ) -> rocketmq_error::RocketMQResult<Vec<MessageExt>>;
 
     /// Retrieves topic statistics information.
     ///
@@ -89,7 +87,7 @@ pub trait MqClientAdminInner: Sync {
         address: &str,
         request_header: GetTopicStatsInfoRequestHeader,
         timeout_millis: u64,
-    ) -> Result<TopicStatsTable>;
+    ) -> rocketmq_error::RocketMQResult<TopicStatsTable>;
 
     /// Queries the consume time span for a topic.
     ///
@@ -107,7 +105,7 @@ pub trait MqClientAdminInner: Sync {
         address: &str,
         request_header: QueryConsumeTimeSpanRequestHeader,
         timeout_millis: u64,
-    ) -> Result<Vec<QueueTimeSpan>>;
+    ) -> rocketmq_error::RocketMQResult<Vec<QueueTimeSpan>>;
 
     /// Updates or creates a topic.
     ///
@@ -125,7 +123,7 @@ pub trait MqClientAdminInner: Sync {
         address: &str,
         request_header: CreateTopicRequestHeader,
         timeout_millis: u64,
-    ) -> Result<()>;
+    ) -> rocketmq_error::RocketMQResult<()>;
 
     /// Updates or creates a subscription group.
     ///
@@ -143,7 +141,7 @@ pub trait MqClientAdminInner: Sync {
         address: &str,
         config: SubscriptionGroupConfig,
         timeout_millis: u64,
-    ) -> Result<()>;
+    ) -> rocketmq_error::RocketMQResult<()>;
 
     /// Deletes a topic in the broker.
     ///
@@ -161,7 +159,7 @@ pub trait MqClientAdminInner: Sync {
         address: &str,
         request_header: DeleteTopicRequestHeader,
         timeout_millis: u64,
-    ) -> Result<()>;
+    ) -> rocketmq_error::RocketMQResult<()>;
 
     /// Deletes a topic in the nameserver.
     ///
@@ -179,7 +177,7 @@ pub trait MqClientAdminInner: Sync {
         address: &str,
         request_header: DeleteTopicFromNamesrvRequestHeader,
         timeout_millis: u64,
-    ) -> Result<()>;
+    ) -> rocketmq_error::RocketMQResult<()>;
 
     /// Deletes a key-value configuration.
     ///
@@ -197,7 +195,7 @@ pub trait MqClientAdminInner: Sync {
         address: &str,
         request_header: DeleteKVConfigRequestHeader,
         timeout_millis: u64,
-    ) -> Result<()>;
+    ) -> rocketmq_error::RocketMQResult<()>;
 
     /// Deletes a subscription group.
     ///
@@ -215,7 +213,7 @@ pub trait MqClientAdminInner: Sync {
         address: &str,
         request_header: DeleteSubscriptionGroupRequestHeader,
         timeout_millis: u64,
-    ) -> Result<()>;
+    ) -> rocketmq_error::RocketMQResult<()>;
 
     /// Invokes the broker to reset the offset.
     ///
@@ -233,7 +231,7 @@ pub trait MqClientAdminInner: Sync {
         address: &str,
         request_header: ResetOffsetRequestHeader,
         timeout_millis: u64,
-    ) -> Result<HashMap<MessageQueue, i64>>;
+    ) -> rocketmq_error::RocketMQResult<HashMap<MessageQueue, i64>>;
 
     /// Views a message.
     ///
@@ -251,7 +249,7 @@ pub trait MqClientAdminInner: Sync {
         address: &str,
         request_header: ViewMessageRequestHeader,
         timeout_millis: u64,
-    ) -> Result<MessageExt>;
+    ) -> rocketmq_error::RocketMQResult<MessageExt>;
 
     /// Retrieves broker cluster information.
     ///
@@ -267,7 +265,7 @@ pub trait MqClientAdminInner: Sync {
         &self,
         address: &str,
         timeout_millis: u64,
-    ) -> Result<ClusterInfo>;
+    ) -> rocketmq_error::RocketMQResult<ClusterInfo>;
 
     /// Retrieves the consumer connection list.
     ///
@@ -285,7 +283,7 @@ pub trait MqClientAdminInner: Sync {
         address: &str,
         request_header: GetConsumerConnectionListRequestHeader,
         timeout_millis: u64,
-    ) -> Result<ConsumerConnection>;
+    ) -> rocketmq_error::RocketMQResult<ConsumerConnection>;
 
     /// Queries topics by consumer.
     ///
@@ -303,7 +301,7 @@ pub trait MqClientAdminInner: Sync {
         address: &str,
         request_header: QueryTopicsByConsumerRequestHeader,
         timeout_millis: u64,
-    ) -> Result<TopicList>;
+    ) -> rocketmq_error::RocketMQResult<TopicList>;
 
     /// Queries subscription by consumer.
     ///
@@ -321,7 +319,7 @@ pub trait MqClientAdminInner: Sync {
         address: &str,
         request_header: QuerySubscriptionByConsumerRequestHeader,
         timeout_millis: u64,
-    ) -> Result<SubscriptionData>;
+    ) -> rocketmq_error::RocketMQResult<SubscriptionData>;
 
     /// Retrieves consume statistics.
     ///
@@ -339,7 +337,7 @@ pub trait MqClientAdminInner: Sync {
         address: &str,
         request_header: GetConsumeStatsRequestHeader,
         timeout_millis: u64,
-    ) -> Result<ConsumeStats>;
+    ) -> rocketmq_error::RocketMQResult<ConsumeStats>;
 
     /// Queries which group consumes a topic.
     ///
@@ -357,7 +355,7 @@ pub trait MqClientAdminInner: Sync {
         address: &str,
         request_header: QueryTopicConsumeByWhoRequestHeader,
         timeout_millis: u64,
-    ) -> Result<GroupList>;
+    ) -> rocketmq_error::RocketMQResult<GroupList>;
 
     /// Retrieves consumer running information.
     ///
@@ -375,7 +373,7 @@ pub trait MqClientAdminInner: Sync {
         address: &str,
         request_header: GetConsumerRunningInfoRequestHeader,
         timeout_millis: u64,
-    ) -> Result<ConsumerRunningInfo>;
+    ) -> rocketmq_error::RocketMQResult<ConsumerRunningInfo>;
 
     /// Consumes a message directly.
     ///
@@ -393,5 +391,5 @@ pub trait MqClientAdminInner: Sync {
         address: &str,
         request_header: ConsumeMessageDirectlyResultRequestHeader,
         timeout_millis: u64,
-    ) -> Result<ConsumeMessageDirectlyResult>;
+    ) -> rocketmq_error::RocketMQResult<ConsumeMessageDirectlyResult>;
 }

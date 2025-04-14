@@ -91,7 +91,9 @@ impl LocalFileOffsetStore {
             }
         }
     }
-    fn read_local_offset_bak(&self) -> Result<Option<OffsetSerializeWrapper>> {
+    fn read_local_offset_bak(
+        &self,
+    ) -> rocketmq_error::RocketMQResult<Option<OffsetSerializeWrapper>> {
         let content = file_utils::file_to_string(&format!("{}{}", self.store_path, ".bak"))
             .map_or("".to_string(), |content| content);
         if content.is_empty() {
@@ -259,7 +261,7 @@ impl OffsetStoreTrait for LocalFileOffsetStore {
         mq: &MessageQueue,
         offset: i64,
         is_oneway: bool,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         Ok(())
     }
 }

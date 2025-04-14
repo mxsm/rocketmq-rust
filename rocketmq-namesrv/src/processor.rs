@@ -46,7 +46,7 @@ impl RequestProcessor for NameServerRequestProcessor {
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         info!("Name server Received request code: {:?}", request_code);
-        let result = match request_code {
+        match request_code {
             RequestCode::GetRouteinfoByTopic => {
                 self.client_request_processor
                     .process_request(channel, ctx, request_code, request)
@@ -55,7 +55,6 @@ impl RequestProcessor for NameServerRequestProcessor {
                 self.default_request_processor
                     .process_request(channel, ctx, request_code, request)
             }
-        };
-        result.map_err(Into::into)
+        }
     }
 }

@@ -121,6 +121,18 @@ pub enum RocketmqError {
 
     #[error("{0}")]
     IpError(String),
+
+    #[error("{0}")]
+    ChannelError(String),
+
+    #[error("Client exception occurred: CODE:{0}, broker address:{2}, Message:{1}")]
+    MQBrokerError(i32, String, String),
+
+    #[error("{0}")]
+    NoneError(String),
+
+    #[error("{0}")]
+    TokioHandlerError(String),
 }
 
 #[derive(Error, Debug)]
@@ -187,8 +199,8 @@ impl MQBrokerErr {
 macro_rules! client_broker_err {
     // Handle errors with a custom ResponseCode and formatted string
     ($response_code:expr, $error_message:expr, $broker_addr:expr) => {{
-        std::result::Result::Err($rocketmq_error::RocketmqError::MQClientBrokerError(
-            $crate::client_error::MQBrokerErr::new_with_broker(
+        std::result::Result::Err($crate::RocketmqError::MQClientBrokerError(
+            $crate::MQBrokerErr::new_with_broker(
                 $response_code as i32,
                 $error_message,
                 $broker_addr,
@@ -197,8 +209,8 @@ macro_rules! client_broker_err {
     }};
     // Handle errors without a ResponseCode, using only the error message
     ($response_code:expr, $error_message:expr) => {{
-        std::result::Result::Err($rocketmq_error::RocketmqError::MQClientBrokerError(
-            $crate::client_error::MQBrokerErr::new($response_code as i32, $error_message),
+        std::result::Result::Err($crate::RocketmqError::MQClientBrokerError(
+            $crate::MQBrokerErr::new($response_code as i32, $error_message),
         ))
     }};
 }

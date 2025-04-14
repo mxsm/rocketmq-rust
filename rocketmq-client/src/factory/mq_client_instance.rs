@@ -986,7 +986,7 @@ impl MQClientInstance {
                     {
                         Ok(_) => {}
                         Err(e) => match e {
-                            rocketmq_error::RocketmqError(err) => {
+                            rocketmq_error::RocketmqError::MQClientErr(err) => {
                                 return Err(rocketmq_error::RocketmqError::MQClientErr(err));
                             }
                             _ => {

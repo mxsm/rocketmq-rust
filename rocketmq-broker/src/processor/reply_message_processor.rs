@@ -458,7 +458,7 @@ where
 
 fn parse_request_header(
     request: &RemotingCommand,
-) -> rocketmq_remoting::Result<SendMessageRequestHeader> {
+) -> rocketmq_error::RocketMQResult<SendMessageRequestHeader> {
     let request_code = RequestCode::from(request.code());
     let mut request_header_v2 = None;
     if RequestCode::SendReplyMessageV2 == request_code

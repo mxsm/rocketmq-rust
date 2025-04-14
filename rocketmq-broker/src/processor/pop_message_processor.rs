@@ -71,7 +71,6 @@ use tokio::sync::RwLock;
 use tracing::info;
 use tracing::warn;
 
-use crate::broker_error::BrokerError;
 use crate::broker_runtime::BrokerRuntimeInner;
 use crate::filter::expression_message_filter::ExpressionMessageFilter;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
@@ -170,11 +169,10 @@ where
         channel: Channel,
         ctx: ConnectionHandlerContext,
         request: RemotingCommand,
-    ) -> rocketmq_remoting::Result<Option<RemotingCommand>> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         self._process_request(channel, ctx, request_code, request)
             .await
-            .map_err(Into::into)
     }
 }
 
@@ -188,7 +186,7 @@ where
         ctx: ConnectionHandlerContext,
         request_code: RequestCode,
         mut request: RemotingCommand,
-    ) -> crate::Result<Option<RemotingCommand>> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let begin_time_mills = get_current_millis();
         request.add_ext_field_if_not_exist(
             CheetahString::from_static_str(BORN_TIME),
@@ -206,9 +204,7 @@ where
             );
         }
         let opaque = request.opaque();
-        let request_header = request
-            .decode_command_custom_header::<PopMessageRequestHeader>()
-            .map_err(BrokerError::BrokerRemotingError)?;
+        let request_header = request.decode_command_custom_header::<PopMessageRequestHeader>()?;
 
         self.broker_runtime_inner
             .consumer_manager()

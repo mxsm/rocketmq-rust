@@ -18,7 +18,6 @@ use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 
 use crate::base::mq_admin::MQAdmin;
-use crate::Result;
 
 #[trait_variant::make(MQConsumer: Send)]
 pub trait MQConsumerLocal: MQAdmin {
@@ -27,7 +26,10 @@ pub trait MQConsumerLocal: MQAdmin {
         msg: MessageExt,
         delay_level: i32,
         broker_name: &str,
-    ) -> Result<()>;
+    ) -> rocketmq_error::RocketMQResult<()>;
 
-    async fn fetch_subscribe_message_queues(&mut self, topic: &str) -> Result<Vec<MessageQueue>>;
+    async fn fetch_subscribe_message_queues(
+        &mut self,
+        topic: &str,
+    ) -> rocketmq_error::RocketMQResult<Vec<MessageQueue>>;
 }

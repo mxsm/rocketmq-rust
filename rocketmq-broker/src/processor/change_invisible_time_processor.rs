@@ -32,7 +32,6 @@ use rocketmq_remoting::protocol::header::change_invisible_time_response_header::
 use rocketmq_remoting::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingSerializable;
-use rocketmq_remoting::remoting_error::RocketmqError::DeserializeHeaderError;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_result::PutMessageResult;
@@ -113,7 +112,7 @@ where
         ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: RemotingCommand,
-    ) -> crate::Result<Option<RemotingCommand>> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         self.process_request_inner(channel, ctx, request, true)
             .await
     }
@@ -124,10 +123,9 @@ where
         _ctx: ConnectionHandlerContext,
         request: RemotingCommand,
         _broker_allow_suspend: bool,
-    ) -> crate::Result<Option<RemotingCommand>> {
-        let request_header = request
-            .decode_command_custom_header::<ChangeInvisibleTimeRequestHeader>()
-            .map_err(|e| RemotingCommandError(e.to_string()))?;
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let request_header =
+            request.decode_command_custom_header::<ChangeInvisibleTimeRequestHeader>()?;
         let topic_config = self
             .broker_runtime_inner
             .topic_config_manager()
@@ -265,7 +263,7 @@ where
         &mut self,
         request_header: &ChangeInvisibleTimeRequestHeader,
         extra_info: &[String],
-    ) -> crate::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         let ack_msg = AckMsg {
             ack_offset: request_header.offset,
             start_offset: ExtraInfoUtil::get_ck_queue_offset(extra_info)?,
@@ -342,7 +340,7 @@ where
         offset: i64,
         pop_time: u64,
         broker_name: CheetahString,
-    ) -> crate::Result<PutMessageResult> {
+    ) -> rocketmq_error::RocketMQResult<PutMessageResult> {
         let mut ck = PopCheckPoint {
             bit_map: 0,
             num: 1,
@@ -404,7 +402,7 @@ where
         &mut self,
         request_header: &ChangeInvisibleTimeRequestHeader,
         extra_info: &[String],
-    ) -> crate::Result<Option<RemotingCommand>> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let pop_time = ExtraInfoUtil::get_pop_time(extra_info)?;
         let old_offset = self
             .broker_runtime_inner

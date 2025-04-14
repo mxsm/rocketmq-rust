@@ -637,7 +637,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
     async fn merge_and_revive(
         &mut self,
         consume_revive_obj: &mut ConsumeReviveObj,
-    ) -> crate::Result<()> {
+    ) -> rocketmq_error::RocketMQResult<()> {
         let mut new_offset = consume_revive_obj.old_offset;
         let end_time = consume_revive_obj.end_time;
         let sort_list = consume_revive_obj.gen_sort_list();
