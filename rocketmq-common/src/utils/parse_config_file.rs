@@ -19,20 +19,21 @@ use std::fmt::Debug;
 use std::path::PathBuf;
 
 use config::Config;
+use rocketmq_error::RocketMQResult;
 use serde::Deserialize;
 
-pub fn parse_config_file<'de, C>(config_file: PathBuf) -> anyhow::Result<C, anyhow::Error>
+pub fn parse_config_file<'de, C>(config_file: PathBuf) -> RocketMQResult<C>
 where
     C: Default + Debug + Deserialize<'de>,
 {
-    let config_file = Config::builder()
-        .add_source(config::File::with_name(
-            config_file.to_string_lossy().into_owned().as_str(),
-        ))
+    let config_file = match Config::builder()
+        .add_source(config::File::with_name(&config_file.to_string_lossy()))
         .build()
-        .map_or(C::default(), |result| {
-            result.try_deserialize::<C>().unwrap_or_default()
-        });
-    //info!("parse config: {:?}", config_file);
+    {
+        Ok(cfg) => cfg.try_deserialize::<C>().unwrap_or_default(),
+        Err(err) => {
+            return Err(rocketmq_error::RocketmqError::ConfigError(err.to_string()));
+        }
+    };
     Ok(config_file)
 }

@@ -23,15 +23,16 @@ use rocketmq_broker::Builder;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::EnvUtils::EnvUtils;
 use rocketmq_common::ParseConfigFile;
+use rocketmq_error::RocketMQResult;
 use rocketmq_rust::rocketmq;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use tracing::info;
 
 #[rocketmq::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> RocketMQResult<()> {
     // init logger
     rocketmq_common::log::init_logger();
-    let (broker_config, message_store_config) = parse_config_file();
+    let (broker_config, message_store_config) = parse_config_file()?;
     // boot strap broker
     Builder::new()
         .set_broker_config(broker_config)
@@ -42,31 +43,23 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn parse_config_file() -> (BrokerConfig, MessageStoreConfig) {
+fn parse_config_file() -> RocketMQResult<(BrokerConfig, MessageStoreConfig)> {
     let args = Args::parse();
     let home = EnvUtils::get_rocketmq_home();
     let config = if let Some(ref config_file) = args.config_file {
         let config_file = PathBuf::from(config_file);
-        (
-            ParseConfigFile::parse_config_file::<BrokerConfig>(config_file.clone())
-                .ok()
-                .unwrap(),
-            ParseConfigFile::parse_config_file::<MessageStoreConfig>(config_file)
-                .ok()
-                .unwrap(),
-        )
+        Ok((
+            ParseConfigFile::parse_config_file::<BrokerConfig>(config_file.clone())?,
+            ParseConfigFile::parse_config_file::<MessageStoreConfig>(config_file)?,
+        ))
     } else {
         let path_buf = PathBuf::from(home.as_str())
             .join("conf")
             .join("broker.toml");
-        (
-            ParseConfigFile::parse_config_file::<BrokerConfig>(path_buf.clone())
-                .ok()
-                .unwrap(),
-            ParseConfigFile::parse_config_file::<MessageStoreConfig>(path_buf)
-                .ok()
-                .unwrap(),
-        )
+        Ok((
+            ParseConfigFile::parse_config_file::<BrokerConfig>(path_buf.clone())?,
+            ParseConfigFile::parse_config_file::<MessageStoreConfig>(path_buf)?,
+        ))
     };
     info!("Rocketmq(Rust) home: {}", home);
     config
