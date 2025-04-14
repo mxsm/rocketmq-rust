@@ -59,7 +59,7 @@ pub async fn main() -> RocketMQResult<()> {
     Ok(())
 }
 
-async fn switch_pop_consumer() -> Result<()> {
+async fn switch_pop_consumer() -> RocketMQResult<()> {
     let mut mq_admin_ext = DefaultMQAdminExt::new();
     mq_admin_ext.client_config_mut().namesrv_addr =
         Some(CheetahString::from_static_str(DEFAULT_NAMESRVADDR));
@@ -101,7 +101,7 @@ impl MessageListenerConcurrently for MyMessageListener {
         &self,
         msgs: &[&MessageExt],
         _context: &ConsumeConcurrentlyContext,
-    ) -> Result<ConsumeConcurrentlyStatus> {
+    ) -> RocketMQResult<ConsumeConcurrentlyStatus> {
         for msg in msgs {
             info!("Receive message: {:?}", msg);
         }
