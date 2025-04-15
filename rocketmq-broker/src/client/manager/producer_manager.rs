@@ -128,22 +128,27 @@ impl ProducerManager {
         _client_channel_info: &ClientChannelInfo,
         ctx: &ConnectionHandlerContext,
     ) {
-        let mut mutex_guard = self.group_channel_table.lock();
-        let channel_table = mutex_guard.get_mut(group);
+        let mut group_channel_table = self.group_channel_table.lock();
+        let channel_table = group_channel_table.get_mut(group);
         if let Some(ct) = channel_table {
             if !ct.is_empty() {
                 let old = ct.remove(ctx.channel());
-                //let old = ct.remove(client_channel_info.channel());
                 if old.is_some() {
-                    /*info!(
-                        "unregister a producer[{}] from groupChannelTable {:?}",
-                        group, client_channel_info
-                    );*/
                     info!("unregister a producer[{}] from groupChannelTable", group);
+                    self.call_producer_change_listener(
+                        ProducerGroupEvent::ClientUnregister,
+                        group,
+                        old.as_ref(),
+                    );
                 }
             }
             if ct.is_empty() {
-                let _ = mutex_guard.remove(group);
+                let _ = group_channel_table.remove(group);
+                self.call_producer_change_listener(
+                    ProducerGroupEvent::ClientUnregister,
+                    group,
+                    None,
+                );
                 info!(
                     "unregister a producer group[{}] from groupChannelTable",
                     group
@@ -152,7 +157,6 @@ impl ProducerManager {
         }
     }
 
-    #[allow(clippy::mutable_key_type)]
     pub fn register_producer(
         &self,
         group: &CheetahString,
@@ -195,12 +199,22 @@ impl ProducerManager {
                 return None;
             }
             let channels = channel_map.keys().collect::<Vec<&Channel>>();
+            let size = channels.len();
             let index = self
                 .positive_atomic_counter
                 .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-            let index = index.unsigned_abs() as usize % channels.len();
-            let channel = channels[index].clone();
-            return Some(channel);
+            let mut index = index.unsigned_abs() as usize % size;
+            let mut channel = channels[index];
+            let mut ok = channel.upgrade().is_some();
+            for _ in 0..GET_AVAILABLE_CHANNEL_RETRY_COUNT {
+                if ok {
+                    return Some(channel.clone());
+                }
+                index = (index + 1) % size;
+                channel = channels[index];
+                ok = channel.upgrade().is_some();
+            }
+            return None;
         }
         None
     }
@@ -259,7 +273,50 @@ impl ProducerManager {
         }
     }
 
-    pub fn do_channel_close_event(&self, _remote_addr: &str, _channel: &Channel) {}
+    pub fn do_channel_close_event(&self, remote_addr: &str, channel: &Channel) -> bool {
+        let mut removed = false;
+        let mut group_channel_table = self.group_channel_table.lock();
+        let mut groups_to_process = Vec::new();
+        for (group, client_channel_info_table) in group_channel_table.iter_mut() {
+            if let Some(client_channel_info) = client_channel_info_table.remove(channel) {
+                self.client_channel_table
+                    .lock()
+                    .remove(client_channel_info.client_id());
+                removed = true;
+                info!(
+                    "NETTY EVENT: remove channel[{}][{}] from ProducerManager groupChannelTable, \
+                     producer group: {}",
+                    client_channel_info.channel(),
+                    remote_addr,
+                    group
+                );
+
+                self.call_producer_change_listener(
+                    ProducerGroupEvent::ClientUnregister,
+                    group,
+                    Some(&client_channel_info),
+                );
+
+                if client_channel_info_table.is_empty() {
+                    groups_to_process.push(group.clone());
+                }
+            }
+        }
+        for group in groups_to_process {
+            if group_channel_table.remove(&group).is_some() {
+                info!(
+                    "unregister a producer group[{}] from groupChannelTable",
+                    group
+                );
+                self.call_producer_change_listener(
+                    ProducerGroupEvent::GroupUnregister,
+                    &group,
+                    None,
+                );
+            }
+        }
+        removed
+    }
 
     fn call_producer_change_listener(
         &self,
