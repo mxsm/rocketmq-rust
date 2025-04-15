@@ -22,6 +22,8 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::net::channel::Channel;
+use rocketmq_remoting::protocol::body::producer_info::ProducerInfo;
+use rocketmq_remoting::protocol::body::producer_table_info::ProducerTableInfo;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use tracing::error;
@@ -29,6 +31,7 @@ use tracing::info;
 
 use crate::client::client_channel_info::ClientChannelInfo;
 use crate::client::producer_change_listener::ArcProducerChangeListener;
+use crate::client::producer_group_event::ProducerGroupEvent;
 
 pub struct ProducerManager {
     group_channel_table: parking_lot::Mutex<
@@ -65,6 +68,48 @@ impl ProducerManager {
 }
 
 impl ProducerManager {
+    /// Get a snapshot of all producer clients organized by group
+    ///
+    /// Collects information about all currently connected producers and
+    /// organizes them by producer group.
+    ///
+    /// # Returns
+    /// A table containing producer information for all connected producers
+    pub fn get_producer_table(&self) -> ProducerTableInfo {
+        let mut map: HashMap<String, Vec<ProducerInfo>> = HashMap::new();
+
+        // Acquire read lock on group channel table
+        let group_channel_table = self.group_channel_table.lock();
+
+        // Iterate over all groups
+        for (group, channel_map) in group_channel_table.iter() {
+            // Iterate over all channels in this group
+            for (_, client_channel_info) in channel_map.iter() {
+                // Create producer info from client channel info
+                let producer_info = ProducerInfo::new(
+                    client_channel_info.client_id().to_string(),
+                    client_channel_info.channel().remote_address().to_string(),
+                    client_channel_info.language(),
+                    client_channel_info.version(),
+                    client_channel_info.last_update_timestamp() as i64,
+                );
+
+                // Add to map, creating a new vector if this is the first entry for this group
+                match map.get_mut(group.as_str()) {
+                    Some(producer_list) => {
+                        producer_list.push(producer_info);
+                    }
+                    None => {
+                        map.insert(group.to_string(), vec![producer_info]);
+                    }
+                }
+            }
+        }
+
+        // Create and return producer table info
+        ProducerTableInfo::from(map)
+    }
+
     pub fn group_online(&self, group: String) -> bool {
         let binding = self.group_channel_table.lock();
         let channels = binding.get(group.as_str());
@@ -162,4 +207,15 @@ impl ProducerManager {
     }
 
     pub fn do_channel_close_event(&self, _remote_addr: &str, _channel: &Channel) {}
+
+    fn call_producer_change_listener(
+        &self,
+        event: ProducerGroupEvent,
+        group: &str,
+        client_channel_info: Option<&ClientChannelInfo>,
+    ) {
+        for listener in &self.producer_change_listener_vec {
+            listener.handle(event, group, client_channel_info);
+        }
+    }
 }
