@@ -32,7 +32,7 @@ use tracing::info;
 async fn main() -> RocketMQResult<()> {
     // init logger
     rocketmq_common::log::init_logger();
-    let (broker_config, message_store_config) = parse_config_file()?;
+    let (broker_config, message_store_config) = parse_config_file().unwrap_or_default();
     // boot strap broker
     Builder::new()
         .set_broker_config(broker_config)
@@ -46,6 +46,7 @@ async fn main() -> RocketMQResult<()> {
 fn parse_config_file() -> RocketMQResult<(BrokerConfig, MessageStoreConfig)> {
     let args = Args::parse();
     let home = EnvUtils::get_rocketmq_home();
+    info!("Rocketmq(Rust) home: {}", home);
     let config = if let Some(ref config_file) = args.config_file {
         let config_file = PathBuf::from(config_file);
         Ok((
@@ -61,6 +62,5 @@ fn parse_config_file() -> RocketMQResult<(BrokerConfig, MessageStoreConfig)> {
             ParseConfigFile::parse_config_file::<MessageStoreConfig>(path_buf)?,
         ))
     };
-    info!("Rocketmq(Rust) home: {}", home);
     config
 }
