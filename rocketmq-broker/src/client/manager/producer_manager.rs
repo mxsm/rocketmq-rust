@@ -26,12 +26,15 @@ use rocketmq_remoting::protocol::body::producer_info::ProducerInfo;
 use rocketmq_remoting::protocol::body::producer_table_info::ProducerTableInfo;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
-use tracing::error;
 use tracing::info;
+use tracing::warn;
 
 use crate::client::client_channel_info::ClientChannelInfo;
 use crate::client::producer_change_listener::ArcProducerChangeListener;
 use crate::client::producer_group_event::ProducerGroupEvent;
+
+const CHANNEL_EXPIRED_TIMEOUT: u64 = 120_000; // 120 seconds
+const GET_AVAILABLE_CHANNEL_RETRY_COUNT: u32 = 3; // 120 seconds
 
 pub struct ProducerManager {
     group_channel_table: parking_lot::Mutex<
@@ -203,7 +206,57 @@ impl ProducerManager {
     }
 
     pub fn scan_not_active_channel(&self) {
-        error!("scan_not_active_channel not implemented");
+        let mut groups_to_remove = Vec::new();
+
+        let mut group_channel_table = self.group_channel_table.lock();
+        for (group, chl_map) in group_channel_table.iter_mut() {
+            let mut channels_to_remove = Vec::new();
+
+            {
+                for (channel, info) in chl_map.iter() {
+                    let diff = get_current_millis() - info.last_update_timestamp();
+                    if diff > CHANNEL_EXPIRED_TIMEOUT {
+                        channels_to_remove.push((channel.clone(), info.clone()));
+                    }
+                }
+            }
+
+            for (channel, info) in channels_to_remove {
+                chl_map.remove(&channel);
+                let mut client_channel_table = self.client_channel_table.lock();
+                if let Some(channel_in_client_table) = client_channel_table.get(info.client_id()) {
+                    if *channel_in_client_table == channel {
+                        client_channel_table.remove(info.client_id());
+                    }
+                }
+
+                warn!(
+                    "ProducerManager#scan_not_active_channel: remove expired channel[{}] from \
+                     ProducerManager groupChannelTable, producer group name: {}",
+                    channel.remote_address(),
+                    group
+                );
+                self.call_producer_change_listener(
+                    ProducerGroupEvent::ClientUnregister,
+                    group,
+                    Some(&info),
+                );
+            }
+
+            if chl_map.is_empty() {
+                groups_to_remove.push(group.clone());
+            }
+        }
+
+        for group in groups_to_remove {
+            group_channel_table.remove(&group);
+            warn!(
+                "SCAN: remove expired channel from ProducerManager groupChannelTable, all clear, \
+                 group={}",
+                group
+            );
+            self.call_producer_change_listener(ProducerGroupEvent::GroupUnregister, &group, None);
+        }
     }
 
     pub fn do_channel_close_event(&self, _remote_addr: &str, _channel: &Channel) {}
