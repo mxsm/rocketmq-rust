@@ -34,23 +34,28 @@ impl BrokerHousekeepingService {
 }
 
 impl ChannelEventListener for BrokerHousekeepingService {
+    #[inline]
     fn on_channel_connect(&self, _remote_addr: &str, _channel: &Channel) {
-        warn!("warning: on_channel_connect is not implemented");
+        //nothing needs to be done
     }
 
+    #[inline]
     fn on_channel_close(&self, _remote_addr: &str, _channel: &Channel) {
-        warn!("warning: on_channel_close is not implemented");
+        warn!("warning: on_channel_close is not implemented(Controller mode)");
     }
 
+    #[inline]
     fn on_channel_exception(&self, _remote_addr: &str, _channel: &Channel) {
-        warn!("warning: on_channel_exception is not implemented");
+        warn!("warning: on_channel_exception is not implemented(Controller mode)");
     }
 
+    #[inline]
     fn on_channel_idle(&self, _remote_addr: &str, _channel: &Channel) {
-        warn!("warning: on_channel_idle is not implemented");
+        warn!("warning: on_channel_idle is not implemented(Controller mode)");
     }
 
+    #[inline]
     fn on_channel_active(&self, _remote_addr: &str, _channel: &Channel) {
-        warn!("warning: on_channel_active is not implemented");
+        //nothing needs to be done
     }
 }
