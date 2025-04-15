@@ -44,6 +44,7 @@ pub mod pop_process_queue_info;
 pub mod process_queue_info;
 pub mod producer_connection;
 pub mod producer_info;
+pub mod producer_table_info;
 pub mod query_assignment_request_body;
 pub mod query_assignment_response_body;
 pub mod query_consume_queue_response_body;
