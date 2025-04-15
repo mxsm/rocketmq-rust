@@ -17,7 +17,7 @@
 use std::fmt::Display;
 
 /// Producer group events that occur when producers register or unregister.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProducerGroupEvent {
     /// The group of producer is unregistered.
     GroupUnregister,
