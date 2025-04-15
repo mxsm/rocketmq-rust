@@ -478,7 +478,7 @@ mod tests {
 
     #[test]
     fn split_with_valid_string() {
-        let result = ExtraInfoUtil::split("a|b|c").unwrap();
+        let result = ExtraInfoUtil::split("a b c").unwrap();
         assert_eq!(result, vec!["a", "b", "c"]);
     }
 
