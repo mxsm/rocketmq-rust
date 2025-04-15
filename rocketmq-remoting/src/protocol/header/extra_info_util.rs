@@ -36,7 +36,10 @@ impl ExtraInfoUtil {
         if extra_info.is_empty() {
             return Err(IllegalArgument("split extraInfo is empty".to_string()));
         }
-        Ok(extra_info.split('|').map(String::from).collect())
+        Ok(extra_info
+            .split(MessageConst::KEY_SEPARATOR)
+            .map(String::from)
+            .collect())
     }
 
     pub fn get_ck_queue_offset(extra_info_strs: &[String]) -> rocketmq_error::RocketMQResult<i64> {
@@ -475,7 +478,7 @@ mod tests {
 
     #[test]
     fn split_with_valid_string() {
-        let result = ExtraInfoUtil::split("a|b|c").unwrap();
+        let result = ExtraInfoUtil::split("a b c").unwrap();
         assert_eq!(result, vec!["a", "b", "c"]);
     }
 
