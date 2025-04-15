@@ -51,7 +51,7 @@ cheetah-string = { workspace = true }
 thiserror = { workspace = true }
 
 [target.'cfg(linux)'.dependencies]
-libc = "0.2.171"
+libc = "0.2.172"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61.1", features = ["Win32_Security", "Win32_System_Memory_NonVolatile"] }
