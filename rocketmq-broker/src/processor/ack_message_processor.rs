@@ -25,6 +25,7 @@ use rocketmq_common::common::message::message_decoder;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
+use rocketmq_common::common::mix_all::MASTER_ID;
 use rocketmq_common::common::pop_ack_constants::PopAckConstants;
 use rocketmq_common::common::FAQUrl;
 use rocketmq_common::TimeUtils::get_current_millis;
@@ -75,10 +76,16 @@ where
                 .as_str(),
         ));
         let mut pop_revive_services = vec![];
+        let is_run_pop_revive = broker_runtime_inner
+            .broker_config()
+            .broker_identity
+            .broker_id
+            == MASTER_ID;
         for i in 0..broker_runtime_inner.broker_config().revive_queue_num {
             let revive_queue_id = POP_ORDER_REVIVE_QUEUE;
-            let pop_revive_service =
+            let mut pop_revive_service =
                 PopReviveService::new(revive_topic.clone(), i as i32, broker_runtime_inner.clone());
+            pop_revive_service.set_should_run_pop_revive(is_run_pop_revive);
             pop_revive_services.push(ArcMut::new(pop_revive_service));
         }
         AckMessageProcessor {
