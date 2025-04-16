@@ -1095,7 +1095,7 @@ where
                         msg_offset_info,
                         topic,
                         queue_id,
-                        result_inner.message_queue_offset().clone(),
+                        result_inner.message_queue_offset().as_slice(),
                     );
                 } else if let Some(status) = result_inner.status() {
                     if matches!(
@@ -1159,7 +1159,7 @@ where
                             message_decoder::decodes_batch(&mut bytes, true, false);
                         maped_buffer.release();
                         for mut message_ext in message_ext_list {
-                            let ck_info = ExtraInfoUtil::build_extra_info_with_msg_queue_offset(
+                            let ck_info = ExtraInfoUtil::build_extra_info_with_offset(
                                 final_offset,
                                 pop_time as i64,
                                 request_header.invisible_time as i64,

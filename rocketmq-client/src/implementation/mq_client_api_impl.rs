@@ -40,6 +40,7 @@ use rocketmq_common::MessageDecoder;
 use rocketmq_error::client_broker_err;
 use rocketmq_error::mq_client_err;
 use rocketmq_error::MQBrokerErr;
+use rocketmq_error::RocketMQResult;
 use rocketmq_error::RocketmqError::MQClientBrokerError;
 use rocketmq_remoting::base::connection_net_event::ConnectionNetEvent;
 use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
@@ -1503,7 +1504,7 @@ impl MQClientAPIImpl {
         let sort_map = build_queue_offset_sorted_map(
             topic.as_str(),
             pop_result.msg_found_list.as_ref().map_or(&[], |v| v),
-        );
+        )?;
         let mut map = HashMap::with_capacity(5);
         for message in pop_result
             .msg_found_list
@@ -1745,7 +1746,7 @@ impl MQClientAPIImpl {
 fn build_queue_offset_sorted_map(
     topic: &str,
     msg_found_list: &[MessageExt],
-) -> HashMap<String, Vec<u64>> {
+) -> RocketMQResult<HashMap<String, Vec<u64>>> {
     let mut sort_map: HashMap<String, Vec<u64>> = HashMap::with_capacity(16);
     for message_ext in msg_found_list {
         let key: String;
@@ -1790,14 +1791,14 @@ fn build_queue_offset_sorted_map(
                     MessageConst::PROPERTY_POP_CK,
                 ))
                 .clone()
-                .unwrap_or_default()
-                .as_str(),
+                .as_ref()
+                .map(|item| item.as_str()),
             message_ext.queue_id() as i64,
-        );
+        )?;
         sort_map
             .entry(key)
             .or_insert_with(|| Vec::with_capacity(4))
             .push(message_ext.queue_offset() as u64);
     }
-    sort_map
+    Ok(sort_map)
 }
