@@ -834,7 +834,7 @@ mod tests {
     fn build_msg_offset_info_creates_correct_string() {
         let mut string_builder = String::new();
         ExtraInfoUtil::build_msg_offset_info(&mut string_builder, "topic", 7, &vec![100, 200, 300]);
-        assert_eq!(string_builder, "0 7 100,200,300");
+        assert_eq!(string_builder, "0 7 100;200;300");
     }
 
     #[test]
