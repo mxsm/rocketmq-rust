@@ -269,8 +269,7 @@ where
             mut ack_msg,
             broker_name,
         ) = if let Some(request_header) = request_header {
-            let extra_info =
-                ExtraInfoUtil::split(request_header.extra_info.as_str()).unwrap_or_default();
+            let extra_info = ExtraInfoUtil::split(request_header.extra_info.as_str());
             let broker_name =
                 ExtraInfoUtil::get_broker_name(extra_info.as_slice()).unwrap_or_default();
             let consume_group = request_header.consumer_group;

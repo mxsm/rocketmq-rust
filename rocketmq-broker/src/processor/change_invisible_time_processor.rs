@@ -200,7 +200,7 @@ where
                 ),
             ));
         }
-        let extra_info = ExtraInfoUtil::split(&request_header.extra_info)?;
+        let extra_info = ExtraInfoUtil::split(&request_header.extra_info);
         if ExtraInfoUtil::is_order(extra_info.as_slice()) {
             return self
                 .process_change_invisible_time_for_order(&request_header, extra_info.as_slice())

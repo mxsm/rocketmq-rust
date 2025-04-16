@@ -1372,11 +1372,11 @@ impl DefaultMQPushConsumerImpl {
             ))
             .unwrap_or_default();
         let extra_info_strs = ExtraInfoUtil::split(extra_info.as_str());
-        if extra_info_strs.is_err() {
+        /*        if extra_info_strs.is_err() {
             error!("ackAsync error: {}", extra_info_strs.unwrap_err());
             return;
         }
-        let extra_info_strs = extra_info_strs.unwrap();
+        let extra_info_strs = extra_info_strs.unwrap();*/
         let queue_id = ExtraInfoUtil::get_queue_id(extra_info_strs.as_slice());
         if queue_id.is_err() {
             error!("ackAsync error: {}", queue_id.unwrap_err());
@@ -1478,7 +1478,7 @@ impl DefaultMQPushConsumerImpl {
         invisible_time: u64,
         callback: impl AckCallback,
     ) -> rocketmq_error::RocketMQResult<()> {
-        let extra_info_strs = ExtraInfoUtil::split(extra_info)?;
+        let extra_info_strs = ExtraInfoUtil::split(extra_info);
         let broker_name =
             CheetahString::from_string(ExtraInfoUtil::get_broker_name(extra_info_strs.as_slice())?);
         let queue_id = ExtraInfoUtil::get_queue_id(extra_info_strs.as_slice())?;
