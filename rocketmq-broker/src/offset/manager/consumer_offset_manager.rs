@@ -274,11 +274,24 @@ impl ConsumerOffsetManager {
 #[derive(Default, Clone)]
 struct ConsumerOffsetWrapper {
     data_version: ArcMut<DataVersion>,
-    offset_table:
-        Arc<parking_lot::RwLock<HashMap<CheetahString /* topic@group */, HashMap<i32, i64>>>>,
-    reset_offset_table: Arc<parking_lot::RwLock<HashMap<CheetahString, HashMap<i32, i64>>>>,
-    pull_offset_table:
-        Arc<parking_lot::RwLock<HashMap<CheetahString /* topic@group */, HashMap<i32, i64>>>>,
+    // Pop mode offset table
+    offset_table: Arc<
+        parking_lot::RwLock<
+            HashMap<CheetahString /* topic@group */, HashMap<i32 /* queue id */, i64>>,
+        >,
+    >,
+    // Pop mode reset offset table
+    reset_offset_table: Arc<
+        parking_lot::RwLock<
+            HashMap<CheetahString /* topic@group */, HashMap<i32 /* queue id */, i64>>,
+        >,
+    >,
+    //Pull mode offset table
+    pull_offset_table: Arc<
+        parking_lot::RwLock<
+            HashMap<CheetahString /* topic@group */, HashMap<i32 /* queue id */, i64>>,
+        >,
+    >,
     version_change_counter: Arc<AtomicI64>,
 }
 
