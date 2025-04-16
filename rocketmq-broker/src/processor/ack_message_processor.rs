@@ -29,6 +29,7 @@ use rocketmq_common::common::mix_all::MASTER_ID;
 use rocketmq_common::common::pop_ack_constants::PopAckConstants;
 use rocketmq_common::common::FAQUrl;
 use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
@@ -216,7 +217,7 @@ where
         }
         let mut response = RemotingCommand::create_response_command();
         self.append_ack(Some(request_header), &mut response, None, &channel, None)
-            .await;
+            .await?;
         Ok(Some(response))
     }
 
@@ -242,7 +243,7 @@ where
         let broker_name = &req_body.broker_name;
         for ack in req_body.acks {
             self.append_ack(None, &mut response, Some(ack), &_channel, Some(broker_name))
-                .await;
+                .await?;
         }
         Ok(Some(response))
     }
@@ -254,7 +255,7 @@ where
         batch_ack: Option<BatchAck>,
         channel: &Channel,
         broker_name: Option<&CheetahString>,
-    ) {
+    ) -> RocketMQResult<()> {
         //handle single ack
         let (
             consume_group,
@@ -270,18 +271,15 @@ where
             broker_name,
         ) = if let Some(request_header) = request_header {
             let extra_info = ExtraInfoUtil::split(request_header.extra_info.as_str());
-            let broker_name =
-                ExtraInfoUtil::get_broker_name(extra_info.as_slice()).unwrap_or_default();
+            let broker_name = ExtraInfoUtil::get_broker_name(extra_info.as_slice())?;
             let consume_group = request_header.consumer_group;
             let topic = request_header.topic;
             let qid = request_header.queue_id;
-            let r_qid = ExtraInfoUtil::get_revive_qid(extra_info.as_slice()).unwrap_or_default();
-            let start_offset =
-                ExtraInfoUtil::get_ck_queue_offset(extra_info.as_slice()).unwrap_or_default();
+            let r_qid = ExtraInfoUtil::get_revive_qid(extra_info.as_slice())?;
+            let start_offset = ExtraInfoUtil::get_ck_queue_offset(extra_info.as_slice())?;
             let ack_offset = request_header.offset;
-            let pop_time = ExtraInfoUtil::get_pop_time(extra_info.as_slice()).unwrap_or_default();
-            let invisible_time =
-                ExtraInfoUtil::get_invisible_time(extra_info.as_slice()).unwrap_or_default();
+            let pop_time = ExtraInfoUtil::get_pop_time(extra_info.as_slice())?;
+            let invisible_time = ExtraInfoUtil::get_invisible_time(extra_info.as_slice())?;
             if r_qid == POP_ORDER_REVIVE_QUEUE {
                 self.ack_orderly(
                     topic,
@@ -294,7 +292,7 @@ where
                     response,
                 )
                 .await;
-                return;
+                return Ok(());
             }
             let ack = AckMsg::default();
             let ack_count = 1;
@@ -315,14 +313,11 @@ where
             //handle batch ack
             let batch_ack = batch_ack.unwrap();
             let consumer_group = batch_ack.consumer_group;
-            let topic = CheetahString::from(
-                ExtraInfoUtil::get_real_topic_with_retry(
-                    batch_ack.topic.as_str(),
-                    consumer_group.as_str(),
-                    batch_ack.retry.as_str(),
-                )
-                .unwrap_or_default(),
-            );
+            let topic = CheetahString::from(ExtraInfoUtil::get_real_topic_with_retry(
+                batch_ack.topic.as_str(),
+                consumer_group.as_str(),
+                batch_ack.retry.as_str(),
+            )?);
             let qid = batch_ack.queue_id;
             let r_qid = batch_ack.revive_queue_id;
             let start_offset = batch_ack.start_offset;
@@ -343,7 +338,7 @@ where
                 .get_max_offset_in_queue(&topic, qid);
             if min_offset == -1 || max_offset == -1 {
                 //error!("Illegal topic or queue found when batch ack {:?}", batch_ack);
-                return;
+                return Ok(());
             }
 
             let mut batch_ack_msg = BatchAckMsg::default();
@@ -374,7 +369,7 @@ where
                 }
             }
             if r_qid == POP_ORDER_REVIVE_QUEUE || batch_ack_msg.ack_offset_list.is_empty() {
-                return;
+                return Ok(());
             }
             let ack_count = batch_ack_msg.ack_offset_list.len();
             (
@@ -416,7 +411,7 @@ where
                     qid,
                     ack_count as i64,
                 );
-            return;
+            return Ok(());
         }
         let mut inner = MessageExtBrokerInner::default();
         inner.set_topic(self.revive_topic.clone());
@@ -492,6 +487,7 @@ where
                 qid,
                 ack_count as i64,
             );
+        Ok(())
     }
 
     async fn ack_orderly(
