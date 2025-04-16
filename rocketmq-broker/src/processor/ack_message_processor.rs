@@ -409,11 +409,7 @@ where
         inner.set_topic(self.revive_topic.clone());
         inner.message_ext_inner.queue_id = qid;
         if let Some(batch_ack) = ack_msg.as_any().downcast_ref::<BatchAckMsg>() {
-            if let Ok(bytes) = batch_ack.encode() {
-                inner.set_body(Bytes::from(bytes));
-            } else {
-                warn!("encode batch ack msg error");
-            }
+            inner.set_body(batch_ack.encode()?.into());
             inner.set_tags(CheetahString::from_static_str(
                 PopAckConstants::BATCH_ACK_TAG,
             ));
@@ -426,11 +422,7 @@ where
                 )),
             );
         } else if let Some(ack_msg) = ack_msg.as_any().downcast_ref::<AckMsg>() {
-            if let Ok(bytes) = ack_msg.encode() {
-                inner.set_body(Bytes::from(bytes));
-            } else {
-                warn!("encode ack msg error");
-            }
+            inner.set_body(ack_msg.encode()?.into());
             inner.set_tags(CheetahString::from_static_str(PopAckConstants::ACK_TAG));
             inner.put_property(
                 CheetahString::from_static_str(
