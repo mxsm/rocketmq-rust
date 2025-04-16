@@ -18,7 +18,6 @@
 
 use std::cmp::Ordering;
 
-use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::key_builder::POP_ORDER_REVIVE_QUEUE;
 use rocketmq_common::common::message::message_decoder;
@@ -82,6 +81,8 @@ where
             .broker_identity
             .broker_id
             == MASTER_ID;
+
+        // each PopReviveService handles one revive topic's revive queue
         for i in 0..broker_runtime_inner.broker_config().revive_queue_num {
             let revive_queue_id = POP_ORDER_REVIVE_QUEUE;
             let mut pop_revive_service =
@@ -324,18 +325,9 @@ where
             let akc_offset = -1;
             let pop_time = batch_ack.pop_time;
             let invisible_time = batch_ack.invisible_time;
-            let min_offset = self
-                .broker_runtime_inner
-                .message_store()
-                .as_ref()
-                .unwrap()
-                .get_min_offset_in_queue(&topic, qid);
-            let max_offset = self
-                .broker_runtime_inner
-                .message_store()
-                .as_ref()
-                .unwrap()
-                .get_max_offset_in_queue(&topic, qid);
+            let message_store = self.broker_runtime_inner.message_store().as_ref().unwrap();
+            let min_offset = message_store.get_min_offset_in_queue(&topic, qid);
+            let max_offset = message_store.get_max_offset_in_queue(&topic, qid);
             if min_offset == -1 || max_offset == -1 {
                 //error!("Illegal topic or queue found when batch ack {:?}", batch_ack);
                 return Ok(());
@@ -417,11 +409,7 @@ where
         inner.set_topic(self.revive_topic.clone());
         inner.message_ext_inner.queue_id = qid;
         if let Some(batch_ack) = ack_msg.as_any().downcast_ref::<BatchAckMsg>() {
-            if let Ok(bytes) = batch_ack.encode() {
-                inner.set_body(Bytes::from(bytes));
-            } else {
-                warn!("encode batch ack msg error");
-            }
+            inner.set_body(batch_ack.encode()?.into());
             inner.set_tags(CheetahString::from_static_str(
                 PopAckConstants::BATCH_ACK_TAG,
             ));
@@ -434,11 +422,7 @@ where
                 )),
             );
         } else if let Some(ack_msg) = ack_msg.as_any().downcast_ref::<AckMsg>() {
-            if let Ok(bytes) = ack_msg.encode() {
-                inner.set_body(Bytes::from(bytes));
-            } else {
-                warn!("encode ack msg error");
-            }
+            inner.set_body(ack_msg.encode()?.into());
             inner.set_tags(CheetahString::from_static_str(PopAckConstants::ACK_TAG));
             inner.put_property(
                 CheetahString::from_static_str(
