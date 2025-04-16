@@ -18,7 +18,6 @@
 
 use std::cmp::Ordering;
 
-use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::key_builder::POP_ORDER_REVIVE_QUEUE;
 use rocketmq_common::common::message::message_decoder;
@@ -82,6 +81,8 @@ where
             .broker_identity
             .broker_id
             == MASTER_ID;
+
+        // each PopReviveService handles one revive topic's revive queue
         for i in 0..broker_runtime_inner.broker_config().revive_queue_num {
             let revive_queue_id = POP_ORDER_REVIVE_QUEUE;
             let mut pop_revive_service =
@@ -324,18 +325,9 @@ where
             let akc_offset = -1;
             let pop_time = batch_ack.pop_time;
             let invisible_time = batch_ack.invisible_time;
-            let min_offset = self
-                .broker_runtime_inner
-                .message_store()
-                .as_ref()
-                .unwrap()
-                .get_min_offset_in_queue(&topic, qid);
-            let max_offset = self
-                .broker_runtime_inner
-                .message_store()
-                .as_ref()
-                .unwrap()
-                .get_max_offset_in_queue(&topic, qid);
+            let message_store = self.broker_runtime_inner.message_store().as_ref().unwrap();
+            let min_offset = message_store.get_min_offset_in_queue(&topic, qid);
+            let max_offset = message_store.get_max_offset_in_queue(&topic, qid);
             if min_offset == -1 || max_offset == -1 {
                 //error!("Illegal topic or queue found when batch ack {:?}", batch_ack);
                 return Ok(());
