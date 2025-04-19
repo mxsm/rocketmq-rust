@@ -45,7 +45,7 @@ use crate::transaction::queue::transactional_message_util::TransactionalMessageU
 
 const SEND_TIMEOUT: u64 = 3_000;
 const DEFAULT_PULL_TIMEOUT_MILLIS: u64 = 10_000;
-type FutureResult = Pin<Box<dyn Future<Output = (Option<MessageExt>, String, bool)>>>;
+type FutureResult = Pin<Box<dyn Future<Output = (Option<MessageExt>, String, bool)> + Send>>;
 
 ///### RocketMQ's EscapeBridge for Dead Letter Queue (DLQ) Mechanism
 ///

@@ -58,6 +58,8 @@ dashmap = { workspace = true }
 
 crossbeam-skiplist = "0.1"
 
+futures = "0.3.31"
+
 [dev-dependencies]
 mockall = "0.13.1"
 static_assertions = { version = "1" }

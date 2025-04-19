@@ -2200,6 +2200,7 @@ dependencies = [
  "dashmap",
  "dirs",
  "dns-lookup",
+ "futures",
  "lazy_static",
  "mockall",
  "num_cpus",

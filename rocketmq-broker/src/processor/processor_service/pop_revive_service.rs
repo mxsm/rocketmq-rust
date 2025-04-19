@@ -23,6 +23,8 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
+use futures::future::join_all;
+use futures::FutureExt;
 use rocketmq_client_rust::consumer::pull_result::PullResult;
 use rocketmq_client_rust::consumer::pull_status::PullStatus;
 use rocketmq_common::common::config::TopicConfig;
@@ -351,7 +353,9 @@ impl<MS: MessageStore> PopReviveService<MS> {
                     );
                     continue;
                 }
-                if let Err(e) = this.merge_and_revive(&mut consume_revive_obj).await {
+
+                if let Err(e) = Self::merge_and_revive(this.clone(), &mut consume_revive_obj).await
+                {
                     error!("reviveQueueId={}, revive error:{}", this.queue_id, e);
                     continue;
                 }
@@ -635,16 +639,16 @@ impl<MS: MessageStore> PopReviveService<MS> {
     }
 
     async fn merge_and_revive(
-        &mut self,
+        mut this: ArcMut<Self>,
         consume_revive_obj: &mut ConsumeReviveObj,
     ) -> rocketmq_error::RocketMQResult<()> {
         let mut new_offset = consume_revive_obj.old_offset;
         let end_time = consume_revive_obj.end_time;
         let sort_list = consume_revive_obj.gen_sort_list();
-        if self.broker_runtime_inner.broker_config().enable_pop_log {
+        if this.broker_runtime_inner.broker_config().enable_pop_log {
             info!(
                 "reviveQueueId={}, ck listSize={}",
-                self.queue_id,
+                &this.queue_id,
                 sort_list.len()
             );
         }
@@ -653,7 +657,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
             info!(
                 "reviveQueueId={}, 1st ck, startOffset={}, reviveOffset={}; last ck, \
                  startOffset={}, reviveOffset={}",
-                self.queue_id,
+                this.queue_id,
                 sort_list[0].start_offset,
                 sort_list[0].revive_offset,
                 last.start_offset,
@@ -662,10 +666,10 @@ impl<MS: MessageStore> PopReviveService<MS> {
         }
 
         for pop_check_point in sort_list {
-            if !self.should_run_pop_revive {
+            if !this.should_run_pop_revive {
                 info!(
                     "slave skip ck process, revive topic={}, reviveQueueId={}",
-                    self.revive_topic, self.queue_id
+                    this.revive_topic, this.queue_id
                 );
                 break;
             }
@@ -679,7 +683,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
                 pop_check_point.topic.as_str(),
                 pop_check_point.cid.as_str(),
             ));
-            if self
+            if this
                 .broker_runtime_inner
                 .topic_config_manager()
                 .select_topic_config(&normal_topic)
@@ -687,12 +691,12 @@ impl<MS: MessageStore> PopReviveService<MS> {
             {
                 info!(
                     "reviveQueueId={}, can not get normal topic {}, then continue",
-                    self.queue_id, pop_check_point.topic
+                    this.queue_id, pop_check_point.topic
                 );
                 new_offset = pop_check_point.revive_offset;
                 continue;
             }
-            if self
+            if this
                 .broker_runtime_inner
                 .subscription_group_manager()
                 .find_subscription_group_config(&pop_check_point.cid)
@@ -700,7 +704,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
             {
                 info!(
                     "reviveQueueId={}, can not get cid {}, then continue",
-                    self.queue_id, pop_check_point.cid
+                    this.queue_id, pop_check_point.cid
                 );
                 new_offset = pop_check_point.revive_offset;
                 continue;
@@ -708,15 +712,15 @@ impl<MS: MessageStore> PopReviveService<MS> {
 
             // may be need to optimize
             let mut remove = vec![];
-            let length = self.inflight_revive_request_map.lock().await.len();
+            let length = this.inflight_revive_request_map.lock().await.len();
             while length - remove.len() > 3 {
                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                let mut inflight_map = self.inflight_revive_request_map.lock().await;
+                let mut inflight_map = this.inflight_revive_request_map.lock().await;
                 let entry = inflight_map.first_entry().unwrap();
                 let pair = entry.get();
                 let old_ck = entry.key();
                 if !pair.1 && (get_current_millis() - pair.0 as u64 > 30 * 1000) {
-                    self.re_put_ck(old_ck, pair).await;
+                    this.re_put_ck(old_ck, pair).await;
                     remove.push(old_ck.clone());
                     info!(
                         "stay too long, remove from reviveRequestMap, {}, {:?}, {}, {}",
@@ -727,34 +731,34 @@ impl<MS: MessageStore> PopReviveService<MS> {
                     );
                 }
             }
-            let mut inflight_revive_request_map = self.inflight_revive_request_map.lock().await;
+            let mut inflight_revive_request_map = this.inflight_revive_request_map.lock().await;
             for ck in remove {
                 inflight_revive_request_map.remove(&ck);
             }
             // may be need to optimize
-            self.revive_msg_from_ck(pop_check_point);
+            Self::revive_msg_from_ck(this.clone(), pop_check_point).await;
 
             new_offset = pop_check_point.revive_offset;
         }
         if new_offset > consume_revive_obj.old_offset {
-            if !self.should_run_pop_revive {
+            if !this.should_run_pop_revive {
                 println!(
                     "slave skip commit, revive topic={}, reviveQueueId={}",
-                    self.revive_topic, self.queue_id
+                    this.revive_topic, this.queue_id
                 );
                 return Ok(());
             }
-            self.broker_runtime_inner
+            this.broker_runtime_inner
                 .consumer_offset_manager()
                 .commit_offset(
                     CheetahString::from_static_str(PopAckConstants::LOCAL_HOST),
                     &CheetahString::from_static_str(PopAckConstants::REVIVE_GROUP),
-                    &self.revive_topic,
-                    self.queue_id,
+                    &this.revive_topic,
+                    this.queue_id,
                     new_offset,
                 );
         }
-        self.revive_offset = new_offset;
+        this.revive_offset = new_offset;
         consume_revive_obj.new_offset = new_offset;
         Ok(())
     }
@@ -824,13 +828,108 @@ impl<MS: MessageStore> PopReviveService<MS> {
             .await;
     }
 
-    fn revive_msg_from_ck(&self, _pop_check_point: &PopCheckPoint) {
-        // Implement the logic to revive message from checkpoint
-        unimplemented!()
+    async fn revive_msg_from_ck(this: ArcMut<Self>, pop_check_point: &PopCheckPoint) {
+        if !this.should_run_pop_revive {
+            info!(
+                "slave skip retry, revive topic={}, reviveQueueId={}",
+                this.revive_topic, this.queue_id
+            );
+            return;
+        }
+        let now = get_current_millis() as i64;
+        this.inflight_revive_request_map
+            .lock()
+            .await
+            .insert(pop_check_point.clone(), (now, false));
+        let mut future_list = Vec::with_capacity(pop_check_point.get_num() as usize);
+
+        for j in 0..pop_check_point.get_num() {
+            if DataConverter::get_bit(pop_check_point.get_bit_map(), j as usize) {
+                continue;
+            }
+            let msg_offset = pop_check_point.ack_offset_by_index(j);
+
+            let mut this_inner = this.clone();
+
+            let future = async move {
+                let rst = this_inner
+                    .get_biz_message(pop_check_point, msg_offset)
+                    .await;
+                let message = rst.0;
+                if message.is_none() {
+                    info!(
+                        "reviveQueueId={}, can not get biz msg, topic:{}, qid:{}, offset:{}, \
+                         brokerName:{:?}, info:{}, retry:{}, then continue",
+                        this_inner.queue_id,
+                        pop_check_point.get_topic(),
+                        pop_check_point.get_queue_id(),
+                        msg_offset,
+                        pop_check_point.get_broker_name(),
+                        &rst.1,
+                        rst.2
+                    );
+                    return (msg_offset, !rst.2);
+                }
+                let result = this_inner
+                    .revive_retry(pop_check_point, &message.unwrap())
+                    .await;
+                (msg_offset, result)
+            }
+            .boxed();
+            future_list.push(future);
+        }
+
+        let results = join_all(future_list).await;
+
+        for pair in &results {
+            if !pair.1 {
+                this.re_put_ck(pop_check_point, pair).await;
+            }
+        }
+
+        {
+            let mut inflight = this.inflight_revive_request_map.lock().await;
+            if let Some(entry) = inflight.get_mut(pop_check_point) {
+                entry.1 = true;
+            }
+            let keys: Vec<_> = inflight.keys().cloned().collect();
+            for old_ck in keys {
+                if let Some(pair) = inflight.get(&old_ck) {
+                    if pair.1 {
+                        this.broker_runtime_inner
+                            .consumer_offset_manager()
+                            .commit_offset(
+                                CheetahString::from_static_str(PopAckConstants::LOCAL_HOST),
+                                &CheetahString::from_static_str(PopAckConstants::REVIVE_GROUP),
+                                &this.revive_topic,
+                                this.queue_id,
+                                old_ck.get_revive_offset(),
+                            );
+                        inflight.remove(&old_ck);
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     pub fn set_should_run_pop_revive(&mut self, should_run_pop_revive: bool) {
         self.should_run_pop_revive = should_run_pop_revive;
+    }
+
+    pub async fn get_biz_message(
+        &self,
+        pop_check_point: &PopCheckPoint,
+        offset: i64,
+    ) -> (Option<MessageExt>, String, bool) {
+        let topic = pop_check_point.get_topic();
+        let queue_id = pop_check_point.get_queue_id();
+        let broker_name = pop_check_point.get_broker_name().unwrap();
+        self.broker_runtime_inner
+            .escape_bridge()
+            .get_message_async(topic, offset, queue_id, broker_name, false)
+            .await
     }
 }
 
