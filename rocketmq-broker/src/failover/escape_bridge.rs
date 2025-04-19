@@ -14,12 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::future::Future;
 use std::ops::Deref;
-use std::pin::Pin;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
+use futures::future::BoxFuture;
+use futures::FutureExt;
 use rocketmq_client_rust::consumer::pull_status::PullStatus;
 use rocketmq_client_rust::producer::send_result::SendResult;
 use rocketmq_client_rust::producer::send_status::SendStatus;
@@ -45,7 +45,6 @@ use crate::transaction::queue::transactional_message_util::TransactionalMessageU
 
 const SEND_TIMEOUT: u64 = 3_000;
 const DEFAULT_PULL_TIMEOUT_MILLIS: u64 = 10_000;
-type FutureResult = Pin<Box<dyn Future<Output = (Option<MessageExt>, String, bool)> + Send>>;
 
 ///### RocketMQ's EscapeBridge for Dead Letter Queue (DLQ) Mechanism
 ///
@@ -470,7 +469,7 @@ where
         queue_id: i32,
         broker_name: &CheetahString,
         de_compress_body: bool,
-    ) -> FutureResult {
+    ) -> BoxFuture<(Option<MessageExt>, String, bool)> {
         let message_store = self.broker_runtime_inner.message_store().clone().unwrap();
         let inner_consumer_group_name = self.inner_consumer_group_name.clone();
         let topic = topic.clone();
@@ -483,7 +482,7 @@ where
             .broker_name
             == broker_name
         {
-            Box::pin(async move {
+            async move {
                 let result = message_store
                     .get_message(
                         &inner_consumer_group_name,
@@ -520,7 +519,8 @@ where
                     return (None, "Can not get msg".to_string(), need_retry);
                 }
                 (Some(list.remove(0)), "".to_string(), false)
-            })
+            }
+            .boxed()
         } else {
             self.get_message_from_remote_async(&topic, offset, queue_id, &broker_name)
         }
@@ -532,7 +532,7 @@ where
         offset: i64,
         queue_id: i32,
         broker_name: &CheetahString,
-    ) -> FutureResult {
+    ) -> BoxFuture<(Option<MessageExt>, String, bool)> {
         /* let topic_route_info_manager = self.topic_route_info_manager.clone();
         let broker_outer_api = self.broker_outer_api.clone();*/
         let broker_runtime_inner_ = self.broker_runtime_inner.clone();
@@ -540,7 +540,7 @@ where
         let topic = topic.clone();
         let broker_name = broker_name.clone();
 
-        Box::pin(async move {
+        async move {
             let mut broker_addr = broker_runtime_inner_
                 .topic_route_info_manager()
                 .find_broker_address_in_subscribe(Some(&broker_name), 0, false);
@@ -603,7 +603,8 @@ where
             }
 
             (None, "Get message from remote failed".to_string(), true)
-        })
+        }
+        .boxed()
     }
 }
 
