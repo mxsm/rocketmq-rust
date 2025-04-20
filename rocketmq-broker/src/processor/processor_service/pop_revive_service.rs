@@ -52,6 +52,7 @@ use rocketmq_store::pop::pop_check_point::PopCheckPoint;
 use rocketmq_store::pop::AckMessage;
 use tracing::error;
 use tracing::info;
+use tracing::warn;
 
 use crate::broker_runtime::BrokerRuntimeInner;
 use crate::processor::pop_message_processor::PopMessageProcessor;
@@ -627,15 +628,47 @@ impl<MS: MessageStore> PopReviveService<MS> {
         consume_revive_obj.map.extend(mock_point_map);
         consume_revive_obj.end_time = end_time as i64;
     }
+
     fn mock_ck_for_ack(
         &self,
-        _message_ext: &MessageExt,
-        _ack_msg: &dyn AckMessage,
-        _merge_key: &CheetahString,
-        _mock_point_map: &mut HashMap<CheetahString, PopCheckPoint>,
+        message_ext: &MessageExt,
+        ack_msg: &(impl AckMessage + std::fmt::Debug),
+        merge_key: &CheetahString,
+        mock_point_map: &mut HashMap<CheetahString, PopCheckPoint>,
     ) -> bool {
-        // Implement the logic to mock checkpoint for ack
-        unimplemented!()
+        let now = get_current_millis();
+        let ack_wait_time = now - message_ext.get_deliver_time_ms();
+        let revive_ack_wait_ms = self.broker_runtime_inner.broker_config().revive_ack_wait_ms;
+        if ack_wait_time > revive_ack_wait_ms {
+            // will use the revive_offset of pop_check_point to commit offset in merge_and_revive
+            let mock_point = self.create_mock_ck_for_ack(ack_msg, message_ext.queue_offset());
+            warn!(
+                "ack wait for {}ms cannot find ck, skip this ack. mergeKey:{}, ack:{:?}, \
+                 mockCk:{:?}",
+                revive_ack_wait_ms, merge_key, ack_msg, mock_point
+            );
+            mock_point_map.insert(merge_key.clone(), mock_point);
+            return true;
+        }
+        false
+    }
+
+    fn create_mock_ck_for_ack(
+        &self,
+        ack_msg: &impl AckMessage,
+        revive_offset: i64,
+    ) -> PopCheckPoint {
+        let mut point = PopCheckPoint::default();
+        point.set_start_offset(ack_msg.start_offset());
+        point.set_pop_time(ack_msg.pop_time());
+        point.set_queue_id(ack_msg.queue_id());
+        point.set_cid(ack_msg.consumer_group().clone());
+        point.set_topic(ack_msg.topic().clone());
+        point.set_num(0);
+        point.set_bit_map(0);
+        point.set_revive_offset(revive_offset);
+        point.set_broker_name(Some(ack_msg.broker_name().clone()));
+        point
     }
 
     async fn merge_and_revive(
