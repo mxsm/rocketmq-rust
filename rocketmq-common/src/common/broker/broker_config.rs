@@ -17,6 +17,7 @@
 
 use std::any::Any;
 use std::collections::HashMap;
+use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use lazy_static::lazy_static;
@@ -221,6 +222,7 @@ pub struct BrokerConfig {
     pub pop_ck_max_buffer_size: i64,
     pub pop_ck_offset_max_queue_size: u64,
     pub delay_offset_update_version_step: u64,
+    pub revive_ack_wait_ms: u64,
 }
 
 impl Default for BrokerConfig {
@@ -335,6 +337,7 @@ impl Default for BrokerConfig {
             pop_ck_max_buffer_size: 200_000,
             pop_ck_offset_max_queue_size: 20_000,
             delay_offset_update_version_step: 200,
+            revive_ack_wait_ms: Duration::from_secs(3 * 60).as_millis() as u64,
         }
     }
 }
