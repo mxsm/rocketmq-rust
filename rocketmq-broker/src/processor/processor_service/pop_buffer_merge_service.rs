@@ -417,6 +417,9 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         let mut remove_keys = HashSet::new();
         for entry in self.buffer.iter() {
             let point_wrapper = entry.value();
+
+            // just process offset(already stored at pull thread), or buffer ck(not stored and ack
+            // finish)
             if point_wrapper.is_just_offset() && point_wrapper.is_ck_stored()
                 || is_ck_done(point_wrapper)
                 || is_ck_done_for_finish(point_wrapper) && point_wrapper.is_ck_stored()
@@ -427,22 +430,30 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
             }
             let point = point_wrapper.get_ck();
             let now = get_current_millis();
+
+            // remove CheckPoint or not
             let mut remove_ck = !self.serving.load(Ordering::Acquire);
+            // ck will be timeout
             if (point.get_revive_time() - now as i64) < pop_ck_stay_buffer_time_out {
                 remove_ck = true;
             }
+            // the time stayed is too long
             if (now as i64 - point.get_revive_time()) > pop_ck_stay_buffer_time {
                 remove_ck = true;
             }
+
+            // double check
             if is_ck_done(point_wrapper) {
                 continue;
             } else if point_wrapper.is_just_offset() {
+                // just offset should be in store.
                 if point_wrapper.get_revive_queue_offset() < 0 {
                     self.put_ck_to_store(point_wrapper, false).await;
                     count_ck += 1;
                 }
                 continue;
             } else if remove_ck {
+                // put buffer ak to store
                 if point_wrapper.get_revive_queue_offset() < 0 {
                     self.put_ck_to_store(point_wrapper, false).await;
                     count_ck += 1;
@@ -455,7 +466,11 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
                     .broker_config()
                     .enable_pop_batch_ack
                 {
+                    // Before removing the CheckPoint from memory, store the messages that have been
+                    // Acked in it as Ack messages on disk.
                     for i in 0..point.num {
+                        // Traverse each bit of the message bit code table in CheckPoint to check
+                        // whether it has been Acked and not stored on disk.
                         if DataConverter::get_bit(
                             point_wrapper.get_bits().load(Ordering::Relaxed),
                             i as usize,
@@ -503,7 +518,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         for key in remove_keys {
             self.buffer.remove(&key);
         }
-
+        //Scan the completed CheckPoints and submit message consumption progress for them.
         let offset_buffer_size = self.scan_commit_offset().await;
         let eclipse = start_time.elapsed().as_millis() as i64;
         if eclipse
@@ -626,6 +641,9 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
                 if point_wrapper.is_none() {
                     break;
                 }
+                // 1. just offset & stored, not processed by scan
+                // 2. ck is buffer(acked)
+                // 3. ck is buffer(not all acked), all ak are stored and ck is stored
                 let point_wrapper = point_wrapper.unwrap();
                 if point_wrapper.is_just_offset() && point_wrapper.is_ck_stored()
                     || is_ck_done(point_wrapper)
