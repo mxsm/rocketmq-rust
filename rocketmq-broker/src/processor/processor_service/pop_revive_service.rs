@@ -964,6 +964,33 @@ impl<MS: MessageStore> PopReviveService<MS> {
             .get_message_async(topic, offset, queue_id, broker_name, false)
             .await
     }
+
+    pub fn get_revive_behind_millis(&self) -> i64 {
+        if self.current_revive_message_timestamp <= 0 {
+            return 0;
+        }
+        let max_offset = self
+            .broker_runtime_inner
+            .message_store_unchecked()
+            .get_max_offset_in_queue(&self.revive_topic, self.queue_id);
+        if max_offset - self.revive_offset > 1 {
+            let now = get_current_millis() as i64;
+            return std::cmp::max(0, now - self.current_revive_message_timestamp);
+        }
+        0
+    }
+
+    pub fn get_revive_behind_messages(&self) -> i64 {
+        if self.current_revive_message_timestamp <= 0 {
+            return 0;
+        }
+        let max_offset = self
+            .broker_runtime_inner
+            .message_store_unchecked()
+            .get_max_offset_in_queue(&self.revive_topic, self.queue_id);
+        let diff = max_offset - self.revive_offset;
+        std::cmp::max(0, diff)
+    }
 }
 
 fn reach_tail(pull_result: &PullResult, offset: i64) -> bool {
