@@ -67,7 +67,7 @@ pub struct BrokerRequestProcessor<MS, TS> {
     pub(crate) pop_message_processor: ArcMut<PopMessageProcessor<MS>>,
     pub(crate) ack_message_processor: ArcMut<AckMessageProcessor<MS>>,
     pub(crate) change_invisible_time_processor: ArcMut<ChangeInvisibleTimeProcessor<MS>>,
-    pub(crate) notification_processor: ArcMut<NotificationProcessor>,
+    pub(crate) notification_processor: ArcMut<NotificationProcessor<MS>>,
     pub(crate) polling_info_processor: ArcMut<PollingInfoProcessor>,
     pub(crate) reply_message_processor: ArcMut<ReplyMessageProcessor<MS, TS>>,
     pub(crate) query_message_processor: ArcMut<QueryMessageProcessor<MS>>,

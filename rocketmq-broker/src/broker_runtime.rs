@@ -577,7 +577,7 @@ impl BrokerRuntime {
         ));
         self.inner.ack_message_processor = Some(ack_message_processor.clone());
 
-        let notification_processor = ArcMut::new(NotificationProcessor::default());
+        let notification_processor = NotificationProcessor::new(self.inner.clone());
         self.inner.notification_processor = Some(notification_processor.clone());
         BrokerRequestProcessor {
             send_message_processor: ArcMut::new(send_message_processor),
@@ -1335,7 +1335,7 @@ pub(crate) struct BrokerRuntimeInner<MS> {
     //Processor
     pop_message_processor: Option<ArcMut<PopMessageProcessor<MS>>>,
     ack_message_processor: Option<ArcMut<AckMessageProcessor<MS>>>,
-    notification_processor: Option<ArcMut<NotificationProcessor>>,
+    notification_processor: Option<ArcMut<NotificationProcessor<MS>>>,
     broker_attached_plugins: Vec<Arc<dyn BrokerAttachedPlugin>>,
 }
 
@@ -2147,7 +2147,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         unsafe { self.ack_message_processor.as_ref().unwrap_unchecked() }
     }
 
-    pub fn notification_processor_unchecked(&self) -> &ArcMut<NotificationProcessor> {
+    pub fn notification_processor_unchecked(&self) -> &ArcMut<NotificationProcessor<MS>> {
         unsafe { self.notification_processor.as_ref().unwrap_unchecked() }
     }
 
