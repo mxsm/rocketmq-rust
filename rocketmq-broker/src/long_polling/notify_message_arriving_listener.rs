@@ -81,7 +81,7 @@ where
 
         self.broker_runtime_inner
             .notification_processor_unchecked()
-            .notify_message_arriving_full(
+            .notify_message_arriving(
                 topic.clone(),
                 queue_id,
                 tags_code,
