@@ -43,7 +43,7 @@ rocketmq-tools = { version = "0.5.0", path = "./rocketmq-tools" }
 rocketmq-error = { version = "0.5.0", path = "./rocketmq-error" }
 
 tokio = { version = "1.44", features = ["full"] }
-tokio-util = { version = "0.7.14", features = ["full"] }
+tokio-util = { version = "0.7.15", features = ["full"] }
 tokio-stream = { version = "0.1.17", features = ["full"] }
 
 tracing = "0.1.41"
