@@ -90,7 +90,7 @@ impl Display for TopicMessageType {
             Self::Transaction => "TRANSACTION".to_string(),
             Self::Mixed => "MIXED".to_string(),
         };
-        write!(f, "{}", str)
+        write!(f, "{str}",)
     }
 }
 

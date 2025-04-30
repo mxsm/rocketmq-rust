@@ -252,5 +252,5 @@ where
 }
 
 fn build_key(topic: &str, queue_id: i32) -> String {
-    format!("{}{}{}", topic, TOPIC_QUEUE_ID_SEPARATOR, queue_id)
+    format!("{topic}{TOPIC_QUEUE_ID_SEPARATOR}{queue_id}")
 }

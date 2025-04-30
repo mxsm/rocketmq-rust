@@ -46,7 +46,7 @@ impl HttpTinyClient {
         let client = Client::new();
         let url = if let Some(params) = param_values {
             let encoded_content = HttpTinyClient::encode_params(params, encoding);
-            format!("{}?{}", url, encoded_content)
+            format!("{url}?{encoded_content}")
         } else {
             url.to_string()
         };
@@ -108,8 +108,7 @@ impl HttpTinyClient {
         header_map.insert(
             CONTENT_TYPE,
             HeaderValue::from_str(&format!(
-                "application/x-www-form-urlencoded;charset={}",
-                encoding
+                "application/x-www-form-urlencoded;charset={encoding}",
             ))
             .unwrap(),
         );

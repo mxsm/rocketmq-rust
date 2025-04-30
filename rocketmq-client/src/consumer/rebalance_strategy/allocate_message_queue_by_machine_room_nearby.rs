@@ -65,7 +65,7 @@ impl AllocateMessageQueueStrategy for AllocateMessageQueueByMachineRoomNearby {
                     .push(mq.clone());
             } else {
                 return Err(rocketmq_error::RocketmqError::IllegalArgumentError(
-                    format!("Machine room is null for mq {}", mq),
+                    format!("Machine room is null for mq {mq}"),
                 ));
             }
         }
@@ -79,7 +79,7 @@ impl AllocateMessageQueueStrategy for AllocateMessageQueueByMachineRoomNearby {
                     .push(cid.clone());
             } else {
                 return Err(rocketmq_error::RocketmqError::IllegalArgumentError(
-                    format!("Machine room is null for consumer id {}", cid),
+                    format!("Machine room is null for consumer id {cid}"),
                 ));
             }
         }

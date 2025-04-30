@@ -74,7 +74,7 @@ impl TokioExecutorService {
                 .thread_name_fn(move || {
                     static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
                     let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
-                    format!("{}{}", thread_prefix_inner, id)
+                    format!("{thread_prefix_inner}{id}")
                 })
                 .enable_all()
                 .build()
@@ -193,7 +193,7 @@ impl ScheduledExecutorService {
                 .thread_name_fn(move || {
                     static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
                     let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
-                    format!("{}{}", thread_prefix_inner, id)
+                    format!("{thread_prefix_inner}{id}")
                 })
                 .enable_all()
                 .build()

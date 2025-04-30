@@ -173,7 +173,7 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
             if let Err(e) = rpc_response {
                 return Some(
                     RemotingCommand::create_response_command_with_code(ResponseCode::SystemError)
-                        .set_remark(format!("{}", e)),
+                        .set_remark(format!("{e}")),
                 );
             } else {
                 match rpc_response
@@ -250,7 +250,7 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
             if let Err(e) = rpc_response {
                 return Some(
                     RemotingCommand::create_response_command_with_code(ResponseCode::SystemError)
-                        .set_remark(format!("{}", e)),
+                        .set_remark(format!("{e}")),
                 );
             } else {
                 match rpc_response

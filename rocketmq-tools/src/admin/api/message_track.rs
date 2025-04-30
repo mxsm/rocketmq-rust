@@ -59,7 +59,7 @@ impl std::fmt::Display for MessageTrack {
         let track_type_str = self
             .track_type
             .as_ref()
-            .map_or("None".to_string(), |tt| format!("{}", tt));
+            .map_or("None".to_string(), |tt| format!("{tt}"));
         write!(
             f,
             "MessageTrack [consumerGroup={}, trackType={}, exceptionDesc={}]",

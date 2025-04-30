@@ -64,16 +64,16 @@ impl DefaultTopAddressing {
         let mut url = self.ws_addr.to_string();
         if let Some(para) = &self.para {
             if let Some(unit_name) = &self.unit_name {
-                url.push_str(&format!("-{}?nofix=1&", unit_name));
+                url.push_str(&format!("-{unit_name}?nofix=1&"));
             } else {
                 url.push('?');
             }
             for (key, value) in para {
-                url.push_str(&format!("{}={}&", key, value));
+                url.push_str(&format!("{key}={value}&"));
             }
             url.pop(); // Remove the last '&'
         } else if let Some(unit_name) = &self.unit_name {
-            url.push_str(&format!("-{}?nofix=1", unit_name));
+            url.push_str(&format!("-{unit_name}?nofix=1"));
         }
 
         match HttpTinyClient::http_get(&url, None, None, "UTF-8", timeout_millis) {

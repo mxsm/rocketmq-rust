@@ -120,8 +120,7 @@ where
                     RemotingCommand::create_response_command_with_code_remark(
                         ResponseCode::MessageIllegal,
                         format!(
-                            "AckMessageProcessor failed to process RequestCode: {:?}",
-                            request_code
+                            "AckMessageProcessor failed to process RequestCode: {request_code:?}",
                         ),
                     ),
                 ))

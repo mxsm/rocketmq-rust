@@ -274,17 +274,17 @@ impl Display for Message {
         let properties_str = self
             .properties
             .iter()
-            .map(|(k, v)| format!("{}: {}", k, v))
+            .map(|(k, v)| format!("{k}: {v}"))
             .collect::<Vec<_>>()
             .join(", ");
 
         let body_str = match &self.body {
-            Some(body) => format!("Some({:?})", body),
+            Some(body) => format!("Some({body:?})"),
             None => "None".to_string(),
         };
 
         let compressed_body_str = match &self.compressed_body {
-            Some(compressed_body) => format!("Some({:?})", compressed_body),
+            Some(compressed_body) => format!("Some({compressed_body:?})"),
             None => "None".to_string(),
         };
 

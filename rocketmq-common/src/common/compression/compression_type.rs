@@ -28,7 +28,7 @@ impl CompressionType {
             "LZ4" => Self::LZ4,
             "ZSTD" => Self::Zstd,
             "ZLIB" => Self::Zlib,
-            _ => panic!("Unsupported compress type name: {}", name),
+            _ => panic!("Unsupported compress type name: {name}"),
         }
     }
 
@@ -37,7 +37,7 @@ impl CompressionType {
             1 => Self::LZ4,
             2 => Self::Zstd,
             0 | 3 => Self::Zlib,
-            _ => panic!("Unknown compress type value: {}", value),
+            _ => panic!("Unknown compress type value: {value}"),
         }
     }
 

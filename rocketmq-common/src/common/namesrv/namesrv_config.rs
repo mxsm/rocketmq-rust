@@ -240,7 +240,7 @@ impl NamesrvConfig {
         // Convert the HashMap to a JSON value
         match serde_json::to_string_pretty(&json_map) {
             Ok(json) => Ok(json),
-            Err(err) => Err(format!("Failed to serialize NamesrvConfig: {}", err)),
+            Err(err) => Err(format!("Failed to serialize NamesrvConfig: {err}")),
         }
     }
 
@@ -265,90 +265,90 @@ impl NamesrvConfig {
                 "clusterTest" => {
                     self.cluster_test = value
                         .parse()
-                        .map_err(|_| format!("Invalid boolean value for key '{}'", key))?
+                        .map_err(|_| format!("Invalid boolean value for key '{key}'"))?
                 }
                 "orderMessageEnable" => {
                     self.order_message_enable = value
                         .parse()
-                        .map_err(|_| format!("Invalid boolean value for key '{}'", key))?
+                        .map_err(|_| format!("Invalid boolean value for key '{key}'"))?
                 }
                 "clientRequestThreadPoolNums" => {
                     self.client_request_thread_pool_nums = value
                         .parse()
-                        .map_err(|_| format!("Invalid integer value for key '{}'", key))?
+                        .map_err(|_| format!("Invalid integer value for key '{key}'"))?
                 }
                 "defaultThreadPoolNums" => {
                     self.default_thread_pool_nums = value
                         .parse()
-                        .map_err(|_| format!("Invalid integer value for key '{}'", key))?
+                        .map_err(|_| format!("Invalid integer value for key '{key}'"))?
                 }
                 "clientRequestThreadPoolQueueCapacity" => {
                     self.client_request_thread_pool_queue_capacity = value
                         .parse()
-                        .map_err(|_| format!("Invalid integer value for key '{}'", key))?
+                        .map_err(|_| format!("Invalid integer value for key '{key}'"))?
                 }
                 "defaultThreadPoolQueueCapacity" => {
                     self.default_thread_pool_queue_capacity = value
                         .parse()
-                        .map_err(|_| format!("Invalid integer value for key '{}'", key))?
+                        .map_err(|_| format!("Invalid integer value for key '{key}'"))?
                 }
                 "scanNotActiveBrokerInterval" => {
                     self.scan_not_active_broker_interval = value
                         .parse()
-                        .map_err(|_| format!("Invalid value for key '{}'", key))?
+                        .map_err(|_| format!("Invalid value for key '{key}'"))?
                 }
                 "unRegisterBrokerQueueCapacity" => {
                     self.unregister_broker_queue_capacity = value
                         .parse()
-                        .map_err(|_| format!("Invalid integer value for key '{}'", key))?
+                        .map_err(|_| format!("Invalid integer value for key '{key}'"))?
                 }
                 "supportActingMaster" => {
                     self.support_acting_master = value
                         .parse()
-                        .map_err(|_| format!("Invalid boolean value for key '{}'", key))?
+                        .map_err(|_| format!("Invalid boolean value for key '{key}'"))?
                 }
                 "enableAllTopicList" => {
                     self.enable_all_topic_list = value
                         .parse()
-                        .map_err(|_| format!("Invalid boolean value for key '{}'", key))?
+                        .map_err(|_| format!("Invalid boolean value for key '{key}'"))?
                 }
                 "enableTopicList" => {
                     self.enable_topic_list = value
                         .parse()
-                        .map_err(|_| format!("Invalid boolean value for key '{}'", key))?
+                        .map_err(|_| format!("Invalid boolean value for key '{key}'"))?
                 }
                 "notifyMinBrokerIdChanged" => {
                     self.notify_min_broker_id_changed = value
                         .parse()
-                        .map_err(|_| format!("Invalid boolean value for key '{}'", key))?
+                        .map_err(|_| format!("Invalid boolean value for key '{key}'"))?
                 }
                 "enableControllerInNamesrv" => {
                     self.enable_controller_in_namesrv = value
                         .parse()
-                        .map_err(|_| format!("Invalid boolean value for key '{}'", key))?
+                        .map_err(|_| format!("Invalid boolean value for key '{key}'"))?
                 }
                 "needWaitForService" => {
                     self.need_wait_for_service = value
                         .parse()
-                        .map_err(|_| format!("Invalid boolean value for key '{}'", key))?
+                        .map_err(|_| format!("Invalid boolean value for key '{key}'"))?
                 }
                 "waitSecondsForService" => {
                     self.wait_seconds_for_service = value
                         .parse()
-                        .map_err(|_| format!("Invalid integer value for key '{}'", key))?
+                        .map_err(|_| format!("Invalid integer value for key '{key}'"))?
                 }
                 "deleteTopicWithBrokerRegistration" => {
                     self.delete_topic_with_broker_registration = value
                         .parse()
-                        .map_err(|_| format!("Invalid boolean value for key '{}'", key))?
+                        .map_err(|_| format!("Invalid boolean value for key '{key}'"))?
                 }
                 "configBlackList" => {
                     self.config_black_list = value
                         .parse()
-                        .map_err(|_| format!("Invalid string value for key '{}'", key))?
+                        .map_err(|_| format!("Invalid string value for key '{key}'"))?
                 }
                 _ => {
-                    return Err(format!("Unknown configuration key: '{}'", key));
+                    return Err(format!("Unknown configuration key: '{key}'"));
                 }
             }
         }

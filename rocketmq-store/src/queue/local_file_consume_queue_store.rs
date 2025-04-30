@@ -317,7 +317,7 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
         Some(
             self.inner
                 .queue_offset_operator
-                .current_queue_offset(&format!("{}-{}", topic, queue_id).into()),
+                .current_queue_offset(&format!("{topic}-{queue_id}").into()),
         )
     }
 
@@ -540,12 +540,12 @@ impl ConsumeQueueStore {
                 }
             }
             Err(e) => {
-                error!("Failed to read topic directories: {}", e);
+                error!("Failed to read topic directories: {e}");
                 return false;
             }
         }
 
-        info!("load {} all over, OK", cq_type);
+        info!("load {cq_type} all over, OK");
         true
     }
 
@@ -577,10 +577,7 @@ impl ConsumeQueueStore {
             .get_topic_config(topic);
         let act = QueueTypeUtils::get_cq_type(&topic_config);
         if act != cq_type {
-            panic!(
-                "The queue type of topic: {} should be {:?}, but is {:?}",
-                topic, cq_type, act
-            );
+            panic!("The queue type of topic: {topic} should be {cq_type:?}, but is {act:?}",);
         }
     }
 
@@ -625,8 +622,8 @@ impl ConsumeQueueStore {
                 ArcMut::new(Box::new(consume_queue))
             }
             _ => {
-                error!("Unsupported consume queue type: {:?}", cq_type);
-                panic!("Unsupported consume queue type: {:?}", cq_type);
+                error!("Unsupported consume queue type: {cq_type:?}");
+                panic!("Unsupported consume queue type: {cq_type:?}");
             }
         }
     }

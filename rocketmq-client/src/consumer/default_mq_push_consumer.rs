@@ -633,7 +633,7 @@ impl MQPushConsumer for DefaultMQPushConsumer {
         {
             Ok(value) => value,
             Err(er) => {
-                panic!("Error: {:?}", er);
+                panic!("Error: {er:?}");
             }
         }
     }

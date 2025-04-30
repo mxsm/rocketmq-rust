@@ -531,8 +531,7 @@ impl RemotingCommand {
         let header_length = parse_header_length(ori_header_length);
         if header_length > total_size - 4 {
             return Err(RocketmqError::RemotingCommandDecoderError(format!(
-                "Header length {} is greater than total size {}",
-                header_length, total_size
+                "Header length {header_length} is greater than total size {total_size}"
             )));
         }
         let protocol_type = parse_serialize_type(ori_header_length)?;
@@ -561,8 +560,7 @@ impl RemotingCommand {
                     SerdeJsonUtils::from_json_slice::<RemotingCommand>(src).map_err(|error| {
                         // Handle deserialization error gracefully
                         RocketmqError::RemotingCommandDecoderError(format!(
-                            "Deserialization error: {}",
-                            error
+                            "Deserialization error: {error}"
                         ))
                     })?;
 

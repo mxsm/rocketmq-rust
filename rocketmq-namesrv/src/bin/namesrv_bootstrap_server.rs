@@ -50,7 +50,7 @@ async fn main() -> RocketMQResult<()> {
         if config.exists() && config.is_file() {
             Some(config)
         } else {
-            eprintln!("Config file not found: {:?}", config);
+            eprintln!("Config file not found: {config:?}");
             exit(1);
         }
     } else {

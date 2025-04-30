@@ -41,8 +41,7 @@ impl FromStr for BrokerRequestCode {
             "BROKERHEARTBEAT" => Ok(BrokerRequestCode::BrokerHeartbeat),
             "GETBROKERCLUSTERINFO" => Ok(BrokerRequestCode::GetBrokerClusterInfo),
             _ => Err(FromStrErr(format!(
-                "Parse from string error,Invalid BrokerRequestCode: {}",
-                s
+                "Parse from string error,Invalid BrokerRequestCode: {s}"
             ))),
         }
     }

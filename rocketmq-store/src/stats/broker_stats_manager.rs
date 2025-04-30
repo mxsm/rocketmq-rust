@@ -588,7 +588,7 @@ pub fn create_statistics_kind_meta(
 
 #[inline]
 pub fn build_commercial_stats_key(owner: &str, topic: &str, group: &str, type_: &str) -> String {
-    format!("{}@{}@{}@{}", owner, topic, group, type_)
+    format!("{owner}@{topic}@{group}@{type_}")
 }
 
 #[inline]
@@ -600,10 +600,7 @@ pub fn build_account_stats_key(
     group: &str,
     msg_type: &str,
 ) -> String {
-    format!(
-        "{}@{}@{}@{}@{}@{}",
-        account_owner_parent, account_owner_self, instance_id, topic, group, msg_type
-    )
+    format!("{account_owner_parent}@{account_owner_self}@{instance_id}@{topic}@{group}@{msg_type}")
 }
 
 #[inline]
@@ -614,17 +611,11 @@ pub fn build_account_stats_key_with_flowlimit(
     topic: &str,
     group: &str,
     msg_type: &str,
-    flowlimit_threshold: &str,
+    flow_limit_threshold: &str,
 ) -> String {
     format!(
-        "{}@{}@{}@{}@{}@{}@{}",
-        account_owner_parent,
-        account_owner_self,
-        instance_id,
-        topic,
-        group,
-        msg_type,
-        flowlimit_threshold
+        "{account_owner_parent}@{account_owner_self}@{instance_id}@{topic}@{group}@{msg_type}@\
+         {flow_limit_threshold}"
     )
 }
 
@@ -636,7 +627,7 @@ pub fn build_account_stat_key(
     group: &str,
     msg_type: &str,
 ) -> String {
-    format!("{}|{}|{}|{}|{}", owner, instance_id, topic, group, msg_type)
+    format!("{owner}|{instance_id}|{topic}|{group}|{msg_type}")
 }
 
 #[inline]
@@ -646,12 +637,9 @@ pub fn build_account_stat_key_with_flowlimit(
     topic: &str,
     group: &str,
     msg_type: &str,
-    flowlimit_threshold: &str,
+    flow_limit_threshold: &str,
 ) -> String {
-    format!(
-        "{}|{}|{}|{}|{}|{}",
-        owner, instance_id, topic, group, msg_type, flowlimit_threshold
-    )
+    format!("{owner}|{instance_id}|{topic}|{group}|{msg_type}|{flow_limit_threshold}")
 }
 
 #[inline]

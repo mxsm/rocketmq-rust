@@ -80,7 +80,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
             .collect::<HashMap<_, _>>();
         let mut body = String::new();
         for (key, value) in combine_map {
-            body.push_str(&format!("{}:{}\n", key, value));
+            body.push_str(&format!("{key}:{value}\n"));
         }
         if !body.is_empty() {
             response.set_body_mut_ref(body);

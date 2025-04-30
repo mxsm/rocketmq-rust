@@ -239,10 +239,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                 return Some(
                     response
                         .set_code(ResponseCode::SystemError)
-                        .set_remark(format!(
-                            "The topic[{}] is conflict with system topic.",
-                            topic
-                        )),
+                        .set_remark(format!("The topic[{topic}] is conflict with system topic.",)),
                 );
             }
             if topic_config.get_topic_message_type() == TopicMessageType::Mixed
@@ -340,10 +337,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             return Some(
                 response
                     .set_code(ResponseCode::SystemError)
-                    .set_remark(format!(
-                        "The topic[{}] is conflict with system topic.",
-                        topic
-                    )),
+                    .set_remark(format!("The topic[{topic}] is conflict with system topic.",)),
             );
         }
         let groups = self
@@ -463,7 +457,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             return Some(
                 response
                     .set_code(ResponseCode::TopicNotExist)
-                    .set_remark(format!("The topic[{}] not exist.", topic)),
+                    .set_remark(format!("The topic[{topic}] not exist.")),
             );
         }
         let topic_config = topic_config.unwrap();
@@ -542,7 +536,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             return Some(
                 response
                     .set_code(ResponseCode::TopicNotExist)
-                    .set_remark(format!("No topic in this broker. topic: {}", topic)),
+                    .set_remark(format!("No topic in this broker. topic: {topic}")),
             );
         }
         let mut topic_queue_mapping_detail: Option<TopicQueueMappingDetail> = None;

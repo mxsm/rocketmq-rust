@@ -62,9 +62,9 @@ pub(super) fn request_header_codec_inner(
              //Determining whether it is an Option type or a direct data type
              //This will lead to different ways of processing in the future.
              let has_option = is_option_type(&field.ty);
-             let camel_case_name = snake_to_camel_case(&format!("{}", field_name));
+             let camel_case_name = snake_to_camel_case(&format!("{field_name}"));
              let static_name = Ident::new(
-                 &format!("{}", field_name).to_ascii_uppercase(),
+                 &format!("{field_name}").to_ascii_uppercase(),
                  field_name.span(),
              );
              let type_name = if let Some(value) = &has_option {

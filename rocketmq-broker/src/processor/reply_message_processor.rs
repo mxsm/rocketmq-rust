@@ -140,10 +140,7 @@ where
         if get_current_millis() < start_timstamp {
             return response
                 .set_code(ResponseCode::SystemError)
-                .set_remark(format!(
-                    "broker unable to service, until, {}",
-                    start_timstamp
-                ));
+                .set_remark(format!("broker unable to service, until, {start_timstamp}"));
         }
         response.set_code_mut(-1);
         self.inner
@@ -433,14 +430,13 @@ where
                     }
                     Err(error) => {
                         push_reply_result.1 = format!(
-                            "push reply message to client failed, error: {},{}",
-                            error, sender_id
+                            "push reply message to client failed, error: {error},{sender_id}"
                         );
                     }
                 };
             } else {
                 warn!("can not find channel by sender_id: {}", sender_id);
-                push_reply_result.1 = format!("can not find channel by sender_id: {}", sender_id);
+                push_reply_result.1 = format!("can not find channel by sender_id: {sender_id}");
             }
         } else {
             warn!(

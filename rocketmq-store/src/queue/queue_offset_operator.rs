@@ -120,7 +120,7 @@ impl QueueOffsetOperator {
 
     #[inline]
     pub fn remove(&self, topic: &CheetahString, queue_id: i32) {
-        let topic_queue_key = CheetahString::from(format!("{}-{}", topic, queue_id));
+        let topic_queue_key = CheetahString::from(format!("{topic}-{queue_id}"));
         // Beware of thread-safety
         let mut topic_queue_table = self.topic_queue_table.lock();
         topic_queue_table.remove(&topic_queue_key);

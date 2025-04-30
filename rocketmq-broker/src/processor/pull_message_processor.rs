@@ -174,7 +174,7 @@ where
             Err(err) => {
                 return Some(RemotingCommand::create_response_command_with_code_remark(
                     ResponseCode::SystemError,
-                    format!("invoke rpc failed: {:?}", err),
+                    format!("invoke rpc failed: {err:?}"),
                 ));
             }
         };

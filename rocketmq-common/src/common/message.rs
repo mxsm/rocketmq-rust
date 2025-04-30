@@ -80,10 +80,7 @@ pub trait MessageTrait: Any + Display + Debug {
     /// * `value` - The value of the user property, converted into a `String`.
     fn put_user_property(&mut self, name: CheetahString, value: CheetahString) {
         if STRING_HASH_SET.contains(name.as_str()) {
-            panic!(
-                "The Property<{}> is used by system, input another please",
-                name
-            );
+            panic!("The Property<{name}> is used by system, input another please");
         }
         if value.is_empty() || name.is_empty() {
             panic!("The name or value of property can not be null or blank string!");

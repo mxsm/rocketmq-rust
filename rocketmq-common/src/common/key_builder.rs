@@ -33,31 +33,21 @@ impl KeyBuilder {
     }
 
     pub fn build_pop_retry_topic_default(topic: &str, cid: &str) -> String {
-        format!(
-            "{}{}{}{}",
-            RETRY_GROUP_TOPIC_PREFIX, cid, POP_RETRY_SEPARATOR_V1, topic
-        )
+        format!("{RETRY_GROUP_TOPIC_PREFIX}{cid}{POP_RETRY_SEPARATOR_V1}{topic}")
     }
 
     pub fn build_pop_retry_topic_v2(topic: &str, cid: &str) -> String {
-        format!(
-            "{}{}{}{}",
-            RETRY_GROUP_TOPIC_PREFIX, cid, POP_RETRY_SEPARATOR_V2, topic
-        )
+        format!("{RETRY_GROUP_TOPIC_PREFIX}{cid}{POP_RETRY_SEPARATOR_V2}{topic}")
     }
 
     pub fn build_pop_retry_topic_v1(topic: &str, cid: &str) -> String {
-        format!(
-            "{}{}{}{}",
-            RETRY_GROUP_TOPIC_PREFIX, cid, POP_RETRY_SEPARATOR_V1, topic
-        )
+        format!("{RETRY_GROUP_TOPIC_PREFIX}{cid}{POP_RETRY_SEPARATOR_V1}{topic}")
     }
 
     pub fn parse_normal_topic(topic: &str, cid: &str) -> String {
         if topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) {
             if topic.starts_with(&format!(
-                "{}{}{}",
-                RETRY_GROUP_TOPIC_PREFIX, cid, POP_RETRY_SEPARATOR_V2
+                "{RETRY_GROUP_TOPIC_PREFIX}{cid}{POP_RETRY_SEPARATOR_V2}"
             )) {
                 return topic[RETRY_GROUP_TOPIC_PREFIX.len() + cid.len() + 1..].to_string();
             }

@@ -166,7 +166,7 @@ where
             return Some(
                 response
                     .set_code(ResponseCode::SubscriptionGroupNotExist)
-                    .set_remark(format!("subscription group not exist, {}", group)),
+                    .set_remark(format!("subscription group not exist, {group}")),
             );
         }
 
@@ -178,7 +178,7 @@ where
             return Some(
                 response
                     .set_code(ResponseCode::TopicNotExist)
-                    .set_remark(format!("topic not exist, {}", topic)),
+                    .set_remark(format!("topic not exist, {topic}")),
             );
         }
 

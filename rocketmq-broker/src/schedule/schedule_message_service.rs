@@ -166,7 +166,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
                     queue_id,
                 );
 
-            let value = format!("{},{}", delay_offset, max_offset);
+            let value = format!("{delay_offset},{max_offset}");
             let key = format!(
                 "{}_{}",
                 RunningStats::ScheduleMessageOffset.as_str(),
@@ -390,7 +390,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
             let ch = value.chars().last().unwrap().to_string();
             let tu = time_unit_table
                 .get(&ch.as_str())
-                .ok_or(format!("Unknown time unit: {}", ch));
+                .ok_or(format!("Unknown time unit: {ch}"));
             if tu.is_err() {
                 return false;
             }

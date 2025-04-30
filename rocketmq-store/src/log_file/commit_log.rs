@@ -1098,10 +1098,7 @@ impl CommitLog {
 
             process_offset += mapped_file_offset;
             if broker_config.enable_controller_mode {
-                println!(
-                    "TODO: finishCommitLogDispatch:{}",
-                    last_confirm_valid_msg_phy_offset
-                );
+                println!("TODO: finishCommitLogDispatch:{last_confirm_valid_msg_phy_offset}",);
                 unimplemented!();
             } else {
                 self.set_confirm_offset(last_valid_msg_phy_offset as i64);

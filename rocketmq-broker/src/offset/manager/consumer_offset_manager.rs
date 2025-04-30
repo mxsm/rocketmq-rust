@@ -114,8 +114,7 @@ impl ConsumerOffsetManager {
         queue_id: i32,
         offset: i64,
     ) {
-        let key =
-            CheetahString::from_string(format!("{}{}{}", topic, TOPIC_GROUP_SEPARATOR, group));
+        let key = CheetahString::from_string(format!("{topic}{TOPIC_GROUP_SEPARATOR}{group}"));
 
         let mut write_guard = self.consumer_offset_wrapper.offset_table.write();
         let map = write_guard.entry(key.clone()).or_default();
@@ -153,7 +152,7 @@ impl ConsumerOffsetManager {
     }
 
     pub fn has_offset_reset(&self, group: &str, topic: &str, queue_id: i32) -> bool {
-        let key = format!("{}{}{}", topic, TOPIC_GROUP_SEPARATOR, group);
+        let key = format!("{topic}{TOPIC_GROUP_SEPARATOR}{group}");
         match self
             .consumer_offset_wrapper
             .reset_offset_table
@@ -166,7 +165,7 @@ impl ConsumerOffsetManager {
     }
 
     pub fn query_offset(&self, group: &CheetahString, topic: &CheetahString, queue_id: i32) -> i64 {
-        let key = format!("{}{}{}", topic, TOPIC_GROUP_SEPARATOR, group);
+        let key = format!("{topic}{TOPIC_GROUP_SEPARATOR}{group}");
         if self.broker_config.use_server_side_reset_offset {
             if let Some(value) = self
                 .consumer_offset_wrapper
@@ -245,8 +244,7 @@ impl ConsumerOffsetManager {
         queue_id: i32,
         offset: i64,
     ) {
-        let key =
-            CheetahString::from_string(format!("{}{}{}", topic, TOPIC_GROUP_SEPARATOR, group));
+        let key = CheetahString::from_string(format!("{topic}{TOPIC_GROUP_SEPARATOR}{group}"));
         self.consumer_offset_wrapper
             .pull_offset_table
             .write()
@@ -261,7 +259,7 @@ impl ConsumerOffsetManager {
         group: &CheetahString,
         queue_id: i32,
     ) -> Option<i64> {
-        let key = format!("{}{}{}", topic, TOPIC_GROUP_SEPARATOR, group);
+        let key = format!("{topic}{TOPIC_GROUP_SEPARATOR}{group}");
         let mut write_guard = self.consumer_offset_wrapper.reset_offset_table.write();
         let offset_table = write_guard.get_mut(key.as_str());
         match offset_table {

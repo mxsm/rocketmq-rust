@@ -540,7 +540,7 @@ impl BrokerOuterAPI {
                 let code = response.code();
                 let mut pull_result_ext = match process_pull_response(response, broker_addr) {
                     Ok(value) => value,
-                    Err(_) => return Ok((None, format!("Response Code:{}", code), true)),
+                    Err(_) => return Ok((None, format!("Response Code:{code}"), true)),
                 };
                 let name = pull_result_ext.pull_result.pull_status().to_string();
                 process_pull_result(&mut pull_result_ext, broker_name, queue_id);
@@ -698,7 +698,7 @@ fn dns_lookup_address_by_domain(domain: &str) -> Vec<CheetahString> {
             match lookup_host(domain_str) {
                 Ok(addresses) => {
                     for address in addresses {
-                        address_list.push(format!("{}{}", address, port_str).into());
+                        address_list.push(format!("{address}{port_str}").into());
                     }
                     info!(
                         "DNS lookup address by domain success, domain={}, result={:?}",

@@ -158,7 +158,7 @@ impl Encoder<Bytes> for CompositeCodec {
 
     fn encode(&mut self, item: Bytes, dst: &mut BytesMut) -> Result<(), Self::Error> {
         self.bytes_codec.encode(item, dst).map_err(|error| {
-            RocketmqError::RemotingCommandEncoderError(format!("Error encoding bytes: {}", error))
+            RocketmqError::RemotingCommandEncoderError(format!("Error encoding bytes: {error}"))
         })
     }
 }

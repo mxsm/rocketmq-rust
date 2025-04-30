@@ -269,8 +269,7 @@ impl DefaultMQProducerImpl {
         if timeout < cost_time {
             return Err(rocketmq_error::RocketmqError::RequestTimeoutError(
                 RequestTimeoutErr::new(format!(
-                    "send message timeout {}ms is required, but {}ms is given",
-                    timeout, cost_time
+                    "send message timeout {timeout}ms is required, but {cost_time}ms is given",
                 )),
             ));
         }
@@ -1787,8 +1786,8 @@ impl DefaultMQProducerImpl {
                 RequestTimeoutErr::new_with_code(
                     ClientErrorCode::REQUEST_TIMEOUT_EXCEPTION,
                     format!(
-                        "send request message to <{}> OK, but wait reply message timeout, {} ms.",
-                        topic, timeout
+                        "send request message to <{topic}> OK, but wait reply message timeout, \
+                         {timeout} ms."
                     ),
                 ),
             ))
@@ -2054,8 +2053,8 @@ impl MQProducerInner for DefaultMQProducerImpl {
                 topic_publish_info_table
                     .read()
                     .await
-                    .iter()
-                    .map(|(k, _)| k.clone())
+                    .keys()
+                    .cloned()
                     .collect()
             })
         })

@@ -379,5 +379,5 @@ impl IndexService {
 
 #[inline]
 fn build_key(topic: &str, key: &str) -> String {
-    format!("{}#{}", topic, key)
+    format!("{topic}#{key}")
 }

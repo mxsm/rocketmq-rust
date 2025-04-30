@@ -776,7 +776,7 @@ impl BrokerRuntime {
         if let Some(ref mut message_store) = self.inner.message_store {
             message_store
                 .start()
-                .unwrap_or_else(|e| panic!("Failed to start message store: {}", e));
+                .unwrap_or_else(|e| panic!("Failed to start message store: {e}"));
         } else {
             panic!("Message store is not initialized");
         }

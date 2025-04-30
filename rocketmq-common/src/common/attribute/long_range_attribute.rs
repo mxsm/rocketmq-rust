@@ -99,7 +99,7 @@ impl LongRangeAttribute {
     pub fn parse_long(value: &str) -> Result<i64, String> {
         value
             .parse::<i64>()
-            .map_err(|e| format!("Invalid integer format: {}", e))
+            .map_err(|e| format!("Invalid integer format: {e}"))
     }
 }
 

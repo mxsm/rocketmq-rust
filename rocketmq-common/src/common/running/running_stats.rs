@@ -63,7 +63,7 @@ impl std::str::FromStr for RunningStats {
             "commitLogDiskRatio" => Ok(RunningStats::CommitLogDiskRatio),
             "consumeQueueDiskRatio" => Ok(RunningStats::ConsumeQueueDiskRatio),
             "scheduleMessageOffset" => Ok(RunningStats::ScheduleMessageOffset),
-            _ => Err(format!("Unknown RunningStats value: {}", s)),
+            _ => Err(format!("Unknown RunningStats value: {s}")),
         }
     }
 }

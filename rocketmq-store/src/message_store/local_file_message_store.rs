@@ -2294,7 +2294,7 @@ pub fn parse_delay_level(level_string: &str) -> (BTreeMap<i32, i64>, i32) {
         let ch = value.chars().last().unwrap().to_string();
         let tu = time_unit_table
             .get(&ch.as_str())
-            .ok_or(format!("Unknown time unit: {}", ch));
+            .ok_or(format!("Unknown time unit: {ch}"));
         if tu.is_err() {
             continue;
         }
