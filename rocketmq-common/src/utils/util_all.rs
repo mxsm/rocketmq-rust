@@ -294,7 +294,7 @@ fn char_to_byte(c: char) -> u8 {
 /// ```
 #[inline]
 pub fn offset_to_file_name(offset: u64) -> String {
-    format!("{:020}", offset)
+    format!("{offset:020}")
 }
 
 pub fn ensure_dir_ok(dir_name: &str) {

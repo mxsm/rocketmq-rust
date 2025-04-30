@@ -154,7 +154,7 @@ impl From<&'static str> for Level {
     fn from(level: &'static str) -> Self {
         match level {
             "ERROR" | "WARN" | "INFO" | "DEBUG" | "TRACE" => Level(level),
-            _ => panic!("Invalid log level: {}", level),
+            _ => panic!("Invalid log level: {level}"),
         }
     }
 }

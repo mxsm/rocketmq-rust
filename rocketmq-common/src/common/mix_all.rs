@@ -100,11 +100,11 @@ pub fn is_sys_consumer_group_for_no_cold_read_limit(consumer_group: &str) -> boo
 }
 
 pub fn get_retry_topic(consumer_group: &str) -> String {
-    format!("{}{}", RETRY_GROUP_TOPIC_PREFIX, consumer_group)
+    format!("{RETRY_GROUP_TOPIC_PREFIX}{consumer_group}")
 }
 
 pub fn get_dlq_topic(consumer_group: &str) -> String {
-    format!("{}{}", DLQ_GROUP_TOPIC_PREFIX, consumer_group)
+    format!("{DLQ_GROUP_TOPIC_PREFIX}{consumer_group}")
 }
 
 pub fn is_lmq(lmq_meta_data: Option<&str>) -> bool {
@@ -119,13 +119,10 @@ pub fn get_ws_addr() -> String {
         .unwrap_or_else(|_| DEFAULT_NAMESRV_ADDR_LOOKUP.to_string());
     let ws_domain_subgroup =
         env::var("rocketmq.namesrv.domain.subgroup").unwrap_or_else(|_| "nsaddr".to_string());
-    let mut ws_addr = format!(
-        "http://{}:8080/rocketmq/{}",
-        ws_domain_name, ws_domain_subgroup
-    );
+    let mut ws_addr = format!("http://{ws_domain_name}:8080/rocketmq/{ws_domain_subgroup}");
 
     if ws_domain_name.contains(':') {
-        ws_addr = format!("http://{}/rocketmq/{}", ws_domain_name, ws_domain_subgroup);
+        ws_addr = format!("http://{ws_domain_name}/rocketmq/{ws_domain_subgroup}");
     }
 
     ws_addr
@@ -148,14 +145,14 @@ pub fn human_readable_byte_count(bytes: i64, si: bool) -> String {
     let bytes = bytes as f64;
     let unit = if si { 1000.0 } else { 1024.0 };
     if bytes < unit {
-        return format!("{} B", bytes);
+        return format!("{bytes} B");
     }
     let exp = (bytes.ln() / unit.ln()).floor() as i32;
     let pre = ['K', 'M', 'G', 'T', 'P', 'E'][(exp - 1) as usize];
     let pre = if si {
         pre.to_string()
     } else {
-        format!("{}i", pre)
+        format!("{pre}i")
     };
     format!("{:.1} {}B", bytes / unit.powi(exp), pre)
 }

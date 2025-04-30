@@ -497,10 +497,7 @@ impl StoreStatsService {
         let minutes = (time % 3600) / 60;
         let seconds = time % 60;
 
-        format!(
-            "[ {} days, {} hours, {} minutes, {} seconds ]",
-            days, hours, minutes, seconds
-        )
+        format!("[ {days} days, {hours} hours, {minutes} minutes, {seconds} seconds ]")
     }
 }
 
@@ -515,7 +512,7 @@ impl fmt::Display for StoreStatsService {
             "\tputMessageEntireTimeMax: {}",
             self.put_message_entire_time_max.load(Ordering::Relaxed)
         )?;
-        writeln!(f, "\tputMessageTimesTotal: {}", total_times_adj)?;
+        writeln!(f, "\tputMessageTimesTotal: {total_times_adj}")?;
         writeln!(
             f,
             "\tgetPutMessageFailedTimes: {}",

@@ -374,8 +374,7 @@ impl ExtraInfoUtil {
             let split: Vec<&str> = one.split(MessageConst::KEY_SEPARATOR).collect();
             if split.len() != 3 {
                 return Err(IllegalArgument(format!(
-                    "parse startOffsetInfo error, {}",
-                    start_offset_info
+                    "parse startOffsetInfo error, {start_offset_info}"
                 )));
             }
 
@@ -413,16 +412,14 @@ impl ExtraInfoUtil {
             let split: Vec<&str> = one.split(MessageConst::KEY_SEPARATOR).collect();
             if split.len() != 3 {
                 return Err(IllegalArgument(format!(
-                    "parse orderCountInfo error {}",
-                    order_count_info
+                    "parse orderCountInfo error {order_count_info}"
                 )));
             }
 
             let key = format!("{}@{}", split[0], split[1]);
             if order_count_map.contains_key(&key) {
                 return Err(IllegalArgument(format!(
-                    "parse orderCountInfo error, duplicate, {}",
-                    order_count_info
+                    "parse orderCountInfo error, duplicate, {order_count_info}"
                 )));
             }
 

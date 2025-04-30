@@ -288,7 +288,7 @@ impl<MS: MessageStore> ConsumerOrderInfoManager<MS> {
 #[inline]
 #[must_use]
 fn build_key(topic: &CheetahString, group: &CheetahString) -> String {
-    format!("{}{}{}", topic, TOPIC_GROUP_SEPARATOR, group)
+    format!("{topic}{TOPIC_GROUP_SEPARATOR}{group}")
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]

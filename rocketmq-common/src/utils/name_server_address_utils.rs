@@ -28,7 +28,7 @@ const ENDPOINT_PREFIX: &str = "(\\w+://|)";
 lazy_static! {
     pub static ref NAMESRV_ENDPOINT_PATTERN: Regex = Regex::new("^http://.*").unwrap();
     pub static ref INST_ENDPOINT_PATTERN: Regex =
-        Regex::new(&format!("^{}{}", ENDPOINT_PREFIX, INSTANCE_REGEX)).unwrap();
+        Regex::new(&format!("^{ENDPOINT_PREFIX}{INSTANCE_REGEX}")).unwrap();
 }
 pub struct NameServerAddressUtils;
 

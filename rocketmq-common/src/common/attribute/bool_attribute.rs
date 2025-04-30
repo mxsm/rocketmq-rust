@@ -79,8 +79,7 @@ impl BooleanAttribute {
             "true" => Ok(true),
             "false" => Ok(false),
             _ => Err(format!(
-                "Boolean attribute must be 'true' or 'false', got '{}'",
-                value
+                "Boolean attribute must be 'true' or 'false', got '{value}'",
             )),
         }
     }

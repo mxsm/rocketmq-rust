@@ -1018,7 +1018,7 @@ where
                 if new_topic_config.is_none() {
                     response
                         .with_code(ResponseCode::SystemError)
-                        .with_remark(format!("topic {} not exist, apply DLQ failed", new_topic));
+                        .with_remark(format!("topic {new_topic} not exist, apply DLQ failed"));
                     return false;
                 }
                 *topic_config = new_topic_config.unwrap();
@@ -1193,7 +1193,7 @@ where
             return Ok(Some(
                 RemotingCommand::create_response_command_with_code_remark(
                     ResponseCode::SystemError,
-                    format!("topic {} not exist", new_topic),
+                    format!("topic {new_topic} not exist"),
                 ),
             ));
         }
@@ -1202,7 +1202,7 @@ where
             return Ok(Some(
                 RemotingCommand::create_response_command_with_code_remark(
                     ResponseCode::NoPermission,
-                    format!("the topic[{}] sending message is forbidden", new_topic),
+                    format!("the topic[{new_topic}] sending message is forbidden"),
                 ),
             ));
         }
@@ -1262,7 +1262,7 @@ where
                 return Ok(Some(
                     RemotingCommand::create_response_command_with_code_remark(
                         ResponseCode::SystemError,
-                        format!("topic {} not exist", new_topic),
+                        format!("topic {new_topic} not exist"),
                     ),
                 ));
             }

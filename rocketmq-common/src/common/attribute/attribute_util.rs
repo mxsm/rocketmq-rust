@@ -184,10 +184,7 @@ impl AttributeUtil {
 
             if !delete {
                 attribute.verify(value).map_err(|e| {
-                    AttributeError::AttributeVerificationFailed(format!(
-                        "Key: {}, Error: {}",
-                        key, e
-                    ))
+                    AttributeError::AttributeVerificationFailed(format!("Key: {key}, Error: {e}"))
                 })?;
             }
         }

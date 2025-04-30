@@ -75,7 +75,7 @@ impl RpcClientImpl {
         match self.client_metadata.find_master_broker_addr(broker_name) {
             None => Err(RpcError(
                 From::from(ResponseCode::SystemError),
-                format!("cannot find addr for broker {}", broker_name),
+                format!("cannot find addr for broker {broker_name}"),
             )),
             Some(value) => Ok(value),
         }
@@ -115,7 +115,7 @@ impl RpcClientImpl {
             },
             Err(_error) => Err(RpcError(
                 From::from(ResponseCode::SystemError),
-                format!("process failed. addr: {}. Request", addr),
+                format!("process failed. addr: {addr}. Request"),
             )),
         }
     }
@@ -151,7 +151,7 @@ impl RpcClientImpl {
             },
             Err(_error) => Err(RpcError(
                 From::from(ResponseCode::SystemError),
-                format!("process failed. addr: {}. Request", addr),
+                format!("process failed. addr: {addr}. Request"),
             )),
         }
     }
@@ -186,7 +186,7 @@ impl RpcClientImpl {
             },
             Err(_error) => Err(RpcError(
                 From::from(ResponseCode::SystemError),
-                format!("process failed. addr: {}. Request", addr),
+                format!("process failed. addr: {addr}. Request"),
             )),
         }
     }
@@ -221,7 +221,7 @@ impl RpcClientImpl {
             },
             Err(_error) => Err(RpcError(
                 From::from(ResponseCode::SystemError),
-                format!("process failed. addr: {}. Request", addr),
+                format!("process failed. addr: {addr}. Request"),
             )),
         }
     }
@@ -256,7 +256,7 @@ impl RpcClientImpl {
             },
             Err(_error) => Err(RpcError(
                 From::from(ResponseCode::SystemError),
-                format!("process failed. addr: {}. Request", addr),
+                format!("process failed. addr: {addr}. Request"),
             )),
         }
     }
@@ -295,7 +295,7 @@ impl RpcClientImpl {
             },
             Err(_error) => Err(RpcError(
                 From::from(ResponseCode::SystemError),
-                format!("process failed. addr: {}. Request", addr),
+                format!("process failed. addr: {addr}. Request"),
             )),
         }
     }
@@ -330,7 +330,7 @@ impl RpcClientImpl {
             },
             Err(_error) => Err(RpcError(
                 From::from(ResponseCode::SystemError),
-                format!("process failed. addr: {}. Request", addr),
+                format!("process failed. addr: {addr}. Request"),
             )),
         }
     }
@@ -362,7 +362,7 @@ impl RpcClientImpl {
             },
             Err(_error) => Err(RpcError(
                 From::from(ResponseCode::SystemError),
-                format!("process failed. addr: {}. Request", addr),
+                format!("process failed. addr: {addr}. Request"),
             )),
         }
     }

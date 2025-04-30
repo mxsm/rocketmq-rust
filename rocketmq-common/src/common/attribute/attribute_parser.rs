@@ -43,16 +43,16 @@ impl AttributeParser {
                 key.push_str(splits[0]);
                 value.push_str(splits[1]);
                 if !key.contains(ATTR_ADD_PLUS_SIGN) {
-                    return Err(format!("add/alter attribute format is wrong: {}", key));
+                    return Err(format!("add/alter attribute format is wrong: {key}"));
                 }
             } else {
                 key.push_str(kv);
                 if !key.contains(ATTR_DELETE_MINUS_SIGN) {
-                    return Err(format!("delete attribute format is wrong: {}", key));
+                    return Err(format!("delete attribute format is wrong: {key}",));
                 }
             }
             if attributes.insert(key.clone(), value).is_some() {
-                return Err(format!("key duplication: {}", key));
+                return Err(format!("key duplication: {key}",));
             }
         }
         Ok(attributes)
@@ -68,7 +68,7 @@ impl AttributeParser {
             if value.is_empty() {
                 kvs.push(key.clone());
             } else {
-                kvs.push(format!("{}{}{}", key, ATTR_KEY_VALUE_EQUAL_SIGN, value));
+                kvs.push(format!("{key}{ATTR_KEY_VALUE_EQUAL_SIGN}{value}"));
             }
         }
         kvs.join(ATTR_ARRAY_SEPARATOR_COMMA)

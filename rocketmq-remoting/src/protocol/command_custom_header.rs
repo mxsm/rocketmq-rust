@@ -114,7 +114,7 @@ pub trait CommandCustomHeader: AsAny {
         match map.get(field) {
             Some(value) => Ok(value.clone()),
             None => Err(rocketmq_error::RocketmqError::DeserializeHeaderError(
-                format!("The field {} is required.", field),
+                format!("The field {field} is required."),
             )),
         }
     }

@@ -60,7 +60,7 @@ impl StringUtils {
             };
             let tu = *time_unit_table
                 .get(&ch)
-                .ok_or(format!("Unknown time unit: {}", ch))?;
+                .ok_or(format!("Unknown time unit: {ch}"))?;
 
             let level = i as i32 + 1;
             if level > max_delay_level {

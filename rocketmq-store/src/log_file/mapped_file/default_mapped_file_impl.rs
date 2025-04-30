@@ -113,11 +113,11 @@ impl DefaultMappedFile {
     pub fn new(file_name: CheetahString, file_size: u64) -> Self {
         let path_buf = PathBuf::from(file_name.as_str());
         if path_buf.parent().is_none() {
-            panic!("file path is invalid: {}", file_name);
+            panic!("file path is invalid: {file_name}");
         }
         let dir = path_buf.parent().unwrap().to_str();
         if dir.is_none() {
-            panic!("file path is invalid: {}", file_name);
+            panic!("file path is invalid: {file_name}");
         }
         ensure_dir_ok(dir.unwrap());
         let file_from_offset = Self::parse_file_from_offset(&path_buf);
@@ -212,7 +212,7 @@ impl DefaultMappedFile {
             .open(path)
             .expect("Open file failed");
         file.set_len(file_size)
-            .unwrap_or_else(|_| panic!("failed to set file size: {}", file_name));
+            .unwrap_or_else(|_| panic!("failed to set file size: {file_name}"));
         file
     }
 

@@ -1882,7 +1882,7 @@ pub enum RocketMqVersion {
 
 impl fmt::Display for RocketMqVersion {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 

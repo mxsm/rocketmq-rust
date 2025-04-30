@@ -89,7 +89,7 @@ impl std::fmt::Display for TraceContext {
             }
         }
         sb.push('}');
-        write!(f, "{}", sb)
+        write!(f, "{sb}")
     }
 }
 

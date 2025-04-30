@@ -589,7 +589,7 @@ impl DefaultRequestProcessor {
                     return Ok(RemotingCommand::create_response_command_with_code(
                         RemotingSysResponseCode::SystemError,
                     )
-                    .set_remark(format!("UnsupportedEncodingException {:?}", e)));
+                    .set_remark(format!("UnsupportedEncodingException {e:?}")));
                 }
             };
 
@@ -623,7 +623,7 @@ impl DefaultRequestProcessor {
                 return Ok(RemotingCommand::create_response_command_with_code(
                     RemotingSysResponseCode::SystemError,
                 )
-                .set_remark(format!("Update error {:?}", e)));
+                .set_remark(format!("Update error {e:?}")));
             }
         }
 
@@ -648,7 +648,7 @@ impl DefaultRequestProcessor {
             }
             Err(e) => RemotingCommand::create_response_command_with_code_remark(
                 ResponseCode::SystemError,
-                format!("UnsupportedEncodingException {}", e),
+                format!("UnsupportedEncodingException {e}"),
             ),
         };
         Ok(result)

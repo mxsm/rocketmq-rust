@@ -636,8 +636,7 @@ impl DefaultMQPushConsumerImpl {
                 let subscription_data = FilterAPI::build_subscription_data(topic, sub_expression)
                     .map_err(|e| {
                     rocketmq_error::RocketmqError::MQClientErr(ClientErr::new(format!(
-                        "buildSubscriptionData exception, {}",
-                        e
+                        "buildSubscriptionData exception, {e}",
                     )))
                 })?;
                 self.rebalance_impl
@@ -661,8 +660,7 @@ impl DefaultMQPushConsumerImpl {
                 )
                 .map_err(|e| {
                     rocketmq_error::RocketmqError::MQClientErr(ClientErr::new(format!(
-                        "buildSubscriptionData exception, {}",
-                        e
+                        "buildSubscriptionData exception, {e}",
                     )))
                 })?;
                 self.rebalance_impl

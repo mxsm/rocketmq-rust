@@ -118,8 +118,7 @@ impl TopicValidator {
             return ValidateTopicResult {
                 valid: false,
                 remark: CheetahString::from(format!(
-                    "The specified topic is longer than topic max length {}.",
-                    TOPIC_MAX_LENGTH
+                    "The specified topic is longer than topic max length {TOPIC_MAX_LENGTH}."
                 )),
             };
         }

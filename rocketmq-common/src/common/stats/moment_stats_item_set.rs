@@ -92,7 +92,7 @@ impl MomentStatsItemSet {
             .filter(|entry| {
                 entry
                     .key()
-                    .contains(&format!("{}{}{}", separator, stats_key, separator))
+                    .contains(&format!("{separator}{stats_key}{separator}"))
             })
             .map(|entry| entry.key().clone())
             .collect();
@@ -105,11 +105,7 @@ impl MomentStatsItemSet {
         let to_remove: Vec<String> = self
             .stats_item_table
             .iter()
-            .filter(|entry| {
-                entry
-                    .key()
-                    .ends_with(&format!("{}{}", separator, stats_key))
-            })
+            .filter(|entry| entry.key().ends_with(&format!("{separator}{stats_key}")))
             .map(|entry| entry.key().clone())
             .collect();
         for key in to_remove {
