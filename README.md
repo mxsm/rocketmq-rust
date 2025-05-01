@@ -24,6 +24,11 @@ language.
 
 ![](resources/architecture.png)
 
+### Document
+
+- **`Manual official documentation`**：[Rocketmq-rust website](https://rocketmq-rust.ljbmxsm.com/)
+- **`AI documentation`**: [Rocketmq-rust Deepwiki](https://deepwiki.com/mxsm/rocketmq-rust)
+
 ## Getting Started
 
 ### Requirements
