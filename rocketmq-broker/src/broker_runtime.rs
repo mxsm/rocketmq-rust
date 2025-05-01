@@ -397,18 +397,6 @@ impl BrokerRuntime {
     }
 }
 
-/*impl Drop for BrokerRuntime {
-    fn drop(&mut self) {
-        let result =
-            self.drop
-                .clone()
-                .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed);
-        if result.is_ok() {
-            self.shutdown();
-        }
-    }
-}*/
-
 impl BrokerRuntime {
     pub(crate) async fn initialize(&mut self) -> bool {
         let mut result = self.initialize_metadata();
@@ -429,8 +417,8 @@ impl BrokerRuntime {
     fn initialize_metadata(&self) -> bool {
         info!("======Starting initialize metadata========");
         self.inner.topic_config_manager().load()
-            && self.inner.topic_queue_mapping_manager.load()
-            && self.inner.consumer_offset_manager.load()
+            && self.inner.topic_queue_mapping_manager().load()
+            && self.inner.consumer_offset_manager().load()
             && self.inner.subscription_group_manager().load()
             && self.inner.consumer_filter_manager().load()
             && self.inner.consumer_order_info_manager().load()
@@ -452,15 +440,10 @@ impl BrokerRuntime {
                 let time_message_store = TimerMessageStore::new(Some(message_store.clone()));
                 message_store.set_timer_message_store(Arc::new(time_message_store));
             }
-            //Maybe need to set message store to other components
-            /*self.consumer_offset_manager
-                .set_message_store(Some(message_store.clone()));
-            self.topic_config_manager
-                .set_message_store(Some(message_store.clone()));*/
             self.inner.broker_stats = Some(BrokerStats::new(message_store.clone()));
             self.inner.message_store = Some(message_store);
         } else if self.inner.message_store_config.store_type == StoreType::RocksDB {
-            info!("Use RocksDB as message store");
+            unimplemented!("Use RocksDB as message store unimplemented");
         } else {
             warn!("Unknown store type");
             return false;
