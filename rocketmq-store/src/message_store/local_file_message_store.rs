@@ -125,13 +125,13 @@ pub struct LocalFileMessageStore {
     put_message_hook_list: Arc<parking_lot::RwLock<Vec<BoxedPutMessageHook>>>,
     topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
     commit_log: ArcMut<CommitLog>,
-    compaction_service: Option<CompactionService>,
+
     store_checkpoint: Option<Arc<StoreCheckpoint>>,
     master_flushed_offset: Arc<AtomicI64>,
     index_service: IndexService,
     allocate_mapped_file_service: Arc<AllocateMappedFileService>,
     consume_queue_store: ConsumeQueueStore,
-    dispatcher: CommitLogDispatcherDefault,
+    dispatcher: ArcMut<CommitLogDispatcherDefault>,
     broker_init_max_offset: Arc<AtomicI64>,
     state_machine_version: Arc<AtomicI64>,
     shutdown: Arc<AtomicBool>,
@@ -145,7 +145,10 @@ pub struct LocalFileMessageStore {
         Option<Arc<Box<dyn MessageArrivingListener + Sync + Send + 'static>>>,
     notify_message_arrive_in_batch: bool,
     store_stats_service: Arc<StoreStatsService>,
+
     compaction_store: Arc<CompactionStore>,
+    compaction_service: Option<CompactionService>,
+
     timer_message_store: Option<Arc<TimerMessageStore>>,
     transient_store_pool: TransientStorePool,
     message_store_arc: Option<ArcMut<LocalFileMessageStore>>,
@@ -177,22 +180,23 @@ impl LocalFileMessageStore {
             store_checkpoint.clone(),
             running_flags.clone(),
         );
-        let build_index =
-            CommitLogDispatcherBuildIndex::new(index_service.clone(), message_store_config.clone());
-        // let topic_config_table = Arc::new(parking_lot::Mutex::new(HashMap::new()));
+        let build_index: Arc<dyn CommitLogDispatcher> = Arc::new(
+            CommitLogDispatcherBuildIndex::new(index_service.clone(), message_store_config.clone()),
+        );
         let consume_queue_store =
             ConsumeQueueStore::new(message_store_config.clone(), broker_config.clone());
-        let build_consume_queue =
-            CommitLogDispatcherBuildConsumeQueue::new(consume_queue_store.clone());
+        let build_consume_queue: Arc<dyn CommitLogDispatcher> = Arc::new(
+            CommitLogDispatcherBuildConsumeQueue::new(consume_queue_store.clone()),
+        );
 
-        let dispatcher = CommitLogDispatcherDefault {
-            dispatcher_vec: Arc::new(vec![Box::new(build_consume_queue), Box::new(build_index)]),
-        };
+        let dispatcher = ArcMut::new(CommitLogDispatcherDefault {
+            dispatcher_vec: vec![build_consume_queue, build_index],
+        });
 
         let commit_log = ArcMut::new(CommitLog::new(
             message_store_config.clone(),
             broker_config.clone(),
-            &dispatcher,
+            dispatcher.clone(),
             store_checkpoint.clone(),
             topic_config_table.clone(),
             consume_queue_store.clone(),
@@ -1644,12 +1648,19 @@ impl MessageStore for LocalFileMessageStore {
         self.remain_transient_store_buffer_numbs() == 0
     }
 
-    fn get_dispatcher_list(&self) -> Vec<Arc<dyn CommitLogDispatcher>> {
-        todo!()
+    #[inline]
+    fn get_dispatcher_list(&self) -> &[Arc<dyn CommitLogDispatcher>] {
+        self.dispatcher.dispatcher_vec.as_slice()
     }
 
-    fn add_dispatcher(&self, dispatcher: Arc<dyn CommitLogDispatcher>) {
-        todo!()
+    #[inline]
+    fn add_dispatcher(&mut self, dispatcher: Arc<dyn CommitLogDispatcher>) {
+        self.dispatcher.add_dispatcher(dispatcher);
+    }
+
+    #[inline]
+    fn add_first_dispatcher(&mut self, dispatcher: Arc<dyn CommitLogDispatcher>) {
+        self.dispatcher.add_first_dispatcher(dispatcher);
     }
 
     fn get_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue> {
@@ -1921,17 +1932,29 @@ impl MessageStore for LocalFileMessageStore {
     }
 }
 
-#[derive(Clone)]
+#[derive(Default)]
 pub struct CommitLogDispatcherDefault {
-    /*build_index: CommitLogDispatcherBuildIndex,
-    build_consume_queue: CommitLogDispatcherBuildConsumeQueue,*/
-    dispatcher_vec: Arc<Vec<Box<dyn CommitLogDispatcher>>>,
+    dispatcher_vec: Vec<Arc<dyn CommitLogDispatcher>>,
+}
+
+impl CommitLogDispatcherDefault {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[inline]
+    pub fn add_dispatcher(&mut self, dispatcher: Arc<dyn CommitLogDispatcher>) {
+        self.dispatcher_vec.push(dispatcher);
+    }
+
+    #[inline]
+    pub fn add_first_dispatcher(&mut self, dispatcher: Arc<dyn CommitLogDispatcher>) {
+        self.dispatcher_vec.insert(0, dispatcher);
+    }
 }
 
 impl CommitLogDispatcher for CommitLogDispatcherDefault {
     fn dispatch(&self, dispatch_request: &DispatchRequest) {
-        /*self.build_index.dispatch(dispatch_request);
-        self.build_consume_queue.dispatch(dispatch_request);*/
         for dispatcher in self.dispatcher_vec.iter() {
             dispatcher.dispatch(dispatch_request);
         }
@@ -2009,7 +2032,7 @@ impl ReputMessageService {
         &mut self,
         commit_log: ArcMut<CommitLog>,
         message_store_config: Arc<MessageStoreConfig>,
-        dispatcher: CommitLogDispatcherDefault,
+        dispatcher: ArcMut<CommitLogDispatcherDefault>,
         notify_message_arrive_in_batch: bool,
         message_store: ArcMut<LocalFileMessageStore>,
     ) {
@@ -2069,7 +2092,7 @@ struct ReputMessageServiceInner {
     reput_from_offset: Arc<AtomicI64>,
     commit_log: ArcMut<CommitLog>,
     message_store_config: Arc<MessageStoreConfig>,
-    dispatcher: CommitLogDispatcherDefault,
+    dispatcher: ArcMut<CommitLogDispatcherDefault>,
     notify_message_arrive_in_batch: bool,
     message_store: ArcMut<LocalFileMessageStore>,
 }

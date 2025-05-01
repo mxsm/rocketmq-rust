@@ -400,10 +400,13 @@ pub trait MessageStoreInner: Sync + 'static {
     fn is_transient_store_pool_deficient(&self) -> bool;
 
     /// Get the dispatcher list.
-    fn get_dispatcher_list(&self) -> Vec<Arc<dyn CommitLogDispatcher>>;
+    fn get_dispatcher_list(&self) -> &[Arc<dyn CommitLogDispatcher>];
 
     /// Add dispatcher.
-    fn add_dispatcher(&self, dispatcher: Arc<dyn CommitLogDispatcher>);
+    fn add_dispatcher(&mut self, dispatcher: Arc<dyn CommitLogDispatcher>);
+
+    /// Add the first dispatcher.
+    fn add_first_dispatcher(&mut self, dispatcher: Arc<dyn CommitLogDispatcher>);
 
     /// Get consume queue of the topic/queue. If not exist, returns None.
     fn get_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue>;
