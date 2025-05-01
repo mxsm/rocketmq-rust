@@ -142,20 +142,12 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
         }
     }
 
-    pub fn queue_id_to_delay_level(queue_id: i32) -> i32 {
-        queue_id + 1
-    }
-
-    pub fn delay_level_to_queue_id(delay_level: i32) -> i32 {
-        delay_level - 1
-    }
-
     pub fn build_running_stats(&self, stats: &mut HashMap<String, String>) {
         for entry in self.offset_table.iter() {
             let delay_level = entry.key();
             let delay_offset = entry.value();
 
-            let queue_id = Self::delay_level_to_queue_id(*delay_level);
+            let queue_id = delay_level_to_queue_id(*delay_level);
             let max_offset = self
                 .broker_controller
                 .message_store()
@@ -317,7 +309,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
     pub fn correct_delay_offset(&self) -> bool {
         let topic = CheetahString::from_static_str(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC);
         for delay_level in self.delay_level_table.keys() {
-            let queue_id = Self::delay_level_to_queue_id(*delay_level);
+            let queue_id = delay_level_to_queue_id(*delay_level);
             let cq = self
                 .broker_controller
                 .message_store_unchecked()
@@ -464,7 +456,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
         if let Some(queue_id) = queue_id {
             inner.message_ext_inner.queue_id = queue_id.parse::<i32>().unwrap();
         }
-        // Mock implementation of converting a MessageExt to MessageExtBrokerInner
+
         inner
     }
 
@@ -485,10 +477,8 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
 }
 
 impl<MS: MessageStore> ConfigManager for ScheduleMessageService<MS> {
-    #[allow(unconditional_recursion)]
     fn load(&self) -> bool {
         let result = {
-            // Mock implementation for the parent class load method
             let file_name = self.config_file_path();
             let result = FileUtils::file_to_string(file_name.as_str());
             match result {
@@ -619,7 +609,7 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
     /// Execute when the scheduled time is up for messages
     async fn execute_on_time_up(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // Get the consume queue for this delay level
-        let queue_id = ScheduleMessageService::<MS>::delay_level_to_queue_id(self.delay_level);
+        let queue_id = delay_level_to_queue_id(self.delay_level);
         let cq = self
             .schedule_service
             .broker_controller
@@ -751,7 +741,7 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
         }
 
         // Release the iterator
-        // buffer_cq.release();
+        buffer_cq.release();
 
         // Schedule the next task
         self.schedule_next_timer_task(next_offset, DELAY_FOR_A_WHILE);
@@ -1389,4 +1379,14 @@ impl<MS: MessageStore> HandlePutResultTask<MS> {
             });
         }
     }
+}
+
+#[inline]
+pub fn queue_id_to_delay_level(queue_id: i32) -> i32 {
+    queue_id + 1
+}
+
+#[inline]
+pub fn delay_level_to_queue_id(delay_level: i32) -> i32 {
+    delay_level - 1
 }
