@@ -191,7 +191,7 @@ pub struct CommitLog {
     broker_config: Arc<BrokerConfig>,
     enabled_append_prop_crc: bool,
     local_file_message_store: Option<ArcMut<LocalFileMessageStore>>,
-    dispatcher: CommitLogDispatcherDefault,
+    dispatcher: ArcMut<CommitLogDispatcherDefault>,
     confirm_offset: i64,
     store_checkpoint: Arc<StoreCheckpoint>,
     append_message_callback: Arc<DefaultAppendMessageCallback>,
@@ -208,7 +208,7 @@ impl CommitLog {
     pub fn new(
         message_store_config: Arc<MessageStoreConfig>,
         broker_config: Arc<BrokerConfig>,
-        dispatcher: &CommitLogDispatcherDefault,
+        dispatcher: ArcMut<CommitLogDispatcherDefault>,
         store_checkpoint: Arc<StoreCheckpoint>,
         topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
         consume_queue_store: ConsumeQueueStore,
@@ -227,7 +227,7 @@ impl CommitLog {
             broker_config,
             enabled_append_prop_crc,
             local_file_message_store: None,
-            dispatcher: dispatcher.clone(),
+            dispatcher,
             confirm_offset: -1,
             store_checkpoint: store_checkpoint.clone(),
             append_message_callback: Arc::new(DefaultAppendMessageCallback::new(
