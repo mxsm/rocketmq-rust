@@ -42,14 +42,17 @@ use crate::long_polling::polling_result::PollingResult;
 
 pub struct NotificationProcessor<MS> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-    pop_long_polling_service: PopLongPollingService<MS, NotificationProcessor<MS>>,
+    pop_long_polling_service: ArcMut<PopLongPollingService<MS, NotificationProcessor<MS>>>,
 }
 
 impl<MS: MessageStore> NotificationProcessor<MS> {
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> ArcMut<Self> {
         let mut this = ArcMut::new(Self {
             broker_runtime_inner: broker_runtime_inner.clone(),
-            pop_long_polling_service: PopLongPollingService::new(broker_runtime_inner, true),
+            pop_long_polling_service: ArcMut::new(PopLongPollingService::new(
+                broker_runtime_inner,
+                true,
+            )),
         });
         let this_clone = this.clone();
         this.pop_long_polling_service.set_processor(this_clone);
@@ -57,11 +60,11 @@ impl<MS: MessageStore> NotificationProcessor<MS> {
     }
 
     pub fn start(&mut self) {
-        warn!("NotificationProcessor started unimplemented, need to implement it");
+        PopLongPollingService::start(self.pop_long_polling_service.clone())
     }
 
     pub fn shutdown(&mut self) {
-        warn!("NotificationProcessor shutdown unimplemented, need to implement it");
+        self.pop_long_polling_service.shutdown();
     }
 
     pub fn notify_message_arriving_simple(&self, topic: &CheetahString, queue_id: i32) {
