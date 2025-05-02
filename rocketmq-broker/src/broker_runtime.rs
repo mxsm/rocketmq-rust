@@ -464,10 +464,11 @@ impl BrokerRuntime {
 
         if self.inner.broker_config().enable_controller_mode {
             info!("Start controller mode(Support for future versions)");
-            unimplemented!()
+            unimplemented!("tart controller mode(Support for future versions")
         }
         if self.inner.message_store.is_some() {
             self.register_message_store_hook();
+            // load message store
             self.inner.message_store.as_mut().unwrap().load().await;
         }
 
@@ -480,7 +481,7 @@ impl BrokerRuntime {
             result &= self.inner.timer_message_store.as_mut().unwrap().load();
         }
 
-        // maybe need to optimize
+        //scheduleMessageService load after messageStore load success
         result &= self.inner.schedule_message_service.as_ref().unwrap().load();
 
         if result {
