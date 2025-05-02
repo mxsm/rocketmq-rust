@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::sync::Arc;
 
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::server::config::ServerConfig;
@@ -92,7 +93,7 @@ impl Builder {
     pub fn build(self) -> BrokerBootstrap {
         BrokerBootstrap {
             broker_runtime: BrokerRuntime::new(
-                self.broker_config,
+                Arc::new(self.broker_config),
                 self.message_store_config,
                 self.server_config,
             ),
