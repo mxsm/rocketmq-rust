@@ -27,6 +27,7 @@ use std::fs;
 use std::future::Future;
 use std::net::IpAddr;
 use std::ops::Deref;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
@@ -316,7 +317,7 @@ impl LocalFileMessageStore {
 
     fn is_temp_file_exist(&self) -> bool {
         let file_name = get_abort_file(self.message_store_config.store_path_root_dir.as_str());
-        fs::metadata(file_name).is_ok()
+        Path::new(&file_name).exists()
     }
 
     fn create_temp_file(&self) {

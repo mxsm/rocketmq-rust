@@ -365,14 +365,13 @@ impl<MS: MessageStore> FileQueueLifeCycle for ConsumeQueue<MS> {
         result
     }
 
-    #[inline]
     fn recover(&mut self) {
         let binding = self.mapped_file_queue.get_mapped_files();
         let mapped_files = binding.read();
         if mapped_files.is_empty() {
             return;
         }
-        let mut index = (mapped_files.len()) as i32 - 3;
+        let mut index = mapped_files.len() as i32 - 3;
         if index < 0 {
             index = 0;
         }
