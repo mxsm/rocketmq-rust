@@ -126,8 +126,8 @@ pub(crate) struct BrokerRuntime {
 impl BrokerRuntime {
     pub(crate) fn new(
         broker_config: Arc<BrokerConfig>,
-        message_store_config: MessageStoreConfig,
-        server_config: ServerConfig,
+        message_store_config: Arc<MessageStoreConfig>,
+        server_config: Arc<ServerConfig>,
     ) -> Self {
         let broker_address = format!("{}:{}", broker_config.broker_ip1, broker_config.listen_port);
         let store_host = broker_address
@@ -429,7 +429,7 @@ impl BrokerRuntime {
         if self.inner.message_store_config.store_type == StoreType::LocalFile {
             info!("Use local file as message store");
             let mut message_store = ArcMut::new(LocalFileMessageStore::new(
-                Arc::new(self.inner.message_store_config.clone()),
+                self.inner.message_store_config.clone(),
                 self.inner.broker_config.clone(),
                 self.inner.topic_config_manager().topic_config_table(),
                 self.inner.broker_stats_manager.clone(),
@@ -502,7 +502,7 @@ impl BrokerRuntime {
         if let Some(ref mut message_store) = self.inner.message_store {
             message_store.set_put_message_hook(Box::new(CheckBeforePutMessageHook::new(
                 message_store.clone(),
-                Arc::new(config),
+                config,
             )));
             message_store.set_put_message_hook(Box::new(BatchCheckBeforePutMessageHook::new(arc)));
             message_store
@@ -782,7 +782,7 @@ impl BrokerRuntime {
         let request_processor = self.init_processor();
         let fast_request_processor = request_processor.clone();
 
-        let server = RocketMQServer::new(Arc::new(self.inner.server_config.clone()));
+        let server = RocketMQServer::new(self.inner.server_config.clone());
         //start nomarl broker remoting_server
         let client_housekeeping_service_main = self
             .inner
@@ -796,7 +796,7 @@ impl BrokerRuntime {
                 .await
         });
         //start fast broker remoting_server
-        let mut fast_server_config = self.inner.server_config.clone();
+        let mut fast_server_config = self.inner.server_config.as_ref().clone();
         fast_server_config.listen_port = self.inner.server_config.listen_port - 2;
         let fast_server = RocketMQServer::new(Arc::new(fast_server_config));
         tokio::spawn(async move {
@@ -1286,8 +1286,8 @@ pub(crate) struct BrokerRuntimeInner<MS> {
     store_host: SocketAddr,
     broker_addr: CheetahString,
     broker_config: Arc<BrokerConfig>,
-    message_store_config: MessageStoreConfig,
-    server_config: ServerConfig,
+    message_store_config: Arc<MessageStoreConfig>,
+    server_config: Arc<ServerConfig>,
     topic_config_manager: Option<TopicConfigManager<MS>>,
     topic_queue_mapping_manager: TopicQueueMappingManager,
     consumer_offset_manager: ConsumerOffsetManager,
@@ -1334,16 +1334,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     #[inline]
     pub fn store_host_mut(&mut self) -> &mut SocketAddr {
         &mut self.store_host
-    }
-
-    #[inline]
-    pub fn message_store_config_mut(&mut self) -> &mut MessageStoreConfig {
-        &mut self.message_store_config
-    }
-
-    #[inline]
-    pub fn server_config_mut(&mut self) -> &mut ServerConfig {
-        &mut self.server_config
     }
 
     #[inline]
@@ -1776,12 +1766,12 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
     #[inline]
     pub fn set_message_store_config(&mut self, message_store_config: MessageStoreConfig) {
-        self.message_store_config = message_store_config;
+        self.message_store_config = Arc::new(message_store_config);
     }
 
     #[inline]
     pub fn set_server_config(&mut self, server_config: ServerConfig) {
-        self.server_config = server_config;
+        self.server_config = Arc::new(server_config);
     }
 
     #[inline]

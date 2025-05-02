@@ -94,8 +94,8 @@ impl Builder {
         BrokerBootstrap {
             broker_runtime: BrokerRuntime::new(
                 Arc::new(self.broker_config),
-                self.message_store_config,
-                self.server_config,
+                Arc::new(self.message_store_config),
+                Arc::new(self.server_config),
             ),
         }
     }
