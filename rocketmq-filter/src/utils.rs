@@ -14,5 +14,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+pub mod bits_array;
 pub mod bloom_filter;
 pub mod bloom_filter_data;

@@ -15,8 +15,9 @@
  * limitations under the License.
  */
 
+pub(crate) mod commit_log_dispatcher_calc_bit_map;
 pub(crate) mod consumer_filter_data;
 pub(crate) mod expression_for_retry_message_filter;
 pub(crate) mod expression_message_filter;
 pub(crate) mod manager;
-mod message_evaluation_context;
+pub(crate) mod message_evaluation_context;

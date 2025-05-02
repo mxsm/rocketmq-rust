@@ -44,7 +44,7 @@ impl ExpressionMessageFilter {
     ) -> Self {
         let bloom_data_valid = match consumer_filter_data {
             None => false,
-            Some(ref filter) => match consumer_filter_manager.get_bloom_filter() {
+            Some(ref filter) => match consumer_filter_manager.bloom_filter() {
                 None => false,
                 Some(bloom_filter) => bloom_filter.is_valid(filter.bloom_filter_data()),
             },
@@ -121,7 +121,7 @@ impl MessageFilter for ExpressionMessageFilter {
         } else {
             None
         };
-        let context = MessageEvaluationContext::new(temp_properties);
+        let context = MessageEvaluationContext::new(&temp_properties);
         if let Some(filter) = real_filter_data.compiled_expression() {
             match filter.evaluate(&context) {
                 Ok(value) => *value.downcast_ref::<bool>().unwrap_or(&false),

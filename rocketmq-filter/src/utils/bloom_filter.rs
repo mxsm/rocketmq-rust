@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use crate::utils::bits_array::BitsArray;
 use crate::utils::bloom_filter_data::BloomFilterData;
 
 #[derive(Clone, Copy)]
@@ -38,6 +39,8 @@ impl Default for BloomFilter {
     }
 }
 
+#[allow(unused_mut)]
+#[allow(unused_variables)]
 impl BloomFilter {
     pub fn new(f: i32, n: i32) -> Result<Self, &'static str> {
         if !(1..100).contains(&f) {
@@ -87,5 +90,25 @@ impl BloomFilter {
             }
             None => false,
         }
+    }
+
+    pub fn hash_to(&self, filter_data: &BloomFilterData, bits: &mut BitsArray) {
+        /* if !self.is_valid(filter_data) {
+            panic!(
+                "Bloom filter data may not belong to this filter! {:?}, {:?}",
+                filter_data, self
+            );
+        }
+        self.hash_to_positions(filter_data.bit_pos(), bits);*/
+        unimplemented!("hash_to");
+    }
+
+    // Helper method for setting bits at given positions
+    pub fn hash_to_positions(&self, bit_positions: &[usize], bits: &mut BitsArray) {
+        /*self.check(bits);
+        for &i in bit_positions {
+            bits.set_bit(i, true);
+        }*/
+        unimplemented!("hash_to_positions");
     }
 }

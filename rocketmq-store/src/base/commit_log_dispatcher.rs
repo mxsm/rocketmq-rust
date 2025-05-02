@@ -18,5 +18,5 @@
 use crate::base::dispatch_request::DispatchRequest;
 
 pub trait CommitLogDispatcher: Send + Sync + 'static {
-    fn dispatch(&self, dispatch_request: &DispatchRequest);
+    fn dispatch(&self, dispatch_request: &mut DispatchRequest);
 }
