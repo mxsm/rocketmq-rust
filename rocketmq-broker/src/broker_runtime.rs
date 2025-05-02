@@ -43,6 +43,7 @@ use rocketmq_remoting::remoting_server::server::RocketMQServer;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_rust::ArcMut;
+use rocketmq_store::base::commit_log_dispatcher::CommitLogDispatcher;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::base::store_enum::StoreType;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
@@ -66,6 +67,7 @@ use crate::coldctr::cold_data_cg_ctr_service::ColdDataCgCtrService;
 use crate::coldctr::cold_data_pull_request_hold_service::ColdDataPullRequestHoldService;
 use crate::controller::replicas_manager::ReplicasManager;
 use crate::failover::escape_bridge::EscapeBridge;
+use crate::filter::commit_log_dispatcher_calc_bit_map::CommitLogDispatcherCalcBitMap;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
 use crate::hook::batch_check_before_put_message::BatchCheckBeforePutMessageHook;
 use crate::hook::check_before_put_message::CheckBeforePutMessageHook;
@@ -123,7 +125,7 @@ pub(crate) struct BrokerRuntime {
 
 impl BrokerRuntime {
     pub(crate) fn new(
-        broker_config: BrokerConfig,
+        broker_config: Arc<BrokerConfig>,
         message_store_config: MessageStoreConfig,
         server_config: ServerConfig,
     ) -> Self {
@@ -134,8 +136,7 @@ impl BrokerRuntime {
         let runtime = RocketMQRuntime::new_multi(10, "broker-thread");
         let broker_outer_api = BrokerOuterAPI::new(Arc::new(TokioClientConfig::default()));
 
-        let topic_queue_mapping_manager =
-            TopicQueueMappingManager::new(Arc::new(broker_config.clone()));
+        let topic_queue_mapping_manager = TopicQueueMappingManager::new(broker_config.clone());
         let mut broker_member_group = BrokerMemberGroup::new(
             broker_config.broker_identity.broker_cluster_name.clone(),
             broker_config.broker_identity.broker_name.clone(),
@@ -150,7 +151,7 @@ impl BrokerRuntime {
         > = Arc::new(Box::new(DefaultConsumerIdsChangeListener {}));
         let consumer_manager = ConsumerManager::new_with_broker_stats(
             consumer_ids_change_listener.clone(),
-            Arc::new(broker_config.clone()),
+            broker_config.clone(),
         );
 
         let should_start_time = Arc::new(AtomicU64::new(0));
@@ -204,7 +205,7 @@ impl BrokerRuntime {
             notification_processor: None,
             broker_attached_plugins: vec![],
         });
-        let mut stats_manager = BrokerStatsManager::new(Arc::new(inner.broker_config.clone()));
+        let mut stats_manager = BrokerStatsManager::new(inner.broker_config.clone());
         stats_manager.set_producer_state_getter(Arc::new(ProducerStateGetter {
             broker_runtime_inner: inner.clone(),
         }));
@@ -429,7 +430,7 @@ impl BrokerRuntime {
             info!("Use local file as message store");
             let mut message_store = ArcMut::new(LocalFileMessageStore::new(
                 Arc::new(self.inner.message_store_config.clone()),
-                Arc::new(self.inner.broker_config.clone()),
+                self.inner.broker_config.clone(),
                 self.inner.topic_config_manager().topic_config_table(),
                 self.inner.broker_stats_manager.clone(),
                 false,
@@ -448,6 +449,13 @@ impl BrokerRuntime {
             warn!("Unknown store type");
             return false;
         }
+        let filter: Arc<dyn CommitLogDispatcher> = Arc::new(CommitLogDispatcherCalcBitMap::new(
+            self.inner.broker_config.clone(),
+            self.inner.consumer_filter_manager.clone().unwrap(),
+        ));
+        self.inner
+            .message_store_unchecked_mut()
+            .add_first_dispatcher(filter);
         true
     }
 
@@ -1277,7 +1285,7 @@ pub(crate) struct BrokerRuntimeInner<MS> {
     shutdown: Arc<AtomicBool>,
     store_host: SocketAddr,
     broker_addr: CheetahString,
-    broker_config: BrokerConfig,
+    broker_config: Arc<BrokerConfig>,
     message_store_config: MessageStoreConfig,
     server_config: ServerConfig,
     topic_config_manager: Option<TopicConfigManager<MS>>,
@@ -1326,11 +1334,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     #[inline]
     pub fn store_host_mut(&mut self) -> &mut SocketAddr {
         &mut self.store_host
-    }
-
-    #[inline]
-    pub fn broker_config_mut(&mut self) -> &mut BrokerConfig {
-        &mut self.broker_config
     }
 
     #[inline]
@@ -1621,6 +1624,11 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
+    pub fn message_store_unchecked_mut(&mut self) -> &mut ArcMut<MS> {
+        unsafe { self.message_store.as_mut().unwrap_unchecked() }
+    }
+
+    #[inline]
     pub fn broker_stats(&self) -> &Option<BrokerStats<MS>> {
         &self.broker_stats
     }
@@ -1763,7 +1771,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
     #[inline]
     pub fn set_broker_config(&mut self, broker_config: BrokerConfig) {
-        self.broker_config = broker_config;
+        self.broker_config = Arc::new(broker_config);
     }
 
     #[inline]
