@@ -21,7 +21,7 @@ pub mod allocate_mapped_file_service;
 pub mod append_message_callback;
 pub mod commit_log_dispatcher;
 pub mod compaction_append_msg_callback;
-pub(crate) mod dispatch_request;
+pub mod dispatch_request;
 pub mod flush_manager;
 pub mod get_message_result;
 pub mod message_arriving_listener;

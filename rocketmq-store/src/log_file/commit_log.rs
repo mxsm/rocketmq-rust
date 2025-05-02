@@ -808,7 +808,7 @@ impl CommitLog {
 
     fn on_commit_log_dispatch(
         &mut self,
-        request: &DispatchRequest,
+        request: &mut DispatchRequest,
         do_dispatch: bool,
         is_recover: bool,
         is_file_end: bool,
@@ -862,7 +862,7 @@ impl CommitLog {
                     break;
                 }
                 let mut msg_bytes = msg.unwrap();
-                let dispatch_request = check_message_and_return_size(
+                let mut dispatch_request = check_message_and_return_size(
                     &mut msg_bytes,
                     check_crc_on_recover,
                     check_dup_info,
@@ -881,12 +881,12 @@ impl CommitLog {
                 if dispatch_request.success && dispatch_request.msg_size > 0 {
                     last_valid_msg_phy_offset = process_offset + mapped_file_offset;
                     mapped_file_offset += dispatch_request.msg_size as u64;
-                    self.on_commit_log_dispatch(&dispatch_request, do_dispatch, true, false);
+                    self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, false);
                 } else if dispatch_request.success && dispatch_request.msg_size == 0 {
                     // Come the end of the file, switch to the next file Since the
                     // return 0 representatives met last hole,
                     // this can not be included in truncate offset
-                    self.on_commit_log_dispatch(&dispatch_request, do_dispatch, true, true);
+                    self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, true);
                     index += 1;
                     if index >= mapped_files_inner.len() {
                         info!(
@@ -1024,7 +1024,7 @@ impl CommitLog {
                     break;
                 }
                 let mut msg_bytes = msg.unwrap();
-                let dispatch_request = check_message_and_return_size(
+                let mut dispatch_request = check_message_and_return_size(
                     &mut msg_bytes,
                     check_crc_on_recover,
                     check_dup_info,
@@ -1051,7 +1051,7 @@ impl CommitLog {
                             <= self.get_confirm_offset()
                         {
                             self.on_commit_log_dispatch(
-                                &dispatch_request,
+                                &mut dispatch_request,
                                 do_dispatch,
                                 true,
                                 false,
@@ -1060,13 +1060,18 @@ impl CommitLog {
                                 dispatch_request.commit_log_offset as u64 + size as u64;
                         }
                     } else {
-                        self.on_commit_log_dispatch(&dispatch_request, do_dispatch, true, false);
+                        self.on_commit_log_dispatch(
+                            &mut dispatch_request,
+                            do_dispatch,
+                            true,
+                            false,
+                        );
                     }
                 } else if dispatch_request.success && dispatch_request.msg_size == 0 {
                     // Come the end of the file, switch to the next file Since the
                     // return 0 representatives met last hole,
                     // this can not be included in truncate offset
-                    self.on_commit_log_dispatch(&dispatch_request, do_dispatch, true, true);
+                    self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, true);
                     index += 1;
                     if index >= mapped_files_inner.len() {
                         info!(

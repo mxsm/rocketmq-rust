@@ -14,7 +14,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -130,7 +129,11 @@ impl ConsumerFilterManager {
         None
     }
 
-    pub fn get_bloom_filter(&self) -> Option<&BloomFilter> {
+    pub fn bloom_filter(&self) -> Option<&BloomFilter> {
         self.bloom_filter.as_ref()
+    }
+
+    pub fn get(&self, topic: &CheetahString) -> Option<Vec<ConsumerFilterData>> {
+        unimplemented!("get method not implemented");
     }
 }

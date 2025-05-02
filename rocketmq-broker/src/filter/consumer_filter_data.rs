@@ -14,6 +14,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::fmt::Debug;
+use std::fmt::Display;
+use std::fmt::Formatter;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
@@ -104,5 +107,40 @@ impl ConsumerFilterData {
 
     pub fn compiled_expression(&self) -> &Option<Arc<Box<dyn Expression + Send + Sync + 'static>>> {
         &self.compiled_expression
+    }
+}
+
+impl Debug for ConsumerFilterData {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConsumerFilterData")
+            .field("consumer_group", &self.consumer_group)
+            .field("topic", &self.topic)
+            .field("expression", &self.expression)
+            .field("expression_type", &self.expression_type)
+            .field("compiled_expression", &self.compiled_expression.is_some())
+            .field("born_time", &self.born_time)
+            .field("dead_time", &self.dead_time)
+            .field("bloom_filter_data", &self.bloom_filter_data)
+            .field("client_version", &self.client_version)
+            .finish()
+    }
+}
+
+impl Display for ConsumerFilterData {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "ConsumerFilterData {{ group: {}, topic: {}, expression: {:?}, type: {:?}, \
+             has_compiled: {}, born: {}, dead: {}, has_bloom: {}, client_ver: {} }}",
+            self.consumer_group,
+            self.topic,
+            self.expression,
+            self.expression_type,
+            self.compiled_expression.is_some(),
+            self.born_time,
+            self.dead_time,
+            self.bloom_filter_data.is_some(),
+            self.client_version
+        )
     }
 }

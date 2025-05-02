@@ -19,17 +19,17 @@ use std::collections::HashMap;
 use cheetah_string::CheetahString;
 use rocketmq_filter::expression::evaluation_context::EvaluationContext;
 
-pub struct MessageEvaluationContext {
-    properties: Option<HashMap<CheetahString, CheetahString>>,
+pub struct MessageEvaluationContext<'a> {
+    properties: &'a Option<HashMap<CheetahString, CheetahString>>,
 }
 
-impl MessageEvaluationContext {
-    pub fn new(properties: Option<HashMap<CheetahString, CheetahString>>) -> Self {
+impl<'a> MessageEvaluationContext<'a> {
+    pub fn new(properties: &'a Option<HashMap<CheetahString, CheetahString>>) -> Self {
         Self { properties }
     }
 }
 
-impl EvaluationContext for MessageEvaluationContext {
+impl<'a> EvaluationContext for MessageEvaluationContext<'a> {
     fn get(&self, name: &str) -> Option<&CheetahString> {
         self.properties
             .as_ref()
@@ -49,63 +49,70 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn new_creates_instance_with_properties() {
+    #[tokio::test]
+    async fn get_returns_value_when_key_exists() {
         let mut properties = HashMap::new();
         properties.insert(
-            CheetahString::from_static_str("key"),
-            CheetahString::from_static_str("value"),
+            CheetahString::from_slice("key1"),
+            CheetahString::from_slice("value1"),
         );
-        let context = MessageEvaluationContext::new(Some(properties.clone()));
-        assert_eq!(context.properties, Some(properties));
+        let binding = Some(properties);
+        let context = MessageEvaluationContext::new(&binding);
+
+        let result = context.get("key1");
+
+        assert_eq!(result, Some(&CheetahString::from_slice("value1")));
     }
 
-    #[test]
-    fn new_creates_instance_with_none_properties() {
-        let context = MessageEvaluationContext::new(None);
-        assert!(context.properties.is_none());
-    }
-
-    #[test]
-    fn get_returns_value_if_key_exists() {
+    #[tokio::test]
+    async fn get_returns_none_when_key_does_not_exist() {
         let mut properties = HashMap::new();
         properties.insert(
-            CheetahString::from_static_str("key"),
-            CheetahString::from_static_str("value"),
+            CheetahString::from_slice("key1"),
+            CheetahString::from_slice("value1"),
         );
-        let context = MessageEvaluationContext::new(Some(properties));
-        assert_eq!(
-            context.get("key"),
-            Some(&CheetahString::from_static_str("value"))
-        );
+        let binding = Some(properties);
+        let context = MessageEvaluationContext::new(&binding);
+
+        let result = context.get("key2");
+
+        assert!(result.is_none());
     }
 
-    #[test]
-    fn get_returns_none_if_key_does_not_exist() {
-        let context = MessageEvaluationContext::new(Some(HashMap::new()));
-        assert!(context.get("nonexistent").is_none());
+    #[tokio::test]
+    async fn get_returns_none_when_properties_are_none() {
+        let context = MessageEvaluationContext::new(&None);
+
+        let result = context.get("key1");
+
+        assert!(result.is_none());
     }
 
-    #[test]
-    fn get_returns_none_if_properties_is_none() {
-        let context = MessageEvaluationContext::new(None);
-        assert!(context.get("key").is_none());
-    }
-
-    #[test]
-    fn key_values_returns_properties_if_present() {
+    #[tokio::test]
+    async fn key_values_returns_all_properties_when_present() {
         let mut properties = HashMap::new();
         properties.insert(
-            CheetahString::from_static_str("key"),
-            CheetahString::from_static_str("value"),
+            CheetahString::from_slice("key1"),
+            CheetahString::from_slice("value1"),
         );
-        let context = MessageEvaluationContext::new(Some(properties.clone()));
-        assert_eq!(context.key_values(), Some(properties));
+        properties.insert(
+            CheetahString::from_slice("key2"),
+            CheetahString::from_slice("value2"),
+        );
+        let binding = Some(properties.clone());
+        let context = MessageEvaluationContext::new(&binding);
+
+        let result = context.key_values();
+
+        assert_eq!(result, Some(properties));
     }
 
-    #[test]
-    fn key_values_returns_none_if_properties_is_none() {
-        let context = MessageEvaluationContext::new(None);
-        assert!(context.key_values().is_none());
+    #[tokio::test]
+    async fn key_values_returns_none_when_properties_are_none() {
+        let context = MessageEvaluationContext::new(&None);
+
+        let result = context.key_values();
+
+        assert!(result.is_none());
     }
 }

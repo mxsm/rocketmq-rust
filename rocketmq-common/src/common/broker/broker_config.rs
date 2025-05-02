@@ -223,6 +223,12 @@ pub struct BrokerConfig {
     pub pop_ck_offset_max_queue_size: u64,
     pub delay_offset_update_version_step: u64,
     pub revive_ack_wait_ms: u64,
+
+    // Switch of filter bit map calculation.
+    // If switch on:
+    // 1. Calculate filter bit map when construct queue.
+    // 2. Filter bit map will be saved to consume queue extend file if allowed.
+    pub enable_calc_filter_bit_map: bool,
 }
 
 impl Default for BrokerConfig {
@@ -338,6 +344,7 @@ impl Default for BrokerConfig {
             pop_ck_offset_max_queue_size: 20_000,
             delay_offset_update_version_step: 200,
             revive_ack_wait_ms: Duration::from_secs(3 * 60).as_millis() as u64,
+            enable_calc_filter_bit_map: false,
         }
     }
 }

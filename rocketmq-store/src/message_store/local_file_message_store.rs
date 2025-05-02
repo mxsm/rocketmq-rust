@@ -409,7 +409,7 @@ impl LocalFileMessageStore {
 
     pub fn on_commit_log_dispatch(
         &mut self,
-        dispatch_request: &DispatchRequest,
+        dispatch_request: &mut DispatchRequest,
         do_dispatch: bool,
         is_recover: bool,
         _is_file_end: bool,
@@ -419,7 +419,7 @@ impl LocalFileMessageStore {
         }
     }
 
-    pub fn do_dispatch(&mut self, dispatch_request: &DispatchRequest) {
+    pub fn do_dispatch(&mut self, dispatch_request: &mut DispatchRequest) {
         self.dispatcher.dispatch(dispatch_request)
     }
 
@@ -1954,7 +1954,7 @@ impl CommitLogDispatcherDefault {
 }
 
 impl CommitLogDispatcher for CommitLogDispatcherDefault {
-    fn dispatch(&self, dispatch_request: &DispatchRequest) {
+    fn dispatch(&self, dispatch_request: &mut DispatchRequest) {
         for dispatcher in self.dispatcher_vec.iter() {
             dispatcher.dispatch(dispatch_request);
         }
@@ -2198,7 +2198,7 @@ impl ReputMessageServiceInner {
                 if dispatch_request.success {
                     match dispatch_request.msg_size.cmp(&0) {
                         std::cmp::Ordering::Greater => {
-                            self.dispatcher.dispatch(&dispatch_request);
+                            self.dispatcher.dispatch(&mut dispatch_request);
                             if !self.notify_message_arrive_in_batch {
                                 self.message_store
                                     .notify_message_arrive_if_necessary(&mut dispatch_request);
