@@ -378,6 +378,7 @@ impl BrokerConfig {
         self.region_id.as_str()
     }
 
+    #[inline]
     pub fn broker_permission(&self) -> u32 {
         self.broker_permission
     }

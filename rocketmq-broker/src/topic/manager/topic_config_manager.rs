@@ -273,6 +273,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
          }
     }
 
+    #[inline]
     pub fn is_order_topic(&self, topic: &str) -> bool {
         match self.get_topic_config(topic) {
             None => false,

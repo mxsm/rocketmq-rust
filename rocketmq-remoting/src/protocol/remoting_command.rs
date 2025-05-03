@@ -827,12 +827,14 @@ pub fn parse_serialize_type(size: i32) -> rocketmq_error::RocketMQResult<Seriali
 }
 
 impl AsRef<RemotingCommand> for RemotingCommand {
+    #[inline]
     fn as_ref(&self) -> &RemotingCommand {
         self
     }
 }
 
 impl AsMut<RemotingCommand> for RemotingCommand {
+    #[inline]
     fn as_mut(&mut self) -> &mut RemotingCommand {
         self
     }
