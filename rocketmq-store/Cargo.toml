@@ -50,6 +50,8 @@ once_cell = { workspace = true }
 cheetah-string = { workspace = true }
 thiserror = { workspace = true }
 
+futures-util = "0.3.31"
+
 [target.'cfg(linux)'.dependencies]
 libc = "0.2.172"
 
