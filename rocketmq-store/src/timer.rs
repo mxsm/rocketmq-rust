@@ -15,5 +15,6 @@
  * limitations under the License.
  */
 
+pub mod slot;
 pub mod timer_message_store;
 pub mod timer_metrics;
