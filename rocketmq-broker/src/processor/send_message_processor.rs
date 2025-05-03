@@ -99,7 +99,7 @@ where
     }
 
     fn clear_reserved_properties(request_header: &mut SendMessageRequestHeader) {
-        let properties = request_header.properties.clone();
+        let properties = request_header.properties.take();
         if let Some(value) = properties {
             let delete_properties =
                 message_utils::delete_property(value.as_str(), MessageConst::PROPERTY_POP_CK);
@@ -1037,19 +1037,6 @@ where
 const DLQ_NUMS_PER_GROUP: u32 = 1;
 
 pub(crate) struct Inner<MS, TS> {
-    /*pub(crate) topic_config_manager: TopicConfigManager,
-    pub(crate) send_message_hook_vec: ArcMut<Vec<Box<dyn SendMessageHook>>>,
-    pub(crate) consume_message_hook_vec: ArcMut<Vec<Box<dyn ConsumeMessageHook>>>,
-    pub(crate) topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
-    pub(crate) subscription_group_manager: Arc<SubscriptionGroupManager<MS>>,
-    pub(crate) broker_config: Arc<BrokerConfig>,
-    pub(crate) message_store: ArcMut<MS>,
-    pub(crate) transactional_message_service: ArcMut<TS>,
-    pub(crate) rebalance_lock_manager: Arc<RebalanceLockManager>,
-    pub(crate) broker_stats_manager: Arc<BrokerStatsManager>,
-    pub(crate) producer_manager: Option<Arc<ProducerManager>>,
-    pub(crate) broker_to_client: Broker2Client,
-    pub(crate) store_host: SocketAddr,*/
     pub(crate) send_message_hook_vec: ArcMut<Vec<Box<dyn SendMessageHook>>>,
     pub(crate) consume_message_hook_vec: ArcMut<Vec<Box<dyn ConsumeMessageHook>>>,
     pub(crate) broker_to_client: Broker2Client,

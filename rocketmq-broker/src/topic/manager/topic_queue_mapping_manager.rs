@@ -54,10 +54,9 @@ impl TopicQueueMappingManager {
         request_header: &mut impl TopicRequestHeaderTrait,
         mapping_context: &TopicQueueMappingContext,
     ) -> Option<RemotingCommand> {
-        mapping_context.mapping_detail.as_ref()?;
+        let mapping_detail = mapping_context.mapping_detail.as_ref()?;
 
         if !mapping_context.is_leader() {
-            let mapping_detail = mapping_context.mapping_detail.as_ref().unwrap();
             return Some(RemotingCommand::create_response_command_with_code_remark(
                 ResponseCode::NotLeaderForQueue,
                 format!(
@@ -72,8 +71,9 @@ impl TopicQueueMappingManager {
                 ),
             ));
         }
-        let mapping_item = mapping_context.leader_item.as_ref().unwrap();
-        request_header.set_queue_id(mapping_item.queue_id);
+        if let Some(mapping_item) = mapping_context.leader_item.as_ref() {
+            request_header.set_queue_id(mapping_item.queue_id);
+        }
         None
     }
 }
@@ -123,16 +123,6 @@ impl TopicQueueMappingManager {
             self.broker_config.broker_name
         );
 
-        // if global_id.is_none() {
-        //     return TopicQueueMappingContext {
-        //         topic: topic.clone(),
-        //         global_id: None,
-        //         mapping_detail: Some(mapping_detail.clone()),
-        //         mapping_item_list: vec![],
-        //         leader_item: None,
-        //         current_item: None,
-        //     };
-        // }
         // If not find mappingItem, it encounters some errors
         if global_id < 0 && !select_one_when_miss {
             return TopicQueueMappingContext {
@@ -144,7 +134,7 @@ impl TopicQueueMappingManager {
                 current_item: None,
             };
         }
-        // if let Some(ref mut global_id_value) = global_id {
+
         if global_id < 0 {
             if let Some(hosted_queues) = &mapping_detail.hosted_queues {
                 if !hosted_queues.is_empty() {
