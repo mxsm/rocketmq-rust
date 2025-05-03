@@ -498,7 +498,7 @@ impl LocalFileMessageStore {
 
     fn check_self(&self) {
         self.commit_log.check_self();
-        self.consume_queue_store.check_self();
+        ConsumeQueueStoreTrait::check_self(&self.consume_queue_store);
     }
 
     pub fn next_offset_correction(&self, old_offset: i64, new_offset: i64) -> i64 {

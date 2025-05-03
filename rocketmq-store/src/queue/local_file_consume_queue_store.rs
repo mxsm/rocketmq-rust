@@ -92,6 +92,12 @@ impl ConsumeQueueStore {
     pub fn set_message_store(&mut self, message_store: ArcMut<LocalFileMessageStore>) {
         self.inner.message_store = Some(message_store);
     }
+
+    pub fn check_self(&self, consume_queue: &dyn ConsumeQueueTrait) {
+        let life_cycle =
+            self.get_life_cycle(consume_queue.get_topic(), consume_queue.get_queue_id());
+        life_cycle.check_self();
+    }
 }
 
 #[allow(unused_variables)]
@@ -213,7 +219,13 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     fn check_self(&self) {
-        println!("ConsumeQueueStore::check_self unimplemented");
+        let consume_queue_table = self.inner.consume_queue_table.lock();
+        for consume_queue_table in consume_queue_table.values() {
+            for consume_queue in consume_queue_table.values() {
+                let consume_queue = &**consume_queue.as_ref();
+                self.check_self(consume_queue);
+            }
+        }
     }
 
     fn delete_expired_file(
