@@ -2430,6 +2430,7 @@ dependencies = [
  "cheetah-string",
  "criterion",
  "dirs",
+ "futures-util",
  "lazy_static",
  "libc",
  "memmap2",

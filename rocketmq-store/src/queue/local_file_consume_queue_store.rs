@@ -25,6 +25,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
+use futures_util::future::join_all;
 use rocketmq_common::common::attribute::cq_type::CQType;
 use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
@@ -133,7 +134,52 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     async fn recover_concurrently(&self) -> bool {
-        todo!()
+        // Count the total number of consume queues
+        let mut count = 0;
+        for maps in self.inner.consume_queue_table.lock().values() {
+            count += maps.values().len();
+        }
+
+        // Create a vector to hold all futures
+        let mut futures = Vec::with_capacity(count);
+
+        // For each consume queue, create a future to recover it
+        for maps in self.inner.consume_queue_table.lock().values() {
+            for logic in maps.values() {
+                let mut logic_clone = logic.clone();
+                let future = async move {
+                    let mut ret = true;
+                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        logic_clone.recover()
+                    })) {
+                        Ok(_) => {}
+                        Err(_) => {
+                            ret = false;
+                            error!(
+                                "Exception occurs while recover consume queue concurrently, \
+                                 topic={}, queueId={}",
+                                logic_clone.get_topic(),
+                                logic_clone.get_queue_id()
+                            );
+                        }
+                    }
+                    ret
+                };
+                futures.push(future);
+            }
+        }
+
+        // Wait for all futures to complete
+        let results = join_all(futures).await;
+
+        // Check if any recovery failed
+        for result in results {
+            if !result {
+                return false;
+            }
+        }
+
+        true
     }
 
     fn shutdown(&self) -> bool {
