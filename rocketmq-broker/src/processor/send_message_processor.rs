@@ -1478,7 +1478,7 @@ where
         let result = TopicValidator::validate_topic(request_header.topic.as_str());
         if !result.valid() {
             response.with_code(SystemError);
-            response.with_remark(result.remark().clone());
+            response.with_remark(result.take_remark());
             return;
         }
 

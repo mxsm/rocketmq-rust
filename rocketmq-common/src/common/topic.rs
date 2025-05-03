@@ -159,16 +159,27 @@ pub struct ValidateTopicResult {
 }
 
 impl ValidateTopicResult {
+    #[inline]
     pub fn valid(&self) -> bool {
         self.valid
     }
+
+    #[inline]
     pub fn remark(&self) -> &CheetahString {
         &self.remark
     }
 
+    #[inline]
+    pub fn take_remark(self) -> CheetahString {
+        self.remark
+    }
+
+    #[inline]
     pub fn set_valid(&mut self, valid: bool) {
         self.valid = valid;
     }
+
+    #[inline]
     pub fn set_remark(&mut self, remark: CheetahString) {
         self.remark = remark;
     }
