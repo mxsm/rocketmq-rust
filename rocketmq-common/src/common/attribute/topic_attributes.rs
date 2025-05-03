@@ -4,7 +4,6 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 
 use cheetah_string::CheetahString;
-use lazy_static::lazy_static;
 
 use crate::common::attribute::enum_attribute::EnumAttribute;
 use crate::common::attribute::long_range_attribute::LongRangeAttribute;
