@@ -26,6 +26,7 @@ use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::mix_all;
+use rocketmq_common::common::pop_ack_constants::PopAckConstants;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::TopicAttributes::TopicAttributes;
@@ -36,6 +37,7 @@ use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::timer::timer_message_store;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -50,30 +52,19 @@ pub(crate) struct TopicConfigManager<MS> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
-/*impl Clone for TopicConfigManager {
-    fn clone(&self) -> Self {
-        Self {
-            topic_config_table: self.topic_config_table.clone(),
-            data_version: self.data_version.clone(),
-            broker_config: self.broker_config.clone(),
-            message_store: self.message_store.clone(),
-            topic_config_table_lock: self.topic_config_table_lock.clone(),
-            broker_runtime_inner: self.broker_runtime_inner.clone(),
-        }
-    }
-}*/
-
 impl<MS: MessageStore> TopicConfigManager<MS> {
     const SCHEDULE_TOPIC_QUEUE_NUM: u32 = 18;
 
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
+    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>, init: bool) -> Self {
         let mut manager = Self {
             topic_config_table: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             data_version: ArcMut::new(DataVersion::default()),
             topic_config_table_lock: Default::default(),
             broker_runtime_inner,
         };
-        manager.init();
+        if init {
+            manager.init();
+        }
         manager
     }
 
@@ -121,6 +112,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
                 .broker_identity
                 .broker_cluster_name
                 .to_string();
+            TopicValidator::add_system_topic(topic.as_str());
             let mut config = TopicConfig::new(topic);
             let mut perm = PermName::PERM_INHERIT;
             if self
@@ -141,7 +133,10 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
                 .broker_identity
                 .broker_name
                 .to_string();
+            TopicValidator::add_system_topic(topic.as_str());
             let mut config = TopicConfig::new(topic);
+            config.write_queue_nums = 1;
+            config.read_queue_nums = 1;
             let mut perm = PermName::PERM_INHERIT;
             if self
                 .broker_runtime_inner
@@ -177,6 +172,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
                     .broker_config()
                     .msg_trace_topic_name
                     .clone();
+                TopicValidator::add_system_topic(topic.as_str());
                 self.put_topic_config(TopicConfig::with_queues(topic, 1, 1));
             }
         }
@@ -190,19 +186,19 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
                     .broker_name,
                 mix_all::REPLY_TOPIC_POSTFIX
             );
+            TopicValidator::add_system_topic(topic.as_str());
             self.put_topic_config(TopicConfig::with_queues(topic, 1, 1));
         }
 
         {
-            // PopAckConstants.REVIVE_TOPIC
-            let topic = format!(
-                "rmq_sys_REVIVE_LOG_{}",
+            let topic = PopAckConstants::build_cluster_revive_topic(
                 self.broker_runtime_inner
                     .broker_config()
                     .broker_identity
                     .broker_cluster_name
+                    .as_str(),
             );
-
+            TopicValidator::add_system_topic(topic.as_str());
             self.put_topic_config(TopicConfig::with_queues(
                 topic,
                 self.broker_runtime_inner.broker_config().revive_queue_num,
@@ -219,6 +215,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
                     .broker_identity
                     .broker_name,
             );
+            TopicValidator::add_system_topic(topic.as_str());
             self.put_topic_config(TopicConfig::with_perm(topic, 1, 1, PermName::PERM_INHERIT));
         }
 
@@ -236,6 +233,21 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
                 1,
                 1,
             ));
+        }
+
+        {
+            if self
+                .broker_runtime_inner
+                .message_store_config()
+                .timer_wheel_enable
+            {
+                TopicValidator::add_system_topic(timer_message_store::TIMER_TOPIC);
+                self.put_topic_config(TopicConfig::with_queues(
+                    timer_message_store::TIMER_TOPIC,
+                    1,
+                    1,
+                ));
+            }
         }
     }
 

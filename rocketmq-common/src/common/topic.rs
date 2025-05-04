@@ -16,6 +16,7 @@
  */
 
 use std::collections::HashSet;
+use std::ops::Deref;
 use std::sync::Mutex;
 
 use cheetah_string::CheetahString;
@@ -40,28 +41,28 @@ lazy_static! {
         }
         map
     };
-    static ref SYSTEM_TOPIC_SET: parking_lot::RwLock<HashSet<&'static str>> = {
+    static ref SYSTEM_TOPIC_SET: parking_lot::RwLock<HashSet<String>> = {
         let mut set = HashSet::new();
-        set.insert(TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC);
-        set.insert(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC);
-        set.insert(TopicValidator::RMQ_SYS_BENCHMARK_TOPIC);
-        set.insert(TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC);
-        set.insert(TopicValidator::RMQ_SYS_TRACE_TOPIC);
-        set.insert(TopicValidator::RMQ_SYS_TRANS_OP_HALF_TOPIC);
-        set.insert(TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC);
-        set.insert(TopicValidator::RMQ_SYS_SELF_TEST_TOPIC);
-        set.insert(TopicValidator::RMQ_SYS_OFFSET_MOVED_EVENT);
-        set.insert(TopicValidator::RMQ_SYS_ROCKSDB_OFFSET_TOPIC);
+        set.insert(TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC.to_string());
+        set.insert(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC.to_string());
+        set.insert(TopicValidator::RMQ_SYS_BENCHMARK_TOPIC.to_string());
+        set.insert(TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC.to_string());
+        set.insert(TopicValidator::RMQ_SYS_TRACE_TOPIC.to_string());
+        set.insert(TopicValidator::RMQ_SYS_TRANS_OP_HALF_TOPIC.to_string());
+        set.insert(TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC.to_string());
+        set.insert(TopicValidator::RMQ_SYS_SELF_TEST_TOPIC.to_string());
+        set.insert(TopicValidator::RMQ_SYS_OFFSET_MOVED_EVENT.to_string());
+        set.insert(TopicValidator::RMQ_SYS_ROCKSDB_OFFSET_TOPIC.to_string());
         parking_lot::RwLock::new(set)
     };
-    static ref NOT_ALLOWED_SEND_TOPIC_SET: HashSet<&'static str> = {
+    static ref NOT_ALLOWED_SEND_TOPIC_SET: HashSet<String> = {
         let mut set = HashSet::new();
-        set.insert(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC);
-        set.insert(TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC);
-        set.insert(TopicValidator::RMQ_SYS_TRANS_OP_HALF_TOPIC);
-        set.insert(TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC);
-        set.insert(TopicValidator::RMQ_SYS_SELF_TEST_TOPIC);
-        set.insert(TopicValidator::RMQ_SYS_OFFSET_MOVED_EVENT);
+        set.insert(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC.to_string());
+        set.insert(TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC.to_string());
+        set.insert(TopicValidator::RMQ_SYS_TRANS_OP_HALF_TOPIC.to_string());
+        set.insert(TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC.to_string());
+        set.insert(TopicValidator::RMQ_SYS_SELF_TEST_TOPIC.to_string());
+        set.insert(TopicValidator::RMQ_SYS_OFFSET_MOVED_EVENT.to_string());
         set
     };
 }
@@ -136,17 +137,17 @@ impl TopicValidator {
         NOT_ALLOWED_SEND_TOPIC_SET.contains(topic)
     }
 
-    pub fn add_system_topic(system_topic: &'static str) {
+    pub fn add_system_topic(system_topic: impl Into<String>) {
         let mut system_topics = SYSTEM_TOPIC_SET.write();
-        system_topics.insert(system_topic);
+        system_topics.insert(system_topic.into());
     }
 
-    pub fn get_system_topic_set() -> HashSet<&'static str> {
+    pub fn get_system_topic_set() -> HashSet<String> {
         SYSTEM_TOPIC_SET.read().clone()
     }
 
-    pub fn get_not_allowed_send_topic_set() -> &'static HashSet<&'static str> {
-        &NOT_ALLOWED_SEND_TOPIC_SET
+    pub fn get_not_allowed_send_topic_set() -> &'static HashSet<String> {
+        NOT_ALLOWED_SEND_TOPIC_SET.deref()
     }
 }
 
