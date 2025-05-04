@@ -31,6 +31,7 @@ impl PermName {
     pub const PERM_READ: u32 = 0x1 << Self::INDEX_PERM_READ;
     pub const PERM_WRITE: u32 = 0x1 << Self::INDEX_PERM_WRITE;
 
+    #[inline]
     pub fn perm2string(perm: u32) -> String {
         let mut sb = String::from("---");
 
@@ -49,22 +50,27 @@ impl PermName {
         sb
     }
 
+    #[inline]
     pub fn is_readable(perm: u32) -> bool {
         (perm & Self::PERM_READ) == Self::PERM_READ
     }
 
+    #[inline]
     pub fn is_writeable(perm: u32) -> bool {
         (perm & Self::PERM_WRITE) == Self::PERM_WRITE
     }
 
+    #[inline]
     pub fn is_inherited(perm: u32) -> bool {
         (perm & Self::PERM_INHERIT) == Self::PERM_INHERIT
     }
 
+    #[inline]
     pub fn is_valid(perm: u32) -> bool {
         perm < Self::PERM_PRIORITY
     }
 
+    #[inline]
     pub fn is_priority(perm: u32) -> bool {
         (perm & Self::PERM_PRIORITY) == Self::PERM_PRIORITY
     }
