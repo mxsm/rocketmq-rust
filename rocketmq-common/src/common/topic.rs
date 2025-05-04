@@ -22,7 +22,6 @@ use cheetah_string::CheetahString;
 use lazy_static::lazy_static;
 
 pub const TOPIC_MAX_LENGTH: usize = 127;
-
 lazy_static! {
     static ref VALID_CHAR_BIT_MAP: [bool; 128] = {
         let mut map = [false; 128];
@@ -41,7 +40,7 @@ lazy_static! {
         }
         map
     };
-    static ref SYSTEM_TOPIC_SET: Mutex<HashSet<&'static str>> = {
+    static ref SYSTEM_TOPIC_SET: parking_lot::RwLock<HashSet<&'static str>> = {
         let mut set = HashSet::new();
         set.insert(TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC);
         set.insert(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC);
@@ -53,9 +52,9 @@ lazy_static! {
         set.insert(TopicValidator::RMQ_SYS_SELF_TEST_TOPIC);
         set.insert(TopicValidator::RMQ_SYS_OFFSET_MOVED_EVENT);
         set.insert(TopicValidator::RMQ_SYS_ROCKSDB_OFFSET_TOPIC);
-        Mutex::new(set)
+        parking_lot::RwLock::new(set)
     };
-    static ref NOT_ALLOWED_SEND_TOPIC_SET: Mutex<HashSet<&'static str>> = {
+    static ref NOT_ALLOWED_SEND_TOPIC_SET: HashSet<&'static str> = {
         let mut set = HashSet::new();
         set.insert(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC);
         set.insert(TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC);
@@ -63,10 +62,9 @@ lazy_static! {
         set.insert(TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC);
         set.insert(TopicValidator::RMQ_SYS_SELF_TEST_TOPIC);
         set.insert(TopicValidator::RMQ_SYS_OFFSET_MOVED_EVENT);
-        Mutex::new(set)
+        set
     };
 }
-
 pub struct TopicValidator;
 
 impl TopicValidator {
@@ -130,26 +128,25 @@ impl TopicValidator {
     }
 
     pub fn is_system_topic(topic: &str) -> bool {
-        let system_topics = SYSTEM_TOPIC_SET.lock().unwrap();
+        let system_topics = SYSTEM_TOPIC_SET.read();
         system_topics.contains(topic) || topic.starts_with(TopicValidator::SYSTEM_TOPIC_PREFIX)
     }
 
     pub fn is_not_allowed_send_topic(topic: &str) -> bool {
-        let not_allowed_topics = NOT_ALLOWED_SEND_TOPIC_SET.lock().unwrap();
-        not_allowed_topics.contains(topic)
+        NOT_ALLOWED_SEND_TOPIC_SET.contains(topic)
     }
 
     pub fn add_system_topic(system_topic: &'static str) {
-        let mut system_topics = SYSTEM_TOPIC_SET.lock().unwrap();
+        let mut system_topics = SYSTEM_TOPIC_SET.write();
         system_topics.insert(system_topic);
     }
 
     pub fn get_system_topic_set() -> HashSet<&'static str> {
-        SYSTEM_TOPIC_SET.lock().unwrap().clone()
+        SYSTEM_TOPIC_SET.read().clone()
     }
 
-    pub fn get_not_allowed_send_topic_set() -> HashSet<&'static str> {
-        NOT_ALLOWED_SEND_TOPIC_SET.lock().unwrap().clone()
+    pub fn get_not_allowed_send_topic_set() -> &'static HashSet<&'static str> {
+        &NOT_ALLOWED_SEND_TOPIC_SET
     }
 }
 
