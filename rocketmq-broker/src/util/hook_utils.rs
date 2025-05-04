@@ -369,7 +369,7 @@ impl HookUtils {
 
         // Backup real topic, queueId
         msg.message_ext_inner.message.properties.insert(
-            CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC),// real topic: %RETRY% + consumerGroup
+            CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC), // real topic: %RETRY% + consumerGroup
             CheetahString::from_string(msg.topic().to_string()),
         );
         msg.message_ext_inner.message.properties.insert(
