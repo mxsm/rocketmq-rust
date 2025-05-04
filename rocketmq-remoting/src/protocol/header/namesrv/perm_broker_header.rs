@@ -39,43 +39,15 @@ impl WipeWritePermOfBrokerRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
 pub struct WipeWritePermOfBrokerResponseHeader {
     pub wipe_topic_count: i32,
 }
 
 impl WipeWritePermOfBrokerResponseHeader {
-    const WIPE_TOPIC_COUNT: &'static str = "wipeTopicCount";
-
     pub fn new(wipe_topic_count: i32) -> Self {
         Self { wipe_topic_count }
-    }
-}
-
-impl CommandCustomHeader for WipeWritePermOfBrokerResponseHeader {
-    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
-        Some(HashMap::from([(
-            CheetahString::from_static_str(Self::WIPE_TOPIC_COUNT),
-            CheetahString::from_string(self.wipe_topic_count.to_string()),
-        )]))
-    }
-}
-
-impl FromMap for WipeWritePermOfBrokerResponseHeader {
-    type Error = rocketmq_error::RocketmqError;
-
-    type Target = Self;
-
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
-        Ok(WipeWritePermOfBrokerResponseHeader {
-            wipe_topic_count: map
-                .get(&CheetahString::from_static_str(
-                    WipeWritePermOfBrokerResponseHeader::WIPE_TOPIC_COUNT,
-                ))
-                .and_then(|s| s.parse::<i32>().ok())
-                .unwrap_or(0),
-        })
     }
 }
 
