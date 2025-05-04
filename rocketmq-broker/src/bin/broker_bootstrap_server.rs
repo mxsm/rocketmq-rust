@@ -31,7 +31,7 @@ use tracing::info;
 #[rocketmq::main]
 async fn main() -> RocketMQResult<()> {
     // init logger
-    rocketmq_common::log::init_logger();
+    rocketmq_common::log::init_logger_with_level(rocketmq_common::log::Level::INFO);
     let (broker_config, message_store_config) = parse_config_file().unwrap_or_default();
     // boot strap broker
     Builder::new()

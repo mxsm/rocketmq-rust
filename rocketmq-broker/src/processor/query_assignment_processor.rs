@@ -17,36 +17,35 @@
 
 use crate::broker_runtime::BrokerRuntimeInner;
 
- use crate::load_balance::message_request_mode_manager::MessageRequestModeManager;
+use crate::load_balance::message_request_mode_manager::MessageRequestModeManager;
 
-
- use cheetah_string::CheetahString;
+use cheetah_string::CheetahString;
  use rocketmq_client_rust::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
  use rocketmq_client_rust::consumer::rebalance_strategy::allocate_message_queue_averagely::AllocateMessageQueueAveragely;
  use rocketmq_client_rust::consumer::rebalance_strategy::allocate_message_queue_averagely_by_circle::AllocateMessageQueueAveragelyByCircle;
 
- use rocketmq_common::common::config_manager::ConfigManager;
- use rocketmq_common::common::message::message_enum::MessageRequestMode;
- use rocketmq_common::common::message::message_queue::MessageQueue;
- use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
- use rocketmq_common::common::mix_all;
- use rocketmq_common::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
- use rocketmq_remoting::code::request_code::RequestCode;
- use rocketmq_remoting::code::response_code::ResponseCode;
- use rocketmq_remoting::net::channel::Channel;
- use rocketmq_remoting::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
- use rocketmq_remoting::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
- use rocketmq_remoting::protocol::body::set_message_request_mode_request_body::SetMessageRequestModeRequestBody;
- use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
- use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
- use rocketmq_remoting::protocol::{RemotingDeserializable, RemotingSerializable};
- use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
- use rocketmq_rust::ArcMut;
+use rocketmq_common::common::config_manager::ConfigManager;
+use rocketmq_common::common::message::message_enum::MessageRequestMode;
+use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
+use rocketmq_common::common::mix_all;
+use rocketmq_common::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
+use rocketmq_remoting::code::request_code::RequestCode;
+use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::net::channel::Channel;
+use rocketmq_remoting::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
+use rocketmq_remoting::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
+use rocketmq_remoting::protocol::body::set_message_request_mode_request_body::SetMessageRequestModeRequestBody;
+use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
+use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_remoting::protocol::{RemotingDeserializable, RemotingSerializable};
+use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_rust::ArcMut;
 
- use rocketmq_store::base::message_store::MessageStore;
- use std::collections::{HashMap, HashSet};
- use std::sync::Arc;
- use tracing::{info, warn};
+use rocketmq_store::base::message_store::MessageStore;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use tracing::{info, warn};
 
 /// A processor for handling query assignments in the RocketMQ broker.
 ///
