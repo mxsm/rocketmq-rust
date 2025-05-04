@@ -213,7 +213,7 @@ impl BrokerRuntime {
             broker_runtime_inner: inner.clone(),
         }));
         let stats_manager = Arc::new(stats_manager);
-        inner.topic_config_manager = Some(TopicConfigManager::new(inner.clone()));
+        inner.topic_config_manager = Some(TopicConfigManager::new(inner.clone(), true));
         inner.topic_route_info_manager = Some(TopicRouteInfoManager::new(inner.clone()));
         inner.escape_bridge = Some(EscapeBridge::new(inner.clone()));
         inner.subscription_group_manager = Some(SubscriptionGroupManager::new(inner.clone()));
