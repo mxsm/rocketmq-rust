@@ -45,6 +45,7 @@ use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
 use crate::queue::consume_queue::ConsumeQueueTrait;
 use crate::queue::consume_queue_ext::ConsumeQueueExt;
+use crate::queue::consume_queue_store::ConsumeQueueStoreInterface;
 use crate::queue::queue_offset_operator::QueueOffsetOperator;
 use crate::queue::referred_iterator::ReferredIterator;
 use crate::queue::CqUnit;
@@ -457,7 +458,10 @@ impl<MS: MessageStore> FileQueueLifeCycle for ConsumeQueue<MS> {
 
     #[inline]
     fn check_self(&self) {
-        todo!()
+        self.mapped_file_queue.check_self();
+        if self.is_ext_read_enable() {
+            self.consume_queue_ext.as_ref().unwrap().check_self();
+        }
     }
 
     #[inline]
