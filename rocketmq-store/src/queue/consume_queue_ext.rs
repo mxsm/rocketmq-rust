@@ -98,4 +98,8 @@ impl ConsumeQueueExt {
     pub fn get(&self, address: i64, cq_ext_unit: &CqExtUnit) -> bool {
         unimplemented!()
     }
+
+    pub fn check_self(&self) {
+        self.mapped_file_queue.check_self()
+    }
 }

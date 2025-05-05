@@ -457,7 +457,10 @@ impl<MS: MessageStore> FileQueueLifeCycle for ConsumeQueue<MS> {
 
     #[inline]
     fn check_self(&self) {
-        todo!()
+        self.mapped_file_queue.check_self();
+        if self.is_ext_read_enable() {
+            self.consume_queue_ext.as_ref().unwrap().check_self();
+        }
     }
 
     #[inline]
