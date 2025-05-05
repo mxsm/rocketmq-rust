@@ -206,12 +206,12 @@ where
         mut send_message_context: SendMessageContext,
         request_header: SendMessageRequestHeader,
         mut mapping_context: TopicQueueMappingContext,
-        _send_message_callback: F,
+        send_message_callback: F,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>>
     where
         F: Fn(&mut SendMessageContext, &mut RemotingCommand),
     {
-        let response = self.pre_send(channel, ctx, request.as_ref(), &request_header);
+        let mut response = self.pre_send(channel, ctx, request.as_ref(), &request_header);
         if response.code() != -1 {
             return Ok(Some(response));
         }
@@ -377,10 +377,10 @@ where
             })
             .await
             .map_err(|e| TokioHandlerError(e.to_string()))?;
-            Ok(self
+            let result = self
                 .handle_put_message_result(
                     put_message_result,
-                    response,
+                    &mut response,
                     &request,
                     topic.as_ref(),
                     transaction_id,
@@ -391,9 +391,15 @@ where
                     &mut mapping_context,
                     MessageType::NormalMsg,
                 )
-                .await)
-            //Java version has a send_message_callback here, but it is not used
-            //send_message_callback(&mut send_message_context, &mut response);
+                .await;
+            send_message_callback(&mut send_message_context, &mut response);
+            if result.1 {
+                Ok(None)
+            } else if result.0.is_some() {
+                Ok(result.0)
+            } else {
+                Ok(Some(response))
+            }
         } else {
             let put_message_result = if is_inner_batch {
                 self.inner
@@ -412,10 +418,10 @@ where
                     .put_messages(batch_message)
                     .await
             };
-            Ok(self
+            let result = self
                 .handle_put_message_result(
                     put_message_result,
-                    response,
+                    &mut response,
                     &request,
                     topic.as_str(),
                     transaction_id,
@@ -426,9 +432,15 @@ where
                     &mut mapping_context,
                     MessageType::NormalMsg,
                 )
-                .await)
-            //Java version has a send_message_callback here, but it is not used
-            //send_message_callback(&mut send_message_context, &mut response);
+                .await;
+            send_message_callback(&mut send_message_context, &mut response);
+            if result.1 {
+                Ok(None)
+            } else if result.0.is_some() {
+                Ok(result.0)
+            } else {
+                Ok(Some(response))
+            }
         }
     }
 
@@ -440,7 +452,7 @@ where
         mut send_message_context: SendMessageContext,
         request_header: SendMessageRequestHeader,
         mut mapping_context: TopicQueueMappingContext,
-        _send_message_callback: F,
+        send_message_callback: F,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>>
     where
         F: Fn(&mut SendMessageContext, &mut RemotingCommand),
@@ -498,7 +510,7 @@ where
 
         let tra_flag = ori_props
             .get(MessageConst::PROPERTY_TRANSACTION_PREPARED)
-            .cloned();
+            .is_some_and(|tra_flag_inner| tra_flag_inner.parse().unwrap_or(false));
         message_ext.message_ext_inner.message.properties = ori_props;
         let cleanup_policy = CleanupPolicyUtils::get_delete_policy(Some(&topic_config));
 
@@ -541,9 +553,6 @@ where
         message_ext.properties_string = MessageDecoder::message_properties_to_string(
             &message_ext.message_ext_inner.message.properties,
         );
-        let tra_flag =
-            tra_flag.is_some_and(|tra_flag_inner| tra_flag_inner.parse().unwrap_or(false));
-
         let send_transaction_prepare_message = if tra_flag
             && !(message_ext.reconsume_times() > 0
                 && message_ext.message_ext_inner.message.get_delay_time_level() > 0)
@@ -600,10 +609,11 @@ where
             let put_message_result = put_message_handle
                 .await
                 .map_err(|e| TokioHandlerError(e.to_string()))?;
-            Ok(self
+
+            let result = self
                 .handle_put_message_result(
                     put_message_result,
-                    response,
+                    &mut response,
                     &request,
                     topic.as_str(),
                     transaction_id,
@@ -614,9 +624,15 @@ where
                     &mut mapping_context,
                     MessageType::NormalMsg,
                 )
-                .await)
-            //Java version has a send_message_callback here, but it is not used
-            //send_message_callback(&mut send_message_context, &mut response);
+                .await;
+            send_message_callback(&mut send_message_context, &mut response);
+            if result.1 {
+                Ok(None)
+            } else if result.0.is_some() {
+                Ok(result.0)
+            } else {
+                Ok(Some(response))
+            }
         } else {
             let put_message_result = if send_transaction_prepare_message {
                 self.inner
@@ -632,11 +648,10 @@ where
                     .put_message(message_ext)
                     .await
             };
-
-            Ok(self
+            let result = self
                 .handle_put_message_result(
                     put_message_result,
-                    response,
+                    &mut response,
                     &request,
                     topic.as_str(),
                     transaction_id,
@@ -647,16 +662,22 @@ where
                     &mut mapping_context,
                     MessageType::NormalMsg,
                 )
-                .await)
-            //Java version has a send_message_callback here, but it is not used
-            //send_message_callback(&mut send_message_context, &mut response);
+                .await;
+            send_message_callback(&mut send_message_context, &mut response);
+            if result.1 {
+                Ok(None)
+            } else if result.0.is_some() {
+                Ok(result.0)
+            } else {
+                Ok(Some(response))
+            }
         }
     }
 
     async fn handle_put_message_result(
         &self,
         put_message_result: PutMessageResult,
-        mut response: RemotingCommand,
+        response: &mut RemotingCommand,
         request: &RemotingCommand,
         topic: &str,
         transaction_id: Option<CheetahString>,
@@ -666,7 +687,7 @@ where
         begin_time_millis: Instant,
         mapping_context: &mut TopicQueueMappingContext,
         _message_type: MessageType,
-    ) -> Option<RemotingCommand> {
+    ) -> (Option<RemotingCommand>, bool) {
         let mut send_ok = false;
         match put_message_result.put_message_status() {
                         rocketmq_store::base::message_status_enum::PutMessageStatus::PutOk => {
@@ -820,13 +841,13 @@ where
             let rewrite_result =
                 rewrite_response_for_static_topic(response_header, mapping_context);
             if rewrite_result.is_some() {
-                return rewrite_result;
+                return (rewrite_result, false);
             }
             let msg_id = response_header.msg_id().to_string();
             let queue_id = Some(response_header.queue_id());
             let queue_offset = Some(response_header.queue_offset());
-
-            ctx.write(response.set_opaque(request.opaque())).await;
+            response.set_opaque_mut(request.opaque());
+            ctx.write_ref(response).await;
 
             if self.has_send_message_hook() {
                 send_message_context.msg_id = CheetahString::from_string(msg_id);
@@ -858,7 +879,7 @@ where
                 send_message_context.send_msg_size = wrote_size;
                 send_message_context.send_msg_num = msg_num;
             }
-            None
+            (None, true)
         } else {
             if self.has_send_message_hook() {
                 let append_message_result = put_message_result.append_message_result();
@@ -882,7 +903,7 @@ where
                 send_message_context.send_msg_size = wrote_size;
                 send_message_context.send_msg_num = msg_num;
             }
-            Some(response)
+            (None, false)
         }
     }
 

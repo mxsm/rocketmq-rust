@@ -60,6 +60,19 @@ impl ConnectionHandlerContextWrapper {
             }
         }
     }
+    pub async fn write_ref(&mut self, cmd: &mut RemotingCommand) {
+        match self.channel.upgrade() {
+            Some(mut channel) => match channel.connection_mut().send_command_ref(cmd).await {
+                Ok(_) => {}
+                Err(error) => {
+                    error!("send response failed: {}", error);
+                }
+            },
+            None => {
+                error!("channel is closed");
+            }
+        }
+    }
 
     pub fn channel(&self) -> &Channel {
         &self.channel
