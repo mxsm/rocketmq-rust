@@ -37,6 +37,7 @@ use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerM
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
+use rocketmq_remoting::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::remoting_server::server::RocketMQServer;
@@ -1086,6 +1087,74 @@ impl BrokerRuntime {
                 Default::default(),
                 self.inner.clone(),
             )
+            .await;
+    }
+
+    pub async fn register_increment_broker_data(
+        &mut self,
+        topic_config_list: &[TopicConfig],
+        data_version: DataVersion,
+    ) {
+        if topic_config_list.is_empty() {
+            return;
+        }
+
+        let mut topic_config_serialize_wrapper = TopicConfigAndMappingSerializeWrapper {
+            mapping_data_version: data_version,
+            ..Default::default()
+        };
+
+        // Build topic config table
+        let topic_config_table: HashMap<CheetahString, TopicConfig> = topic_config_list
+            .iter()
+            .map(|topic_config| {
+                let register_topic_config =
+                    if !PermName::is_writeable(self.broker_config().broker_permission())
+                        || !PermName::is_readable(self.broker_config().broker_permission())
+                    {
+                        TopicConfig::with_sys_flag(
+                            topic_config.topic_name.clone().unwrap(),
+                            topic_config.read_queue_nums,
+                            topic_config.write_queue_nums,
+                            topic_config.perm & self.broker_config().broker_permission(),
+                            topic_config.topic_sys_flag,
+                        )
+                    } else {
+                        topic_config.clone()
+                    };
+                (
+                    register_topic_config.topic_name.clone().unwrap(),
+                    register_topic_config,
+                )
+            })
+            .collect();
+        topic_config_serialize_wrapper
+            .topic_config_serialize_wrapper
+            .topic_config_table = topic_config_table;
+
+        // Build topic queue mapping info map
+        let topic_queue_mapping_info_map: HashMap<CheetahString, TopicQueueMappingInfo> =
+            topic_config_list
+                .iter()
+                .filter_map(|topic_config| {
+                    let topic_name = topic_config.topic_name.clone().unwrap();
+                    self.inner
+                        .topic_queue_mapping_manager
+                        .get_topic_queue_mapping(topic_name.as_str())
+                        .map(|info| {
+                            (
+                                topic_name,
+                                TopicQueueMappingDetail::clone_as_mapping_info(&info),
+                            )
+                        })
+                })
+                .collect();
+
+        if !topic_queue_mapping_info_map.is_empty() {
+            topic_config_serialize_wrapper.topic_queue_mapping_info_map =
+                topic_queue_mapping_info_map;
+        }
+        self.do_register_broker_all(true, false, topic_config_serialize_wrapper)
             .await;
     }
 }
