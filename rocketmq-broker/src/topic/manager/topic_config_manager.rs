@@ -430,13 +430,19 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         let broker_config = self.broker_runtime_inner.broker_config().clone();
         let broker_runtime_inner = self.broker_runtime_inner.clone();
         let topic_config_clone = topic_config.clone();
+        let data_version = self.data_version.as_ref().clone();
         tokio::spawn(async move {
             if broker_config.enable_single_topic_register {
                 broker_runtime_inner
                     .register_single_topic_all(topic_config_clone)
                     .await;
             } else {
-                unimplemented!()
+                BrokerRuntimeInner::register_increment_broker_data(
+                    broker_runtime_inner,
+                    vec![topic_config_clone],
+                    data_version,
+                )
+                .await;
             }
         });
     }
