@@ -45,7 +45,6 @@ use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
 use crate::queue::consume_queue::ConsumeQueueTrait;
 use crate::queue::consume_queue_ext::ConsumeQueueExt;
-use crate::queue::consume_queue_store::ConsumeQueueStoreInterface;
 use crate::queue::queue_offset_operator::QueueOffsetOperator;
 use crate::queue::referred_iterator::ReferredIterator;
 use crate::queue::CqUnit;
