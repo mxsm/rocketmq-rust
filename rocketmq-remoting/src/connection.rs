@@ -151,6 +151,28 @@ impl Connection {
         Ok(())
     }
 
+    /// Sends a `RemotingCommand` over the connection.
+    ///
+    /// # Arguments
+    ///
+    /// * `command` - The `RemotingCommand` to send.
+    ///
+    /// # Returns
+    ///
+    /// A result indicating success or failure.
+    pub async fn send_command_ref(
+        &mut self,
+        command: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        self.buf.clear();
+        command.fast_header_encode(&mut self.buf);
+        if let Some(body_inner) = command.take_body() {
+            self.buf.put(body_inner);
+        }
+        self.writer.send(self.buf.clone().freeze()).await?;
+        Ok(())
+    }
+
     /// Sends a `Bytes` object over the connection.
     ///
     /// # Arguments
