@@ -51,45 +51,17 @@ impl WipeWritePermOfBrokerResponseHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
 pub struct AddWritePermOfBrokerRequestHeader {
     pub broker_name: CheetahString,
 }
 
 impl AddWritePermOfBrokerRequestHeader {
-    const BROKER_NAME: &'static str = "brokerName";
-
     pub fn new(broker_name: impl Into<CheetahString>) -> Self {
         Self {
             broker_name: broker_name.into(),
         }
-    }
-}
-
-impl CommandCustomHeader for AddWritePermOfBrokerRequestHeader {
-    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
-        Some(HashMap::from([(
-            CheetahString::from_static_str(Self::BROKER_NAME),
-            self.broker_name.clone(),
-        )]))
-    }
-}
-
-impl FromMap for AddWritePermOfBrokerRequestHeader {
-    type Error = rocketmq_error::RocketmqError;
-
-    type Target = Self;
-
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
-        Ok(AddWritePermOfBrokerRequestHeader {
-            broker_name: map
-                .get(&CheetahString::from_static_str(
-                    AddWritePermOfBrokerRequestHeader::BROKER_NAME,
-                ))
-                .cloned()
-                .unwrap_or_default(),
-        })
     }
 }
 
