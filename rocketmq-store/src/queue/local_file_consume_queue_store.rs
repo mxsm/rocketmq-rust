@@ -219,11 +219,11 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     fn check_self(&self) {
-        let consume_queue_table = self.inner.consume_queue_table.lock();
+        let consume_queue_table = self.inner.consume_queue_table.lock().clone();
         for consume_queue_table in consume_queue_table.values() {
             for consume_queue in consume_queue_table.values() {
                 let consume_queue = &**consume_queue.as_ref();
-                self.check_self(consume_queue);
+                ConsumeQueueStore::check_self(self, consume_queue);
             }
         }
     }
