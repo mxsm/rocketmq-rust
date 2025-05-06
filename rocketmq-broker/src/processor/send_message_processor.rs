@@ -357,22 +357,18 @@ where
             .broker_config()
             .async_send_enable
         {
-            let mut broker_runtime_inner = self.inner.broker_runtime_inner.clone();
+            let mut message_store = self
+                .inner
+                .broker_runtime_inner
+                .message_store_unchecked()
+                .clone();
             let put_message_result = tokio::spawn(async move {
                 if is_inner_batch {
-                    broker_runtime_inner
-                        .message_store_mut()
-                        .as_mut()
-                        .unwrap()
+                    message_store
                         .put_message(batch_message.message_ext_broker_inner)
                         .await
                 } else {
-                    broker_runtime_inner
-                        .message_store_mut()
-                        .as_mut()
-                        .unwrap()
-                        .put_messages(batch_message)
-                        .await
+                    message_store.put_messages(batch_message).await
                 }
             })
             .await
@@ -404,17 +400,13 @@ where
             let put_message_result = if is_inner_batch {
                 self.inner
                     .broker_runtime_inner
-                    .message_store_mut()
-                    .as_mut()
-                    .unwrap()
+                    .message_store_unchecked_mut()
                     .put_message(batch_message.message_ext_broker_inner)
                     .await
             } else {
                 self.inner
                     .broker_runtime_inner
-                    .message_store_mut()
-                    .as_mut()
-                    .unwrap()
+                    .message_store_unchecked_mut()
                     .put_messages(batch_message)
                     .await
             };
@@ -596,15 +588,12 @@ where
                         .await
                 })
             } else {
-                let mut broker_runtime_inner = self.inner.broker_runtime_inner.clone();
-                tokio::spawn(async move {
-                    broker_runtime_inner
-                        .message_store_mut()
-                        .as_mut()
-                        .unwrap()
-                        .put_message(message_ext)
-                        .await
-                })
+                let mut message_store = self
+                    .inner
+                    .broker_runtime_inner
+                    .message_store_unchecked()
+                    .clone();
+                tokio::spawn(async move { message_store.put_message(message_ext).await })
             };
             let put_message_result = put_message_handle
                 .await
@@ -642,9 +631,7 @@ where
             } else {
                 self.inner
                     .broker_runtime_inner
-                    .message_store_mut()
-                    .as_mut()
-                    .unwrap()
+                    .message_store_unchecked_mut()
                     .put_message(message_ext)
                     .await
             };
