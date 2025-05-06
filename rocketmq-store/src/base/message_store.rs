@@ -608,5 +608,5 @@ pub trait MessageStoreInner: Sync + 'static {
     /// # Arguments
     ///
     /// * `put_message_hook` - The hook to set.
-    fn set_put_message_hook(&self, put_message_hook: BoxedPutMessageHook);
+    fn set_put_message_hook(&mut self, put_message_hook: BoxedPutMessageHook);
 }

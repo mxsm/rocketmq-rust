@@ -123,7 +123,7 @@ use crate::utils::store_util::TOTAL_PHYSICAL_MEMORY_SIZE;
 pub struct LocalFileMessageStore {
     message_store_config: Arc<MessageStoreConfig>,
     broker_config: Arc<BrokerConfig>,
-    put_message_hook_list: Arc<parking_lot::RwLock<Vec<BoxedPutMessageHook>>>,
+    put_message_hook_list: Vec<BoxedPutMessageHook>,
     topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
     commit_log: ArcMut<CommitLog>,
 
@@ -215,7 +215,7 @@ impl LocalFileMessageStore {
         Self {
             message_store_config: message_store_config.clone(),
             broker_config,
-            put_message_hook_list: Arc::new(parking_lot::RwLock::new(vec![])),
+            put_message_hook_list: vec![],
             topic_config_table,
             // message_store_runtime: Some(RocketMQRuntime::new_multi(10, "message-store-thread")),
             commit_log,
@@ -754,7 +754,7 @@ impl MessageStore for LocalFileMessageStore {
     }*/
 
     async fn put_message(&mut self, mut msg: MessageExtBrokerInner) -> PutMessageResult {
-        for hook in self.put_message_hook_list.read().iter() {
+        for hook in self.put_message_hook_list.iter() {
             if let Some(result) = hook.execute_before_put_message(&mut msg) {
                 return result;
             }
@@ -802,7 +802,7 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     async fn put_messages(&mut self, mut message_ext_batch: MessageExtBatch) -> PutMessageResult {
-        for hook in self.put_message_hook_list.read().iter() {
+        for hook in self.put_message_hook_list.iter() {
             if let Some(result) =
                 hook.execute_before_put_message(&mut message_ext_batch.message_ext_broker_inner)
             {
@@ -1928,8 +1928,8 @@ impl MessageStore for LocalFileMessageStore {
         }
     }
 
-    fn set_put_message_hook(&self, put_message_hook: BoxedPutMessageHook) {
-        self.put_message_hook_list.write().push(put_message_hook);
+    fn set_put_message_hook(&mut self, put_message_hook: BoxedPutMessageHook) {
+        self.put_message_hook_list.push(put_message_hook);
     }
 }
 
