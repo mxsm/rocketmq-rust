@@ -502,8 +502,9 @@ impl BrokerRuntime {
         let arc = self.inner.topic_config_manager().topic_config_table();
         let broker_runtime_inner = ArcMut::clone(&self.inner);
         if let Some(ref mut message_store) = self.inner.message_store {
+            let message_store_clone = message_store.clone();
             message_store.set_put_message_hook(Box::new(CheckBeforePutMessageHook::new(
-                message_store.clone(),
+                message_store_clone,
                 config,
             )));
             message_store.set_put_message_hook(Box::new(BatchCheckBeforePutMessageHook::new(arc)));
