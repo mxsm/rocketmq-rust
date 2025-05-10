@@ -363,8 +363,8 @@ where
                     .has_msg_from_topic_name(&retry_topic, random_q, &request_header)
                     .await;
                 if !has_msg
-                    & &broker_config.enable_retry_topic_v2
-                    & &broker_config.retrieve_message_from_pop_retry_topic_v1
+                    && broker_config.enable_retry_topic_v2
+                    && broker_config.retrieve_message_from_pop_retry_topic_v1
                 {
                     let retry_topic_v1 = KeyBuilder::build_pop_retry_topic_v1(
                         request_header.topic.as_str(),
