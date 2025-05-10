@@ -46,7 +46,7 @@ pub struct NotificationProcessor<MS> {
 }
 
 impl<MS: MessageStore> NotificationProcessor<MS> {
-    const BORN_TIME: &'static str = "bornTime";
+    pub const BORN_TIME: &'static str = "bornTime";
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> ArcMut<Self> {
         let mut this = ArcMut::new(Self {
             broker_runtime_inner: broker_runtime_inner.clone(),
@@ -223,6 +223,8 @@ where
         let mut response = RemotingCommand::create_response_command();
         let request_header = request.decode_command_custom_header::<NotificationRequestHeader>()?;
 
+        response.set_opaque_mut(request.opaque());
+
         if !PermName::is_readable(
             self.broker_runtime_inner
                 .broker_config()
@@ -279,20 +281,22 @@ where
             return Ok(Some(response));
         }
 
-        let subscription_group_config = self
+        let subscription_group_config = match self
             .broker_runtime_inner
             .subscription_group_manager()
-            .find_subscription_group_config(&request_header.consumer_group);
-        if subscription_group_config.is_none() {
-            response.set_code_ref(ResponseCode::SubscriptionGroupNotExist);
-            response.set_remark_mut(format!(
-                "subscription group [{}] does not exist, {}",
-                request_header.consumer_group,
-                FAQUrl::suggest_todo(FAQUrl::SUBSCRIPTION_GROUP_NOT_EXIST)
-            ));
-            return Ok(Some(response));
-        }
-        let subscription_group_config = subscription_group_config.unwrap();
+            .find_subscription_group_config(&request_header.consumer_group)
+        {
+            Some(config) => config,
+            None => {
+                response.set_code_ref(ResponseCode::SubscriptionGroupNotExist);
+                response.set_remark_mut(format!(
+                    "subscription group [{}] does not exist, {}",
+                    request_header.consumer_group,
+                    FAQUrl::suggest_todo(FAQUrl::SUBSCRIPTION_GROUP_NOT_EXIST)
+                ));
+                return Ok(Some(response));
+            }
+        };
 
         if !subscription_group_config.consume_enable() {
             response.set_code_ref(ResponseCode::NoPermission);
@@ -347,6 +351,7 @@ where
                     )
                     .await;
             }
+            // if it doesn't have message, fetch retry again
             if !need_retry && !has_msg {
                 let retry_topic = KeyBuilder::build_pop_retry_topic(
                     request_header.topic.as_str(),
@@ -358,8 +363,8 @@ where
                     .has_msg_from_topic_name(&retry_topic, random_q, &request_header)
                     .await;
                 if !has_msg
-                    && broker_config.enable_retry_topic_v2
-                    && broker_config.retrieve_message_from_pop_retry_topic_v1
+                    & &broker_config.enable_retry_topic_v2
+                    & &broker_config.retrieve_message_from_pop_retry_topic_v1
                 {
                     let retry_topic_v1 = KeyBuilder::build_pop_retry_topic_v1(
                         request_header.topic.as_str(),
@@ -374,12 +379,10 @@ where
         }
 
         if !has_msg
-            && self.pop_long_polling_service.polling(
+            && self.pop_long_polling_service.polling_(
                 ctx,
                 request,
                 PollingHeader::new_from_notification_request_header(&request_header),
-                None,
-                None,
             ) == PollingResult::PollingSuc
         {
             return Ok(None);
