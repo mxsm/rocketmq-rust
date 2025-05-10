@@ -13,6 +13,7 @@
 <br/>
 ![GitHub repo size](https://img.shields.io/github/repo-size/mxsm/rocketmq-rust)
 ![Static Badge](https://img.shields.io/badge/MSRV-1.75.0%2B-25b373)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/mxsm/rocketmq-rust)
 
 </div>
 
