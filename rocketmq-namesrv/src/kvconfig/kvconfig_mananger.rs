@@ -160,11 +160,10 @@ impl KVConfigManager {
 
     /// Deletes a key-value configuration.
     pub fn delete_kv_config(&mut self, namespace: &CheetahString, key: &CheetahString) {
-        if !self.config_table.contains_key(namespace) {
-            return;
-        }
-
-        let pre_value = self.config_table.get_mut(namespace).unwrap().remove(key);
+        let pre_value = match self.config_table.get_mut(namespace) {
+            None => return,
+            Some(mut table) => table.remove(key),
+        };
         match pre_value {
             None => {}
             Some(value) => {
