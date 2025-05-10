@@ -18,7 +18,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use parking_lot::RwLock;
 use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::FileUtils;
@@ -33,11 +32,9 @@ use crate::kvconfig::KVConfigSerializeWrapper;
 
 pub struct KVConfigManager {
     pub(crate) config_table: Arc<
-        RwLock<
-            HashMap<
-                CheetahString, /* Namespace */
-                HashMap<CheetahString /* Key */, CheetahString /* Value */>,
-            >,
+        dashmap::DashMap<
+            CheetahString, /* Namespace */
+            HashMap<CheetahString /* Key */, CheetahString /* Value */>,
         >,
     >,
     pub(crate) name_server_runtime_inner: ArcMut<NameServerRuntimeInner>,
@@ -57,7 +54,7 @@ impl KVConfigManager {
         name_server_runtime_inner: ArcMut<NameServerRuntimeInner>,
     ) -> KVConfigManager {
         KVConfigManager {
-            config_table: Arc::new(RwLock::new(HashMap::new())),
+            config_table: Arc::new(dashmap::DashMap::new()),
             name_server_runtime_inner,
         }
     }
@@ -69,8 +66,8 @@ impl KVConfigManager {
     /// A reference to the configuration table.
     pub fn get_config_table(
         &self,
-    ) -> HashMap<CheetahString, HashMap<CheetahString, CheetahString>> {
-        self.config_table.read().clone()
+    ) -> &dashmap::DashMap<CheetahString, HashMap<CheetahString, CheetahString>> {
+        &self.config_table
     }
 
     /// Gets a reference to the Namesrv configuration.
@@ -96,8 +93,9 @@ impl KVConfigManager {
             let wrapper =
                 SerdeJsonUtils::decode::<KVConfigSerializeWrapper>(content.as_bytes()).unwrap();
             if let Some(config_table) = wrapper.config_table {
-                let mut table = self.config_table.write();
-                table.extend(config_table);
+                for (key, value) in config_table {
+                    self.config_table.insert(key, value);
+                }
                 info!("load KV config success");
             }
         }
@@ -116,7 +114,7 @@ impl KVConfigManager {
     /// Persists the current key-value configurations to a file.
     pub fn persist(&mut self) {
         let wrapper =
-            KVConfigSerializeWrapper::new_with_config_table(self.config_table.write().clone());
+            KVConfigSerializeWrapper::new_with_config_table(self.config_table.as_ref().clone());
         let content = serde_json::to_string(&wrapper).unwrap();
 
         let result = FileUtils::string_to_file(
@@ -138,35 +136,35 @@ impl KVConfigManager {
         key: CheetahString,
         value: CheetahString,
     ) {
-        let mut config_table = self.config_table.write();
-        let namespace_entry = config_table.entry(namespace.clone()).or_default();
-        let pre_value = namespace_entry.insert(key.clone(), value.clone());
-        match pre_value {
-            None => {
-                info!(
-                    "putKVConfig create new config item, Namespace: {} Key: {} Value: {}",
-                    namespace, key, value
-                )
-            }
-            Some(_) => {
-                info!(
-                    "putKVConfig update config item, Namespace: {} Key: {} Value: {}",
-                    namespace, key, value
-                )
+        {
+            // use {} to drop namespace_entry
+            let mut namespace_entry = self.config_table.entry(namespace.clone()).or_default();
+            let pre_value = namespace_entry.insert(key.clone(), value.clone());
+            match pre_value {
+                None => {
+                    info!(
+                        "putKVConfig create new config item, Namespace: {} Key: {} Value: {}",
+                        namespace, key, value
+                    )
+                }
+                Some(_) => {
+                    info!(
+                        "putKVConfig update config item, Namespace: {} Key: {} Value: {}",
+                        namespace, key, value
+                    )
+                }
             }
         }
-        drop(config_table);
         self.persist();
     }
 
     /// Deletes a key-value configuration.
     pub fn delete_kv_config(&mut self, namespace: &CheetahString, key: &CheetahString) {
-        let mut config_table = self.config_table.write();
-        if !config_table.contains_key(namespace) {
+        if !self.config_table.contains_key(namespace) {
             return;
         }
 
-        let pre_value = config_table.get_mut(namespace).unwrap().remove(key);
+        let pre_value = self.config_table.get_mut(namespace).unwrap().remove(key);
         match pre_value {
             None => {}
             Some(value) => {
@@ -176,14 +174,12 @@ impl KVConfigManager {
                 )
             }
         }
-        drop(config_table);
         self.persist();
     }
 
     /// Gets the key-value list for a specific namespace.
     pub fn get_kv_list_by_namespace(&self, namespace: &CheetahString) -> Option<Vec<u8>> {
-        let config_table = self.config_table.read();
-        config_table.get(namespace).map(|kv_table| {
+        self.config_table.get(namespace).map(|kv_table| {
             let table = KVTable {
                 table: kv_table.clone(),
             };
@@ -197,8 +193,7 @@ impl KVConfigManager {
         namespace: &CheetahString,
         key: &CheetahString,
     ) -> Option<CheetahString> {
-        let config_table = self.config_table.read();
-        match config_table.get(namespace) {
+        match self.config_table.get(namespace) {
             None => None,
             Some(kv_table) => kv_table.get(key).cloned(),
         }

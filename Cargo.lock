@@ -2368,6 +2368,7 @@ dependencies = [
  "cheetah-string",
  "clap",
  "config",
+ "dashmap",
  "parking_lot",
  "rocketmq-common",
  "rocketmq-error",
