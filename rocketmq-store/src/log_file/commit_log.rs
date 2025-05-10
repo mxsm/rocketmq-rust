@@ -107,7 +107,7 @@ thread_local! {
 fn encode_message_ext(
     message_ext: &MessageExtBrokerInner,
     message_store_config: &Arc<MessageStoreConfig>,
-) -> (Option<PutMessageResult>, ArcMut<BytesMut>) {
+) -> (Option<PutMessageResult>, BytesMut) {
     PUT_MESSAGE_THREAD_LOCAL.with(|thread_local| {
         if thread_local.encoder.borrow().is_none() {
             let encoder = MessageExtEncoder::new(Arc::clone(message_store_config));
