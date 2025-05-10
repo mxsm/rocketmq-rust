@@ -2,13 +2,19 @@
     <img src="resources/logo.png" width="30%" height="auto"/>
 </p>
 
+<div align="center">
+    
 ![GitHub last commit](https://img.shields.io/github/last-commit/mxsm/rocketmq-rust)
 [![Crates.io](https://img.shields.io/crates/v/rocketmq-rust.svg)](https://crates.io/crates/rocketmq-rust)
 [![Docs.rs](https://docs.rs/rocketmq-rust/badge.svg)](https://docs.rs/rocketmq-rust)
 [![CI](https://github.com/mxsm/rocketmq-rust/workflows/CI/badge.svg)](https://github.com/mxsm/rocketmq-rust/actions)
 [![CodeCov][codecov-image]][codecov-url] ![GitHub contributors](https://img.shields.io/github/contributors/mxsm/rocketmq-rust)
-![Crates.io License](https://img.shields.io/crates/l/rocketmq-rust) ![GitHub repo size](https://img.shields.io/github/repo-size/mxsm/rocketmq-rust)
+![Crates.io License](https://img.shields.io/crates/l/rocketmq-rust) 
+<br/>
+![GitHub repo size](https://img.shields.io/github/repo-size/mxsm/rocketmq-rust)
 ![Static Badge](https://img.shields.io/badge/MSRV-1.75.0%2B-25b373)
+
+</div>
 
 <div align="center">
   <a href="https://trendshift.io/repositories/12176" target="_blank"><img src="https://trendshift.io/api/badge/repositories/12176" alt="mxsm%2Frocketmq-rust | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
@@ -145,11 +151,9 @@ cargo run --bin rocketmq-broker-rust
 
 First, start the RocketMQ NameServer and Broker services.
 
-- [**Send a single message
-  **](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md#Send-a-single-message)
+- [**Send a single message**](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md#Send-a-single-message)
 
-- [**Send batch messages
-  **](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md#Send-batch-messages)
+- [**Send batch messages**](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md#Send-batch-messages)
 
 - [**Send RPC messages**](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md#Send-RPC-messages)
 

@@ -27,7 +27,7 @@ pub mod kvconfig_mananger;
 pub struct KVConfigSerializeWrapper {
     #[serde(rename = "configTable")]
     pub config_table: Option<
-        HashMap<
+        dashmap::DashMap<
             CheetahString, /* Namespace */
             HashMap<CheetahString /* Key */, CheetahString /* Value */>,
         >,
@@ -36,7 +36,7 @@ pub struct KVConfigSerializeWrapper {
 
 impl KVConfigSerializeWrapper {
     pub fn new_with_config_table(
-        config_table: HashMap<CheetahString, HashMap<CheetahString, CheetahString>>,
+        config_table: dashmap::DashMap<CheetahString, HashMap<CheetahString, CheetahString>>,
     ) -> KVConfigSerializeWrapper {
         KVConfigSerializeWrapper {
             config_table: Some(config_table),
@@ -45,7 +45,7 @@ impl KVConfigSerializeWrapper {
 
     pub fn new() -> KVConfigSerializeWrapper {
         KVConfigSerializeWrapper {
-            config_table: Some(HashMap::new()),
+            config_table: Some(dashmap::DashMap::new()),
         }
     }
 }
