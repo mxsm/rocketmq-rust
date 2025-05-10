@@ -20,7 +20,7 @@ use std::sync::Arc;
 use crate::base::message_status_enum::AppendMessageStatus;
 use crate::base::message_status_enum::PutMessageStatus;
 
-type MessageIdSupplier = Box<dyn Fn() -> String + Send + Sync>;
+type MessageIdSupplier = Arc<dyn Fn() -> String + Send + Sync>;
 
 /// Represents the result of an append message operation.
 #[derive(Clone)]
@@ -34,7 +34,7 @@ pub struct AppendMessageResult {
     /// Message ID.
     pub msg_id: Option<String>,
     /// Message ID supplier.
-    pub msg_id_supplier: Option<Arc<MessageIdSupplier>>,
+    pub msg_id_supplier: Option<MessageIdSupplier>,
     /// Message storage timestamp.
     pub store_timestamp: i64,
     /// Consume queue's offset (step by one).
