@@ -130,18 +130,14 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         let msg_id_supplier =
             move || -> String { message_utils::build_message_id(addr, wrote_offset) };
 
-        /*let msg_id =
-        message_utils::build_message_id(msg_inner.message_ext_inner.store_host, wrote_offset);*/
-
         let mut queue_offset = msg_inner.queue_offset();
-        //let message_num = CommitLog::get_message_num(msg_inner);
         let message_num = get_message_num(&self.topic_config_table, msg_inner);
         // Transaction messages that require special handling
-        match MessageSysFlag::get_transaction_value(msg_inner.sys_flag()) {
-            // Prepared and Rollback message is not consumed, will not enter the consume queue
-            MessageSysFlag::TRANSACTION_PREPARED_TYPE
-            | MessageSysFlag::TRANSACTION_ROLLBACK_TYPE => queue_offset = 0,
-            _ => {}
+        if let MessageSysFlag::TRANSACTION_PREPARED_TYPE
+        | MessageSysFlag::TRANSACTION_ROLLBACK_TYPE =
+            MessageSysFlag::get_transaction_value(msg_inner.sys_flag())
+        {
+            queue_offset = 0;
         }
 
         // Determines whether there is sufficient free space
@@ -160,17 +156,18 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
                 store_timestamp: msg_inner.store_timestamp(),
                 logics_offset: queue_offset,
                 msg_num: message_num as i32,
-                msg_id_supplier: Some(Arc::new(Box::new(msg_id_supplier))),
+                msg_id_supplier: Some(Arc::new(msg_id_supplier)),
                 page_cache_rt: instant.elapsed().as_millis() as i64,
                 ..Default::default()
             };
         }
 
-        let mut pos = 4 // 1 TOTALSIZE
-             + 4// 2 MAGICCODE
-             + 4// 3 BODYCRC
-             + 4 // 4 QUEUEID
-             + 4; // 5 FLAG
+        /*        let mut pos = 4 // 1 TOTALSIZE
+        + 4// 2 MAGICCODE
+        + 4// 3 BODYCRC
+        + 4 // 4 QUEUEID
+        + 4; // 5 FLAG*/
+        let mut pos = 20; // TOTALSIZE +  MAGICCODE + BODYCRC + QUEUEID + FLAG
         pre_encode_buffer[pos..(pos + 8)].copy_from_slice(&queue_offset.to_be_bytes()); // 6 QUEUEOFFSET
         pos += 8;
         pre_encode_buffer[pos..(pos + 8)].copy_from_slice(&wrote_offset.to_be_bytes()); // 7 PHYSICALOFFSET
