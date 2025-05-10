@@ -46,6 +46,7 @@ pub struct NotificationProcessor<MS> {
 }
 
 impl<MS: MessageStore> NotificationProcessor<MS> {
+    const BORN_TIME: &'static str = "bornTime";
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> ArcMut<Self> {
         let mut this = ArcMut::new(Self {
             broker_runtime_inner: broker_runtime_inner.clone(),
@@ -72,7 +73,6 @@ impl<MS: MessageStore> NotificationProcessor<MS> {
             .notify_message_arriving_with_retry_topic(topic, queue_id);
     }
 
-    #[allow(unused_variables)]
     pub fn notify_message_arriving(
         &self,
         topic: CheetahString,
@@ -207,17 +207,16 @@ where
         ctx: ConnectionHandlerContext,
         mut request: RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        const BORN_TIME: &str = "bornTime";
         let now = get_current_millis();
-        request.add_ext_field_if_not_exist(BORN_TIME, now.to_string());
+        request.add_ext_field_if_not_exist(NotificationProcessor::<MS>::BORN_TIME, now.to_string());
         if request
             .ext_fields()
             .unwrap()
-            .get(BORN_TIME)
+            .get(NotificationProcessor::<MS>::BORN_TIME)
             .map(|v| v == "0")
             .unwrap_or(false)
         {
-            request.add_ext_field(BORN_TIME, now.to_string());
+            request.add_ext_field(NotificationProcessor::<MS>::BORN_TIME, now.to_string());
         }
         let channel = ctx.channel();
 
