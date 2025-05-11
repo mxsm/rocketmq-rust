@@ -33,12 +33,10 @@ pub struct WeakArcMut<T: ?Sized> {
 }
 
 // Implementation of PartialEq for WeakArcMut<T>
-impl<T: PartialEq> PartialEq for WeakArcMut<T> {
-    #[inline]
+impl<T: PartialEq + ?Sized> PartialEq for WeakArcMut<T> {
     fn eq(&self, other: &Self) -> bool {
-        // Upgrade the Weak references to Arc, then compare the inner values
-        if let (Some(self_arc), Some(other_arc)) = (self.inner.upgrade(), other.inner.upgrade()) {
-            unsafe { *self_arc.get() == *other_arc.get() }
+        if let (Some(a), Some(b)) = (self.inner.upgrade(), other.inner.upgrade()) {
+            unsafe { *a.get() == *b.get() }
         } else {
             false
         }
@@ -46,11 +44,11 @@ impl<T: PartialEq> PartialEq for WeakArcMut<T> {
 }
 
 // Implementation of Eq for WeakArcMut<T>
-impl<T: PartialEq> Eq for WeakArcMut<T> {}
+impl<T: Eq + ?Sized> Eq for WeakArcMut<T> {}
 
 // Implementation of Hash for WeakArcMut<T>
-impl<T: Hash> Hash for WeakArcMut<T> {
-    #[inline]
+
+impl<T: Hash + ?Sized> Hash for WeakArcMut<T> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         if let Some(arc) = self.inner.upgrade() {
             unsafe { (*arc.get()).hash(state) }
@@ -59,18 +57,17 @@ impl<T: Hash> Hash for WeakArcMut<T> {
 }
 
 impl<T: ?Sized> Clone for WeakArcMut<T> {
-    #[inline]
     fn clone(&self) -> Self {
-        WeakArcMut {
+        Self {
             inner: self.inner.clone(),
         }
     }
 }
 
-impl<T> WeakArcMut<T> {
+impl<T: ?Sized> WeakArcMut<T> {
     #[inline]
     pub fn upgrade(&self) -> Option<ArcMut<T>> {
-        self.inner.upgrade().map(|value| ArcMut { inner: value })
+        self.inner.upgrade().map(|inner| ArcMut { inner })
     }
 }
 
@@ -80,13 +77,13 @@ pub struct ArcMut<T: ?Sized> {
 }
 
 // Implementation of PartialEq for ArcMut<T>
-impl<T: PartialEq> PartialEq for ArcMut<T> {
-    #[inline]
+impl<T: PartialEq + ?Sized> PartialEq for ArcMut<T> {
     fn eq(&self, other: &Self) -> bool {
-        // Compare the inner values by borrowing them unsafely
         unsafe { *self.inner.get() == *other.inner.get() }
     }
 }
+
+impl<T: Eq + ?Sized> Eq for ArcMut<T> {}
 
 impl<T: Hash> Hash for ArcMut<T> {
     #[inline]
@@ -96,11 +93,14 @@ impl<T: Hash> Hash for ArcMut<T> {
     }
 }
 
-// Implementation of Eq for ArcMut<T>
-// Eq implies PartialEq, so we don't need to add any methods here
-impl<T: PartialEq> Eq for ArcMut<T> {}
-
 impl<T> ArcMut<T> {
+    #[inline]
+    pub fn new(value: T) -> Self {
+        Self {
+            inner: Arc::new(SyncUnsafeCell::new(value)),
+        }
+    }
+
     #[inline]
     #[allow(clippy::mut_from_ref)]
     pub fn mut_from_ref(&self) -> &mut T {
@@ -118,14 +118,20 @@ impl<T> ArcMut<T> {
     pub fn get_inner(&self) -> &Arc<SyncUnsafeCell<T>> {
         &self.inner
     }
-}
 
-impl<T> ArcMut<T> {
-    #[inline]
-    pub fn new(value: T) -> Self {
-        Self {
-            inner: Arc::new(SyncUnsafeCell::new(value)),
+    pub fn try_unwrap(self) -> Result<T, Self> {
+        match Arc::try_unwrap(self.inner) {
+            Ok(cell) => Ok(cell.into_inner()),
+            Err(inner) => Err(Self { inner }),
         }
+    }
+
+    pub fn strong_count(&self) -> usize {
+        Arc::strong_count(&self.inner)
+    }
+
+    pub fn weak_count(&self) -> usize {
+        Arc::weak_count(&self.inner)
     }
 }
 
