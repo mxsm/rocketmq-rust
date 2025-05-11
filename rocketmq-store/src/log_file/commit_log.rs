@@ -15,7 +15,6 @@
  * limitations under the License.
  */
 
-#![allow(clippy::missing_const_for_thread_local)]
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -98,10 +97,10 @@ struct PutMessageThreadLocal {
 }
 
 thread_local! {
-    static PUT_MESSAGE_THREAD_LOCAL: PutMessageThreadLocal = const { PutMessageThreadLocal{
+     static PUT_MESSAGE_THREAD_LOCAL: PutMessageThreadLocal = PutMessageThreadLocal{
         encoder: RefCell::new(None),
-        key: RefCell::new(String::new()),
-    } };
+        key: RefCell::new(String::with_capacity(128)),
+    };
 }
 
 fn encode_message_ext(
@@ -109,13 +108,12 @@ fn encode_message_ext(
     message_store_config: &Arc<MessageStoreConfig>,
 ) -> (Option<PutMessageResult>, BytesMut) {
     PUT_MESSAGE_THREAD_LOCAL.with(|thread_local| {
-        if thread_local.encoder.borrow().is_none() {
+        let mut encoder_ref = thread_local.encoder.borrow_mut();
+        if encoder_ref.is_none() {
             let encoder = MessageExtEncoder::new(Arc::clone(message_store_config));
-            //*thread_local.encoder.borrow_mut() = Some(encoder);
-            thread_local.encoder.replace(Some(encoder));
+            *encoder_ref = Some(MessageExtEncoder::new(Arc::clone(message_store_config)));
         }
-        let mut ref_mut = thread_local.encoder.borrow_mut();
-        let encoder = ref_mut.as_mut().unwrap();
+        let encoder = encoder_ref.as_mut().unwrap();
         let result = encoder.encode(message_ext);
         let bytes_mut = encoder.byte_buf();
         (result, bytes_mut)
@@ -128,14 +126,11 @@ fn encode_message_ext_batch(
     message_store_config: &Arc<MessageStoreConfig>,
 ) -> Option<BytesMut> {
     PUT_MESSAGE_THREAD_LOCAL.with(|thread_local| {
-        if thread_local.encoder.borrow().is_none() {
-            let encoder = MessageExtEncoder::new(Arc::clone(message_store_config));
-            //*thread_local.encoder.borrow_mut() = Some(encoder);
-            thread_local.encoder.replace(Some(encoder));
+        let mut encoder_ref = thread_local.encoder.borrow_mut();
+        if encoder_ref.is_none() {
+            *encoder_ref = Some(MessageExtEncoder::new(Arc::clone(message_store_config)));
         }
-        thread_local
-            .encoder
-            .borrow_mut()
+        encoder_ref
             .as_mut()
             .unwrap()
             .encode_batch(message_ext_batch, put_message_context)
@@ -148,8 +143,8 @@ fn generate_key(msg: &MessageExtBrokerInner) -> String {
         topic_queue_key.clear();
         topic_queue_key.push_str(msg.topic());
         topic_queue_key.push('-');
-        topic_queue_key.push_str(msg.queue_id().to_string().as_str());
-        topic_queue_key.to_string()
+        topic_queue_key.push_str(&msg.queue_id().to_string());
+        topic_queue_key.clone()
     })
 }
 
