@@ -139,25 +139,26 @@ pub struct ChannelInner {
 }
 
 type ChannelMessage = (
-    RemotingCommand,
-    Option<tokio::sync::oneshot::Sender<rocketmq_error::RocketMQResult<RemotingCommand>>>,
-    Option<u64>,
+    RemotingCommand, /* request */
+    // RemotingCommand, /* response */
+    Option<tokio::sync::oneshot::Sender<rocketmq_error::RocketMQResult<RemotingCommand>>>, /* tx */
+    Option<u64>, /* timeout_millis */
 );
 
-pub(crate) async fn run_send(
+pub(crate) async fn handle_send(
     mut connection: ArcMut<Connection>,
     mut rx: Receiver<ChannelMessage>,
     mut response_table: ArcMut<HashMap<i32, ResponseFuture>>,
 ) {
-    while let Some((request, tx, timeout_millis)) = rx.recv().await {
-        let opaque = request.opaque();
+    while let Some((send, tx, timeout_millis)) = rx.recv().await {
+        let opaque = send.opaque();
         if let Some(tx) = tx {
             response_table.insert(
                 opaque,
                 ResponseFuture::new(opaque, timeout_millis.unwrap_or(0), true, tx),
             );
         }
-        match connection.send_command(request).await {
+        match connection.send_command(send).await {
             Ok(_) => {}
             Err(error) => match error {
                 RocketmqError::Io(error) => {
@@ -182,7 +183,7 @@ impl ChannelInner {
         let (tx, rx) = tokio::sync::mpsc::channel(1024);
         //let response_table = ArcMut::new(HashMap::with_capacity(32));
         let connection = ArcMut::new(connection);
-        tokio::spawn(run_send(connection.clone(), rx, response_table.clone()));
+        tokio::spawn(handle_send(connection.clone(), rx, response_table.clone()));
         Self {
             tx,
             connection,
@@ -256,9 +257,13 @@ impl ChannelInner {
         Ok(())
     }
 
-    pub async fn send(&mut self, request: RemotingCommand) -> rocketmq_error::RocketMQResult<()> {
-        let request = request.mark_oneway_rpc();
-        if let Err(err) = self.tx.send((request, None, None)).await {
+    pub async fn send(
+        &self,
+        request: RemotingCommand,
+        timeout_millis: Option<u64>,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        // let request = request.mark_oneway_rpc();
+        if let Err(err) = self.tx.send((request, None, timeout_millis)).await {
             error!("send request failed: {}", err);
             return Err(RocketmqError::ChannelSendRequestFailed(err.to_string()));
         }

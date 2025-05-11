@@ -463,6 +463,7 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
         PollingResult::PollingSuc
     }
 
+    // wake up and try process request
     pub fn wake_up(&self, pop_request: Arc<PopRequest>) -> bool {
         if !pop_request.complete() {
             return false;
@@ -479,11 +480,10 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
                         .await;
                     match response {
                         Ok(result) => {
-                            if let Some(response) = result {
+                            if let Some(mut response) = result {
                                 if let Some(channel) = pop_request.get_channel().upgrade() {
-                                    let _ = channel
-                                        .send_one_way(response.set_opaque(opaque), 1000)
-                                        .await;
+                                    response.set_opaque_mut(opaque);
+                                    let _ = channel.send_one_way(response, 1000).await;
                                 }
                             }
                         }
