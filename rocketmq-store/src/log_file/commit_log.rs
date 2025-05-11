@@ -230,7 +230,7 @@ impl CommitLog {
                 topic_config_table.clone(),
             )),
             put_message_lock: Arc::new(Default::default()),
-            topic_queue_lock: Arc::new(TopicQueueLock::new(
+            topic_queue_lock: Arc::new(TopicQueueLock::with_size(
                 message_store_config.topic_queue_lock_num,
             )),
             topic_config_table,
@@ -368,11 +368,7 @@ impl CommitLog {
         let topic_queue_key = generate_key(&msg_batch.message_ext_broker_inner);
         put_message_context.set_topic_queue_table_key(topic_queue_key.clone());
         msg_batch.encoded_buff = encoded_buff;
-        let topic_queue_lock = self
-            .topic_queue_lock
-            .lock(topic_queue_key.as_str())
-            .lock()
-            .await;
+        let topic_queue_lock = self.topic_queue_lock.lock(topic_queue_key.as_str()).await;
         self.assign_offset(&mut msg_batch.message_ext_broker_inner);
 
         let lock = self.put_message_lock.lock().await;
@@ -561,11 +557,7 @@ impl CommitLog {
         let need_assign_offset = !(self.message_store_config.duplication_enable
             && self.message_store_config.broker_role != BrokerRole::Slave);
 
-        let topic_queue_lock = self
-            .topic_queue_lock
-            .lock(topic_queue_key.as_str())
-            .lock()
-            .await;
+        let topic_queue_lock = self.topic_queue_lock.lock(topic_queue_key.as_str()).await;
         if need_assign_offset {
             self.assign_offset(&mut msg);
         }
