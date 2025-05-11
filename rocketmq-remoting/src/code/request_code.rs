@@ -20,17 +20,17 @@ pub enum RequestCode {
     SendMessage = 10,
     PullMessage = 11,
     QueryMessage = 12,
-    QueryBrokerOffset = 13,
+    QueryBrokerOffset = 13, // Not used in Java
     QueryConsumerOffset = 14,
     UpdateConsumerOffset = 15,
     UpdateAndCreateTopic = 17,
     UpdateAndCreateTopicList = 18,
     GetAllTopicConfig = 21,
-    GetTopicConfigList = 22,
-    GetTopicNameList = 23,
+    GetTopicConfigList = 22, // Not used in Java
+    GetTopicNameList = 23,   // Not used in Java
     UpdateBrokerConfig = 25,
     GetBrokerConfig = 26,
-    TriggerDeleteFiles = 27,
+    TriggerDeleteFiles = 27, // Not used in Java
     GetBrokerRuntimeInfo = 28,
     SearchOffsetByTimestamp = 29,
     GetMaxOffset = 30,
@@ -49,7 +49,7 @@ pub enum RequestCode {
     GetAllConsumerOffset = 43,
     GetAllDelayOffset = 45,
     CheckClientConfig = 46,
-    GetClientConfig = 47,
+    GetClientConfig = 47, // Not used in Java
     UpdateAndCreateAclConfig = 50,
     DeleteAclConfig = 51,
     GetBrokerClusterAclInfo = 52,
@@ -57,6 +57,7 @@ pub enum RequestCode {
     GetBrokerClusterAclConfig = 54, // Deprecated
     GetTimerCheckPoint = 60,
     GetTimerMetrics = 61,
+
     PopMessage = 200050,
     AckMessage = 200051,
     BatchAckMessage = 200151,
@@ -64,6 +65,7 @@ pub enum RequestCode {
     ChangeMessageInvisibleTime = 200053,
     Notification = 200054,
     PollingInfo = 200055,
+
     PutKvConfig = 100,
     GetKvConfig = 101,
     DeleteKvConfig = 102,
@@ -80,12 +82,14 @@ pub enum RequestCode {
     GetAllTopicListFromNameserver = 206,
     DeleteSubscriptionGroup = 207,
     GetConsumeStats = 208,
-    SuspendConsumer = 209,
-    ResumeConsumer = 210,
-    ResetConsumerOffsetInConsumer = 211,
-    ResetConsumerOffsetInBroker = 212,
-    AdjustConsumerThreadPool = 213,
-    WhoConsumeTheMessage = 214,
+
+    SuspendConsumer = 209,               // Not used in Java
+    ResumeConsumer = 210,                // Not used in Java
+    ResetConsumerOffsetInConsumer = 211, // Not used in Java
+    ResetConsumerOffsetInBroker = 212,   // Not used in Java
+    AdjustConsumerThreadPool = 213,      // Not used in Java
+    WhoConsumeTheMessage = 214,          // Not used in Java
+
     DeleteTopicInBroker = 215,
     DeleteTopicInNamesrv = 216,
     RegisterTopicInNamesrv = 217,
@@ -94,12 +98,15 @@ pub enum RequestCode {
     GetConsumerStatusFromClient = 221,
     InvokeBrokerToResetOffset = 222,
     InvokeBrokerToGetConsumerStatus = 223,
+
     QueryTopicConsumeByWho = 300,
     GetTopicsByCluster = 224,
     QueryTopicsByConsumer = 343,
     QuerySubscriptionByConsumer = 345,
-    RegisterFilterServer = 301,
-    RegisterMessageFilterClass = 302,
+
+    RegisterFilterServer = 301,       // Not used in Java
+    RegisterMessageFilterClass = 302, // Not used in Java
+
     QueryConsumeTimeSpan = 303,
     GetSystemTopicListFromNs = 304,
     GetSystemTopicListFromBroker = 305,
@@ -129,6 +136,7 @@ pub enum RequestCode {
     GetSubscriptionGroupConfig = 352,
     UpdateAndGetGroupForbidden = 353,
     LitePullMessage = 361,
+
     QueryAssignment = 400,
     SetMessageRequestMode = 401,
     GetAllMessageRequestMode = 402,
@@ -148,6 +156,40 @@ pub enum RequestCode {
     RemoveColdDataFlowCtrConfig = 2002,
     GetColdDataFlowCtrInfo = 2003,
     SetCommitlogReadMode = 2004,
+
+    // Controller codes
+    ControllerAlterSyncStateSet = 1001,
+    ControllerElectMaster = 1002,
+    ControllerRegisterBroker = 1003,
+    ControllerGetReplicaInfo = 1004,
+    ControllerGetMetadataInfo = 1005,
+    ControllerGetSyncStateData = 1006,
+    GetBrokerEpochCache = 1007,
+    NotifyBrokerRoleChanged = 1008,
+    UpdateControllerConfig = 1009,
+    GetControllerConfig = 1010,
+
+    CleanBrokerData = 1011,
+    ControllerGetNextBrokerId = 1012,
+    ControllerApplyBrokerId = 1013,
+    BrokerCloseChannelRequest = 1014,
+    CheckNotActiveBrokerRequest = 1015,
+    GetBrokerLiveInfoRequest = 1016,
+    GetSyncStateDataRequest = 1017,
+    RaftBrokerHeartBeatEventRequest = 1018,
+
+    // Auth codes
+    AuthCreateUser = 3001,
+    AuthUpdateUser = 3002,
+    AuthDeleteUser = 3003,
+    AuthGetUser = 3004,
+    AuthListUser = 3005,
+    AuthCreateAcl = 3006,
+    AuthUpdateAcl = 3007,
+    AuthDeleteAcl = 3008,
+    AuthGetAcl = 3009,
+    AuthListAcl = 3010,
+
     Unknown = -9999999,
 }
 
@@ -290,6 +332,37 @@ impl From<i32> for RequestCode {
             2002 => RequestCode::RemoveColdDataFlowCtrConfig,
             2003 => RequestCode::GetColdDataFlowCtrInfo,
             2004 => RequestCode::SetCommitlogReadMode,
+
+            1001 => RequestCode::ControllerAlterSyncStateSet,
+            1002 => RequestCode::ControllerElectMaster,
+            1003 => RequestCode::ControllerRegisterBroker,
+            1004 => RequestCode::ControllerGetReplicaInfo,
+            1005 => RequestCode::ControllerGetMetadataInfo,
+            1006 => RequestCode::ControllerGetSyncStateData,
+            1007 => RequestCode::GetBrokerEpochCache,
+            1008 => RequestCode::NotifyBrokerRoleChanged,
+            1009 => RequestCode::UpdateControllerConfig,
+            1010 => RequestCode::GetControllerConfig,
+            1011 => RequestCode::CleanBrokerData,
+            1012 => RequestCode::ControllerGetNextBrokerId,
+            1013 => RequestCode::ControllerApplyBrokerId,
+            1014 => RequestCode::BrokerCloseChannelRequest,
+            1015 => RequestCode::CheckNotActiveBrokerRequest,
+            1016 => RequestCode::GetBrokerLiveInfoRequest,
+            1017 => RequestCode::GetSyncStateDataRequest,
+            1018 => RequestCode::RaftBrokerHeartBeatEventRequest,
+
+            3001 => RequestCode::AuthCreateUser,
+            3002 => RequestCode::AuthUpdateUser,
+            3003 => RequestCode::AuthDeleteUser,
+            3004 => RequestCode::AuthGetUser,
+            3005 => RequestCode::AuthListUser,
+            3006 => RequestCode::AuthCreateAcl,
+            3007 => RequestCode::AuthUpdateAcl,
+            3008 => RequestCode::AuthDeleteAcl,
+            3009 => RequestCode::AuthGetAcl,
+            3010 => RequestCode::AuthListAcl,
+
             _ => RequestCode::Unknown,
         }
     }
@@ -305,7 +378,7 @@ impl RequestCode {
     }
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+/*#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ControllerRequestCode {
     ControllerAlterSyncStateSet = 1001,
     ControllerElectMaster = 1002,
@@ -320,4 +393,4 @@ pub enum ControllerRequestCode {
     CleanBrokerData = 1011,
     ControllerGetNextBrokerId = 1012,
     ControllerApplyBrokerId = 1013,
-}
+}*/
