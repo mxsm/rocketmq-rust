@@ -26,6 +26,7 @@ use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::message::MessageConst;
+use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::common::topic::TopicValidator;
@@ -55,7 +56,7 @@ impl HookUtils {
     pub fn check_before_put_message(
         message_store: &impl MessageStore,
         message_store_config: &Arc<MessageStoreConfig>,
-        msg: &MessageExt,
+        msg: &mut dyn MessageTrait,
     ) -> Option<PutMessageResult> {
         if message_store.is_shutdown() {
             warn!("message store has shutdown, so putMessage is forbidden");
@@ -93,13 +94,13 @@ impl HookUtils {
             PRINT_TIMES.store(0, Ordering::SeqCst);
         }
 
-        let topic_data = msg.topic().as_bytes();
-        let retry_topic = msg.topic().starts_with(RETRY_GROUP_TOPIC_PREFIX);
+        let topic_data = msg.get_topic().as_bytes();
+        let retry_topic = msg.get_topic().starts_with(RETRY_GROUP_TOPIC_PREFIX);
         if !retry_topic && topic_data.len() > i8::MAX as usize {
             warn!(
                 "putMessage message topic[{}] length too long {}, but it is not supported by \
                  broker",
-                msg.topic(),
+                msg.get_topic(),
                 topic_data.len()
             );
             return Some(PutMessageResult::new_default(
@@ -110,7 +111,7 @@ impl HookUtils {
             warn!(
                 "putMessage message topic[{}] length too long {}, but it is not supported by \
                  broker",
-                msg.topic(),
+                msg.get_topic(),
                 topic_data.len()
             );
             return Some(PutMessageResult::new_default(
@@ -118,10 +119,10 @@ impl HookUtils {
             ));
         }
 
-        if msg.body().is_none() {
+        if msg.get_body().is_none() {
             warn!(
                 "putMessage message topic[{}], but message body is null",
-                msg.topic()
+                msg.get_topic()
             );
             return Some(PutMessageResult::new_default(
                 PutMessageStatus::MessageIllegal,
@@ -168,9 +169,6 @@ impl HookUtils {
     }
 
     pub fn handle_schedule_message<MS: MessageStore>(
-        /*timer_message_store: &TimerMessageStore,
-        schedule_message_service: &ScheduleMessageService<MS>,
-        message_store_config: &Arc<MessageStoreConfig>,*/
         broker_runtime_inner: &ArcMut<BrokerRuntimeInner<MS>>,
         msg: &mut MessageExtBrokerInner,
     ) -> Option<PutMessageResult> {

@@ -20,8 +20,10 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_common::common::message::MessageTrait;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::hook::put_message_hook::PutMessageHook;
+use tracing::warn;
 
 use crate::util::hook_utils::HookUtils;
 
@@ -42,10 +44,13 @@ impl PutMessageHook for BatchCheckBeforePutMessageHook {
         "batchCheckBeforePutMessage".to_string()
     }
 
-    fn execute_before_put_message(
-        &self,
-        msg: &mut MessageExtBrokerInner,
-    ) -> Option<PutMessageResult> {
-        HookUtils::check_inner_batch(&self.topic_config_table, &msg.message_ext_inner)
+    fn execute_before_put_message(&self, msg: &mut dyn MessageTrait) -> Option<PutMessageResult> {
+        if let Some(msg) = msg.as_any_mut().downcast_mut::<MessageExtBrokerInner>() {
+            HookUtils::check_inner_batch(&self.topic_config_table, &msg.message_ext_inner)
+        } else {
+            // This should not happen, but just in case
+            warn!("Message is not of type MessageExtBrokerInner");
+            None
+        }
     }
 }
