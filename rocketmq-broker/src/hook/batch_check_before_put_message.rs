@@ -48,8 +48,12 @@ impl PutMessageHook for BatchCheckBeforePutMessageHook {
         if let Some(msg) = msg.as_any_mut().downcast_mut::<MessageExtBrokerInner>() {
             HookUtils::check_inner_batch(&self.topic_config_table, &msg.message_ext_inner)
         } else {
-            // This should not happen, but just in case
-            warn!("Message is not of type MessageExtBrokerInner");
+            // This fallback case exists as a safeguard against unexpected message types.
+            // If this warning is logged, it indicates a potential issue with the message type conversion.
+            warn!(
+                "Message is not of type MessageExtBrokerInner. Actual type: {}",
+                msg.type_name()
+            );
             None
         }
     }
