@@ -43,6 +43,12 @@ impl<MS: MessageStore> PutMessageHook for ScheduleMessageHook<MS> {
     }
 
     fn execute_before_put_message(&self, msg: &mut dyn MessageTrait) -> Option<PutMessageResult> {
+        // Attempt to downcast the generic MessageTrait to MessageExtBrokerInner.
+        // This is necessary because the schedule message handling logic requires
+        // specific fields and methods available only in MessageExtBrokerInner.
+        // If the downcast fails, it means the message is not of the expected type,
+        // so we log a warning and return None to indicate that no further processing
+        // can be performed for this message.
         if let Some(msg) = msg.as_any_mut().downcast_mut::<MessageExtBrokerInner>() {
             HookUtils::handle_schedule_message(&self.broker_runtime_inner, msg)
         } else {
