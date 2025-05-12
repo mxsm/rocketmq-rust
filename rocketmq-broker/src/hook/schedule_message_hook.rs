@@ -14,12 +14,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_common::common::message::MessageTrait;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::hook::put_message_hook::PutMessageHook;
+use tracing::warn;
 
 use crate::broker_runtime::BrokerRuntimeInner;
 use crate::util::hook_utils::HookUtils;
@@ -41,10 +42,12 @@ impl<MS: MessageStore> PutMessageHook for ScheduleMessageHook<MS> {
         "ScheduleMessageHook".to_string()
     }
 
-    fn execute_before_put_message(
-        &self,
-        msg: &mut MessageExtBrokerInner,
-    ) -> Option<PutMessageResult> {
-        HookUtils::handle_schedule_message(&self.broker_runtime_inner, msg)
+    fn execute_before_put_message(&self, msg: &mut dyn MessageTrait) -> Option<PutMessageResult> {
+        if let Some(msg) = msg.as_any_mut().downcast_mut::<MessageExtBrokerInner>() {
+            HookUtils::handle_schedule_message(&self.broker_runtime_inner, msg)
+        } else {
+            warn!("Message is not of type MessageExtBrokerInner");
+            None
+        }
     }
 }
