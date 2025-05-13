@@ -14,6 +14,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+#![feature(duration_constructors_lite)]
+
 use std::sync::Arc;
 use std::time::Duration;
 
