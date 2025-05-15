@@ -141,7 +141,7 @@ pub struct ChannelInner {
 type ChannelMessage = (
     RemotingCommand, /* command */
     Option<tokio::sync::oneshot::Sender<rocketmq_error::RocketMQResult<RemotingCommand>>>, /* tx */
-    Option<u64>, /* timeout_millis */
+    Option<u64>,     /* timeout_millis */
 );
 
 pub(crate) async fn handle_send(
