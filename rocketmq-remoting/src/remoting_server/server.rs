@@ -130,7 +130,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                     return Ok(());
                 }
             };
-            //handle response
+            // process response command
             if cmd.get_type() == RemotingCommandType::RESPONSE {
                 let future_response = self.response_table.remove(&cmd.opaque());
                 if let Some(future_response) = future_response {
@@ -144,6 +144,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                 }
                 continue;
             }
+
             let opaque = cmd.opaque();
             let oneway_rpc = cmd.is_oneway_rpc();
             //before handle request hooks
@@ -161,14 +162,16 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
             let mut response = {
                 let channel = self.channel_inner.1.clone();
                 let ctx = self.connection_handler_context.clone();
-                tokio::select! {
-                    result = self.request_processor.process_request(channel,ctx,cmd) =>  match result{
-                        Ok(value) => value,
-                        Err(_err) => Some(RemotingCommand::create_response_command_with_code(
-                                        ResponseCode::SystemError,
-                                    )),
-                    },
-                }
+                let result = self
+                    .request_processor
+                    .process_request(channel, ctx, cmd)
+                    .await
+                    .unwrap_or_else(|_err| {
+                        Some(RemotingCommand::create_response_command_with_code(
+                            ResponseCode::SystemError,
+                        ))
+                    });
+                result
             };
 
             let exception = self
@@ -184,20 +187,24 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                 continue;
             }
             let response = response.unwrap();
-            tokio::select! {
-                result =self.channel_inner.0.connection.send_command(response.set_opaque(opaque)) => match result{
-                    Ok(_) =>{},
-                    Err(err) => {
-                        match err {
-                            RocketmqError::Io(io_error) => {
-                                error!("connection disconnect: {}", io_error);
-                                return Ok(())
-                            }
-                            _ => { error!("send response failed: {}", err);}
-                        }
-                    },
+            let result = self
+                .channel_inner
+                .0
+                .connection
+                .send_command(response.set_opaque(opaque))
+                .await;
+            match result {
+                Ok(_) => {}
+                Err(err) => match err {
+                    RocketmqError::Io(io_error) => {
+                        error!("connection disconnect: {}", io_error);
+                        return Ok(());
+                    }
+                    _ => {
+                        error!("send response failed: {}", err);
+                    }
                 },
-            }
+            };
         }
         Ok(())
     }
