@@ -41,11 +41,11 @@ serde_json.workspace = true
 
 lazy_static.workspace = true
 
-tempfile = "3.19.1"
+tempfile = "3.20.0"
 
 memmap2 = "0.9.5"
 trait-variant.workspace = true
-sysinfo = "0.35.0"
+sysinfo = "0.35.1"
 once_cell = { workspace = true }
 cheetah-string = { workspace = true }
 thiserror = { workspace = true }
@@ -60,7 +60,7 @@ windows = { version = "0.61.1", features = ["Win32_Security", "Win32_System_Memo
 
 
 [dev-dependencies]
-tempfile = "3.19.1"
+tempfile = "3.20.0"
 criterion = { version = "0.5", features = ["html_reports"] }
 
 [[bench]]

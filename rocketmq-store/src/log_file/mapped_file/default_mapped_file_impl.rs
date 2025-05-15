@@ -19,6 +19,7 @@ use std::fs;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::ops::Deref;
 use std::path::Path;
 use std::path::PathBuf;
 use std::ptr;
@@ -35,7 +36,7 @@ use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_common::UtilAll::ensure_dir_ok;
-use rocketmq_rust::SyncUnsafeCellWrapper;
+use rocketmq_rust::ArcMut;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -61,8 +62,7 @@ static TOTAL_MAPPED_FILES: AtomicI32 = AtomicI32::new(0);
 pub struct DefaultMappedFile {
     reference_resource: ReferenceResourceCounter,
     file: File,
-    mmapped_file: SyncUnsafeCellWrapper<MmapMut>,
-    mapped_bytes: Bytes,
+    mmapped_file: ArcMut<MmapMut>,
     transient_store_pool: Option<TransientStorePool>,
     file_name: CheetahString,
     file_from_offset: u64,
@@ -131,14 +131,10 @@ impl DefaultMappedFile {
         file.set_len(file_size).unwrap();
 
         let mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
-        let mapped_slice: &'static [u8] =
-            unsafe { std::mem::transmute::<&[u8], &'static [u8]>(mmap.as_ref()) };
-        let mapped_bytes = Bytes::from_static(mapped_slice);
-
         Self {
             reference_resource: ReferenceResourceCounter::new(),
             file,
-            mmapped_file: SyncUnsafeCellWrapper::new(mmap),
+            mmapped_file: ArcMut::new(mmap),
             file_name,
             file_from_offset,
             mapped_byte_buffer: None,
@@ -154,7 +150,6 @@ impl DefaultMappedFile {
             start_timestamp: 0,
             transient_store_pool: None,
             stop_timestamp: 0,
-            mapped_bytes,
         }
     }
 
@@ -233,9 +228,6 @@ impl DefaultMappedFile {
         file.set_len(file_size).expect("Set file size failed");
 
         let mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
-        let mapped_slice: &'static [u8] =
-            unsafe { std::mem::transmute::<&[u8], &'static [u8]>(mmap.as_ref()) };
-        let mapped_bytes = Bytes::from_static(mapped_slice);
         Self {
             reference_resource: ReferenceResourceCounter::new(),
             file,
@@ -254,8 +246,7 @@ impl DefaultMappedFile {
             start_timestamp: 0,
             transient_store_pool: Some(transient_store_pool),
             stop_timestamp: 0,
-            mmapped_file: SyncUnsafeCellWrapper::new(mmap),
-            mapped_bytes,
+            mmapped_file: ArcMut::new(mmap),
         }
     }
 }
@@ -527,7 +518,11 @@ impl MappedFile for DefaultMappedFile {
                 Some(SelectMappedBufferResult {
                     start_offset: self.file_from_offset + pos as u64,
                     size,
-                    bytes: Some(self.mapped_bytes.slice(pos as usize..(pos + size) as usize)),
+                    bytes: Some(Bytes::from_owner(MmapRegionSlice::new(
+                        self.mmapped_file.clone(),
+                        pos as usize,
+                        size as usize,
+                    ))),
                     is_in_cache: true,
                     ..Default::default()
                 })
@@ -845,10 +840,11 @@ impl MappedFile for DefaultMappedFile {
             Some(SelectMappedBufferResult {
                 start_offset: self.get_file_from_offset() + pos as u64,
                 size,
-                bytes: Some(
-                    self.mapped_bytes
-                        .slice(pos as usize..read_position as usize),
-                ),
+                bytes: Some(Bytes::from_owner(MmapRegionSlice::new(
+                    self.mmapped_file.clone(),
+                    pos as usize,
+                    size as usize,
+                ))),
                 is_in_cache: true,
                 ..Default::default()
             })
@@ -951,5 +947,30 @@ impl ReferenceResource for DefaultMappedFile {
 
     fn is_cleanup_over(&self) -> bool {
         self.reference_resource.is_cleanup_over()
+    }
+}
+
+pub struct MmapRegionSlice {
+    mmap: ArcMut<MmapMut>,
+    offset: usize,
+    len: usize,
+}
+
+impl Deref for MmapRegionSlice {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        &self.mmap[self.offset..self.offset + self.len]
+    }
+}
+
+impl AsRef<[u8]> for MmapRegionSlice {
+    fn as_ref(&self) -> &[u8] {
+        &self.mmap[self.offset..self.offset + self.len]
+    }
+}
+
+impl MmapRegionSlice {
+    pub fn new(mmap: ArcMut<MmapMut>, offset: usize, len: usize) -> Self {
+        Self { mmap, offset, len }
     }
 }

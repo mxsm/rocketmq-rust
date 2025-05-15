@@ -17,38 +17,50 @@
 use std::hash::DefaultHasher;
 use std::hash::Hash;
 use std::hash::Hasher;
+use std::sync::Arc;
 
 use tokio::sync::Mutex;
+use tokio::sync::MutexGuard;
 
 const MAXIMUM_CAPACITY: usize = 1 << 6;
 
-pub(crate) struct TopicQueueLock {
-    pub(crate) size: usize,
-    pub(crate) size_: usize,
-    pub(crate) lock_vec: Vec<Mutex<()>>,
+#[derive(Clone)]
+pub struct TopicQueueLock {
+    size: usize,
+    locks: Vec<Arc<Mutex<()>>>,
 }
 
-impl TopicQueueLock {
-    pub(crate) fn new(size: usize) -> Self {
-        let size = table_size_for(size);
-        let mut lock_vec = Vec::with_capacity(size);
-        for _ in 0..size {
-            lock_vec.push(Mutex::new(()));
-        }
-        TopicQueueLock {
-            size,
-            size_: size - 1,
-            lock_vec,
-        }
+impl Default for TopicQueueLock {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 impl TopicQueueLock {
-    #[inline]
-    pub(crate) fn lock(&self, topic_queue_key: &str) -> &Mutex<()> {
-        let hash = calculate_hash(topic_queue_key);
-        let index = (hash & self.size_ as u64) as usize;
-        &self.lock_vec[index]
+    pub fn new() -> Self {
+        Self::with_size(32)
+    }
+
+    pub fn with_size(size: usize) -> Self {
+        let size = table_size_for(size);
+        let locks = (0..size)
+            .map(|_| Arc::new(Mutex::new(())))
+            .collect::<Vec<_>>();
+        Self { size, locks }
+    }
+
+    pub async fn lock<'a, K>(&'a self, key: &K) -> MutexGuard<'a, ()>
+    where
+        K: Hash + ?Sized,
+    {
+        let index = self.index_for_key(key);
+        self.locks[index].lock().await
+    }
+
+    fn index_for_key<K: Hash + ?Sized>(&self, key: &K) -> usize {
+        let mut hasher = DefaultHasher::new();
+        key.hash(&mut hasher);
+        (hasher.finish() & 0x7FFF_FFFF) as usize % self.size
     }
 }
 
@@ -112,5 +124,50 @@ mod tests {
     #[test]
     fn calculates_table_size_for_large_number() {
         assert_eq!(table_size_for(1_000_000), 64);
+    }
+
+    #[tokio::test]
+    async fn locks_same_key_exclusively() {
+        let lock = TopicQueueLock::new();
+        let key = "key";
+
+        let guard1 = lock.lock(&key).await;
+        let lock_clone = lock.clone();
+
+        let handle = tokio::spawn(async move {
+            let _ = lock_clone.lock(&key).await;
+        });
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        assert!(!handle.is_finished());
+
+        drop(guard1);
+        handle.await.unwrap();
+    }
+
+    #[test]
+    fn calculates_index_for_key_correctly() {
+        let lock = TopicQueueLock::with_size(16);
+        let key1 = "key1";
+        let key2 = "key21";
+
+        let index1 = lock.index_for_key(&key1);
+        let index2 = lock.index_for_key(&key2);
+
+        assert!(index1 < 16);
+        assert!(index2 < 16);
+        assert_ne!(index1, index2);
+    }
+
+    #[test]
+    fn creates_correct_number_of_locks() {
+        let lock = TopicQueueLock::with_size(32);
+        assert_eq!(lock.locks.len(), 32);
+    }
+
+    #[test]
+    fn handles_zero_capacity_gracefully() {
+        let lock = TopicQueueLock::with_size(0);
+        assert_eq!(lock.locks.len(), 1);
     }
 }

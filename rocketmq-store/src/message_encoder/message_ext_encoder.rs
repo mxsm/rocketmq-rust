@@ -26,7 +26,6 @@ use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::CRC32Utils::crc32;
 use rocketmq_common::MessageDecoder;
 use rocketmq_common::MessageDecoder::PROPERTY_SEPARATOR;
-use rocketmq_rust::ArcMut;
 use tracing::warn;
 
 use crate::base::message_result::PutMessageResult;
@@ -37,7 +36,7 @@ use crate::log_file::commit_log::CommitLog;
 use crate::log_file::commit_log::CRC32_RESERVED_LEN;
 
 pub struct MessageExtEncoder {
-    byte_buf: ArcMut<bytes::BytesMut>,
+    byte_buf: BytesMut,
     max_message_body_size: i32,
     max_message_size: i32,
     crc32_reserved_length: i32,
@@ -58,7 +57,7 @@ impl MessageExtEncoder {
             0
         };
         MessageExtEncoder {
-            byte_buf: ArcMut::new(BytesMut::with_capacity(max_message_size as usize)),
+            byte_buf: BytesMut::with_capacity(max_message_size as usize),
             max_message_body_size,
             max_message_size,
             crc32_reserved_length,
@@ -221,7 +220,7 @@ impl MessageExtEncoder {
         } else {
             self.byte_buf.put_u8(topic_length as u8);
         }
-        self.byte_buf.put(topic_data);
+        self.byte_buf.put_slice(topic_data);
 
         None
     }
@@ -359,7 +358,7 @@ impl MessageExtEncoder {
         } else {
             self.byte_buf.put_u8(topic_length as u8);
         }
-        self.byte_buf.put(topic_data);
+        self.byte_buf.put_slice(topic_data);
 
         // 17 PROPERTIES
         self.byte_buf.put_u16(properties_length as u16);
@@ -515,7 +514,7 @@ impl MessageExtEncoder {
                     self.byte_buf
                         .put_u8(MessageDecoder::PROPERTY_SEPARATOR as u8);
                 }
-                self.byte_buf.put(batch_prop_data);
+                self.byte_buf.put_slice(batch_prop_data);
             }
             // 18 CRC32
             self.byte_buf.advance(self.crc32_reserved_length as usize);
@@ -545,8 +544,8 @@ impl MessageExtEncoder {
         self.byte_buf.resize(self.max_message_size as usize, 0);
     }
 
-    pub fn byte_buf(&mut self) -> ArcMut<bytes::BytesMut> {
-        self.byte_buf.clone()
+    pub fn byte_buf(&mut self) -> BytesMut {
+        self.byte_buf.split()
     }
 }
 
