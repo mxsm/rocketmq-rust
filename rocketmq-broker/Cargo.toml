@@ -63,7 +63,7 @@ futures = "0.3.31"
 [dev-dependencies]
 mockall = "0.13.1"
 static_assertions = { version = "1" }
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.6", features = ["html_reports"] }
 
 [[bin]]
 name = "rocketmq-broker-rust"
