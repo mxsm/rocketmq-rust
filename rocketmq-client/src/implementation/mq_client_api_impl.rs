@@ -172,22 +172,23 @@ impl MQClientAPIImpl {
 
     pub async fn fetch_name_server_addr(&mut self) -> Option<String> {
         let addrs = self.top_addressing.fetch_ns_addr();
-        if addrs.is_some() && !addrs.as_ref().unwrap().is_empty() {
-            let mut notify = false;
-            if let Some(addr) = self.name_srv_addr.as_mut() {
-                let addrs = addrs.unwrap();
-                if addr != addrs.as_str() {
-                    *addr = addrs.clone();
-                    notify = true;
+
+        if let Some(addrs) = addrs.as_ref() {
+            if !addrs.is_empty() {
+                let mut notify = false;
+                if let Some(addr) = self.name_srv_addr.as_mut() {
+                    if addr != addrs.as_str() {
+                        *addr = addrs.clone();
+                        notify = true;
+                    }
+                }
+                if notify {
+                    let name_srv = self.name_srv_addr.as_ref().unwrap().as_str();
+                    self.update_name_server_address_list(name_srv).await;
+                    return Some(name_srv.to_string());
                 }
             }
-            if notify {
-                let name_srv = self.name_srv_addr.as_ref().unwrap().as_str();
-                self.update_name_server_address_list(name_srv).await;
-                return Some(name_srv.to_string());
-            }
         }
-
         self.name_srv_addr.clone()
     }
 
@@ -566,19 +567,20 @@ impl MQClientAPIImpl {
             .unwrap();
         let mut topic = msg.get_topic().to_string();
         let namespace = self.client_config.get_namespace();
-        if namespace.is_some() && !namespace.as_ref().unwrap().is_empty() {
-            topic = NamespaceUtil::without_namespace_with_namespace(
-                topic.as_str(),
-                namespace.as_ref().unwrap().as_str(),
-            );
+        if let Some(ns) = namespace.as_ref() {
+            if !ns.is_empty() {
+                topic =
+                    NamespaceUtil::without_namespace_with_namespace(topic.as_str(), ns.as_str());
+            }
         }
         let message_queue =
             MessageQueue::from_parts(topic.as_str(), broker_name, response_header.queue_id());
         let mut uniq_msg_id = MessageClientIDSetter::get_uniq_id(msg);
         let msgs = msg.as_any().downcast_ref::<MessageBatch>();
-        if msgs.is_some() && response_header.batch_uniq_id().is_none() {
+
+        if let (Some(msgs), true) = (msgs, response_header.batch_uniq_id().is_none()) {
             let mut sb = String::new();
-            for msg in msgs.unwrap().messages.as_ref().unwrap().iter() {
+            for msg in msgs.messages.as_ref().unwrap().iter() {
                 sb.push_str(if sb.is_empty() { "" } else { "," });
                 sb.push_str(MessageClientIDSetter::get_uniq_id(msg).unwrap().as_str());
             }

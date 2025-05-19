@@ -1347,15 +1347,7 @@ pub fn check_message_and_return_size(
             .cloned();
         if check_dup_info {
             let dup_info = properties_map.get(MessageConst::DUP_INFO).cloned();
-            if dup_info.is_none() {
-                warn!("DupInfo in properties check failed. dupInfo=null");
-                return DispatchRequest {
-                    msg_size: -1,
-                    success: false,
-                    ..Default::default()
-                };
-            } else {
-                let content = dup_info.unwrap();
+            if let Some(content) = dup_info {
                 let vec = content.split('_').collect::<Vec<&str>>();
                 if vec.len() != 2 {
                     warn!("DupInfo in properties check failed. dupInfo={}", content);
@@ -1365,6 +1357,13 @@ pub fn check_message_and_return_size(
                         ..Default::default()
                     };
                 }
+            } else {
+                warn!("DupInfo in properties check failed. dupInfo=null");
+                return DispatchRequest {
+                    msg_size: -1,
+                    success: false,
+                    ..Default::default()
+                };
             }
         }
         let tags = properties_map.get(MessageConst::PROPERTY_TAGS);
@@ -1375,16 +1374,20 @@ pub fn check_message_and_return_size(
             let delay_time_level = properties_map.get(&CheetahString::from_static_str(
                 MessageConst::PROPERTY_DELAY_TIME_LEVEL,
             ));
-            if delay_time_level.is_some() && TopicValidator::RMQ_SYS_SCHEDULE_TOPIC == topic {
-                let mut delay_level = delay_time_level.unwrap().parse::<i32>().unwrap();
-                if delay_level > max_delay_level {
-                    delay_level = max_delay_level;
-                }
-                if delay_level > 0 {
-                    if let Some(delay_level) = delay_level_table.get(&delay_level) {
-                        tags_code = *delay_level + store_timestamp;
-                    } else {
-                        tags_code = store_timestamp + 1000;
+            if let (Some(delay_time_level_str), true) = (
+                delay_time_level,
+                TopicValidator::RMQ_SYS_SCHEDULE_TOPIC == topic,
+            ) {
+                if let Ok(mut delay_level) = delay_time_level_str.parse::<i32>() {
+                    if delay_level > max_delay_level {
+                        delay_level = max_delay_level;
+                    }
+                    if delay_level > 0 {
+                        if let Some(delay_time) = delay_level_table.get(&delay_level) {
+                            tags_code = *delay_time + store_timestamp;
+                        } else {
+                            tags_code = store_timestamp + 1000;
+                        }
                     }
                 }
             }

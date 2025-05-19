@@ -597,7 +597,6 @@ impl ConsumeRequest {
                     default_mqpush_consumer_impl.execute_hook_before(&mut consume_message_context);
                 }
                 let begin_timestamp = Instant::now();
-                let mut return_type = ConsumeReturnType::Success;
                 let mut has_exception = false;
                 let consume_lock = self.process_queue.consume_lock.write().await;
                 if self.process_queue.is_dropped() {
@@ -637,23 +636,31 @@ impl ConsumeRequest {
                     );
                 }
                 let consume_rt = begin_timestamp.elapsed().as_millis() as u64;
-                if status.is_none() {
-                    if has_exception {
-                        return_type = ConsumeReturnType::Exception;
-                    } else {
-                        return_type = ConsumeReturnType::ReturnNull;
+                let return_type = match status {
+                    None => {
+                        if has_exception {
+                            ConsumeReturnType::Exception
+                        } else {
+                            ConsumeReturnType::ReturnNull
+                        }
                     }
-                } else if consume_rt
-                    >= default_mqpush_consumer_impl.consumer_config.consume_timeout * 60 * 1000
-                {
-                    return_type = ConsumeReturnType::TimeOut;
-                } else if *status.as_ref().unwrap()
-                    == ConsumeOrderlyStatus::SuspendCurrentQueueAMoment
-                {
-                    return_type = ConsumeReturnType::Failed;
-                } else if *status.as_ref().unwrap() == ConsumeOrderlyStatus::Success {
-                    return_type = ConsumeReturnType::Success;
-                }
+                    Some(status_value) => {
+                        if consume_rt
+                            >= default_mqpush_consumer_impl.consumer_config.consume_timeout
+                                * 60
+                                * 1000
+                        {
+                            ConsumeReturnType::TimeOut
+                        } else if status_value == ConsumeOrderlyStatus::SuspendCurrentQueueAMoment {
+                            ConsumeReturnType::Failed
+                        } else if status_value == ConsumeOrderlyStatus::Success {
+                            ConsumeReturnType::Success
+                        } else {
+                            // Handle other status cases
+                            ConsumeReturnType::Success
+                        }
+                    }
+                };
                 if default_mqpush_consumer_impl.has_hook() {
                     consume_message_context.as_mut().unwrap().props.insert(
                         CheetahString::from_static_str(mix_all::CONSUME_CONTEXT_TYPE),

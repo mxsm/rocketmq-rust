@@ -253,8 +253,9 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
                     pop_request.get_subscription_data(),
                 );
 
-                if message_filter.is_some() && subscription_data.is_some() {
-                    let message_filter = message_filter.unwrap();
+                if let (Some(message_filter), Some(_subscription_data)) =
+                    (message_filter, subscription_data)
+                {
                     let mut match_result = message_filter.is_matched_by_consume_queue(
                         tags_code,
                         Some(&CqExtUnit::new(

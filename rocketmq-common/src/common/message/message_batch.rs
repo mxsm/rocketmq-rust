@@ -87,9 +87,8 @@ impl MessageBatch {
                     "Retry group topic is not supported for batching".to_string(),
                 ));
             }
-            if first.is_none() {
-                first = Some(message);
-            } else {
+
+            if let Some(first_message) = first {
                 let first_message = first.unwrap();
                 if first_message.get_topic() != message.get_topic() {
                     return Err(UnsupportedOperationException(
@@ -102,6 +101,8 @@ impl MessageBatch {
                             .to_string(),
                     ));
                 }
+            } else {
+                first = Some(message);
             }
         }
         let first = first.unwrap();

@@ -710,65 +710,66 @@ where
             .broker_runtime_inner
             .consumer_offset_manager()
             .query_then_erase_reset_offset(topic, group, queue_id);
-        let get_message_result = if use_reset_offset_feature && reset_offset.is_some() {
-            let mut get_message_result = GetMessageResult::new();
-            get_message_result.set_status(Some(GetMessageStatus::OffsetReset));
-            get_message_result.set_next_begin_offset(reset_offset.unwrap());
-            get_message_result.set_min_offset(
-                self.broker_runtime_inner
-                    .message_store()
-                    .as_ref()
-                    .unwrap()
-                    .get_min_offset_in_queue(topic, queue_id),
-            );
-            get_message_result.set_max_offset(
-                self.broker_runtime_inner
-                    .message_store()
-                    .as_ref()
-                    .unwrap()
-                    .get_max_offset_in_queue(topic, queue_id),
-            );
-            get_message_result.set_suggest_pulling_from_slave(false);
-            Some(get_message_result)
-        } else {
-            let broadcast_init_offset = self.query_broadcast_pull_init_offset(
-                topic,
-                group,
-                queue_id,
-                &request_header,
-                &channel,
-            );
-            if broadcast_init_offset >= 0 {
+        let get_message_result =
+            if let (true, Some(reset_offset)) = (use_reset_offset_feature, reset_offset) {
                 let mut get_message_result = GetMessageResult::new();
                 get_message_result.set_status(Some(GetMessageStatus::OffsetReset));
-                get_message_result.set_next_begin_offset(broadcast_init_offset);
+                get_message_result.set_next_begin_offset(reset_offset);
+                get_message_result.set_min_offset(
+                    self.broker_runtime_inner
+                        .message_store()
+                        .as_ref()
+                        .unwrap()
+                        .get_min_offset_in_queue(topic, queue_id),
+                );
+                get_message_result.set_max_offset(
+                    self.broker_runtime_inner
+                        .message_store()
+                        .as_ref()
+                        .unwrap()
+                        .get_max_offset_in_queue(topic, queue_id),
+                );
+                get_message_result.set_suggest_pulling_from_slave(false);
                 Some(get_message_result)
             } else {
-                let result = self
-                    .broker_runtime_inner
-                    .message_store()
-                    .as_ref()
-                    .unwrap()
-                    .get_message(
-                        group,
-                        topic,
-                        queue_id,
-                        request_header.queue_offset,
-                        request_header.max_msg_nums,
-                        //   MAX_PULL_MSG_SIZE,
-                        Some(message_filter.clone()),
-                    )
-                    .await;
-                if result.is_none() {
-                    return Some(
-                        response
-                            .set_code(ResponseCode::SystemError)
-                            .set_remark("store getMessage return None"),
-                    );
+                let broadcast_init_offset = self.query_broadcast_pull_init_offset(
+                    topic,
+                    group,
+                    queue_id,
+                    &request_header,
+                    &channel,
+                );
+                if broadcast_init_offset >= 0 {
+                    let mut get_message_result = GetMessageResult::new();
+                    get_message_result.set_status(Some(GetMessageStatus::OffsetReset));
+                    get_message_result.set_next_begin_offset(broadcast_init_offset);
+                    Some(get_message_result)
+                } else {
+                    let result = self
+                        .broker_runtime_inner
+                        .message_store()
+                        .as_ref()
+                        .unwrap()
+                        .get_message(
+                            group,
+                            topic,
+                            queue_id,
+                            request_header.queue_offset,
+                            request_header.max_msg_nums,
+                            //   MAX_PULL_MSG_SIZE,
+                            Some(message_filter.clone()),
+                        )
+                        .await;
+                    if result.is_none() {
+                        return Some(
+                            response
+                                .set_code(ResponseCode::SystemError)
+                                .set_remark("store getMessage return None"),
+                        );
+                    }
+                    result
                 }
-                result
-            }
-        };
+            };
         if let Some(get_message_result) = get_message_result {
             return self
                 .pull_message_result_handler

@@ -114,12 +114,12 @@ impl MessageFilter for ExpressionMessageFilter {
             return true;
         }
 
-        let temp_properties = if properties.is_none() && msg_buffer.is_some() {
-            let bytes = msg_buffer.unwrap();
-            let mut bytes_ = Bytes::copy_from_slice(bytes);
-            message_decoder::decode_properties(&mut bytes_)
-        } else {
-            None
+        let temp_properties = match (properties, msg_buffer) {
+            (None, Some(bytes)) => {
+                let mut bytes_ = Bytes::copy_from_slice(bytes);
+                message_decoder::decode_properties(&mut bytes_)
+            }
+            _ => None,
         };
         let context = MessageEvaluationContext::new(&temp_properties);
         if let Some(filter) = real_filter_data.compiled_expression() {

@@ -335,7 +335,6 @@ impl MappedFileQueue {
         }
     }
 
-    #[inline]
     pub fn find_mapped_file_by_offset(
         &self,
         offset: i64,
@@ -343,45 +342,48 @@ impl MappedFileQueue {
     ) -> Option<Arc<DefaultMappedFile>> {
         let first_mapped_file = self.get_first_mapped_file();
         let last_mapped_file = self.get_last_mapped_file();
-        if first_mapped_file.is_some() && last_mapped_file.is_some() {
-            if offset < first_mapped_file.as_ref().unwrap().get_file_from_offset() as i64
-                || offset
-                    >= last_mapped_file.as_ref().unwrap().get_file_from_offset() as i64
-                        + self.mapped_file_size as i64
-            {
+
+        match (first_mapped_file, last_mapped_file) {
+            (Some(first), Some(last)) => {
+                let first_offset = first.get_file_from_offset() as i64;
+                let last_offset = last.get_file_from_offset() as i64 + self.mapped_file_size as i64;
+
+                if offset < first_offset || offset >= last_offset {
+                    return if return_first_on_not_found {
+                        Some(first)
+                    } else {
+                        None
+                    };
+                }
+
+                // Try direct index calculation (O(1) access)
+                let index = (offset as usize / self.mapped_file_size as usize)
+                    - (first_offset as usize / self.mapped_file_size as usize);
+
+                let read_guard = self.mapped_files.read();
+                if let Some(file) = read_guard.get(index).cloned() {
+                    if offset >= file.get_file_from_offset() as i64 {
+                        return Some(file);
+                    }
+                }
+
+                // Fall back to linear search if direct indexing fails
+                for file in read_guard.iter() {
+                    let file_offset = file.get_file_from_offset() as i64;
+                    if offset >= file_offset && offset < file_offset + self.mapped_file_size as i64
+                    {
+                        return Some(file.clone());
+                    }
+                }
+
+                // Not found in any file
                 if return_first_on_not_found {
-                    first_mapped_file
+                    Some(first)
                 } else {
                     None
                 }
-            } else {
-                let index = offset as usize / self.mapped_file_size as usize
-                    - first_mapped_file.as_ref().unwrap().get_file_from_offset() as usize
-                        / self.mapped_file_size as usize;
-                let read_guard = self.mapped_files.read();
-                let target_file = read_guard.get(index).cloned();
-                if target_file.is_some()
-                    && offset >= target_file.as_ref().unwrap().get_file_from_offset() as i64
-                {
-                    return target_file;
-                }
-                for index in 0..read_guard.len() {
-                    let mapped_file = read_guard.get(index).unwrap();
-                    if offset >= mapped_file.get_file_from_offset() as i64
-                        && offset
-                            < mapped_file.get_file_from_offset() as i64
-                                + self.mapped_file_size as i64
-                    {
-                        return Some(mapped_file.clone());
-                    }
-                }
-                if return_first_on_not_found {
-                    return first_mapped_file;
-                }
-                None
             }
-        } else {
-            None
+            _ => None,
         }
     }
 

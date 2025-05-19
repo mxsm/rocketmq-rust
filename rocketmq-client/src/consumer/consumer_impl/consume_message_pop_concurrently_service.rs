@@ -412,7 +412,6 @@ impl ConsumeRequest {
 
         let begin_timestamp = Instant::now();
         let mut has_exception = false;
-        let mut return_type = ConsumeReturnType::Success;
         let mut status = None;
 
         if !self.msgs.is_empty() {
@@ -456,21 +455,27 @@ impl ConsumeRequest {
             }
         }
         let consume_rt = begin_timestamp.elapsed().as_millis() as u64;
-        if status.is_none() {
-            if has_exception {
-                return_type = ConsumeReturnType::Exception;
-            } else {
-                return_type = ConsumeReturnType::ReturnNull;
+        let return_type = match status {
+            None => {
+                if has_exception {
+                    ConsumeReturnType::Exception
+                } else {
+                    ConsumeReturnType::ReturnNull
+                }
             }
-        } else if consume_rt
-            > default_mqpush_consumer_impl.consumer_config.consume_timeout * 60 * 1000
-        {
-            return_type = ConsumeReturnType::TimeOut;
-        } else if status.unwrap() == ConsumeConcurrentlyStatus::ReconsumeLater {
-            return_type = ConsumeReturnType::Failed;
-        } else if status.unwrap() == ConsumeConcurrentlyStatus::ConsumeSuccess {
-            return_type = ConsumeReturnType::Success;
-        }
+            Some(s) => {
+                if consume_rt
+                    > default_mqpush_consumer_impl.consumer_config.consume_timeout * 60 * 1000
+                {
+                    ConsumeReturnType::TimeOut
+                } else if s == ConsumeConcurrentlyStatus::ReconsumeLater {
+                    ConsumeReturnType::Failed
+                } else {
+                    // Must be ConsumeSuccess
+                    ConsumeReturnType::Success
+                }
+            }
+        };
 
         if default_mqpush_consumer_impl.has_hook() {
             consume_message_context.as_mut().unwrap().props.insert(
