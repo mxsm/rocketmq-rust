@@ -22,7 +22,8 @@ set PROJECTS= rocketmq-error ^
  rocketmq-namesrv ^
  rocketmq-broker ^
  rocketmq-tools ^
- rocketmq-tui
+ rocketmq-tui ^
+ rocketmq-example
 
 for %%P in (%PROJECTS%) do (
     echo Packaging %%P...

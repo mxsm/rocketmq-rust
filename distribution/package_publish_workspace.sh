@@ -9,10 +9,10 @@ cd ..
 echo "Starting to package Rust workspace projects..."
 
 PROJECTS=(
+    "rocketmq-error"
     "rocketmq-common"
     "rocketmq-runtime"
     "rocketmq-macros"
-    "rocketmq-error"
     "rocketmq"
     "rocketmq-filter"
     "rocketmq-store"
@@ -23,6 +23,7 @@ PROJECTS=(
     "rocketmq-broker"
     "rocketmq-tools"
     "rocketmq-tui"
+    "rocketmq-example"
 )
 
 for PROJECT in "${PROJECTS[@]}"
