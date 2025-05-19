@@ -2207,7 +2207,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-broker"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2245,7 +2245,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-cli"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "bytes",
  "cheetah-string",
@@ -2257,7 +2257,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-client-rust"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "bytes",
  "cheetah-string",
@@ -2282,7 +2282,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-common"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "byteorder",
@@ -2324,14 +2324,14 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-error"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "thiserror 2.0.12",
 ]
 
 [[package]]
 name = "rocketmq-example"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "cheetah-string",
  "rocketmq-client-rust",
@@ -2345,7 +2345,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-filter"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "cheetah-string",
  "serde",
@@ -2353,7 +2353,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-macros"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2362,7 +2362,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-namesrv"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "cheetah-string",
@@ -2384,7 +2384,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-remoting"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "bitvec",
@@ -2418,14 +2418,14 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-runtime"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "tokio",
 ]
 
 [[package]]
 name = "rocketmq-rust"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "tokio",
  "tracing",
@@ -2433,7 +2433,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-store"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "bytes",
  "cheetah-string",
@@ -2461,7 +2461,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-tools"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "cheetah-string",
  "rocketmq-client-rust",
@@ -2476,7 +2476,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-tui"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "crossterm",
