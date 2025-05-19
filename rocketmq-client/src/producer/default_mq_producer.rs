@@ -509,17 +509,17 @@ impl DefaultMQProducer {
         M: MessageTrait + Clone + Send + Sync,
     {
         if send_callback.is_none() {
-            if mq.is_none() {
+            if let Some(mq) = mq {
                 self.default_mqproducer_impl
                     .as_mut()
                     .unwrap()
-                    .send(&mut msg)
+                    .sync_send_with_message_queue(msg, mq)
                     .await
             } else {
                 self.default_mqproducer_impl
                     .as_mut()
                     .unwrap()
-                    .sync_send_with_message_queue(msg, mq.unwrap())
+                    .send(&mut msg)
                     .await
             }
         } else if mq.is_none() {

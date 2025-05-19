@@ -1052,8 +1052,7 @@ impl DefaultMQPushConsumerImpl {
         }
         let mut sub_expression = None;
         let mut class_filter = false;
-        if subscription_data.is_some() {
-            let subscription_data = subscription_data.as_ref().unwrap();
+        if let Some(subscription_data) = subscription_data.as_ref() {
             if self.consumer_config.post_subscription_when_pull
                 && !subscription_data.class_filter_mode
             {

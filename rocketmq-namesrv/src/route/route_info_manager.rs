@@ -612,17 +612,17 @@ impl RouteInfoManager {
             .get_mut(topic_config.topic_name.as_ref().unwrap().as_str());
         if let Some(queue_data_map_inner) = queue_data_map {
             let existed_qd = queue_data_map_inner.get(broker_name);
-            if existed_qd.is_none() {
-                queue_data_map_inner.insert(broker_name.clone(), queue_data);
-            } else {
-                let unwrap = existed_qd.unwrap();
-                if unwrap != &queue_data {
+
+            if let Some(existed_qd) = existed_qd {
+                if existed_qd != &queue_data {
                     info!(
                         "topic changed, {} OLD: {:?} NEW: {:?}",
                         topic_config.topic_name.as_ref().unwrap(),
-                        unwrap,
+                        existed_qd,
                         queue_data
                     );
+                    queue_data_map_inner.insert(broker_name.clone(), queue_data);
+                } else {
                     queue_data_map_inner.insert(broker_name.clone(), queue_data);
                 }
             }
@@ -1118,10 +1118,7 @@ impl RouteInfoManager {
                         // Master has been unregistered, wipe the write perm
                         let flag = {
                             let broker_data = self.broker_addr_table.get(*broker_name);
-                            if broker_data.is_none() {
-                                true
-                            } else {
-                                let broker_data_unwrap = broker_data.unwrap();
+                            if let Some(broker_data_unwrap) = broker_data {
                                 if broker_data_unwrap.broker_addrs().is_empty() {
                                     true
                                 } else {
@@ -1133,6 +1130,8 @@ impl RouteInfoManager {
                                         .unwrap()
                                         > 0
                                 }
+                            } else {
+                                true
                             }
                         };
                         //if self.is_no_master_exists(broker_name.as_str()) {

@@ -535,7 +535,8 @@ impl MQClientInstance {
         producer_config: Option<&Arc<ProducerConfig>>,
     ) -> bool {
         let lock = self.lock_namesrv.lock().await;
-        let topic_route_data = if is_default && producer_config.is_some() {
+        let topic_route_data = if let (true, Some(producer_config)) = (is_default, producer_config)
+        {
             let mut result = self
                 .mq_client_api_impl
                 .as_mut()
@@ -548,7 +549,6 @@ impl MQClientInstance {
             if let Some(topic_route_data) = result.as_mut() {
                 for data in topic_route_data.queue_datas.iter_mut() {
                     let queue_nums = producer_config
-                        .unwrap()
                         .default_topic_queue_nums()
                         .max(data.read_queue_nums);
                     data.read_queue_nums = queue_nums;

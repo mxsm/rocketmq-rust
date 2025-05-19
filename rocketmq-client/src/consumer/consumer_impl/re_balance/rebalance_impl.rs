@@ -826,11 +826,9 @@ where
                     );
                     return true;
                 }
-                if mq_set.is_some() && cid_all.is_some() {
-                    let mq_set = mq_set.unwrap();
+                if let (Some(mq_set), Some(mut ci_all)) = (mq_set, cid_all) {
                     let mut mq_all = mq_set.iter().cloned().collect::<Vec<MessageQueue>>();
                     mq_all.sort();
-                    let mut ci_all = cid_all.unwrap();
                     ci_all.sort();
 
                     let strategy = self.allocate_message_queue_strategy.as_ref().unwrap();
