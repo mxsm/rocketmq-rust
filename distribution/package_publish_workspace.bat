@@ -9,10 +9,10 @@ cd ..
 
 echo Starting to package Rust workspace projects...
 
-set PROJECTS=rocketmq-common ^
+set PROJECTS= rocketmq-error ^
+ rocketmq-common ^
  rocketmq-runtime ^
  rocketmq-macros ^
- rocketmq-error ^
  rocketmq ^
  rocketmq-filter ^
  rocketmq-store ^
