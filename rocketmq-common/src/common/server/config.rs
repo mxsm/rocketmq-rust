@@ -17,18 +17,32 @@
 use serde::Deserialize;
 use serde::Serialize;
 
+/// Default value functions for Serde deserialization
+mod defaults {
+    pub fn listen_port() -> u32 {
+        10911
+    }
+
+    pub fn bind_address() -> String {
+        "0.0.0.0".to_string()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerConfig {
+    #[serde(default = "defaults::listen_port")]
     pub listen_port: u32,
+
+    #[serde(default = "defaults::bind_address")]
     pub bind_address: String,
 }
 
 impl Default for ServerConfig {
     fn default() -> Self {
         ServerConfig {
-            listen_port: 10911,
-            bind_address: "0.0.0.0".to_string(),
+            listen_port: defaults::listen_port(),
+            bind_address: defaults::bind_address(),
         }
     }
 }

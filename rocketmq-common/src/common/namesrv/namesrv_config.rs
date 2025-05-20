@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 use std::env;
+use std::path::MAIN_SEPARATOR;
 
 use cheetah_string::CheetahString;
 use serde::Deserialize;
@@ -25,72 +26,179 @@ use serde_json::Value;
 use crate::common::mix_all::ROCKETMQ_HOME_ENV;
 use crate::common::mix_all::ROCKETMQ_HOME_PROPERTY;
 
+/// Default value functions for serde deserialization
+mod defaults {
+    use super::*;
+
+    pub fn rocketmq_home() -> String {
+        env::var(ROCKETMQ_HOME_PROPERTY)
+            .unwrap_or_else(|_| env::var(ROCKETMQ_HOME_ENV).unwrap_or_default())
+    }
+
+    pub fn kv_config_path() -> String {
+        format!(
+            "{}{}{}{}{}",
+            dirs::home_dir().unwrap().to_str().unwrap(),
+            MAIN_SEPARATOR,
+            "rocketmq-namesrv",
+            MAIN_SEPARATOR,
+            "kvConfig.json"
+        )
+    }
+
+    pub fn config_store_path() -> String {
+        format!(
+            "{}{}{}{}{}",
+            dirs::home_dir().unwrap().to_str().unwrap(),
+            MAIN_SEPARATOR,
+            "rocketmq-namesrv",
+            MAIN_SEPARATOR,
+            "rocketmq-namesrv.properties"
+        )
+    }
+
+    pub fn product_env_name() -> String {
+        "center".to_string()
+    }
+
+    pub fn return_order_topic_config_to_broker() -> bool {
+        true
+    }
+
+    pub fn client_request_thread_pool_nums() -> i32 {
+        8
+    }
+
+    pub fn default_thread_pool_nums() -> i32 {
+        16
+    }
+
+    pub fn client_request_thread_pool_queue_capacity() -> i32 {
+        50000
+    }
+
+    pub fn default_thread_pool_queue_capacity() -> i32 {
+        10000
+    }
+
+    pub fn scan_not_active_broker_interval() -> u64 {
+        5 * 1000
+    }
+
+    pub fn unregister_broker_queue_capacity() -> i32 {
+        3000
+    }
+
+    pub fn enable_all_topic_list() -> bool {
+        true
+    }
+
+    pub fn enable_topic_list() -> bool {
+        true
+    }
+
+    pub fn wait_seconds_for_service() -> i32 {
+        45
+    }
+
+    pub fn config_black_list() -> String {
+        "configBlackList;configStorePath;kvConfigPath".to_string()
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct NamesrvConfig {
-    #[serde(alias = "rocketmqHome")]
+    #[serde(alias = "rocketmqHome", default = "defaults::rocketmq_home")]
     pub rocketmq_home: String,
 
-    #[serde(alias = "kvConfigPath")]
+    #[serde(alias = "kvConfigPath", default = "defaults::kv_config_path")]
     pub kv_config_path: String,
 
-    #[serde(alias = "configStorePath")]
+    #[serde(alias = "configStorePath", default = "defaults::config_store_path")]
     pub config_store_path: String,
 
-    #[serde(alias = "productEnvName")]
+    #[serde(alias = "productEnvName", default = "defaults::product_env_name")]
     pub product_env_name: String,
 
-    #[serde(alias = "clusterTest")]
+    #[serde(alias = "clusterTest", default)]
     pub cluster_test: bool,
 
-    #[serde(alias = "orderMessageEnable")]
+    #[serde(alias = "orderMessageEnable", default)]
     pub order_message_enable: bool,
 
-    #[serde(alias = "returnOrderTopicConfigToBroker")]
+    #[serde(
+        alias = "returnOrderTopicConfigToBroker",
+        default = "defaults::return_order_topic_config_to_broker"
+    )]
     pub return_order_topic_config_to_broker: bool,
 
-    #[serde(alias = "clientRequestThreadPoolNums")]
+    #[serde(
+        alias = "clientRequestThreadPoolNums",
+        default = "defaults::client_request_thread_pool_nums"
+    )]
     pub client_request_thread_pool_nums: i32,
 
-    #[serde(alias = "defaultThreadPoolNums")]
+    #[serde(
+        alias = "defaultThreadPoolNums",
+        default = "defaults::default_thread_pool_nums"
+    )]
     pub default_thread_pool_nums: i32,
 
-    #[serde(alias = "clientRequestThreadPoolQueueCapacity")]
+    #[serde(
+        alias = "clientRequestThreadPoolQueueCapacity",
+        default = "defaults::client_request_thread_pool_queue_capacity"
+    )]
     pub client_request_thread_pool_queue_capacity: i32,
 
-    #[serde(alias = "defaultThreadPoolQueueCapacity")]
+    #[serde(
+        alias = "defaultThreadPoolQueueCapacity",
+        default = "defaults::default_thread_pool_queue_capacity"
+    )]
     pub default_thread_pool_queue_capacity: i32,
 
-    #[serde(alias = "scanNotActiveBrokerInterval")]
+    #[serde(
+        alias = "scanNotActiveBrokerInterval",
+        default = "defaults::scan_not_active_broker_interval"
+    )]
     pub scan_not_active_broker_interval: u64,
 
-    #[serde(alias = "unRegisterBrokerQueueCapacity")]
+    #[serde(
+        alias = "unRegisterBrokerQueueCapacity",
+        default = "defaults::unregister_broker_queue_capacity"
+    )]
     pub unregister_broker_queue_capacity: i32,
 
-    #[serde(alias = "supportActingMaster")]
+    #[serde(alias = "supportActingMaster", default)]
     pub support_acting_master: bool,
 
-    #[serde(alias = "enableAllTopicList")]
+    #[serde(
+        alias = "enableAllTopicList",
+        default = "defaults::enable_all_topic_list"
+    )]
     pub enable_all_topic_list: bool,
 
-    #[serde(alias = "enableTopicList")]
+    #[serde(alias = "enableTopicList", default = "defaults::enable_topic_list")]
     pub enable_topic_list: bool,
 
-    #[serde(alias = "notifyMinBrokerIdChanged")]
+    #[serde(alias = "notifyMinBrokerIdChanged", default)]
     pub notify_min_broker_id_changed: bool,
 
-    #[serde(alias = "enableControllerInNamesrv")]
+    #[serde(alias = "enableControllerInNamesrv", default)]
     pub enable_controller_in_namesrv: bool,
 
-    #[serde(alias = "needWaitForService")]
+    #[serde(alias = "needWaitForService", default)]
     pub need_wait_for_service: bool,
 
-    #[serde(alias = "waitSecondsForService")]
+    #[serde(
+        alias = "waitSecondsForService",
+        default = "defaults::wait_seconds_for_service"
+    )]
     pub wait_seconds_for_service: i32,
 
-    #[serde(alias = "deleteTopicWithBrokerRegistration")]
+    #[serde(alias = "deleteTopicWithBrokerRegistration", default)]
     pub delete_topic_with_broker_registration: bool,
 
-    #[serde(alias = "configBlackList")]
+    #[serde(alias = "configBlackList", default = "defaults::config_black_list")]
     pub config_black_list: String,
 }
 
