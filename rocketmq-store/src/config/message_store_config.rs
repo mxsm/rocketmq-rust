@@ -31,183 +31,770 @@ lazy_static! {
     static ref USER_HOME: PathBuf = dirs::home_dir().unwrap();
 }
 
+/// Default value functions for Serde deserialization
+mod defaults {
+    use super::*;
+
+    pub fn store_path_root_dir() -> CheetahString {
+        USER_HOME
+            .clone()
+            .join("store")
+            .to_string_lossy()
+            .to_string()
+            .into()
+    }
+
+    pub fn mapped_file_size_commit_log() -> usize {
+        1024 * 1024 * 1024 // 1GB
+    }
+
+    pub fn compaction_mapped_file_size() -> usize {
+        100 * 1024 * 1024 // 100MB
+    }
+
+    pub fn compaction_cq_mapped_file_size() -> usize {
+        10 * 1024 * 1024 // 10MB
+    }
+
+    pub fn compaction_schedule_internal() -> usize {
+        15 * 60 * 1000 // 15 minutes
+    }
+
+    pub fn max_offset_map_size() -> usize {
+        100 * 1024 * 1024 // 100MB
+    }
+
+    pub fn compaction_thread_num() -> usize {
+        6
+    }
+
+    pub fn mapped_file_size_timer_log() -> usize {
+        100 * 1024 * 1024 // 100MB
+    }
+
+    pub fn timer_precision_ms() -> u64 {
+        1000 // 1 second
+    }
+
+    pub fn timer_roll_window_slot() -> usize {
+        3600 * 24 * 2 // 2 days
+    }
+
+    pub fn timer_flush_interval_ms() -> usize {
+        1000 // 1 second
+    }
+
+    pub fn timer_get_message_thread_num() -> usize {
+        3
+    }
+
+    pub fn timer_put_message_thread_num() -> usize {
+        3
+    }
+
+    pub fn timer_wheel_enable() -> bool {
+        true
+    }
+
+    pub fn disappear_time_after_start() -> i64 {
+        -1
+    }
+
+    pub fn timer_check_metrics_when() -> String {
+        "".to_string()
+    }
+
+    pub fn store_type() -> StoreType {
+        StoreType::default()
+    }
+
+    pub fn mapped_file_size_consume_queue() -> usize {
+        300000 * 20
+    }
+
+    pub fn mapped_file_size_consume_queue_ext() -> usize {
+        48 * 1024 * 1024 // 48MB
+    }
+
+    pub fn mapper_file_size_batch_consume_queue() -> usize {
+        300000 * 46
+    }
+
+    pub fn bit_map_length_consume_queue_ext() -> usize {
+        64
+    }
+
+    pub fn flush_interval_commit_log() -> i32 {
+        500
+    }
+
+    pub fn commit_interval_commit_log() -> u64 {
+        200
+    }
+
+    pub fn flush_commit_log_timed() -> bool {
+        true
+    }
+
+    pub fn flush_interval_consume_queue() -> usize {
+        1000
+    }
+
+    pub fn clean_resource_interval() -> usize {
+        10000
+    }
+
+    pub fn delete_commit_log_files_interval() -> usize {
+        100
+    }
+
+    pub fn delete_consume_queue_files_interval() -> usize {
+        100
+    }
+
+    pub fn destroy_mapped_file_interval_forcibly() -> usize {
+        1000 * 120 // 2 minutes
+    }
+
+    pub fn redelete_hanged_file_interval() -> usize {
+        1000 * 120 // 2 minutes
+    }
+
+    pub fn delete_when() -> String {
+        "04".to_string()
+    }
+
+    pub fn disk_max_used_space_ratio() -> usize {
+        75
+    }
+
+    pub fn max_message_size() -> i32 {
+        1024 * 1024 * 4 // 4MB
+    }
+
+    pub fn commit_commit_log_least_pages() -> i32 {
+        4
+    }
+
+    pub fn flush_commit_log_thorough_interval() -> i32 {
+        1000 * 10 // 10 seconds
+    }
+
+    pub fn commit_commit_log_thorough_interval() -> u64 {
+        200
+    }
+
+    pub fn max_transfer_bytes_on_message_in_memory() -> u64 {
+        1024 * 256 // 256KB
+    }
+
+    pub fn max_transfer_count_on_message_in_memory() -> u64 {
+        32
+    }
+
+    pub fn max_transfer_bytes_on_message_in_disk() -> u64 {
+        1024 * 64 // 64KB
+    }
+
+    pub fn max_transfer_count_on_message_in_disk() -> u64 {
+        8
+    }
+
+    pub fn access_message_in_memory_max_ratio() -> usize {
+        40
+    }
+
+    pub fn message_index_enable() -> bool {
+        true
+    }
+
+    pub fn max_hash_slot_num() -> u32 {
+        5000000
+    }
+
+    pub fn max_index_num() -> u32 {
+        5000000 * 4
+    }
+
+    pub fn max_msgs_num_batch() -> usize {
+        64
+    }
+
+    pub fn broker_role() -> BrokerRole {
+        BrokerRole::default()
+    }
+
+    pub fn flush_disk_type() -> FlushDiskType {
+        FlushDiskType::SyncFlush
+    }
+
+    pub fn sync_flush_timeout() -> u64 {
+        1000 * 5 // 5 seconds
+    }
+
+    pub fn message_delay_level() -> String {
+        "1s 5s 10s 30s 1m 2m 3m 4m 5m 6m 7m 8m 9m 10m 20m 30m 1h 2h".to_string()
+    }
+
+    pub fn flush_delay_offset_interval() -> u64 {
+        10_000 // 10 seconds
+    }
+
+    pub fn os_page_cache_busy_timeout_mills() -> u64 {
+        1000 // 1 second
+    }
+
+    pub fn auto_message_version_on_topic_len() -> bool {
+        true
+    }
+
+    pub fn travel_cq_file_num_when_get_message() -> usize {
+        1
+    }
+
+    pub fn total_replicas() -> usize {
+        1
+    }
+
+    pub fn in_sync_replicas() -> u32 {
+        1
+    }
+
+    pub fn topic_queue_lock_num() -> usize {
+        32
+    }
+
+    pub fn max_filter_message_size() -> i32 {
+        16000
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageStoreConfig {
+    #[serde(default = "defaults::store_path_root_dir")]
     pub store_path_root_dir: CheetahString,
+
+    #[serde(default)]
     pub store_path_commit_log: Option<CheetahString>,
+
+    #[serde(default)]
     pub store_path_dledger_commit_log: Option<CheetahString>,
+
+    #[serde(default)]
     pub store_path_epoch_file: Option<CheetahString>,
+
+    #[serde(default)]
     pub store_path_broker_identity: Option<CheetahString>,
+
+    #[serde(default)]
     pub read_only_commit_log_store_paths: Option<CheetahString>,
+
+    #[serde(default = "defaults::mapped_file_size_commit_log")]
     pub mapped_file_size_commit_log: usize,
+
+    #[serde(default = "defaults::compaction_mapped_file_size")]
     pub compaction_mapped_file_size: usize,
+
+    #[serde(default = "defaults::compaction_cq_mapped_file_size")]
     pub compaction_cq_mapped_file_size: usize,
+
+    #[serde(default = "defaults::compaction_schedule_internal")]
     pub compaction_schedule_internal: usize,
+
+    #[serde(default = "defaults::max_offset_map_size")]
     pub max_offset_map_size: usize,
+
+    #[serde(default = "defaults::compaction_thread_num")]
     pub compaction_thread_num: usize,
+
+    #[serde(default)]
     pub enable_compaction: bool,
+
+    #[serde(default = "defaults::mapped_file_size_timer_log")]
     pub mapped_file_size_timer_log: usize,
+
+    #[serde(default = "defaults::timer_precision_ms")]
     pub timer_precision_ms: u64,
+
+    #[serde(default = "defaults::timer_roll_window_slot")]
     pub timer_roll_window_slot: usize,
+
+    #[serde(default = "defaults::timer_flush_interval_ms")]
     pub timer_flush_interval_ms: usize,
+
+    #[serde(default = "defaults::timer_get_message_thread_num")]
     pub timer_get_message_thread_num: usize,
+
+    #[serde(default = "defaults::timer_put_message_thread_num")]
     pub timer_put_message_thread_num: usize,
+
+    #[serde(default)]
     pub timer_enable_disruptor: bool,
+
+    #[serde(default)]
     pub timer_enable_check_metrics: bool,
+
+    #[serde(default)]
     pub timer_intercept_delay_level: bool,
+
+    #[serde(default)]
     pub timer_max_delay_sec: u64,
+
+    #[serde(default = "defaults::timer_wheel_enable")]
     pub timer_wheel_enable: bool,
+
+    #[serde(default = "defaults::disappear_time_after_start")]
     pub disappear_time_after_start: i64,
+
+    #[serde(default)]
     pub timer_stop_enqueue: bool,
+
+    #[serde(default = "defaults::timer_check_metrics_when")]
     pub timer_check_metrics_when: String,
+
+    #[serde(default)]
     pub timer_skip_unknown_error: bool,
+
+    #[serde(default)]
     pub timer_warm_enable: bool,
+
+    #[serde(default)]
     pub timer_stop_dequeue: bool,
+
+    #[serde(default)]
     pub timer_congest_num_each_slot: usize,
+
+    #[serde(default)]
     pub timer_metric_small_threshold: usize,
+
+    #[serde(default)]
     pub timer_progress_log_interval_ms: usize,
+
+    #[serde(default = "defaults::store_type")]
     pub store_type: StoreType,
+
+    #[serde(default = "defaults::mapped_file_size_consume_queue")]
     pub mapped_file_size_consume_queue: usize,
+
+    #[serde(default)]
     pub enable_consume_queue_ext: bool,
+
+    #[serde(default = "defaults::mapped_file_size_consume_queue_ext")]
     pub mapped_file_size_consume_queue_ext: usize,
+
+    #[serde(default = "defaults::mapper_file_size_batch_consume_queue")]
     pub mapper_file_size_batch_consume_queue: usize,
+
+    #[serde(default = "defaults::bit_map_length_consume_queue_ext")]
     pub bit_map_length_consume_queue_ext: usize,
+
+    #[serde(default = "defaults::flush_interval_commit_log")]
     pub flush_interval_commit_log: i32,
+
+    #[serde(default = "defaults::commit_interval_commit_log")]
     pub commit_interval_commit_log: u64,
+
+    #[serde(default)]
     pub max_recovery_commit_log_files: usize,
+
+    #[serde(default)]
     pub disk_space_warning_level_ratio: usize,
+
+    #[serde(default)]
     pub disk_space_clean_forcibly_ratio: usize,
+
+    #[serde(default)]
     pub use_reentrant_lock_when_put_message: bool,
+
+    #[serde(default = "defaults::flush_commit_log_timed")]
     pub flush_commit_log_timed: bool,
+
+    #[serde(default = "defaults::flush_interval_consume_queue")]
     pub flush_interval_consume_queue: usize,
+
+    #[serde(default = "defaults::clean_resource_interval")]
     pub clean_resource_interval: usize,
+
+    #[serde(default = "defaults::delete_commit_log_files_interval")]
     pub delete_commit_log_files_interval: usize,
+
+    #[serde(default = "defaults::delete_consume_queue_files_interval")]
     pub delete_consume_queue_files_interval: usize,
+
+    #[serde(default = "defaults::destroy_mapped_file_interval_forcibly")]
     pub destroy_mapped_file_interval_forcibly: usize,
+
+    #[serde(default = "defaults::redelete_hanged_file_interval")]
     pub redelete_hanged_file_interval: usize,
+
+    #[serde(default = "defaults::delete_when")]
     pub delete_when: String,
+
+    #[serde(default = "defaults::disk_max_used_space_ratio")]
     pub disk_max_used_space_ratio: usize,
+
+    #[serde(default)]
     pub file_reserved_time: usize,
+
+    #[serde(default)]
     pub delete_file_batch_max: usize,
+
+    #[serde(default)]
     pub put_msg_index_hight_water: usize,
+
+    #[serde(default = "defaults::max_message_size")]
     pub max_message_size: i32,
+
+    #[serde(default)]
     pub check_crc_on_recover: bool,
+
+    #[serde(default)]
     pub flush_commit_log_least_pages: i32,
+
+    #[serde(default = "defaults::commit_commit_log_least_pages")]
     pub commit_commit_log_least_pages: i32,
+
+    #[serde(default)]
     pub flush_least_pages_when_warm_mapped_file: usize,
+
+    #[serde(default)]
     pub flush_consume_queue_least_pages: usize,
+
+    #[serde(default = "defaults::flush_commit_log_thorough_interval")]
     pub flush_commit_log_thorough_interval: i32,
+
+    #[serde(default = "defaults::commit_commit_log_thorough_interval")]
     pub commit_commit_log_thorough_interval: u64,
+
+    #[serde(default)]
     pub flush_consume_queue_thorough_interval: usize,
+
+    #[serde(default = "defaults::max_transfer_bytes_on_message_in_memory")]
     pub max_transfer_bytes_on_message_in_memory: u64,
+
+    #[serde(default = "defaults::max_transfer_count_on_message_in_memory")]
     pub max_transfer_count_on_message_in_memory: u64,
+
+    #[serde(default = "defaults::max_transfer_bytes_on_message_in_disk")]
     pub max_transfer_bytes_on_message_in_disk: u64,
+
+    #[serde(default = "defaults::max_transfer_count_on_message_in_disk")]
     pub max_transfer_count_on_message_in_disk: u64,
+
+    #[serde(default = "defaults::access_message_in_memory_max_ratio")]
     pub access_message_in_memory_max_ratio: usize,
+
+    #[serde(default = "defaults::message_index_enable")]
     pub message_index_enable: bool,
+
+    #[serde(default = "defaults::max_hash_slot_num")]
     pub max_hash_slot_num: u32,
+
+    #[serde(default = "defaults::max_index_num")]
     pub max_index_num: u32,
+
+    #[serde(default = "defaults::max_msgs_num_batch")]
     pub max_msgs_num_batch: usize,
+
+    #[serde(default)]
     pub message_index_safe: bool,
+
+    #[serde(default)]
     pub ha_listen_port: usize,
+
+    #[serde(default)]
     pub ha_send_heartbeat_interval: usize,
+
+    #[serde(default)]
     pub ha_housekeeping_interval: usize,
+
+    #[serde(default)]
     pub ha_transfer_batch_size: usize,
+
+    #[serde(default)]
     pub ha_master_address: Option<String>,
+
+    #[serde(default)]
     pub ha_max_gap_not_in_sync: usize,
+
+    #[serde(default = "defaults::broker_role")]
     pub broker_role: BrokerRole,
+
+    #[serde(default = "defaults::flush_disk_type")]
     pub flush_disk_type: FlushDiskType,
+
+    #[serde(default = "defaults::sync_flush_timeout")]
     pub sync_flush_timeout: u64,
+
+    #[serde(default)]
     pub put_message_timeout: usize,
+
+    #[serde(default)]
     pub slave_timeout: usize,
+
+    #[serde(default = "defaults::message_delay_level")]
     pub message_delay_level: String,
+
+    #[serde(default = "defaults::flush_delay_offset_interval")]
     pub flush_delay_offset_interval: u64,
+
+    #[serde(default)]
     pub clean_file_forcibly_enable: bool,
+
+    #[serde(default)]
     pub warm_mapped_file_enable: bool,
+
+    #[serde(default)]
     pub offset_check_in_slave: bool,
+
+    #[serde(default)]
     pub debug_lock_enable: bool,
+
+    #[serde(default)]
     pub duplication_enable: bool,
+
+    #[serde(default)]
     pub disk_fall_recorded: bool,
+
+    #[serde(default = "defaults::os_page_cache_busy_timeout_mills")]
     pub os_page_cache_busy_timeout_mills: u64,
+
+    #[serde(default)]
     pub default_query_max_num: usize,
+
+    #[serde(default)]
     pub transient_store_pool_enable: bool,
+
+    #[serde(default)]
     pub transient_store_pool_size: usize,
+
+    #[serde(default)]
     pub fast_fail_if_no_buffer_in_store_pool: bool,
+
+    #[serde(default)]
     pub enable_dledger_commit_log: bool,
+
+    #[serde(default)]
     pub dledger_group: Option<String>,
+
+    #[serde(default)]
     pub dledger_peers: Option<String>,
+
+    #[serde(default)]
     pub dledger_self_id: Option<String>,
+
+    #[serde(default)]
     pub preferred_leader_id: Option<String>,
+
+    #[serde(default)]
     pub enable_batch_push: bool,
+
+    #[serde(default)]
     pub enable_schedule_message_stats: bool,
+
+    #[serde(default)]
     pub enable_lmq: bool,
+
+    #[serde(default)]
     pub enable_multi_dispatch: bool,
+
+    #[serde(default)]
     pub max_lmq_consume_queue_num: usize,
+
+    #[serde(default)]
     pub enable_schedule_async_deliver: bool,
+
+    #[serde(default)]
     pub schedule_async_deliver_max_pending_limit: usize,
+
+    #[serde(default)]
     pub schedule_async_deliver_max_resend_num2_blocked: usize,
+
+    #[serde(default)]
     pub max_batch_delete_files_num: usize,
+
+    #[serde(default)]
     pub dispatch_cq_threads: usize,
+
+    #[serde(default)]
     pub dispatch_cq_cache_num: usize,
+
+    #[serde(default)]
     pub enable_async_reput: bool,
+
+    #[serde(default)]
     pub recheck_reput_offset_from_cq: bool,
+
+    #[serde(default)]
     pub max_topic_length: usize,
+
+    #[serde(default = "defaults::auto_message_version_on_topic_len")]
     pub auto_message_version_on_topic_len: bool,
+
+    #[serde(default)]
     pub enabled_append_prop_crc: bool,
+
+    #[serde(default)]
     pub force_verify_prop_crc: bool,
+
+    #[serde(default = "defaults::travel_cq_file_num_when_get_message")]
     pub travel_cq_file_num_when_get_message: usize,
+
+    #[serde(default)]
     pub correct_logic_min_offset_sleep_interval: usize,
+
+    #[serde(default)]
     pub correct_logic_min_offset_force_interval: usize,
+
+    #[serde(default)]
     pub mapped_file_swap_enable: bool,
+
+    #[serde(default)]
     pub commit_log_force_swap_map_interval: usize,
+
+    #[serde(default)]
     pub commit_log_swap_map_interval: usize,
+
+    #[serde(default)]
     pub commit_log_swap_map_reserve_file_num: usize,
+
+    #[serde(default)]
     pub logic_queue_force_swap_map_interval: usize,
+
+    #[serde(default)]
     pub logic_queue_swap_map_interval: usize,
+
+    #[serde(default)]
     pub clean_swapped_map_interval: usize,
+
+    #[serde(default)]
     pub logic_queue_swap_map_reserve_file_num: usize,
+
+    #[serde(default)]
     pub search_bcq_by_cache_enable: bool,
+
+    #[serde(default)]
     pub dispatch_from_sender_thread: bool,
+
+    #[serde(default)]
     pub wake_commit_when_put_message: bool,
+
+    #[serde(default)]
     pub wake_flush_when_put_message: bool,
+
+    #[serde(default)]
     pub enable_clean_expired_offset: bool,
+
+    #[serde(default)]
     pub max_async_put_message_requests: usize,
+
+    #[serde(default)]
     pub pull_batch_max_message_count: usize,
+
+    #[serde(default = "defaults::total_replicas")]
     pub total_replicas: usize,
+
+    #[serde(default = "defaults::in_sync_replicas")]
     pub in_sync_replicas: u32,
+
+    #[serde(default)]
     pub min_in_sync_replicas: usize,
+
+    #[serde(default)]
     pub all_ack_in_sync_state_set: bool,
+
+    #[serde(default)]
     pub enable_auto_in_sync_replicas: bool,
+
+    #[serde(default)]
     pub ha_flow_control_enable: bool,
+
+    #[serde(default)]
     pub max_ha_transfer_byte_in_second: usize,
+
+    #[serde(default)]
     pub ha_max_time_slave_not_catchup: usize,
+
+    #[serde(default)]
     pub sync_master_flush_offset_when_startup: bool,
+
+    #[serde(default)]
     pub max_checksum_range: usize,
+
+    #[serde(default)]
     pub replicas_per_disk_partition: usize,
+
+    #[serde(default)]
     pub logical_disk_space_clean_forcibly_threshold: f64,
+
+    #[serde(default)]
     pub max_slave_resend_length: usize,
+
+    #[serde(default)]
     pub sync_from_last_file: bool,
+
+    #[serde(default)]
     pub async_learner: bool,
+
+    #[serde(default)]
     pub max_consume_queue_scan: usize,
+
+    #[serde(default)]
     pub sample_count_threshold: usize,
+
+    #[serde(default)]
     pub cold_data_flow_control_enable: bool,
+
+    #[serde(default)]
     pub cold_data_scan_enable: bool,
+
+    #[serde(default)]
     pub data_read_ahead_enable: bool,
+
+    #[serde(default)]
     pub timer_cold_data_check_interval_ms: usize,
+
+    #[serde(default)]
     pub sample_steps: usize,
+
+    #[serde(default)]
     pub access_message_in_memory_hot_ratio: usize,
+
+    #[serde(default)]
     pub enable_build_consume_queue_concurrently: bool,
+
+    #[serde(default)]
     pub batch_dispatch_request_thread_pool_nums: usize,
+
+    #[serde(default)]
     pub clean_rocksdb_dirty_cq_interval_min: usize,
+
+    #[serde(default)]
     pub stat_rocksdb_cq_interval_sec: usize,
+
+    #[serde(default)]
     pub mem_table_flush_interval_ms: usize,
+
+    #[serde(default)]
     pub real_time_persist_rocksdb_config: bool,
+
+    #[serde(default)]
     pub enable_rocksdb_log: bool,
+
+    #[serde(default = "defaults::topic_queue_lock_num")]
     pub topic_queue_lock_num: usize,
+
+    #[serde(default = "defaults::max_filter_message_size")]
     pub max_filter_message_size: i32,
+
+    #[serde(default)]
     pub enable_dleger_commit_log: bool,
+
+    #[serde(default)]
     pub rocksdb_cq_double_write_enable: bool,
+
+    #[serde(default)]
     pub read_uncommitted: bool,
 }
 

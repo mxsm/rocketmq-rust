@@ -47,14 +47,335 @@ lazy_static! {
         std::env::var(NAMESRV_ADDR_PROPERTY).map_or(Some("127.0.0.1:9876".to_string()), Some);
 }
 
-#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+/// Default value functions for Serde deserialization
+mod defaults {
+    use super::*;
+
+    // BrokerIdentity defaults
+    pub fn broker_name() -> CheetahString {
+        default_broker_name().into()
+    }
+
+    pub fn broker_cluster_name() -> CheetahString {
+        DEFAULT_CLUSTER_NAME.to_string().into()
+    }
+
+    pub fn broker_id() -> u64 {
+        mix_all::MASTER_ID
+    }
+
+    // BrokerConfig defaults
+    pub fn broker_identity() -> BrokerIdentity {
+        BrokerIdentity::new()
+    }
+
+    pub fn topic_queue_config() -> TopicQueueConfig {
+        TopicQueueConfig::default()
+    }
+
+    pub fn timer_wheel_config() -> TimerWheelConfig {
+        TimerWheelConfig::default()
+    }
+
+    pub fn broker_server_config() -> ServerConfig {
+        ServerConfig::default()
+    }
+
+    pub fn broker_ip1() -> CheetahString {
+        match local_ip_address::local_ip() {
+            Ok(local_ip) => local_ip.to_string().into(),
+            Err(_) => "127.0.0.1".to_string().into(),
+        }
+    }
+
+    pub fn broker_ip2() -> Option<CheetahString> {
+        match local_ip_address::local_ip() {
+            Ok(local_ip) => Some(local_ip.to_string().into()),
+            Err(_) => None,
+        }
+    }
+
+    pub fn listen_port() -> u32 {
+        10911
+    }
+
+    pub fn msg_trace_topic_name() -> CheetahString {
+        CheetahString::from_static_str(TopicValidator::RMQ_SYS_TRACE_TOPIC)
+    }
+
+    pub fn region_id() -> CheetahString {
+        CheetahString::from_static_str(mix_all::DEFAULT_TRACE_REGION_ID)
+    }
+
+    pub fn trace_on() -> bool {
+        true
+    }
+
+    pub fn broker_permission() -> u32 {
+        PermName::PERM_WRITE | PermName::PERM_READ
+    }
+
+    pub fn store_path_root_dir() -> CheetahString {
+        dirs::home_dir()
+            .unwrap_or_default()
+            .join("store")
+            .to_string_lossy()
+            .into_owned()
+            .into()
+    }
+
+    pub fn split_registration_size() -> i32 {
+        800
+    }
+
+    pub fn register_broker_timeout_mills() -> i32 {
+        24000
+    }
+
+    pub fn commercial_size_per_msg() -> i32 {
+        4 * 1024
+    }
+
+    pub fn auto_create_topic_enable() -> bool {
+        true
+    }
+
+    pub fn enable_single_topic_register() -> bool {
+        true
+    }
+
+    pub fn broker_topic_enable() -> bool {
+        true
+    }
+
+    pub fn cluster_topic_enable() -> bool {
+        true
+    }
+
+    pub fn revive_queue_num() -> u32 {
+        8
+    }
+
+    pub fn enable_detail_stat() -> bool {
+        true
+    }
+
+    pub fn flush_consumer_offset_interval() -> u64 {
+        1000 * 5
+    }
+
+    pub fn force_register() -> bool {
+        true
+    }
+
+    pub fn register_name_server_period() -> u64 {
+        1000 * 30
+    }
+
+    pub fn namesrv_addr() -> Option<CheetahString> {
+        NAMESRV_ADDR.clone().map(|addr| addr.into())
+    }
+
+    pub fn lite_pull_message_enable() -> bool {
+        true
+    }
+
+    pub fn auto_create_subscription_group() -> bool {
+        true
+    }
+
+    pub fn channel_expired_timeout() -> u64 {
+        1000 * 120
+    }
+
+    pub fn subscription_expired_timeout() -> u64 {
+        1000 * 60 * 10
+    }
+
+    pub fn use_server_side_reset_offset() -> bool {
+        true
+    }
+
+    pub fn consumer_offset_update_version_step() -> i64 {
+        500
+    }
+
+    pub fn enable_broadcast_offset_store() -> bool {
+        true
+    }
+
+    pub fn transfer_msg_by_heap() -> bool {
+        true
+    }
+
+    pub fn short_polling_time_mills() -> u64 {
+        1000
+    }
+
+    pub fn long_polling_enable() -> bool {
+        true
+    }
+
+    pub fn max_error_rate_of_bloom_filter() -> i32 {
+        20
+    }
+
+    pub fn expect_consumer_num_use_filter() -> i32 {
+        32
+    }
+
+    pub fn bit_map_length_consume_queue_ext() -> i32 {
+        64
+    }
+
+    pub fn forward_timeout() -> u64 {
+        3 * 1000
+    }
+
+    pub fn validate_system_topic_when_update_topic() -> bool {
+        true
+    }
+
+    pub fn store_reply_message_enable() -> bool {
+        true
+    }
+
+    pub fn transaction_timeout() -> u64 {
+        6_000
+    }
+
+    pub fn transaction_op_msg_max_size() -> i32 {
+        4096
+    }
+
+    pub fn default_message_request_mode() -> MessageRequestMode {
+        MessageRequestMode::Pull
+    }
+
+    pub fn default_pop_share_queue_num() -> i32 {
+        -1
+    }
+
+    pub fn load_balance_poll_name_server_interval() -> u64 {
+        30_000
+    }
+
+    pub fn server_load_balancer_enable() -> bool {
+        true
+    }
+
+    pub fn retrieve_message_from_pop_retry_topic_v1() -> bool {
+        true
+    }
+
+    pub fn pop_from_retry_probability() -> i32 {
+        20
+    }
+
+    pub fn init_pop_offset_by_check_msg_in_mem() -> bool {
+        true
+    }
+
+    pub fn pop_ck_stay_buffer_time_out() -> u64 {
+        3_000
+    }
+
+    pub fn pop_ck_stay_buffer_time() -> u64 {
+        10_000
+    }
+
+    pub fn broker_role() -> BrokerRole {
+        BrokerRole::AsyncMaster
+    }
+
+    pub fn revive_interval() -> u64 {
+        1000
+    }
+
+    pub fn revive_max_slow() -> u64 {
+        3
+    }
+
+    pub fn revive_scan_time() -> u64 {
+        10_000
+    }
+
+    pub fn commercial_base_count() -> i32 {
+        1
+    }
+
+    pub fn broker_not_active_timeout_millis() -> i64 {
+        10_000
+    }
+
+    pub fn sync_broker_member_group_period() -> u64 {
+        1_000
+    }
+
+    pub fn pop_polling_map_size() -> usize {
+        100000
+    }
+
+    pub fn max_pop_polling_size() -> u64 {
+        100000
+    }
+
+    pub fn pop_polling_size() -> usize {
+        1024
+    }
+
+    pub fn pop_inflight_message_threshold() -> i64 {
+        10_000
+    }
+
+    pub fn pop_ck_max_buffer_size() -> i64 {
+        200_000
+    }
+
+    pub fn pop_ck_offset_max_queue_size() -> u64 {
+        20_000
+    }
+
+    pub fn delay_offset_update_version_step() -> u64 {
+        200
+    }
+
+    pub fn revive_ack_wait_ms() -> u64 {
+        Duration::from_secs(3 * 60).as_millis() as u64
+    }
+
+    pub fn os_page_cache_busy_timeout_mills() -> u64 {
+        1000
+    }
+
+    pub fn default_topic_queue_nums() -> u32 {
+        8
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct BrokerIdentity {
+    #[serde(default = "defaults::broker_name")]
     pub broker_name: CheetahString,
+
+    #[serde(default = "defaults::broker_cluster_name")]
     pub broker_cluster_name: CheetahString,
+
+    #[serde(default = "defaults::broker_id")]
     pub broker_id: u64,
+
+    #[serde(default)]
     pub is_broker_container: bool,
+
+    #[serde(default)]
     pub is_in_broker_container: bool,
+}
+
+impl Default for BrokerIdentity {
+    fn default() -> Self {
+        BrokerIdentity::new()
+    }
 }
 
 impl BrokerIdentity {
@@ -120,114 +441,298 @@ impl BrokerIdentity {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct BrokerConfig {
+    #[serde(default = "defaults::broker_identity")]
     pub broker_identity: BrokerIdentity,
 
+    #[serde(default = "defaults::topic_queue_config")]
     pub topic_queue_config: TopicQueueConfig,
 
+    #[serde(default = "defaults::timer_wheel_config")]
     pub timer_wheel_config: TimerWheelConfig,
 
+    #[serde(default = "defaults::broker_server_config")]
     pub broker_server_config: ServerConfig,
 
+    #[serde(default = "defaults::broker_ip1")]
     pub broker_ip1: CheetahString,
+
+    #[serde(default = "defaults::broker_ip2")]
     pub broker_ip2: Option<CheetahString>,
+
+    #[serde(default = "defaults::listen_port")]
     pub listen_port: u32,
+
+    #[serde(default)]
     pub trace_topic_enable: bool,
+
+    #[serde(default = "defaults::msg_trace_topic_name")]
     pub msg_trace_topic_name: CheetahString,
+
+    #[serde(default)]
     pub enable_controller_mode: bool,
+
+    #[serde(default = "defaults::broker_name")]
     pub broker_name: CheetahString,
+
+    #[serde(default = "defaults::region_id")]
     pub region_id: CheetahString,
+
+    #[serde(default = "defaults::trace_on")]
     pub trace_on: bool,
+
+    #[serde(default = "defaults::broker_permission")]
     pub broker_permission: u32,
+
+    #[serde(default)]
     pub async_send_enable: bool,
+
+    #[serde(default = "defaults::store_path_root_dir")]
     pub store_path_root_dir: CheetahString,
+
+    #[serde(default)]
     pub enable_split_registration: bool,
+
+    #[serde(default = "defaults::split_registration_size")]
     pub split_registration_size: i32,
+
+    #[serde(default = "defaults::register_broker_timeout_mills")]
     pub register_broker_timeout_mills: i32,
+
+    #[serde(default)]
     pub is_in_broker_container: bool,
+
+    #[serde(default = "defaults::commercial_size_per_msg")]
     pub commercial_size_per_msg: i32,
+
+    #[serde(default)]
     pub recover_concurrently: bool,
+
+    #[serde(default)]
     pub duplication_enable: bool,
+
+    #[serde(default)]
     pub start_accept_send_request_time_stamp: i64,
+
+    #[serde(default = "defaults::auto_create_topic_enable")]
     pub auto_create_topic_enable: bool,
+
+    #[serde(default = "defaults::enable_single_topic_register")]
     pub enable_single_topic_register: bool,
+
+    #[serde(default = "defaults::broker_topic_enable")]
     pub broker_topic_enable: bool,
+
+    #[serde(default = "defaults::cluster_topic_enable")]
     pub cluster_topic_enable: bool,
+
+    #[serde(default = "defaults::revive_queue_num")]
     pub revive_queue_num: u32,
+
+    #[serde(default)]
     pub enable_slave_acting_master: bool,
+
+    #[serde(default)]
     pub reject_transaction_message: bool,
+
+    #[serde(default = "defaults::enable_detail_stat")]
     pub enable_detail_stat: bool,
+
+    #[serde(default = "defaults::flush_consumer_offset_interval")]
     pub flush_consumer_offset_interval: u64,
+
+    #[serde(default = "defaults::force_register")]
     pub force_register: bool,
+
+    #[serde(default = "defaults::register_name_server_period")]
     pub register_name_server_period: u64,
+
+    #[serde(default)]
     pub skip_pre_online: bool,
+
+    #[serde(default = "defaults::namesrv_addr")]
     pub namesrv_addr: Option<CheetahString>,
+
+    #[serde(default)]
     pub fetch_name_srv_addr_by_dns_lookup: bool,
+
+    #[serde(default = "defaults::lite_pull_message_enable")]
     pub lite_pull_message_enable: bool,
+
+    #[serde(default = "defaults::auto_create_subscription_group")]
     pub auto_create_subscription_group: bool,
+
+    #[serde(default = "defaults::channel_expired_timeout")]
     pub channel_expired_timeout: u64,
+
+    #[serde(default = "defaults::subscription_expired_timeout")]
     pub subscription_expired_timeout: u64,
+
+    #[serde(default)]
     pub enable_property_filter: bool,
+
+    #[serde(default)]
     pub filter_support_retry: bool,
+
+    #[serde(default = "defaults::use_server_side_reset_offset")]
     pub use_server_side_reset_offset: bool,
+
+    #[serde(default)]
     pub slave_read_enable: bool,
+
+    #[serde(default = "defaults::commercial_base_count")]
     pub commercial_base_count: i32,
+
+    #[serde(default)]
     pub reject_pull_consumer_enable: bool,
+
+    #[serde(default = "defaults::consumer_offset_update_version_step")]
     pub consumer_offset_update_version_step: i64,
+
+    #[serde(default = "defaults::enable_broadcast_offset_store")]
     pub enable_broadcast_offset_store: bool,
+
+    #[serde(default = "defaults::transfer_msg_by_heap")]
     pub transfer_msg_by_heap: bool,
+
+    #[serde(default = "defaults::short_polling_time_mills")]
     pub short_polling_time_mills: u64,
+
+    #[serde(default = "defaults::long_polling_enable")]
     pub long_polling_enable: bool,
+
+    #[serde(default = "defaults::max_error_rate_of_bloom_filter")]
     pub max_error_rate_of_bloom_filter: i32,
+
+    #[serde(default = "defaults::expect_consumer_num_use_filter")]
     pub expect_consumer_num_use_filter: i32,
+
+    #[serde(default = "defaults::bit_map_length_consume_queue_ext")]
     pub bit_map_length_consume_queue_ext: i32,
+
+    #[serde(default = "defaults::validate_system_topic_when_update_topic")]
     pub validate_system_topic_when_update_topic: bool,
+
+    #[serde(default)]
     pub enable_mixed_message_type: bool,
+
+    #[serde(default)]
     pub auto_delete_unused_stats: bool,
+
+    #[serde(default = "defaults::forward_timeout")]
     pub forward_timeout: u64,
+
+    #[serde(default = "defaults::store_reply_message_enable")]
     pub store_reply_message_enable: bool,
+
+    #[serde(default)]
     pub lock_in_strict_mode: bool,
+
+    #[serde(default = "defaults::transaction_timeout")]
     pub transaction_timeout: u64,
+
+    #[serde(default = "defaults::transaction_op_msg_max_size")]
     pub transaction_op_msg_max_size: i32,
+
+    #[serde(default = "defaults::default_message_request_mode")]
     pub default_message_request_mode: MessageRequestMode,
+
+    #[serde(default = "defaults::default_pop_share_queue_num")]
     pub default_pop_share_queue_num: i32,
+
+    #[serde(default = "defaults::load_balance_poll_name_server_interval")]
     pub load_balance_poll_name_server_interval: u64,
+
+    #[serde(default = "defaults::server_load_balancer_enable")]
     pub server_load_balancer_enable: bool,
+
+    #[serde(default)]
     pub enable_remote_escape: bool,
+
+    #[serde(default)]
     pub enable_pop_log: bool,
+
+    #[serde(default)]
     pub enable_retry_topic_v2: bool,
-    // read message from pop retry topic v1, for the compatibility, will be removed in the future
-    // version
+
+    #[serde(default = "defaults::retrieve_message_from_pop_retry_topic_v1")]
     pub retrieve_message_from_pop_retry_topic_v1: bool,
+
+    #[serde(default = "defaults::pop_from_retry_probability")]
     pub pop_from_retry_probability: i32,
+
+    #[serde(default)]
     pub pop_response_return_actual_retry_topic: bool,
+
+    #[serde(default = "defaults::init_pop_offset_by_check_msg_in_mem")]
     pub init_pop_offset_by_check_msg_in_mem: bool,
+
+    #[serde(default)]
     pub enable_pop_buffer_merge: bool,
+
+    #[serde(default = "defaults::pop_ck_stay_buffer_time_out")]
     pub pop_ck_stay_buffer_time_out: u64,
+
+    #[serde(default = "defaults::pop_ck_stay_buffer_time")]
     pub pop_ck_stay_buffer_time: u64,
+
+    #[serde(default = "defaults::broker_role")]
     pub broker_role: BrokerRole,
+
+    #[serde(default)]
     pub enable_pop_batch_ack: bool,
+
+    #[serde(default = "defaults::revive_interval")]
     pub revive_interval: u64,
+
+    #[serde(default = "defaults::revive_max_slow")]
     pub revive_max_slow: u64,
+
+    #[serde(default = "defaults::revive_scan_time")]
     pub revive_scan_time: u64,
+
+    #[serde(default)]
     pub enable_skip_long_awaiting_ack: bool,
+
+    #[serde(default)]
     pub skip_when_ck_re_put_reach_max_times: bool,
+
+    #[serde(default)]
     pub compressed_register: bool,
+
+    #[serde(default = "defaults::broker_not_active_timeout_millis")]
     pub broker_not_active_timeout_millis: i64,
+
+    #[serde(default = "defaults::sync_broker_member_group_period")]
     pub sync_broker_member_group_period: u64,
+
+    #[serde(default = "defaults::pop_polling_map_size")]
     pub pop_polling_map_size: usize,
+
+    #[serde(default = "defaults::max_pop_polling_size")]
     pub max_pop_polling_size: u64,
+
+    #[serde(default = "defaults::pop_polling_size")]
     pub pop_polling_size: usize,
+
+    #[serde(default)]
     pub enable_pop_message_threshold: bool,
+
+    #[serde(default = "defaults::pop_inflight_message_threshold")]
     pub pop_inflight_message_threshold: i64,
+
+    #[serde(default = "defaults::pop_ck_max_buffer_size")]
     pub pop_ck_max_buffer_size: i64,
+
+    #[serde(default = "defaults::pop_ck_offset_max_queue_size")]
     pub pop_ck_offset_max_queue_size: u64,
+
+    #[serde(default = "defaults::delay_offset_update_version_step")]
     pub delay_offset_update_version_step: u64,
+
+    #[serde(default = "defaults::revive_ack_wait_ms")]
     pub revive_ack_wait_ms: u64,
 
-    // Switch of filter bit map calculation.
-    // If switch on:
-    // 1. Calculate filter bit map when construct queue.
-    // 2. Filter bit map will be saved to consume queue extend file if allowed.
+    #[serde(default)]
     pub enable_calc_filter_bit_map: bool,
 }
 
@@ -652,6 +1157,7 @@ pub fn default_broker_name() -> String {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct TopicQueueConfig {
+    #[serde(default = "defaults::default_topic_queue_nums")]
     pub default_topic_queue_nums: u32,
 }
 
@@ -666,5 +1172,6 @@ impl Default for TopicQueueConfig {
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct TimerWheelConfig {
+    #[serde(default)]
     pub timer_wheel_enable: bool,
 }
