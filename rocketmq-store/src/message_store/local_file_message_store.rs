@@ -739,19 +739,6 @@ impl MessageStore for LocalFileMessageStore {
             self.message_store_config.store_path_root_dir.as_str(),
         ));
     }
-    /*    async fn async_put_message(
-        &mut self,
-        msg: MessageExtBrokerInner,
-    ) ->PutMessageResult {
-
-    }*/
-
-    /*    async fn async_put_messages(
-        &self,
-        message_ext_batch: MessageExtBatch,
-    ) -> Result<PutMessageResult, StoreError> {
-
-    }*/
 
     async fn put_message(&mut self, mut msg: MessageExtBrokerInner) -> PutMessageResult {
         for hook in self.put_message_hook_list.iter() {
@@ -846,18 +833,6 @@ impl MessageStore for LocalFileMessageStore {
         )
         .await
     }
-
-    /*    async fn get_message_async(
-        &self,
-        group: &str,
-        topic: &str,
-        queue_id: i32,
-        offset: i64,
-        max_msg_nums: i32,
-        message_filter: &dyn MessageFilter,
-    ) -> Result<GetMessageResult, StoreError> {
-
-    }*/
 
     async fn get_message_with_size_limit(
         &self,
