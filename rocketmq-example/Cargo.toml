@@ -7,7 +7,7 @@ homepage.workspace = true
 repository.workspace = true
 license.workspace = true
 keywords.workspace = true
-readme.workspace = true
+readme = "README.md"
 description.workspace = true
 
 [dependencies]
@@ -19,7 +19,6 @@ rocketmq-error = { workspace = true }
 
 tracing.workspace = true
 cheetah-string = { workspace = true }
-tokio =  { workspace = true }
 
 [[example]]
 name = "pop-consumer"
