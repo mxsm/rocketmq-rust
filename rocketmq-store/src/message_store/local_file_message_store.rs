@@ -739,19 +739,6 @@ impl MessageStore for LocalFileMessageStore {
             self.message_store_config.store_path_root_dir.as_str(),
         ));
     }
-    /*    async fn async_put_message(
-        &mut self,
-        msg: MessageExtBrokerInner,
-    ) ->PutMessageResult {
-
-    }*/
-
-    /*    async fn async_put_messages(
-        &self,
-        message_ext_batch: MessageExtBatch,
-    ) -> Result<PutMessageResult, StoreError> {
-
-    }*/
 
     async fn put_message(&mut self, mut msg: MessageExtBrokerInner) -> PutMessageResult {
         for hook in self.put_message_hook_list.iter() {
