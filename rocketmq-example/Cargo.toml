@@ -19,6 +19,7 @@ rocketmq-error = { workspace = true }
 
 tracing.workspace = true
 cheetah-string = { workspace = true }
+tokio =  { workspace = true }
 
 [[example]]
 name = "pop-consumer"
