@@ -739,6 +739,19 @@ impl MessageStore for LocalFileMessageStore {
             self.message_store_config.store_path_root_dir.as_str(),
         ));
     }
+    /*    async fn async_put_message(
+        &mut self,
+        msg: MessageExtBrokerInner,
+    ) ->PutMessageResult {
+
+    }*/
+
+    /*    async fn async_put_messages(
+        &self,
+        message_ext_batch: MessageExtBatch,
+    ) -> Result<PutMessageResult, StoreError> {
+
+    }*/
 
     async fn put_message(&mut self, mut msg: MessageExtBrokerInner) -> PutMessageResult {
         for hook in self.put_message_hook_list.iter() {
@@ -769,8 +782,7 @@ impl MessageStore for LocalFileMessageStore {
         }
         let begin_time = Instant::now();
         //put message to commit log
-        let commit_log_this = self.commit_log.clone();
-        let result = self.commit_log.put_message(msg, commit_log_this).await;
+        let result = self.commit_log.put_message(msg).await;
         let elapsed_time = begin_time.elapsed().as_millis();
         if elapsed_time > 500 {
             warn!(
@@ -799,11 +811,7 @@ impl MessageStore for LocalFileMessageStore {
 
         let begin_time = Instant::now();
         //put message to commit log
-        let commit_log_this = self.commit_log.clone();
-        let result = self
-            .commit_log
-            .put_messages(message_ext_batch, commit_log_this)
-            .await;
+        let result = self.commit_log.put_messages(message_ext_batch).await;
         let elapsed_time = begin_time.elapsed().as_millis();
         if elapsed_time > 500 {
             warn!("not in lock eclipse time(ms) {}ms", elapsed_time,);
