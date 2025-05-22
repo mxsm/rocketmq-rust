@@ -63,6 +63,7 @@ use crate::base::message_result::AppendMessageResult;
 use crate::base::message_result::PutMessageResult;
 use crate::base::message_status_enum::AppendMessageStatus;
 use crate::base::message_status_enum::PutMessageStatus;
+use crate::base::message_store::MessageStore;
 use crate::base::put_message_context::PutMessageContext;
 use crate::base::select_result::SelectMappedBufferResult;
 use crate::base::store_checkpoint::StoreCheckpoint;
@@ -332,7 +333,7 @@ impl CommitLog {
             msg_batch.message_ext_broker_inner.with_store_host_v6_flag();
         }
 
-        let mut _unlock_mapped_file = None;
+        let mut unlock_mapped_file = None;
         let mut mapped_file = self.mapped_file_queue.get_last_mapped_file();
         let curr_offset = if let Some(ref mapped_file_inner) = mapped_file {
             mapped_file_inner.get_wrote_position() as u64 + mapped_file_inner.get_file_from_offset()
@@ -410,7 +411,7 @@ impl CommitLog {
             }
             AppendMessageStatus::EndOfFile => {
                 //onCommitLogAppend(msg, result, mappedFile); in java not support this version
-                _unlock_mapped_file = mapped_file;
+                unlock_mapped_file = mapped_file;
                 mapped_file = self
                     .mapped_file_queue
                     .get_last_mapped_file_mut_start_offset(0, true);
@@ -467,7 +468,15 @@ impl CommitLog {
                 put_message_result.append_message_result().as_ref().unwrap(),
             );
         }
-
+        if let (Some(unlock_mf), true) = (
+            unlock_mapped_file,
+            self.message_store_config.warm_mapped_file_enable,
+        ) {
+            self.local_file_message_store
+                .as_ref()
+                .unwrap()
+                .unlock_mapped_file(unlock_mf.as_ref());
+        }
         if put_message_result.put_message_status() == PutMessageStatus::PutOk {
             self.increase_offset(
                 &msg_batch.message_ext_broker_inner,
@@ -527,7 +536,7 @@ impl CommitLog {
 
         let topic_queue_key = generate_key(&msg);
 
-        let mut _unlock_mapped_file = None;
+        let mut unlock_mapped_file = None;
 
         //get last mapped file from mapped file queue
         let mut mapped_file = self.mapped_file_queue.get_last_mapped_file();
@@ -601,7 +610,7 @@ impl CommitLog {
             }
             AppendMessageStatus::EndOfFile => {
                 //onCommitLogAppend(msg, result, mappedFile); in java not support this version
-                _unlock_mapped_file = mapped_file;
+                unlock_mapped_file = mapped_file;
                 mapped_file = self
                     .mapped_file_queue
                     .get_last_mapped_file_mut_start_offset(0, true);
@@ -656,6 +665,16 @@ impl CommitLog {
                 msg.body_len(),
                 put_message_result.append_message_result().as_ref().unwrap(),
             );
+        }
+
+        if let (Some(unlock_mf), true) = (
+            unlock_mapped_file,
+            self.message_store_config.warm_mapped_file_enable,
+        ) {
+            self.local_file_message_store
+                .as_ref()
+                .unwrap()
+                .unlock_mapped_file(unlock_mf.as_ref());
         }
 
         if put_message_result.put_message_status() == PutMessageStatus::PutOk {

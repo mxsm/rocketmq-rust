@@ -470,7 +470,8 @@ pub trait MessageStoreInner: Sync + 'static {
     fn get_allocate_mapped_file_service(&self) -> Arc<AllocateMappedFileService>;
 
     /// Truncate dirty logic files
-    fn truncate_dirty_logic_files(&self, phy_offset: i64) -> Result<(), StoreError>;
+    // fn truncate_dirty_logic_files(&self, phy_offset: i64) -> Result<(), StoreError>;
+    fn truncate_dirty_logic_files(&self, phy_offset: i64);
 
     /// Unlock mappedFile
     fn unlock_mapped_file<MF: MappedFile>(&self, unlock_mapped_file: &MF);

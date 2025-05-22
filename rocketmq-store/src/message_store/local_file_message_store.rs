@@ -424,9 +424,9 @@ impl LocalFileMessageStore {
         self.dispatcher.dispatch(dispatch_request)
     }
 
-    pub fn truncate_dirty_logic_files(&mut self, phy_offset: i64) {
+    /*    pub fn truncate_dirty_logic_files(&mut self, phy_offset: i64) {
         self.consume_queue_store.truncate_dirty(phy_offset);
-    }
+    }*/
 
     pub fn consume_queue_store_mut(&mut self) -> &mut ConsumeQueueStore {
         &mut self.consume_queue_store
@@ -1716,12 +1716,12 @@ impl MessageStore for LocalFileMessageStore {
         todo!()
     }
 
-    fn truncate_dirty_logic_files(&self, phy_offset: i64) -> Result<(), StoreError> {
-        todo!()
+    fn truncate_dirty_logic_files(&self, phy_offset: i64) {
+        self.consume_queue_store.truncate_dirty(phy_offset);
     }
 
     fn unlock_mapped_file<MF: MappedFile>(&self, unlock_mapped_file: &MF) {
-        todo!()
+        warn!("unlock_mapped_file: not implemented");
     }
 
     fn get_queue_store(&self) -> &dyn Any {
