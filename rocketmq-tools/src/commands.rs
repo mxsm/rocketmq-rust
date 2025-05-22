@@ -14,6 +14,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod admin;
-pub(crate) mod commands;
-pub mod rocketmq_cli;
+mod topic_commands;
+
+use clap::Subcommand;
+
+#[derive(Subcommand)]
+pub enum Commands {
+    #[command(subcommand)]
+    #[command(about = "Topic commands")]
+    Topic(topic_commands::TopicCommands),
+}
