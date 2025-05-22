@@ -16,28 +16,10 @@
  */
 use clap::Parser;
 
-use crate::commands::Commands;
+use crate::commands::CommonArgs;
 
-#[derive(Parser)]
-#[command(name = "rocketmq-admin-cli-rust")]
-#[command(about = "Rocketmq Rust admin commands", long_about = None, author="mxsm")]
-pub struct RocketMQCli {
-    #[command(subcommand)]
-    commands: Commands,
-}
-
-impl RocketMQCli {
-    pub fn handle(&self) {
-        match &self.commands {
-            Commands::Topic(_) => {
-                unimplemented!("Topic command is not implemented yet");
-            }
-            Commands::Show(value) => {
-                value.print();
-            }
-            Commands::NameServer(_) => {
-                unimplemented!("NameServer command is not implemented yet");
-            }
-        }
-    }
+#[derive(Debug, Clone, Parser)]
+pub struct GetNamesrvConfigCommand {
+    #[command(flatten)]
+    common: CommonArgs,
 }

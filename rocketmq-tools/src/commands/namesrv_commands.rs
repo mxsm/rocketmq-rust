@@ -14,30 +14,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use clap::Parser;
+mod get_namesrv_config_command;
 
-use crate::commands::Commands;
+use clap::Subcommand;
 
-#[derive(Parser)]
-#[command(name = "rocketmq-admin-cli-rust")]
-#[command(about = "Rocketmq Rust admin commands", long_about = None, author="mxsm")]
-pub struct RocketMQCli {
-    #[command(subcommand)]
-    commands: Commands,
-}
+use crate::commands::namesrv_commands::get_namesrv_config_command::GetNamesrvConfigCommand;
 
-impl RocketMQCli {
-    pub fn handle(&self) {
-        match &self.commands {
-            Commands::Topic(_) => {
-                unimplemented!("Topic command is not implemented yet");
-            }
-            Commands::Show(value) => {
-                value.print();
-            }
-            Commands::NameServer(_) => {
-                unimplemented!("NameServer command is not implemented yet");
-            }
-        }
-    }
+#[derive(Subcommand)]
+pub enum NameServerCommands {
+    #[command(
+        name = "getNamesrvConfig",
+        about = "Get configs of name server.",
+        long_about = None,
+    )]
+    GetNamesrvConfig(GetNamesrvConfigCommand),
 }

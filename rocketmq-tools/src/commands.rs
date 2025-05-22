@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+mod namesrv_commands;
 mod topic_commands;
 
 use clap::Parser;
@@ -22,8 +23,25 @@ use tabled::settings::Style;
 use tabled::Table;
 use tabled::Tabled;
 
+#[derive(Debug, Parser, Clone)]
+pub struct CommonArgs {
+    /// The name of the topic
+    #[arg(
+        short = 'n',
+        long = "namesrvAddr",
+        required = true,
+        help = "Name server address list, eg: '192.168.0.1:9876;192.168.0.2:9876'"
+    )]
+    pub namesrv_addr: String,
+}
+
 #[derive(Subcommand)]
 pub enum Commands {
+    #[command(subcommand)]
+    #[command(about = "Name server commands")]
+    #[command(name = "nameserver")]
+    NameServer(namesrv_commands::NameServerCommands),
+
     #[command(subcommand)]
     #[command(about = "Topic commands")]
     Topic(topic_commands::TopicCommands),
@@ -49,11 +67,18 @@ pub(crate) struct ClassificationTablePrint;
 
 impl ClassificationTablePrint {
     pub fn print(&self) {
-        let commands: Vec<Command> = vec![Command {
-            category: "Topic",
-            command: "allocateMQ",
-            remark: "Allocate MQ.",
-        }];
+        let commands: Vec<Command> = vec![
+            Command {
+                category: "Topic",
+                command: "allocateMQ",
+                remark: "Allocate MQ.",
+            },
+            Command {
+                category: "NameServer",
+                command: "getNamesrvConfig",
+                remark: "Get configs of name server.",
+            },
+        ];
         let mut table = Table::new(commands);
         table.with(Style::extended());
         print!("{table}");
