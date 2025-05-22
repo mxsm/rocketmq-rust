@@ -47,10 +47,11 @@ pub struct CommonArgs {
     #[arg(
         short = 'n',
         long = "namesrvAddr",
-        required = true,
+        required = false,
+        default_value = None,
         help = "Name server address list, eg: '192.168.0.1:9876;192.168.0.2:9876'"
     )]
-    pub namesrv_addr: String,
+    pub namesrv_addr: Option<String>,
 }
 
 #[derive(Subcommand)]
