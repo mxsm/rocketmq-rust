@@ -17,11 +17,29 @@
 mod namesrv_commands;
 mod topic_commands;
 
+use std::sync::Arc;
+
 use clap::Parser;
 use clap::Subcommand;
+use rocketmq_remoting::runtime::RPCHook;
 use tabled::settings::Style;
 use tabled::Table;
 use tabled::Tabled;
+
+/// A trait that defines the execution behavior for commands.
+///
+/// This trait is designed to be implemented by various command types
+/// that require execution logic. The `execute` method provides the
+/// functionality to execute a command with a given RPC hook.
+pub trait CommandExecute {
+    /// Executes the command.
+    ///
+    /// # Parameters
+    /// - `rpcHook`: An `Arc` containing a reference to a type that implements the `RPCHook` trait.
+    ///   This hook is used to customize the behavior of remote procedure calls during command
+    ///   execution.
+    fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>);
+}
 
 #[derive(Debug, Parser, Clone)]
 pub struct CommonArgs {
@@ -50,6 +68,17 @@ pub enum Commands {
     Show(ClassificationTablePrint),
 }
 
+impl CommandExecute for Commands {
+    fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) {
+        match self {
+            Commands::NameServer(value) => value.execute(rpc_hook),
+            Commands::Topic(value) => value.execute(rpc_hook),
+            Commands::Show(value) => value.execute(rpc_hook),
+        }
+    }
+}
+
+// ================for commands table print================
 #[derive(Tabled, Clone)]
 struct Command {
     #[tabled(rename = "Category")]
@@ -65,8 +94,8 @@ struct Command {
 #[derive(Parser)]
 pub(crate) struct ClassificationTablePrint;
 
-impl ClassificationTablePrint {
-    pub fn print(&self) {
+impl CommandExecute for ClassificationTablePrint {
+    fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) {
         let commands: Vec<Command> = vec![
             Command {
                 category: "Topic",

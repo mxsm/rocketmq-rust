@@ -16,6 +16,7 @@
  */
 use clap::Parser;
 
+use crate::commands::CommandExecute;
 use crate::commands::Commands;
 
 #[derive(Parser)]
@@ -28,16 +29,6 @@ pub struct RocketMQCli {
 
 impl RocketMQCli {
     pub fn handle(&self) {
-        match &self.commands {
-            Commands::Topic(_) => {
-                unimplemented!("Topic command is not implemented yet");
-            }
-            Commands::Show(value) => {
-                value.print();
-            }
-            Commands::NameServer(_) => {
-                unimplemented!("NameServer command is not implemented yet");
-            }
-        }
+        self.commands.execute(None)
     }
 }

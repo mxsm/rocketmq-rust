@@ -14,7 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::sync::Arc;
+
 use clap::Parser;
+use rocketmq_remoting::runtime::RPCHook;
+
+use crate::commands::CommandExecute;
 
 #[derive(Debug, Clone, Parser)]
 pub struct AllocateMQSubCommand {
@@ -25,4 +30,10 @@ pub struct AllocateMQSubCommand {
     /// Comma-separated list of IP addresses
     #[arg(short = 'i', long = "ipList", required = true)]
     ip_list: String,
+}
+
+impl CommandExecute for AllocateMQSubCommand {
+    fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) {
+        unimplemented!("AllocateMQSubCommand is not implemented yet");
+    }
 }
