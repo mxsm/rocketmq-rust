@@ -16,11 +16,46 @@
  */
 mod topic_commands;
 
+use clap::Parser;
 use clap::Subcommand;
+use tabled::settings::Style;
+use tabled::Table;
+use tabled::Tabled;
 
 #[derive(Subcommand)]
 pub enum Commands {
     #[command(subcommand)]
     #[command(about = "Topic commands")]
     Topic(topic_commands::TopicCommands),
+
+    #[command(about = "Category commands show")]
+    Show(ClassificationTablePrint),
+}
+
+#[derive(Tabled, Clone)]
+struct Command {
+    #[tabled(rename = "Category")]
+    category: &'static str,
+
+    #[tabled(rename = "Command")]
+    command: &'static str,
+
+    #[tabled(rename = "Remark")]
+    remark: &'static str,
+}
+
+#[derive(Parser)]
+pub(crate) struct ClassificationTablePrint;
+
+impl ClassificationTablePrint {
+    pub fn print(&self) {
+        let commands: Vec<Command> = vec![Command {
+            category: "Topic",
+            command: "allocateMQ",
+            remark: "Allocate MQ.",
+        }];
+        let mut table = Table::new(commands);
+        table.with(Style::extended());
+        print!("{table}");
+    }
 }
