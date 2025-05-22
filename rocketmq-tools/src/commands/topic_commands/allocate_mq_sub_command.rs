@@ -14,6 +14,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod admin;
-pub(crate) mod commands;
-pub mod rocketmq_cli;
+use clap::Parser;
+
+#[derive(Debug, Clone, Parser)]
+pub struct AllocateMQSubCommand {
+    /// Topic name
+    #[arg(short = 't', long = "topic", required = true)]
+    topic: String,
+
+    /// Comma-separated list of IP addresses
+    #[arg(short = 'i', long = "ipList", required = true)]
+    ip_list: String,
+}

@@ -14,6 +14,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod admin;
-pub(crate) mod commands;
-pub mod rocketmq_cli;
+mod allocate_mq_sub_command;
+
+use clap::Subcommand;
+
+#[derive(Subcommand)]
+pub enum TopicCommands {
+    #[command(
+        name = "allocateMQ",
+        about = "Allocate memory space for each topic",
+        long_about = "Allocate memory space for each topic, which is used to allocate the memory \
+                      space of the topic when the topic is created. The default value is 1. If \
+                      you want to allocate more memory space, you can use this command to \
+                      allocate it."
+    )]
+    AllocateMQ(allocate_mq_sub_command::AllocateMQSubCommand),
+}

@@ -14,6 +14,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod admin;
-pub(crate) mod commands;
-pub mod rocketmq_cli;
+use clap::Parser;
+
+use crate::commands::Commands;
+
+#[derive(Parser)]
+#[command(name = "rocketmq-admin-cli-rust")]
+#[command(about = "An example CLI application with subcommands in a group", long_about = None)]
+pub struct RocketMQCli {
+    #[command(subcommand)]
+    commands: Commands,
+}

@@ -2424,6 +2424,7 @@ name = "rocketmq-tools"
 version = "0.6.0"
 dependencies = [
  "cheetah-string",
+ "clap",
  "rocketmq-client-rust",
  "rocketmq-common",
  "rocketmq-error",
@@ -2431,7 +2432,7 @@ dependencies = [
  "rocketmq-rust",
  "serde",
  "serde_json",
- "thiserror 2.0.12",
+ "tokio",
 ]
 
 [[package]]
