@@ -16,9 +16,13 @@
  */
 mod get_namesrv_config_command;
 
+use std::sync::Arc;
+
 use clap::Subcommand;
+use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::namesrv_commands::get_namesrv_config_command::GetNamesrvConfigCommand;
+use crate::commands::CommandExecute;
 
 #[derive(Subcommand)]
 pub enum NameServerCommands {
@@ -28,4 +32,14 @@ pub enum NameServerCommands {
         long_about = None,
     )]
     GetNamesrvConfig(GetNamesrvConfigCommand),
+}
+
+impl CommandExecute for NameServerCommands {
+    fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) {
+        match self {
+            NameServerCommands::GetNamesrvConfig(value) => {
+                value.execute(rpc_hook);
+            }
+        }
+    }
 }

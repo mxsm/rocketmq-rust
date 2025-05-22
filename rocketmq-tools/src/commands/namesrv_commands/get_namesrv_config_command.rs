@@ -14,12 +14,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use clap::Parser;
+use std::sync::Arc;
 
+use clap::Parser;
+use rocketmq_remoting::runtime::RPCHook;
+
+use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
 
 #[derive(Debug, Clone, Parser)]
 pub struct GetNamesrvConfigCommand {
     #[command(flatten)]
     common: CommonArgs,
+}
+
+impl CommandExecute for GetNamesrvConfigCommand {
+    fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) {
+        unimplemented!("GetNamesrvConfigCommand is not implemented yet");
+    }
 }

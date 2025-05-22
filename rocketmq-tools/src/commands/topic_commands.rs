@@ -16,7 +16,12 @@
  */
 mod allocate_mq_sub_command;
 
+use std::sync::Arc;
+
 use clap::Subcommand;
+use rocketmq_remoting::runtime::RPCHook;
+
+use crate::commands::CommandExecute;
 
 #[derive(Subcommand)]
 pub enum TopicCommands {
@@ -28,4 +33,12 @@ space of the topic when the topic is created. The default value is 1. If you wan
 more memory space, you can use this command to allocate it."#
     )]
     AllocateMQ(allocate_mq_sub_command::AllocateMQSubCommand),
+}
+
+impl CommandExecute for TopicCommands {
+    fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) {
+        match self {
+            TopicCommands::AllocateMQ(cmd) => cmd.execute(rpc_hook),
+        }
+    }
 }
