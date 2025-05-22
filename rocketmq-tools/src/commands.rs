@@ -25,7 +25,7 @@ use tabled::Tabled;
 
 #[derive(Debug, Parser, Clone)]
 pub struct CommonArgs {
-    /// The name of the topic
+    /// The name server address list
     #[arg(
         short = 'n',
         long = "namesrvAddr",
