@@ -2432,6 +2432,7 @@ dependencies = [
  "rocketmq-rust",
  "serde",
  "serde_json",
+ "tabled",
  "tokio",
 ]
 

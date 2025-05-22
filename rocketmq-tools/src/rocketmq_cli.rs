@@ -20,8 +20,21 @@ use crate::commands::Commands;
 
 #[derive(Parser)]
 #[command(name = "rocketmq-admin-cli-rust")]
-#[command(about = "An example CLI application with subcommands in a group", long_about = None)]
+#[command(about = "Rocketmq Rust admin commands", long_about = None, author="mxsm")]
 pub struct RocketMQCli {
     #[command(subcommand)]
     commands: Commands,
+}
+
+impl RocketMQCli {
+    pub fn handle(&self) {
+        match &self.commands {
+            Commands::Topic(_) => {
+                unimplemented!("Topic command is not implemented yet");
+            }
+            Commands::Show(value) => {
+                value.print();
+            }
+        }
+    }
 }

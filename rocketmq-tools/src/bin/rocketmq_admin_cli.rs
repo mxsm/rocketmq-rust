@@ -21,5 +21,6 @@ use rocketmq_tools::rocketmq_cli::RocketMQCli;
 async fn main() {
     // This is a placeholder for the main function.
     // The actual implementation will depend on the specific requirements of the RocketMQ admin CLI.
-    let _cli = RocketMQCli::parse();
+    let cli = RocketMQCli::parse();
+    cli.handle();
 }
