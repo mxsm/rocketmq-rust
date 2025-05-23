@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use clap::Parser;
 use clap::Subcommand;
+use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 use tabled::settings::Style;
 use tabled::Table;
@@ -38,7 +39,7 @@ pub trait CommandExecute {
     /// - `rpcHook`: An `Arc` containing a reference to a type that implements the `RPCHook` trait.
     ///   This hook is used to customize the behavior of remote procedure calls during command
     ///   execution.
-    fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>);
+    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()>;
 }
 
 #[derive(Debug, Parser, Clone)]
@@ -70,11 +71,11 @@ pub enum Commands {
 }
 
 impl CommandExecute for Commands {
-    fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) {
+    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         match self {
-            Commands::NameServer(value) => value.execute(rpc_hook),
-            Commands::Topic(value) => value.execute(rpc_hook),
-            Commands::Show(value) => value.execute(rpc_hook),
+            Commands::NameServer(value) => value.execute(rpc_hook).await,
+            Commands::Topic(value) => value.execute(rpc_hook).await,
+            Commands::Show(value) => value.execute(rpc_hook).await,
         }
     }
 }
@@ -96,7 +97,7 @@ struct Command {
 pub(crate) struct ClassificationTablePrint;
 
 impl CommandExecute for ClassificationTablePrint {
-    fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) {
+    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         let commands: Vec<Command> = vec![
             Command {
                 category: "Topic",
@@ -112,5 +113,6 @@ impl CommandExecute for ClassificationTablePrint {
         let mut table = Table::new(commands);
         table.with(Style::extended());
         print!("{table}");
+        Ok(())
     }
 }
