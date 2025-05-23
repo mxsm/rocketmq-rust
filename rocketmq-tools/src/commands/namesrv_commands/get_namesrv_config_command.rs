@@ -64,16 +64,18 @@ impl CommandExecute for GetNamesrvConfigCommand {
         }
         let mut admin = DefaultMQAdminExt::new();
         admin.client_config_mut().instance_name = get_current_millis().to_string().into();
-
+        println!("RocketMQ Admin CLI: getNamesrvConfig");
         let server_list = self.parse_server_list();
         if let Some(server_list) = server_list {
             admin.start().await?;
-            let _ = admin.get_name_server_config(server_list).await;
+            println!("RocketMQ Admin CLI: getNamesrvConfig==============");
+            let configs = admin.get_name_server_config(server_list).await?;
+            println!("Configs: {:#?}", configs);
         } else {
             eprintln!("Please set the namesrvAddr parameter");
             return Ok(());
         }
 
-        unimplemented!("GetNamesrvConfigCommand is not implemented yet");
+        Ok(())
     }
 }

@@ -297,13 +297,13 @@ impl MQClientInstance {
             ServiceState::CreateJust => {
                 self.service_state = ServiceState::StartFailed;
                 // If not specified,looking address from name remoting_server
-                if self.client_config.namesrv_addr.is_none() {
+                /*              if self.client_config.namesrv_addr.is_none() {
                     self.mq_client_api_impl
                         .as_mut()
                         .expect("mq_client_api_impl is None")
                         .fetch_name_server_addr()
                         .await;
-                }
+                }*/
                 // Start request-response channel
                 self.mq_client_api_impl
                     .as_mut()

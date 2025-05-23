@@ -52,6 +52,7 @@ use rocketmq_rust::ArcMut;
 use tracing::info;
 
 use crate::admin::mq_admin_ext_async::MQAdminExt;
+use crate::admin::mq_admin_ext_async::MQAdminExtLocal;
 use crate::admin::mq_admin_ext_async_inner::MQAdminExtInnerImpl;
 use crate::base::client_config::ClientConfig;
 use crate::common::admin_tool_result::AdminToolResult;
@@ -657,7 +658,16 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         name_servers: Vec<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>>
     {
-        todo!()
+        Ok(self
+            .client_instance
+            .as_ref()
+            .unwrap()
+            .mq_client_api_impl
+            .as_ref()
+            .unwrap()
+            .get_name_server_config(Some(name_servers), self.timeout_millis)
+            .await?
+            .unwrap_or_default())
     }
 
     async fn resume_check_half_message(
