@@ -28,7 +28,9 @@ pub struct RocketMQCli {
 }
 
 impl RocketMQCli {
-    pub fn handle(&self) {
-        self.commands.execute(None)
+    pub async fn handle(&self) {
+        if let Err(e) = self.commands.execute(None).await {
+            eprintln!("Error: {e}");
+        }
     }
 }

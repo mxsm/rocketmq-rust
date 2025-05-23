@@ -19,6 +19,7 @@ mod allocate_mq_sub_command;
 use std::sync::Arc;
 
 use clap::Subcommand;
+use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
@@ -36,9 +37,9 @@ more memory space, you can use this command to allocate it."#
 }
 
 impl CommandExecute for TopicCommands {
-    fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) {
+    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         match self {
-            TopicCommands::AllocateMQ(cmd) => cmd.execute(rpc_hook),
+            TopicCommands::AllocateMQ(cmd) => cmd.execute(rpc_hook).await,
         }
     }
 }

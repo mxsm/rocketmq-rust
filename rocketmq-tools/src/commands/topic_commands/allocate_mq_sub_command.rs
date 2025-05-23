@@ -17,6 +17,7 @@
 use std::sync::Arc;
 
 use clap::Parser;
+use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
@@ -33,7 +34,7 @@ pub struct AllocateMQSubCommand {
 }
 
 impl CommandExecute for AllocateMQSubCommand {
-    fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) {
+    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         unimplemented!("AllocateMQSubCommand is not implemented yet");
     }
 }
