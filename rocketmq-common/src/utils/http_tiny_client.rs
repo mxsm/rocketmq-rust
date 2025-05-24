@@ -26,106 +26,214 @@ use reqwest::header::HeaderMap;
 use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
 use reqwest::header::CONTENT_TYPE;
-use url::form_urlencoded;
+
+use crate::common::mq_version::RocketMqVersion;
+use crate::TimeUtils::get_current_millis;
 
 pub struct HttpTinyClient;
 
+/// HTTP response result (mirrors Java HttpResult)
+#[derive(Debug, Clone)]
 pub struct HttpResult {
-    pub code: u16,
+    /// HTTP status code
+    pub code: i32,
+    /// Response content
     pub content: String,
 }
 
+impl HttpResult {
+    /// Create a new HttpResult
+    pub fn new(code: i32, content: String) -> Self {
+        Self { code, content }
+    }
+
+    /// Check if the response is successful (2xx status codes)
+    pub fn is_success(&self) -> bool {
+        self.code >= 200 && self.code < 300
+    }
+
+    /// Check if the response is OK (200 status code)
+    pub fn is_ok(&self) -> bool {
+        self.code == 200
+    }
+}
+
+impl std::fmt::Display for HttpResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "HttpResult(code: {}, content_length: {})",
+            self.code,
+            self.content.len()
+        )
+    }
+}
+
 impl HttpTinyClient {
+    /// Perform HTTP GET request
+    ///
+    /// # Arguments
+    /// * `url` - The URL to request
+    /// * `headers` - Optional list of headers (key-value pairs)
+    /// * `param_values` - Optional list of query parameters (key-value pairs)
+    /// * `encoding` - Character encoding (e.g., "UTF-8")
+    /// * `read_timeout_ms` - Timeout in milliseconds
+    ///
+    /// # Returns
+    /// `HttpResult` containing response code and content
     pub fn http_get(
         url: &str,
-        headers: Option<HashMap<String, String>>,
-        param_values: Option<HashMap<String, String>>,
+        headers: Option<&[String]>,
+        param_values: Option<&[String]>,
         encoding: &str,
         read_timeout_ms: u64,
-    ) -> Result<HttpResult, reqwest::Error> {
-        let client = Client::new();
-        let url = if let Some(params) = param_values {
-            let encoded_content = HttpTinyClient::encode_params(params, encoding);
-            format!("{url}?{encoded_content}")
+    ) -> Result<HttpResult, io::Error> {
+        let encoded_content = Self::encoding_params(param_values, encoding)?;
+        let full_url = if let Some(params) = encoded_content {
+            format!("{url}?{params}")
         } else {
             url.to_string()
         };
 
-        let mut request = client.get(&url);
-        if let Some(headers) = headers {
-            let header_map = HttpTinyClient::set_headers(headers, encoding);
-            request = request.headers(header_map);
-        }
-
-        let response = request
+        let client = Client::builder()
             .timeout(Duration::from_millis(read_timeout_ms))
-            .send()?;
-        HttpTinyClient::process_response(response, encoding)
+            .build()
+            .map_err(io::Error::other)?;
+
+        let mut request_builder = client.get(&full_url);
+
+        // Set headers
+        request_builder = Self::set_headers(request_builder, headers, encoding);
+
+        let response = request_builder.send().map_err(io::Error::other)?;
+
+        let status_code = response.status().as_u16() as i32;
+
+        // Read response content based on status code
+        let content = if response.status().is_success() {
+            response.text()
+        } else {
+            // For error responses, still try to read the body
+            response.text()
+        }
+        .map_err(io::Error::other)?;
+
+        Ok(HttpResult::new(status_code, content))
     }
 
+    /// Perform HTTP POST request
+    ///
+    /// # Arguments
+    /// * `url` - The URL to request
+    /// * `headers` - Optional list of headers (key-value pairs)
+    /// * `param_values` - Optional list of form parameters (key-value pairs)
+    /// * `encoding` - Character encoding (e.g., "UTF-8")
+    /// * `read_timeout_ms` - Timeout in milliseconds
+    ///
+    /// # Returns
+    /// `HttpResult` containing response code and content
     pub fn http_post(
         url: &str,
-        headers: Option<HashMap<String, String>>,
-        param_values: Option<HashMap<String, String>>,
+        headers: Option<&[String]>,
+        param_values: Option<&[String]>,
         encoding: &str,
         read_timeout_ms: u64,
-    ) -> Result<HttpResult, reqwest::Error> {
-        let client = Client::new();
-        let encoded_content =
-            HttpTinyClient::encode_params(param_values.unwrap_or_default(), encoding);
+    ) -> Result<HttpResult, io::Error> {
+        let encoded_content = Self::encoding_params(param_values, encoding)?.unwrap_or_default();
 
-        let mut request = client.post(url).body(encoded_content.clone());
-        if let Some(headers) = headers {
-            let header_map = HttpTinyClient::set_headers(headers, encoding);
-            request = request.headers(header_map);
-        }
-
-        let response = request
+        let client = Client::builder()
             .timeout(Duration::from_millis(read_timeout_ms))
-            .send()?;
-        HttpTinyClient::process_response(response, encoding)
-    }
+            .connect_timeout(Duration::from_millis(3000)) // Fixed 3 second connect timeout like Java
+            .build()
+            .map_err(io::Error::other)?;
 
-    fn encode_params(params: HashMap<String, String>, encoding: &str) -> String {
-        let encoded: String = form_urlencoded::Serializer::new(String::new())
-            .extend_pairs(params)
-            .finish();
-        encoded
-    }
+        let mut request_builder = client.post(url);
 
-    fn set_headers(headers: HashMap<String, String>, encoding: &str) -> HeaderMap {
-        let mut header_map = HeaderMap::new();
-        for (key, value) in headers {
-            header_map.insert(
-                HeaderName::from_str(&key).unwrap(),
-                HeaderValue::from_str(&value).unwrap(),
-            );
+        // Set headers
+        request_builder = Self::set_headers(request_builder, headers, encoding);
+
+        // Set body content
+        request_builder = request_builder.body(encoded_content);
+
+        let response = request_builder.send().map_err(io::Error::other)?;
+
+        let status_code = response.status().as_u16() as i32;
+
+        // Read response content based on status code
+        let content = if response.status().is_success() {
+            response.text()
+        } else {
+            // For error responses, still try to read the body
+            response.text()
         }
-        header_map.insert(
-            "Client-Version",
-            HeaderValue::from_str(&format!("MyClient/{}", env!("CARGO_PKG_VERSION"))).unwrap(),
-        );
-        header_map.insert(
-            CONTENT_TYPE,
-            HeaderValue::from_str(&format!(
-                "application/x-www-form-urlencoded;charset={encoding}",
-            ))
-            .unwrap(),
-        );
-        header_map.insert(
-            "Metaq-Client-RequestTS",
-            HeaderValue::from_str(&format!("{}", chrono::Utc::now().timestamp_millis())).unwrap(),
-        );
-        header_map
+        .map_err(io::Error::other)?;
+
+        Ok(HttpResult::new(status_code, content))
     }
 
-    fn process_response(response: Response, encoding: &str) -> Result<HttpResult, reqwest::Error> {
-        let status = response.status();
-        let content = response.text()?;
+    /// Encode parameters for URL or form data using form_urlencoded
+    fn encoding_params(
+        param_values: Option<&[String]>,
+        _encoding: &str,
+    ) -> Result<Option<String>, io::Error> {
+        let params = match param_values {
+            Some(params) if !params.is_empty() => params,
+            _ => return Ok(None),
+        };
 
-        Ok(HttpResult {
-            code: status.as_u16(),
-            content,
-        })
+        if params.len() % 2 != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Parameter values must be in key-value pairs",
+            ));
+        }
+
+        let mut encoder = form_urlencoded::Serializer::new(String::new());
+
+        let mut iter = params.iter();
+        while let (Some(key), Some(value)) = (iter.next(), iter.next()) {
+            encoder.append_pair(key, value);
+        }
+
+        let encoded = encoder.finish();
+        if encoded.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(encoded))
+        }
+    }
+
+    /// Set headers on the request builder
+    fn set_headers(
+        mut request_builder: reqwest::blocking::RequestBuilder,
+        headers: Option<&[String]>,
+        encoding: &str,
+    ) -> reqwest::blocking::RequestBuilder {
+        // Set custom headers (key-value pairs)
+        if let Some(headers) = headers {
+            if headers.len() % 2 == 0 {
+                let mut iter = headers.iter();
+                while let (Some(key), Some(value)) = (iter.next(), iter.next()) {
+                    request_builder = request_builder.header(key, value);
+                }
+            }
+        }
+
+        // Set standard headers (matching Java implementation)
+        request_builder = request_builder
+            .header(
+                "Client-Version",
+                RocketMqVersion::CURRENT_VERSION.to_string(),
+            )
+            .header(
+                "Content-Type",
+                format!("application/x-www-form-urlencoded;charset={encoding}"),
+            );
+
+        // Set timestamp header
+        let timestamp = get_current_millis();
+        request_builder = request_builder.header("Metaq-Client-RequestTS", timestamp.to_string());
+
+        request_builder
     }
 }

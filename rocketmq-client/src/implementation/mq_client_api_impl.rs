@@ -127,7 +127,7 @@ lazy_static! {
 
 pub struct MQClientAPIImpl {
     remoting_client: ArcMut<RocketmqDefaultClient<ClientRemotingProcessor>>,
-    top_addressing: Box<dyn TopAddressing>,
+    top_addressing: Arc<Box<dyn TopAddressing>>,
     // client_remoting_processor: ClientRemotingProcessor,
     name_srv_addr: Option<String>,
     client_config: ClientConfig,
@@ -155,10 +155,10 @@ impl MQClientAPIImpl {
 
         MQClientAPIImpl {
             remoting_client: ArcMut::new(default_client),
-            top_addressing: Box::new(DefaultTopAddressing::new(
+            top_addressing: Arc::new(Box::new(DefaultTopAddressing::new(
                 mix_all::get_ws_addr().into(),
                 client_config.unit_name.clone(),
-            )),
+            ))),
             //client_remoting_processor,
             name_srv_addr: None,
             client_config,
@@ -171,7 +171,10 @@ impl MQClientAPIImpl {
     }
 
     pub async fn fetch_name_server_addr(&mut self) -> Option<String> {
-        let addrs = self.top_addressing.fetch_ns_addr();
+        let top_addressing = self.top_addressing.clone();
+        let addrs = tokio::task::spawn_blocking(move || top_addressing.fetch_ns_addr())
+            .await
+            .unwrap_or_default();
 
         if let Some(addrs) = addrs.as_ref() {
             if !addrs.is_empty() {
