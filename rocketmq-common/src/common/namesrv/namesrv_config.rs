@@ -660,55 +660,77 @@ mod tests {
         assert_eq!(parsed["kvConfigPath"], config.kv_config_path);
         assert_eq!(parsed["configStorePath"], config.config_store_path);
         assert_eq!(parsed["productEnvName"], config.product_env_name);
-        assert_eq!(parsed["clusterTest"], config.cluster_test);
-        assert_eq!(parsed["orderMessageEnable"], config.order_message_enable);
         assert_eq!(
-            parsed["returnOrderTopicConfigToBroker"],
-            config.return_order_topic_config_to_broker
+            parsed["clusterTest"].as_str().unwrap(),
+            config.cluster_test.to_string()
         );
         assert_eq!(
-            parsed["clientRequestThreadPoolNums"],
-            config.client_request_thread_pool_nums
+            parsed["orderMessageEnable"].as_str().unwrap(),
+            config.order_message_enable.to_string()
         );
         assert_eq!(
-            parsed["defaultThreadPoolNums"],
-            config.default_thread_pool_nums
+            parsed["returnOrderTopicConfigToBroker"].as_str().unwrap(),
+            config.return_order_topic_config_to_broker.to_string()
         );
         assert_eq!(
-            parsed["clientRequestThreadPoolQueueCapacity"],
-            config.client_request_thread_pool_queue_capacity
+            parsed["clientRequestThreadPoolNums"].as_str().unwrap(),
+            config.client_request_thread_pool_nums.to_string()
         );
         assert_eq!(
-            parsed["defaultThreadPoolQueueCapacity"],
-            config.default_thread_pool_queue_capacity
+            parsed["defaultThreadPoolNums"].as_str().unwrap(),
+            config.default_thread_pool_nums.to_string()
         );
         assert_eq!(
-            parsed["scanNotActiveBrokerInterval"],
-            config.scan_not_active_broker_interval
+            parsed["clientRequestThreadPoolQueueCapacity"]
+                .as_str()
+                .unwrap(),
+            config.client_request_thread_pool_queue_capacity.to_string()
         );
         assert_eq!(
-            parsed["unRegisterBrokerQueueCapacity"],
-            config.unregister_broker_queue_capacity
-        );
-        assert_eq!(parsed["supportActingMaster"], config.support_acting_master);
-        assert_eq!(parsed["enableAllTopicList"], config.enable_all_topic_list);
-        assert_eq!(parsed["enableTopicList"], config.enable_topic_list);
-        assert_eq!(
-            parsed["notifyMinBrokerIdChanged"],
-            config.notify_min_broker_id_changed
+            parsed["defaultThreadPoolQueueCapacity"].as_str().unwrap(),
+            config.default_thread_pool_queue_capacity.to_string()
         );
         assert_eq!(
-            parsed["enableControllerInNamesrv"],
-            config.enable_controller_in_namesrv
-        );
-        assert_eq!(parsed["needWaitForService"], config.need_wait_for_service);
-        assert_eq!(
-            parsed["waitSecondsForService"],
-            config.wait_seconds_for_service
+            parsed["scanNotActiveBrokerInterval"].as_str().unwrap(),
+            config.scan_not_active_broker_interval.to_string()
         );
         assert_eq!(
-            parsed["deleteTopicWithBrokerRegistration"],
-            config.delete_topic_with_broker_registration
+            parsed["unRegisterBrokerQueueCapacity"].as_str().unwrap(),
+            config.unregister_broker_queue_capacity.to_string()
+        );
+        assert_eq!(
+            parsed["supportActingMaster"].as_str().unwrap(),
+            config.support_acting_master.to_string()
+        );
+        assert_eq!(
+            parsed["enableAllTopicList"].as_str().unwrap(),
+            config.enable_all_topic_list.to_string()
+        );
+        assert_eq!(
+            parsed["enableTopicList"].as_str().unwrap(),
+            config.enable_topic_list.to_string()
+        );
+        assert_eq!(
+            parsed["notifyMinBrokerIdChanged"].as_str().unwrap(),
+            config.notify_min_broker_id_changed.to_string()
+        );
+        assert_eq!(
+            parsed["enableControllerInNamesrv"].as_str().unwrap(),
+            config.enable_controller_in_namesrv.to_string()
+        );
+        assert_eq!(
+            parsed["needWaitForService"].as_str().unwrap(),
+            config.need_wait_for_service.to_string()
+        );
+        assert_eq!(
+            parsed["waitSecondsForService"].as_str().unwrap(),
+            config.wait_seconds_for_service.to_string()
+        );
+        assert_eq!(
+            parsed["deleteTopicWithBrokerRegistration"]
+                .as_str()
+                .unwrap(),
+            config.delete_topic_with_broker_registration.to_string()
         );
         assert_eq!(parsed["configBlackList"], config.config_black_list);
     }
