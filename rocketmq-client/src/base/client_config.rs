@@ -190,6 +190,10 @@ impl ClientConfig {
             self.instance_name = format!("{}#{}", std::process::id(), get_current_nano()).into();
         }
     }
+    #[inline]
+    pub fn setInstanceName(&mut self,  instance_name: CheetahString) {
+        self.instance_name = instance_name;
+    }
 
     #[inline]
     pub fn build_mq_client_id(&self) -> String {

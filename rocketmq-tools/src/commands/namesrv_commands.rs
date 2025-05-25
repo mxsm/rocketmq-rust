@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 mod get_namesrv_config_command;
+mod delete_kv_config_command;
 
 use std::sync::Arc;
 
@@ -24,6 +25,7 @@ use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::namesrv_commands::get_namesrv_config_command::GetNamesrvConfigCommand;
 use crate::commands::CommandExecute;
+use crate::commands::namesrv_commands::delete_kv_config_command::DeleteKvConfigCommand;
 
 #[derive(Subcommand)]
 pub enum NameServerCommands {
@@ -33,6 +35,13 @@ pub enum NameServerCommands {
         long_about = None,
     )]
     GetNamesrvConfig(GetNamesrvConfigCommand),
+
+    #[command(
+        name = "deleteKvConfig",
+        about = "Delete KV config.",
+        long_about = None,
+    )]
+    DeleteKvConfig(DeleteKvConfigCommand),
 }
 
 impl CommandExecute for NameServerCommands {

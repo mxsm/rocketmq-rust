@@ -468,7 +468,7 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         namespace: CheetahString,
         key: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.client_instance.unwrap().get_mq_client_api_impl().try_unwrap()?.delete_kvconfig_value(namespace, key, self.timeout_millis)  
     }
 
     async fn reset_offset_by_timestamp(
