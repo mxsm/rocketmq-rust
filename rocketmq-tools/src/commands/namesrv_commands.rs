@@ -14,36 +14,31 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+mod get_namesrv_config_command;
 
-use std::fmt::Debug;
-use std::path::PathBuf;
+use std::sync::Arc;
 
-use config::Config;
+use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
-use serde::Deserialize;
-use tracing::warn;
+use rocketmq_remoting::runtime::RPCHook;
 
-pub fn parse_config_file<'de, C>(config_file: PathBuf) -> RocketMQResult<C>
-where
-    C: Default + Debug + Deserialize<'de>,
-{
-    let config_file = match Config::builder()
-        .add_source(config::File::from(config_file))
-        .build()
-    {
-        Ok(cfg) => match cfg.try_deserialize::<C>() {
-            Ok(value) => value,
-            Err(e) => {
-                warn!(
-                    "Failed to parse config file: {:?}, and will use default config",
-                    e
-                );
-                C::default()
-            }
-        },
-        Err(err) => {
-            return Err(rocketmq_error::RocketmqError::ConfigError(err.to_string()));
+use crate::commands::namesrv_commands::get_namesrv_config_command::GetNamesrvConfigCommand;
+use crate::commands::CommandExecute;
+
+#[derive(Subcommand)]
+pub enum NameServerCommands {
+    #[command(
+        name = "getNamesrvConfig",
+        about = "Get configs of name server.",
+        long_about = None,
+    )]
+    GetNamesrvConfig(GetNamesrvConfigCommand),
+}
+
+impl CommandExecute for NameServerCommands {
+    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+        match self {
+            NameServerCommands::GetNamesrvConfig(value) => value.execute(rpc_hook).await,
         }
-    };
-    Ok(config_file)
+    }
 }

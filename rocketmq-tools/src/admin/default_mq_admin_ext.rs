@@ -669,7 +669,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         name_servers: Vec<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>>
     {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .get_name_server_config(name_servers)
+            .await
     }
 
     async fn resume_check_half_message(

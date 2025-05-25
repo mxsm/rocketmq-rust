@@ -63,6 +63,7 @@ use crate::base::message_result::AppendMessageResult;
 use crate::base::message_result::PutMessageResult;
 use crate::base::message_status_enum::AppendMessageStatus;
 use crate::base::message_status_enum::PutMessageStatus;
+use crate::base::message_store::MessageStore;
 use crate::base::put_message_context::PutMessageContext;
 use crate::base::select_result::SelectMappedBufferResult;
 use crate::base::store_checkpoint::StoreCheckpoint;
@@ -301,11 +302,7 @@ impl CommitLog {
             .set_confirm_phy_offset(phy_offset as u64);
     }
 
-    pub async fn put_messages(
-        &mut self,
-        mut msg_batch: MessageExtBatch,
-        this: ArcMut<Self>,
-    ) -> PutMessageResult {
+    pub async fn put_messages(&mut self, mut msg_batch: MessageExtBatch) -> PutMessageResult {
         msg_batch
             .message_ext_broker_inner
             .message_ext_inner
@@ -336,7 +333,7 @@ impl CommitLog {
             msg_batch.message_ext_broker_inner.with_store_host_v6_flag();
         }
 
-        let mut _unlock_mapped_file = None;
+        let mut unlock_mapped_file = None;
         let mut mapped_file = self.mapped_file_queue.get_last_mapped_file();
         let curr_offset = if let Some(ref mapped_file_inner) = mapped_file {
             mapped_file_inner.get_wrote_position() as u64 + mapped_file_inner.get_file_from_offset()
@@ -414,7 +411,7 @@ impl CommitLog {
             }
             AppendMessageStatus::EndOfFile => {
                 //onCommitLogAppend(msg, result, mappedFile); in java not support this version
-                _unlock_mapped_file = mapped_file;
+                unlock_mapped_file = mapped_file;
                 mapped_file = self
                     .mapped_file_queue
                     .get_last_mapped_file_mut_start_offset(0, true);
@@ -471,15 +468,22 @@ impl CommitLog {
                 put_message_result.append_message_result().as_ref().unwrap(),
             );
         }
-
+        if let (Some(unlock_mf), true) = (
+            unlock_mapped_file,
+            self.message_store_config.warm_mapped_file_enable,
+        ) {
+            self.local_file_message_store
+                .as_ref()
+                .unwrap()
+                .unlock_mapped_file(unlock_mf.as_ref());
+        }
         if put_message_result.put_message_status() == PutMessageStatus::PutOk {
             self.increase_offset(
                 &msg_batch.message_ext_broker_inner,
                 put_message_context.get_batch_size() as i16,
             );
             drop(topic_queue_lock);
-            CommitLog::handle_disk_flush_and_ha(
-                this,
+            self.handle_disk_flush_and_ha(
                 put_message_result,
                 msg_batch.message_ext_broker_inner,
                 need_ack_nums,
@@ -491,11 +495,7 @@ impl CommitLog {
         }
     }
 
-    pub async fn put_message(
-        &mut self,
-        mut msg: MessageExtBrokerInner,
-        this: ArcMut<Self>,
-    ) -> PutMessageResult {
+    pub async fn put_message(&mut self, mut msg: MessageExtBrokerInner) -> PutMessageResult {
         // Set the storage time
         if !self.message_store_config.duplication_enable {
             msg.message_ext_inner.store_timestamp = time_utils::get_current_millis() as i64;
@@ -536,7 +536,7 @@ impl CommitLog {
 
         let topic_queue_key = generate_key(&msg);
 
-        let mut _unlock_mapped_file = None;
+        let mut unlock_mapped_file = None;
 
         //get last mapped file from mapped file queue
         let mut mapped_file = self.mapped_file_queue.get_last_mapped_file();
@@ -610,7 +610,7 @@ impl CommitLog {
             }
             AppendMessageStatus::EndOfFile => {
                 //onCommitLogAppend(msg, result, mappedFile); in java not support this version
-                _unlock_mapped_file = mapped_file;
+                unlock_mapped_file = mapped_file;
                 mapped_file = self
                     .mapped_file_queue
                     .get_last_mapped_file_mut_start_offset(0, true);
@@ -667,18 +667,22 @@ impl CommitLog {
             );
         }
 
+        if let (Some(unlock_mf), true) = (
+            unlock_mapped_file,
+            self.message_store_config.warm_mapped_file_enable,
+        ) {
+            self.local_file_message_store
+                .as_ref()
+                .unwrap()
+                .unlock_mapped_file(unlock_mf.as_ref());
+        }
+
         if put_message_result.put_message_status() == PutMessageStatus::PutOk {
             let message_num = get_message_num(&self.topic_config_table, &msg);
             self.increase_offset(&msg, message_num);
             drop(topic_queue_lock);
-            CommitLog::handle_disk_flush_and_ha(
-                this,
-                put_message_result,
-                msg,
-                need_ack_nums,
-                need_handle_ha,
-            )
-            .await
+            self.handle_disk_flush_and_ha(put_message_result, msg, need_ack_nums, need_handle_ha)
+                .await
         } else {
             put_message_result
         }
@@ -706,16 +710,30 @@ impl CommitLog {
     }
 
     async fn handle_disk_flush_and_ha(
-        this: ArcMut<Self>,
+        &self,
         mut put_message_result: PutMessageResult,
         msg: MessageExtBrokerInner,
         need_ack_nums: u32,
         need_handle_ha: bool,
     ) -> PutMessageResult {
-        let commit_log = this.clone();
-        let put_message_result_clone =
-            Arc::new(put_message_result.append_message_result().unwrap().clone());
-        let put_message_result_cloned = put_message_result_clone.clone();
+        let append_message_result = put_message_result.append_message_result().unwrap();
+
+        let (disk_status, ha_status) = tokio::join!(
+            async { self.handle_disk_flush(append_message_result, &msg).await },
+            async {
+                if need_handle_ha {
+                    self.handle_ha(append_message_result, need_ack_nums).await
+                } else {
+                    PutMessageStatus::PutOk
+                }
+            }
+        );
+        put_message_result.set_put_message_status(disk_status);
+
+        if disk_status == PutMessageStatus::PutOk {
+            put_message_result.set_put_message_status(ha_status);
+        }
+        /*let put_message_result_cloned = put_message_result_clone.clone();
         let disk_flush_handle = tokio::spawn(async move {
             commit_log
                 .handle_disk_flush(put_message_result_clone.as_ref(), &msg)
@@ -743,7 +761,7 @@ impl CommitLog {
             Err(error) => {
                 put_message_result.set_put_message_status(PutMessageStatus::FlushDiskTimeout);
             }
-        }
+        }*/
 
         put_message_result
     }

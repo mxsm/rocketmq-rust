@@ -14,6 +14,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod admin;
-pub(crate) mod commands;
-pub mod rocketmq_cli;
+use clap::Parser;
+
+use crate::commands::CommandExecute;
+use crate::commands::Commands;
+
+#[derive(Parser)]
+#[command(name = "rocketmq-admin-cli-rust")]
+#[command(about = "Rocketmq Rust admin commands", long_about = None, author="mxsm")]
+pub struct RocketMQCli {
+    #[command(subcommand)]
+    commands: Commands,
+}
+
+impl RocketMQCli {
+    pub async fn handle(&self) {
+        if let Err(e) = self.commands.execute(None).await {
+            eprintln!("Error: {e}");
+        }
+    }
+}

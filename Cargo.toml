@@ -63,7 +63,7 @@ rand = "0.9.1"
 lazy_static = "1.5.0"
 num_cpus = "1.16"
 
-config = "0.14"
+config = "0.15.11"
 
 parking_lot = "0.12"
 dirs = "5.0"
@@ -75,7 +75,7 @@ mockall = "0.13.1"
 cfg-if = "1.0.0"
 
 sysinfo = "0.35.1"
-uuid = { version = "1.16.0", features = ["v4", # Lets you generate random UUIDs
+uuid = { version = "1.17.0", features = ["v4", # Lets you generate random UUIDs
     "fast-rng", # Use a faster (but still sufficiently random) RNG
     "macro-diagnostics", ] }
 

@@ -14,6 +14,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod admin;
-pub(crate) mod commands;
-pub mod rocketmq_cli;
+use clap::Parser;
+use rocketmq_tools::rocketmq_cli::RocketMQCli;
+
+#[rocketmq_rust::main]
+async fn main() {
+    // This is a placeholder for the main function.
+    // The actual implementation will depend on the specific requirements of the RocketMQ admin CLI.
+    let cli = RocketMQCli::parse();
+    cli.handle().await;
+}

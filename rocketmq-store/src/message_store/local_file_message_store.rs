@@ -424,9 +424,9 @@ impl LocalFileMessageStore {
         self.dispatcher.dispatch(dispatch_request)
     }
 
-    pub fn truncate_dirty_logic_files(&mut self, phy_offset: i64) {
+    /*    pub fn truncate_dirty_logic_files(&mut self, phy_offset: i64) {
         self.consume_queue_store.truncate_dirty(phy_offset);
-    }
+    }*/
 
     pub fn consume_queue_store_mut(&mut self) -> &mut ConsumeQueueStore {
         &mut self.consume_queue_store
@@ -739,19 +739,6 @@ impl MessageStore for LocalFileMessageStore {
             self.message_store_config.store_path_root_dir.as_str(),
         ));
     }
-    /*    async fn async_put_message(
-        &mut self,
-        msg: MessageExtBrokerInner,
-    ) ->PutMessageResult {
-
-    }*/
-
-    /*    async fn async_put_messages(
-        &self,
-        message_ext_batch: MessageExtBatch,
-    ) -> Result<PutMessageResult, StoreError> {
-
-    }*/
 
     async fn put_message(&mut self, mut msg: MessageExtBrokerInner) -> PutMessageResult {
         for hook in self.put_message_hook_list.iter() {
@@ -782,8 +769,7 @@ impl MessageStore for LocalFileMessageStore {
         }
         let begin_time = Instant::now();
         //put message to commit log
-        let commit_log_this = self.commit_log.clone();
-        let result = self.commit_log.put_message(msg, commit_log_this).await;
+        let result = self.commit_log.put_message(msg).await;
         let elapsed_time = begin_time.elapsed().as_millis();
         if elapsed_time > 500 {
             warn!(
@@ -812,11 +798,7 @@ impl MessageStore for LocalFileMessageStore {
 
         let begin_time = Instant::now();
         //put message to commit log
-        let commit_log_this = self.commit_log.clone();
-        let result = self
-            .commit_log
-            .put_messages(message_ext_batch, commit_log_this)
-            .await;
+        let result = self.commit_log.put_messages(message_ext_batch).await;
         let elapsed_time = begin_time.elapsed().as_millis();
         if elapsed_time > 500 {
             warn!("not in lock eclipse time(ms) {}ms", elapsed_time,);
@@ -851,18 +833,6 @@ impl MessageStore for LocalFileMessageStore {
         )
         .await
     }
-
-    /*    async fn get_message_async(
-        &self,
-        group: &str,
-        topic: &str,
-        queue_id: i32,
-        offset: i64,
-        max_msg_nums: i32,
-        message_filter: &dyn MessageFilter,
-    ) -> Result<GetMessageResult, StoreError> {
-
-    }*/
 
     async fn get_message_with_size_limit(
         &self,
@@ -1746,12 +1716,12 @@ impl MessageStore for LocalFileMessageStore {
         todo!()
     }
 
-    fn truncate_dirty_logic_files(&self, phy_offset: i64) -> Result<(), StoreError> {
-        todo!()
+    fn truncate_dirty_logic_files(&self, phy_offset: i64) {
+        self.consume_queue_store.truncate_dirty(phy_offset);
     }
 
     fn unlock_mapped_file<MF: MappedFile>(&self, unlock_mapped_file: &MF) {
-        todo!()
+        warn!("unlock_mapped_file: not implemented");
     }
 
     fn get_queue_store(&self) -> &dyn Any {

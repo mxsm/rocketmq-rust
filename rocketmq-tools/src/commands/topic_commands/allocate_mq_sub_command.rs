@@ -14,36 +14,27 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::sync::Arc;
 
-use std::fmt::Debug;
-use std::path::PathBuf;
-
-use config::Config;
+use clap::Parser;
 use rocketmq_error::RocketMQResult;
-use serde::Deserialize;
-use tracing::warn;
+use rocketmq_remoting::runtime::RPCHook;
 
-pub fn parse_config_file<'de, C>(config_file: PathBuf) -> RocketMQResult<C>
-where
-    C: Default + Debug + Deserialize<'de>,
-{
-    let config_file = match Config::builder()
-        .add_source(config::File::from(config_file))
-        .build()
-    {
-        Ok(cfg) => match cfg.try_deserialize::<C>() {
-            Ok(value) => value,
-            Err(e) => {
-                warn!(
-                    "Failed to parse config file: {:?}, and will use default config",
-                    e
-                );
-                C::default()
-            }
-        },
-        Err(err) => {
-            return Err(rocketmq_error::RocketmqError::ConfigError(err.to_string()));
-        }
-    };
-    Ok(config_file)
+use crate::commands::CommandExecute;
+
+#[derive(Debug, Clone, Parser)]
+pub struct AllocateMQSubCommand {
+    /// Topic name
+    #[arg(short = 't', long = "topic", required = true)]
+    topic: String,
+
+    /// Comma-separated list of IP addresses
+    #[arg(short = 'i', long = "ipList", required = true)]
+    ip_list: String,
+}
+
+impl CommandExecute for AllocateMQSubCommand {
+    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+        unimplemented!("AllocateMQSubCommand is not implemented yet");
+    }
 }
