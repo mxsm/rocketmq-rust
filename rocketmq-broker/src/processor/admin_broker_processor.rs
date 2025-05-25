@@ -29,12 +29,14 @@ use crate::processor::admin_broker_processor::batch_mq_handler::BatchMqHandler;
 use crate::processor::admin_broker_processor::broker_config_request_handler::BrokerConfigRequestHandler;
 use crate::processor::admin_broker_processor::consumer_request_handler::ConsumerRequestHandler;
 use crate::processor::admin_broker_processor::offset_request_handler::OffsetRequestHandler;
+use crate::processor::admin_broker_processor::subscription_group_handler::SubscriptionGroupHandler;
 use crate::processor::admin_broker_processor::topic_request_handler::TopicRequestHandler;
 
 mod batch_mq_handler;
 mod broker_config_request_handler;
 mod consumer_request_handler;
 mod offset_request_handler;
+mod subscription_group_handler;
 mod topic_request_handler;
 
 pub struct AdminBrokerProcessor<MS> {
@@ -43,6 +45,8 @@ pub struct AdminBrokerProcessor<MS> {
     consumer_request_handler: ConsumerRequestHandler<MS>,
     offset_request_handler: OffsetRequestHandler<MS>,
     batch_mq_handler: BatchMqHandler<MS>,
+    subscription_group_handler: SubscriptionGroupHandler<MS>,
+
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
@@ -54,12 +58,15 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
         let consumer_request_handler = ConsumerRequestHandler::new(broker_runtime_inner.clone());
         let offset_request_handler = OffsetRequestHandler::new(broker_runtime_inner.clone());
         let batch_mq_handler = BatchMqHandler::new(broker_runtime_inner.clone());
+        let subscription_group_handler =
+            SubscriptionGroupHandler::new(broker_runtime_inner.clone());
         AdminBrokerProcessor {
             topic_request_handler,
             broker_config_request_handler,
             consumer_request_handler,
             offset_request_handler,
             batch_mq_handler,
+            subscription_group_handler,
             broker_runtime_inner,
         }
     }
@@ -169,6 +176,11 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             RequestCode::UnlockBatchMq => {
                 self.batch_mq_handler
                     .unlock_batch_mq(channel, ctx, request_code, request)
+                    .await
+            }
+            RequestCode::UpdateAndCreateSubscriptionGroup => {
+                self.subscription_group_handler
+                    .update_and_create_subscription_group(channel, ctx, request_code, request)
                     .await
             }
             _ => Some(get_unknown_cmd_response(request_code)),

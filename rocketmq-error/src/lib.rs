@@ -32,7 +32,7 @@
  */
 use std::io;
 
-pub type RocketMQResult<T> = std::result::Result<T, RocketmqError>;
+pub type RocketMQResult<T> = Result<T, RocketmqError>;
 
 use thiserror::Error;
 

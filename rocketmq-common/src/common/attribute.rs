@@ -23,6 +23,7 @@ pub mod cleanup_policy;
 pub mod cq_type;
 pub mod enum_attribute;
 pub mod long_range_attribute;
+pub mod subscription_group_attributes;
 pub mod topic_attributes;
 pub mod topic_message_type;
 
