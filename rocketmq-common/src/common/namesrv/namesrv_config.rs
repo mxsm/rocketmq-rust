@@ -25,6 +25,7 @@ use serde_json::Value;
 
 use crate::common::mix_all::ROCKETMQ_HOME_ENV;
 use crate::common::mix_all::ROCKETMQ_HOME_PROPERTY;
+use crate::utils::serde_json_utils::SerdeJsonUtils;
 
 /// Default value functions for serde deserialization
 mod defaults {
@@ -256,9 +257,10 @@ impl NamesrvConfig {
         Self::default()
     }
 
+    /// Returns a JSON string representation of the NamesrvConfig.
+    /// Compatible with Java version
     pub fn get_all_configs_format_string(&self) -> Result<String, String> {
         let mut json_map = HashMap::new();
-
         json_map.insert(
             "rocketmqHome".to_string(),
             Value::String(self.rocketmq_home.clone()),
@@ -275,70 +277,73 @@ impl NamesrvConfig {
             "productEnvName".to_string(),
             Value::String(self.product_env_name.clone()),
         );
-        json_map.insert("clusterTest".to_string(), Value::Bool(self.cluster_test));
+        json_map.insert(
+            "clusterTest".to_string(),
+            Value::String(self.cluster_test.to_string()),
+        );
         json_map.insert(
             "orderMessageEnable".to_string(),
-            Value::Bool(self.order_message_enable),
+            Value::String(self.order_message_enable.to_string()),
         );
         json_map.insert(
             "returnOrderTopicConfigToBroker".to_string(),
-            Value::Bool(self.return_order_topic_config_to_broker),
+            Value::String(self.return_order_topic_config_to_broker.to_string()),
         );
         json_map.insert(
             "clientRequestThreadPoolNums".to_string(),
-            Value::Number(self.client_request_thread_pool_nums.into()),
+            Value::String(self.client_request_thread_pool_nums.to_string()),
         );
         json_map.insert(
             "defaultThreadPoolNums".to_string(),
-            Value::Number(self.default_thread_pool_nums.into()),
+            Value::String(self.default_thread_pool_nums.to_string()),
         );
         json_map.insert(
             "clientRequestThreadPoolQueueCapacity".to_string(),
-            Value::Number(self.client_request_thread_pool_queue_capacity.into()),
+            Value::String(self.client_request_thread_pool_queue_capacity.to_string()),
         );
         json_map.insert(
             "defaultThreadPoolQueueCapacity".to_string(),
-            Value::Number(self.default_thread_pool_queue_capacity.into()),
+            Value::String(self.default_thread_pool_queue_capacity.to_string()),
         );
         json_map.insert(
             "scanNotActiveBrokerInterval".to_string(),
-            Value::Number(self.scan_not_active_broker_interval.into()),
+            Value::String(self.scan_not_active_broker_interval.to_string()),
         );
         json_map.insert(
             "unRegisterBrokerQueueCapacity".to_string(),
-            Value::Number(self.unregister_broker_queue_capacity.into()),
+            Value::String(self.unregister_broker_queue_capacity.to_string()),
         );
         json_map.insert(
             "supportActingMaster".to_string(),
-            Value::Bool(self.support_acting_master),
+            Value::String(self.support_acting_master.to_string()),
         );
         json_map.insert(
             "enableAllTopicList".to_string(),
-            Value::Bool(self.enable_all_topic_list),
+            Value::String(self.enable_all_topic_list.to_string()),
         );
         json_map.insert(
             "enableTopicList".to_string(),
-            Value::Bool(self.enable_topic_list),
+            Value::String(self.enable_topic_list.to_string()),
         );
         json_map.insert(
             "notifyMinBrokerIdChanged".to_string(),
-            Value::Bool(self.notify_min_broker_id_changed),
+            Value::String(self.notify_min_broker_id_changed.to_string()),
         );
         json_map.insert(
             "enableControllerInNamesrv".to_string(),
-            Value::Bool(self.enable_controller_in_namesrv),
+            Value::String(self.enable_controller_in_namesrv.to_string()),
         );
         json_map.insert(
             "needWaitForService".to_string(),
-            Value::Bool(self.need_wait_for_service),
+            Value::String(self.need_wait_for_service.to_string()),
         );
         json_map.insert(
             "waitSecondsForService".to_string(),
-            Value::Number(self.wait_seconds_for_service.into()),
+            Value::String(self.wait_seconds_for_service.to_string()),
         );
         json_map.insert(
             "deleteTopicWithBrokerRegistration".to_string(),
-            Value::Bool(self.delete_topic_with_broker_registration),
+            Value::String(self.delete_topic_with_broker_registration.to_string()),
         );
         json_map.insert(
             "configBlackList".to_string(),
@@ -346,7 +351,7 @@ impl NamesrvConfig {
         );
 
         // Convert the HashMap to a JSON value
-        match serde_json::to_string_pretty(&json_map) {
+        match SerdeJsonUtils::to_json(&json_map) {
             Ok(json) => Ok(json),
             Err(err) => Err(format!("Failed to serialize NamesrvConfig: {err}")),
         }
@@ -655,55 +660,77 @@ mod tests {
         assert_eq!(parsed["kvConfigPath"], config.kv_config_path);
         assert_eq!(parsed["configStorePath"], config.config_store_path);
         assert_eq!(parsed["productEnvName"], config.product_env_name);
-        assert_eq!(parsed["clusterTest"], config.cluster_test);
-        assert_eq!(parsed["orderMessageEnable"], config.order_message_enable);
         assert_eq!(
-            parsed["returnOrderTopicConfigToBroker"],
-            config.return_order_topic_config_to_broker
+            parsed["clusterTest"].as_str().unwrap(),
+            config.cluster_test.to_string()
         );
         assert_eq!(
-            parsed["clientRequestThreadPoolNums"],
-            config.client_request_thread_pool_nums
+            parsed["orderMessageEnable"].as_str().unwrap(),
+            config.order_message_enable.to_string()
         );
         assert_eq!(
-            parsed["defaultThreadPoolNums"],
-            config.default_thread_pool_nums
+            parsed["returnOrderTopicConfigToBroker"].as_str().unwrap(),
+            config.return_order_topic_config_to_broker.to_string()
         );
         assert_eq!(
-            parsed["clientRequestThreadPoolQueueCapacity"],
-            config.client_request_thread_pool_queue_capacity
+            parsed["clientRequestThreadPoolNums"].as_str().unwrap(),
+            config.client_request_thread_pool_nums.to_string()
         );
         assert_eq!(
-            parsed["defaultThreadPoolQueueCapacity"],
-            config.default_thread_pool_queue_capacity
+            parsed["defaultThreadPoolNums"].as_str().unwrap(),
+            config.default_thread_pool_nums.to_string()
         );
         assert_eq!(
-            parsed["scanNotActiveBrokerInterval"],
-            config.scan_not_active_broker_interval
+            parsed["clientRequestThreadPoolQueueCapacity"]
+                .as_str()
+                .unwrap(),
+            config.client_request_thread_pool_queue_capacity.to_string()
         );
         assert_eq!(
-            parsed["unRegisterBrokerQueueCapacity"],
-            config.unregister_broker_queue_capacity
-        );
-        assert_eq!(parsed["supportActingMaster"], config.support_acting_master);
-        assert_eq!(parsed["enableAllTopicList"], config.enable_all_topic_list);
-        assert_eq!(parsed["enableTopicList"], config.enable_topic_list);
-        assert_eq!(
-            parsed["notifyMinBrokerIdChanged"],
-            config.notify_min_broker_id_changed
+            parsed["defaultThreadPoolQueueCapacity"].as_str().unwrap(),
+            config.default_thread_pool_queue_capacity.to_string()
         );
         assert_eq!(
-            parsed["enableControllerInNamesrv"],
-            config.enable_controller_in_namesrv
-        );
-        assert_eq!(parsed["needWaitForService"], config.need_wait_for_service);
-        assert_eq!(
-            parsed["waitSecondsForService"],
-            config.wait_seconds_for_service
+            parsed["scanNotActiveBrokerInterval"].as_str().unwrap(),
+            config.scan_not_active_broker_interval.to_string()
         );
         assert_eq!(
-            parsed["deleteTopicWithBrokerRegistration"],
-            config.delete_topic_with_broker_registration
+            parsed["unRegisterBrokerQueueCapacity"].as_str().unwrap(),
+            config.unregister_broker_queue_capacity.to_string()
+        );
+        assert_eq!(
+            parsed["supportActingMaster"].as_str().unwrap(),
+            config.support_acting_master.to_string()
+        );
+        assert_eq!(
+            parsed["enableAllTopicList"].as_str().unwrap(),
+            config.enable_all_topic_list.to_string()
+        );
+        assert_eq!(
+            parsed["enableTopicList"].as_str().unwrap(),
+            config.enable_topic_list.to_string()
+        );
+        assert_eq!(
+            parsed["notifyMinBrokerIdChanged"].as_str().unwrap(),
+            config.notify_min_broker_id_changed.to_string()
+        );
+        assert_eq!(
+            parsed["enableControllerInNamesrv"].as_str().unwrap(),
+            config.enable_controller_in_namesrv.to_string()
+        );
+        assert_eq!(
+            parsed["needWaitForService"].as_str().unwrap(),
+            config.need_wait_for_service.to_string()
+        );
+        assert_eq!(
+            parsed["waitSecondsForService"].as_str().unwrap(),
+            config.wait_seconds_for_service.to_string()
+        );
+        assert_eq!(
+            parsed["deleteTopicWithBrokerRegistration"]
+                .as_str()
+                .unwrap(),
+            config.delete_topic_with_broker_registration.to_string()
         );
         assert_eq!(parsed["configBlackList"], config.config_black_list);
     }
