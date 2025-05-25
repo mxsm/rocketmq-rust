@@ -83,8 +83,7 @@ where
                 .as_ref()
                 .lock()
                 .subscription_group_table
-                .get(config.group_name())
-                .is_none(),
+                .contains_key(config.group_name()),
             SubscriptionGroupAttributes::all(),
             &current_attributes,
             &new_attributes,
