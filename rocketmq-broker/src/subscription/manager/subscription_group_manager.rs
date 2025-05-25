@@ -19,6 +19,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
+use rocketmq_common::common::attribute::attribute_util::AttributeUtil;
+use rocketmq_common::common::attribute::subscription_group_attributes::SubscriptionGroupAttributes;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::common::mix_all::is_sys_consumer_group;
 use rocketmq_common::common::topic::TopicValidator;
@@ -40,9 +42,13 @@ pub const TOPIC_MAX_LENGTH: usize = 127;
 pub(crate) struct SubscriptionGroupManager<MS> {
     pub(crate) subscription_group_wrapper: Arc<parking_lot::Mutex<SubscriptionGroupWrapper>>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    data_version: DataVersion,
 }
 
-impl<MS> SubscriptionGroupManager<MS> {
+impl<MS> SubscriptionGroupManager<MS>
+where
+    MS: MessageStore,
+{
     pub fn new(
         broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> SubscriptionGroupManager<MS> {
@@ -51,11 +57,105 @@ impl<MS> SubscriptionGroupManager<MS> {
                 SubscriptionGroupWrapper::default(),
             )),
             broker_runtime_inner,
+            data_version: DataVersion::new(),
         }
     }
 
     pub fn subscription_group_wrapper(&self) -> &Arc<parking_lot::Mutex<SubscriptionGroupWrapper>> {
         &self.subscription_group_wrapper
+    }
+    pub(crate) fn update_subscription_group_config(
+        &mut self,
+        config: &mut SubscriptionGroupConfig,
+    ) {
+        self.update_subscription_group_config_without_persist(config);
+        self.persist();
+    }
+
+    fn update_subscription_group_config_without_persist(
+        &mut self,
+        config: &mut SubscriptionGroupConfig,
+    ) {
+        let new_attributes = self.request(config);
+        let current_attributes = self.current(config.group_name());
+        let final_attributes = match AttributeUtil::alter_current_attributes(
+            self.subscription_group_wrapper
+                .as_ref()
+                .lock()
+                .subscription_group_table
+                .contains_key(config.group_name()),
+            SubscriptionGroupAttributes::all(),
+            &current_attributes,
+            &new_attributes,
+        ) {
+            Ok(final_attributes) => final_attributes,
+            Err(_err) => {
+                todo!("deal runtime exception")
+            }
+        };
+        config.set_attributes(final_attributes);
+
+        match self.put_subscription_group_config(config.clone()) {
+            //todo avoid clone
+            Some(old) => {
+                info!(
+                    "update subscription group config, old: {:?} new: {:?}",
+                    old, config,
+                );
+            }
+            None => {
+                info!("create new subscription group, {:?}", config)
+            }
+        }
+
+        self.update_data_version();
+    }
+    fn request(
+        &self,
+        subscription_group_config: &SubscriptionGroupConfig,
+    ) -> HashMap<CheetahString, CheetahString> {
+        subscription_group_config.attributes().clone()
+    }
+
+    fn current(&self, group_name: &str) -> HashMap<CheetahString, CheetahString> {
+        match self
+            .subscription_group_wrapper()
+            .lock()
+            .subscription_group_table()
+            .get(group_name)
+        {
+            Some(subscription_group_config) => subscription_group_config.attributes().clone(),
+            None => HashMap::new(),
+        }
+    }
+
+    fn put_subscription_group_config(
+        &self,
+        subscription_group_config: SubscriptionGroupConfig,
+    ) -> Option<SubscriptionGroupConfig> {
+        self.subscription_group_wrapper
+            .lock()
+            .subscription_group_table
+            .insert(
+                subscription_group_config.group_name().into(),
+                subscription_group_config,
+            )
+    }
+
+    fn update_data_version(&mut self) {
+        let state_machine_version = match self.broker_runtime_inner.message_store() {
+            Some(message_store) => message_store.get_state_machine_version(),
+            None => 0,
+        };
+        self.date_version_mut()
+            .next_version_with(state_machine_version);
+    }
+
+    fn date_version(&self) -> &DataVersion {
+        &self.data_version
+    }
+    fn date_version_mut(&mut self) -> &mut DataVersion {
+        &mut self.data_version
     }
 }
 
@@ -212,6 +312,7 @@ where
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SubscriptionGroupWrapper {
+    //todo dashmap to concurrent safe
     subscription_group_table: HashMap<CheetahString, SubscriptionGroupConfig>,
     forbidden_table: HashMap<CheetahString, HashMap<CheetahString, i32>>,
     data_version: DataVersion,

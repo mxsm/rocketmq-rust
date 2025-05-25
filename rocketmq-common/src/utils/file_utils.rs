@@ -51,7 +51,7 @@ pub fn file_to_string_impl(file: &File) -> Result<String, io::Error> {
 }
 
 pub fn string_to_file(str_content: &str, file_name: &str) -> io::Result<()> {
-    let lock = LOCK.lock();
+    let lock = LOCK.lock(); //todo enhancement: not use global lock
 
     let bak_file = format!("{file_name}.bak");
 
