@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
@@ -22,6 +23,12 @@ use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
+use tabled::settings::object::Rows;
+use tabled::settings::Alignment;
+use tabled::settings::Modify;
+use tabled::settings::Style;
+use tabled::Table;
+use tabled::Tabled;
 
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use crate::commands::CommandExecute;
@@ -68,12 +75,57 @@ impl CommandExecute for GetNamesrvConfigCommand {
         let server_list = self.parse_server_list();
         if let Some(server_list) = server_list {
             admin.start().await?;
-            let _ = admin.get_name_server_config(server_list).await;
+            let configs = admin.get_name_server_config(server_list).await?;
+            display_configs_with_table(&configs);
+            admin.shutdown().await;
+            return Ok(());
         } else {
             eprintln!("Please set the namesrvAddr parameter");
-            return Ok(());
         }
 
-        unimplemented!("GetNamesrvConfigCommand is not implemented yet");
+        Ok(())
+    }
+}
+
+/// Configuration entry for table display
+#[derive(Debug, Clone, Tabled)]
+struct ConfigEntry {
+    #[tabled(rename = "Configuration Key")]
+    key: CheetahString,
+    #[tabled(rename = "Value")]
+    value: CheetahString,
+}
+
+/// Display configurations using tabled for formatted output
+fn display_configs_with_table(
+    configs: &HashMap<CheetahString, HashMap<CheetahString, CheetahString>>,
+) {
+    for (server_addr, properties) in configs {
+        println!("============Name server: {server_addr}============",);
+
+        // Convert properties to ConfigEntry vector
+        let mut config_entries: Vec<ConfigEntry> = properties
+            .iter()
+            .map(|(key, value)| ConfigEntry {
+                key: key.clone(),
+                value: value.clone(),
+            })
+            .collect();
+
+        // Sort by key for consistent output
+        config_entries.sort_by(|a, b| a.key.cmp(&b.key));
+
+        // Create and display table
+        if !config_entries.is_empty() {
+            let table = Table::new(&config_entries)
+                .with(Style::modern())
+                .with(Modify::new(Rows::new(1..)).with(Alignment::left()))
+                .to_string();
+
+            println!("{table}");
+        } else {
+            println!("No configuration found for this server.");
+        }
+        println!(); // Add blank line between servers
     }
 }
