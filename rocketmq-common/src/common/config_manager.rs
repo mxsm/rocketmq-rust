@@ -25,6 +25,7 @@ use crate::FileUtils;
 
 // Define the trait ConfigManager
 pub trait ConfigManager {
+    
     /// Loads the configuration from a file.
     ///
     /// This method attempts to load the configuration from a file whose path is returned by

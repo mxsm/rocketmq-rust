@@ -42,6 +42,7 @@ pub const TOPIC_MAX_LENGTH: usize = 127;
 pub(crate) struct SubscriptionGroupManager<MS> {
     pub(crate) subscription_group_wrapper: Arc<parking_lot::Mutex<SubscriptionGroupWrapper>>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    data_version: DataVersion,
 }
 
 impl<MS> SubscriptionGroupManager<MS>
@@ -56,19 +57,23 @@ where
                 SubscriptionGroupWrapper::default(),
             )),
             broker_runtime_inner,
+            data_version: DataVersion::new(),
         }
     }
 
     pub fn subscription_group_wrapper(&self) -> &Arc<parking_lot::Mutex<SubscriptionGroupWrapper>> {
         &self.subscription_group_wrapper
     }
-    pub(crate) fn update_subscription_group_config(&self, config: &mut SubscriptionGroupConfig) {
+    pub(crate) fn update_subscription_group_config(
+        &mut self,
+        config: &mut SubscriptionGroupConfig,
+    ) {
         self.update_subscription_group_config_without_persist(config);
         self.persist();
     }
 
     fn update_subscription_group_config_without_persist(
-        &self,
+        &mut self,
         config: &mut SubscriptionGroupConfig,
     ) {
         let new_attributes = self.request(config);
@@ -86,7 +91,7 @@ where
         ) {
             Ok(final_attributes) => final_attributes,
             Err(_err) => {
-                todo!()
+                todo!("deal runtime exception")
             }
         };
         config.set_attributes(final_attributes);
@@ -138,8 +143,20 @@ where
             )
     }
 
-    fn update_data_version(&self) {
-        todo!()
+    fn update_data_version(&mut self) {
+        let state_machine_version = match self.broker_runtime_inner.message_store() {
+            Some(message_store) => message_store.get_state_machine_version(),
+            None => 0,
+        };
+        self.date_version_mut()
+            .next_version_with(state_machine_version);
+    }
+
+    fn date_version(&self) -> &DataVersion {
+        &self.data_version
+    }
+    fn date_version_mut(&mut self) -> &mut DataVersion {
+        &mut self.data_version
     }
 }
 

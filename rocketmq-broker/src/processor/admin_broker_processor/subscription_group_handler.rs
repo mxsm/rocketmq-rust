@@ -63,8 +63,8 @@ impl<MS: MessageStore> SubscriptionGroupHandler<MS> {
         let mut config = SubscriptionGroupConfig::decode(request.get_body().unwrap());
         if let Ok(config) = config.as_mut() {
             self.broker_runtime_inner
-                .subscription_group_manager()
-                .update_subscription_group_config(config);
+                .subscription_group_manager_mut()
+                .update_subscription_group_config(config)
         }
         response.set_code_ref(ResponseCode::Success);
         let execution_time = get_current_millis() as i64 - start_time;
