@@ -2425,6 +2425,7 @@ version = "0.6.0"
 dependencies = [
  "cheetah-string",
  "clap",
+ "futures",
  "rocketmq-client-rust",
  "rocketmq-common",
  "rocketmq-error",

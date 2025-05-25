@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
+use std::time::Duration;
 use std::time::Instant;
 
 use cheetah_string::CheetahString;
@@ -36,11 +37,14 @@ use rocketmq_common::common::namesrv::name_server_update_callback::NameServerUpd
 use rocketmq_common::common::namesrv::top_addressing::TopAddressing;
 use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
 use rocketmq_common::common::topic::TopicValidator;
+use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::MessageDecoder;
 use rocketmq_error::client_broker_err;
 use rocketmq_error::mq_client_err;
+use rocketmq_error::ClientErr;
 use rocketmq_error::MQBrokerErr;
 use rocketmq_error::RocketMQResult;
+use rocketmq_error::RocketmqError;
 use rocketmq_error::RocketmqError::MQClientBrokerError;
 use rocketmq_remoting::base::connection_net_event::ConnectionNetEvent;
 use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
@@ -1745,6 +1749,73 @@ impl MQClientAPIImpl {
             }
         }
         Ok(())
+    }
+
+    pub async fn get_name_server_config(
+        &self,
+        name_servers: Option<Vec<CheetahString>>,
+        timeout_millis: Duration,
+    ) -> rocketmq_error::RocketMQResult<
+        Option<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>>,
+    > {
+        // Determine which name servers to invoke
+        let invoke_name_servers = match name_servers {
+            Some(servers) if !servers.is_empty() => servers,
+            _ => self.remoting_client.get_name_server_address_list().to_vec(),
+        };
+
+        if invoke_name_servers.is_empty() {
+            return Ok(None);
+        }
+
+        // Create request command
+        let request = RemotingCommand::create_remoting_command(RequestCode::GetNamesrvConfig);
+        let mut config_map = HashMap::with_capacity(4);
+        // Iterate through each name server
+        for name_server in invoke_name_servers {
+            // Make synchronous call with timeout
+            let response = self
+                .remoting_client
+                .invoke_async(
+                    Some(&name_server),
+                    request.clone(),
+                    timeout_millis.as_millis() as u64,
+                )
+                .await?;
+            // Check response code
+            match ResponseCode::from(response.code()) {
+                ResponseCode::Success => {
+                    // Parse response body as properties
+                    match response.get_body() {
+                        Some(body) => {
+                            let body_str = String::from_utf8_lossy(body.as_ref()).to_string();
+                            // if body_str contains =, return from Java version
+                            let properties = if body_str.contains('=') {
+                                mix_all::string_to_properties(&body_str).unwrap_or_default()
+                            } else {
+                                SerdeJsonUtils::from_json_str::<
+                                    HashMap<CheetahString, CheetahString>,
+                                >(&body_str).expect("failed to parse JSON")
+                            };
+
+                            config_map.insert(name_server.clone(), properties);
+                        }
+                        None => {
+                            return Err(RocketmqError::MQClientErr(ClientErr::new(
+                                "Body is empty".to_string(),
+                            )))
+                        }
+                    }
+                }
+                code => {
+                    return Err(RocketmqError::MQClientErr(ClientErr::new_with_code(
+                        response.code(),
+                        response.remark().map_or("".to_string(), |s| s.to_string()),
+                    )));
+                }
+            }
+        }
+        Ok(Some(config_map))
     }
 }
 
