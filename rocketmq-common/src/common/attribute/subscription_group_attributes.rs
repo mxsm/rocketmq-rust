@@ -11,6 +11,6 @@ pub struct SubscriptionGroupAttributes {}
 impl SubscriptionGroupAttributes {
     pub fn all() -> &'static HashMap<CheetahString, Arc<dyn Attribute>> {
         static ALL: OnceLock<HashMap<CheetahString, Arc<dyn Attribute>>> = OnceLock::new();
-        ALL.get_or_init(HashMap::new())
+        ALL.get_or_init(|| HashMap::new())
     }
 }
