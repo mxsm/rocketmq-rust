@@ -281,6 +281,26 @@ where
             .await
     }
 
+    /// Parses and transforms a message into a half message for transaction processing.
+    ///
+    /// A half message is an intermediate state in RocketMQ's transaction mechanism where
+    /// the message is stored but not yet visible to consumers until the transaction is
+    /// committed or rolled back.
+    ///
+    /// # Arguments
+    ///
+    /// * `message` - The original message to be transformed into a half message
+    ///
+    /// # Process
+    ///
+    /// 1. **Transaction ID Setup**: Extracts the unique client message ID and sets it as the
+    ///    transaction ID
+    /// 2. **Original Topic Preservation**: Stores the original topic name for later restoration
+    /// 3. **Queue ID Preservation**: Stores the original queue ID for later restoration
+    /// 4. **Transaction Flag Reset**: Resets the transaction flag to NOT_TYPE
+    /// 5. **Topic Redirection**: Changes the topic to the internal half message topic
+    /// 6. **Queue Reset**: Sets queue ID to 0 (all half messages go to queue 0)
+    /// 7. **Properties Serialization**: Updates the properties string representation
     pub fn parse_half_message_inner(message: &mut MessageExtBrokerInner) {
         let uniq_id = message.get_user_property(&CheetahString::from_static_str(
             MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
