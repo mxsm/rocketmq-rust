@@ -163,7 +163,8 @@ where
         queue_id: i32,
         offset: i64,
         nums: i32,
-        _sub: Option<SubscriptionData>,
+        _sub: Option<SubscriptionData>, /* in Java version, this is not used, so we keep it as
+                                         * Option */
     ) -> Option<PullResult> {
         let get_message_result = self
             .broker_runtime_inner
@@ -176,7 +177,7 @@ where
             )
             .await;
 
-        if let Some(get_message_result) = get_message_result {
+        if let Some(mut get_message_result) = get_message_result {
             let (pull_status, msg_found_list) = match get_message_result.status().unwrap() {
                 GetMessageStatus::Found => {
                     let msg_list = Self::decode_msg_list(&get_message_result);
@@ -194,6 +195,7 @@ where
 
                 GetMessageStatus::OffsetReset => (PullStatus::NoNewMsg, None),
             };
+            get_message_result.release();
             Some(PullResult::new(
                 pull_status,
                 get_message_result.next_begin_offset() as u64,
@@ -256,9 +258,7 @@ where
     ) -> PutMessageResult {
         Self::parse_half_message_inner(&mut message);
         self.broker_runtime_inner
-            .message_store_mut()
-            .as_mut()
-            .unwrap()
+            .message_store_unchecked_mut()
             .put_message(message)
             .await
     }
@@ -312,6 +312,9 @@ where
         message.set_topic(CheetahString::from_static_str(
             TransactionalMessageUtil::build_half_topic(),
         ));
+
+        //TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC topic is a special topic for half messages
+        // write queue number is always 1, read queue number is always 1
         message.message_ext_inner.queue_id = 0;
         let properties_to_string =
             message_decoder::message_properties_to_string(message.get_properties());
@@ -431,6 +434,20 @@ where
             //nothing to do
         }
         result
+    }
+
+    pub async fn put_message(&mut self, message_inner: MessageExtBrokerInner) -> bool {
+        let result = self.put_message_return_result(message_inner).await;
+        result.put_message_status() == PutMessageStatus::PutOk
+    }
+
+    pub async fn escape_message(&mut self, message_inner: MessageExtBrokerInner) -> bool {
+        let put_message_result = self
+            .broker_runtime_inner
+            .escape_bridge_mut()
+            .put_message(message_inner)
+            .await;
+        put_message_result.is_ok()
     }
 }
 
