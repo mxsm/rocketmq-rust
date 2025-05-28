@@ -52,12 +52,7 @@ use crate::transaction::queue::transactional_message_util::TransactionalMessageU
 
 pub struct TransactionalMessageBridge<MS> {
     pub(crate) op_queue_map: Arc<Mutex<HashMap<i32, MessageQueue>>>,
-    // pub(crate) message_store: ArcMut<MS>,
     pub(crate) store_host: SocketAddr,
-    //  pub(crate) broker_stats_manager: Arc<BrokerStatsManager>,
-    //pub(crate) consumer_offset_manager: ConsumerOffsetManager,
-    // pub(crate) broker_config: Arc<BrokerConfig>,
-    //  pub(crate) topic_config_manager: TopicConfigManager,
     pub(crate) broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
@@ -65,23 +60,10 @@ impl<MS> TransactionalMessageBridge<MS>
 where
     MS: MessageStore,
 {
-    pub fn new(
-        /* message_store: ArcMut<MS>,
-        broker_stats_manager: Arc<BrokerStatsManager>,
-        consumer_offset_manager: ConsumerOffsetManager,
-        broker_config: Arc<BrokerConfig>,
-        topic_config_manager: TopicConfigManager,
-        store_host: SocketAddr,*/
-        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-    ) -> Self {
+    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
         Self {
             op_queue_map: Arc::new(Mutex::new(HashMap::new())),
-            //message_store,
             store_host: broker_runtime_inner.store_host(),
-            //broker_stats_manager,
-            // consumer_offset_manager,
-            //broker_config,
-            // topic_config_manager,
             broker_runtime_inner,
         }
     }
