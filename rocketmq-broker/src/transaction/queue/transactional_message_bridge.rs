@@ -60,9 +60,7 @@ impl<MS> TransactionalMessageBridge<MS>
 where
     MS: MessageStore,
 {
-    pub fn new(
-        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-    ) -> Self {
+    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
         Self {
             op_queue_map: Arc::new(Mutex::new(HashMap::new())),
             store_host: broker_runtime_inner.store_host(),
