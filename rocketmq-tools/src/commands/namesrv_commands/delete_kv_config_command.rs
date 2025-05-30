@@ -16,10 +16,8 @@
  */
 use std::sync::Arc;
 
-use cheetah_string::CheetahString;
 use clap::Parser;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExtLocal;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_error::RocketMQResult;
 use rocketmq_error::RocketmqError;
@@ -27,7 +25,6 @@ use rocketmq_remoting::runtime::RPCHook;
 
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use crate::commands::CommandExecute;
-use crate::commands::CommonArgs;
 
 #[derive(Debug, Clone, Parser)]
 pub struct DeleteKvConfigCommand {
@@ -56,7 +53,7 @@ impl CommandExecute for DeleteKvConfigCommand {
                     )
                 })?;
 
-            MQAdminExt::delete_kv_config(&default_mqadmin_ext, self.namespace.into(), self.key.into())
+            MQAdminExt::delete_kv_config(&default_mqadmin_ext, self.namespace.parse().unwrap(), self.key.parse().unwrap())
                 .await
                 .map_err(|e| {
                     RocketmqError::SubCommand(

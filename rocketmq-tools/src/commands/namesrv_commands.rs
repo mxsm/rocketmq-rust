@@ -48,6 +48,7 @@ impl CommandExecute for NameServerCommands {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         match self {
             NameServerCommands::GetNamesrvConfig(value) => value.execute(rpc_hook).await,
+            NameServerCommands::DeleteKvConfig(value) => value.execute(rpc_hook).await,
         }
     }
 }

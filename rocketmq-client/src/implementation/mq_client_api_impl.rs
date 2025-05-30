@@ -18,11 +18,9 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
-use std::time::Duration;
 use std::time::Instant;
 
 use cheetah_string::CheetahString;
-use futures::future::ok;
 use lazy_static::lazy_static;
 use rocketmq_common::common::message::message_batch::MessageBatch;
 use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
@@ -44,7 +42,6 @@ use rocketmq_error::mq_client_err;
 use rocketmq_error::MQBrokerErr;
 use rocketmq_error::RocketMQResult;
 use rocketmq_error::RocketmqError::MQClientBrokerError;
-use rocketmq_error::RocketmqError::MQClientErr;
 use rocketmq_remoting::base::connection_net_event::ConnectionNetEvent;
 use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
@@ -138,37 +135,35 @@ pub struct MQClientAPIImpl {
 }
 
 impl MQClientAPIImpl {
-    pub(crate) fn delete_kvconfig_value(
+    pub(crate) async fn delete_kvconfig_value(
         &self,
         namespace: CheetahString,
         key: CheetahString,
-        timeout_millis: Duration,
+        timeout_millis: u64,
     ) -> RocketMQResult<()> {
         let request_header = DeleteKVConfigRequestHeader::new(namespace, key);
         let request =
             RemotingCommand::create_request_command(RequestCode::DeleteKvConfig, request_header);
 
-        let nameServerAddressList = self.remoting_client.get_name_server_address_list();
-        // RemotingCommand errResponse = null;
-        let mut errResponse = None;
-        for nameSrvAddr in nameServerAddressList {
+        let name_server_address_list = self.remoting_client.get_name_server_address_list();
+        let mut err_response = None;
+        for name_srv_addr in name_server_address_list {
             let response = self
                 .remoting_client
                 .invoke_async(
-                    Some(nameSrvAddr),
-                    request,
-                    timeout_millis.as_millis() as u64,
-                )
-                .await?;
+                    Some(name_srv_addr),
+                    request.clone(),
+                    timeout_millis,
+                ).await?;
             match ResponseCode::from(response.code()) {
                 ResponseCode::Success => break,
-                _ => errResponse = Some(response),
+                _ => err_response = Some(response),
             }
         }
-
-        if errResponse.is_some() {
-            let errResponse = errResponse.unwrap();
-            return mq_client_err!(errResponse.code(), errResponse.remark().unwrap_or_default());
+        
+        if err_response.is_some() {
+            let err_response = err_response.unwrap();
+            return mq_client_err!(err_response.code(), err_response.remark().map_or("".to_string(), |s| s.to_string()));
         }
         Ok(())
     }
