@@ -158,8 +158,7 @@ impl MQClientAPIImpl {
             }
         }
 
-        if err_response.is_some() {
-            let err_response = err_response.unwrap();
+        if let Some(err_response) = err_response {
             return mq_client_err!(
                 err_response.code(),
                 err_response

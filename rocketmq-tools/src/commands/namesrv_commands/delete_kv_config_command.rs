@@ -40,9 +40,9 @@ impl CommandExecute for DeleteKvConfigCommand {
         let mut default_mqadmin_ext = DefaultMQAdminExt::new();
         default_mqadmin_ext
             .client_config_mut()
-            .setInstanceName(get_current_millis().to_string().into());
+            .set_instance_name(get_current_millis().to_string().into());
 
-        let operation_result = (async || {
+        let operation_result = async {
             MQAdminExt::start(&mut default_mqadmin_ext)
                 .await
                 .map_err(|e| {
@@ -64,7 +64,7 @@ impl CommandExecute for DeleteKvConfigCommand {
 
             println!("delete kv config from namespace success.");
             Ok(())
-        })()
+        }
         .await;
         MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
         operation_result

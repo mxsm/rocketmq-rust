@@ -85,7 +85,7 @@ impl GetKVConfigResponseHeader {
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
 pub struct DeleteKVConfigRequestHeader {
-    #[required] // //todo 看下这个有什么用 ，怎么起作用的
+    #[required]
     pub namespace: CheetahString,
 
     #[required]

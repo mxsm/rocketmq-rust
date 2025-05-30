@@ -191,7 +191,7 @@ impl ClientConfig {
         }
     }
     #[inline]
-    pub fn setInstanceName(&mut self, instance_name: CheetahString) {
+    pub fn set_instance_name(&mut self, instance_name: CheetahString) {
         self.instance_name = instance_name;
     }
 

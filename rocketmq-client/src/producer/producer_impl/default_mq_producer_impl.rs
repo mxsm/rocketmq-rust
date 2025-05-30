@@ -872,7 +872,7 @@ impl DefaultMQProducerImpl {
                 return if let Some(err) = exception {
                     match err {
                         rocketmq_error::RocketmqError::MQClientErr(_) => {
-                            mq_client_err!(ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION, info) //todo 看下这个宏
+                            mq_client_err!(ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION, info)
                         }
                         RemotingTooMuchRequestError(_) => {
                             mq_client_err!(ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION, info)
