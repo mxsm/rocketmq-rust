@@ -43,7 +43,6 @@ impl CommandExecute for DeleteKvConfigCommand {
             .setInstanceName(get_current_millis().to_string().into());
 
         let operation_result = (async || {
-            // 立即执行的闭包
             MQAdminExt::start(&mut default_mqadmin_ext)
                 .await
                 .map_err(|e| {
@@ -53,18 +52,20 @@ impl CommandExecute for DeleteKvConfigCommand {
                     )
                 })?;
 
-            MQAdminExt::delete_kv_config(&default_mqadmin_ext, self.namespace.parse().unwrap(), self.key.parse().unwrap())
-                .await
-                .map_err(|e| {
-                    RocketmqError::SubCommand(
-                        "DeleteKvConfigCommand".parse().unwrap(),
-                        e.to_string(),
-                    )
-                })?;
+            MQAdminExt::delete_kv_config(
+                &default_mqadmin_ext,
+                self.namespace.parse().unwrap(),
+                self.key.parse().unwrap(),
+            )
+            .await
+            .map_err(|e| {
+                RocketmqError::SubCommand("DeleteKvConfigCommand".parse().unwrap(), e.to_string())
+            })?;
 
             println!("delete kv config from namespace success.");
             Ok(())
-        })().await;
+        })()
+        .await;
         MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
         operation_result
     }

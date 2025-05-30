@@ -150,20 +150,22 @@ impl MQClientAPIImpl {
         for name_srv_addr in name_server_address_list {
             let response = self
                 .remoting_client
-                .invoke_async(
-                    Some(name_srv_addr),
-                    request.clone(),
-                    timeout_millis,
-                ).await?;
+                .invoke_async(Some(name_srv_addr), request.clone(), timeout_millis)
+                .await?;
             match ResponseCode::from(response.code()) {
                 ResponseCode::Success => break,
                 _ => err_response = Some(response),
             }
         }
-        
+
         if err_response.is_some() {
             let err_response = err_response.unwrap();
-            return mq_client_err!(err_response.code(), err_response.remark().map_or("".to_string(), |s| s.to_string()));
+            return mq_client_err!(
+                err_response.code(),
+                err_response
+                    .remark()
+                    .map_or("".to_string(), |s| s.to_string())
+            );
         }
         Ok(())
     }

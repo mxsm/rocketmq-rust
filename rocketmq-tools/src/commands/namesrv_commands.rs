@@ -14,8 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-mod get_namesrv_config_command;
 mod delete_kv_config_command;
+mod get_namesrv_config_command;
 
 use std::sync::Arc;
 
@@ -23,9 +23,9 @@ use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
+use crate::commands::namesrv_commands::delete_kv_config_command::DeleteKvConfigCommand;
 use crate::commands::namesrv_commands::get_namesrv_config_command::GetNamesrvConfigCommand;
 use crate::commands::CommandExecute;
-use crate::commands::namesrv_commands::delete_kv_config_command::DeleteKvConfigCommand;
 
 #[derive(Subcommand)]
 pub enum NameServerCommands {
