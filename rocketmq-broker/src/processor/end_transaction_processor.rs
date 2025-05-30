@@ -111,8 +111,11 @@ where
             }
         }
 
-        let result = if MessageSysFlag::TRANSACTION_COMMIT_TYPE == request_header.commit_or_rollback
-        {
+        let OperationResult {
+            response_remark,
+            response_code,
+            ..
+        } = if MessageSysFlag::TRANSACTION_COMMIT_TYPE == request_header.commit_or_rollback {
             let result = self
                 .transactional_message_service
                 .commit_message(&request_header);
@@ -196,8 +199,8 @@ where
         };
 
         Some(
-            RemotingCommand::create_remoting_command(result.response_code)
-                .set_remark_option(result.response_remark),
+            RemotingCommand::create_remoting_command(response_code)
+                .set_remark_option(response_remark),
         )
     }
 
