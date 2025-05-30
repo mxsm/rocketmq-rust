@@ -135,6 +135,9 @@ pub enum RocketmqError {
 
     #[error("{0}")]
     ConfigError(String),
+
+    #[error("{0} command failed , {1}")]
+    SubCommand(String, String),
 }
 
 #[derive(Error, Debug)]
