@@ -76,6 +76,7 @@ use rocketmq_remoting::protocol::header::message_operation_header::send_message_
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
 use rocketmq_remoting::protocol::header::namesrv::kv_config_header::DeleteKVConfigRequestHeader;
+use rocketmq_remoting::protocol::header::namesrv::kv_config_header::PutKVConfigRequestHeader;
 use rocketmq_remoting::protocol::header::pop_message_request_header::PopMessageRequestHeader;
 use rocketmq_remoting::protocol::header::pop_message_response_header::PopMessageResponseHeader;
 use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
@@ -148,6 +149,41 @@ impl MQClientAPIImpl {
         let request_header = DeleteKVConfigRequestHeader::new(namespace, key);
         let request =
             RemotingCommand::create_request_command(RequestCode::DeleteKvConfig, request_header);
+
+        let name_server_address_list = self.remoting_client.get_name_server_address_list();
+        let mut err_response = None;
+        for name_srv_addr in name_server_address_list {
+            let response = self
+                .remoting_client
+                .invoke_async(Some(name_srv_addr), request.clone(), timeout_millis)
+                .await?;
+            match ResponseCode::from(response.code()) {
+                ResponseCode::Success => break,
+                _ => err_response = Some(response),
+            }
+        }
+
+        if let Some(err_response) = err_response {
+            return mq_client_err!(
+                err_response.code(),
+                err_response
+                    .remark()
+                    .map_or("".to_string(), |s| s.to_string())
+            );
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn put_kvconfig_value(
+        &self,
+        namespace: CheetahString,
+        key: CheetahString,
+        value: CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<()> {
+        let request_header = PutKVConfigRequestHeader::new(namespace, key, value);
+        let request =
+            RemotingCommand::create_request_command(RequestCode::PutKvConfig, request_header);
 
         let name_server_address_list = self.remoting_client.get_name_server_address_list();
         let mut err_response = None;
