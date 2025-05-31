@@ -83,11 +83,15 @@ docs:
   #      - title: "Utility Classes"
   #        url: /docs/utility-classes/
   - title: Producer
-  #    children:
-  #      - title: "Stylesheets"
-  #        url: /docs/stylesheets/
-  #      - title: "JavaScript"
-  #        url: /docs/javascript/
+    children:
+      - title: "Simple Producer"
+        url: /docs/producer/simple-producer/
+      - title: "Order Producer"
+        url: /docs/producer/order-producer/
+      - title: "Batch Producer"
+        url: /docs/producer/batch-producer/
+      - title: "Transaction Producer"
+        url: /docs/producer/transaction-producer/
   - title: Consumer
   #    children:
   #      - title: "FAQ"
