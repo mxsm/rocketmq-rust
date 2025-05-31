@@ -197,7 +197,7 @@ impl ClientConfig {
     #[inline]
     pub fn set_namesrv_addr(&mut self, namesrv_addr: CheetahString) {
         self.namesrv_addr = Some(namesrv_addr);
-        self.namespace_initialized.store(false, Ordering::Release); //todo 看下不同顺序的表现
+        self.namespace_initialized.store(false, Ordering::Release);
     }
 
     #[inline]
