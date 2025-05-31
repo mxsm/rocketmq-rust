@@ -87,7 +87,7 @@ impl CommandExecute for UpdateKvConfigCommand {
                     )
                 })?;
 
-            println!("delete kv config from namespace success.");
+            println!("update kv config in namespace success.");
             Ok(())
         }
         .await;
