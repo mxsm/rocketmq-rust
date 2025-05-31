@@ -16,6 +16,7 @@
  */
 mod delete_kv_config_command;
 mod get_namesrv_config_command;
+mod update_kv_config_command;
 
 use std::sync::Arc;
 
@@ -25,6 +26,7 @@ use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::namesrv_commands::delete_kv_config_command::DeleteKvConfigCommand;
 use crate::commands::namesrv_commands::get_namesrv_config_command::GetNamesrvConfigCommand;
+use crate::commands::namesrv_commands::update_kv_config_command::UpdateKvConfigCommand;
 use crate::commands::CommandExecute;
 
 #[derive(Subcommand)]
@@ -42,6 +44,13 @@ pub enum NameServerCommands {
         long_about = None,
     )]
     DeleteKvConfig(DeleteKvConfigCommand),
+
+    #[command(
+        name = "updateKvConfig",
+        about = "Create or update KV config.",
+        long_about = None,
+    )]
+    UpdateKvConfigCommand(UpdateKvConfigCommand),
 }
 
 impl CommandExecute for NameServerCommands {
@@ -49,6 +58,7 @@ impl CommandExecute for NameServerCommands {
         match self {
             NameServerCommands::GetNamesrvConfig(value) => value.execute(rpc_hook).await,
             NameServerCommands::DeleteKvConfig(value) => value.execute(rpc_hook).await,
+            NameServerCommands::UpdateKvConfigCommand(value) => value.execute(rpc_hook).await,
         }
     }
 }

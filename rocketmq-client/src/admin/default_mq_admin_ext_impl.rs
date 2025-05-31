@@ -460,7 +460,17 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         key: CheetahString,
         value: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.client_instance
+            .as_ref()
+            .unwrap()
+            .get_mq_client_api_impl()
+            .put_kvconfig_value(
+                namespace,
+                key,
+                value,
+                self.timeout_millis.as_millis() as u64,
+            )
+            .await
     }
 
     async fn delete_kv_config(

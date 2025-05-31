@@ -60,6 +60,12 @@ pub struct DefaultMQAdminExt {
 }
 
 impl DefaultMQAdminExt {
+    pub(crate) fn set_namesrv_addr(&mut self, name_serv_addr: &str) {
+        self.client_config.set_namesrv_addr(name_serv_addr.into());
+    }
+}
+
+impl DefaultMQAdminExt {
     pub fn new() -> Self {
         let admin_ext_group = CheetahString::from_static_str(ADMIN_EXT_GROUP);
         let client_config = ArcMut::new(ClientConfig::new());
@@ -472,7 +478,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         key: CheetahString,
         value: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .create_and_update_kv_config(namespace, key, value)
+            .await
     }
 
     async fn delete_kv_config(
