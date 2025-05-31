@@ -1,6 +1,6 @@
 ---
 title: "Transaction Producer"
-permalink: /docs/producer/transaction-producer/
+permalink: /zh/docs/producer/transaction-producer/
 excerpt: "Transaction Producer in RocketMQ Rust"
 last_modified_at: 2025-05-31T20:14:05
 redirect_from:
@@ -11,35 +11,35 @@ classes: wide
 
 ![Architecture](/assets/images/transaction-message-flow.png)
 
-## ⚙️ Principle of RocketMQ Transaction Message Model
+## ⚙️ RocketMQ 事务消息模型原理
 
-The transaction message process of RocketMQ is divided into three steps:
+RocketMQ 的事务消息流程分为 **三步**：
 
-### 1. **Send "Half Message" (Prepared Message)**
+### 1. **发送“半消息”（Prepared Message）**
 
-The producer sends a special "**half message**", and this message:
+生产者发送一个特殊的“**半消息**”，这个消息：
 
-- It will not be visible to consumers.
-- It indicates that the message has been sent successfully but has not been submitted yet.
+- 不会对消费者可见。
+- 表示消息发送成功，但还未提交。
 
-### 2. Execute local transactions
+### 2. **执行本地事务**
 
-After successfully sending a half-message, the producer executes local transaction logic (such as database operations, etc.).
+在发送半消息成功后，生产者执行本地事务逻辑（如数据库操作等）。
 
-### 3. **Submit or roll back transaction messages**
+### 3. **提交 or 回滚事务消息**
 
-- Local transaction is executed successfully ⇒ Commit the transaction message (the message becomes deliverable and can be consumed by the consumer).
-- Local transaction fails ⇒ Roll back the transaction message (the message is deleted and will never be delivered).
+- 本地事务执行成功 ⇒ 提交事务消息（消息变为可投递状态，消费者可消费）。
+- 本地事务失败 ⇒ 回滚事务消息（消息被删除，永远不会投递）。
 
-### ✅ Reliable back-check mechanism (transaction status back-check)
+### ✅ 可靠回查机制（事务状态回查）
 
-If the Broker **has not received a commit or rollback instruction for a long time**, it will **actively inquire about the local transaction status from the producer**.
+如果 Broker **长时间未收到提交或回滚指令**，会 **主动询问生产者** 本地事务状态。
 
-> Prevent semi - messages from hanging unresolved due to the producer crashing or network jitter.
+> 防止因生产者宕机或网络抖动，导致半消息悬挂不决。
 
 
 
-## How to send transaction messages
+## 快速开始
 
 ```toml
 [dependencies]
@@ -51,7 +51,7 @@ cheetah-string ={version = "0.1.6"}
 parking_lot = "0.12.4"
 ```
 
-**code**：
+代码：
 
 ```rust
 use std::any::Any;
