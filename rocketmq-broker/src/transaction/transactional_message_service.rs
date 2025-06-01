@@ -21,6 +21,7 @@ use rocketmq_store::base::message_result::PutMessageResult;
 
 use crate::transaction::operation_result::OperationResult;
 use crate::transaction::transaction_metrics::TransactionMetrics;
+use crate::transaction::transactional_message_check_listener::TransactionalMessageCheckListener;
 
 /// Trait defining the local transactional message service.
 /// This trait provides methods for preparing, committing, rolling back, and checking transactional
@@ -92,11 +93,11 @@ pub trait TransactionalMessageServiceLocal: Sync + 'static {
     ///
     /// * `transaction_timeout` - The timeout for the transaction.
     /// * `transaction_check_max` - The maximum number of transaction checks.
-    fn check(
-        &self,
+    async fn check<Listener: TransactionalMessageCheckListener + Clone>(
+        &mut self,
         transaction_timeout: u64,
         transaction_check_max: i32,
-        // listener: AbstractTransactionalMessageCheckListener,
+        listener: Listener,
     );
 
     /// Opens the transactional message service.

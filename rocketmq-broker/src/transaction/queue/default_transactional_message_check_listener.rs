@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::any::Any;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::config::TopicConfig;
@@ -39,6 +40,7 @@ use crate::transaction::transactional_message_check_listener::TransactionalMessa
 
 const TCMT_QUEUE_NUMS: i32 = 1;
 
+#[derive(Clone)]
 pub struct DefaultTransactionalMessageCheckListener<MS> {
     inner: TransactionalMessageCheckListenerInner<MS>,
     // topic_config_manager: TopicConfigManager,
@@ -115,6 +117,14 @@ where
                 msg_ext.msg_id(),
             );
         }
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
     }
 }
 

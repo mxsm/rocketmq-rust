@@ -19,7 +19,8 @@ use rocketmq_common::common::message::message_ext::MessageExt;
 
 /// Trait defining the listener for transactional message checks.
 /// This trait provides a method for resolving discarded messages.
-pub trait TransactionalMessageCheckListener {
+#[trait_variant::make(TransactionalMessageCheckListener: Send)]
+pub trait TransactionalMessageCheckListenerInner: std::any::Any {
     /// Attempts to resolve a discarded message, typically called when a transaction
     /// message needs cleanup or final disposition.
     ///
@@ -39,4 +40,8 @@ pub trait TransactionalMessageCheckListener {
     /// - The broker fails to process the resolution
     /// - The message is in an invalid state
     async fn resolve_discard_msg(&mut self, msg_ext: MessageExt);
+
+    fn as_any(&self) -> &dyn std::any::Any;
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }
