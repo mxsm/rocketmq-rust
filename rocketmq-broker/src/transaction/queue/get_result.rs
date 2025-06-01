@@ -18,6 +18,31 @@ use rocketmq_client_rust::consumer::pull_result::PullResult;
 use rocketmq_common::common::message::message_ext::MessageExt;
 
 pub(crate) struct GetResult {
-    pub(crate) msg: MessageExt,
-    pub(crate) pull_result: PullResult,
+    pub(crate) msg: Option<MessageExt>,
+    pub(crate) pull_result: Option<PullResult>,
+}
+
+impl GetResult {
+    pub fn new() -> Self {
+        Self {
+            pull_result: None,
+            msg: None,
+        }
+    }
+
+    pub fn get_pull_result(&self) -> Option<&PullResult> {
+        self.pull_result.as_ref()
+    }
+
+    pub fn set_pull_result(&mut self, pull_result: Option<PullResult>) {
+        self.pull_result = pull_result;
+    }
+
+    pub fn get_msg(&self) -> Option<&MessageExt> {
+        self.msg.as_ref()
+    }
+
+    pub fn set_msg(&mut self, msg: Option<MessageExt>) {
+        self.msg = msg;
+    }
 }

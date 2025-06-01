@@ -1929,6 +1929,10 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         self.transactional_message_service = Some(transactional_message_service);
     }*/
 
+    pub fn get_min_broker_id_in_group(&self) -> u64 {
+        self.broker_config.broker_identity.broker_id
+    }
+
     #[inline]
     pub fn set_transactional_message_check_listener(
         &mut self,
