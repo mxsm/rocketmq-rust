@@ -217,7 +217,7 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<()> {
         let body = mix_all::properties_to_string(&properties);
-        if body.len() < 1 {
+        if body.is_empty() {
             return Ok(());
         }
         let invoke_name_servers;
