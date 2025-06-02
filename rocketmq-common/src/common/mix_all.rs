@@ -180,6 +180,15 @@ pub fn string_to_properties(input: &str) -> Option<HashMap<CheetahString, Cheeta
     Some(properties)
 }
 
+pub fn properties_to_string(properties: &HashMap<CheetahString, CheetahString>) -> CheetahString {
+    properties
+        .iter()
+        .map(|(key, value)| format!("{}={}", key.as_str(), value.as_str()))
+        .collect::<Vec<String>>()
+        .join("\n")
+        .into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

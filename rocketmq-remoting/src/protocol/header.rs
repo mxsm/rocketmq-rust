@@ -26,6 +26,7 @@ pub mod create_topic_request_header;
 pub mod delete_subscription_group_request_header;
 pub mod delete_topic_request_header;
 pub mod elect_master_response_header;
+pub mod empty_header;
 pub mod end_transaction_request_header;
 pub mod extra_info_util;
 pub mod get_all_topic_config_response_header;

@@ -65,6 +65,7 @@ use rocketmq_remoting::protocol::header::change_invisible_time_request_header::C
 use rocketmq_remoting::protocol::header::change_invisible_time_response_header::ChangeInvisibleTimeResponseHeader;
 use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_remoting::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
+use rocketmq_remoting::protocol::header::empty_header::EmptyHeader;
 use rocketmq_remoting::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
 use rocketmq_remoting::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_remoting::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
@@ -158,7 +159,7 @@ impl MQClientAPIImpl {
                 .invoke_async(Some(name_srv_addr), request.clone(), timeout_millis)
                 .await?;
             match ResponseCode::from(response.code()) {
-                ResponseCode::Success => break,
+                ResponseCode::Success => {}
                 _ => err_response = Some(response),
             }
         }
@@ -193,7 +194,56 @@ impl MQClientAPIImpl {
                 .invoke_async(Some(name_srv_addr), request.clone(), timeout_millis)
                 .await?;
             match ResponseCode::from(response.code()) {
-                ResponseCode::Success => break,
+                ResponseCode::Success => {}
+                _ => err_response = Some(response),
+            }
+        }
+
+        if let Some(err_response) = err_response {
+            return mq_client_err!(
+                err_response.code(),
+                err_response
+                    .remark()
+                    .map_or("".to_string(), |s| s.to_string())
+            );
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn update_name_server_config(
+        &self,
+        properties: HashMap<CheetahString, CheetahString>,
+        special_name_servers: Option<Vec<CheetahString>>,
+        timeout_millis: u64,
+    ) -> RocketMQResult<()> {
+        let body = mix_all::properties_to_string(&properties);
+        if body.is_empty() {
+            return Ok(());
+        }
+        let invoke_name_servers;
+        if let Some(name_servers) = special_name_servers
+            && !name_servers.is_empty()
+        {
+            invoke_name_servers = name_servers;
+        } else {
+            invoke_name_servers = Vec::from(self.get_name_server_address_list());
+        }
+        if invoke_name_servers.is_empty() {
+            return Ok(());
+        }
+        let empty_header = EmptyHeader {};
+        let mut request =
+            RemotingCommand::create_request_command(RequestCode::UpdateNamesrvConfig, empty_header);
+
+        request = request.set_body(body.to_string());
+        let mut err_response = None;
+        for name_srv_addr in invoke_name_servers {
+            let response = self
+                .remoting_client
+                .invoke_async(Some(&name_srv_addr), request.clone(), timeout_millis)
+                .await?;
+            match ResponseCode::from(response.code()) {
+                ResponseCode::Success => {}
                 _ => err_response = Some(response),
             }
         }
@@ -1828,9 +1878,7 @@ impl MQClientAPIImpl {
         &self,
         name_servers: Option<Vec<CheetahString>>,
         timeout_millis: Duration,
-    ) -> rocketmq_error::RocketMQResult<
-        Option<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>>,
-    > {
+    ) -> RocketMQResult<Option<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>>> {
         // Determine which name servers to invoke
         let invoke_name_servers = match name_servers {
             Some(servers) if !servers.is_empty() => servers,
