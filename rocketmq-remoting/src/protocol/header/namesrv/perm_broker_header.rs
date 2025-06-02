@@ -79,6 +79,12 @@ impl AddWritePermOfBrokerResponseHeader {
     }
 }
 
+impl AddWritePermOfBrokerResponseHeader {
+    pub fn get_add_topic_count(&self) -> i32 {
+        self.add_topic_count
+    }
+}
+
 impl CommandCustomHeader for AddWritePermOfBrokerResponseHeader {
     fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
         Some(HashMap::from([(
