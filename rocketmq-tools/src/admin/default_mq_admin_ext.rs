@@ -405,8 +405,10 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         namesrv_addr: CheetahString,
         broker_name: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<i32> {
-        todo!()
+    ) -> RocketMQResult<i32> {
+        self.default_mqadmin_ext_impl
+            .wipe_write_perm_of_broker(namesrv_addr, broker_name)
+            .await
     }
 
     async fn add_write_perm_of_broker(

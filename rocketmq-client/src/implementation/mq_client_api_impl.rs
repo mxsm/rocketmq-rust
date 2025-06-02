@@ -80,6 +80,8 @@ use rocketmq_remoting::protocol::header::namesrv::kv_config_header::DeleteKVConf
 use rocketmq_remoting::protocol::header::namesrv::kv_config_header::PutKVConfigRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::perm_broker_header::AddWritePermOfBrokerRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::perm_broker_header::AddWritePermOfBrokerResponseHeader;
+use rocketmq_remoting::protocol::header::namesrv::perm_broker_header::WipeWritePermOfBrokerRequestHeader;
+use rocketmq_remoting::protocol::header::namesrv::perm_broker_header::WipeWritePermOfBrokerResponseHeader;
 use rocketmq_remoting::protocol::header::pop_message_request_header::PopMessageRequestHeader;
 use rocketmq_remoting::protocol::header::pop_message_response_header::PopMessageResponseHeader;
 use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
@@ -281,6 +283,33 @@ impl MQClientAPIImpl {
             let request_header = response
                 .decode_command_custom_header_fast::<AddWritePermOfBrokerResponseHeader>()?;
             return Ok(request_header.get_add_topic_count());
+        }
+        mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        )
+    }
+
+    pub(crate) async fn wipe_write_perm_of_broker(
+        &self,
+        namesrv_addr: CheetahString,
+        broker_name: CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<i32> {
+        let request_header = WipeWritePermOfBrokerRequestHeader::new(broker_name);
+        let request = RemotingCommand::create_request_command(
+            RequestCode::WipeWritePermOfBroker,
+            request_header,
+        );
+
+        let response = self
+            .remoting_client
+            .invoke_async(Some(&namesrv_addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            let request_header = response
+                .decode_command_custom_header_fast::<WipeWritePermOfBrokerResponseHeader>()?;
+            return Ok(request_header.get_wipe_topic_count());
         }
         mq_client_err!(
             response.code(),
