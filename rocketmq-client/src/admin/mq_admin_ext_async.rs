@@ -462,7 +462,7 @@ pub trait MQAdminExtLocal: Sync {
     async fn update_name_server_config(
         &self,
         properties: HashMap<CheetahString, CheetahString>,
-        name_servers: Vec<CheetahString>,
+        name_servers: Option<Vec<CheetahString>>,
     ) -> rocketmq_error::RocketMQResult<()>;
 
     async fn get_name_server_config(

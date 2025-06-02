@@ -31,6 +31,7 @@ use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::topic::TopicValidator;
+use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::admin::consume_stats::ConsumeStats;
 use rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable;
 use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
@@ -487,7 +488,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         namespace: CheetahString,
         key: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> RocketMQResult<()> {
         self.default_mqadmin_ext_impl
             .delete_kv_config(namespace, key)
             .await
@@ -669,9 +670,11 @@ impl MQAdminExt for DefaultMQAdminExt {
     async fn update_name_server_config(
         &self,
         properties: HashMap<CheetahString, CheetahString>,
-        name_servers: Vec<CheetahString>,
-    ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        special_server_list: Option<Vec<CheetahString>>,
+    ) -> RocketMQResult<()> {
+        self.default_mqadmin_ext_impl
+            .update_name_server_config(properties, special_server_list)
+            .await
     }
 
     async fn get_name_server_config(

@@ -100,7 +100,7 @@ mod tests {
                 is_activated: true,
             },
         };
-        let display = format!("{:?}", info);
+        let display = format!("{info:?}");
         assert!(display.contains("HARuntimeInfo"));
         assert!(display.contains("master: true"));
         assert!(display.contains("master_commit_log_max_offset: 1000"));

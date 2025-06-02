@@ -662,9 +662,18 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
     async fn update_name_server_config(
         &self,
         properties: HashMap<CheetahString, CheetahString>,
-        name_servers: Vec<CheetahString>,
+        name_servers: Option<Vec<CheetahString>>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.client_instance
+            .as_ref()
+            .unwrap()
+            .get_mq_client_api_impl()
+            .update_name_server_config(
+                properties,
+                name_servers,
+                self.timeout_millis.as_millis() as u64,
+            )
+            .await
     }
 
     async fn get_name_server_config(
