@@ -2402,8 +2402,10 @@ dependencies = [
 name = "rocketmq-rust"
 version = "0.6.0"
 dependencies = [
+ "rocketmq-error",
  "tokio",
  "tracing",
+ "trait-variant",
 ]
 
 [[package]]
