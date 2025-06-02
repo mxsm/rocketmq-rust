@@ -108,10 +108,10 @@ impl<T: ServiceTask + 'static> ServiceTaskImpl<T> {
         );
 
         // Check if already started
-        if !self
+        if self
             .started
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
+            .is_err()
         {
             warn!("Service thread {} is already started", service_name);
             return Ok(());
@@ -212,10 +212,10 @@ impl<T: ServiceTask + 'static> ServiceTaskImpl<T> {
         );
 
         // Check if not started
-        if !self
+        if self
             .started
             .compare_exchange(true, false, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
+            .is_err()
         {
             warn!("Service thread {} is not running", service_name);
             return Ok(());

@@ -16,13 +16,15 @@
  */
 pub mod service_task;
 
+pub use service_task::ServiceTaskImpl;
+
 /// Helper macro to create a service thread implementation
 #[macro_export]
 macro_rules! service_task {
     ($service_type:ty) => {
         impl $service_type {
-            pub fn create_service_task(self) -> ServiceTaskImpl<Self> {
-                ServiceTaskImpl::new(self)
+            pub fn create_service_task(self) -> $crate::task::service_task::ServiceTaskImpl<Self> {
+                $crate::task::service_task::ServiceTaskImpl::new(self)
             }
         }
     };
