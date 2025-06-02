@@ -58,16 +58,16 @@ impl CommandExecute for UpdateNamesrvConfig {
             properties.insert(key.clone(), value.clone());
 
             let mut server_list = None;
-            if let Some(servers) = &self.common_args.namesrv_addr
-                && servers.len() > 0
-            {
-                let servers_split: Vec<&str> = servers.split(';').collect();
-                if !servers_split.is_empty() {
-                    let mut vec = Vec::with_capacity(servers_split.len());
-                    for server in servers_split {
-                        vec.push(server.into());
+            if let Some(servers) = &self.common_args.namesrv_addr {
+                if !servers.is_empty() {
+                    let servers_split: Vec<&str> = servers.split(';').collect();
+                    if !servers_split.is_empty() {
+                        let mut vec = Vec::with_capacity(servers_split.len());
+                        for server in servers_split {
+                            vec.push(server.into());
+                        }
+                        server_list = Some(vec);
                     }
-                    server_list = Some(vec);
                 }
             }
 
