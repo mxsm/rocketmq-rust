@@ -49,6 +49,10 @@ impl WipeWritePermOfBrokerResponseHeader {
     pub fn new(wipe_topic_count: i32) -> Self {
         Self { wipe_topic_count }
     }
+
+    pub fn get_wipe_topic_count(&self) -> i32 {
+        self.wipe_topic_count
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]

@@ -19,6 +19,7 @@ mod delete_kv_config_command;
 mod get_namesrv_config_command;
 mod update_kv_config_command;
 mod update_namesrv_config;
+mod wipe_write_perm_sub_command;
 
 use std::sync::Arc;
 
@@ -32,6 +33,7 @@ use crate::commands::namesrv_commands::get_namesrv_config_command::GetNamesrvCon
 use crate::commands::namesrv_commands::update_kv_config_command::UpdateKvConfigCommand;
 use crate::commands::namesrv_commands::update_namesrv_config::UpdateNamesrvConfig;
 use crate::commands::CommandExecute;
+use crate::commands::namesrv_commands::wipe_write_perm_sub_command::WipeWritePermSubCommand;
 
 #[derive(Subcommand)]
 pub enum NameServerCommands {
@@ -68,6 +70,13 @@ pub enum NameServerCommands {
         long_about = None,
     )]
     AddWritePermSubCommand(AddWritePermSubCommand),
+
+    #[command(
+        name = "wipeWritePerm",
+        about = "Wipe write perm of broker in all name server you defined in the -n param.",
+        long_about = None,
+    )]
+    WipeWritePermSubCommand(WipeWritePermSubCommand),
 }
 
 impl CommandExecute for NameServerCommands {
@@ -78,6 +87,7 @@ impl CommandExecute for NameServerCommands {
             NameServerCommands::UpdateKvConfigCommand(value) => value.execute(rpc_hook).await,
             NameServerCommands::UpdateNamesrvConfig(value) => value.execute(rpc_hook).await,
             NameServerCommands::AddWritePermSubCommand(value) => value.execute(rpc_hook).await,
+            NameServerCommands::WipeWritePermSubCommand(value) => value.execute(rpc_hook).await,
         }
     }
 }
