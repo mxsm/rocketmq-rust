@@ -138,6 +138,9 @@ pub enum RocketmqError {
 
     #[error("{0} command failed , {1}")]
     SubCommand(String, String),
+
+    #[error("{0}")]
+    ServiceTaskError(#[from] ServiceError),
 }
 
 #[derive(Error, Debug)]
@@ -359,4 +362,28 @@ macro_rules! request_timeout_err {
             $crate::RequestTimeoutErr::new($error_message),
         ))
     }};
+}
+
+//------------------ServiceError------------------
+
+/// Service error enumeration
+#[derive(Debug, thiserror::Error)]
+pub enum ServiceError {
+    #[error("Service is already running")]
+    AlreadyRunning,
+
+    #[error("Service is not running")]
+    NotRunning,
+
+    #[error("Service startup failed: {0}")]
+    StartupFailed(String),
+
+    #[error("Service shutdown failed: {0}")]
+    ShutdownFailed(String),
+
+    #[error("Service operation timeout")]
+    Timeout,
+
+    #[error("Service interrupted")]
+    Interrupted,
 }

@@ -15,3 +15,5 @@ description.workspace = true
 [dependencies]
 tokio.workspace = true
 tracing.workspace = true
+trait-variant = { workspace = true }
+rocketmq-error = { workspace = true }
