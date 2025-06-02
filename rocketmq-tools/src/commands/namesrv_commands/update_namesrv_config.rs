@@ -43,19 +43,6 @@ pub struct UpdateNamesrvConfig {
 
 impl CommandExecute for UpdateNamesrvConfig {
     async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        //         try {
-
-        //             defaultMQAdminExt.start();
-        //
-        //             defaultMQAdminExt.update_name_server_config(properties, serverList);
-        //
-        //             System.out.printf("update name server config success!%s\n%s : %s\n",
-        //                 serverList == null ? "" : serverList, key, value);
-        //         } catch (Exception e) {
-        //             throw new SubCommandException(this.getClass().getSimpleName() + " command
-        // failed", e);         } finally {
-        //             defaultMQAdminExt.shutdown();
-        //         }
         let mut default_mqadmin_ext = DefaultMQAdminExt::new();
         default_mqadmin_ext
             .client_config_mut()
