@@ -112,9 +112,6 @@ use crate::transaction::transactional_message_check_service::TransactionalMessag
 pub(crate) struct BrokerRuntime {
     #[cfg(feature = "local_file_store")]
     inner: ArcMut<BrokerRuntimeInner<LocalFileMessageStore>>,
-    #[cfg(feature = "local_file_store")]
-    transactional_message_service:
-        Option<ArcMut<DefaultTransactionalMessageService<LocalFileMessageStore>>>,
     broker_runtime: Option<RocketMQRuntime>,
     shutdown_hook: Option<BrokerShutdownHook>,
     consumer_ids_change_listener: Arc<Box<dyn ConsumerIdsChangeListener + Send + Sync + 'static>>,
@@ -205,6 +202,7 @@ impl BrokerRuntime {
             ack_message_processor: None,
             notification_processor: None,
             broker_attached_plugins: vec![],
+            transactional_message_service: None,
         });
         let mut stats_manager = BrokerStatsManager::new(inner.broker_config.clone());
         stats_manager.set_producer_state_getter(Arc::new(ProducerStateGetter {
@@ -233,7 +231,6 @@ impl BrokerRuntime {
 
         Self {
             inner,
-            transactional_message_service: None,
             broker_runtime: Some(runtime),
             shutdown_hook: None,
             consumer_ids_change_listener,
@@ -317,7 +314,9 @@ impl BrokerRuntime {
             ack_message_processor.shutdown();
         }
 
-        if let Some(transactional_message_service) = self.transactional_message_service.as_mut() {
+        if let Some(transactional_message_service) =
+            self.inner.transactional_message_service.as_mut()
+        {
             transactional_message_service.shutdown();
         }
 
@@ -529,11 +528,19 @@ impl BrokerRuntime {
         DefaultTransactionalMessageService<LocalFileMessageStore>,
     > {
         let send_message_processor = SendMessageProcessor::new(
-            self.transactional_message_service.as_ref().unwrap().clone(),
+            self.inner
+                .transactional_message_service
+                .as_ref()
+                .unwrap()
+                .clone(),
             self.inner.clone(),
         );
         let reply_message_processor = ReplyMessageProcessor::new(
-            self.transactional_message_service.as_ref().unwrap().clone(),
+            self.inner
+                .transactional_message_service
+                .as_ref()
+                .unwrap()
+                .clone(),
             self.inner.clone(),
         );
         let pull_message_result_handler = ArcMut::new(DefaultPullMessageResultHandler::new(
@@ -594,7 +601,11 @@ impl BrokerRuntime {
             )),
             query_message_processor: ArcMut::new(query_message_processor),
             end_transaction_processor: ArcMut::new(EndTransactionProcessor::new(
-                self.transactional_message_service.as_ref().unwrap().clone(),
+                self.inner
+                    .transactional_message_service
+                    .as_ref()
+                    .unwrap()
+                    .clone(),
                 self.inner.clone(),
             )),
         }
@@ -750,13 +761,14 @@ impl BrokerRuntime {
                     self.inner.clone()
                 );
                 let service = DefaultTransactionalMessageService::new(bridge);
-                self.transactional_message_service = Some(ArcMut::new(service));
+                self.inner.transactional_message_service = Some(ArcMut::new(service));
             }
         }
         self.inner.transactional_message_check_listener = Some(
             DefaultTransactionalMessageCheckListener::new(Broker2Client, self.inner.clone()),
         );
-        self.inner.transactional_message_check_service = Some(TransactionalMessageCheckService);
+        self.inner.transactional_message_check_service =
+            Some(TransactionalMessageCheckService::new(self.inner.clone()));
         self.inner.transaction_metrics_flush_service = Some(TransactionMetricsFlushService);
     }
 
@@ -1324,7 +1336,7 @@ pub(crate) struct BrokerRuntimeInner<MS> {
     rebalance_lock_manager: RebalanceLockManager,
     broker_member_group: BrokerMemberGroup,
     transactional_message_check_listener: Option<DefaultTransactionalMessageCheckListener<MS>>,
-    transactional_message_check_service: Option<TransactionalMessageCheckService>,
+    transactional_message_check_service: Option<TransactionalMessageCheckService<MS>>,
     transaction_metrics_flush_service: Option<TransactionMetricsFlushService>,
     topic_route_info_manager: Option<TopicRouteInfoManager<MS>>,
     escape_bridge: Option<EscapeBridge<MS>>,
@@ -1341,6 +1353,8 @@ pub(crate) struct BrokerRuntimeInner<MS> {
     ack_message_processor: Option<ArcMut<AckMessageProcessor<MS>>>,
     notification_processor: Option<ArcMut<NotificationProcessor<MS>>>,
     broker_attached_plugins: Vec<Arc<dyn BrokerAttachedPlugin>>,
+    transactional_message_service:
+        Option<ArcMut<DefaultTransactionalMessageService<LocalFileMessageStore>>>,
 }
 
 impl<MS: MessageStore> BrokerRuntimeInner<MS> {
@@ -1493,12 +1507,23 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         &mut self.broker_member_group
     }
 
-    /*    #[inline]
+    #[inline]
     pub fn transactional_message_service_mut(
         &mut self,
     ) -> &mut Option<DefaultTransactionalMessageService<MS>> {
         &mut self.transactional_message_service
-    }*/
+    }
+
+    #[inline]
+    pub fn transactional_message_service_unchecked_mut(
+        &mut self,
+    ) -> &mut DefaultTransactionalMessageService<MS> {
+        unsafe {
+            self.transactional_message_service
+                .as_mut()
+                .unwrap_unchecked()
+        }
+    }
 
     #[inline]
     pub fn transactional_message_check_listener_mut(
@@ -1510,8 +1535,19 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     #[inline]
     pub fn transactional_message_check_service_mut(
         &mut self,
-    ) -> &mut Option<TransactionalMessageCheckService> {
+    ) -> &mut Option<TransactionalMessageCheckService<MS>> {
         &mut self.transactional_message_check_service
+    }
+
+    #[inline]
+    pub fn transactional_message_check_service_unchecked_mut(
+        &mut self,
+    ) -> &mut TransactionalMessageCheckService<MS> {
+        unsafe {
+            self.transactional_message_check_service
+                .as_mut()
+                .unwrap_unchecked()
+        }
     }
 
     #[inline]
@@ -1743,7 +1779,9 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn transactional_message_check_service(&self) -> &Option<TransactionalMessageCheckService> {
+    pub fn transactional_message_check_service(
+        &self,
+    ) -> &Option<TransactionalMessageCheckService<MS>> {
         &self.transactional_message_check_service
     }
 
@@ -1944,7 +1982,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     #[inline]
     pub fn set_transactional_message_check_service(
         &mut self,
-        transactional_message_check_service: TransactionalMessageCheckService,
+        transactional_message_check_service: TransactionalMessageCheckService<MS>,
     ) {
         self.transactional_message_check_service = Some(transactional_message_check_service);
     }

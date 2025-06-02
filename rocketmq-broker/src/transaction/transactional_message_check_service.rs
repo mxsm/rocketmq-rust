@@ -14,13 +14,97 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::future::Future;
+use std::time::Duration;
+use std::time::Instant;
 
+use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_rust::service_task;
+use rocketmq_rust::task::service_task::ServiceTask;
+use rocketmq_rust::task::ServiceTaskImpl;
+use rocketmq_rust::ArcMut;
+use rocketmq_store::base::message_store::MessageStore;
 use tracing::error;
+use tracing::info;
 
-#[derive(Clone)]
-pub struct TransactionalMessageCheckService;
+use crate::broker_runtime::BrokerRuntimeInner;
+use crate::transaction::transactional_message_service::TransactionalMessageService;
 
-impl TransactionalMessageCheckService {
+pub struct TransactionalMessageCheckService<MS> {
+    pub(crate) broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+}
+
+impl<MS> Clone for TransactionalMessageCheckService<MS> {
+    fn clone(&self) -> Self {
+        TransactionalMessageCheckService {
+            broker_runtime_inner: self.broker_runtime_inner.clone(),
+        }
+    }
+}
+
+impl<MS: MessageStore> ServiceTask for TransactionalMessageCheckService<MS> {
+    fn get_service_name(&self) -> String {
+        "TransactionalMessageCheckService".into()
+    }
+
+    async fn run(&self) {
+        info!("Starting transactional check service");
+        let service = self.clone();
+        let task_impl = ServiceTaskImpl::new(service);
+
+        while !task_impl.is_stopped() {
+            let transaction_check_interval = self
+                .broker_runtime_inner
+                .broker_config()
+                .transaction_check_interval;
+            task_impl.wait_for_running(Duration::from_millis(transaction_check_interval));
+        }
+        info!("Transactional check service stopped");
+    }
+
+    #[inline]
+    async fn on_wait_end(&self) {
+        let transaction_timeout = self
+            .broker_runtime_inner
+            .broker_config()
+            .transaction_timeout;
+        let transaction_check_max = self
+            .broker_runtime_inner
+            .broker_config()
+            .transaction_check_max;
+        let begin = Instant::now();
+        info!(
+            "Transactional check service is running, waiting for {} ms",
+            transaction_timeout
+        );
+        self.broker_runtime_inner
+            .mut_from_ref()
+            .transactional_message_service_unchecked_mut()
+            .check(
+                transaction_timeout,
+                transaction_check_max as i32,
+                self.broker_runtime_inner
+                    .transactional_message_check_listener()
+                    .clone()
+                    .unwrap(),
+            )
+            .await;
+        info!(
+            "End to check prepare message, consumed time:{}",
+            begin.elapsed().as_millis()
+        );
+    }
+}
+
+impl<MS: MessageStore> TransactionalMessageCheckService<MS> {
+    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
+        TransactionalMessageCheckService {
+            broker_runtime_inner,
+        }
+    }
+}
+
+impl<MS: MessageStore> TransactionalMessageCheckService<MS> {
     pub fn start(&mut self) {
         error!("TransactionalMessageCheckService start not implemented");
     }
