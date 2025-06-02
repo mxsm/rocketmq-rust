@@ -377,7 +377,12 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
     }
 
     async fn get_name_server_address_list(&self) -> Vec<CheetahString> {
-        todo!()
+        self.client_instance
+            .as_ref()
+            .unwrap()
+            .get_mq_client_api_impl()
+            .get_name_server_address_list()
+            .to_vec()
     }
 
     async fn wipe_write_perm_of_broker(
@@ -393,7 +398,16 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         namesrv_addr: CheetahString,
         broker_name: CheetahString,
     ) -> rocketmq_error::RocketMQResult<i32> {
-        todo!()
+        self.client_instance
+            .as_ref()
+            .unwrap()
+            .get_mq_client_api_impl()
+            .add_write_perm_of_broker(
+                namesrv_addr,
+                broker_name,
+                self.timeout_millis.as_millis() as u64,
+            )
+            .await
     }
 
     async fn put_kv_config(

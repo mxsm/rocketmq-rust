@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+mod add_write_perm_sub_command;
 mod delete_kv_config_command;
 mod get_namesrv_config_command;
 mod update_kv_config_command;
@@ -25,6 +26,7 @@ use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
+use crate::commands::namesrv_commands::add_write_perm_sub_command::AddWritePermSubCommand;
 use crate::commands::namesrv_commands::delete_kv_config_command::DeleteKvConfigCommand;
 use crate::commands::namesrv_commands::get_namesrv_config_command::GetNamesrvConfigCommand;
 use crate::commands::namesrv_commands::update_kv_config_command::UpdateKvConfigCommand;
@@ -55,11 +57,17 @@ pub enum NameServerCommands {
     UpdateKvConfigCommand(UpdateKvConfigCommand),
 
     #[command(
-        name = "UpdateNamesrvConfig",
+        name = "updateNamesrvConfig",
         about = "Update configs of name server.",
         long_about = None,
     )]
     UpdateNamesrvConfig(UpdateNamesrvConfig),
+    #[command(
+        name = "addWritePerm",
+        about = "Add write perm of broker in all name server you defined in the -n param.",
+        long_about = None,
+    )]
+    AddWritePermSubCommand(AddWritePermSubCommand),
 }
 
 impl CommandExecute for NameServerCommands {
@@ -69,6 +77,7 @@ impl CommandExecute for NameServerCommands {
             NameServerCommands::DeleteKvConfig(value) => value.execute(rpc_hook).await,
             NameServerCommands::UpdateKvConfigCommand(value) => value.execute(rpc_hook).await,
             NameServerCommands::UpdateNamesrvConfig(value) => value.execute(rpc_hook).await,
+            NameServerCommands::AddWritePermSubCommand(value) => value.execute(rpc_hook).await,
         }
     }
 }
