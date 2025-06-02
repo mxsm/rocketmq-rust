@@ -32,8 +32,8 @@ use crate::commands::namesrv_commands::delete_kv_config_command::DeleteKvConfigC
 use crate::commands::namesrv_commands::get_namesrv_config_command::GetNamesrvConfigCommand;
 use crate::commands::namesrv_commands::update_kv_config_command::UpdateKvConfigCommand;
 use crate::commands::namesrv_commands::update_namesrv_config::UpdateNamesrvConfig;
-use crate::commands::CommandExecute;
 use crate::commands::namesrv_commands::wipe_write_perm_sub_command::WipeWritePermSubCommand;
+use crate::commands::CommandExecute;
 
 #[derive(Subcommand)]
 pub enum NameServerCommands {
