@@ -23,7 +23,7 @@ use rocketmq_store::base::message_store::MessageStore;
 
 use crate::broker_runtime::BrokerRuntimeInner;
 
-pub struct NotifyMessageArrivingListener<MS> {
+pub struct NotifyMessageArrivingListener<MS: MessageStore> {
     //pull_request_hold_service: ArcMut<PullRequestHoldService<MS>>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }

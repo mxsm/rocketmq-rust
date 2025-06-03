@@ -57,7 +57,7 @@ use tracing::{info, warn};
 ///
 /// * `MS` - A type that implements the `MessageStore` trait, representing the message store used by
 ///   the broker.
-pub struct QueryAssignmentProcessor<MS> {
+pub struct QueryAssignmentProcessor<MS: MessageStore> {
     // Manages the message request modes for different topics and consumer groups.
     message_request_mode_manager: MessageRequestModeManager,
 

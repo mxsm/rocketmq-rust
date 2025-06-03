@@ -43,7 +43,7 @@ use crate::transaction::operation_result::OperationResult;
 use crate::transaction::queue::transactional_message_util::TransactionalMessageUtil;
 use crate::transaction::transactional_message_service::TransactionalMessageService;
 
-pub struct EndTransactionProcessor<TM, MS> {
+pub struct EndTransactionProcessor<TM, MS: MessageStore> {
     /*  message_store_config: Arc<MessageStoreConfig>,
     broker_config: Arc<BrokerConfig>,*/
     transactional_message_service: ArcMut<TM>,
@@ -51,7 +51,7 @@ pub struct EndTransactionProcessor<TM, MS> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
-impl<TM, MS> EndTransactionProcessor<TM, MS> {
+impl<TM, MS: MessageStore> EndTransactionProcessor<TM, MS> {
     pub fn new(
         /*message_store_config: Arc<MessageStoreConfig>,
         broker_config: Arc<BrokerConfig>,

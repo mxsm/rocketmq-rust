@@ -83,7 +83,7 @@ use crate::mqtrace::send_message_hook::SendMessageHook;
 use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
 use crate::transaction::transactional_message_service::TransactionalMessageService;
 
-pub struct SendMessageProcessor<MS, TS> {
+pub struct SendMessageProcessor<MS: MessageStore, TS> {
     inner: ArcMut<Inner<MS, TS>>,
     store_host: SocketAddr,
 }
@@ -1044,7 +1044,10 @@ where
 
 const DLQ_NUMS_PER_GROUP: u32 = 1;
 
-pub(crate) struct Inner<MS, TS> {
+pub(crate) struct Inner<MS, TS>
+where
+    MS: MessageStore,
+{
     pub(crate) send_message_hook_vec: ArcMut<Vec<Box<dyn SendMessageHook>>>,
     pub(crate) consume_message_hook_vec: ArcMut<Vec<Box<dyn ConsumeMessageHook>>>,
     pub(crate) broker_to_client: Broker2Client,

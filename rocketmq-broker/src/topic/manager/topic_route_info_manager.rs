@@ -40,7 +40,7 @@ const GET_TOPIC_ROUTE_TIMEOUT: u64 = 3000;
 const LOCK_TIMEOUT_MILLIS: u64 = 3000;
 
 #[derive(Clone)]
-pub(crate) struct TopicRouteInfoManager<MS> {
+pub(crate) struct TopicRouteInfoManager<MS: MessageStore> {
     pub(crate) lock: Arc<RocketMQTokioMutex<()>>,
     pub(crate) topic_route_table: ArcMut<HashMap<CheetahString /* Topic */, TopicRouteData>>,
     pub(crate) broker_addr_table: ArcMut<

@@ -111,7 +111,7 @@ pub type DeliverPendingTable<MS> = Arc<DashMap<i32, Arc<Mutex<VecDeque<PutResult
 /// **Duplicate Delivery Prevention**:
 /// Duplicate delivery is prevented through the unique message key (`uniqKey`) and the storage
 /// offset (`commitLogOffset`).
-pub struct ScheduleMessageService<MS> {
+pub struct ScheduleMessageService<MS: MessageStore> {
     delay_level_table: ArcMut<BTreeMap<i32 /* level */, i64 /* delay timeMillis */>>,
     offset_table: ArcMut<DashMap<i32, i64>>,
     started: AtomicBool,
@@ -550,7 +550,7 @@ impl<MS: MessageStore> ConfigManager for ScheduleMessageService<MS> {
 }
 
 /// Task for delivering delayed messages when their time is up
-pub struct DeliverDelayedMessageTimerTask<MS> {
+pub struct DeliverDelayedMessageTimerTask<MS: MessageStore> {
     /// The delay level for this task
     delay_level: i32,
 
@@ -880,7 +880,7 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
 }
 
 /// Process for handling the result of putting a message
-pub struct PutResultProcess<MS> {
+pub struct PutResultProcess<MS: MessageStore> {
     topic: CheetahString,
     offset: i64,
     physic_offset: i64,
@@ -1293,7 +1293,7 @@ impl Display for ProcessStatus {
 }
 
 /// Task for handling results of asynchronous message puts
-pub struct HandlePutResultTask<MS> {
+pub struct HandlePutResultTask<MS: MessageStore> {
     /// Delay level this task is handling
     delay_level: i32,
 

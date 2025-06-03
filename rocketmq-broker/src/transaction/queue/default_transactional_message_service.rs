@@ -61,7 +61,7 @@ const MAX_RETRY_COUNT_WHEN_HALF_NULL: i32 = 1;
 const OP_MSG_PULL_NUMS: i32 = 32;
 const SLEEP_WHILE_NO_OP: i32 = 1000;
 
-pub struct DefaultTransactionalMessageService<MS> {
+pub struct DefaultTransactionalMessageService<MS: MessageStore> {
     transactional_message_bridge: TransactionalMessageBridge<MS>,
     delete_context: Arc<Mutex<HashMap<i32, MessageQueueOpContext>>>,
     transactional_op_batch_service: TransactionalOpBatchService,

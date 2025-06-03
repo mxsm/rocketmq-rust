@@ -60,12 +60,12 @@ use crate::processor::pull_message_processor::is_broadcast;
 use crate::processor::pull_message_processor::rewrite_response_for_static_topic;
 use crate::processor::pull_message_result_handler::PullMessageResultHandler;
 
-pub struct DefaultPullMessageResultHandler<MS> {
+pub struct DefaultPullMessageResultHandler<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     consume_message_hook_list: Arc<Vec<Box<dyn ConsumeMessageHook>>>,
 }
 
-impl<MS> DefaultPullMessageResultHandler<MS> {
+impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
     pub fn new(
         consume_message_hook_list: Arc<Vec<Box<dyn ConsumeMessageHook>>>,
         broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,

@@ -29,13 +29,13 @@ use rocketmq_store::base::message_store::MessageStore;
 
 use crate::broker_runtime::BrokerRuntimeInner;
 
-pub struct QueryMessageProcessor<MS> {
+pub struct QueryMessageProcessor<MS: MessageStore> {
     /*message_store_config: Arc<MessageStoreConfig>,
     message_store: ArcMut<MS>,*/
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
-impl<MS> QueryMessageProcessor<MS> {
+impl<MS: MessageStore> QueryMessageProcessor<MS> {
     pub fn new(
         /* message_store_config: Arc<MessageStoreConfig>, message_store: ArcMut<MS> */
         broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,

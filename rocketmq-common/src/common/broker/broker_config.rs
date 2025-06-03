@@ -351,6 +351,13 @@ mod defaults {
     pub fn default_topic_queue_nums() -> u32 {
         8
     }
+    pub fn transaction_check_interval() -> u64 {
+        30_000
+    }
+
+    pub fn transaction_check_max() -> u32 {
+        15
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -734,6 +741,12 @@ pub struct BrokerConfig {
 
     #[serde(default)]
     pub enable_calc_filter_bit_map: bool,
+
+    #[serde(default = "defaults::transaction_check_interval")]
+    pub transaction_check_interval: u64,
+
+    #[serde(default = "defaults::transaction_check_max")]
+    pub transaction_check_max: u32,
 }
 
 impl Default for BrokerConfig {
@@ -850,6 +863,8 @@ impl Default for BrokerConfig {
             delay_offset_update_version_step: 200,
             revive_ack_wait_ms: Duration::from_secs(3 * 60).as_millis() as u64,
             enable_calc_filter_bit_map: false,
+            transaction_check_interval: 30_000,
+            transaction_check_max: 15,
         }
     }
 }

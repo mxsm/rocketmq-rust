@@ -39,7 +39,7 @@ use crate::broker_runtime::BrokerRuntimeInner;
 pub const CHARACTER_MAX_LENGTH: usize = 255;
 pub const TOPIC_MAX_LENGTH: usize = 127;
 
-pub(crate) struct SubscriptionGroupManager<MS> {
+pub(crate) struct SubscriptionGroupManager<MS: MessageStore> {
     pub(crate) subscription_group_wrapper: Arc<parking_lot::Mutex<SubscriptionGroupWrapper>>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     data_version: DataVersion,

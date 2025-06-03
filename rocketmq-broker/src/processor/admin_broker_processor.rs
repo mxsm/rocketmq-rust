@@ -39,7 +39,7 @@ mod offset_request_handler;
 mod subscription_group_handler;
 mod topic_request_handler;
 
-pub struct AdminBrokerProcessor<MS> {
+pub struct AdminBrokerProcessor<MS: MessageStore> {
     topic_request_handler: TopicRequestHandler<MS>,
     broker_config_request_handler: BrokerConfigRequestHandler<MS>,
     consumer_request_handler: ConsumerRequestHandler<MS>,

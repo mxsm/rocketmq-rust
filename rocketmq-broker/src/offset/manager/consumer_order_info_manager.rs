@@ -39,13 +39,13 @@ use crate::offset::manager::consumer_order_info_lock_manager::ConsumerOrderInfoL
 const TOPIC_GROUP_SEPARATOR: &str = "@";
 const CLEAN_SPAN_FROM_LAST: u64 = 24 * 3600 * 1000;
 
-pub(crate) struct ConsumerOrderInfoManager<MS> {
+pub(crate) struct ConsumerOrderInfoManager<MS: MessageStore> {
     pub(crate) consumer_order_info_wrapper: parking_lot::Mutex<ConsumerOrderInfoWrapper>,
     pub(crate) consumer_order_info_lock_manager: Option<ConsumerOrderInfoLockManager>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
-impl<MS> ConsumerOrderInfoManager<MS> {
+impl<MS: MessageStore> ConsumerOrderInfoManager<MS> {
     pub fn new(
         broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> ConsumerOrderInfoManager<MS> {

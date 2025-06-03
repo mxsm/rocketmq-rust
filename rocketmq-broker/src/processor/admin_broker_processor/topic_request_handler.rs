@@ -54,11 +54,11 @@ use tracing::info;
 use crate::broker_runtime::BrokerRuntimeInner;
 
 #[derive(Clone)]
-pub(super) struct TopicRequestHandler<MS> {
+pub(super) struct TopicRequestHandler<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
-impl<MS> TopicRequestHandler<MS> {
+impl<MS: MessageStore> TopicRequestHandler<MS> {
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
         TopicRequestHandler {
             broker_runtime_inner,

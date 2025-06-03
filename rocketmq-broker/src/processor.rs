@@ -60,7 +60,7 @@ pub(crate) mod query_message_processor;
 pub(crate) mod reply_message_processor;
 pub(crate) mod send_message_processor;
 
-pub struct BrokerRequestProcessor<MS, TS> {
+pub struct BrokerRequestProcessor<MS: MessageStore, TS> {
     pub(crate) send_message_processor: ArcMut<SendMessageProcessor<MS, TS>>,
     pub(crate) pull_message_processor: ArcMut<PullMessageProcessor<MS>>,
     pub(crate) peek_message_processor: ArcMut<PeekMessageProcessor>,
@@ -77,7 +77,7 @@ pub struct BrokerRequestProcessor<MS, TS> {
     pub(crate) end_transaction_processor: ArcMut<EndTransactionProcessor<TS, MS>>,
     pub(crate) admin_broker_processor: ArcMut<AdminBrokerProcessor<MS>>,
 }
-impl<MS, TS> Clone for BrokerRequestProcessor<MS, TS> {
+impl<MS: MessageStore, TS> Clone for BrokerRequestProcessor<MS, TS> {
     fn clone(&self) -> Self {
         Self {
             send_message_processor: self.send_message_processor.clone(),

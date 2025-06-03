@@ -54,7 +54,7 @@ use crate::broker_runtime::BrokerRuntimeInner;
 use crate::processor::pop_message_processor::PopMessageProcessor;
 use crate::processor::pop_message_processor::QueueLockManager;
 
-pub(crate) struct PopBufferMergeService<MS> {
+pub(crate) struct PopBufferMergeService<MS: MessageStore> {
     buffer: DashMap<CheetahString /* mergeKey */, ArcMut<PopCheckPointWrapper>>,
     commit_offsets: DashMap<
         CheetahString, /* topic@cid@queueId */
@@ -76,7 +76,7 @@ pub(crate) struct PopBufferMergeService<MS> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
-impl<MS> PopBufferMergeService<MS> {
+impl<MS: MessageStore> PopBufferMergeService<MS> {
     pub fn new(
         revive_topic: CheetahString,
         queue_lock_manager: QueueLockManager,

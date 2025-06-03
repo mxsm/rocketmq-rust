@@ -81,7 +81,7 @@ use crate::processor::processor_service::pop_buffer_merge_service::PopBufferMerg
 
 const BORN_TIME: &str = "bornTime";
 
-pub struct PopMessageProcessor<MS> {
+pub struct PopMessageProcessor<MS: MessageStore> {
     ck_message_number: AtomicI64,
     pop_long_polling_service: ArcMut<PopLongPollingService<MS, PopMessageProcessor<MS>>>,
     pop_buffer_merge_service: ArcMut<PopBufferMergeService<MS>>,
@@ -1475,7 +1475,7 @@ where
     }
 }
 
-impl<MS> PopMessageProcessor<MS> {
+impl<MS: MessageStore> PopMessageProcessor<MS> {
     pub fn gen_ack_unique_id(ack_msg: &dyn AckMessage) -> String {
         format!(
             "{}{}{}{}{}{}{}{}{}{}{}{}{}",

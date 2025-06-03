@@ -45,7 +45,7 @@ use crate::long_polling::polling_header::PollingHeader;
 use crate::long_polling::polling_result::PollingResult;
 use crate::long_polling::pop_request::PopRequest;
 
-pub(crate) struct PopLongPollingService<MS, RP> {
+pub(crate) struct PopLongPollingService<MS: MessageStore, RP> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     topic_cid_map: DashMap<CheetahString, DashMap<CheetahString, u8>>,
     polling_map: DashMap<CheetahString, SkipSet<Arc<PopRequest>>>,

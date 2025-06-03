@@ -34,7 +34,7 @@ use tracing::warn;
 use crate::broker_runtime::BrokerRuntimeInner;
 
 #[derive(Clone)]
-pub(super) struct SubscriptionGroupHandler<MS> {
+pub(super) struct SubscriptionGroupHandler<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 

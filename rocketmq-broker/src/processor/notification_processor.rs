@@ -40,7 +40,7 @@ use crate::long_polling::long_polling_service::pop_long_polling_service::PopLong
 use crate::long_polling::polling_header::PollingHeader;
 use crate::long_polling::polling_result::PollingResult;
 
-pub struct NotificationProcessor<MS> {
+pub struct NotificationProcessor<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     pop_long_polling_service: ArcMut<PopLongPollingService<MS, NotificationProcessor<MS>>>,
 }

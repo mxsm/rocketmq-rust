@@ -23,7 +23,7 @@ use tracing::info;
 
 use crate::base::message_store::MessageStore;
 
-pub struct BrokerStats<MS> {
+pub struct BrokerStats<MS: MessageStore> {
     default_message_store: ArcMut<MS>,
     msg_put_total_yesterday_morning: AtomicU64,
     msg_put_total_today_morning: AtomicU64,
