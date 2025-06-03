@@ -62,7 +62,7 @@ use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
 use crate::processor::default_pull_message_result_handler::DefaultPullMessageResultHandler;
 use crate::processor::pull_message_result_handler::PullMessageResultHandler;
 
-pub struct PullMessageProcessor<MS> {
+pub struct PullMessageProcessor<MS: MessageStore> {
     pull_message_result_handler: ArcMut<DefaultPullMessageResultHandler<MS>>,
     // write message to consume client runtime
     cold_data_cg_ctr_service: Arc<ColdDataCgCtrService>,

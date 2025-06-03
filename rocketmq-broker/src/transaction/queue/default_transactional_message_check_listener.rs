@@ -40,14 +40,14 @@ use crate::transaction::transactional_message_check_listener::TransactionalMessa
 
 const TCMT_QUEUE_NUMS: i32 = 1;
 
-pub struct DefaultTransactionalMessageCheckListener<MS> {
+pub struct DefaultTransactionalMessageCheckListener<MS: MessageStore> {
     inner: TransactionalMessageCheckListenerInner<MS>,
     // topic_config_manager: TopicConfigManager,
     //message_store: ArcMut<MS>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
-impl<MS> Clone for DefaultTransactionalMessageCheckListener<MS> {
+impl<MS: MessageStore> Clone for DefaultTransactionalMessageCheckListener<MS> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
@@ -138,12 +138,20 @@ where
     }
 }
 
-#[derive(Clone)]
-struct TransactionalMessageCheckListenerInner<MS> {
+struct TransactionalMessageCheckListenerInner<MS: MessageStore> {
     //broker_config: Arc<BrokerConfig>,
     //producer_manager: Arc<ProducerManager>,
     broker_client: ArcMut<Broker2Client>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+}
+
+impl<MS: MessageStore> Clone for TransactionalMessageCheckListenerInner<MS> {
+    fn clone(&self) -> Self {
+        Self {
+            broker_client: self.broker_client.clone(),
+            broker_runtime_inner: self.broker_runtime_inner.clone(),
+        }
+    }
 }
 
 impl<MS: MessageStore> TransactionalMessageCheckListenerInner<MS> {

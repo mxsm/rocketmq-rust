@@ -45,7 +45,7 @@ use tracing::warn;
 use crate::broker_path_config_helper::get_topic_config_path;
 use crate::broker_runtime::BrokerRuntimeInner;
 
-pub(crate) struct TopicConfigManager<MS> {
+pub(crate) struct TopicConfigManager<MS: MessageStore> {
     topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
     data_version: ArcMut<DataVersion>,
     topic_config_table_lock: Arc<parking_lot::ReentrantMutex<()>>,

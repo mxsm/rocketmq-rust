@@ -35,7 +35,7 @@ use crate::processor::pull_message_processor::PullMessageProcessor;
 
 const TOPIC_QUEUE_ID_SEPARATOR: &str = "@";
 
-pub struct PullRequestHoldService<MS> {
+pub struct PullRequestHoldService<MS: MessageStore> {
     pull_request_table: Arc<parking_lot::RwLock<HashMap<String, ManyPullRequest>>>,
     pull_message_processor: ArcMut<PullMessageProcessor<MS>>,
     //message_store: ArcMut<MS>,

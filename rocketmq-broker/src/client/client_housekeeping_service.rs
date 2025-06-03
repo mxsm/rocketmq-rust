@@ -25,12 +25,12 @@ use tokio::sync::Notify;
 
 use crate::broker_runtime::BrokerRuntimeInner;
 
-pub struct ClientHousekeepingService<MS> {
+pub struct ClientHousekeepingService<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     shutdown: Arc<Notify>,
 }
 
-impl<MS> Clone for ClientHousekeepingService<MS> {
+impl<MS: MessageStore> Clone for ClientHousekeepingService<MS> {
     fn clone(&self) -> Self {
         Self {
             broker_runtime_inner: self.broker_runtime_inner.clone(),

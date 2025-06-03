@@ -25,7 +25,7 @@ use tracing::warn;
 use crate::broker_runtime::BrokerRuntimeInner;
 use crate::util::hook_utils::HookUtils;
 
-pub struct ScheduleMessageHook<MS> {
+pub struct ScheduleMessageHook<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 

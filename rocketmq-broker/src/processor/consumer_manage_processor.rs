@@ -35,7 +35,7 @@ use tracing::warn;
 
 use crate::broker_runtime::BrokerRuntimeInner;
 
-pub struct ConsumerManageProcessor<MS> {
+pub struct ConsumerManageProcessor<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 

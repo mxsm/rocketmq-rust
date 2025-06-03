@@ -38,7 +38,7 @@ use tracing::warn;
 use crate::broker_runtime::BrokerRuntimeInner;
 
 #[derive(Clone)]
-pub(super) struct BatchMqHandler<MS> {
+pub(super) struct BatchMqHandler<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 

@@ -14,50 +14,45 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::future::Future;
+
 use std::time::Duration;
 use std::time::Instant;
 
-use rocketmq_common::TimeUtils::get_current_millis;
-use rocketmq_rust::service_task;
 use rocketmq_rust::task::service_task::ServiceTask;
+use rocketmq_rust::task::service_task::ServiceTaskContext;
 use rocketmq_rust::task::ServiceTaskImpl;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
-use tracing::error;
 use tracing::info;
 
 use crate::broker_runtime::BrokerRuntimeInner;
 use crate::transaction::transactional_message_service::TransactionalMessageService;
 
-pub struct TransactionalMessageCheckService<MS> {
-    pub(crate) broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+pub struct TransactionalMessageCheckService<MS: MessageStore> {
+    task_impl: ServiceTaskImpl<TransactionalMessageCheckServiceInner<MS>>,
 }
 
-impl<MS> Clone for TransactionalMessageCheckService<MS> {
-    fn clone(&self) -> Self {
-        TransactionalMessageCheckService {
-            broker_runtime_inner: self.broker_runtime_inner.clone(),
-        }
-    }
+struct TransactionalMessageCheckServiceInner<MS: MessageStore> {
+    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
-impl<MS: MessageStore> ServiceTask for TransactionalMessageCheckService<MS> {
+impl<MS: MessageStore> ServiceTask for TransactionalMessageCheckServiceInner<MS> {
     fn get_service_name(&self) -> String {
         "TransactionalMessageCheckService".into()
     }
 
-    async fn run(&self) {
+    async fn run(&self, context: &ServiceTaskContext) {
         info!("Starting transactional check service");
-        let service = self.clone();
-        let task_impl = ServiceTaskImpl::new(service);
 
-        while !task_impl.is_stopped() {
+        while !context.is_stopped() {
             let transaction_check_interval = self
                 .broker_runtime_inner
                 .broker_config()
                 .transaction_check_interval;
-            task_impl.wait_for_running(Duration::from_millis(transaction_check_interval));
+            context
+                .wait_for_running(Duration::from_millis(transaction_check_interval))
+                .await;
+            self.on_wait_end().await;
         }
         info!("Transactional check service stopped");
     }
@@ -98,17 +93,26 @@ impl<MS: MessageStore> ServiceTask for TransactionalMessageCheckService<MS> {
 
 impl<MS: MessageStore> TransactionalMessageCheckService<MS> {
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        TransactionalMessageCheckService {
+        let task_impl = ServiceTaskImpl::new(TransactionalMessageCheckServiceInner {
             broker_runtime_inner,
-        }
+        });
+        TransactionalMessageCheckService { task_impl }
     }
 }
 
 impl<MS: MessageStore> TransactionalMessageCheckService<MS> {
-    pub fn start(&mut self) {
-        error!("TransactionalMessageCheckService start not implemented");
+    pub async fn start(&mut self) {
+        self.task_impl.start().await.unwrap();
     }
-    pub fn shutdown(&mut self) {
-        error!("TransactionalMessageCheckService shutdown not implemented");
+
+    pub async fn shutdown(&mut self) {
+        self.task_impl.shutdown().await.unwrap();
+    }
+
+    pub async fn shutdown_interrupt(&mut self, interrupt: bool) {
+        self.task_impl
+            .shutdown_with_interrupt(interrupt)
+            .await
+            .unwrap();
     }
 }

@@ -39,7 +39,7 @@ use tracing::info;
 use crate::broker_runtime::BrokerRuntimeInner;
 use crate::client::client_channel_info::ClientChannelInfo;
 
-pub struct ClientManageProcessor<MS> {
+pub struct ClientManageProcessor<MS: MessageStore> {
     consumer_group_heartbeat_table: Arc<
         parking_lot::RwLock<
             HashMap<CheetahString /* ConsumerGroup */, i32 /* HeartbeatFingerprint */>,

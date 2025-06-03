@@ -46,7 +46,7 @@ use crate::mqtrace::send_message_context::SendMessageContext;
 use crate::processor::send_message_processor::Inner;
 use crate::transaction::transactional_message_service::TransactionalMessageService;
 
-pub struct ReplyMessageProcessor<MS, TS> {
+pub struct ReplyMessageProcessor<MS: MessageStore, TS> {
     inner: Inner<MS, TS>,
 }
 

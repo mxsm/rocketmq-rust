@@ -38,11 +38,11 @@ use tracing::warn;
 use crate::broker_runtime::BrokerRuntimeInner;
 
 #[derive(Clone)]
-pub(super) struct ConsumerRequestHandler<MS> {
+pub(super) struct ConsumerRequestHandler<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
-impl<MS> ConsumerRequestHandler<MS> {
+impl<MS: MessageStore> ConsumerRequestHandler<MS> {
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
         Self {
             broker_runtime_inner,

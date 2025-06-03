@@ -32,11 +32,11 @@ use sysinfo::Disks;
 use crate::broker_runtime::BrokerRuntimeInner;
 
 #[derive(Clone)]
-pub(super) struct BrokerConfigRequestHandler<MS> {
+pub(super) struct BrokerConfigRequestHandler<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
-impl<MS> BrokerConfigRequestHandler<MS> {
+impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
         BrokerConfigRequestHandler {
             broker_runtime_inner,

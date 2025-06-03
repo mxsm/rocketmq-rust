@@ -34,11 +34,11 @@ use rocketmq_store::base::message_store::MessageStore;
 use crate::broker_runtime::BrokerRuntimeInner;
 
 #[derive(Clone)]
-pub(super) struct OffsetRequestHandler<MS> {
+pub(super) struct OffsetRequestHandler<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
-impl<MS> OffsetRequestHandler<MS> {
+impl<MS: MessageStore> OffsetRequestHandler<MS> {
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
         Self {
             broker_runtime_inner,

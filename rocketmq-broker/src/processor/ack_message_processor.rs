@@ -53,7 +53,7 @@ use crate::broker_runtime::BrokerRuntimeInner;
 use crate::processor::pop_message_processor::PopMessageProcessor;
 use crate::processor::processor_service::pop_revive_service::PopReviveService;
 
-pub struct AckMessageProcessor<MS> {
+pub struct AckMessageProcessor<MS: MessageStore> {
     pop_message_processor: ArcMut<PopMessageProcessor<MS>>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     revive_topic: CheetahString,

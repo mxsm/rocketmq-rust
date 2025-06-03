@@ -57,7 +57,7 @@ use tracing::warn;
 use crate::broker_runtime::BrokerRuntimeInner;
 use crate::processor::pop_message_processor::PopMessageProcessor;
 
-pub struct PopReviveService<MS> {
+pub struct PopReviveService<MS: MessageStore> {
     ck_rewrite_intervals_in_seconds: [i32; 17],
     queue_id: i32,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,

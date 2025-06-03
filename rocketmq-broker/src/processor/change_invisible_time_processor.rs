@@ -45,7 +45,7 @@ use tracing::info;
 use crate::broker_runtime::BrokerRuntimeInner;
 use crate::processor::pop_message_processor::PopMessageProcessor;
 
-pub struct ChangeInvisibleTimeProcessor<MS> {
+pub struct ChangeInvisibleTimeProcessor<MS: MessageStore> {
     // broker_config: Arc<BrokerConfig>,
     // topic_config_manager: TopicConfigManager,
     //  message_store: ArcMut<MS>,

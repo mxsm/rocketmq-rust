@@ -85,7 +85,7 @@ const DEFAULT_PULL_TIMEOUT_MILLIS: u64 = 10_000;
 ///
 /// **Note:** The specific configuration and usage methods may vary depending on the version of
 /// RocketMQ. Please refer to the official documentation for the most accurate information.
-pub(crate) struct EscapeBridge<MS> {
+pub(crate) struct EscapeBridge<MS: MessageStore> {
     inner_producer_group_name: CheetahString,
     inner_consumer_group_name: CheetahString,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,

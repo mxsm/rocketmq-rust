@@ -50,7 +50,7 @@ use tracing::error;
 use crate::broker_runtime::BrokerRuntimeInner;
 use crate::transaction::queue::transactional_message_util::TransactionalMessageUtil;
 
-pub struct TransactionalMessageBridge<MS> {
+pub struct TransactionalMessageBridge<MS: MessageStore> {
     pub(crate) op_queue_map: Arc<Mutex<HashMap<i32, MessageQueue>>>,
     pub(crate) store_host: SocketAddr,
     pub(crate) broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,

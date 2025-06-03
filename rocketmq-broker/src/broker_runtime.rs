@@ -355,7 +355,7 @@ impl BrokerRuntime {
         if let Some(transactional_message_check_service) =
             self.inner.transactional_message_check_service.as_mut()
         {
-            transactional_message_check_service.shutdown();
+            transactional_message_check_service.shutdown().await;
         }
         if let Some(transaction_metrics_flush_service) =
             self.inner.transaction_metrics_flush_service.as_mut()
@@ -897,7 +897,7 @@ impl BrokerRuntime {
         {
             let is_master =
                 self.inner.broker_config.broker_identity.broker_id == mix_all::MASTER_ID;
-            self.inner.change_special_service_status(is_master);
+            self.inner.change_special_service_status(is_master).await;
             self.register_broker_all(true, false, true).await;
         }
 
@@ -1039,7 +1039,7 @@ impl BrokerRuntime {
                 .get_canonical_name()
         );
         let is_master = self.inner.broker_config.broker_identity.broker_id == mix_all::MASTER_ID;
-        self.inner.change_special_service_status(is_master);
+        self.inner.change_special_service_status(is_master).await;
         self.register_broker_all(true, false, self.inner.broker_config.force_register)
             .await;
         self.inner.is_isolated.store(false, Ordering::Release);
@@ -1237,7 +1237,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     topic_config_manager: TopicConfigManager,
     producer_manager: Arc<ProducerManager>,
 }*/
-struct ProducerStateGetter<MS> {
+struct ProducerStateGetter<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 impl<MS: MessageStore> StateGetter for ProducerStateGetter<MS> {
@@ -1269,7 +1269,7 @@ impl<MS: MessageStore> StateGetter for ProducerStateGetter<MS> {
     topic_config_manager: TopicConfigManager,
     consumer_manager: Arc<ConsumerManager>,
 }*/
-struct ConsumerStateGetter<MS> {
+struct ConsumerStateGetter<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
@@ -1306,7 +1306,7 @@ impl<MS: MessageStore> StateGetter for ConsumerStateGetter<MS> {
     }
 }
 
-pub(crate) struct BrokerRuntimeInner<MS> {
+pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     shutdown: Arc<AtomicBool>,
     store_host: SocketAddr,
     broker_addr: CheetahString,
@@ -1353,8 +1353,7 @@ pub(crate) struct BrokerRuntimeInner<MS> {
     ack_message_processor: Option<ArcMut<AckMessageProcessor<MS>>>,
     notification_processor: Option<ArcMut<NotificationProcessor<MS>>>,
     broker_attached_plugins: Vec<Arc<dyn BrokerAttachedPlugin>>,
-    transactional_message_service:
-        Option<ArcMut<DefaultTransactionalMessageService<LocalFileMessageStore>>>,
+    transactional_message_service: Option<ArcMut<DefaultTransactionalMessageService<MS>>>,
 }
 
 impl<MS: MessageStore> BrokerRuntimeInner<MS> {
@@ -1510,7 +1509,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     #[inline]
     pub fn transactional_message_service_mut(
         &mut self,
-    ) -> &mut Option<DefaultTransactionalMessageService<MS>> {
+    ) -> &mut Option<ArcMut<DefaultTransactionalMessageService<MS>>> {
         &mut self.transactional_message_service
     }
 
@@ -2187,12 +2186,13 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         unsafe { self.notification_processor.as_ref().unwrap_unchecked() }
     }
 
-    pub fn change_special_service_status(&mut self, should_start: bool) {
+    pub async fn change_special_service_status(&mut self, should_start: bool) {
         for plugin in self.broker_attached_plugins.iter() {
             plugin.status_changed(should_start);
         }
         self.change_schedule_service_status(should_start);
-        self.change_transaction_check_service_status(should_start);
+        self.change_transaction_check_service_status(should_start)
+            .await;
 
         if let Some(ack_message_processor) = &mut self.ack_message_processor {
             info!("Set PopReviveService Status to {}", should_start);
@@ -2221,7 +2221,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         }
     }
 
-    pub fn change_transaction_check_service_status(&mut self, should_start: bool) {
+    pub async fn change_transaction_check_service_status(&mut self, should_start: bool) {
         if self
             .is_transaction_check_service_start
             .load(Ordering::Relaxed)
@@ -2232,12 +2232,14 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                 if let Some(transactional_message_check_service) =
                     &mut self.transactional_message_check_service
                 {
-                    transactional_message_check_service.start();
+                    transactional_message_check_service.start().await;
                 }
             } else if let Some(transactional_message_check_service) =
                 &mut self.transactional_message_check_service
             {
-                transactional_message_check_service.shutdown();
+                transactional_message_check_service
+                    .shutdown_interrupt(true)
+                    .await;
             }
 
             self.is_transaction_check_service_start
