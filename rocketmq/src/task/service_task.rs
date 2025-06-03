@@ -27,13 +27,68 @@ use tokio::time::timeout;
 use tracing::info;
 use tracing::warn;
 
+/// Service thread context that gets passed to the service
+/// This contains all the control mechanisms
+pub struct ServiceTaskContext {
+    /// Wait point for notifications
+    wait_point: Arc<Notify>,
+    /// Notification flag
+    has_notified: Arc<AtomicBool>,
+    /// Stop flag
+    stopped: Arc<AtomicBool>,
+}
+
+impl ServiceTaskContext {
+    pub fn new(
+        wait_point: Arc<Notify>,
+        has_notified: Arc<AtomicBool>,
+        stopped: Arc<AtomicBool>,
+    ) -> Self {
+        Self {
+            wait_point,
+            has_notified,
+            stopped,
+        }
+    }
+
+    /// Check if service is stopped
+    pub fn is_stopped(&self) -> bool {
+        self.stopped.load(Ordering::Acquire)
+    }
+
+    /// Wait for running with interval
+    pub async fn wait_for_running(&self, interval: Duration) -> bool {
+        // Check if already notified
+        if self
+            .has_notified
+            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            return true; // Should call on_wait_end
+        }
+
+        // Entry to wait
+        match timeout(interval, self.wait_point.notified()).await {
+            Ok(_) => {
+                // Notified
+            }
+            Err(_) => {
+                // Timeout occurred - this is normal behavior
+            }
+        }
+        // Reset notification flag
+        self.has_notified.store(false, Ordering::Release);
+        true // Should call on_wait_end
+    }
+}
+
 #[trait_variant::make(ServiceTask: Send)]
 pub trait ServiceTaskInner: Sync {
     /// Get the service name
     fn get_service_name(&self) -> String;
 
     /// Main run method - implement the service logic here
-    async fn run(&self);
+    async fn run(&self, context: &ServiceTaskContext);
 
     /// Called when wait ends - override for custom behavior
     async fn on_wait_end(&self);
@@ -168,7 +223,7 @@ impl<T: ServiceTask + 'static> ServiceTaskImpl<T> {
         stopped: Arc<AtomicBool>,
         started: Arc<AtomicBool>,
         has_notified: Arc<AtomicBool>,
-        _wait_point: Arc<Notify>,
+        wait_point: Arc<Notify>,
     ) {
         let service_name = service.get_service_name();
         info!("Service thread {} is running", service_name);
@@ -178,9 +233,11 @@ impl<T: ServiceTask + 'static> ServiceTaskImpl<T> {
             let mut state_guard = state.write().await;
             *state_guard = ServiceState::Running;
         }
-
+        // Create context for the service
+        let context =
+            ServiceTaskContext::new(wait_point.clone(), has_notified.clone(), stopped.clone());
         // Run the service
-        service.run().await;
+        service.run(&context).await;
 
         // Clean up after run completes
         started.store(false, Ordering::Release);
@@ -240,18 +297,13 @@ impl<T: ServiceTask + 'static> ServiceTaskImpl<T> {
         // Wait for the task to complete
         let join_time = self.service.get_join_time();
         let result = if !self.is_daemon() {
-            let handle_guard = self.task_handle.read().await;
-            if let Some(ref handle) = *handle_guard {
+            let mut handle_guard = self.task_handle.write().await;
+            if let Some(handle) = handle_guard.take() {
                 if interrupt {
                     handle.abort();
                     Ok(())
                 } else {
-                    match timeout(join_time, async {
-                        // We can't await a reference to JoinHandle, so we need to work around this
-                        // In a real implementation, you might need to restructure this
-                    })
-                    .await
-                    {
+                    match timeout(join_time, handle).await {
                         Ok(_) => Ok(()),
                         Err(_) => {
                             warn!("Service thread {} shutdown timeout", service_name);
@@ -384,13 +436,11 @@ mod tests {
             "ExampleTransactionCheckService".to_string()
         }
 
-        async fn run(&self) {
+        async fn run(&self, context: &ServiceTaskContext) {
             info!("Start transaction check service thread!");
 
-            let service_impl = ServiceTaskImpl::new(self.clone());
-
-            while !service_impl.is_stopped() {
-                service_impl.wait_for_running(self.check_interval).await;
+            while !context.is_stopped() {
+                context.wait_for_running(self.check_interval).await;
             }
 
             info!("End transaction check service thread!");
@@ -454,29 +504,31 @@ mod tests {
             self.name.clone()
         }
 
-        async fn run(&self) {
-            info!("TestService {} starting", self.name);
+        async fn run(&self, context: &ServiceTaskContext) {
+            println!(
+                "TestService {} starting {}",
+                self.name,
+                context.is_stopped()
+            );
 
-            let service_impl = ServiceTaskImpl::new(self.clone());
             let mut counter = 0;
 
-            while !service_impl.is_stopped() && counter < 5 {
-                service_impl
-                    .wait_for_running(Duration::from_millis(100))
-                    .await;
+            while !context.is_stopped() && counter < 5 {
+                context.wait_for_running(Duration::from_millis(100)).await;
+                println!("TestService {} running iteration {}", self.name, counter);
                 counter += 1;
             }
 
-            info!(
+            println!(
                 "TestService {} finished after {} iterations",
                 self.name, counter
             );
         }
 
         async fn on_wait_end(&self) {
-            info!("TestService {} performing work", self.name);
+            println!("TestService {} performing work", self.name);
             sleep(self.work_duration).await;
-            info!("TestService {} work completed", self.name);
+            println!("TestService {} work completed", self.name);
         }
     }
 
