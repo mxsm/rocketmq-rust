@@ -81,7 +81,7 @@ impl PullCallback for DefaultPullCallback {
                     .pull_result
                     .msg_found_list
                     .as_ref()
-                    .map_or(true, |v| v.is_empty())
+                    .is_none_or(|v| v.is_empty())
                 {
                     push_consumer_impl
                         .execute_pull_request_immediately(pull_request)

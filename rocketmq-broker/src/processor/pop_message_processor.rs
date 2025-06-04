@@ -196,7 +196,7 @@ where
         if request
             .get_ext_fields()
             .and_then(|fields| fields.get(BORN_TIME).cloned())
-            .map_or(true, |old| old == "0")
+            .is_none_or(|old| old == "0")
         {
             request.add_ext_field(
                 CheetahString::from_static_str(BORN_TIME),

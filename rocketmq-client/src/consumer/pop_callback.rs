@@ -111,7 +111,7 @@ impl PopCallback for DefaultPopCallback {
                 if pop_result
                     .msg_found_list
                     .as_ref()
-                    .map_or(true, |value| value.is_empty())
+                    .is_none_or(|value| value.is_empty())
                 {
                     push_consumer_impl
                         .execute_pop_request_immediately(pop_request)
