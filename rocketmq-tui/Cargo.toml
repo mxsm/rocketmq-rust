@@ -10,6 +10,7 @@ keywords = ["tui", "terminal", "dashboard", "rocketmq", "tools"]
 categories = ["development-tools", "command-line-interface"]
 readme = "README.md"
 description = "A RocketMQ Rust terminal command management tool implemented based on Ratatui."
+rust-version.workspace = true
 
 [dependencies]
 rocketmq-rust = { workspace = true }

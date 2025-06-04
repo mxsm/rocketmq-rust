@@ -9,6 +9,7 @@ license.workspace = true
 keywords.workspace = true
 readme = "README.md"
 description.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 rocketmq-rust = { workspace = true }

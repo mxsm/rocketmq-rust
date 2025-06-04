@@ -10,6 +10,7 @@ keywords = ["rocketmq", "cli", "tools"]
 readme = "README.md"
 description = "Provide some command-line tools to read data from RocketMQ files"
 categories = ["development-tools"]
+rust-version.workspace = true
 
 [dependencies]
 rocketmq-common = { workspace = true }

@@ -233,9 +233,9 @@ where
             return Ok(None);
         }
         let topic_publish_info = topic_publish_info.unwrap();
-        let _mq_selected = if !broker_name_to_send
+        let _mq_selected = if broker_name_to_send
             .as_ref()
-            .is_some_and(|value| !value.is_empty())
+            .is_none_or(|value| !value.is_empty())
         {
             let mq = topic_publish_info
                 .select_one_message_queue_by_broker(broker_name_to_send.as_ref())
