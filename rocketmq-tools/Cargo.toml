@@ -10,6 +10,7 @@ keywords = ["apache-rocketmq", "rocketmq-rust", "apache", "rust", "rocketmq-tool
 categories = ["command-line-utilities", "parsing"]
 readme = "README.md"
 description = "Rust implementation of Apache RocketMQ tools"
+rust-version.workspace = true
 
 [dependencies]
 rocketmq-common = { workspace = true }

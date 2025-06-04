@@ -10,7 +10,7 @@ keywords = ["rocketmq-rust", "async", "non-blocking", "futures", "rocketmq"]
 categories = ["asynchronous", "network-programming"]
 description = "Rust implementation of Apache rocketmq remoting"
 readme = "README.md"
-
+rust-version.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]

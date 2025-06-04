@@ -55,7 +55,7 @@ language.
 
 ### Requirements
 
-1. rust toolchain MSRV is 1.75.(stable,nightly)
+1. rust toolchain MSRV is 1.85.0(stable,nightly)
 
 ### Run name server
 
