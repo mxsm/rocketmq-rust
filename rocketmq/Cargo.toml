@@ -16,5 +16,23 @@ rust-version.workspace = true
 [dependencies]
 tokio.workspace = true
 tracing.workspace = true
+tracing-subscriber.workspace = true
 trait-variant = { workspace = true }
 rocketmq-error = { workspace = true }
+
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+cron = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tokio-test = "0.4"
+
+[[example]]
+name = "basic_usage"
+path = "examples/basic_usage.rs"
+
+[[example]]
+name = "advanced_usage"
+path = "examples/advanced_usage.rs"
