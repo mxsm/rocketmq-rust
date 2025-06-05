@@ -23,8 +23,11 @@ pub mod count_down_latch;
 mod netty_rust;
 pub use netty_rust::timer::Timer;
 pub mod rocketmq_tokio_lock;
+
 mod shutdown;
 pub mod task;
+
+pub mod schedule;
 
 pub use arc_mut::ArcMut;
 pub use arc_mut::SyncUnsafeCellWrapper;
@@ -35,6 +38,18 @@ pub use count_down_latch::CountDownLatch;
 pub use rocketmq::main;
 pub use rocketmq_tokio_lock::RocketMQTokioMutex;
 pub use rocketmq_tokio_lock::RocketMQTokioRwLock;
+pub use schedule::executor::ExecutorPool;
+pub use schedule::executor::TaskExecutor;
+pub use schedule::scheduler::SchedulerConfig;
+pub use schedule::scheduler::TaskScheduler;
+pub use schedule::task::Task;
+pub use schedule::task::TaskContext;
+pub use schedule::task::TaskResult;
+pub use schedule::task::TaskStatus;
+pub use schedule::trigger::CronTrigger;
+pub use schedule::trigger::DelayTrigger;
+pub use schedule::trigger::IntervalTrigger;
+pub use schedule::trigger::Trigger;
 pub use shutdown::Shutdown;
 /// Re-export tokio module.
 pub use tokio as rocketmq;
