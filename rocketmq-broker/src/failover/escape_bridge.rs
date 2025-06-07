@@ -469,7 +469,7 @@ where
         queue_id: i32,
         broker_name: &CheetahString,
         de_compress_body: bool,
-    ) -> BoxFuture<(Option<MessageExt>, String, bool)> {
+    ) -> BoxFuture<'_, (Option<MessageExt>, String, bool)> {
         let message_store = self.broker_runtime_inner.message_store().clone().unwrap();
         let inner_consumer_group_name = self.inner_consumer_group_name.clone();
         let topic = topic.clone();
@@ -532,7 +532,7 @@ where
         offset: i64,
         queue_id: i32,
         broker_name: &CheetahString,
-    ) -> BoxFuture<(Option<MessageExt>, String, bool)> {
+    ) -> BoxFuture<'_, (Option<MessageExt>, String, bool)> {
         /* let topic_route_info_manager = self.topic_route_info_manager.clone();
         let broker_outer_api = self.broker_outer_api.clone();*/
         let broker_runtime_inner_ = self.broker_runtime_inner.clone();
