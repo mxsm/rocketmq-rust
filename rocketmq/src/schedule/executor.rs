@@ -213,6 +213,64 @@ impl TaskExecutor {
             .run_task_internal(task, execution_id, scheduled_time)
             .await;
     }
+
+    pub async fn execute_task_with_delay(
+        &self,
+        task: Arc<Task>,
+        scheduled_time: SystemTime,
+        execution_delay: Option<Duration>,
+    ) -> Result<String, SchedulerError> {
+        let execution_id = Uuid::new_v4().to_string();
+        let mut execution = TaskExecution::new(task.id.clone(), scheduled_time);
+        execution.execution_id = execution_id.clone();
+
+        // Calculate actual execution time considering delay
+        let actual_execution_time = if let Some(delay) = execution_delay.or(task.execution_delay) {
+            scheduled_time + delay
+        } else {
+            scheduled_time
+        };
+
+        // Store execution record
+        {
+            let mut executions = self.executions.write().await;
+            executions.insert(execution_id.clone(), execution.clone());
+        }
+
+        // Clone necessary data for the task
+        let executor = self.clone_for_task();
+        let task_clone = task.clone();
+        let execution_id_clone = execution_id.clone();
+
+        // Spawn the delayed task execution
+        let handle = tokio::spawn(async move {
+            // Wait until actual execution time
+            let now = SystemTime::now();
+            if actual_execution_time > now {
+                if let Ok(delay_duration) = actual_execution_time.duration_since(now) {
+                    tokio::time::sleep(delay_duration).await;
+                }
+            }
+
+            executor
+                .run_task_internal(task_clone, execution_id_clone, actual_execution_time)
+                .await;
+        });
+
+        // Store the handle
+        {
+            let mut running_tasks = self.running_tasks.write().await;
+            running_tasks.insert(execution_id.clone(), handle);
+        }
+
+        info!(
+            "Task scheduled for delayed execution: {} ({}) - delay: {:?}",
+            task.name,
+            execution_id,
+            execution_delay.or(task.execution_delay)
+        );
+        Ok(execution_id)
+    }
 }
 
 // Internal executor for task execution
