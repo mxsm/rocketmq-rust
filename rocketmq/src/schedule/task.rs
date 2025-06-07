@@ -94,6 +94,8 @@ pub struct Task {
     pub max_retry: u32,
     pub timeout: Option<Duration>,
     pub enabled: bool,
+    pub initial_delay: Option<Duration>,
+    pub execution_delay: Option<Duration>,
     executor: Arc<TaskFn>,
     metadata: HashMap<String, String>,
 }
@@ -118,9 +120,23 @@ impl Task {
             max_retry: 0,
             timeout: None,
             enabled: true,
+            initial_delay: None,
+            execution_delay: None,
             executor,
             metadata: HashMap::new(),
         }
+    }
+
+    /// Set initial delay before first execution
+    pub fn with_initial_delay(mut self, delay: Duration) -> Self {
+        self.initial_delay = Some(delay);
+        self
+    }
+
+    /// Set delay before each execution
+    pub fn with_execution_delay(mut self, delay: Duration) -> Self {
+        self.execution_delay = Some(delay);
+        self
     }
 
     pub fn with_description(mut self, description: impl Into<String>) -> Self {

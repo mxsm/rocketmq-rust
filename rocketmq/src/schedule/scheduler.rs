@@ -27,11 +27,13 @@ use uuid::Uuid;
 
 use crate::schedule::executor::ExecutorConfig;
 use crate::schedule::task::TaskExecution;
+use crate::schedule::trigger::DelayedIntervalTrigger;
 use crate::schedule::trigger::Trigger;
 use crate::schedule::ExecutorPool;
 use crate::schedule::SchedulerError;
 use crate::schedule::SchedulerResult;
 use crate::schedule::Task;
+use crate::DelayTrigger;
 
 /// Scheduler configuration
 #[derive(Debug, Clone)]
@@ -296,6 +298,76 @@ impl TaskScheduler {
             let executor = self.executor_pool.get_executor().await;
             let execution_id = executor.execute_task(job.task, SystemTime::now()).await?;
             info!("Job executed immediately: {} ({})", job_id, execution_id);
+            Ok(execution_id)
+        } else {
+            Err(SchedulerError::TaskNotFound(job_id.to_string()))
+        }
+    }
+
+    /// Schedule a delayed job (execute once after delay)
+    pub async fn schedule_delayed_job(
+        &self,
+        task: Arc<Task>,
+        delay: Duration,
+    ) -> SchedulerResult<String> {
+        let trigger = Arc::new(DelayTrigger::new(delay));
+        self.schedule_job(task, trigger).await
+    }
+
+    /// Schedule a delayed job with specific ID
+    pub async fn schedule_delayed_job_with_id(
+        &self,
+        job_id: impl Into<String>,
+        task: Arc<Task>,
+        delay: Duration,
+    ) -> SchedulerResult<String> {
+        let trigger = Arc::new(DelayTrigger::new(delay));
+        self.schedule_job_with_id(job_id, task, trigger).await
+    }
+
+    /// Schedule an interval job with initial delay
+    pub async fn schedule_interval_job_with_delay(
+        &self,
+        task: Arc<Task>,
+        interval: Duration,
+        initial_delay: Duration,
+    ) -> SchedulerResult<String> {
+        let trigger = Arc::new(DelayedIntervalTrigger::new(interval, initial_delay));
+        self.schedule_job(task, trigger).await
+    }
+
+    /// Schedule an interval job with initial delay and specific ID
+    pub async fn schedule_interval_job_with_delay_and_id(
+        &self,
+        job_id: impl Into<String>,
+        task: Arc<Task>,
+        interval: Duration,
+        initial_delay: Duration,
+    ) -> SchedulerResult<String> {
+        let trigger = Arc::new(DelayedIntervalTrigger::new(interval, initial_delay));
+        self.schedule_job_with_id(job_id, task, trigger).await
+    }
+
+    /// Execute a job immediately with optional execution delay
+    pub async fn execute_job_now_with_delay(
+        &self,
+        job_id: &str,
+        execution_delay: Option<Duration>,
+    ) -> SchedulerResult<String> {
+        let job = {
+            let jobs = self.jobs.read().await;
+            jobs.get(job_id).cloned()
+        };
+
+        if let Some(job) = job {
+            let executor = self.executor_pool.get_executor().await;
+            let execution_id = executor
+                .execute_task_with_delay(job.task, SystemTime::now(), execution_delay)
+                .await?;
+            info!(
+                "Job executed immediately with delay: {} ({})",
+                job_id, execution_id
+            );
             Ok(execution_id)
         } else {
             Err(SchedulerError::TaskNotFound(job_id.to_string()))
