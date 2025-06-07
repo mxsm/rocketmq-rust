@@ -82,7 +82,7 @@ impl ServiceTaskContext {
     }
 }
 
-#[trait_variant::make(ServiceTask: Send)]
+/*#[trait_variant::make(ServiceTask: Send)]
 pub trait ServiceTaskInner: Sync {
     /// Get the service name
     fn get_service_name(&self) -> String;
@@ -92,6 +92,26 @@ pub trait ServiceTaskInner: Sync {
 
     /// Called when wait ends - override for custom behavior
     async fn on_wait_end(&self);
+
+    /// Get join time for shutdown (default 90 seconds)
+    fn get_join_time(&self) -> Duration {
+        Duration::from_millis(90_000)
+    }
+}*/
+
+pub trait ServiceTask: Sync + Send {
+    /// Get the service name
+    fn get_service_name(&self) -> String;
+
+    /// implement the service logic here
+    fn run(&self, context: &ServiceTaskContext) -> impl ::core::future::Future<Output = ()> + Send;
+
+    /// override for custom behavior
+    fn on_wait_end(&self) -> impl ::core::future::Future<Output = ()> + Send {
+        async {
+            // Default implementation does nothing
+        }
+    }
 
     /// Get join time for shutdown (default 90 seconds)
     fn get_join_time(&self) -> Duration {
