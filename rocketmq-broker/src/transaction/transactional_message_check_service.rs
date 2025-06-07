@@ -18,9 +18,9 @@
 use std::time::Duration;
 use std::time::Instant;
 
+use rocketmq_rust::task::service_task::ServiceContext;
 use rocketmq_rust::task::service_task::ServiceTask;
-use rocketmq_rust::task::service_task::ServiceTaskContext;
-use rocketmq_rust::task::ServiceTaskImpl;
+use rocketmq_rust::task::ServiceManager;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use tracing::info;
@@ -29,7 +29,7 @@ use crate::broker_runtime::BrokerRuntimeInner;
 use crate::transaction::transactional_message_service::TransactionalMessageService;
 
 pub struct TransactionalMessageCheckService<MS: MessageStore> {
-    task_impl: ServiceTaskImpl<TransactionalMessageCheckServiceInner<MS>>,
+    task_impl: ServiceManager<TransactionalMessageCheckServiceInner<MS>>,
 }
 
 struct TransactionalMessageCheckServiceInner<MS: MessageStore> {
@@ -41,7 +41,7 @@ impl<MS: MessageStore> ServiceTask for TransactionalMessageCheckServiceInner<MS>
         "TransactionalMessageCheckService".into()
     }
 
-    async fn run(&self, context: &ServiceTaskContext) {
+    async fn run(&self, context: &ServiceContext) {
         info!("Starting transactional check service");
 
         while !context.is_stopped() {
@@ -93,7 +93,7 @@ impl<MS: MessageStore> ServiceTask for TransactionalMessageCheckServiceInner<MS>
 
 impl<MS: MessageStore> TransactionalMessageCheckService<MS> {
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        let task_impl = ServiceTaskImpl::new(TransactionalMessageCheckServiceInner {
+        let task_impl = ServiceManager::new(TransactionalMessageCheckServiceInner {
             broker_runtime_inner,
         });
         TransactionalMessageCheckService { task_impl }

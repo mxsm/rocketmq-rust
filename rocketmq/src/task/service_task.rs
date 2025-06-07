@@ -29,7 +29,7 @@ use tracing::warn;
 
 /// Service thread context that gets passed to the service
 /// This contains all the control mechanisms
-pub struct ServiceTaskContext {
+pub struct ServiceContext {
     /// Wait point for notifications
     wait_point: Arc<Notify>,
     /// Notification flag
@@ -38,7 +38,7 @@ pub struct ServiceTaskContext {
     stopped: Arc<AtomicBool>,
 }
 
-impl ServiceTaskContext {
+impl ServiceContext {
     pub fn new(
         wait_point: Arc<Notify>,
         has_notified: Arc<AtomicBool>,
@@ -104,7 +104,7 @@ pub trait ServiceTask: Sync + Send {
     fn get_service_name(&self) -> String;
 
     /// implement the service logic here
-    fn run(&self, context: &ServiceTaskContext) -> impl ::core::future::Future<Output = ()> + Send;
+    fn run(&self, context: &ServiceContext) -> impl ::core::future::Future<Output = ()> + Send;
 
     /// override for custom behavior
     fn on_wait_end(&self) -> impl ::core::future::Future<Output = ()> + Send {
@@ -120,12 +120,12 @@ pub trait ServiceTask: Sync + Send {
 }
 
 /// Service thread implementation with lifecycle management
-pub struct ServiceTaskImpl<T: ServiceTask + 'static> {
+pub struct ServiceManager<T: ServiceTask + 'static> {
     /// The actual service implementation
     service: Arc<T>,
 
     /// Thread state management
-    state: Arc<RwLock<ServiceState>>,
+    state: Arc<RwLock<ServiceLifecycle>>,
 
     /// Stop flag
     stopped: Arc<AtomicBool>,
@@ -148,7 +148,7 @@ pub struct ServiceTaskImpl<T: ServiceTask + 'static> {
 
 /// Service state enumeration
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ServiceState {
+pub enum ServiceLifecycle {
     NotStarted,
     Starting,
     Running,
@@ -156,12 +156,12 @@ pub enum ServiceState {
     Stopped,
 }
 
-impl<T: ServiceTask + 'static> ServiceTaskImpl<T> {
+impl<T: ServiceTask + 'static> ServiceManager<T> {
     /// Create new service thread implementation
     pub fn new(service: T) -> Self {
         Self {
             service: Arc::new(service),
-            state: Arc::new(RwLock::new(ServiceState::NotStarted)),
+            state: Arc::new(RwLock::new(ServiceLifecycle::NotStarted)),
             stopped: Arc::new(AtomicBool::new(false)),
             started: Arc::new(AtomicBool::new(false)),
             has_notified: Arc::new(AtomicBool::new(false)),
@@ -179,7 +179,7 @@ impl<T: ServiceTask + 'static> ServiceTaskImpl<T> {
             "Try to start service thread: {} started: {} current_state: {:?}",
             service_name,
             self.started.load(Ordering::Acquire),
-            self.get_state().await
+            self.get_lifecycle_state().await
         );
 
         // Check if already started
@@ -195,7 +195,7 @@ impl<T: ServiceTask + 'static> ServiceTaskImpl<T> {
         // Update state
         {
             let mut state = self.state.write().await;
-            *state = ServiceState::Starting;
+            *state = ServiceLifecycle::Starting;
         }
 
         // Reset stopped flag
@@ -224,7 +224,7 @@ impl<T: ServiceTask + 'static> ServiceTaskImpl<T> {
         // Update state to running
         {
             let mut state = self.state.write().await;
-            *state = ServiceState::Running;
+            *state = ServiceLifecycle::Running;
         }
 
         info!(
@@ -239,7 +239,7 @@ impl<T: ServiceTask + 'static> ServiceTaskImpl<T> {
     /// Internal run method
     async fn run_internal(
         service: Arc<T>,
-        state: Arc<RwLock<ServiceState>>,
+        state: Arc<RwLock<ServiceLifecycle>>,
         stopped: Arc<AtomicBool>,
         started: Arc<AtomicBool>,
         has_notified: Arc<AtomicBool>,
@@ -251,11 +251,11 @@ impl<T: ServiceTask + 'static> ServiceTaskImpl<T> {
         // Set state to running
         {
             let mut state_guard = state.write().await;
-            *state_guard = ServiceState::Running;
+            *state_guard = ServiceLifecycle::Running;
         }
         // Create context for the service
         let context =
-            ServiceTaskContext::new(wait_point.clone(), has_notified.clone(), stopped.clone());
+            ServiceContext::new(wait_point.clone(), has_notified.clone(), stopped.clone());
         // Run the service
         service.run(&context).await;
 
@@ -266,7 +266,7 @@ impl<T: ServiceTask + 'static> ServiceTaskImpl<T> {
 
         {
             let mut state_guard = state.write().await;
-            *state_guard = ServiceState::Stopped;
+            *state_guard = ServiceLifecycle::Stopped;
         }
 
         info!("Service thread {} has stopped", service_name);
@@ -285,7 +285,7 @@ impl<T: ServiceTask + 'static> ServiceTaskImpl<T> {
             "Try to shutdown service thread: {} started: {} current_state: {:?}",
             service_name,
             self.started.load(Ordering::Acquire),
-            self.get_state().await
+            self.get_lifecycle_state().await
         );
 
         // Check if not started
@@ -301,7 +301,7 @@ impl<T: ServiceTask + 'static> ServiceTaskImpl<T> {
         // Update state
         {
             let mut state = self.state.write().await;
-            *state = ServiceState::Stopping;
+            *state = ServiceLifecycle::Stopping;
         }
 
         // Set stopped flag
@@ -349,7 +349,7 @@ impl<T: ServiceTask + 'static> ServiceTaskImpl<T> {
         // Update final state
         {
             let mut state = self.state.write().await;
-            *state = ServiceState::Stopped;
+            *state = ServiceLifecycle::Stopped;
         }
 
         result
@@ -418,7 +418,7 @@ impl<T: ServiceTask + 'static> ServiceTaskImpl<T> {
     }
 
     /// Get current service state
-    pub async fn get_state(&self) -> ServiceState {
+    pub async fn get_lifecycle_state(&self) -> ServiceLifecycle {
         *self.state.read().await
     }
 
@@ -434,7 +434,7 @@ mod tests {
     use tokio::time::Duration;
 
     use super::*;
-    use crate::service_task;
+    use crate::service_manager;
 
     /// Example implementation - Transaction Check Service
     pub struct ExampleTransactionCheckService {
@@ -456,7 +456,7 @@ mod tests {
             "ExampleTransactionCheckService".to_string()
         }
 
-        async fn run(&self, context: &ServiceTaskContext) {
+        async fn run(&self, context: &ServiceContext) {
             info!("Start transaction check service thread!");
 
             while !context.is_stopped() {
@@ -502,7 +502,7 @@ mod tests {
     }
 
     // Use the macro to add service thread functionality
-    service_task!(ExampleTransactionCheckService);
+    service_manager!(ExampleTransactionCheckService);
 
     #[derive(Clone)]
     struct TestService {
@@ -524,7 +524,7 @@ mod tests {
             self.name.clone()
         }
 
-        async fn run(&self, context: &ServiceTaskContext) {
+        async fn run(&self, context: &ServiceContext) {
             println!(
                 "TestService {} starting {}",
                 self.name,
@@ -552,7 +552,7 @@ mod tests {
         }
     }
 
-    service_task!(TestService);
+    service_manager!(TestService);
 
     #[tokio::test]
     async fn test_service_lifecycle() {
@@ -560,13 +560,19 @@ mod tests {
         let service_thread = service.create_service_task();
 
         // Test initial state
-        assert_eq!(service_thread.get_state().await, ServiceState::NotStarted);
+        assert_eq!(
+            service_thread.get_lifecycle_state().await,
+            ServiceLifecycle::NotStarted
+        );
         assert!(!service_thread.is_started());
         assert!(!service_thread.is_stopped());
 
         // Test start
         service_thread.start().await.unwrap();
-        assert_eq!(service_thread.get_state().await, ServiceState::Running);
+        assert_eq!(
+            service_thread.get_lifecycle_state().await,
+            ServiceLifecycle::Running
+        );
         assert!(service_thread.is_started());
         assert!(!service_thread.is_stopped());
 
@@ -579,7 +585,10 @@ mod tests {
 
         // Test shutdown
         service_thread.shutdown().await.unwrap();
-        assert_eq!(service_thread.get_state().await, ServiceState::Stopped);
+        assert_eq!(
+            service_thread.get_lifecycle_state().await,
+            ServiceLifecycle::Stopped
+        );
         assert!(!service_thread.is_started());
         assert!(service_thread.is_stopped());
     }
