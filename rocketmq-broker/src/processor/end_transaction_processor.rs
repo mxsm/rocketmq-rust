@@ -116,7 +116,7 @@ where
             response_code,
             ..
         } = if MessageSysFlag::TRANSACTION_COMMIT_TYPE == request_header.commit_or_rollback {
-            let result = self
+            let mut result = self
                 .transactional_message_service
                 .commit_message(&request_header);
             if result.response_code == ResponseCode::Success {
@@ -137,7 +137,7 @@ where
                     self.check_prepare_message(result.prepare_message.as_ref(), &request_header);
                 if ResponseCode::from(res.code()) != ResponseCode::Success {
                     let mut msg_inner =
-                        end_message_transaction(result.prepare_message.as_ref().unwrap());
+                        end_message_transaction(result.prepare_message.as_mut().unwrap());
                     msg_inner.message_ext_inner.sys_flag = MessageSysFlag::reset_transaction_value(
                         msg_inner.message_ext_inner.sys_flag,
                         request_header.commit_or_rollback,
@@ -364,7 +364,7 @@ where
     }
 }
 
-fn end_message_transaction(msg_ext: &MessageExt) -> MessageExtBrokerInner {
+fn end_message_transaction(msg_ext: &mut MessageExt) -> MessageExtBrokerInner {
     let mut msg_inner = MessageExtBrokerInner::default();
     msg_inner.set_topic(
         msg_ext
@@ -380,8 +380,8 @@ fn end_message_transaction(msg_ext: &MessageExt) -> MessageExtBrokerInner {
         .unwrap_or_default()
         .parse()
         .unwrap_or_default();
-    if let Some(body) = msg_ext.get_body() {
-        msg_inner.set_body(body.clone());
+    if let Some(body) = msg_ext.take_body() {
+        msg_inner.set_body(body);
     }
     msg_inner.set_flag(msg_ext.get_flag());
     msg_inner.message_ext_inner.born_timestamp = msg_ext.born_timestamp;
@@ -423,8 +423,8 @@ mod tests {
 
     #[test]
     fn end_message_transaction_with_valid_message() {
-        let msg_ext = MessageExt::default();
-        let msg_inner = end_message_transaction(&msg_ext);
+        let mut msg_ext = MessageExt::default();
+        let msg_inner = end_message_transaction(&mut msg_ext);
         assert_eq!(
             msg_inner.get_topic(),
             &msg_ext
@@ -481,9 +481,9 @@ mod tests {
 
     #[test]
     fn end_message_transaction_with_empty_body() {
-        let msg_ext = MessageExt::default();
+        let mut msg_ext = MessageExt::default();
         //msg_ext.set_body(None);
-        let msg_inner = end_message_transaction(&msg_ext);
+        let msg_inner = end_message_transaction(&mut msg_ext);
         assert!(!msg_inner.get_body().is_some_and(|b| b.is_empty()));
     }
 
@@ -498,7 +498,7 @@ mod tests {
             CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID),
             CheetahString::empty(),
         );
-        let msg_inner = end_message_transaction(&msg_ext);
+        let msg_inner = end_message_transaction(&mut msg_ext);
         assert!(msg_inner.get_topic().is_empty());
         assert_eq!(msg_inner.message_ext_inner.queue_id, 0);
     }
