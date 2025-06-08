@@ -370,19 +370,20 @@ where
 
     fn make_op_message_inner(
         &self,
-        message: &Message,
+        message: Message,
         message_queue: &MessageQueue,
     ) -> MessageExtBrokerInner {
         let mut msg_inner = MessageExtBrokerInner::default();
-        msg_inner.set_topic(message.get_topic().to_owned());
-        msg_inner.set_body(message.get_body().expect("message body is empty").clone());
+        msg_inner.message_ext_inner.message = message;
+        //msg_inner.set_topic(message.get_topic().to_owned());
+        //msg_inner.set_body(message.get_body().expect("message body is empty").clone());
         msg_inner.message_ext_inner.queue_id = message_queue.get_queue_id();
-        msg_inner.set_tags(message.get_tags().unwrap_or_default());
+        //msg_inner.set_tags(message.get_tags().unwrap_or_default());
         msg_inner.tags_code = MessageExtBrokerInner::tags_string_to_tags_code(
-            message.get_tags().unwrap_or_default().as_str(),
+            msg_inner.get_tags().unwrap_or_default().as_str(),
         );
         msg_inner.message_ext_inner.sys_flag = 0;
-        MessageAccessor::set_properties(&mut msg_inner, message.get_properties().clone());
+        //MessageAccessor::set_properties(&mut msg_inner, message.get_properties().clone());
         msg_inner.properties_string =
             MessageDecoder::message_properties_to_string(msg_inner.get_properties());
 
@@ -413,7 +414,7 @@ where
                     .clone(),
             )
         });
-        let inner = self.make_op_message_inner(&message, op_queue);
+        let inner = self.make_op_message_inner(message, op_queue);
         let result = self.put_message_return_result(inner).await;
         result.put_message_status() == PutMessageStatus::PutOk
     }
