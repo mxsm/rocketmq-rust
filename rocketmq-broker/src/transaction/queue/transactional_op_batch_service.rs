@@ -14,41 +14,103 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::sync::Arc;
 
+use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
+use std::time::Duration;
+
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::TimeUtils::get_current_millis;
-use tokio::sync::Notify;
+use rocketmq_rust::task::service_task::ServiceContext;
+use rocketmq_rust::task::service_task::ServiceTask;
+use rocketmq_rust::task::ServiceManager;
+use rocketmq_rust::ArcMut;
+use rocketmq_store::base::message_store::MessageStore;
 use tracing::info;
 
-#[derive(Default, Clone)]
-pub struct TransactionalOpBatchService {
-    notify: Arc<Notify>,
+use crate::transaction::queue::default_transactional_message_service::DefaultTransactionalMessageService;
+
+pub struct TransactionalOpBatchService<MS>
+where
+    MS: MessageStore,
+{
+    service_manager: ServiceManager<TransactionalOpBatchServiceInner<MS>>,
 }
 
-impl TransactionalOpBatchService {
-    pub fn new() -> Self {
-        TransactionalOpBatchService {
-            notify: Arc::new(Notify::new()),
-        }
+impl<MS> TransactionalOpBatchService<MS>
+where
+    MS: MessageStore,
+{
+    pub fn new(
+        broker_config: Arc<BrokerConfig>,
+        transactional_message_service: ArcMut<DefaultTransactionalMessageService<MS>>,
+    ) -> Self {
+        let inner = TransactionalOpBatchServiceInner {
+            broker_config,
+            transactional_message_service,
+            wakeup_timestamp: AtomicU64::new(0),
+        };
+        let service_manager = ServiceManager::new(inner);
+        TransactionalOpBatchService { service_manager }
+    }
+
+    pub async fn start(&self) {
+        self.service_manager.start().await.unwrap();
     }
 
     pub fn wakeup(&self) {
-        self.notify.notify_waiters();
+        self.service_manager.wakeup();
+    }
+}
+
+struct TransactionalOpBatchServiceInner<MS>
+where
+    MS: MessageStore,
+{
+    broker_config: Arc<BrokerConfig>,
+    transactional_message_service: ArcMut<DefaultTransactionalMessageService<MS>>,
+    wakeup_timestamp: AtomicU64,
+}
+
+impl<MS> ServiceTask for TransactionalOpBatchServiceInner<MS>
+where
+    MS: MessageStore,
+{
+    fn get_service_name(&self) -> String {
+        "TransactionalOpBatchService".to_string()
     }
 
-    pub fn run(&self, transaction_op_batch_interval: u64) {
-        let this = self.clone();
-        tokio::spawn(async move {
-            info!("TransactionalOpBatchService started");
-            let wakeup_timestamp = get_current_millis() + transaction_op_batch_interval;
-            loop {
-                let mut interval = (wakeup_timestamp as i64) - get_current_millis() as i64;
-                if interval <= 0 {
-                    interval = 0;
-                    this.wakeup();
-                }
-                tokio::time::sleep(tokio::time::Duration::from_millis(interval as u64)).await;
+    async fn run(&self, context: &ServiceContext) {
+        info!("TransactionalOpBatchService started");
+        let transaction_op_batch_interval = self.broker_config.transaction_op_batch_interval;
+        self.wakeup_timestamp.store(
+            get_current_millis() + transaction_op_batch_interval,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        while !context.is_stopped() {
+            let mut interval = self
+                .wakeup_timestamp
+                .load(std::sync::atomic::Ordering::Relaxed) as i64
+                - get_current_millis() as i64;
+            if interval <= 0 {
+                interval = 0;
+                context.wakeup();
             }
-        });
+            if context
+                .wait_for_running(Duration::from_millis(interval as u64))
+                .await
+            {
+                self.on_wait_end().await;
+            }
+        }
+    }
+
+    async fn on_wait_end(&self) {
+        let time = self
+            .transactional_message_service
+            .batch_send_op_message()
+            .await;
+        self.wakeup_timestamp
+            .store(time, std::sync::atomic::Ordering::Relaxed);
     }
 }

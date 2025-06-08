@@ -358,6 +358,10 @@ mod defaults {
     pub fn transaction_check_max() -> u32 {
         15
     }
+
+    pub fn transaction_op_batch_interval() -> u64 {
+        3000
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -747,6 +751,9 @@ pub struct BrokerConfig {
 
     #[serde(default = "defaults::transaction_check_max")]
     pub transaction_check_max: u32,
+
+    #[serde(default = "defaults::transaction_op_batch_interval")]
+    pub transaction_op_batch_interval: u64,
 }
 
 impl Default for BrokerConfig {
@@ -865,6 +872,7 @@ impl Default for BrokerConfig {
             enable_calc_filter_bit_map: false,
             transaction_check_interval: 30_000,
             transaction_check_max: 15,
+            transaction_op_batch_interval: 3_000,
         }
     }
 }

@@ -488,7 +488,7 @@ impl BrokerRuntime {
             self.initialize_remoting_server();
             self.initialize_resources();
             self.initialize_scheduled_tasks().await;
-            self.initial_transaction();
+            self.initial_transaction().await;
             self.initial_acl();
             self.initial_rpc_hooks();
             self.initial_request_pipeline();
@@ -753,15 +753,16 @@ impl BrokerRuntime {
         }
     }
 
-    fn initial_transaction(&mut self) {
+    async fn initial_transaction(&mut self) {
         cfg_if::cfg_if! {
             if #[cfg(feature = "local_file_store")] {
                 let bridge = TransactionalMessageBridge::new(
-
                     self.inner.clone()
                 );
-                let service = DefaultTransactionalMessageService::new(bridge);
-                self.inner.transactional_message_service = Some(ArcMut::new(service));
+                let mut service = ArcMut::new(DefaultTransactionalMessageService::new(bridge));
+                let service_clone = service.clone();
+                service.set_transactional_op_batch_service_start(service_clone).await;
+                self.inner.transactional_message_service = Some(service);
             }
         }
         self.inner.transactional_message_check_listener = Some(
@@ -1589,6 +1590,11 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     #[inline]
     pub fn broker_config(&self) -> &BrokerConfig {
         &self.broker_config
+    }
+
+    #[inline]
+    pub fn broker_config_arc(&self) -> Arc<BrokerConfig> {
+        self.broker_config.clone()
     }
 
     #[inline]

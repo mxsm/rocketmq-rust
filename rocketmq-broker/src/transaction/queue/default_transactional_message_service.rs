@@ -64,7 +64,7 @@ const SLEEP_WHILE_NO_OP: i32 = 1000;
 pub struct DefaultTransactionalMessageService<MS: MessageStore> {
     transactional_message_bridge: TransactionalMessageBridge<MS>,
     delete_context: Arc<Mutex<HashMap<i32, MessageQueueOpContext>>>,
-    transactional_op_batch_service: TransactionalOpBatchService,
+    transactional_op_batch_service: Option<TransactionalOpBatchService<MS>>,
     op_queue_map: Arc<RwLock<HashMap<MessageQueue, MessageQueue>>>,
     transaction_metrics: TransactionMetrics,
 }
@@ -77,10 +77,24 @@ where
         Self {
             transactional_message_bridge,
             delete_context: Arc::new(Mutex::new(HashMap::new())),
-            transactional_op_batch_service: TransactionalOpBatchService::new(),
+            transactional_op_batch_service: None,
             op_queue_map: Arc::new(Default::default()),
             transaction_metrics: TransactionMetrics,
         }
+    }
+
+    pub async fn set_transactional_op_batch_service_start(
+        &mut self,
+        this: ArcMut<DefaultTransactionalMessageService<MS>>,
+    ) {
+        let transactional_op_batch_service = TransactionalOpBatchService::new(
+            self.transactional_message_bridge
+                .broker_runtime_inner
+                .broker_config_arc(),
+            this,
+        );
+        transactional_op_batch_service.start().await;
+        self.transactional_op_batch_service = Some(transactional_op_batch_service);
     }
 
     fn get_half_message_by_offset(&self, offset: i64) -> OperationResult {
@@ -101,6 +115,54 @@ where
                 response_code: ResponseCode::SystemError,
             }
         }
+    }
+
+    pub async fn batch_send_op_message(&self) -> u64 {
+        let start_time = get_current_millis();
+        let broker_config = self
+            .transactional_message_bridge
+            .broker_runtime_inner
+            .broker_config();
+        let interval = broker_config.transaction_op_batch_interval;
+        let max_size = broker_config.transaction_op_msg_max_size as usize;
+        let mut over_size = false;
+        let mut first_timestamp = start_time;
+        let mut send_map = HashMap::<i32, Message>::new();
+        let delete_context_mutex_guard = self.delete_context.lock().await;
+        for (queue_id, mq_context) in delete_context_mutex_guard.iter() {
+            if mq_context.get_total_size() <= 0
+                || mq_context.context_queue().is_empty().await
+                || (mq_context.get_total_size() < max_size as i32
+                    && (start_time as i64 - mq_context.get_last_write_timestamp().await as i64)
+                        < interval as i64)
+            {
+                continue;
+            }
+            let op_message = self.get_op_message(*queue_id, None).await;
+            if op_message.is_none() {
+                continue;
+            }
+            send_map.insert(*queue_id, op_message.unwrap());
+            first_timestamp = first_timestamp.min(mq_context.get_last_write_timestamp().await);
+            if mq_context.get_total_size() >= max_size as i32 {
+                over_size = true;
+            }
+        }
+        for (op_queue_id, op_message) in send_map {
+            if !self
+                .transactional_message_bridge
+                .write_op(op_queue_id, op_message)
+                .await
+            {
+                error!("Transaction batch op message write failed.");
+            }
+        }
+        //wait for next batch remove
+        let wakeup_timestamp = first_timestamp + interval;
+        if !over_size && wakeup_timestamp > start_time {
+            return wakeup_timestamp;
+        }
+        0
     }
 
     pub async fn get_op_message(
@@ -976,12 +1038,19 @@ where
                     .broker_config()
                     .transaction_op_msg_max_size
             {
-                self.transactional_op_batch_service.wakeup();
+                self.transactional_op_batch_service
+                    .as_ref()
+                    .unwrap()
+                    .wakeup();
             }
             return true;
         } else {
-            self.transactional_op_batch_service.wakeup();
+            self.transactional_op_batch_service
+                .as_ref()
+                .unwrap()
+                .wakeup();
         }
+
         let msg = self.get_op_message(queue_id, Some(data)).await;
         if self
             .transactional_message_bridge
