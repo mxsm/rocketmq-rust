@@ -116,7 +116,7 @@ where
             response_code,
             ..
         } = if MessageSysFlag::TRANSACTION_COMMIT_TYPE == request_header.commit_or_rollback {
-            let result = self
+            let mut result = self
                 .transactional_message_service
                 .commit_message(&request_header);
             if result.response_code == ResponseCode::Success {
@@ -137,7 +137,7 @@ where
                     self.check_prepare_message(result.prepare_message.as_ref(), &request_header);
                 if ResponseCode::from(res.code()) != ResponseCode::Success {
                     let mut msg_inner =
-                        end_message_transaction(result.prepare_message.as_ref().unwrap());
+                        end_message_transaction(result.prepare_message.as_mut().unwrap());
                     msg_inner.message_ext_inner.sys_flag = MessageSysFlag::reset_transaction_value(
                         msg_inner.message_ext_inner.sys_flag,
                         request_header.commit_or_rollback,
@@ -364,7 +364,7 @@ where
     }
 }
 
-fn end_message_transaction(msg_ext: &MessageExt) -> MessageExtBrokerInner {
+fn end_message_transaction(msg_ext: &mut MessageExt) -> MessageExtBrokerInner {
     let mut msg_inner = MessageExtBrokerInner::default();
     msg_inner.set_topic(
         msg_ext
@@ -380,8 +380,8 @@ fn end_message_transaction(msg_ext: &MessageExt) -> MessageExtBrokerInner {
         .unwrap_or_default()
         .parse()
         .unwrap_or_default();
-    if let Some(body) = msg_ext.get_body() {
-        msg_inner.set_body(body.clone());
+    if let Some(body) = msg_ext.take_body() {
+        msg_inner.set_body(body);
     }
     msg_inner.set_flag(msg_ext.get_flag());
     msg_inner.message_ext_inner.born_timestamp = msg_ext.born_timestamp;
