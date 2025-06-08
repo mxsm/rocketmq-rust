@@ -341,6 +341,11 @@ impl MessageTrait for MessageExt {
         self.message.set_compressed_body_mut(compressed_body);
     }
 
+    #[inline]
+    fn take_body(&mut self) -> Option<Bytes> {
+        self.message.take_body()
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }

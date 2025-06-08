@@ -387,9 +387,29 @@ pub trait MessageTrait: Any + Display + Debug {
         .unwrap_or(0)
     }
 
+    /// Retrieves a mutable reference to the compressed body of the message.
+    ///
+    /// # Returns
+    /// A mutable reference to an `Option<Bytes>` containing the compressed body, if it exists.
     fn get_compressed_body_mut(&mut self) -> &mut Option<Bytes>;
+
+    /// Retrieves an immutable reference to the compressed body of the message.
+    ///
+    /// # Returns
+    /// An `Option<&Bytes>` containing the compressed body, if it exists.
     fn get_compressed_body(&self) -> Option<&Bytes>;
+
+    /// Sets the compressed body of the message.
+    ///
+    /// # Arguments
+    /// * `compressed_body` - A `Bytes` object representing the compressed body to set.
     fn set_compressed_body_mut(&mut self, compressed_body: Bytes);
+
+    /// Takes ownership of the message body, leaving it empty.
+    ///
+    /// # Returns
+    /// An `Option<Bytes>` containing the message body if it exists, otherwise `None`.
+    fn take_body(&mut self) -> Option<Bytes>;
 
     /// Converts the message into a dynamic `Any` type.
     ///

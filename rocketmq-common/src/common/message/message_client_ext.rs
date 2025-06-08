@@ -149,6 +149,11 @@ impl MessageTrait for MessageClientExt {
     }
 
     #[inline]
+    fn take_body(&mut self) -> Option<Bytes> {
+        self.message_ext_inner.take_body()
+    }
+
+    #[inline]
     fn as_any(&self) -> &dyn Any {
         self
     }

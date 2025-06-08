@@ -390,6 +390,11 @@ impl MessageTrait for Message {
     }
 
     #[inline]
+    fn take_body(&mut self) -> Option<Bytes> {
+        self.body.take()
+    }
+
+    #[inline]
     fn as_any(&self) -> &dyn Any {
         self
     }

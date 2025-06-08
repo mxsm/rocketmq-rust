@@ -203,6 +203,11 @@ impl MessageTrait for MessageBatch {
         self.final_message.compressed_body = Some(compressed_body);
     }
 
+    #[inline]
+    fn take_body(&mut self) -> Option<Bytes> {
+        self.final_message.body.take()
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
