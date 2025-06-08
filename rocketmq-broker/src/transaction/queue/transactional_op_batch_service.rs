@@ -24,9 +24,10 @@ use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_rust::task::service_task::ServiceContext;
 use rocketmq_rust::task::service_task::ServiceTask;
 use rocketmq_rust::task::ServiceManager;
-use rocketmq_rust::ArcMut;
+use rocketmq_rust::WeakArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use tracing::info;
+use tracing::warn;
 
 use crate::transaction::queue::default_transactional_message_service::DefaultTransactionalMessageService;
 
@@ -43,7 +44,7 @@ where
 {
     pub fn new(
         broker_config: Arc<BrokerConfig>,
-        transactional_message_service: ArcMut<DefaultTransactionalMessageService<MS>>,
+        transactional_message_service: WeakArcMut<DefaultTransactionalMessageService<MS>>,
     ) -> Self {
         let inner = TransactionalOpBatchServiceInner {
             broker_config,
@@ -68,7 +69,7 @@ where
     MS: MessageStore,
 {
     broker_config: Arc<BrokerConfig>,
-    transactional_message_service: ArcMut<DefaultTransactionalMessageService<MS>>,
+    transactional_message_service: WeakArcMut<DefaultTransactionalMessageService<MS>>,
     wakeup_timestamp: AtomicU64,
 }
 
@@ -106,11 +107,14 @@ where
     }
 
     async fn on_wait_end(&self) {
-        let time = self
-            .transactional_message_service
-            .batch_send_op_message()
-            .await;
-        self.wakeup_timestamp
-            .store(time, std::sync::atomic::Ordering::Relaxed);
+        if let Some(transactional_message_service) = self.transactional_message_service.upgrade() {
+            let time = transactional_message_service.batch_send_op_message().await;
+            self.wakeup_timestamp
+                .store(time, std::sync::atomic::Ordering::Relaxed);
+        } else {
+            const WARN_MESSAGE: &str = "TransactionalMessageService has been dropped, skipping \
+                                        batch send operation message.";
+            warn!(WARN_MESSAGE);
+        }
     }
 }
