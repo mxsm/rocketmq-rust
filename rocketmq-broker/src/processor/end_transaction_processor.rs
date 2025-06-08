@@ -423,8 +423,8 @@ mod tests {
 
     #[test]
     fn end_message_transaction_with_valid_message() {
-        let msg_ext = MessageExt::default();
-        let msg_inner = end_message_transaction(&msg_ext);
+        let mut msg_ext = MessageExt::default();
+        let msg_inner = end_message_transaction(&mut msg_ext);
         assert_eq!(
             msg_inner.get_topic(),
             &msg_ext
@@ -481,9 +481,9 @@ mod tests {
 
     #[test]
     fn end_message_transaction_with_empty_body() {
-        let msg_ext = MessageExt::default();
+        let mut msg_ext = MessageExt::default();
         //msg_ext.set_body(None);
-        let msg_inner = end_message_transaction(&msg_ext);
+        let msg_inner = end_message_transaction(&mut msg_ext);
         assert!(!msg_inner.get_body().is_some_and(|b| b.is_empty()));
     }
 
@@ -498,7 +498,7 @@ mod tests {
             CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID),
             CheetahString::empty(),
         );
-        let msg_inner = end_message_transaction(&msg_ext);
+        let msg_inner = end_message_transaction(&mut msg_ext);
         assert!(msg_inner.get_topic().is_empty());
         assert_eq!(msg_inner.message_ext_inner.queue_id, 0);
     }
