@@ -760,8 +760,8 @@ impl BrokerRuntime {
                     self.inner.clone()
                 );
                 let mut service = ArcMut::new(DefaultTransactionalMessageService::new(bridge));
-                let service_clone = service.clone();
-                service.set_transactional_op_batch_service_start(service_clone).await;
+                                let weak_service = ArcMut::downgrade(&service);
+                service.set_transactional_op_batch_service_start(weak_service).await;
                 self.inner.transactional_message_service = Some(service);
             }
         }

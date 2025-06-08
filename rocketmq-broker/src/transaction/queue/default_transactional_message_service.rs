@@ -34,6 +34,7 @@ use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
 use rocketmq_rust::ArcMut;
+use rocketmq_rust::WeakArcMut;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
@@ -85,13 +86,13 @@ where
 
     pub async fn set_transactional_op_batch_service_start(
         &mut self,
-        this: ArcMut<DefaultTransactionalMessageService<MS>>,
+        weak_this: WeakArcMut<DefaultTransactionalMessageService<MS>>,
     ) {
         let transactional_op_batch_service = TransactionalOpBatchService::new(
             self.transactional_message_bridge
                 .broker_runtime_inner
                 .broker_config_arc(),
-            this,
+            weak_this,
         );
         transactional_op_batch_service.start().await;
         self.transactional_op_batch_service = Some(transactional_op_batch_service);
@@ -1038,17 +1039,17 @@ where
                     .broker_config()
                     .transaction_op_msg_max_size
             {
-                self.transactional_op_batch_service
-                    .as_ref()
-                    .unwrap()
-                    .wakeup();
+                if let Some(batch_service) = &self.transactional_op_batch_service {
+                    batch_service.wakeup();
+                } else {
+                    error!("Transactional op batch service not initialized");
+                }
             }
             return true;
+        } else if let Some(batch_service) = &self.transactional_op_batch_service {
+            batch_service.wakeup();
         } else {
-            self.transactional_op_batch_service
-                .as_ref()
-                .unwrap()
-                .wakeup();
+            error!("Transactional op batch service not initialized");
         }
 
         let msg = self.get_op_message(queue_id, Some(data)).await;
