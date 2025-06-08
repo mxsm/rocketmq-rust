@@ -205,7 +205,7 @@ impl MessageTrait for MessageBatch {
 
     #[inline]
     fn take_body(&mut self) -> Option<Bytes> {
-        self.final_message.body.take()
+        self.final_message.take_body()
     }
 
     fn as_any(&self) -> &dyn Any {
