@@ -112,7 +112,8 @@ where
             self.wakeup_timestamp
                 .store(time, std::sync::atomic::Ordering::Relaxed);
         } else {
-            const WARN_MESSAGE: &str = "TransactionalMessageService has been dropped, skipping batch send operation message.";
+            const WARN_MESSAGE: &str = "TransactionalMessageService has been dropped, skipping \
+                                        batch send operation message.";
             warn!(WARN_MESSAGE);
         }
     }
