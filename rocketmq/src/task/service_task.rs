@@ -80,6 +80,16 @@ impl ServiceContext {
         self.has_notified.store(false, Ordering::Release);
         true // Should call on_wait_end
     }
+
+    pub fn wakeup(&self) {
+        if self
+            .has_notified
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            self.wait_point.notify_one();
+        }
+    }
 }
 
 /*#[trait_variant::make(ServiceTask: Send)]
