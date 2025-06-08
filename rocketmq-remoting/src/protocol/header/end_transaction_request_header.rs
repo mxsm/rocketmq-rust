@@ -29,11 +29,20 @@ use crate::rpc::rpc_request_header::RpcRequestHeader;
 #[serde(rename_all = "camelCase")]
 pub struct EndTransactionRequestHeader {
     pub topic: CheetahString,
+
     pub producer_group: CheetahString,
+
+    //ConsumeQueue Offset
     pub tran_state_table_offset: u64,
+
+    // Offset of the message in the CommitLog
     pub commit_log_offset: u64,
+    //TRANSACTION_COMMIT_TYPE,TRANSACTION_ROLLBACK_TYPE,TRANSACTION_NOT_TYPE
     pub commit_or_rollback: i32,
+
+    //Whether the check-back is initiated by the Broker
     pub from_transaction_check: bool,
+
     pub msg_id: CheetahString,
     pub transaction_id: Option<CheetahString>,
     #[serde(flatten)]
