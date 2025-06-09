@@ -207,7 +207,6 @@ where
     }
 }
 
-
 fn to_message_ext_broker_inner(
     topic_config: &TopicConfig,
     msg_ext: &MessageExt,
