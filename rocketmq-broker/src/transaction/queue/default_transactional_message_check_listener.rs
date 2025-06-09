@@ -207,37 +207,6 @@ where
     }
 }
 
-struct TransactionalMessageCheckListenerInner<MS: MessageStore> {
-    //broker_config: Arc<BrokerConfig>,
-    //producer_manager: Arc<ProducerManager>,
-    broker_client: ArcMut<Broker2Client>,
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-}
-
-impl<MS: MessageStore> Clone for TransactionalMessageCheckListenerInner<MS> {
-    fn clone(&self) -> Self {
-        Self {
-            broker_client: self.broker_client.clone(),
-            broker_runtime_inner: self.broker_runtime_inner.clone(),
-        }
-    }
-}
-
-impl<MS: MessageStore> TransactionalMessageCheckListenerInner<MS> {
-    pub fn new(
-        /* broker_config: Arc<BrokerConfig>,
-        producer_manager: Arc<ProducerManager>,*/
-        broker_client: Broker2Client,
-        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-    ) -> Self {
-        Self {
-            /*broker_config,
-            producer_manager,*/
-            broker_client: ArcMut::new(broker_client),
-            broker_runtime_inner,
-        }
-    }
-}
 
 fn to_message_ext_broker_inner(
     topic_config: &TopicConfig,
