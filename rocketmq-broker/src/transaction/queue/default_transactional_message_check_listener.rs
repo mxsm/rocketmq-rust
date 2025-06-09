@@ -187,15 +187,14 @@ where
         Ok(())
     }
 
-    async fn resolve_half_msg(&self, _msg_ext: MessageExt) -> rocketmq_error::RocketMQResult<()> {
-        /*let this = self.clone();
+    async fn resolve_half_msg(&self, msg_ext: MessageExt) -> rocketmq_error::RocketMQResult<()> {
+        let this = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = this.send_check_message(msg_ext).await {
-                warn!("Send check m_msg_extfailed: {:?}", e);
-            }
+            this.send_check_message(msg_ext).await.unwrap_or_else(|e| {
+                error!("Failed to send check message: {}", e);
+            });
         });
-        Ok(())*/
-        unimplemented!("resolve_half_msg")
+        Ok(())
     }
 
     fn as_any(&self) -> &dyn Any {
