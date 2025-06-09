@@ -527,7 +527,12 @@ where
                         msg_ext.commit_log_offset()
                     );
 
-                    listener.resolve_discard_msg(msg_ext).await;
+                    listener
+                        .resolve_half_msg(msg_ext)
+                        .await
+                        .unwrap_or_else(|err| {
+                            error!("Failed to resolve half message, error: {}", err);
+                        })
                 } else {
                     // Pull more operation messages
                     next_op_offset = pull_result
