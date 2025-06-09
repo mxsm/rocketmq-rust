@@ -41,6 +41,43 @@ pub trait TransactionalMessageCheckListenerInner: std::any::Any {
     /// - The message is in an invalid state
     async fn resolve_discard_msg(&mut self, msg_ext: MessageExt);
 
+    /// Sends a check message to verify the state of a transactional message.
+    ///
+    /// # Arguments
+    ///
+    /// * `msg_ext` - The transactional message to be checked, containing metadata such as
+    ///   transaction ID and state.
+    ///
+    /// # Returns
+    ///
+    /// A `RocketMQResult<()>` indicating the success or failure of the operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The message cannot be sent
+    /// - The broker encounters an issue during processing
+    async fn send_check_message(&self, msg_ext: MessageExt) -> rocketmq_error::RocketMQResult<()>;
+
+    /// Resolves a half message, typically used for transactional messages
+    /// that are in an intermediate state and require further processing.
+    ///
+    /// # Arguments
+    ///
+    /// * `_msg_ext` - The half message to be resolved, containing metadata such as transaction ID
+    ///   and state.
+    ///
+    /// # Returns
+    ///
+    /// A `RocketMQResult<()>` indicating the success or failure of the resolution.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The message cannot be resolved
+    /// - The broker encounters an issue during processing
+    async fn resolve_half_msg(&self, _msg_ext: MessageExt) -> rocketmq_error::RocketMQResult<()>;
+
     fn as_any(&self) -> &dyn std::any::Any;
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
