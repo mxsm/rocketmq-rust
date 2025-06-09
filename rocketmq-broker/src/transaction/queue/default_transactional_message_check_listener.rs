@@ -41,16 +41,16 @@ use crate::transaction::transactional_message_check_listener::TransactionalMessa
 const TCMT_QUEUE_NUMS: i32 = 1;
 
 pub struct DefaultTransactionalMessageCheckListener<MS: MessageStore> {
-    inner: TransactionalMessageCheckListenerInner<MS>,
     // topic_config_manager: TopicConfigManager,
     //message_store: ArcMut<MS>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    broker_client: ArcMut<Broker2Client>,
 }
 
 impl<MS: MessageStore> Clone for DefaultTransactionalMessageCheckListener<MS> {
     fn clone(&self) -> Self {
         Self {
-            inner: self.inner.clone(),
+            broker_client: self.broker_client.clone(),
             // topic_config_manager: self.topic_config_manager.clone(),
             // message_store: self.message_store.clone(),
             broker_runtime_inner: self.broker_runtime_inner.clone(),
@@ -68,15 +68,10 @@ impl<MS: MessageStore> DefaultTransactionalMessageCheckListener<MS> {
         broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> Self {
         Self {
-            inner: TransactionalMessageCheckListenerInner::new(
-                /*  broker_config,
-                producer_manager,*/
-                broker_client,
-                broker_runtime_inner.clone(),
-            ),
             /*topic_config_manager,
             message_store,*/
             broker_runtime_inner,
+            broker_client: ArcMut::new(broker_client),
         }
     }
 }
@@ -129,47 +124,7 @@ where
         }
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-}
-
-struct TransactionalMessageCheckListenerInner<MS: MessageStore> {
-    //broker_config: Arc<BrokerConfig>,
-    //producer_manager: Arc<ProducerManager>,
-    broker_client: ArcMut<Broker2Client>,
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-}
-
-impl<MS: MessageStore> Clone for TransactionalMessageCheckListenerInner<MS> {
-    fn clone(&self) -> Self {
-        Self {
-            broker_client: self.broker_client.clone(),
-            broker_runtime_inner: self.broker_runtime_inner.clone(),
-        }
-    }
-}
-
-impl<MS: MessageStore> TransactionalMessageCheckListenerInner<MS> {
-    pub fn new(
-        /* broker_config: Arc<BrokerConfig>,
-        producer_manager: Arc<ProducerManager>,*/
-        broker_client: Broker2Client,
-        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-    ) -> Self {
-        Self {
-            /*broker_config,
-            producer_manager,*/
-            broker_client: ArcMut::new(broker_client),
-            broker_runtime_inner,
-        }
-    }
-
-    pub async fn send_check_message(
+    async fn send_check_message(
         &self,
         mut msg_ext: MessageExt,
     ) -> rocketmq_error::RocketMQResult<()> {
@@ -232,7 +187,7 @@ impl<MS: MessageStore> TransactionalMessageCheckListenerInner<MS> {
         Ok(())
     }
 
-    pub fn resolve_half_msg(&self, _msg_ext: MessageExt) -> rocketmq_error::RocketMQResult<()> {
+    async fn resolve_half_msg(&self, _msg_ext: MessageExt) -> rocketmq_error::RocketMQResult<()> {
         /*let this = self.clone();
         tokio::spawn(async move {
             if let Err(e) = this.send_check_message(msg_ext).await {
@@ -241,6 +196,46 @@ impl<MS: MessageStore> TransactionalMessageCheckListenerInner<MS> {
         });
         Ok(())*/
         unimplemented!("resolve_half_msg")
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
+struct TransactionalMessageCheckListenerInner<MS: MessageStore> {
+    //broker_config: Arc<BrokerConfig>,
+    //producer_manager: Arc<ProducerManager>,
+    broker_client: ArcMut<Broker2Client>,
+    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+}
+
+impl<MS: MessageStore> Clone for TransactionalMessageCheckListenerInner<MS> {
+    fn clone(&self) -> Self {
+        Self {
+            broker_client: self.broker_client.clone(),
+            broker_runtime_inner: self.broker_runtime_inner.clone(),
+        }
+    }
+}
+
+impl<MS: MessageStore> TransactionalMessageCheckListenerInner<MS> {
+    pub fn new(
+        /* broker_config: Arc<BrokerConfig>,
+        producer_manager: Arc<ProducerManager>,*/
+        broker_client: Broker2Client,
+        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    ) -> Self {
+        Self {
+            /*broker_config,
+            producer_manager,*/
+            broker_client: ArcMut::new(broker_client),
+            broker_runtime_inner,
+        }
     }
 }
 
