@@ -325,7 +325,7 @@ where
         remove_map: &mut HashMap<i64, i64>,
         op_msg_map: &mut HashMap<i64, HashSet<i64>>,
         done_op_offset: &mut Vec<i64>,
-        pull_result: Option<PullResult>,
+        mut pull_result: Option<PullResult>,
         mut listener: Listener,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut get_message_null_count = 1;
@@ -360,11 +360,8 @@ where
                     }
                 }
             } else {
-                let GetResult {
-                    msg,
-                    mut pull_result,
-                } = self.get_half_msg(message_queue, i).await?;
-                let mut msg_ext = match msg {
+                let get_result = self.get_half_msg(message_queue, i).await?;
+                let mut msg_ext = match get_result.msg {
                     Some(msg) => msg,
                     None => {
                         if get_message_null_count > MAX_RETRY_COUNT_WHEN_HALF_NULL {
@@ -372,7 +369,7 @@ where
                         }
                         get_message_null_count += 1;
 
-                        if let Some(pr) = pull_result {
+                        if let Some(pr) = get_result.pull_result {
                             if *pr.pull_status() == PullStatus::NoNewMsg {
                                 debug!(
                                     "No new msg, the miss offset={} in={:?}, continue check={}, \
@@ -492,18 +489,18 @@ where
                 }
 
                 // Determine if check is needed
-                let op_msg = pull_result
-                    .as_ref()
-                    .and_then(|pr| pr.msg_found_list().clone());
-
+                let op_msg = if let Some(ref inner) = pull_result {
+                    inner.msg_found_list()
+                } else {
+                    &None
+                };
                 let is_need_check = self.is_check_needed(
-                    &op_msg,
+                    op_msg,
                     value_of_current_minus_born,
                     check_immunity_time,
                     start_time,
                     transaction_timeout as i64,
                 );
-
                 if is_need_check {
                     if !self.put_back_half_msg_queue(&mut msg_ext, i).await {
                         continue;
