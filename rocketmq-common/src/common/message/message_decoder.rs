@@ -564,8 +564,8 @@ pub fn encode(
     need_compress: bool,
 ) -> rocketmq_error::RocketMQResult<Bytes> {
     let body = message_ext.get_body().unwrap();
-    let topics = message_ext.get_topic().as_bytes();
-    let topic_len = topics.len();
+    let topic = message_ext.get_topic().as_bytes();
+    let topic_len = topic.len();
     let properties = message_properties_to_string(message_ext.get_properties());
     let properties_bytes = properties.as_bytes();
     let properties_length = properties_bytes.len();
@@ -680,8 +680,8 @@ pub fn encode(
     }
 
     // 16 TOPIC
-    byte_buffer.put_i16(topic_len as i16);
-    byte_buffer.put_slice(topics);
+    byte_buffer.put_u8(topic_len as u8);
+    byte_buffer.put_slice(topic);
 
     // 17 properties
     byte_buffer.put_i16(properties_length as i16);
