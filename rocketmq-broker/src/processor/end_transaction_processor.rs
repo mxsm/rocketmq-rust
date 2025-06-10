@@ -212,6 +212,10 @@ where
         if from_transaction_check {
             return false;
         }
+
+        // The setting of MessageConst::PROPERTY_CHECK_IMMUNITY_TIME_IN_SECONDS is configured in the
+        // SendMessageActivity of the Proxy. Therefore, messages sent through theSDK will not have
+        // this property.
         let check_immunity_time_str = message_ext.get_user_property(
             &CheetahString::from_static_str(MessageConst::PROPERTY_CHECK_IMMUNITY_TIME_IN_SECONDS),
         );
