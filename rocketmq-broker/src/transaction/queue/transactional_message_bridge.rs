@@ -201,13 +201,8 @@ where
                 get_message_result.next_begin_offset() as u64,
                 get_message_result.min_offset() as u64,
                 get_message_result.max_offset() as u64,
-                Some(
-                    msg_found_list
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(ArcMut::new)
-                        .collect(),
-                ),
+                msg_found_list
+                    .map(|msg_found_list| msg_found_list.into_iter().map(ArcMut::new).collect()),
             ))
         } else {
             error!(
