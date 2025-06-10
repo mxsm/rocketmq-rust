@@ -475,7 +475,7 @@ impl MessageVersion {
 
     pub fn get_topic_length(&self, buffer: &mut Bytes) -> usize {
         match self {
-            MessageVersion::V1 => i32::from(buffer.get_u8()) as usize,
+            MessageVersion::V1 => buffer.get_u8() as usize,
             MessageVersion::V2 => buffer.get_i16() as usize,
         }
     }
