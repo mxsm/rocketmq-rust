@@ -235,6 +235,8 @@ where
         listener: Listener,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let topic = CheetahString::from_static_str(TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC);
+
+        //TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC only one read and write queue
         let msg_queues = self
             .transactional_message_bridge
             .fetch_message_queues(&topic);
@@ -885,7 +887,27 @@ where
             .clone()
     }
 
-    /// Fill operation remove map
+    /// Read op message, parse op message, and fill removeMap
+    ///
+    /// # Arguments
+    ///
+    /// * `remove_map` -Half message to be removed, key:halfOffset, value: opOffset.
+    /// * `op_queue` - Op message queue.
+    /// * `pull_offset_of_op` -The being offset of op message queue.
+    /// * `mini_offset` - The current minimum offset of half message queue.
+    /// * `op_msg_map` -Half message offset in op message
+    /// * `done_op_offset` - Stored op messages that have been processed.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing an `Option<PullResult>`:
+    /// - `Some(PullResult)` if the operation messages were successfully pulled.
+    /// - `None` if no operation messages were found or an error occurred.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if pulling operation messages fails or if there is an issue processing the
+    /// messages.
     async fn fill_op_remove_map(
         &self,
         remove_map: &mut HashMap<i64, i64>,
