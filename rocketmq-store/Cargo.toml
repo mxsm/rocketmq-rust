@@ -57,7 +57,7 @@ futures-util = "0.3.31"
 libc = "0.2.172"
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.61.1", features = ["Win32_Security", "Win32_System_Memory_NonVolatile"] }
+windows = { version = "0.61.2", features = ["Win32_Security", "Win32_System_Memory_NonVolatile"] }
 
 
 [dev-dependencies]
