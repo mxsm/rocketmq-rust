@@ -122,6 +122,44 @@ impl fmt::Display for LanguageCode {
     }
 }
 
+impl From<LanguageCode> for u8 {
+    fn from(code: LanguageCode) -> Self {
+        code.get_code()
+    }
+}
+
+impl From<LanguageCode> for i32 {
+    fn from(code: LanguageCode) -> Self {
+        code.get_code() as i32
+    }
+}
+
+impl From<u32> for LanguageCode {
+    fn from(code: u32) -> Self {
+        if let Ok(c) = u8::try_from(code) {
+            LanguageCode::value_of(c).unwrap_or(LanguageCode::OTHER)
+        } else {
+            LanguageCode::OTHER
+        }
+    }
+}
+
+impl From<i32> for LanguageCode {
+    fn from(code: i32) -> Self {
+        if let Ok(c) = u8::try_from(code) {
+            LanguageCode::value_of(c).unwrap_or(LanguageCode::OTHER)
+        } else {
+            LanguageCode::OTHER
+        }
+    }
+}
+
+impl From<u8> for LanguageCode {
+    fn from(code: u8) -> Self {
+        LanguageCode::value_of(code).unwrap_or(LanguageCode::OTHER)
+    }
+}
+
 impl LanguageCode {
     pub fn value_of(code: u8) -> Option<Self> {
         match code {
@@ -138,7 +176,7 @@ impl LanguageCode {
             10 => Some(LanguageCode::PHP),
             11 => Some(LanguageCode::OMS),
             12 => Some(LanguageCode::RUST),
-            _ => None,
+            _ => Some(LanguageCode::OTHER),
         }
     }
 
