@@ -39,6 +39,7 @@ pub(crate) mod hook;
 pub(crate) mod latency;
 pub(crate) mod load_balance;
 pub(crate) mod long_polling;
+pub(crate) mod metrics;
 pub(crate) mod mqtrace;
 pub(crate) mod offset;
 pub(crate) mod out_api;
