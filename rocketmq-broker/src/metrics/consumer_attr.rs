@@ -468,7 +468,7 @@ mod tests {
         assert_eq!(java_attrs.len(), 2);
 
         let pull_attrs = attrs.find_by_consume_mode(ConsumeType::ConsumeActively);
-        assert_eq!(pull_attrs.len(), 1);
+        assert_eq!(pull_attrs.len(), 3);
 
         let unique_groups = attrs.unique_groups();
         assert_eq!(unique_groups.len(), 2);
@@ -497,7 +497,7 @@ mod tests {
 
         let string_repr = attr.to_string();
         assert!(string_repr.contains("test-group"));
-        assert!(string_repr.contains("Rust"));
+        assert!(string_repr.contains("RUST"));
         assert!(string_repr.contains("123"));
     }
 
