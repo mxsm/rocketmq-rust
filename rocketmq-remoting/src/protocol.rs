@@ -136,13 +136,21 @@ impl From<LanguageCode> for i32 {
 
 impl From<u32> for LanguageCode {
     fn from(code: u32) -> Self {
-        LanguageCode::value_of(code as u8).unwrap_or(LanguageCode::OTHER)
+        if let Ok(c) = u8::try_from(code) {
+            LanguageCode::value_of(c).unwrap_or(LanguageCode::OTHER)
+        } else {
+            LanguageCode::OTHER
+        }
     }
 }
 
 impl From<i32> for LanguageCode {
     fn from(code: i32) -> Self {
-        LanguageCode::value_of(code as u8).unwrap_or(LanguageCode::OTHER)
+        if let Ok(c) = u8::try_from(code) {
+            LanguageCode::value_of(c).unwrap_or(LanguageCode::OTHER)
+        } else {
+            LanguageCode::OTHER
+        }
     }
 }
 
