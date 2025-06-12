@@ -14,4 +14,5 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-mod consumer_attr;
+pub(crate) mod broker_metrics_constant;
+pub(crate) mod consumer_attr;
