@@ -108,7 +108,7 @@ pub trait TransactionalMessageServiceLocal: Sync + 'static {
     fn open(&self) -> bool;
 
     /// Closes the transactional message service.
-    fn close(&self);
+    async fn close(&self);
 
     /// Gets the transaction metrics.
     ///

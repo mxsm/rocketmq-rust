@@ -223,8 +223,8 @@ where
         ))
     }
 
-    pub fn shutdown(&mut self) {
-        warn!("DefaultTransactionalMessageService shutdown unimplemented, need to implement");
+    pub async fn shutdown(&mut self) {
+        self.close().await
     }
 
     /// Internal check implementation
@@ -1125,8 +1125,10 @@ where
         true
     }
 
-    fn close(&self) {
-        //nothing to do
+    async fn close(&self) {
+        if let Some(batch_service) = &self.transactional_op_batch_service {
+            batch_service.shutdown().await
+        }
     }
 
     fn get_transaction_metrics(&self) -> &TransactionMetrics {

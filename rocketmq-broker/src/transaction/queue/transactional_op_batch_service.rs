@@ -59,6 +59,10 @@ where
         self.service_manager.start().await.unwrap();
     }
 
+    pub async fn shutdown(&self) {
+        self.service_manager.shutdown().await.unwrap();
+    }
+
     pub fn wakeup(&self) {
         self.service_manager.wakeup();
     }
