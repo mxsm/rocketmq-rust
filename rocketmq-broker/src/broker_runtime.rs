@@ -317,7 +317,7 @@ impl BrokerRuntime {
         if let Some(transactional_message_service) =
             self.inner.transactional_message_service.as_mut()
         {
-            transactional_message_service.shutdown();
+            transactional_message_service.shutdown().await;
         }
 
         if let Some(notification_processor) = self.inner.notification_processor.as_mut() {
