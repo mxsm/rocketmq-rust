@@ -64,7 +64,7 @@ pub trait TransactionalMessageCheckListenerInner: std::any::Any {
     ///
     /// # Arguments
     ///
-    /// * `_msg_ext` - The half message to be resolved, containing metadata such as transaction ID
+    /// * `msg_ext` - The half message to be resolved, containing metadata such as transaction ID
     ///   and state.
     ///
     /// # Returns
@@ -76,7 +76,7 @@ pub trait TransactionalMessageCheckListenerInner: std::any::Any {
     /// Returns an error if:
     /// - The message cannot be resolved
     /// - The broker encounters an issue during processing
-    async fn resolve_half_msg(&self, _msg_ext: MessageExt) -> rocketmq_error::RocketMQResult<()>;
+    async fn resolve_half_msg(&self, msg_ext: MessageExt) -> rocketmq_error::RocketMQResult<()>;
 
     fn as_any(&self) -> &dyn std::any::Any;
 

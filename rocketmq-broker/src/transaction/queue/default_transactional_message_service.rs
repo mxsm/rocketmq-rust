@@ -273,7 +273,9 @@ where
             }
 
             let mut done_op_offset = Vec::new();
+            //key: half message queue offset, value: op message queue offset
             let mut remove_map = HashMap::new();
+            // key: op message queue offset, value: half message queue offsets
             let mut op_msg_map: HashMap<i64, HashSet<i64>> = HashMap::new();
 
             let pull_result = self
@@ -300,6 +302,7 @@ where
                 &message_queue,
                 &op_queue,
                 half_offset,
+                op_offset,
                 start_time,
                 transaction_timeout,
                 transaction_check_max,
@@ -321,6 +324,7 @@ where
         message_queue: &MessageQueue,
         op_queue: &MessageQueue,
         half_offset: i64,
+        op_offset: i64,
         start_time: i64,
         transaction_timeout: u64,
         transaction_check_max: i32,
@@ -332,11 +336,8 @@ where
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut get_message_null_count = 1;
         let mut new_offset = half_offset;
-        let mut i = half_offset;
-        let mut next_op_offset = pull_result
-            .as_ref()
-            .map(|pr| pr.next_begin_offset())
-            .unwrap_or(0);
+        let mut consume_half_offset = half_offset;
+        let mut next_op_offset = pull_result.as_ref().map_or(0, |pr| pr.next_begin_offset());
         let mut put_in_queue_count = 0;
         let mut escape_fail_cnt = 0;
         let listener = &mut listener;
@@ -351,18 +352,23 @@ where
                 break;
             }
 
-            if let Some(removed_op_offset) = remove_map.remove(&i) {
-                debug!("Half offset {} has been committed/rolled back", i);
+            if let Some(removed_op_offset) = remove_map.remove(&consume_half_offset) {
+                debug!(
+                    "Half offset {} has been committed/rolled back",
+                    consume_half_offset
+                );
 
                 if let Some(op_msg_set) = op_msg_map.get_mut(&removed_op_offset) {
-                    op_msg_set.remove(&i);
+                    op_msg_set.remove(&consume_half_offset);
                     if op_msg_set.is_empty() {
                         op_msg_map.remove(&removed_op_offset);
                         done_op_offset.push(removed_op_offset);
                     }
                 }
             } else {
-                let get_result = self.get_half_msg(message_queue, i).await?;
+                let get_result = self
+                    .get_half_msg(message_queue, consume_half_offset)
+                    .await?;
                 let mut msg_ext = match get_result.msg {
                     Some(msg) => msg,
                     None => {
@@ -376,17 +382,17 @@ where
                                 debug!(
                                     "No new msg, the miss offset={} in={:?}, continue check={}, \
                                      pull result={}",
-                                    i, message_queue, get_message_null_count, pr
+                                    consume_half_offset, message_queue, get_message_null_count, pr
                                 );
                                 break;
                             } else {
                                 info!(
                                     "Illegal offset, the miss offset={} in={:?}, continue \
                                      check={}, pull result={}",
-                                    i, message_queue, get_message_null_count, pr
+                                    consume_half_offset, message_queue, get_message_null_count, pr
                                 );
-                                i = pr.next_begin_offset() as i64;
-                                new_offset = i;
+                                consume_half_offset = pr.next_begin_offset() as i64;
+                                new_offset = consume_half_offset;
                                 continue;
                             }
                         }
@@ -404,8 +410,8 @@ where
 
                     if is_success {
                         escape_fail_cnt = 0;
-                        new_offset = i + 1;
-                        i += 1;
+                        new_offset = consume_half_offset + 1;
+                        consume_half_offset += 1;
                     } else {
                         warn!(
                             "Escaping transactional message failed {} times! msgId(offsetId)={}, \
@@ -425,8 +431,8 @@ where
                             tokio::time::sleep(Duration::from_millis(sleep_time as u64)).await;
                         } else {
                             escape_fail_cnt = 0;
-                            new_offset = i + 1;
-                            i += 1;
+                            new_offset = consume_half_offset + 1;
+                            consume_half_offset += 1;
                         }
                     }
                     continue;
@@ -437,8 +443,8 @@ where
                     || self.need_skip(&msg_ext)
                 {
                     listener.resolve_discard_msg(msg_ext).await;
-                    new_offset = i + 1;
-                    i += 1;
+                    new_offset = consume_half_offset + 1;
+                    consume_half_offset += 1;
                     continue;
                 }
 
@@ -446,7 +452,7 @@ where
                 if msg_ext.store_timestamp() >= start_time {
                     debug!(
                         "Fresh stored. the miss offset={}, check it later, store={}",
-                        i,
+                        consume_half_offset,
                         msg_ext.store_timestamp()
                     );
                     break;
@@ -474,8 +480,8 @@ where
                             )
                             .await?
                     {
-                        new_offset = i + 1;
-                        i += 1;
+                        new_offset = consume_half_offset + 1;
+                        consume_half_offset += 1;
                         continue;
                     }
                 } else if 0 <= value_of_current_minus_born
@@ -504,7 +510,10 @@ where
                     transaction_timeout as i64,
                 );
                 if is_need_check {
-                    if !self.put_back_half_msg_queue(&mut msg_ext, i).await {
+                    if !self
+                        .put_back_half_msg_queue(&mut msg_ext, consume_half_offset)
+                        .await
+                    {
                         continue;
                     }
                     put_in_queue_count += 1;
@@ -534,10 +543,11 @@ where
                         })
                 } else {
                     // Pull more operation messages
-                    next_op_offset = pull_result
-                        .as_ref()
-                        .map(|pr| pr.next_begin_offset())
-                        .unwrap_or(next_op_offset);
+                    next_op_offset = if let Some(pr) = pull_result.as_ref() {
+                        pr.next_begin_offset()
+                    } else {
+                        next_op_offset
+                    };
 
                     pull_result = self
                         .fill_op_remove_map(
@@ -563,15 +573,15 @@ where
                         info!(
                             "The miss message offset:{}, pullOffsetOfOp:{}, miniOffset:{} get \
                              more opMsg.",
-                            i, next_op_offset, half_offset
+                            consume_half_offset, next_op_offset, half_offset
                         );
                     }
                     continue;
                 }
             }
 
-            new_offset = i + 1;
-            i += 1;
+            new_offset = consume_half_offset + 1;
+            consume_half_offset += 1;
         }
 
         // Update offsets
@@ -580,8 +590,8 @@ where
                 .update_consume_offset(message_queue, new_offset);
         }
 
-        let new_op_offset = self.calculate_op_offset(done_op_offset, half_offset);
-        if new_op_offset != half_offset {
+        let new_op_offset = self.calculate_op_offset(done_op_offset, op_offset);
+        if new_op_offset != op_offset {
             self.transactional_message_bridge
                 .update_consume_offset(op_queue, new_op_offset);
         }
@@ -590,13 +600,16 @@ where
         let get_result = self.get_half_msg(message_queue, new_offset).await?;
         let pull_result = self.pull_op_msg(op_queue, new_op_offset, 1).await;
 
-        let max_msg_offset = get_result
-            .get_pull_result()
-            .map(|pr| pr.max_offset())
-            .unwrap_or(new_offset as u64);
-        let max_op_offset = pull_result
-            .map(|pr| pr.max_offset())
-            .unwrap_or(new_op_offset as u64);
+        let max_msg_offset = if let Some(ref pr) = get_result.pull_result {
+            pr.max_offset()
+        } else {
+            new_offset as u64
+        };
+        let max_op_offset = if let Some(ref pr) = pull_result {
+            pr.max_offset()
+        } else {
+            new_op_offset as u64
+        };
         let msg_time = get_result
             .get_msg()
             .map(|msg| msg.store_timestamp())
@@ -893,8 +906,8 @@ where
     ///
     /// * `remove_map` -Half message to be removed, key:halfOffset, value: opOffset.
     /// * `op_queue` - Op message queue.
-    /// * `pull_offset_of_op` -The being offset of op message queue.
-    /// * `mini_offset` - The current minimum offset of half message queue.
+    /// * `pull_offset_of_op` -The consume offset of op message queue.
+    /// * `mini_offset` - The current consume offset of half message queue.
     /// * `op_msg_map` -Half message offset in op message
     /// * `done_op_offset` - Stored op messages that have been processed.
     ///
@@ -965,6 +978,8 @@ where
             };
 
             let mut set = HashSet::new();
+
+            // queue_offset_body end with ","
             let queue_offset_body = String::from_utf8_lossy(body);
 
             debug!(
@@ -985,6 +1000,9 @@ where
                     .collect();
 
                 for offset_str in offset_array {
+                    if offset_str.is_empty() {
+                        continue;
+                    }
                     if let Ok(offset_value) = offset_str.parse::<i64>() {
                         if offset_value < mini_offset {
                             continue;
