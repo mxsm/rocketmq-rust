@@ -30,11 +30,11 @@ pub struct GetMessageResult {
     message_queue_offset: Vec<u64>,
     /// The status of getting the message.
     status: Option<GetMessageStatus>,
-    /// The next begin offset.
+    /// The next beginning offset. Consume queue from this offset.
     next_begin_offset: i64,
-    /// The minimum offset.
+    /// The minimum offset of consume queue
     min_offset: i64,
-    /// The maximum offset.
+    /// The maximum offset of consume queue
     max_offset: i64,
     /// The total size of buffers.
     buffer_total_size: i32,
