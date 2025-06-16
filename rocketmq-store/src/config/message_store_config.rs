@@ -264,6 +264,10 @@ mod defaults {
         32
     }
 
+    pub const fn max_ha_transfer_byte_in_second() -> usize {
+        100 * 1024 * 1024
+    }
+
     pub fn max_filter_message_size() -> i32 {
         16000
     }
@@ -710,7 +714,7 @@ pub struct MessageStoreConfig {
     #[serde(default)]
     pub ha_flow_control_enable: bool,
 
-    #[serde(default)]
+    #[serde(default = "defaults::topic_queue_lock_num")]
     pub max_ha_transfer_byte_in_second: usize,
 
     #[serde(default)]
@@ -957,7 +961,7 @@ impl Default for MessageStoreConfig {
             all_ack_in_sync_state_set: false,
             enable_auto_in_sync_replicas: false,
             ha_flow_control_enable: false,
-            max_ha_transfer_byte_in_second: 0,
+            max_ha_transfer_byte_in_second: 100 * 1024 * 1024,
             ha_max_time_slave_not_catchup: 0,
             sync_master_flush_offset_when_startup: false,
             max_checksum_range: 0,

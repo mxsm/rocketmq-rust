@@ -16,6 +16,7 @@
  */
 
 pub(crate) mod default_ha_service;
+pub(crate) mod flow_monitor;
 pub(crate) mod general_ha_service;
 pub(crate) mod ha_client;
 pub(crate) mod ha_connection;
