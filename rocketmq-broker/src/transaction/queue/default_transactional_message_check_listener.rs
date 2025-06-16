@@ -210,8 +210,6 @@ fn to_message_ext_broker_inner(
     topic_config: &TopicConfig,
     msg_ext: &MessageExt,
 ) -> MessageExtBrokerInner {
-    // TODO
-    //let queue_id = rand::thread_rng().gen_range(0..=99999999) % TCMT_QUEUE_NUMS;
     let mut inner = MessageExtBrokerInner::default();
     if let Some(topic_name) = &topic_config.topic_name {
         inner.set_topic(topic_name.clone());
