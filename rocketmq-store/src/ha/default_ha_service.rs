@@ -46,9 +46,18 @@ use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotifi
 use crate::ha::ha_service::HAService;
 use crate::ha::wait_notify_object::WaitNotifyObject;
 use crate::log_file::flush_manager_impl::group_commit_request::GroupCommitRequest;
+use crate::message_store::local_file_message_store::LocalFileMessageStore;
 use crate::store_error::HAResult;
 
 pub struct DefaultHAService;
+
+impl DefaultHAService {
+    // Add any necessary fields here
+
+    pub fn get_default_message_store(&self) -> &LocalFileMessageStore {
+        unimplemented!()
+    }
+}
 
 impl HAService for DefaultHAService {
     fn init<MS: MessageStore>(&mut self, message_store: ArcMut<MS>) -> HAResult<()> {

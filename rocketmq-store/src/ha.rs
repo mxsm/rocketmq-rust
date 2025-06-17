@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 
+mod default_ha_connection;
 pub(crate) mod default_ha_service;
 pub(crate) mod flow_monitor;
 pub(crate) mod general_ha_service;

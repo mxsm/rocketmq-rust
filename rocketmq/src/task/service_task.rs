@@ -156,6 +156,12 @@ pub struct ServiceManager<T: ServiceTask + 'static> {
     is_daemon: AtomicBool,
 }
 
+impl<T: ServiceTask> AsRef<T> for ServiceManager<T> {
+    fn as_ref(&self) -> &T {
+        &self.service
+    }
+}
+
 /// Service state enumeration
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ServiceLifecycle {
