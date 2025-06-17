@@ -15,37 +15,41 @@
  * limitations under the License.
  */
 use cheetah_string::CheetahString;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::protocol::command_custom_header::CommandCustomHeader;
-use crate::protocol::command_custom_header::FromMap;
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
 pub struct QueryMessageRequestHeader {
+    #[required]
     pub topic: CheetahString,
 
+    #[required]
     pub key: CheetahString,
 
+    #[required]
     pub max_num: i32,
 
+    #[required]
     pub begin_timestamp: i64,
 
+    #[required]
     pub end_timestamp: i64,
 
     #[serde(flatten)]
     pub topic_request_header: Option<TopicRequestHeader>,
 }
 
-impl QueryMessageRequestHeader {
-    pub const TOPIC: &'static str = "topic";
-    pub const KEY: &'static str = "key";
-    pub const MAX_NUM: &'static str = "maxNum";
-    pub const BEGIN_TIMESTAMP: &'static str = "beginTimestamp";
-    pub const END_TIMESTAMP: &'static str = "endTimestamp";
-}
+// impl QueryMessageRequestHeader {
+//     pub const TOPIC: &'static str = "topic";
+//     pub const KEY: &'static str = "key";
+//     pub const MAX_NUM: &'static str = "maxNum";
+//     pub const BEGIN_TIMESTAMP: &'static str = "beginTimestamp";
+//     pub const END_TIMESTAMP: &'static str = "endTimestamp";
+// }
 
 /*impl From<&QueryMessageRequestHeader> for String {
     fn from(header: &QueryMessageRequestHeader) -> Self {
@@ -53,101 +57,101 @@ impl QueryMessageRequestHeader {
     }
 }*/
 
-impl CommandCustomHeader for QueryMessageRequestHeader {
-    fn to_map(&self) -> Option<std::collections::HashMap<CheetahString, CheetahString>> {
-        let mut map = std::collections::HashMap::new();
-        map.insert(
-            CheetahString::from_static_str(Self::TOPIC),
-            self.topic.clone(),
-        );
-        map.insert(CheetahString::from_static_str(Self::KEY), self.key.clone());
-        map.insert(
-            CheetahString::from_static_str(Self::MAX_NUM),
-            CheetahString::from_string(self.max_num.to_string()),
-        );
-        map.insert(
-            CheetahString::from_static_str(Self::BEGIN_TIMESTAMP),
-            CheetahString::from_string(self.begin_timestamp.to_string()),
-        );
-        map.insert(
-            CheetahString::from_static_str(Self::END_TIMESTAMP),
-            CheetahString::from_string(self.end_timestamp.to_string()),
-        );
-        if let Some(value) = self.topic_request_header.as_ref() {
-            if let Some(val) = value.to_map() {
-                map.extend(val);
-            }
-        }
-        Some(map)
-    }
-}
+// impl CommandCustomHeader for QueryMessageRequestHeader {
+//     fn to_map(&self) -> Option<std::collections::HashMap<CheetahString, CheetahString>> {
+//         let mut map = std::collections::HashMap::new();
+//         map.insert(
+//             CheetahString::from_static_str(Self::TOPIC),
+//             self.topic.clone(),
+//         );
+//         map.insert(CheetahString::from_static_str(Self::KEY), self.key.clone());
+//         map.insert(
+//             CheetahString::from_static_str(Self::MAX_NUM),
+//             CheetahString::from_string(self.max_num.to_string()),
+//         );
+//         map.insert(
+//             CheetahString::from_static_str(Self::BEGIN_TIMESTAMP),
+//             CheetahString::from_string(self.begin_timestamp.to_string()),
+//         );
+//         map.insert(
+//             CheetahString::from_static_str(Self::END_TIMESTAMP),
+//             CheetahString::from_string(self.end_timestamp.to_string()),
+//         );
+//         if let Some(value) = self.topic_request_header.as_ref() {
+//             if let Some(val) = value.to_map() {
+//                 map.extend(val);
+//             }
+//         }
+//         Some(map)
+//     }
+// }
 
-impl FromMap for QueryMessageRequestHeader {
-    type Error = rocketmq_error::RocketmqError;
+// impl FromMap for QueryMessageRequestHeader {
+//     type Error = rocketmq_error::RocketmqError;
 
-    type Target = Self;
+//     type Target = Self;
 
-    fn from(
-        map: &std::collections::HashMap<CheetahString, CheetahString>,
-    ) -> Result<Self::Target, Self::Error> {
-        Ok(QueryMessageRequestHeader {
-            topic: map
-                .get(&CheetahString::from_static_str(Self::TOPIC))
-                .cloned()
-                .ok_or(rocketmq_error::RocketmqError::DeserializeHeaderError(
-                    "Miss topic field".to_string(),
-                ))?,
-            key: map
-                .get(&CheetahString::from_static_str(Self::KEY))
-                .cloned()
-                .ok_or(rocketmq_error::RocketmqError::DeserializeHeaderError(
-                    "Miss key field".to_string(),
-                ))?,
-            max_num: map
-                .get(&CheetahString::from_static_str(Self::MAX_NUM))
-                .cloned()
-                .ok_or(rocketmq_error::RocketmqError::DeserializeHeaderError(
-                    "Miss maxNum field".to_string(),
-                ))?
-                .parse()
-                .map_err(|_| {
-                    rocketmq_error::RocketmqError::DeserializeHeaderError(
-                        "Parse maxNum field error".to_string(),
-                    )
-                })?,
-            begin_timestamp: map
-                .get(&CheetahString::from_static_str(Self::BEGIN_TIMESTAMP))
-                .cloned()
-                .ok_or(rocketmq_error::RocketmqError::DeserializeHeaderError(
-                    "Miss beginTimestamp field".to_string(),
-                ))?
-                .parse()
-                .map_err(|_| {
-                    rocketmq_error::RocketmqError::DeserializeHeaderError(
-                        "Parse beginTimestamp field error".to_string(),
-                    )
-                })?,
-            end_timestamp: map
-                .get(&CheetahString::from_static_str(Self::END_TIMESTAMP))
-                .cloned()
-                .ok_or(rocketmq_error::RocketmqError::DeserializeHeaderError(
-                    "Miss endTimestamp field".to_string(),
-                ))?
-                .parse()
-                .map_err(|_| {
-                    rocketmq_error::RocketmqError::DeserializeHeaderError(
-                        "Parse endTimestamp field error".to_string(),
-                    )
-                })?,
-            topic_request_header: Some(<TopicRequestHeader as FromMap>::from(map)?),
-        })
-    }
-}
+//     fn from(
+//         map: &std::collections::HashMap<CheetahString, CheetahString>,
+//     ) -> Result<Self::Target, Self::Error> {
+//         Ok(QueryMessageRequestHeader {
+//             topic: map
+//                 .get(&CheetahString::from_static_str(Self::TOPIC))
+//                 .cloned()
+//                 .ok_or(rocketmq_error::RocketmqError::DeserializeHeaderError(
+//                     "Miss topic field".to_string(),
+//                 ))?,
+//             key: map
+//                 .get(&CheetahString::from_static_str(Self::KEY))
+//                 .cloned()
+//                 .ok_or(rocketmq_error::RocketmqError::DeserializeHeaderError(
+//                     "Miss key field".to_string(),
+//                 ))?,
+//             max_num: map
+//                 .get(&CheetahString::from_static_str(Self::MAX_NUM))
+//                 .cloned()
+//                 .ok_or(rocketmq_error::RocketmqError::DeserializeHeaderError(
+//                     "Miss maxNum field".to_string(),
+//                 ))?
+//                 .parse()
+//                 .map_err(|_| {
+//                     rocketmq_error::RocketmqError::DeserializeHeaderError(
+//                         "Parse maxNum field error".to_string(),
+//                     )
+//                 })?,
+//             begin_timestamp: map
+//                 .get(&CheetahString::from_static_str(Self::BEGIN_TIMESTAMP))
+//                 .cloned()
+//                 .ok_or(rocketmq_error::RocketmqError::DeserializeHeaderError(
+//                     "Miss beginTimestamp field".to_string(),
+//                 ))?
+//                 .parse()
+//                 .map_err(|_| {
+//                     rocketmq_error::RocketmqError::DeserializeHeaderError(
+//                         "Parse beginTimestamp field error".to_string(),
+//                     )
+//                 })?,
+//             end_timestamp: map
+//                 .get(&CheetahString::from_static_str(Self::END_TIMESTAMP))
+//                 .cloned()
+//                 .ok_or(rocketmq_error::RocketmqError::DeserializeHeaderError(
+//                     "Miss endTimestamp field".to_string(),
+//                 ))?
+//                 .parse()
+//                 .map_err(|_| {
+//                     rocketmq_error::RocketmqError::DeserializeHeaderError(
+//                         "Parse endTimestamp field error".to_string(),
+//                     )
+//                 })?,
+//             topic_request_header: Some(<TopicRequestHeader as FromMap>::from(map)?),
+//         })
+//     }
+// }
 
 #[cfg(test)]
 mod query_message_request_header_tests {
     use std::collections::HashMap;
-
+    use crate::protocol::command_custom_header::{FromMap, CommandCustomHeader};
     use super::*;
 
     #[test]
@@ -159,7 +163,7 @@ mod query_message_request_header_tests {
         map.insert("beginTimestamp".into(), "1000".into());
         map.insert("endTimestamp".into(), "2000".into());
 
-        let header = <QueryMessageRequestHeader as FromMap>::from(&map).unwrap();
+        let header:QueryMessageRequestHeader = <QueryMessageRequestHeader as FromMap>::from(&map).unwrap();
 
         assert_eq!(header.topic, "test_topic");
         assert_eq!(header.key, "test_key");
@@ -177,7 +181,7 @@ mod query_message_request_header_tests {
         map.insert("beginTimestamp".into(), "1000".into());
         map.insert("endTimestamp".into(), "2000".into());
 
-        let header = <QueryMessageRequestHeader as FromMap>::from(&map).unwrap();
+        let header:QueryMessageRequestHeader = <QueryMessageRequestHeader as FromMap>::from(&map).unwrap();
 
         assert_eq!(header.topic, "test_topic");
         assert_eq!(header.key, "test_key");
@@ -191,7 +195,7 @@ mod query_message_request_header_tests {
         map.insert("key".into(), "test_key".into());
         map.insert("maxNum".into(), "invalid".into());
 
-        let header = <QueryMessageRequestHeader as FromMap>::from(&map);
+        let header:Result<QueryMessageRequestHeader, rocketmq_error::RocketmqError>= <QueryMessageRequestHeader as FromMap>::from(&map);
 
         assert!(header.is_err());
     }
@@ -207,7 +211,7 @@ mod query_message_request_header_tests {
             topic_request_header: None,
         };
 
-        let map = header.to_map().unwrap();
+        let map: HashMap<CheetahString, CheetahString> = header.to_map().unwrap();
 
         assert_eq!(map.get("topic").unwrap(), "test_topic");
         assert_eq!(map.get("key").unwrap(), "test_key");
