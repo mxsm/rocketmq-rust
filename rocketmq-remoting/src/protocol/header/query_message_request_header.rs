@@ -151,8 +151,10 @@ pub struct QueryMessageRequestHeader {
 #[cfg(test)]
 mod query_message_request_header_tests {
     use std::collections::HashMap;
-    use crate::protocol::command_custom_header::{FromMap, CommandCustomHeader};
+
     use super::*;
+    use crate::protocol::command_custom_header::CommandCustomHeader;
+    use crate::protocol::command_custom_header::FromMap;
 
     #[test]
     fn creating_from_map_with_all_fields_populates_struct_correctly() {
@@ -163,7 +165,8 @@ mod query_message_request_header_tests {
         map.insert("beginTimestamp".into(), "1000".into());
         map.insert("endTimestamp".into(), "2000".into());
 
-        let header:QueryMessageRequestHeader = <QueryMessageRequestHeader as FromMap>::from(&map).unwrap();
+        let header: QueryMessageRequestHeader =
+            <QueryMessageRequestHeader as FromMap>::from(&map).unwrap();
 
         assert_eq!(header.topic, "test_topic");
         assert_eq!(header.key, "test_key");
@@ -181,7 +184,8 @@ mod query_message_request_header_tests {
         map.insert("beginTimestamp".into(), "1000".into());
         map.insert("endTimestamp".into(), "2000".into());
 
-        let header:QueryMessageRequestHeader = <QueryMessageRequestHeader as FromMap>::from(&map).unwrap();
+        let header: QueryMessageRequestHeader =
+            <QueryMessageRequestHeader as FromMap>::from(&map).unwrap();
 
         assert_eq!(header.topic, "test_topic");
         assert_eq!(header.key, "test_key");
@@ -195,7 +199,8 @@ mod query_message_request_header_tests {
         map.insert("key".into(), "test_key".into());
         map.insert("maxNum".into(), "invalid".into());
 
-        let header:Result<QueryMessageRequestHeader, rocketmq_error::RocketmqError>= <QueryMessageRequestHeader as FromMap>::from(&map);
+        let header: Result<QueryMessageRequestHeader, rocketmq_error::RocketmqError> =
+            <QueryMessageRequestHeader as FromMap>::from(&map);
 
         assert!(header.is_err());
     }
