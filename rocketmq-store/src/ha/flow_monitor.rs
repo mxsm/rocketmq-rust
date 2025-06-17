@@ -43,6 +43,21 @@ impl FlowMonitor {
     pub async fn shutdown(&self) {
         self.server_manager.shutdown().await.unwrap();
     }
+
+    pub fn get_transferred_byte_in_second(&self) -> i64 {
+        self.server_manager
+            .as_ref()
+            .get_transferred_byte_in_second()
+    }
+    pub fn can_transfer_max_byte_num(&self) -> i32 {
+        self.server_manager.as_ref().can_transfer_max_byte_num()
+    }
+
+    pub fn add_byte_count_transferred(&self, count: i64) {
+        self.server_manager
+            .as_ref()
+            .add_byte_count_transferred(count);
+    }
 }
 
 struct FlowMonitorInner {

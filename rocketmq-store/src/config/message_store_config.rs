@@ -271,6 +271,12 @@ mod defaults {
     pub fn max_filter_message_size() -> i32 {
         16000
     }
+    pub fn ha_housekeeping_interval() -> u64 {
+        1000 * 20
+    }
+    pub fn ha_send_heartbeat_interval() -> u64 {
+        1000 * 5
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -507,11 +513,11 @@ pub struct MessageStoreConfig {
     #[serde(default)]
     pub ha_listen_port: usize,
 
-    #[serde(default)]
-    pub ha_send_heartbeat_interval: usize,
+    #[serde(default = "defaults::ha_send_heartbeat_interval")]
+    pub ha_send_heartbeat_interval: u64,
 
-    #[serde(default)]
-    pub ha_housekeeping_interval: usize,
+    #[serde(default = "defaults::ha_housekeeping_interval")]
+    pub ha_housekeeping_interval: u64,
 
     #[serde(default)]
     pub ha_transfer_batch_size: usize,
@@ -891,8 +897,8 @@ impl Default for MessageStoreConfig {
             max_msgs_num_batch: 64,
             message_index_safe: false,
             ha_listen_port: 0,
-            ha_send_heartbeat_interval: 0,
-            ha_housekeeping_interval: 0,
+            ha_send_heartbeat_interval: 1000 * 5,
+            ha_housekeeping_interval: 1000 * 20,
             ha_transfer_batch_size: 0,
             ha_master_address: None,
             ha_max_gap_not_in_sync: 0,
