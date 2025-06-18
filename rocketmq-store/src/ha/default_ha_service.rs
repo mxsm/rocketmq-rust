@@ -55,7 +55,13 @@ impl DefaultHAService {
     // Add any necessary fields here
 
     pub fn get_default_message_store(&self) -> &LocalFileMessageStore {
-        unimplemented!()
+        unimplemented!(" get_default_message_store method is not implemented");
+    }
+
+    pub async fn notify_transfer_some(&self, _offset: i64) {
+        // This method is a placeholder for notifying transfer operations.
+        // The actual implementation would depend on the specific requirements of the HA service.
+        unimplemented!(" notify_transfer_some method is not implemented");
     }
 }
 
