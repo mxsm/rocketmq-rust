@@ -22,6 +22,8 @@ use std::time::Duration;
 use std::time::Instant;
 
 use bytes::BufMut;
+use bytes::Bytes;
+use bytes::BytesMut;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::net::tcp::OwnedReadHalf;
@@ -476,6 +478,7 @@ impl WriteSocketService {
 
         let mut last_write_over = true;
         let mut last_write_timestamp = Instant::now();
+        let mut byte_buffer_header = BytesMut::with_capacity(TRANSFER_HEADER_SIZE);
 
         loop {
             // Check if we should stop
@@ -496,11 +499,10 @@ impl WriteSocketService {
             if next_transfer_from_where.load(Ordering::SeqCst) == -1 {
                 let slave_offset = slave_request_offset.load(Ordering::SeqCst);
                 let transfer_offset = if slave_offset == 0 {
-                    /*let master_offset = ha_service
-                    .get_message_store()::<MS>()
-                    .get_commit_log()
-                    .get_max_offset();*/
-                    let master_offset = 0;
+                    let master_offset = ha_service
+                        .get_default_message_store()
+                        .get_commit_log()
+                        .get_max_offset();
                     let mapped_file_size = message_store_config.mapped_file_size_commit_log;
                     let aligned_offset = master_offset - (master_offset % mapped_file_size as i64);
                     if aligned_offset < 0 {
@@ -511,7 +513,6 @@ impl WriteSocketService {
                 } else {
                     slave_offset
                 };
-
                 next_transfer_from_where.store(transfer_offset, Ordering::SeqCst);
                 info!(
                     "master transfer data from {} to slave[{}], and slave request {}",
@@ -525,11 +526,13 @@ impl WriteSocketService {
                 let heartbeat_interval = message_store_config.ha_send_heartbeat_interval;
 
                 if interval > Duration::from_millis(heartbeat_interval) {
+                    byte_buffer_header.clear();
                     // Send heartbeat
-                    let header =
-                        Self::build_header(next_transfer_from_where.load(Ordering::SeqCst), 0);
+                    byte_buffer_header.put_i64(next_transfer_from_where.load(Ordering::SeqCst));
+                    byte_buffer_header.put_i32(0);
+                    let header = byte_buffer_header.split().freeze();
                     last_write_over =
-                        Self::transfer_header(&mut socket_stream, &header, &flow_monitor).await;
+                        Self::transfer_data(&mut socket_stream, &header, None, &flow_monitor).await;
                     if !last_write_over {
                         continue;
                     }
@@ -542,8 +545,7 @@ impl WriteSocketService {
                 ha_service.get_default_message_store(),
                 next_transfer_from_where.load(Ordering::SeqCst),
             ) {
-                //let mut size = data.len();
-                let mut size = 0_i32;
+                let mut size = data.size;
                 let max_batch_size = message_store_config.ha_transfer_batch_size as i32;
                 if size > max_batch_size {
                     size = max_batch_size;
@@ -554,17 +556,18 @@ impl WriteSocketService {
                     size = can_transfer_max;
                 }
 
-                let this_offset = next_transfer_from_where.load(Ordering::SeqCst);
-                next_transfer_from_where.store(this_offset + size as i64, Ordering::SeqCst);
+                let this_offset = next_transfer_from_where.fetch_add(size as i64, Ordering::SeqCst);
 
-                let header = Self::build_header(this_offset, size);
-
-                // Transfer header and data
-                if Self::transfer_header(&mut socket_stream, &header, &flow_monitor).await {
-                    /*last_write_over =
-                    Self::transfer_data(&socket_stream, &data[..size as usize], &flow_monitor).await;*/
-                    last_write_timestamp = Instant::now();
-                }
+                byte_buffer_header.clear();
+                // Send heartbeat
+                byte_buffer_header.put_i64(next_transfer_from_where.load(Ordering::SeqCst));
+                byte_buffer_header.put_i32(0);
+                let header = byte_buffer_header.split().freeze();
+                let data_buffer = data.bytes.as_ref().map(|bytes| {
+                    // If the data is larger than the size, slice it
+                    bytes.slice(..size as usize)
+                });
+                Self::transfer_data(&mut socket_stream, &header, data_buffer, &flow_monitor).await;
             } else {
                 // No data available, wait
                 sleep(Duration::from_millis(100)).await;
@@ -574,50 +577,37 @@ impl WriteSocketService {
         info!("WriteSocketService ended for client: {}", client_address);
     }
 
-    fn build_header(offset: i64, size: i32) -> Vec<u8> {
-        let mut header = Vec::with_capacity(TRANSFER_HEADER_SIZE);
-        header.extend_from_slice(&offset.to_be_bytes());
-        header.extend_from_slice(&size.to_be_bytes());
-        header
-    }
-
-    async fn transfer_header(
+    async fn transfer_data(
         socket_stream: &mut Option<OwnedWriteHalf>,
-        header: &[u8],
+        buffer_header: &[u8],
+        select_mapped_buffer: Option<Bytes>,
         flow_monitor: &Arc<FlowMonitor>,
     ) -> bool {
         if let Some(ref mut socket) = socket_stream {
-            match socket.write_all(header).await {
+            let result = match socket.write_all(buffer_header).await {
                 Ok(_) => {
-                    flow_monitor.add_byte_count_transferred(header.len() as i64);
-                    true
-                }
-                Err(e) => {
-                    error!("Failed to write header: {}", e);
-                    false
-                }
-            }
-        } else {
-            false
-        }
-    }
-
-    async fn transfer_data(
-        socket_stream: &Arc<RwLock<Option<TcpStream>>>,
-        data: &[u8],
-        flow_monitor: &Arc<FlowMonitor>,
-    ) -> bool {
-        let mut socket_guard = socket_stream.write().await;
-        if let Some(ref mut socket) = socket_guard.as_mut() {
-            match socket.write_all(data).await {
-                Ok(_) => {
-                    flow_monitor.add_byte_count_transferred(data.len() as i64);
+                    flow_monitor.add_byte_count_transferred(buffer_header.len() as i64);
                     true
                 }
                 Err(e) => {
                     error!("Failed to write data: {}", e);
                     false
                 }
+            };
+
+            if let Some(data) = select_mapped_buffer {
+                match socket.write_all(data.as_ref()).await {
+                    Ok(_) => {
+                        flow_monitor.add_byte_count_transferred(data.len() as i64);
+                        true
+                    }
+                    Err(e) => {
+                        error!("Failed to write data: {}", e);
+                        false
+                    }
+                }
+            } else {
+                result
             }
         } else {
             false
