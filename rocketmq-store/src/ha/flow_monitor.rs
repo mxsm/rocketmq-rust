@@ -44,6 +44,11 @@ impl FlowMonitor {
         self.server_manager.shutdown().await.unwrap();
     }
 
+    
+    pub async fn shutdown_with_interrupt(&self,interrupt: bool) {
+        self.server_manager.shutdown_with_interrupt(interrupt).await.unwrap();
+    }
+
     pub fn get_transferred_byte_in_second(&self) -> i64 {
         self.server_manager
             .as_ref()
