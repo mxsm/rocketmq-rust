@@ -34,18 +34,16 @@ pub struct GroupCommitRequest {
 impl GroupCommitRequest {
     /// Create a new GroupCommitRequest with timeout in milliseconds
     pub fn new(next_offset: i64, timeout_millis: u64) -> Self {
-        let (sender, receiver) = oneshot::channel();
-        Self {
-            next_offset,
-            flush_ok_sender: Some(sender),
-            flush_ok_receiver: Some(receiver),
-            ack_nums: 1,
-            deadline: Instant::now() + Duration::from_millis(timeout_millis),
-        }
+        Self::create_request(next_offset, timeout_millis, 1)
     }
 
     /// Create a new GroupCommitRequest with timeout and ack numbers
     pub fn with_ack_nums(next_offset: i64, timeout_millis: u64, ack_nums: i32) -> Self {
+        Self::create_request(next_offset, timeout_millis, ack_nums)
+    }
+
+    #[inline]
+    fn create_request(next_offset: i64, timeout_millis: u64, ack_nums: i32) -> Self {
         let (sender, receiver) = oneshot::channel();
         Self {
             next_offset,
