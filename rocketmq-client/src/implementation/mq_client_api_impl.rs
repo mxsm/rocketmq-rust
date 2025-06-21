@@ -906,7 +906,7 @@ impl MQClientAPIImpl {
         client_id: &str,
         subscription_data: &SubscriptionData,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> RocketMQResult<()> {
         let mut request = RemotingCommand::create_remoting_command(RequestCode::CheckClientConfig);
         let body = CheckClientRequestBody::new(
             client_id.to_string(),
