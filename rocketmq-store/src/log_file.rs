@@ -18,6 +18,7 @@
 pub(crate) mod cold_data_check_service;
 pub mod commit_log;
 pub mod flush_manager_impl;
+pub mod group_commit_request;
 pub mod mapped_file;
 
 pub const MAX_PULL_MSG_SIZE: i32 = 128 * 1024 * 1024;
