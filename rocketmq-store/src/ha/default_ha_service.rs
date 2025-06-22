@@ -33,25 +33,53 @@
 
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicI64;
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_rust::ArcMut;
 use tracing::error;
 
+use crate::ha::general_ha_client::GeneralHAClient;
+use crate::ha::general_ha_connection::GeneralHAConnection;
+use crate::ha::group_transfer_service::GroupTransferService;
 use crate::ha::ha_client::HAClient;
 use crate::ha::ha_connection::HAConnection;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
+use crate::ha::ha_connection_state_notification_service::HAConnectionStateNotificationService;
 use crate::ha::ha_service::HAService;
 use crate::ha::wait_notify_object::WaitNotifyObject;
 use crate::log_file::flush_manager_impl::group_commit_request::GroupCommitRequest;
 use crate::message_store::local_file_message_store::LocalFileMessageStore;
 use crate::store_error::HAResult;
 
-#[derive(Default)]
-pub struct DefaultHAService {}
+pub struct DefaultHAService {
+    connection_count: Arc<AtomicU64>,
+    connection_list: Vec<GeneralHAConnection>,
+    accept_socket_service: AcceptSocketService,
+    default_message_store: ArcMut<LocalFileMessageStore>,
+    wait_notify_object: Arc<WaitNotifyObject>,
+    push2_slave_max_offset: Arc<AtomicU64>,
+    group_transfer_service: Option<GroupTransferService>,
+    ha_client: GeneralHAClient,
+    ha_connection_state_notification_service: HAConnectionStateNotificationService,
+}
 
 impl DefaultHAService {
+    pub fn new(message_store: ArcMut<LocalFileMessageStore>) -> Self {
+        DefaultHAService {
+            connection_count: Arc::new(AtomicU64::new(0)),
+            connection_list: Vec::new(),
+            accept_socket_service: AcceptSocketService,
+            default_message_store: message_store,
+            wait_notify_object: Arc::new(WaitNotifyObject),
+            push2_slave_max_offset: Arc::new(AtomicU64::new(0)),
+            group_transfer_service: None,
+            ha_client: GeneralHAClient::new(),
+            ha_connection_state_notification_service: HAConnectionStateNotificationService,
+        }
+    }
+
     // Add any necessary fields here
     pub fn get_default_message_store(&self) -> &LocalFileMessageStore {
         unimplemented!(" get_default_message_store method is not implemented");
@@ -63,7 +91,7 @@ impl DefaultHAService {
         unimplemented!(" notify_transfer_some method is not implemented");
     }
 
-    pub(crate) fn init(&mut self, message_store: ArcMut<LocalFileMessageStore>) -> HAResult<()> {
+    pub(crate) fn init(&mut self) -> HAResult<()> {
         // Initialize the DefaultHAService with the provided message store.
         Ok(())
     }
@@ -152,3 +180,5 @@ impl HAService for DefaultHAService {
         todo!()
     }
 }
+
+struct AcceptSocketService;

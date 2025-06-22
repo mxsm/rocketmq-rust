@@ -15,19 +15,4 @@
  * limitations under the License.
  */
 
-mod auto_switch;
-pub(crate) mod default_ha_client;
-mod default_ha_connection;
-pub(crate) mod default_ha_service;
-pub(crate) mod flow_monitor;
-pub(crate) mod general_ha_client;
-pub(crate) mod general_ha_connection;
-pub(crate) mod general_ha_service;
-mod group_transfer_service;
-pub(crate) mod ha_client;
-pub(crate) mod ha_connection;
-pub(crate) mod ha_connection_state;
-pub(crate) mod ha_connection_state_notification_request;
-mod ha_connection_state_notification_service;
-pub(crate) mod ha_service;
-pub(crate) mod wait_notify_object;
+pub struct GroupTransferService;
