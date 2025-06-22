@@ -24,24 +24,47 @@ use rocketmq_rust::ArcMut;
 use tracing::error;
 
 use crate::base::message_store::MessageStore;
+use crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService;
+use crate::ha::default_ha_service::DefaultHAService;
 use crate::ha::ha_client::HAClient;
 use crate::ha::ha_connection::HAConnection;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use crate::ha::ha_service::HAService;
 use crate::ha::wait_notify_object::WaitNotifyObject;
 use crate::log_file::flush_manager_impl::group_commit_request::GroupCommitRequest;
+use crate::message_store::local_file_message_store::LocalFileMessageStore;
+use crate::store_error::HAError;
 use crate::store_error::HAResult;
 
-pub struct GeneralHAService;
+pub struct GeneralHAService {
+    default_ha_service: Option<DefaultHAService>,
+    auto_switch_ha_service: Option<AutoSwitchHAService>,
+}
 
-impl HAService for GeneralHAService {
-    fn init<MS: MessageStore>(&mut self, message_store: ArcMut<MS>) -> HAResult<()> {
-        error!("Initializing general HAService is not implemented");
+impl GeneralHAService {
+    pub(crate) fn init(&mut self, message_store: ArcMut<LocalFileMessageStore>) -> HAResult<()> {
+        if message_store
+            .get_message_store_config()
+            .enable_controller_mode
+        {
+            self.auto_switch_ha_service = Some(AutoSwitchHAService)
+        } else {
+            self.default_ha_service = Some(DefaultHAService::default())
+        }
         Ok(())
     }
+}
 
+impl HAService for GeneralHAService {
     fn start(&mut self) -> HAResult<()> {
-        error!("Starting general HAService is not implemented");
+        if let Some(ref mut service) = self.default_ha_service {
+            service.start()?;
+        } else if let Some(ref mut service) = self.auto_switch_ha_service {
+            service.start()?;
+        } else {
+            error!("No HA service initialized");
+            return Err(HAError::Service("No HA service initialized".to_string()));
+        }
         Ok(())
     }
 

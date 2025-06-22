@@ -15,4 +15,103 @@
  * limitations under the License.
  */
 
+use std::sync::atomic::AtomicI32;
+use std::sync::atomic::AtomicI64;
+use std::sync::Arc;
+
+use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
+use tracing::error;
+
+use crate::ha::ha_client::HAClient;
+use crate::ha::ha_connection::HAConnection;
+use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
+use crate::ha::ha_service::HAService;
+use crate::ha::wait_notify_object::WaitNotifyObject;
+use crate::log_file::flush_manager_impl::group_commit_request::GroupCommitRequest;
+use crate::store_error::HAResult;
+
 pub struct AutoSwitchHAService;
+
+impl HAService for AutoSwitchHAService {
+    fn start(&mut self) -> HAResult<()> {
+        error!("DefaultHAService start not implemented");
+        Ok(())
+    }
+
+    fn shutdown(&self) {
+        todo!()
+    }
+
+    async fn change_to_master(&self, master_epoch: i32) -> HAResult<bool> {
+        todo!()
+    }
+
+    async fn change_to_master_when_last_role_is_master(&self, master_epoch: i32) -> HAResult<bool> {
+        todo!()
+    }
+
+    async fn change_to_slave(
+        &self,
+        new_master_addr: &str,
+        new_master_epoch: i32,
+        slave_id: Option<i64>,
+    ) -> HAResult<bool> {
+        todo!()
+    }
+
+    async fn change_to_slave_when_master_not_change(
+        &self,
+        new_master_addr: &str,
+        new_master_epoch: i32,
+    ) -> HAResult<bool> {
+        todo!()
+    }
+
+    fn update_master_address(&self, new_addr: &str) {
+        todo!()
+    }
+
+    fn update_ha_master_address(&self, new_addr: &str) {
+        todo!()
+    }
+
+    fn in_sync_replicas_nums(&self, master_put_where: i64) -> i32 {
+        todo!()
+    }
+
+    fn get_connection_count(&self) -> &AtomicI32 {
+        todo!()
+    }
+
+    fn put_request(&self, request: GroupCommitRequest) {
+        todo!()
+    }
+
+    fn put_group_connection_state_request(&self, request: HAConnectionStateNotificationRequest) {
+        todo!()
+    }
+
+    fn get_connection_list<CN: HAConnection>(&self) -> Vec<Arc<CN>> {
+        todo!()
+    }
+
+    fn get_ha_client<CL: HAClient>(&self) -> Arc<CL> {
+        todo!()
+    }
+
+    fn get_push_to_slave_max_offset(&self) -> &AtomicI64 {
+        todo!()
+    }
+
+    fn get_runtime_info(&self, master_put_where: i64) -> HARuntimeInfo {
+        todo!()
+    }
+
+    fn get_wait_notify_object(&self) -> Arc<WaitNotifyObject> {
+        todo!()
+    }
+
+    fn is_slave_ok(&self, master_put_where: i64) -> bool {
+        todo!()
+    }
+}
