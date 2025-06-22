@@ -36,6 +36,7 @@ use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
 
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
+use rocketmq_rust::ArcMut;
 use tracing::error;
 
 use crate::ha::ha_client::HAClient;
@@ -60,6 +61,11 @@ impl DefaultHAService {
         // This method is a placeholder for notifying transfer operations.
         // The actual implementation would depend on the specific requirements of the HA service.
         unimplemented!(" notify_transfer_some method is not implemented");
+    }
+
+    pub(crate) fn init(&mut self, message_store: ArcMut<LocalFileMessageStore>) -> HAResult<()> {
+        // Initialize the DefaultHAService with the provided message store.
+        Ok(())
     }
 }
 
