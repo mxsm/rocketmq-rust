@@ -14,12 +14,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use rocketmq_rust::ArcMut;
 
 use crate::ha::auto_switch::auto_switch_ha_client::AutoSwitchHAClient;
 use crate::ha::default_ha_client::DefaultHAClient;
 
 pub struct GeneralHAClient {
-    default_ha_service: Option<DefaultHAClient>,
+    default_ha_service: Option<ArcMut<DefaultHAClient>>,
     auto_switch_ha_service: Option<AutoSwitchHAClient>,
 }
 
@@ -37,7 +38,7 @@ impl GeneralHAClient {
         }
     }
 
-    pub fn set_default_ha_service(&mut self, service: DefaultHAClient) {
+    pub fn set_default_ha_service(&mut self, service: ArcMut<DefaultHAClient>) {
         self.default_ha_service = Some(service);
     }
 

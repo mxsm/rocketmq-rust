@@ -14,5 +14,24 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use rocketmq_rust::ArcMut;
 
-pub struct HAConnectionStateNotificationService;
+use crate::ha::general_ha_service::GeneralHAService;
+use crate::message_store::local_file_message_store::LocalFileMessageStore;
+
+pub struct HAConnectionStateNotificationService {
+    ha_service: GeneralHAService,
+    default_message_store: ArcMut<LocalFileMessageStore>,
+}
+
+impl HAConnectionStateNotificationService {
+    pub fn new(
+        ha_service: GeneralHAService,
+        default_message_store: ArcMut<LocalFileMessageStore>,
+    ) -> Self {
+        HAConnectionStateNotificationService {
+            ha_service,
+            default_message_store,
+        }
+    }
+}

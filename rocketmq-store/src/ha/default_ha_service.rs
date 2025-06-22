@@ -36,12 +36,15 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
+use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_rust::ArcMut;
 use tracing::error;
 
+use crate::ha::default_ha_client::DefaultHAClient;
 use crate::ha::general_ha_client::GeneralHAClient;
 use crate::ha::general_ha_connection::GeneralHAConnection;
+use crate::ha::general_ha_service::GeneralHAService;
 use crate::ha::group_transfer_service::GroupTransferService;
 use crate::ha::ha_client::HAClient;
 use crate::ha::ha_connection::HAConnection;
@@ -51,6 +54,7 @@ use crate::ha::ha_service::HAService;
 use crate::ha::wait_notify_object::WaitNotifyObject;
 use crate::log_file::flush_manager_impl::group_commit_request::GroupCommitRequest;
 use crate::message_store::local_file_message_store::LocalFileMessageStore;
+use crate::store_error::HAError;
 use crate::store_error::HAResult;
 
 pub struct DefaultHAService {
@@ -62,7 +66,7 @@ pub struct DefaultHAService {
     push2_slave_max_offset: Arc<AtomicU64>,
     group_transfer_service: Option<GroupTransferService>,
     ha_client: GeneralHAClient,
-    ha_connection_state_notification_service: HAConnectionStateNotificationService,
+    ha_connection_state_notification_service: Option<HAConnectionStateNotificationService>,
 }
 
 impl DefaultHAService {
@@ -76,7 +80,7 @@ impl DefaultHAService {
             push2_slave_max_offset: Arc::new(AtomicU64::new(0)),
             group_transfer_service: None,
             ha_client: GeneralHAClient::new(),
-            ha_connection_state_notification_service: HAConnectionStateNotificationService,
+            ha_connection_state_notification_service: None,
         }
     }
 
@@ -91,8 +95,22 @@ impl DefaultHAService {
         unimplemented!(" notify_transfer_some method is not implemented");
     }
 
-    pub(crate) fn init(&mut self) -> HAResult<()> {
+    pub(crate) fn init(&mut self, this: ArcMut<Self>) -> HAResult<()> {
         // Initialize the DefaultHAService with the provided message store.
+        let config = self.default_message_store.get_message_store_config();
+        let service = GeneralHAService::new_with_default_ha_service(this.clone());
+        let group_transfer_service = GroupTransferService::new(config.clone(), service.clone());
+        self.group_transfer_service = Some(group_transfer_service);
+
+        if config.broker_role == BrokerRole::Slave {
+            let default_message_store = self.default_message_store.clone();
+            let client = DefaultHAClient::new(default_message_store)
+                .map_err(|e| HAError::Service(format!("Failed to create DefaultHAClient: {e}")))?;
+            self.ha_client.set_default_ha_service(client)
+        }
+        let state_notification_service =
+            HAConnectionStateNotificationService::new(service, self.default_message_store.clone());
+        self.ha_connection_state_notification_service = Some(state_notification_service);
         Ok(())
     }
 }

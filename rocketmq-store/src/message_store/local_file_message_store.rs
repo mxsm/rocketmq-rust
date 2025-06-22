@@ -531,6 +531,10 @@ impl LocalFileMessageStore {
     fn do_recheck_reput_offset_from_cq(&self) {
         error!("do_recheck_reput_offset_from_cq called, not implemented yet");
     }
+
+    pub fn get_message_store_config(&self) -> Arc<MessageStoreConfig> {
+        self.message_store_config.clone()
+    }
 }
 
 fn estimate_in_mem_by_commit_offset(
