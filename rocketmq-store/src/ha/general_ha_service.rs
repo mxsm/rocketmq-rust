@@ -49,7 +49,9 @@ impl GeneralHAService {
         {
             self.auto_switch_ha_service = Some(AutoSwitchHAService)
         } else {
-            self.default_ha_service = Some(DefaultHAService::default())
+            let mut default_ha_service = DefaultHAService::default();
+            default_ha_service.init(message_store)?;
+            self.default_ha_service = Some(default_ha_service);
         }
         Ok(())
     }

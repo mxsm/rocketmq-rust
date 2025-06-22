@@ -14,4 +14,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+pub(crate) mod auto_switch_ha_client;
+pub(crate) mod auto_switch_ha_connection;
 pub(crate) mod auto_switch_ha_service;
