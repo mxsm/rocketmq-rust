@@ -14,5 +14,24 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::sync::Arc;
 
-pub struct GroupTransferService;
+use crate::config::message_store_config::MessageStoreConfig;
+use crate::ha::general_ha_service::GeneralHAService;
+
+pub struct GroupTransferService {
+    message_store_config: Arc<MessageStoreConfig>,
+    ha_service: GeneralHAService,
+}
+
+impl GroupTransferService {
+    pub fn new(
+        message_store_config: Arc<MessageStoreConfig>,
+        ha_service: GeneralHAService,
+    ) -> Self {
+        GroupTransferService {
+            message_store_config,
+            ha_service,
+        }
+    }
+}

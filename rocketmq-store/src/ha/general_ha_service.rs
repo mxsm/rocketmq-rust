@@ -23,7 +23,6 @@ use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_rust::ArcMut;
 use tracing::error;
 
-use crate::base::message_store::MessageStore;
 use crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService;
 use crate::ha::default_ha_service::DefaultHAService;
 use crate::ha::ha_client::HAClient;
@@ -36,21 +35,37 @@ use crate::message_store::local_file_message_store::LocalFileMessageStore;
 use crate::store_error::HAError;
 use crate::store_error::HAResult;
 
+#[derive(Clone)]
 pub struct GeneralHAService {
-    default_ha_service: Option<DefaultHAService>,
-    auto_switch_ha_service: Option<AutoSwitchHAService>,
+    default_ha_service: Option<ArcMut<DefaultHAService>>,
+    auto_switch_ha_service: Option<ArcMut<AutoSwitchHAService>>,
 }
 
 impl GeneralHAService {
+    pub fn new() -> Self {
+        GeneralHAService {
+            default_ha_service: None,
+            auto_switch_ha_service: None,
+        }
+    }
+
+    pub fn new_with_default_ha_service(default_ha_service: ArcMut<DefaultHAService>) -> Self {
+        GeneralHAService {
+            default_ha_service: Some(default_ha_service),
+            auto_switch_ha_service: None,
+        }
+    }
+
     pub(crate) fn init(&mut self, message_store: ArcMut<LocalFileMessageStore>) -> HAResult<()> {
         if message_store
             .get_message_store_config()
             .enable_controller_mode
         {
-            self.auto_switch_ha_service = Some(AutoSwitchHAService)
+            self.auto_switch_ha_service = Some(ArcMut::new(AutoSwitchHAService))
         } else {
-            let mut default_ha_service = DefaultHAService::new(message_store);
-            default_ha_service.init()?;
+            let mut default_ha_service = ArcMut::new(DefaultHAService::new(message_store));
+            let default_ha_service_clone = default_ha_service.clone();
+            DefaultHAService::init(&mut default_ha_service, default_ha_service_clone)?;
             self.default_ha_service = Some(default_ha_service);
         }
         Ok(())
