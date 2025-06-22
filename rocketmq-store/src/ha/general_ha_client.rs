@@ -22,3 +22,28 @@ pub struct GeneralHAClient {
     default_ha_service: Option<DefaultHAClient>,
     auto_switch_ha_service: Option<AutoSwitchHAClient>,
 }
+
+impl Default for GeneralHAClient {
+    fn default() -> Self {
+        GeneralHAClient::new()
+    }
+}
+
+impl GeneralHAClient {
+    pub fn new() -> Self {
+        GeneralHAClient {
+            default_ha_service: None,
+            auto_switch_ha_service: None,
+        }
+    }
+
+    pub fn set_default_ha_service(&mut self, service: DefaultHAClient) {
+        self.default_ha_service = Some(service);
+    }
+
+    pub fn set_auto_switch_ha_service(&mut self, service: AutoSwitchHAClient) {
+        self.auto_switch_ha_service = Some(service);
+    }
+
+    // Additional methods to interact with the HA services can be added here
+}
