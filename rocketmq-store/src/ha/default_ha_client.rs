@@ -39,6 +39,7 @@ use tracing::warn;
 
 use crate::base::message_store::MessageStore;
 use crate::ha::flow_monitor::FlowMonitor;
+use crate::ha::ha_client::HAClient;
 use crate::ha::ha_connection_state::HAConnectionState;
 use crate::message_store::local_file_message_store::LocalFileMessageStore;
 
@@ -609,9 +610,9 @@ impl DefaultHAClient {
         sleep(Duration::from_secs(5)).await;
     }
 
-    /// Start the HA client service
-    pub async fn start(self: Arc<Self>) -> Result<(), HAClientError> {
-        let self_clone = Arc::clone(&self);
+    // Start the HA client service
+    /*    pub async fn start(self: ArcMut<Self>) -> Result<(), HAClientError> {
+        let self_clone = ArcMut::clone(&self);
         let handle = tokio::spawn(async move {
             self_clone.run_service().await;
         });
@@ -620,7 +621,7 @@ impl DefaultHAClient {
         *service_handle = Some(handle);
 
         Ok(())
-    }
+    }*/
 
     /// Shutdown the HA client
     pub async fn shutdown(self: Arc<Self>) {
@@ -663,6 +664,59 @@ impl DefaultHAClient {
     }
 }
 
+impl HAClient for DefaultHAClient {
+    async fn start(&self) {
+        error!("GeneralHAService does not implement start directly, use specific service");
+    }
+
+    async fn shutdown(&self) {
+        todo!()
+    }
+
+    async fn wakeup(&self) {
+        todo!()
+    }
+
+    async fn update_master_address(&self, new_address: &str) {
+        todo!()
+    }
+
+    async fn update_ha_master_address(&self, new_address: &str) {
+        todo!()
+    }
+
+    fn get_master_address(&self) -> String {
+        todo!()
+    }
+
+    fn get_ha_master_address(&self) -> String {
+        todo!()
+    }
+
+    fn get_last_read_timestamp(&self) -> i64 {
+        todo!()
+    }
+
+    fn get_last_write_timestamp(&self) -> i64 {
+        todo!()
+    }
+
+    fn get_current_state(&self) -> HAConnectionState {
+        todo!()
+    }
+
+    fn change_current_state(&self, ha_connection_state: HAConnectionState) {
+        todo!()
+    }
+
+    async fn close_master(&self) {
+        todo!()
+    }
+
+    fn get_transferred_byte_in_second(&self) -> i64 {
+        todo!()
+    }
+}
 /// Error types
 #[derive(Debug, thiserror::Error)]
 pub enum HAClientError {

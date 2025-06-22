@@ -30,18 +30,27 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+use std::net::SocketAddr;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
+use std::time::Duration;
 
 use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_rust::ArcMut;
+use tokio::net::TcpListener;
+use tokio::select;
+use tokio::sync::Mutex;
+use tokio::sync::Notify;
+use tokio::time::sleep;
 use tracing::error;
+use tracing::info;
 
+use crate::config::message_store_config::MessageStoreConfig;
 use crate::ha::default_ha_client::DefaultHAClient;
+use crate::ha::default_ha_connection::DefaultHAConnection;
 use crate::ha::general_ha_client::GeneralHAClient;
 use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::general_ha_service::GeneralHAService;
@@ -59,8 +68,8 @@ use crate::store_error::HAResult;
 
 pub struct DefaultHAService {
     connection_count: Arc<AtomicU64>,
-    connection_list: Vec<GeneralHAConnection>,
-    accept_socket_service: AcceptSocketService,
+    connection_list: Arc<Mutex<Vec<GeneralHAConnection>>>,
+    accept_socket_service: Option<AcceptSocketService>,
     default_message_store: ArcMut<LocalFileMessageStore>,
     wait_notify_object: Arc<WaitNotifyObject>,
     push2_slave_max_offset: Arc<AtomicU64>,
@@ -73,8 +82,8 @@ impl DefaultHAService {
     pub fn new(message_store: ArcMut<LocalFileMessageStore>) -> Self {
         DefaultHAService {
             connection_count: Arc::new(AtomicU64::new(0)),
-            connection_list: Vec::new(),
-            accept_socket_service: AcceptSocketService,
+            connection_list: Arc::new(Mutex::new(Vec::new())),
+            accept_socket_service: None,
             default_message_store: message_store,
             wait_notify_object: Arc::new(WaitNotifyObject),
             push2_slave_max_offset: Arc::new(AtomicU64::new(0)),
@@ -86,7 +95,7 @@ impl DefaultHAService {
 
     // Add any necessary fields here
     pub fn get_default_message_store(&self) -> &LocalFileMessageStore {
-        unimplemented!(" get_default_message_store method is not implemented");
+        self.default_message_store.as_ref()
     }
 
     pub async fn notify_transfer_some(&self, _offset: i64) {
@@ -99,6 +108,7 @@ impl DefaultHAService {
         // Initialize the DefaultHAService with the provided message store.
         let config = self.default_message_store.get_message_store_config();
         let service = GeneralHAService::new_with_default_ha_service(this.clone());
+
         let group_transfer_service = GroupTransferService::new(config.clone(), service.clone());
         self.group_transfer_service = Some(group_transfer_service);
 
@@ -108,16 +118,50 @@ impl DefaultHAService {
                 .map_err(|e| HAError::Service(format!("Failed to create DefaultHAClient: {e}")))?;
             self.ha_client.set_default_ha_service(client)
         }
+
         let state_notification_service =
             HAConnectionStateNotificationService::new(service, self.default_message_store.clone());
         self.ha_connection_state_notification_service = Some(state_notification_service);
+
+        self.accept_socket_service = Some(AcceptSocketService::new(
+            self.default_message_store
+                .get_message_store_config()
+                .clone(),
+            this,
+            false,
+        ));
         Ok(())
+    }
+
+    pub async fn add_connection(&self, connection: GeneralHAConnection) {
+        // Add a new connection to the service
+        let mut vec = self.connection_list.lock().await;
+        vec.push(connection);
+    }
+
+    pub fn get_connection_count(&self) -> &AtomicU64 {
+        &self.connection_count
     }
 }
 
 impl HAService for DefaultHAService {
-    fn start(&mut self) -> HAResult<()> {
-        error!("DefaultHAService start not implemented");
+    async fn start(&mut self) -> HAResult<()> {
+        self.accept_socket_service
+            .as_mut()
+            .expect("AcceptSocketService not initialized")
+            .start()
+            .await?;
+        self.group_transfer_service
+            .as_mut()
+            .expect("GroupTransferService not initialized")
+            .start()
+            .await?;
+        self.ha_connection_state_notification_service
+            .as_mut()
+            .expect("HAConnectionStateNotificationService not initialized")
+            .start()
+            .await?;
+        self.ha_client.start().await;
         Ok(())
     }
 
@@ -199,4 +243,76 @@ impl HAService for DefaultHAService {
     }
 }
 
-struct AcceptSocketService;
+struct AcceptSocketService {
+    socket_address_listen: SocketAddr,
+    message_store_config: Arc<MessageStoreConfig>,
+    is_auto_switch: bool,
+    shutdown_notify: Arc<Notify>,
+    default_ha_service: ArcMut<DefaultHAService>,
+}
+
+impl AcceptSocketService {
+    pub fn new(
+        message_store_config: Arc<MessageStoreConfig>,
+        default_ha_service: ArcMut<DefaultHAService>,
+        is_auto_switch: bool,
+    ) -> Self {
+        let ha_listen_port = message_store_config.ha_listen_port;
+        let socket_address_listen = SocketAddr::from(([0u8, 0u8, 0u8, 0u8], ha_listen_port as u16));
+        AcceptSocketService {
+            socket_address_listen,
+            message_store_config,
+            is_auto_switch,
+            shutdown_notify: Arc::new(Notify::new()),
+            default_ha_service,
+        }
+    }
+
+    pub async fn start(&mut self) -> HAResult<()> {
+        let listener = TcpListener::bind(self.socket_address_listen)
+            .await
+            .map_err(HAError::Io)?;
+        let shutdown_notify = self.shutdown_notify.clone();
+        let is_auto_switch = self.is_auto_switch;
+        let message_store_config = self.message_store_config.clone();
+        let default_ha_service = self.default_ha_service.clone();
+        tokio::spawn(async move {
+            let message_store_config = message_store_config;
+            let default_ha_service = default_ha_service;
+            loop {
+                select! {
+                    _ = shutdown_notify.notified() => {
+                        info!("AcceptSocketService is shutting down");
+                        break;
+                    }
+                // Accept new connections
+                    accept_result = listener.accept() => {
+                        match accept_result {
+                            Ok((stream, addr)) => {
+                                info!("HAService receive new connection, {}", addr);
+                               if is_auto_switch {
+                                    unimplemented!("Auto-switching is not implemented yet");
+                                }else{
+                                    let default_conn = DefaultHAConnection::new(default_ha_service.clone(), stream,message_store_config.clone()).await.expect("Error creating HAConnection");
+                                    let general_conn = GeneralHAConnection::new_with_default_ha_connection(default_conn);
+                                    default_ha_service.add_connection(general_conn).await;
+                                };
+                            }
+                            Err(e) => {
+                                error!("Failed to accept connection: {}", e);
+                                // Add a small delay to prevent busy-waiting on persistent errors
+                                sleep(Duration::from_millis(100)).await;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        Ok(())
+    }
+
+    pub fn shutdown(&self) {
+        info!("Shutting down AcceptSocketService");
+        self.shutdown_notify.notify_waiters();
+    }
+}

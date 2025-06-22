@@ -73,11 +73,11 @@ impl GeneralHAService {
 }
 
 impl HAService for GeneralHAService {
-    fn start(&mut self) -> HAResult<()> {
+    async fn start(&mut self) -> HAResult<()> {
         if let Some(ref mut service) = self.default_ha_service {
-            service.start()?;
+            service.start().await?;
         } else if let Some(ref mut service) = self.auto_switch_ha_service {
-            service.start()?;
+            service.start().await?;
         } else {
             error!("No HA service initialized");
             return Err(HAError::Service("No HA service initialized".to_string()));
