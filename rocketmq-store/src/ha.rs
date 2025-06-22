@@ -34,6 +34,7 @@ use crate::log_file::flush_manager_impl::group_commit_request::GroupCommitReques
 use crate::store_error::HAResult;
 
 mod auto_switch;
+pub(crate) mod default_ha_client;
 mod default_ha_connection;
 pub(crate) mod default_ha_service;
 pub(crate) mod flow_monitor;
