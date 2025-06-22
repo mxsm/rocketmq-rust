@@ -19,9 +19,7 @@ use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
 
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
-use rocketmq_rust::ArcMut;
 
-use crate::base::message_store::MessageStore;
 use crate::ha::ha_client::HAClient;
 use crate::ha::ha_connection::HAConnection;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
@@ -31,16 +29,7 @@ use crate::store_error::HAResult;
 
 #[trait_variant::make(HAService: Send)]
 pub trait RocketHAService: Sync {
-    /// Initialize the HA service
-    ///
-    /// This must be called before other methods.
-    ///
-    /// # Parameters
-    /// * `message_store` - The message store this service will work with
-    ///
-    /// # Returns
-    /// IO Result indicating success or failure
-    fn init<MS: MessageStore>(&mut self, message_store: ArcMut<MS>) -> HAResult<()>;
+    //fn init<MS: MessageStore>(&mut self, message_store: ArcMut<MS>) -> HAResult<()>;
 
     /// Start the HA service
     ///

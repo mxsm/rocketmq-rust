@@ -806,6 +806,9 @@ pub struct MessageStoreConfig {
 
     #[serde(default)]
     pub read_uncommitted: bool,
+
+    #[serde(default)]
+    pub enable_controller_mode: bool,
 }
 
 impl Default for MessageStoreConfig {
@@ -996,6 +999,7 @@ impl Default for MessageStoreConfig {
             enable_dleger_commit_log: false,
             rocksdb_cq_double_write_enable: false,
             read_uncommitted: false,
+            enable_controller_mode: false,
         }
     }
 }

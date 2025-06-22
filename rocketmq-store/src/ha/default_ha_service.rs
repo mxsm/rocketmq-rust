@@ -36,10 +36,8 @@ use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
 
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
-use rocketmq_rust::ArcMut;
 use tracing::error;
 
-use crate::base::message_store::MessageStore;
 use crate::ha::ha_client::HAClient;
 use crate::ha::ha_connection::HAConnection;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
@@ -49,11 +47,11 @@ use crate::log_file::flush_manager_impl::group_commit_request::GroupCommitReques
 use crate::message_store::local_file_message_store::LocalFileMessageStore;
 use crate::store_error::HAResult;
 
-pub struct DefaultHAService;
+#[derive(Default)]
+pub struct DefaultHAService {}
 
 impl DefaultHAService {
     // Add any necessary fields here
-
     pub fn get_default_message_store(&self) -> &LocalFileMessageStore {
         unimplemented!(" get_default_message_store method is not implemented");
     }
@@ -66,11 +64,6 @@ impl DefaultHAService {
 }
 
 impl HAService for DefaultHAService {
-    fn init<MS: MessageStore>(&mut self, message_store: ArcMut<MS>) -> HAResult<()> {
-        error!("DefaultHAService init not implemented");
-        Ok(())
-    }
-
     fn start(&mut self) -> HAResult<()> {
         error!("DefaultHAService start not implemented");
         Ok(())
