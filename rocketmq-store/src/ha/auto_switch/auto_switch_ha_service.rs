@@ -33,7 +33,7 @@ use crate::store_error::HAResult;
 pub struct AutoSwitchHAService;
 
 impl HAService for AutoSwitchHAService {
-    fn start(&mut self) -> HAResult<()> {
+    async fn start(&mut self) -> HAResult<()> {
         error!("DefaultHAService start not implemented");
         Ok(())
     }

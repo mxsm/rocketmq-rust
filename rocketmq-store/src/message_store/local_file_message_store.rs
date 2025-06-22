@@ -642,7 +642,7 @@ impl MessageStore for LocalFileMessageStore {
         result
     }
 
-    fn start(&mut self) -> Result<(), StoreError> {
+    async fn start(&mut self) -> Result<(), StoreError> {
         if !self.message_store_config.enable_dleger_commit_log
             && !self.message_store_config.duplication_enable
         {
@@ -680,7 +680,7 @@ impl MessageStore for LocalFileMessageStore {
         self.store_stats_service.start();
 
         if let Some(ha_service) = self.ha_service.as_mut() {
-            ha_service.start().map_err(|e| {
+            ha_service.start().await.map_err(|e| {
                 error!("HA service start failed: {:?}", e);
                 StoreError::General(e.to_string())
             })?;

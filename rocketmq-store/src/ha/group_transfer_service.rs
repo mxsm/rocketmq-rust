@@ -16,8 +16,11 @@
  */
 use std::sync::Arc;
 
+use tracing::error;
+
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::ha::general_ha_service::GeneralHAService;
+use crate::store_error::HAResult;
 
 pub struct GroupTransferService {
     message_store_config: Arc<MessageStoreConfig>,
@@ -33,5 +36,10 @@ impl GroupTransferService {
             message_store_config,
             ha_service,
         }
+    }
+
+    pub async fn start(&mut self) -> HAResult<()> {
+        error!("GroupTransferService is not implemented yet");
+        Ok(())
     }
 }

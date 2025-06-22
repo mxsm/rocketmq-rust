@@ -24,6 +24,7 @@ use std::time::Instant;
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
+use rocketmq_rust::ArcMut;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::net::tcp::OwnedReadHalf;
@@ -48,7 +49,7 @@ use crate::ha::ha_connection_state::HAConnectionState;
 pub const TRANSFER_HEADER_SIZE: usize = 8 + 4;
 
 pub struct DefaultHAConnection {
-    ha_service: Arc<DefaultHAService>,
+    ha_service: ArcMut<DefaultHAService>,
     socket_stream: Option<TcpStream>,
     client_address: String,
     write_socket_service: Option<WriteSocketService>,
@@ -64,7 +65,7 @@ pub struct DefaultHAConnection {
 impl DefaultHAConnection {
     /// Create a new DefaultHAConnection
     pub async fn new(
-        ha_service: Arc<DefaultHAService>,
+        ha_service: ArcMut<DefaultHAService>,
         socket_stream: TcpStream,
         message_store_config: Arc<MessageStoreConfig>,
     ) -> Result<Self, HAConnectionError> {
@@ -83,7 +84,9 @@ impl DefaultHAConnection {
         let flow_monitor = Arc::new(FlowMonitor::new(message_store_config.clone()));
 
         // Increment connection count
-        // ha_service.increment_connection_count();
+        ha_service
+            .get_connection_count()
+            .fetch_add(1, Ordering::SeqCst);
 
         let (shutdown_sender, shutdown_receiver) = mpsc::channel(1);
 
@@ -116,7 +119,7 @@ impl DefaultHAConnection {
         let read_service = ReadSocketService::new(
             reader,
             self.client_address.clone(),
-            Arc::clone(&self.ha_service),
+            ArcMut::clone(&self.ha_service),
             Arc::clone(&self.current_state),
             self.slave_request_offset.clone(),
             self.slave_ack_offset.clone(),
@@ -128,7 +131,7 @@ impl DefaultHAConnection {
         let write_service = WriteSocketService::new(
             writer,
             self.client_address.clone(),
-            Arc::clone(&self.ha_service),
+            ArcMut::clone(&self.ha_service),
             Arc::clone(&self.current_state),
             self.slave_request_offset.clone(),
             Arc::clone(&self.flow_monitor),
@@ -228,7 +231,7 @@ const REPORT_HEADER_SIZE: usize = 8;
 pub struct ReadSocketService {
     reader: Option<OwnedReadHalf>,
     client_address: String,
-    ha_service: Arc<DefaultHAService>,
+    ha_service: ArcMut<DefaultHAService>,
     current_state: Arc<RwLock<HAConnectionState>>,
     slave_request_offset: Arc<AtomicI64>,
     slave_ack_offset: Arc<AtomicI64>,
@@ -241,7 +244,7 @@ impl ReadSocketService {
     pub async fn new(
         reader: OwnedReadHalf,
         client_address: String,
-        ha_service: Arc<DefaultHAService>,
+        ha_service: ArcMut<DefaultHAService>,
         current_state: Arc<RwLock<HAConnectionState>>,
         slave_request_offset: Arc<AtomicI64>,
         slave_ack_offset: Arc<AtomicI64>,
@@ -265,7 +268,7 @@ impl ReadSocketService {
     pub async fn start(&mut self) -> Result<(), HAConnectionError> {
         let socket_stream = self.reader.take();
         let client_address = self.client_address.clone();
-        let ha_service = Arc::clone(&self.ha_service);
+        let ha_service = ArcMut::clone(&self.ha_service);
         let current_state = Arc::clone(&self.current_state);
         let slave_request_offset = self.slave_request_offset.clone();
         let slave_ack_offset = self.slave_ack_offset.clone();
@@ -291,7 +294,7 @@ impl ReadSocketService {
     async fn run_service(
         mut socket_stream: Option<OwnedReadHalf>,
         client_address: String,
-        ha_service: Arc<DefaultHAService>,
+        ha_service: ArcMut<DefaultHAService>,
         current_state: Arc<RwLock<HAConnectionState>>,
         slave_request_offset: Arc<AtomicI64>,
         slave_ack_offset: Arc<AtomicI64>,
@@ -404,7 +407,7 @@ impl ReadSocketService {
 pub struct WriteSocketService {
     writer: Option<OwnedWriteHalf>,
     client_address: String,
-    ha_service: Arc<DefaultHAService>,
+    ha_service: ArcMut<DefaultHAService>,
     current_state: Arc<RwLock<HAConnectionState>>,
     slave_request_offset: Arc<AtomicI64>,
     flow_monitor: Arc<FlowMonitor>,
@@ -417,7 +420,7 @@ impl WriteSocketService {
     pub async fn new(
         writer: OwnedWriteHalf,
         client_address: String,
-        ha_service: Arc<DefaultHAService>,
+        ha_service: ArcMut<DefaultHAService>,
         current_state: Arc<RwLock<HAConnectionState>>,
         slave_request_offset: Arc<AtomicI64>,
         flow_monitor: Arc<FlowMonitor>,
@@ -439,7 +442,7 @@ impl WriteSocketService {
     pub async fn start(&mut self) -> Result<(), HAConnectionError> {
         let socket_stream = self.writer.take();
         let client_address = self.client_address.clone();
-        let ha_service = Arc::clone(&self.ha_service);
+        let ha_service = ArcMut::clone(&self.ha_service);
         let current_state = Arc::clone(&self.current_state);
         let slave_request_offset = self.slave_request_offset.clone();
         let flow_monitor = Arc::clone(&self.flow_monitor);
@@ -467,7 +470,7 @@ impl WriteSocketService {
     async fn run_service(
         mut socket_stream: Option<OwnedWriteHalf>,
         client_address: String,
-        ha_service: Arc<DefaultHAService>,
+        ha_service: ArcMut<DefaultHAService>,
         current_state: Arc<RwLock<HAConnectionState>>,
         slave_request_offset: Arc<AtomicI64>,
         flow_monitor: Arc<FlowMonitor>,

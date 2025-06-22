@@ -35,7 +35,7 @@ pub trait RocketHAService: Sync {
     ///
     /// # Returns
     /// Result indicating success or failure
-    fn start(&mut self) -> HAResult<()>;
+    async fn start(&mut self) -> HAResult<()>;
 
     /// Shutdown the HA service
     fn shutdown(&self);

@@ -18,6 +18,8 @@ use rocketmq_rust::ArcMut;
 
 use crate::ha::auto_switch::auto_switch_ha_client::AutoSwitchHAClient;
 use crate::ha::default_ha_client::DefaultHAClient;
+use crate::ha::ha_client::HAClient;
+use crate::ha::ha_connection_state::HAConnectionState;
 
 pub struct GeneralHAClient {
     default_ha_service: Option<ArcMut<DefaultHAClient>>,
@@ -47,4 +49,64 @@ impl GeneralHAClient {
     }
 
     // Additional methods to interact with the HA services can be added here
+}
+
+impl HAClient for GeneralHAClient {
+    async fn start(&self) {
+        if let Some(ref service) = self.default_ha_service {
+            service.start().await;
+        } else if let Some(ref service) = self.auto_switch_ha_service {
+            service.start().await;
+        } else {
+            panic!("No HA service is set for GeneralHAClient");
+        }
+    }
+
+    async fn shutdown(&self) {
+        todo!()
+    }
+
+    async fn wakeup(&self) {
+        todo!()
+    }
+
+    async fn update_master_address(&self, new_address: &str) {
+        todo!()
+    }
+
+    async fn update_ha_master_address(&self, new_address: &str) {
+        todo!()
+    }
+
+    fn get_master_address(&self) -> String {
+        todo!()
+    }
+
+    fn get_ha_master_address(&self) -> String {
+        todo!()
+    }
+
+    fn get_last_read_timestamp(&self) -> i64 {
+        todo!()
+    }
+
+    fn get_last_write_timestamp(&self) -> i64 {
+        todo!()
+    }
+
+    fn get_current_state(&self) -> HAConnectionState {
+        todo!()
+    }
+
+    fn change_current_state(&self, ha_connection_state: HAConnectionState) {
+        todo!()
+    }
+
+    async fn close_master(&self) {
+        todo!()
+    }
+
+    fn get_transferred_byte_in_second(&self) -> i64 {
+        todo!()
+    }
 }

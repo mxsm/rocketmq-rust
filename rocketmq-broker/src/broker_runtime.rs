@@ -779,10 +779,11 @@ impl BrokerRuntime {
 
     fn initial_request_pipeline(&mut self) {}
 
-    fn start_basic_service(&mut self) {
+    async fn start_basic_service(&mut self) {
         if let Some(ref mut message_store) = self.inner.message_store {
             message_store
                 .start()
+                .await
                 .unwrap_or_else(|e| panic!("Failed to start message store: {e}"));
         } else {
             panic!("Message store is not initialized");
@@ -890,7 +891,7 @@ impl BrokerRuntime {
         }
 
         self.inner.broker_outer_api.start().await;
-        self.start_basic_service();
+        self.start_basic_service().await;
 
         if !self.inner.is_isolated.load(Ordering::Acquire)
             && !self.inner.message_store_config.enable_dledger_commit_log
