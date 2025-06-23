@@ -22,8 +22,8 @@ use crate::ha::ha_client::HAClient;
 use crate::ha::ha_connection_state::HAConnectionState;
 
 pub struct GeneralHAClient {
-    default_ha_service: Option<ArcMut<DefaultHAClient>>,
-    auto_switch_ha_service: Option<AutoSwitchHAClient>,
+    default_ha_client: Option<ArcMut<DefaultHAClient>>,
+    auto_switch_ha_client: Option<ArcMut<AutoSwitchHAClient>>,
 }
 
 impl Default for GeneralHAClient {
@@ -35,17 +35,17 @@ impl Default for GeneralHAClient {
 impl GeneralHAClient {
     pub fn new() -> Self {
         GeneralHAClient {
-            default_ha_service: None,
-            auto_switch_ha_service: None,
+            default_ha_client: None,
+            auto_switch_ha_client: None,
         }
     }
 
     pub fn set_default_ha_service(&mut self, service: ArcMut<DefaultHAClient>) {
-        self.default_ha_service = Some(service);
+        self.default_ha_client = Some(service);
     }
 
     pub fn set_auto_switch_ha_service(&mut self, service: AutoSwitchHAClient) {
-        self.auto_switch_ha_service = Some(service);
+        self.auto_switch_ha_client = Some(ArcMut::new(service));
     }
 
     // Additional methods to interact with the HA services can be added here
@@ -53,10 +53,10 @@ impl GeneralHAClient {
 
 impl HAClient for GeneralHAClient {
     async fn start(&self) {
-        if let Some(ref service) = self.default_ha_service {
-            service.start().await;
-        } else if let Some(ref service) = self.auto_switch_ha_service {
-            service.start().await;
+        if let Some(ref client) = self.default_ha_client {
+            client.start().await;
+        } else if let Some(ref client) = self.auto_switch_ha_client {
+            client.start().await;
         } else {
             panic!("No HA service is set for GeneralHAClient");
         }
@@ -70,11 +70,17 @@ impl HAClient for GeneralHAClient {
         todo!()
     }
 
-    async fn update_master_address(&self, new_address: &str) {
-        todo!()
+    fn update_master_address(&self, new_address: &str) {
+        if let Some(ref client) = self.default_ha_client {
+            client.update_master_address(new_address);
+        } else if let Some(ref client) = self.auto_switch_ha_client {
+            client.update_master_address(new_address);
+        } else {
+            panic!("No HA service is set for GeneralHAClient");
+        }
     }
 
-    async fn update_ha_master_address(&self, new_address: &str) {
+    fn update_ha_master_address(&self, new_address: &str) {
         todo!()
     }
 

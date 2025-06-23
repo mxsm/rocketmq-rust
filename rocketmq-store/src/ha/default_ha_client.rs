@@ -16,6 +16,7 @@
  */
 use std::io::Cursor;
 use std::sync::atomic::AtomicI64;
+use std::sync::atomic::AtomicPtr;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -65,7 +66,7 @@ pub struct DefaultHAClient {
     master_ha_address: Arc<RwLock<Option<String>>>,
 
     /// Master address (atomic reference)
-    master_address: Arc<RwLock<Option<String>>>,
+    master_address: Arc<AtomicPtr<String>>,
 
     /// TCP connection to master
     socket_stream: Arc<RwLock<Option<TcpStream>>>,
@@ -120,7 +121,7 @@ impl DefaultHAClient {
 
         Ok(ArcMut::new(Self {
             master_ha_address: Arc::new(RwLock::new(None)),
-            master_address: Arc::new(RwLock::new(None)),
+            master_address: Arc::new(AtomicPtr::default()),
             socket_stream: Arc::new(RwLock::new(None)),
             last_read_timestamp: AtomicI64::new(now),
             last_write_timestamp: AtomicI64::new(now),
@@ -151,18 +152,6 @@ impl DefaultHAClient {
         );
     }
 
-    /// Update master address
-    pub async fn update_master_address(&self, new_addr: Option<String>) {
-        let mut current_addr = self.master_address.write().await;
-        let old_addr = current_addr.clone();
-        *current_addr = new_addr.clone();
-
-        info!(
-            "update master address, OLD: {:?} NEW: {:?}",
-            old_addr, new_addr
-        );
-    }
-
     /// Get HA master address
     pub async fn get_ha_master_address(&self) -> Option<String> {
         self.master_ha_address.read().await.clone()
@@ -170,7 +159,13 @@ impl DefaultHAClient {
 
     /// Get master address
     pub async fn get_master_address(&self) -> Option<String> {
-        self.master_address.read().await.clone()
+        let addr_ptr = self.master_address.load(Ordering::SeqCst);
+        if !addr_ptr.is_null() {
+            let address = unsafe { (*addr_ptr).clone() };
+            Some(address)
+        } else {
+            None
+        }
     }
 
     /// Check if it's time to report offset
@@ -677,11 +672,22 @@ impl HAClient for DefaultHAClient {
         todo!()
     }
 
-    async fn update_master_address(&self, new_address: &str) {
-        todo!()
+    /// Update master address
+    fn update_master_address(&self, new_address: &str) {
+        // Safely free the old pointer before storing the new one
+        let old_address = self.master_address.load(Ordering::SeqCst);
+        if !old_address.is_null() {
+            unsafe {
+                // Convert the old pointer back into a Box to free the memory
+                let _ = Box::from_raw(old_address);
+            }
+        }
+        // Store the new address
+        let new_address_ptr = Box::into_raw(Box::new(new_address.to_string()));
+        self.master_address.store(new_address_ptr, Ordering::SeqCst);
     }
 
-    async fn update_ha_master_address(&self, new_address: &str) {
+    fn update_ha_master_address(&self, new_address: &str) {
         todo!()
     }
 

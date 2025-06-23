@@ -38,13 +38,13 @@ pub trait RocketmqHAClient: Sync {
     ///
     /// # Parameters
     /// * `new_address` - The new address to connect to
-    async fn update_master_address(&self, new_address: &str);
+    fn update_master_address(&self, new_address: &str);
 
     /// Update the HA master address
     ///
     /// # Parameters
     /// * `new_address` - The new HA address to connect to
-    async fn update_ha_master_address(&self, new_address: &str);
+    fn update_ha_master_address(&self, new_address: &str);
 
     /// Get the current master address
     ///
