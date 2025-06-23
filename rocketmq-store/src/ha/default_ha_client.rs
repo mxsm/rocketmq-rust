@@ -674,8 +674,17 @@ impl HAClient for DefaultHAClient {
 
     /// Update master address
     fn update_master_address(&self, new_address: &str) {
-        let addresss = Box::into_raw(Box::new(new_address.to_string()));
-        self.master_address.store(addresss, Ordering::SeqCst);
+        // Safely free the old pointer before storing the new one
+        let old_address = self.master_address.load(Ordering::SeqCst);
+        if !old_address.is_null() {
+            unsafe {
+                // Convert the old pointer back into a Box to free the memory
+                let _ = Box::from_raw(old_address);
+            }
+        }
+        // Store the new address
+        let new_address_ptr = Box::into_raw(Box::new(new_address.to_string()));
+        self.master_address.store(new_address_ptr, Ordering::SeqCst);
     }
 
     fn update_ha_master_address(&self, new_address: &str) {
