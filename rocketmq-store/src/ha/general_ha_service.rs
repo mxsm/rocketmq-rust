@@ -115,7 +115,13 @@ impl HAService for GeneralHAService {
     }
 
     fn update_master_address(&self, new_addr: &str) {
-        todo!()
+        if let Some(ref service) = self.default_ha_service {
+            service.update_master_address(new_addr);
+        } else if let Some(ref service) = self.auto_switch_ha_service {
+            service.update_master_address(new_addr);
+        } else {
+            error!("No HA service initialized to update master address");
+        }
     }
 
     fn update_ha_master_address(&self, new_addr: &str) {
