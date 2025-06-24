@@ -81,7 +81,13 @@ impl HAClient for GeneralHAClient {
     }
 
     fn update_ha_master_address(&self, new_address: &str) {
-        todo!()
+        if let Some(ref client) = self.default_ha_client {
+            client.update_ha_master_address(new_address);
+        } else if let Some(ref client) = self.auto_switch_ha_client {
+            client.update_ha_master_address(new_address);
+        } else {
+            panic!("No HA service is set for GeneralHAClient");
+        }
     }
 
     fn get_master_address(&self) -> String {

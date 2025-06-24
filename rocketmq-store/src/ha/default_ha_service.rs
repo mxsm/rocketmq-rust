@@ -199,7 +199,7 @@ impl HAService for DefaultHAService {
     }
 
     fn update_ha_master_address(&self, new_addr: &str) {
-        todo!()
+        self.ha_client.update_ha_master_address(new_addr);
     }
 
     fn in_sync_replicas_nums(&self, master_put_where: i64) -> i32 {
