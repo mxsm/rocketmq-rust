@@ -63,7 +63,7 @@ const TRANSFER_HEADER_SIZE: usize = 12; // 8 bytes offset + 4 bytes body size
 /// Default HA Client implementation using bytes crate
 pub struct DefaultHAClient {
     /// Master HA address (atomic reference)
-    master_ha_address: Arc<RwLock<Option<String>>>,
+    master_ha_address: Arc<AtomicPtr<String>>,
 
     /// Master address (atomic reference)
     master_address: Arc<AtomicPtr<String>>,
@@ -120,7 +120,7 @@ impl DefaultHAClient {
         let now = get_current_millis() as i64;
 
         Ok(ArcMut::new(Self {
-            master_ha_address: Arc::new(RwLock::new(None)),
+            master_ha_address: Arc::new(AtomicPtr::default()),
             master_address: Arc::new(AtomicPtr::default()),
             socket_stream: Arc::new(RwLock::new(None)),
             last_read_timestamp: AtomicI64::new(now),
@@ -140,21 +140,15 @@ impl DefaultHAClient {
         }))
     }
 
-    /// Update HA master address
-    pub async fn update_ha_master_address(&self, new_addr: Option<String>) {
-        let mut current_addr = self.master_ha_address.write().await;
-        let old_addr = current_addr.clone();
-        *current_addr = new_addr.clone();
-
-        info!(
-            "update master ha address, OLD: {:?} NEW: {:?}",
-            old_addr, new_addr
-        );
-    }
-
     /// Get HA master address
     pub async fn get_ha_master_address(&self) -> Option<String> {
-        self.master_ha_address.read().await.clone()
+        let addr_ptr = self.master_ha_address.load(Ordering::SeqCst);
+        if !addr_ptr.is_null() {
+            let address = unsafe { (*addr_ptr).clone() };
+            Some(address)
+        } else {
+            None
+        }
     }
 
     /// Get master address
@@ -688,7 +682,17 @@ impl HAClient for DefaultHAClient {
     }
 
     fn update_ha_master_address(&self, new_address: &str) {
-        todo!()
+        // Safely free the old pointer before storing the new one
+        let old_address = self.master_address.load(Ordering::SeqCst);
+        if !old_address.is_null() {
+            unsafe {
+                // Convert the old pointer back into a Box to free the memory
+                let _ = Box::from_raw(old_address);
+            }
+        }
+        // Store the new address
+        let new_address_ptr = Box::into_raw(Box::new(new_address.to_string()));
+        self.master_address.store(new_address_ptr, Ordering::SeqCst);
     }
 
     fn get_master_address(&self) -> String {
