@@ -31,7 +31,7 @@ bytes.workspace = true
 
 #tokio
 tokio.workspace = true
-
+tokio-util.workspace = true
 
 #log
 tracing.workspace = true

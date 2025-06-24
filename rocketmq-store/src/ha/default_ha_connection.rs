@@ -24,16 +24,17 @@ use std::time::Instant;
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
+use futures_util::stream::SplitSink;
+use futures_util::stream::SplitStream;
+use futures_util::SinkExt;
+use futures_util::StreamExt;
 use rocketmq_rust::ArcMut;
-use tokio::io::AsyncReadExt;
-use tokio::io::AsyncWriteExt;
-use tokio::net::tcp::OwnedReadHalf;
-use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
-use tokio::time::timeout;
+use tokio_util::codec::BytesCodec;
+use tokio_util::codec::Framed;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -112,8 +113,9 @@ impl DefaultHAConnection {
         // Start flow monitor
         self.flow_monitor.start().await;
 
-        let socket_stream = self.socket_stream.take().unwrap();
-        let (reader, writer) = socket_stream.into_split();
+        let tcp_stream = self.socket_stream.take().unwrap();
+        let framed = Framed::with_capacity(tcp_stream, BytesCodec::new(), 1024 * 4);
+        let (writer, reader) = framed.split();
 
         // Create and start read service
         let read_service = ReadSocketService::new(
@@ -229,7 +231,7 @@ const REPORT_HEADER_SIZE: usize = 8;
 /// The main node processes requests from the slave nodes, reads the maximum request offset of the
 /// slave nodes.
 pub struct ReadSocketService {
-    reader: Option<OwnedReadHalf>,
+    reader: Option<SplitStream<Framed<TcpStream, BytesCodec>>>,
     client_address: String,
     ha_service: ArcMut<DefaultHAService>,
     current_state: Arc<RwLock<HAConnectionState>>,
@@ -242,7 +244,7 @@ pub struct ReadSocketService {
 
 impl ReadSocketService {
     pub async fn new(
-        reader: OwnedReadHalf,
+        reader: SplitStream<Framed<TcpStream, BytesCodec>>,
         client_address: String,
         ha_service: ArcMut<DefaultHAService>,
         current_state: Arc<RwLock<HAConnectionState>>,
@@ -292,7 +294,7 @@ impl ReadSocketService {
     }
 
     async fn run_service(
-        mut socket_stream: Option<OwnedReadHalf>,
+        socket_stream: Option<SplitStream<Framed<TcpStream, BytesCodec>>>,
         client_address: String,
         ha_service: ArcMut<DefaultHAService>,
         current_state: Arc<RwLock<HAConnectionState>>,
@@ -300,7 +302,7 @@ impl ReadSocketService {
         slave_ack_offset: Arc<AtomicI64>,
         message_store_config: Arc<MessageStoreConfig>,
     ) {
-        info!("ReadSocketService started for client: {}", client_address);
+        /* info!("ReadSocketService started for client: {}", client_address);
 
         let mut buffer = vec![0u8; READ_MAX_BUFFER_SIZE];
         let mut process_position = 0usize;
@@ -323,7 +325,7 @@ impl ReadSocketService {
                     }
                     match timeout(
                         Duration::from_secs(1),
-                        socket.read(&mut buffer[process_position..]),
+                        socket.next(),
                     )
                     .await
                     {
@@ -378,6 +380,7 @@ impl ReadSocketService {
                                 break;
                             }
                         }
+                        _ => {}
                     }
                 }
             } else {
@@ -392,7 +395,8 @@ impl ReadSocketService {
         }
 
         // ha_service.remove_connection(&client_address).await;
-        info!("ReadSocketService ended for client: {}", client_address);
+        info!("ReadSocketService ended for client: {}", client_address);*/
+        unimplemented!("ReadSocketService is not implemented yet");
     }
 
     pub async fn shutdown(&mut self) {
@@ -405,7 +409,7 @@ impl ReadSocketService {
 
 /// Write Socket Service
 pub struct WriteSocketService {
-    writer: Option<OwnedWriteHalf>,
+    writer: Option<SplitSink<Framed<TcpStream, BytesCodec>, Bytes>>,
     client_address: String,
     ha_service: ArcMut<DefaultHAService>,
     current_state: Arc<RwLock<HAConnectionState>>,
@@ -418,7 +422,7 @@ pub struct WriteSocketService {
 
 impl WriteSocketService {
     pub async fn new(
-        writer: OwnedWriteHalf,
+        writer: SplitSink<Framed<TcpStream, BytesCodec>, Bytes>,
         client_address: String,
         ha_service: ArcMut<DefaultHAService>,
         current_state: Arc<RwLock<HAConnectionState>>,
@@ -468,7 +472,7 @@ impl WriteSocketService {
     }
 
     async fn run_service(
-        mut socket_stream: Option<OwnedWriteHalf>,
+        mut socket_stream: Option<SplitSink<Framed<TcpStream, BytesCodec>, Bytes>>,
         client_address: String,
         ha_service: ArcMut<DefaultHAService>,
         current_state: Arc<RwLock<HAConnectionState>>,
@@ -535,7 +539,7 @@ impl WriteSocketService {
                     byte_buffer_header.put_i32(0);
                     let header = byte_buffer_header.split().freeze();
                     last_write_over =
-                        Self::transfer_data(&mut socket_stream, &header, None, &flow_monitor).await;
+                        Self::transfer_data(&mut socket_stream, header, None, &flow_monitor).await;
                     if !last_write_over {
                         continue;
                     }
@@ -570,7 +574,7 @@ impl WriteSocketService {
                     // If the data is larger than the size, slice it
                     bytes.slice(..size as usize)
                 });
-                Self::transfer_data(&mut socket_stream, &header, data_buffer, &flow_monitor).await;
+                Self::transfer_data(&mut socket_stream, header, data_buffer, &flow_monitor).await;
             } else {
                 // No data available, wait
                 sleep(Duration::from_millis(100)).await;
@@ -581,15 +585,16 @@ impl WriteSocketService {
     }
 
     async fn transfer_data(
-        socket_stream: &mut Option<OwnedWriteHalf>,
-        buffer_header: &[u8],
+        socket_stream: &mut Option<SplitSink<Framed<TcpStream, BytesCodec>, Bytes>>,
+        buffer_header: Bytes,
         select_mapped_buffer: Option<Bytes>,
         flow_monitor: &Arc<FlowMonitor>,
     ) -> bool {
         if let Some(ref mut socket) = socket_stream {
-            let result = match socket.write_all(buffer_header).await {
+            let len = buffer_header.len();
+            let result = match socket.send(buffer_header).await {
                 Ok(_) => {
-                    flow_monitor.add_byte_count_transferred(buffer_header.len() as i64);
+                    flow_monitor.add_byte_count_transferred(len as i64);
                     true
                 }
                 Err(e) => {
@@ -599,9 +604,10 @@ impl WriteSocketService {
             };
 
             if let Some(data) = select_mapped_buffer {
-                match socket.write_all(data.as_ref()).await {
+                let len = data.len();
+                match socket.send(data).await {
                     Ok(_) => {
-                        flow_monitor.add_byte_count_transferred(data.len() as i64);
+                        flow_monitor.add_byte_count_transferred(len as i64);
                         true
                     }
                     Err(e) => {
