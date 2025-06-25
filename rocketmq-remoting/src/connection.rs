@@ -98,7 +98,8 @@ impl Connection {
     ///
     /// A new `Connection` instance.
     pub fn new(tcp_stream: TcpStream) -> Connection {
-        let framed = Framed::with_capacity(tcp_stream, CompositeCodec::new(), 1024 * 4);
+        const CAPACITY: usize = 1024 * 1024; // 1 MB
+        let framed = Framed::with_capacity(tcp_stream, CompositeCodec::new(), CAPACITY);
         let (writer, reader) = framed.split();
         Self {
             writer,
