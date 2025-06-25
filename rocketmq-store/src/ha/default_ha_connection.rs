@@ -43,7 +43,9 @@ use crate::base::message_store::MessageStore;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::ha::default_ha_service::DefaultHAService;
 use crate::ha::flow_monitor::FlowMonitor;
+use crate::ha::ha_connection::HAConnection;
 use crate::ha::ha_connection_state::HAConnectionState;
+use crate::ha::HAConnectionError;
 
 /// Transfer Header buffer size. Schema: physic offset and body size.
 /// Format: [physicOffset (8bytes)][bodySize (4bytes)]
@@ -106,8 +108,40 @@ impl DefaultHAConnection {
         })
     }
 
-    /// Start the HA connection services
-    pub async fn start(&mut self) -> Result<(), HAConnectionError> {
+    /// Change the current state
+    pub async fn change_current_state(&self, new_state: HAConnectionState) {
+        info!("change state to {:?}", new_state);
+        let mut state_guard = self.current_state.write().await;
+        *state_guard = new_state;
+    }
+
+    /// Get current state
+    pub async fn get_current_state(&self) -> HAConnectionState {
+        *self.current_state.read().await
+    }
+
+    /// Get slave ack offset
+    pub fn get_slave_ack_offset(&self) -> i64 {
+        self.slave_ack_offset.load(Ordering::SeqCst)
+    }
+
+    /// Get transferred bytes per second
+    pub fn get_transferred_byte_in_second(&self) -> u64 {
+        self.flow_monitor.get_transferred_byte_in_second() as u64
+    }
+
+    /// Get transfer from where
+    pub fn get_transfer_from_where(&self) -> i64 {
+        if let Some(ref write_service) = self.write_socket_service {
+            write_service.get_next_transfer_from_where()
+        } else {
+            -1
+        }
+    }
+}
+
+impl HAConnection for DefaultHAConnection {
+    async fn start(&mut self) -> Result<(), HAConnectionError> {
         self.change_current_state(HAConnectionState::Transfer).await;
 
         // Start flow monitor
@@ -155,8 +189,7 @@ impl DefaultHAConnection {
         Ok(())
     }
 
-    /// Shutdown the HA connection
-    pub async fn shutdown(&mut self) {
+    async fn shutdown(&mut self) {
         self.change_current_state(HAConnectionState::Shutdown).await;
 
         // Shutdown services
@@ -171,14 +204,13 @@ impl DefaultHAConnection {
         self.flow_monitor.shutdown().await;
 
         // Close socket
-        self.close().await;
+        self.close();
 
         // Decrement connection count
         //self.ha_service.decrement_connection_count();
     }
 
-    /// Close the socket connection
-    pub async fn close(&self) {
+    fn close(&self) {
         /*let mut socket_guard = self.socket_stream.write().await;
         if let Some(mut socket) = socket_guard.take() {
             if let Err(e) = socket.shutdown().await {
@@ -187,40 +219,28 @@ impl DefaultHAConnection {
         }*/
     }
 
-    /// Change the current state
-    pub async fn change_current_state(&self, new_state: HAConnectionState) {
-        info!("change state to {:?}", new_state);
-        let mut state_guard = self.current_state.write().await;
-        *state_guard = new_state;
+    fn get_socket(&self) -> &TcpStream {
+        todo!()
     }
 
-    /// Get current state
-    pub async fn get_current_state(&self) -> HAConnectionState {
+    async fn get_current_state(&self) -> HAConnectionState {
         *self.current_state.read().await
     }
 
-    /// Get client address
-    pub fn get_client_address(&self) -> &str {
+    fn get_client_address(&self) -> &str {
         &self.client_address
     }
 
-    /// Get slave ack offset
-    pub fn get_slave_ack_offset(&self) -> i64 {
-        self.slave_ack_offset.load(Ordering::SeqCst)
+    fn get_transferred_byte_in_second(&self) -> i64 {
+        todo!()
     }
 
-    /// Get transferred bytes per second
-    pub fn get_transferred_byte_in_second(&self) -> u64 {
-        self.flow_monitor.get_transferred_byte_in_second() as u64
+    fn get_transfer_from_where(&self) -> i64 {
+        todo!()
     }
 
-    /// Get transfer from where
-    pub fn get_transfer_from_where(&self) -> i64 {
-        if let Some(ref write_service) = self.write_socket_service {
-            write_service.get_next_transfer_from_where()
-        } else {
-            -1
-        }
+    fn get_slave_ack_offset(&self) -> i64 {
+        todo!()
     }
 }
 
@@ -633,15 +653,4 @@ impl WriteSocketService {
             let _ = handle.await;
         }
     }
-}
-
-/// Error types
-#[derive(Debug, thiserror::Error)]
-pub enum HAConnectionError {
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("Connection error: {0}")]
-    Connection(String),
-    #[error("Service error: {0}")]
-    Service(String),
 }

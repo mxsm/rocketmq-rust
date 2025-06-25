@@ -31,3 +31,14 @@ pub(crate) mod ha_connection_state_notification_request;
 mod ha_connection_state_notification_service;
 pub(crate) mod ha_service;
 pub(crate) mod wait_notify_object;
+
+/// Error types
+#[derive(Debug, thiserror::Error)]
+pub enum HAConnectionError {
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("Connection error: {0}")]
+    Connection(String),
+    #[error("Service error: {0}")]
+    Service(String),
+}
