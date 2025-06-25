@@ -294,8 +294,14 @@ impl AcceptSocketService {
                                     unimplemented!("Auto-switching is not implemented yet");
                                 }else{
                                     let default_conn = DefaultHAConnection::new(default_ha_service.clone(), stream,message_store_config.clone()).await.expect("Error creating HAConnection");
-                                    let general_conn = GeneralHAConnection::new_with_default_ha_connection(default_conn);
-                                    default_ha_service.add_connection(general_conn).await;
+                                    let mut general_conn = GeneralHAConnection::new_with_default_ha_connection(default_conn);
+                                    if  let Err(e) =  general_conn.start().await {
+                                        error!("Error starting HAService: {}", e);
+                                    }else {
+                                        info!("HAService accept new connection, {}", addr);
+                                        default_ha_service.add_connection(general_conn).await;
+                                    }
+
                                 };
                             }
                             Err(e) => {
