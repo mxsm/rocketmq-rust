@@ -99,13 +99,14 @@ impl Connection {
     /// A new `Connection` instance.
     pub fn new(tcp_stream: TcpStream) -> Connection {
         const CAPACITY: usize = 1024 * 1024; // 1 MB
+        const BUFFER_SIZE: usize = 8 * 1024; // 8 KB
         let framed = Framed::with_capacity(tcp_stream, CompositeCodec::new(), CAPACITY);
         let (writer, reader) = framed.split();
         Self {
             writer,
             reader,
             ok: true,
-            buf: BytesMut::with_capacity(4096),
+            buf: BytesMut::with_capacity(BUFFER_SIZE),
         }
     }
 
