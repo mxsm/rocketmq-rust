@@ -15,8 +15,13 @@
  * limitations under the License.
  */
 
+use tokio::net::TcpStream;
+
 use crate::ha::auto_switch::auto_switch_ha_connection::AutoSwitchHAConnection;
 use crate::ha::default_ha_connection::DefaultHAConnection;
+use crate::ha::ha_connection::HAConnection;
+use crate::ha::ha_connection_state::HAConnectionState;
+use crate::ha::HAConnectionError;
 
 pub struct GeneralHAConnection {
     default_ha_connection: Option<DefaultHAConnection>,
@@ -53,5 +58,43 @@ impl GeneralHAConnection {
 
     pub fn set_auto_switch_ha_connection(&mut self, connection: AutoSwitchHAConnection) {
         self.auto_switch_ha_connection = Some(connection);
+    }
+}
+
+impl HAConnection for GeneralHAConnection {
+    async fn start(&mut self) -> Result<(), HAConnectionError> {
+        todo!()
+    }
+
+    async fn shutdown(&mut self) {
+        todo!()
+    }
+
+    fn close(&self) {
+        todo!()
+    }
+
+    fn get_socket(&self) -> &TcpStream {
+        todo!()
+    }
+
+    async fn get_current_state(&self) -> HAConnectionState {
+        todo!()
+    }
+
+    fn get_client_address(&self) -> &str {
+        todo!()
+    }
+
+    fn get_transferred_byte_in_second(&self) -> i64 {
+        todo!()
+    }
+
+    fn get_transfer_from_where(&self) -> i64 {
+        todo!()
+    }
+
+    fn get_slave_ack_offset(&self) -> i64 {
+        todo!()
     }
 }
