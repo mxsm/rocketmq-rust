@@ -114,30 +114,6 @@ impl DefaultHAConnection {
         let mut state_guard = self.current_state.write().await;
         *state_guard = new_state;
     }
-
-    /// Get current state
-    pub async fn get_current_state(&self) -> HAConnectionState {
-        *self.current_state.read().await
-    }
-
-    /// Get slave ack offset
-    pub fn get_slave_ack_offset(&self) -> i64 {
-        self.slave_ack_offset.load(Ordering::SeqCst)
-    }
-
-    /// Get transferred bytes per second
-    pub fn get_transferred_byte_in_second(&self) -> u64 {
-        self.flow_monitor.get_transferred_byte_in_second() as u64
-    }
-
-    /// Get transfer from where
-    pub fn get_transfer_from_where(&self) -> i64 {
-        if let Some(ref write_service) = self.write_socket_service {
-            write_service.get_next_transfer_from_where()
-        } else {
-            -1
-        }
-    }
 }
 
 impl HAConnection for DefaultHAConnection {
@@ -232,15 +208,19 @@ impl HAConnection for DefaultHAConnection {
     }
 
     fn get_transferred_byte_in_second(&self) -> i64 {
-        todo!()
+        self.flow_monitor.get_transferred_byte_in_second()
     }
 
     fn get_transfer_from_where(&self) -> i64 {
-        todo!()
+        if let Some(ref write_service) = self.write_socket_service {
+            write_service.get_next_transfer_from_where()
+        } else {
+            -1
+        }
     }
 
     fn get_slave_ack_offset(&self) -> i64 {
-        todo!()
+        self.slave_ack_offset.load(Ordering::SeqCst)
     }
 }
 
