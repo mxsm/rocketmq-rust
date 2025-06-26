@@ -568,7 +568,7 @@ impl WriteSocketService {
                 byte_buffer_header.clear();
                 // Send heartbeat
                 byte_buffer_header.put_i64(next_transfer_from_where.load(Ordering::SeqCst));
-                byte_buffer_header.put_i32(0);
+                byte_buffer_header.put_i32(size);
                 let header = byte_buffer_header.split().freeze();
                 let data_buffer = data.bytes.as_ref().map(|bytes| {
                     // If the data is larger than the size, slice it
