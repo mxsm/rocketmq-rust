@@ -183,9 +183,10 @@ impl HAConnection for DefaultHAConnection {
         self.close();
 
         // Decrement connection count
-        self.ha_service
-            .get_connection_count()
-            .fetch_sub(1, Ordering::SeqCst);
+        let connection_count = self.ha_service.get_connection_count();
+        if connection_count.load(Ordering::SeqCst) > 0 {
+            connection_count.fetch_sub(1, Ordering::SeqCst);
+        }
     }
 
     fn close(&self) {
