@@ -76,34 +76,91 @@ impl HAConnection for GeneralHAConnection {
     }
 
     async fn shutdown(&mut self) {
-        todo!()
+        match (
+            &mut self.default_ha_connection,
+            &mut self.auto_switch_ha_connection,
+        ) {
+            (Some(connection), _) => connection.shutdown().await,
+            (_, Some(connection)) => connection.shutdown().await,
+            (None, None) => {
+                tracing::warn!("No HA connection to shutdown");
+            }
+        }
     }
 
     fn close(&self) {
-        todo!()
+        match (&self.default_ha_connection, &self.auto_switch_ha_connection) {
+            (Some(connection), _) => connection.close(),
+            (_, Some(connection)) => connection.close(),
+            (None, None) => {
+                tracing::warn!("No HA connection to close");
+            }
+        }
     }
 
     fn get_socket(&self) -> &TcpStream {
-        todo!()
+        match (&self.default_ha_connection, &self.auto_switch_ha_connection) {
+            (Some(connection), _) => connection.get_socket(),
+            (_, Some(connection)) => connection.get_socket(),
+            (None, None) => {
+                tracing::warn!("No HA connection to get socket from");
+                panic!("No HA connection available");
+            }
+        }
     }
 
     async fn get_current_state(&self) -> HAConnectionState {
-        todo!()
+        match (&self.default_ha_connection, &self.auto_switch_ha_connection) {
+            (Some(connection), _) => connection.get_current_state().await,
+            (_, Some(connection)) => connection.get_current_state().await,
+            (None, None) => {
+                tracing::warn!("No HA connection to get current state from");
+                panic!("No HA connection available");
+            }
+        }
     }
 
     fn get_client_address(&self) -> &str {
-        todo!()
+        match (&self.default_ha_connection, &self.auto_switch_ha_connection) {
+            (Some(connection), _) => connection.get_client_address(),
+            (_, Some(connection)) => connection.get_client_address(),
+            (None, None) => {
+                tracing::warn!("No HA connection to get client address from");
+                panic!("No HA connection available");
+            }
+        }
     }
 
     fn get_transferred_byte_in_second(&self) -> i64 {
-        todo!()
+        match (&self.default_ha_connection, &self.auto_switch_ha_connection) {
+            (Some(connection), _) => connection.get_transferred_byte_in_second(),
+            (_, Some(connection)) => connection.get_transferred_byte_in_second(),
+            (None, None) => {
+                tracing::warn!("No HA connection to get transferred bytes from");
+                panic!("No HA connection available");
+            }
+        }
     }
 
     fn get_transfer_from_where(&self) -> i64 {
-        todo!()
+        match (&self.default_ha_connection, &self.auto_switch_ha_connection) {
+            (Some(connection), _) => connection.get_transfer_from_where(),
+            (_, Some(connection)) => connection.get_transfer_from_where(),
+            (None, None) => {
+                tracing::warn!("No HA connection to get transfer offset from");
+                panic!("No HA connection available");
+            }
+        }
     }
 
     fn get_slave_ack_offset(&self) -> i64 {
-        todo!()
+        match (&self.default_ha_connection, &self.auto_switch_ha_connection) {
+            (Some(connection), _) => connection.get_slave_ack_offset(),
+            (_, Some(connection)) => connection.get_slave_ack_offset(),
+            (None, None) => {
+                tracing::warn!("No HA connection to get slave ack offset from");
+                panic!("No HA connection available");
+            }
+        }
     }
 }
