@@ -183,16 +183,14 @@ impl HAConnection for DefaultHAConnection {
         self.close();
 
         // Decrement connection count
-        //self.ha_service.decrement_connection_count();
+        let connection_count = self.ha_service.get_connection_count();
+        if connection_count.load(Ordering::SeqCst) > 0 {
+            connection_count.fetch_sub(1, Ordering::SeqCst);
+        }
     }
 
     fn close(&self) {
-        /*let mut socket_guard = self.socket_stream.write().await;
-        if let Some(mut socket) = socket_guard.take() {
-            if let Err(e) = socket.shutdown().await {
-                error!("Error closing socket: {}", e);
-            }
-        }*/
+        //nothing to do here, the socket will be closed by the services
     }
 
     fn get_socket(&self) -> &TcpStream {
