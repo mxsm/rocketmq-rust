@@ -63,14 +63,15 @@ impl GeneralHAConnection {
 
 impl HAConnection for GeneralHAConnection {
     async fn start(&mut self) -> Result<(), HAConnectionError> {
-        if let Some(ref mut connection) = self.default_ha_connection {
-            connection.start().await
-        } else if let Some(ref mut connection) = self.auto_switch_ha_connection {
-            connection.start().await
-        } else {
-            Err(HAConnectionError::Connection(
+        match (
+            &mut self.default_ha_connection,
+            &mut self.auto_switch_ha_connection,
+        ) {
+            (Some(connection), _) => connection.start().await,
+            (_, Some(connection)) => connection.start().await,
+            (None, None) => Err(HAConnectionError::Connection(
                 "No HA connection set".to_string(),
-            ))
+            )),
         }
     }
 
