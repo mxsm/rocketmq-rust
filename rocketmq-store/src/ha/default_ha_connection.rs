@@ -398,6 +398,10 @@ impl ReadSocketService {
     }
 
     pub async fn shutdown(&mut self) {
+        {
+            let mut state = self.current_state.write().await;
+            *state = HAConnectionState::Shutdown;
+        }
         if let Some(handle) = self.service_handle.take() {
             handle.abort();
             let _ = handle.await;
@@ -626,6 +630,10 @@ impl WriteSocketService {
     }
 
     pub async fn shutdown(&mut self) {
+        {
+            let mut state = self.current_state.write().await;
+            *state = HAConnectionState::Shutdown;
+        }
         if let Some(handle) = self.service_handle.take() {
             handle.abort();
             let _ = handle.await;
