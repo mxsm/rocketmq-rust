@@ -118,13 +118,14 @@ impl DefaultHAConnection {
 
 impl HAConnection for DefaultHAConnection {
     async fn start(&mut self) -> Result<(), HAConnectionError> {
+        const CAPACITY: usize = 1024 * 4;
         self.change_current_state(HAConnectionState::Transfer).await;
 
         // Start flow monitor
         self.flow_monitor.start().await;
 
         let tcp_stream = self.socket_stream.take().unwrap();
-        let framed = Framed::with_capacity(tcp_stream, BytesCodec::new(), 1024 * 4);
+        let framed = Framed::with_capacity(tcp_stream, BytesCodec::new(), CAPACITY);
         let (writer, reader) = framed.split();
 
         // Create and start read service
