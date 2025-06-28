@@ -149,7 +149,7 @@ impl Connection {
         if let Some(body_inner) = command.take_body() {
             self.buf.put(body_inner);
         }
-        self.writer.send(self.buf.clone().freeze()).await?;
+        self.writer.send(self.buf.split().freeze()).await?;
         Ok(())
     }
 
@@ -171,7 +171,7 @@ impl Connection {
         if let Some(body_inner) = command.take_body() {
             self.buf.put(body_inner);
         }
-        self.writer.send(self.buf.clone().freeze()).await?;
+        self.writer.send(self.buf.split().freeze()).await?;
         Ok(())
     }
 
