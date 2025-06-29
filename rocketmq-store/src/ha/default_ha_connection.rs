@@ -16,8 +16,9 @@
  */
 
 use std::sync::atomic::AtomicI64;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 use std::time::Instant;
 
@@ -28,11 +29,14 @@ use futures_util::stream::SplitSink;
 use futures_util::stream::SplitStream;
 use futures_util::SinkExt;
 use futures_util::StreamExt;
+use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_rust::ArcMut;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
+use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
+use tokio::time::timeout;
 use tokio_util::codec::BytesCodec;
 use tokio_util::codec::Framed;
 use tracing::error;
@@ -40,9 +44,11 @@ use tracing::info;
 use tracing::warn;
 
 use crate::base::message_store::MessageStore;
+use crate::base::select_result::SelectMappedBufferResult;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::ha::default_ha_service::DefaultHAService;
 use crate::ha::flow_monitor::FlowMonitor;
+use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::ha_connection::HAConnection;
 use crate::ha::ha_connection_state::HAConnectionState;
 use crate::ha::HAConnectionError;
@@ -55,13 +61,13 @@ pub struct DefaultHAConnection {
     ha_service: ArcMut<DefaultHAService>,
     socket_stream: Option<TcpStream>,
     client_address: String,
-    write_socket_service: Option<WriteSocketService>,
-    read_socket_service: Option<ReadSocketService>,
+    read_service_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    write_service_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     current_state: Arc<RwLock<HAConnectionState>>,
     slave_request_offset: Arc<AtomicI64>,
     slave_ack_offset: Arc<AtomicI64>,
     flow_monitor: Arc<FlowMonitor>,
-    shutdown_sender: Option<mpsc::Sender<()>>,
+    shutdown_tx: Arc<Mutex<Option<mpsc::Sender<()>>>>,
     message_store_config: Arc<MessageStoreConfig>,
 }
 
@@ -97,13 +103,13 @@ impl DefaultHAConnection {
             ha_service,
             socket_stream,
             client_address,
-            write_socket_service: None,
-            read_socket_service: None,
+            read_service_handle: Arc::new(Mutex::new(None)),
+            write_service_handle: Arc::new(Mutex::new(None)),
             current_state: Arc::new(RwLock::new(HAConnectionState::Transfer)),
             slave_request_offset: Arc::new(AtomicI64::new(-1)),
             slave_ack_offset: Arc::new(AtomicI64::new(-1)),
             flow_monitor,
-            shutdown_sender: Some(shutdown_sender),
+            shutdown_tx: Arc::new(Mutex::new(None)),
             message_store_config,
         })
     }
@@ -117,8 +123,8 @@ impl DefaultHAConnection {
 }
 
 impl HAConnection for DefaultHAConnection {
-    async fn start(&mut self) -> Result<(), HAConnectionError> {
-        const CAPACITY: usize = 1024 * 4;
+    async fn start(&mut self, conn: Weak<GeneralHAConnection>) -> Result<(), HAConnectionError> {
+        const CAPACITY: usize = 1024 * 8;
         self.change_current_state(HAConnectionState::Transfer).await;
 
         // Start flow monitor
@@ -128,8 +134,12 @@ impl HAConnection for DefaultHAConnection {
         let framed = Framed::with_capacity(tcp_stream, BytesCodec::new(), CAPACITY);
         let (writer, reader) = framed.split();
 
+        // Create shutdown channel
+        let (shutdown_tx, shutdown_rx) = mpsc::channel(1);
+        *self.shutdown_tx.lock().await = Some(shutdown_tx);
+
         // Create and start read service
-        let read_service = ReadSocketService::new(
+        let mut read_service = ReadSocketService::new(
             reader,
             self.client_address.clone(),
             ArcMut::clone(&self.ha_service),
@@ -137,11 +147,16 @@ impl HAConnection for DefaultHAConnection {
             self.slave_request_offset.clone(),
             self.slave_ack_offset.clone(),
             self.message_store_config.clone(),
+            conn.clone()
         )
-        .await?;
+            .await?;
+
+        let read_handle = tokio::spawn(async move {
+            read_service.run().await;
+        });
 
         // Create and start write service
-        let write_service = WriteSocketService::new(
+        let mut write_service = WriteSocketService::new(
             writer,
             self.client_address.clone(),
             ArcMut::clone(&self.ha_service),
@@ -149,33 +164,40 @@ impl HAConnection for DefaultHAConnection {
             self.slave_request_offset.clone(),
             Arc::clone(&self.flow_monitor),
             self.message_store_config.clone(),
+            conn
         )
-        .await?;
+            .await?;
 
-        self.read_socket_service = Some(read_service);
-        self.write_socket_service = Some(write_service);
+        let write_handle = tokio::spawn(async move {
+            write_service.run(shutdown_rx).await;
+        });
+
 
         // Start services
-        if let Some(ref mut read_service) = self.read_socket_service {
-            read_service.start().await?;
-        }
-        if let Some(ref mut write_service) = self.write_socket_service {
-            write_service.start().await?;
-        }
+        *self.read_service_handle.lock().await = Some(read_handle);
+        *self.write_service_handle.lock().await = Some(write_handle);
 
+        info!("HAConnection started for {}", self.client_address);
         Ok(())
     }
 
     async fn shutdown(&mut self) {
         self.change_current_state(HAConnectionState::Shutdown).await;
 
-        // Shutdown services
-        if let Some(ref mut write_service) = self.write_socket_service {
-            write_service.shutdown().await;
+        // Send shutdown signal
+        if let Some(tx) = self.shutdown_tx.lock().await.take() {
+            let _ = tx.send(()).await;
         }
-        if let Some(ref mut read_service) = self.read_socket_service {
-            read_service.shutdown().await;
+
+        // Wait for services to stop
+        if let Some(handle) = self.read_service_handle.lock().await.take() {
+            let _ = handle.await;
         }
+
+        if let Some(handle) = self.write_service_handle.lock().await.take() {
+            let _ = handle.await;
+        }
+
 
         // Shutdown flow monitor
         self.flow_monitor.shutdown().await;
@@ -211,11 +233,12 @@ impl HAConnection for DefaultHAConnection {
     }
 
     fn get_transfer_from_where(&self) -> i64 {
-        if let Some(ref write_service) = self.write_socket_service {
+        /*if let Some(ref write_service) = self.write_socket_service {
             write_service.get_next_transfer_from_where()
         } else {
             -1
-        }
+        }*/
+        unimplemented!("get_transfer_from_where is not implemented for DefaultHAConnection");
     }
 
     fn get_slave_ack_offset(&self) -> i64 {
@@ -223,22 +246,25 @@ impl HAConnection for DefaultHAConnection {
     }
 }
 
-const READ_MAX_BUFFER_SIZE: usize = 1024 * 1024;
+const READ_MAX_BUFFER_SIZE: usize = 1024 * 1024; // 1 MB
 const REPORT_HEADER_SIZE: usize = 8;
+const SELECT_TIMEOUT: Duration = Duration::from_millis(1000);
 
 /// Read Socket Service
 /// The main node processes requests from the slave nodes, reads the maximum request offset of the
 /// slave nodes.
 pub struct ReadSocketService {
-    reader: Option<SplitStream<Framed<TcpStream, BytesCodec>>>,
+    reader: SplitStream<Framed<TcpStream, BytesCodec>>,
     client_address: String,
     ha_service: ArcMut<DefaultHAService>,
     current_state: Arc<RwLock<HAConnectionState>>,
     slave_request_offset: Arc<AtomicI64>,
     slave_ack_offset: Arc<AtomicI64>,
-    shutdown_sender: Option<mpsc::Sender<()>>,
-    service_handle: Option<tokio::task::JoinHandle<()>>,
+    buffer: BytesMut,
+    process_position: usize,
     message_store_config: Arc<MessageStoreConfig>,
+    last_read_timestamp: AtomicU64,
+    connection: Weak<GeneralHAConnection>
 }
 
 impl ReadSocketService {
@@ -250,169 +276,187 @@ impl ReadSocketService {
         slave_request_offset: Arc<AtomicI64>,
         slave_ack_offset: Arc<AtomicI64>,
         message_store_config: Arc<MessageStoreConfig>,
+        connection: Weak<GeneralHAConnection>
     ) -> Result<Self, HAConnectionError> {
         let (shutdown_sender, _) = mpsc::channel(1);
 
         Ok(Self {
-            reader: Some(reader),
+            reader,
             client_address,
             ha_service,
             current_state,
             slave_request_offset,
             slave_ack_offset,
-            shutdown_sender: Some(shutdown_sender),
-            service_handle: None,
+            buffer: BytesMut::with_capacity(READ_MAX_BUFFER_SIZE),
+            process_position: 0,
             message_store_config,
+            last_read_timestamp: AtomicU64::new(get_current_millis()),
+            connection,
         })
     }
 
-    pub async fn start(&mut self) -> Result<(), HAConnectionError> {
-        let socket_stream = self.reader.take();
-        let client_address = self.client_address.clone();
-        let ha_service = ArcMut::clone(&self.ha_service);
-        let current_state = Arc::clone(&self.current_state);
-        let slave_request_offset = self.slave_request_offset.clone();
-        let slave_ack_offset = self.slave_ack_offset.clone();
-        let message_store_config = self.message_store_config.clone();
-
-        let handle = tokio::spawn(async move {
-            Self::run_service(
-                socket_stream,
-                client_address,
-                ha_service,
-                current_state,
-                slave_request_offset,
-                slave_ack_offset,
-                message_store_config,
-            )
-            .await;
-        });
-
-        self.service_handle = Some(handle);
-        Ok(())
-    }
-
-    async fn run_service(
-        socket_stream: Option<SplitStream<Framed<TcpStream, BytesCodec>>>,
-        client_address: String,
-        ha_service: ArcMut<DefaultHAService>,
-        current_state: Arc<RwLock<HAConnectionState>>,
-        slave_request_offset: Arc<AtomicI64>,
-        slave_ack_offset: Arc<AtomicI64>,
-        message_store_config: Arc<MessageStoreConfig>,
-    ) {
-        /* info!("ReadSocketService started for client: {}", client_address);
-
-        let mut buffer = vec![0u8; READ_MAX_BUFFER_SIZE];
-        let mut process_position = 0usize;
-        let mut last_read_timestamp = Instant::now();
+    pub async fn run(mut self) {
+        info!("{} service started", self.get_service_name());
 
         loop {
-            // Check if we should stop
-            {
-                let state = current_state.read().await;
-                if *state == HAConnectionState::Shutdown {
+            let select_result = timeout(SELECT_TIMEOUT, self.reader.next()).await;
+            match select_result {
+                Ok(Some(Ok(bytes))) => {
+
+                    self.last_read_timestamp
+                        .store(get_current_millis(), Ordering::Relaxed);
+
+                    if let Err(e) = self.process_incoming_data(bytes.freeze()).await {
+                        error!("processReadEvent error: {}", e);
+                        break;
+                    }
+                }
+                Ok(Some(Err(e))) => {
+                    error!("Stream error: {}", e);
                     break;
+                }
+                Ok(None) => {
+                    info!("Stream closed by peer");
+                    break;
+                }
+                Err(_) => {
+
                 }
             }
 
-            if let Some(ref mut socket) = socket_stream {
-                loop {
-                    if buffer.has_remaining_mut() {
-                        buffer.clear();
-                        process_position = 0;
-                    }
-                    match timeout(
-                        Duration::from_secs(1),
-                        socket.next(),
-                    )
-                    .await
-                    {
-                        Ok(Ok(bytes_read)) => {
-                            if bytes_read > 0 {
-                                last_read_timestamp = Instant::now();
-                                // Process the read data
-                                if buffer.len() - process_position >= REPORT_HEADER_SIZE {
-                                    //In general, pos is equal to buffer.len(), mainly to handle
-                                    // the alignment issue of the buffer.
-                                    let pos = buffer.len() - (buffer.len() % REPORT_HEADER_SIZE);
-                                    let read_offset = i64::from_be_bytes([
-                                        buffer[pos - 8],
-                                        buffer[pos - 7],
-                                        buffer[pos - 6],
-                                        buffer[pos - 5],
-                                        buffer[pos - 4],
-                                        buffer[pos - 3],
-                                        buffer[pos - 2],
-                                        buffer[pos - 1],
-                                    ]);
-                                    process_position = pos;
-                                    slave_ack_offset.store(read_offset, Ordering::SeqCst);
-                                    if slave_request_offset.load(Ordering::SeqCst) < 0 {
-                                        slave_request_offset.store(read_offset, Ordering::SeqCst);
-                                        info!(
-                                            "slave[{}] request offset {}",
-                                            client_address, read_offset
-                                        );
-                                    }
-                                    ha_service.notify_transfer_some(read_offset).await;
-                                }
-                            } else {
-                                // Connection closed
-                                break;
-                            }
-                        }
-                        Ok(Err(e)) => {
-                            error!("Read error for client {}: {}", client_address, e);
-                            break;
-                        }
-                        Err(_) => {
-                            // Timeout - check for housekeeping
-                            let interval = last_read_timestamp.elapsed();
-                            let housekeeping_interval =
-                                message_store_config.ha_housekeeping_interval;
-                            if interval > Duration::from_millis(housekeeping_interval) {
-                                warn!(
-                                    "ha housekeeping, found connection[{}] expired, {:?}",
-                                    client_address, interval
-                                );
-                                break;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            } else {
+
+            let current_time = get_current_millis();
+            let last_read = self.last_read_timestamp.load(Ordering::Relaxed);
+            let interval = current_time - last_read;
+
+            if interval
+                > self
+                .message_store_config
+                .ha_housekeeping_interval
+            {
+                warn!(
+                    "ha housekeeping, found this connection[{}] expired, {}",
+                    self.client_address, interval
+                );
+                break;
+            }
+
+
+            if self.is_stopped().await {
                 break;
             }
         }
 
-        // Cleanup
-        {
-            let mut state_guard = current_state.write().await;
-            *state_guard = HAConnectionState::Shutdown;
-        }
-
-        // ha_service.remove_connection(&client_address).await;
-        info!("ReadSocketService ended for client: {}", client_address);*/
-        unimplemented!("ReadSocketService is not implemented yet");
+        self.cleanup().await;
+        info!("{} service end", self.get_service_name());
     }
 
-    pub async fn shutdown(&mut self) {
-        {
-            let mut state = self.current_state.write().await;
-            *state = HAConnectionState::Shutdown;
+    async fn process_incoming_data(
+        &mut self,
+        data: Bytes,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+
+
+
+        if self.buffer.len() + data.len() > READ_MAX_BUFFER_SIZE {
+            self.compact_buffer();
         }
-        if let Some(handle) = self.service_handle.take() {
-            handle.abort();
-            let _ = handle.await;
+
+
+        self.buffer.extend_from_slice(&data);
+
+
+        while self.can_process_message() {
+            self.process_message().await?;
         }
+
+        Ok(())
+    }
+
+    fn can_process_message(&self) -> bool {
+        let available_data = self.buffer.len() - self.process_position;
+        available_data >= REPORT_HEADER_SIZE
+    }
+
+    async fn process_message(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let buffer_position = self.buffer.len();
+        let available_data = buffer_position - self.process_position;
+
+        if available_data >= REPORT_HEADER_SIZE {
+            let aligned_size = available_data - (available_data % REPORT_HEADER_SIZE);
+            let pos = self.process_position + aligned_size;
+
+            if pos >= 8 {
+
+                let offset_start = pos - 8;
+                let offset_bytes = &self.buffer[offset_start..pos];
+
+                let read_offset = i64::from_be_bytes([
+                    offset_bytes[0],
+                    offset_bytes[1],
+                    offset_bytes[2],
+                    offset_bytes[3],
+                    offset_bytes[4],
+                    offset_bytes[5],
+                    offset_bytes[6],
+                    offset_bytes[7],
+                ]);
+
+                self.process_position = pos;
+
+                // 更新连接的 slave offset
+                if let Some(connection) = self.connection.upgrade() {
+                    connection.set_slave_ack_offset(read_offset);
+                    if connection.get_slave_request_offset() < 0 {
+                        connection.set_slave_request_offset(read_offset);
+                        info!(
+                            "slave[{}] request offset {}",
+                            self.client_address, read_offset
+                        );
+                    }
+                }
+
+
+                self.ha_service.notify_transfer_some(read_offset).await;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn compact_buffer(&mut self) {
+
+        if self.process_position > 0 {
+            let remaining_data = self.buffer.len() - self.process_position;
+            if remaining_data > 0 {
+                let remaining = self.buffer.split_off(self.process_position);
+                self.buffer = remaining;
+            } else {
+                self.buffer.clear();
+            }
+            self.process_position = 0;
+        }
+    }
+
+    async fn cleanup(&self) {
+
+    }
+
+    async fn is_stopped(&self) -> bool {
+        matches!(
+            *self.current_state.read().await,
+            HAConnectionState::Shutdown
+        )
+    }
+
+    fn get_service_name(&self) -> String {
+        format!("ReadSocketService[{}]", self.client_address)
     }
 }
 
 /// Write Socket Service
 pub struct WriteSocketService {
-    writer: Option<SplitSink<Framed<TcpStream, BytesCodec>, Bytes>>,
+    writer: SplitSink<Framed<TcpStream, BytesCodec>, Bytes>>,
     client_address: String,
     ha_service: ArcMut<DefaultHAService>,
     current_state: Arc<RwLock<HAConnectionState>>,
@@ -421,6 +465,8 @@ pub struct WriteSocketService {
     next_transfer_from_where: Arc<AtomicI64>,
     service_handle: Option<tokio::task::JoinHandle<()>>,
     message_store_config: Arc<MessageStoreConfig>,
+    byte_buffer_header: BytesMut,
+    connection: Weak<GeneralHAConnection>
 }
 
 impl WriteSocketService {
@@ -432,9 +478,10 @@ impl WriteSocketService {
         slave_request_offset: Arc<AtomicI64>,
         flow_monitor: Arc<FlowMonitor>,
         message_store_config: Arc<MessageStoreConfig>,
+        connection: Weak<GeneralHAConnection>
     ) -> Result<Self, HAConnectionError> {
         Ok(Self {
-            writer: Some(writer),
+            writer,
             client_address,
             ha_service,
             current_state,
@@ -443,201 +490,247 @@ impl WriteSocketService {
             next_transfer_from_where: Arc::new(AtomicI64::new(-1)),
             service_handle: None,
             message_store_config,
+            connection,
+            byte_buffer_header: BytesMut::with_capacity(TRANSFER_HEADER_SIZE),
         })
     }
 
-    pub async fn start(&mut self) -> Result<(), HAConnectionError> {
-        let socket_stream = self.writer.take();
-        let client_address = self.client_address.clone();
-        let ha_service = ArcMut::clone(&self.ha_service);
-        let current_state = Arc::clone(&self.current_state);
-        let slave_request_offset = self.slave_request_offset.clone();
-        let flow_monitor = Arc::clone(&self.flow_monitor);
-        let next_transfer_from_where = self.next_transfer_from_where.clone();
-        let message_store_config = Arc::clone(&self.message_store_config);
+    pub async fn run(mut self, mut shutdown_rx: mpsc::Receiver<()>) {
+        info!("{} service started", self.get_service_name());
 
-        let handle = tokio::spawn(async move {
-            Self::run_service(
-                socket_stream,
-                client_address,
-                ha_service,
-                current_state,
-                slave_request_offset,
-                flow_monitor,
-                next_transfer_from_where,
-                message_store_config,
-            )
-            .await;
-        });
+        loop {
 
-        self.service_handle = Some(handle);
+            let select_result = timeout(SELECT_TIMEOUT, async {
+                tokio::select! {
+                    _ = shutdown_rx.recv() => {
+                        info!("Received shutdown signal");
+                        return false;
+                    }
+                    _ = tokio::task::yield_now() => {
+                        return true;
+                    }
+                }
+            }).await;
+
+            match select_result {
+                Ok(false) => {
+
+                    break;
+                }
+                Ok(true) => {
+
+                    if let Err(e) = self.process_transfer().await {
+                        error!("Transfer error: {}", e);
+                        break;
+                    }
+                }
+                Err(_) => {
+                    // 超时，继续循环
+                    if let Err(e) = self.process_transfer().await {
+                        error!("Transfer error: {}", e);
+                        break;
+                    }
+                }
+            }
+            if self.is_stopped().await {
+                break;
+            }
+        }
+
+        self.cleanup().await;
+        info!("{} service end", self.get_service_name());
+    }
+
+    async fn process_transfer(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+
+        let slave_request_offset = self.connection.upgrade()
+            .map(|conn| conn.get_slave_request_offset())
+            .unwrap_or(-1);
+
+        if slave_request_offset == -1 {
+            sleep(Duration::from_millis(10)).await;
+            return Ok(());
+        }
+
+        if self.next_transfer_from_where.load(Ordering::Relaxed) == -1 {
+            let next_offset = if slave_request_offset == 0 {
+                let mut master_offset = self.ha_service.get_max_offset().await;
+                let mapped_file_size = self.ha_service.get_mapped_file_size_commit_log();
+                master_offset = master_offset - (master_offset % mapped_file_size);
+                if master_offset < 0 {
+                    master_offset = 0;
+                }
+                master_offset
+            } else {
+                slave_request_offset
+            };
+
+            self.next_transfer_from_where.store(next_offset, Ordering::Relaxed);
+            info!(
+                "master transfer data from {} to slave[{}], and slave request {}",
+                next_offset, self.client_address, slave_request_offset
+            );
+        }
+
+        if self.last_write_over.load(Ordering::Relaxed) {
+            let current_time = self.ha_service.get_current_time_millis();
+            let last_write = self.last_write_timestamp.load(Ordering::Relaxed);
+            let interval = current_time - last_write;
+
+            let heartbeat_interval = self.ha_service
+                .get_message_store_config()
+                .get_ha_send_heartbeat_interval();
+
+            if interval > heartbeat_interval {
+
+                self.send_heartbeat().await?;
+                return Ok(());
+            }
+        } else {
+
+            self.transfer_data().await?;
+            return Ok(());
+        }
+
+        let next_offset = self.next_transfer_from_where.load(Ordering::Relaxed);
+        if let Some(select_result) = self.ha_service.get_commit_log_data(next_offset).await {
+            let mut size = select_result.get_size();
+            let max_batch_size = self.ha_service.get_message_store_config().get_ha_transfer_batch_size();
+
+            if size > max_batch_size {
+                size = max_batch_size;
+            }
+
+
+            let can_transfer_max_bytes = self.flow_monitor.can_transfer_max_byte_num();
+            if size > can_transfer_max_bytes {
+                let current_time = Self::current_timestamp();
+                let last_print = self.last_print_timestamp.load(Ordering::Relaxed);
+
+                if current_time - last_print > 1000 {
+                    warn!(
+                        "Trigger HA flow control, max transfer speed {:.2}KB/s, current speed: {:.2}KB/s",
+                        self.flow_monitor.max_transfer_byte_in_second() as f64 / 1024.0,
+                        self.flow_monitor.get_transferred_byte_in_second() as f64 / 1024.0
+                    );
+                    self.last_print_timestamp.store(current_time, Ordering::Relaxed);
+                }
+                size = can_transfer_max_bytes;
+            }
+
+            let this_offset = next_offset;
+            self.next_transfer_from_where.store(next_offset + size as i64, Ordering::Relaxed);
+
+
+            self.send_data(this_offset, select_result, size).await?;
+        } else {
+
+            self.ha_service.wait_for_running(100).await;
+        }
+
         Ok(())
     }
 
-    async fn run_service(
-        mut socket_stream: Option<SplitSink<Framed<TcpStream, BytesCodec>, Bytes>>,
-        client_address: String,
-        ha_service: ArcMut<DefaultHAService>,
-        current_state: Arc<RwLock<HAConnectionState>>,
-        slave_request_offset: Arc<AtomicI64>,
-        flow_monitor: Arc<FlowMonitor>,
-        next_transfer_from_where: Arc<AtomicI64>,
-        message_store_config: Arc<MessageStoreConfig>,
-    ) {
-        info!("WriteSocketService started for client: {}", client_address);
+    async fn send_heartbeat(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
-        let mut last_write_over = true;
-        let mut last_write_timestamp = Instant::now();
-        let mut byte_buffer_header = BytesMut::with_capacity(TRANSFER_HEADER_SIZE);
+        self.byte_buffer_header.clear();
+        let next_offset = self.next_transfer_from_where.load(Ordering::Relaxed);
+        self.byte_buffer_header.put_i64(next_offset);
+        self.byte_buffer_header.put_i32(0); // 0 size indicates heartbeat
 
-        loop {
-            // Check if we should stop
-            {
-                let state = current_state.read().await;
-                if *state == HAConnectionState::Shutdown {
-                    break;
-                }
-            }
+        let bytes = self.byte_buffer_header.clone().freeze();
+        self.sink.send(bytes).await?;
 
-            // Wait for slave request
-            if slave_request_offset.load(Ordering::SeqCst) == -1 {
-                sleep(Duration::from_millis(10)).await;
-                continue;
-            }
+        self.last_write_timestamp.store(self.ha_service.get_current_time_millis(), Ordering::Relaxed);
+        self.flow_monitor.add_byte_count_transferred(TRANSFER_HEADER_SIZE);
+        self.last_write_over.store(true, Ordering::Relaxed);
 
-            // Initialize transfer offset if needed
-            if next_transfer_from_where.load(Ordering::SeqCst) == -1 {
-                let slave_offset = slave_request_offset.load(Ordering::SeqCst);
-                let transfer_offset = if slave_offset == 0 {
-                    let master_offset = ha_service
-                        .get_default_message_store()
-                        .get_commit_log()
-                        .get_max_offset();
-                    let mapped_file_size = message_store_config.mapped_file_size_commit_log;
-                    let aligned_offset = master_offset - (master_offset % mapped_file_size as i64);
-                    if aligned_offset < 0 {
-                        0
-                    } else {
-                        aligned_offset
-                    }
-                } else {
-                    slave_offset
-                };
-                next_transfer_from_where.store(transfer_offset, Ordering::SeqCst);
-                info!(
-                    "master transfer data from {} to slave[{}], and slave request {}",
-                    transfer_offset, client_address, slave_offset
-                );
-            }
-
-            // Handle heartbeat or data transfer
-            if last_write_over {
-                let interval = last_write_timestamp.elapsed();
-                let heartbeat_interval = message_store_config.ha_send_heartbeat_interval;
-
-                if interval > Duration::from_millis(heartbeat_interval) {
-                    byte_buffer_header.clear();
-                    // Send heartbeat
-                    byte_buffer_header.put_i64(next_transfer_from_where.load(Ordering::SeqCst));
-                    byte_buffer_header.put_i32(0);
-                    let header = byte_buffer_header.split().freeze();
-                    last_write_over =
-                        Self::transfer_data(&mut socket_stream, header, None, &flow_monitor).await;
-                    if !last_write_over {
-                        continue;
-                    }
-                    last_write_timestamp = Instant::now();
-                }
-            }
-
-            // Transfer data
-            if let Some(data) = MessageStore::get_commit_log_data(
-                ha_service.get_default_message_store(),
-                next_transfer_from_where.load(Ordering::SeqCst),
-            ) {
-                let mut size = data.size;
-                let max_batch_size = message_store_config.ha_transfer_batch_size as i32;
-                if size > max_batch_size {
-                    size = max_batch_size;
-                }
-
-                let can_transfer_max = flow_monitor.can_transfer_max_byte_num();
-                if size > can_transfer_max {
-                    size = can_transfer_max;
-                }
-
-                let this_offset = next_transfer_from_where.fetch_add(size as i64, Ordering::SeqCst);
-
-                byte_buffer_header.clear();
-                // Send heartbeat
-                byte_buffer_header.put_i64(next_transfer_from_where.load(Ordering::SeqCst));
-                byte_buffer_header.put_i32(size);
-                let header = byte_buffer_header.split().freeze();
-                let data_buffer = data.bytes.as_ref().map(|bytes| {
-                    // If the data is larger than the size, slice it
-                    bytes.slice(..size as usize)
-                });
-                Self::transfer_data(&mut socket_stream, header, data_buffer, &flow_monitor).await;
-            } else {
-                // No data available, wait
-                sleep(Duration::from_millis(100)).await;
-            }
-        }
-
-        info!("WriteSocketService ended for client: {}", client_address);
+        Ok(())
     }
 
-    async fn transfer_data(
-        socket_stream: &mut Option<SplitSink<Framed<TcpStream, BytesCodec>, Bytes>>,
-        buffer_header: Bytes,
-        select_mapped_buffer: Option<Bytes>,
-        flow_monitor: &Arc<FlowMonitor>,
-    ) -> bool {
-        if let Some(ref mut socket) = socket_stream {
-            let len = buffer_header.len();
-            let result = match socket.send(buffer_header).await {
-                Ok(_) => {
-                    flow_monitor.add_byte_count_transferred(len as i64);
-                    true
-                }
-                Err(e) => {
-                    error!("Failed to write data: {}", e);
-                    false
-                }
-            };
+    async fn send_data(
+        &mut self,
+        offset: i64,
+        mut select_result: SelectMappedBufferResult,
+        size: usize,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
-            if let Some(data) = select_mapped_buffer {
-                let len = data.len();
-                match socket.send(data).await {
-                    Ok(_) => {
-                        flow_monitor.add_byte_count_transferred(len as i64);
-                        true
-                    }
-                    Err(e) => {
-                        error!("Failed to write data: {}", e);
-                        false
-                    }
-                }
-            } else {
-                result
-            }
+        self.byte_buffer_header.clear();
+        self.byte_buffer_header.put_i64(offset);
+        self.byte_buffer_header.put_i32(size as i32);
+
+
+        let mut combined_data = BytesMut::with_capacity(TRANSFER_HEADER_SIZE + size);
+        combined_data.extend_from_slice(&self.byte_buffer_header);
+
+
+        let buffer = select_result.get_byte_buffer();
+        if buffer.len() > size {
+            combined_data.extend_from_slice(&buffer[..size]);
         } else {
-            false
+            combined_data.extend_from_slice(buffer);
         }
+
+        let bytes = combined_data.freeze();
+        self.sink.send(bytes).await?;
+
+        self.last_write_timestamp.store(self.ha_service.get_current_time_millis(), Ordering::Relaxed);
+        self.flow_monitor.add_byte_count_transferred(TRANSFER_HEADER_SIZE + size);
+        self.last_write_over.store(true, Ordering::Relaxed);
+
+
+        select_result.release();
+
+        Ok(())
     }
 
-    pub fn get_next_transfer_from_where(&self) -> i64 {
-        self.next_transfer_from_where.load(Ordering::SeqCst)
+    async fn transfer_data(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+
+        if let Some(select_result) = self.select_mapped_buffer_result.take() {
+            let buffer = select_result.get_byte_buffer();
+            if !buffer.is_empty() {
+                let bytes = buffer.clone().freeze();
+                self.sink.send(bytes).await?;
+
+                self.last_write_timestamp.store(self.ha_service.get_current_time_millis(), Ordering::Relaxed);
+                self.flow_monitor.add_byte_count_transferred(buffer.len());
+                self.last_write_over.store(true, Ordering::Relaxed);
+            }
+
+            select_result.release();
+        }
+
+        Ok(())
     }
 
-    pub async fn shutdown(&mut self) {
-        {
-            let mut state = self.current_state.write().await;
-            *state = HAConnectionState::Shutdown;
+    async fn cleanup(&mut self) {
+        *self.current_state.write().await = HAConnectionState::Shutdown;
+
+
+        if let Some(select_result) = self.select_mapped_buffer_result.take() {
+            select_result.release();
         }
-        if let Some(handle) = self.service_handle.take() {
-            handle.abort();
-            let _ = handle.await;
+
+
+        if let Err(e) = self.sink.close().await {
+            error!("Error closing sink: {}", e);
         }
+
+
+        if let Some(connection) = self.connection.upgrade() {
+            self.ha_service.remove_connection(connection).await;
+        }
+
+        self.flow_monitor.shutdown();
     }
+
+    async fn is_stopped(&self) -> bool {
+        matches!(*self.current_state.read().await, HAConnectionState::Shutdown)
+    }
+
+    fn get_service_name(&self) -> String {
+        format!("WriteSocketService[{}]", self.client_address)
+    }
+
+
 }

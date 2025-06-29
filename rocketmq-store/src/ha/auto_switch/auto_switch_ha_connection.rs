@@ -14,9 +14,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::sync::Weak;
 
 use tokio::net::TcpStream;
 
+use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::ha_connection::HAConnection;
 use crate::ha::ha_connection_state::HAConnectionState;
 use crate::ha::HAConnectionError;
@@ -24,7 +26,7 @@ use crate::ha::HAConnectionError;
 pub struct AutoSwitchHAConnection;
 
 impl HAConnection for AutoSwitchHAConnection {
-    async fn start(&mut self) -> Result<(), HAConnectionError> {
+    async fn start(&mut self, conn: Weak<GeneralHAConnection>) -> Result<(), HAConnectionError> {
         todo!()
     }
 

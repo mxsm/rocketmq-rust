@@ -14,9 +14,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::sync::Weak;
 
 use tokio::net::TcpStream;
 
+use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::ha_connection_state::HAConnectionState;
 use crate::ha::HAConnectionError;
 
@@ -25,7 +27,7 @@ pub trait RocketmqHAConnection: Sync {
     /// Start the HA connection
     ///
     /// This initiates the connection threads and begins processing.
-    async fn start(&mut self) -> Result<(), HAConnectionError>;
+    async fn start(&mut self, conn: Weak<GeneralHAConnection>) -> Result<(), HAConnectionError>;
 
     /// Shutdown the HA connection gracefully
     ///

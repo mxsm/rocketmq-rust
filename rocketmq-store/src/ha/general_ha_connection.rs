@@ -14,6 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::sync::Arc;
+use std::sync::Weak;
 
 use tokio::net::TcpStream;
 
@@ -24,8 +26,8 @@ use crate::ha::ha_connection_state::HAConnectionState;
 use crate::ha::HAConnectionError;
 
 pub struct GeneralHAConnection {
-    default_ha_connection: Option<DefaultHAConnection>,
-    auto_switch_ha_connection: Option<AutoSwitchHAConnection>,
+    default_ha_connection: Option<Arc<DefaultHAConnection>>,
+    auto_switch_ha_connection: Option<Arc<AutoSwitchHAConnection>>,
 }
 
 impl GeneralHAConnection {
@@ -38,7 +40,7 @@ impl GeneralHAConnection {
 
     pub fn new_with_default_ha_connection(default_ha_connection: DefaultHAConnection) -> Self {
         GeneralHAConnection {
-            default_ha_connection: Some(default_ha_connection),
+            default_ha_connection: Some(Arc::new(default_ha_connection)),
             auto_switch_ha_connection: None,
         }
     }
@@ -48,27 +50,27 @@ impl GeneralHAConnection {
     ) -> Self {
         GeneralHAConnection {
             default_ha_connection: None,
-            auto_switch_ha_connection: Some(auto_switch_ha_connection),
+            auto_switch_ha_connection: Some(Arc::new(auto_switch_ha_connection)),
         }
     }
 
     pub fn set_default_ha_connection(&mut self, connection: DefaultHAConnection) {
-        self.default_ha_connection = Some(connection);
+        self.default_ha_connection = Some(Arc::new(connection));
     }
 
     pub fn set_auto_switch_ha_connection(&mut self, connection: AutoSwitchHAConnection) {
-        self.auto_switch_ha_connection = Some(connection);
+        self.auto_switch_ha_connection = Some(Arc::new(connection));
     }
 }
 
 impl HAConnection for GeneralHAConnection {
-    async fn start(&mut self) -> Result<(), HAConnectionError> {
+    async fn start(&mut self, conn: Weak<GeneralHAConnection>) -> Result<(), HAConnectionError> {
         match (
             &mut self.default_ha_connection,
             &mut self.auto_switch_ha_connection,
         ) {
-            (Some(connection), _) => connection.start().await,
-            (_, Some(connection)) => connection.start().await,
+            (Some(connection), _) => connection.start(conn).await,
+            (_, Some(connection)) => connection.start(conn).await,
             (None, None) => Err(HAConnectionError::Connection(
                 "No HA connection set".to_string(),
             )),
