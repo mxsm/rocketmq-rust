@@ -14,16 +14,31 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use rocketmq_rust::ArcMut;
+use tracing::error;
 
-use rocketmq_macros::RequestHeaderCodec;
-use serde::Deserialize;
-use serde::Serialize;
+use crate::ha::general_ha_service::GeneralHAService;
+use crate::message_store::local_file_message_store::LocalFileMessageStore;
+use crate::store_error::HAResult;
 
-use crate::rpc::rpc_request_header::RpcRequestHeader;
+pub struct HAConnectionStateNotificationService {
+    ha_service: GeneralHAService,
+    default_message_store: ArcMut<LocalFileMessageStore>,
+}
 
-#[derive(Serialize, Deserialize, Debug, Default, RequestHeaderCodec)]
-#[serde(rename_all = "camelCase")]
-pub struct UnlockBatchMqRequestHeader {
-    #[serde(flatten)]
-    pub rpc_request_header: Option<RpcRequestHeader>,
+impl HAConnectionStateNotificationService {
+    pub fn new(
+        ha_service: GeneralHAService,
+        default_message_store: ArcMut<LocalFileMessageStore>,
+    ) -> Self {
+        HAConnectionStateNotificationService {
+            ha_service,
+            default_message_store,
+        }
+    }
+
+    pub async fn start(&mut self) -> HAResult<()> {
+        error!("HAConnectionStateNotificationService is not implemented yet");
+        Ok(())
+    }
 }

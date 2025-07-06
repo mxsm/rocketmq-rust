@@ -14,23 +14,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::net::SocketAddr;
 
 use tokio::net::TcpStream;
 
 use crate::ha::ha_connection_state::HAConnectionState;
+use crate::ha::HAConnectionError;
 
 #[trait_variant::make(HAConnection: Send)]
 pub trait RocketmqHAConnection: Sync {
     /// Start the HA connection
     ///
     /// This initiates the connection threads and begins processing.
-    async fn start(&self);
+    async fn start(&mut self) -> Result<(), HAConnectionError>;
 
     /// Shutdown the HA connection gracefully
     ///
     /// This initiates a clean shutdown of the connection.
-    async fn shutdown(&self);
+    async fn shutdown(&mut self);
 
     /// Close the HA connection immediately
     ///
@@ -47,13 +47,13 @@ pub trait RocketmqHAConnection: Sync {
     ///
     /// # Returns
     /// Current connection state
-    fn get_current_state(&self) -> HAConnectionState;
+    async fn get_current_state(&self) -> HAConnectionState;
 
     /// Get the client address for this connection
     ///
     /// # Returns
     /// Socket address of the connected client
-    fn get_client_address(&self) -> SocketAddr;
+    fn get_client_address(&self) -> &str;
 
     /// Get the data transfer rate per second
     ///

@@ -98,13 +98,15 @@ impl Connection {
     ///
     /// A new `Connection` instance.
     pub fn new(tcp_stream: TcpStream) -> Connection {
-        let framed = Framed::with_capacity(tcp_stream, CompositeCodec::new(), 1024 * 4);
+        const CAPACITY: usize = 1024 * 1024; // 1 MB
+        const BUFFER_SIZE: usize = 8 * 1024; // 8 KB
+        let framed = Framed::with_capacity(tcp_stream, CompositeCodec::new(), CAPACITY);
         let (writer, reader) = framed.split();
         Self {
             writer,
             reader,
             ok: true,
-            buf: BytesMut::with_capacity(4096),
+            buf: BytesMut::with_capacity(BUFFER_SIZE),
         }
     }
 
@@ -147,7 +149,7 @@ impl Connection {
         if let Some(body_inner) = command.take_body() {
             self.buf.put(body_inner);
         }
-        self.writer.send(self.buf.clone().freeze()).await?;
+        self.writer.send(self.buf.split().freeze()).await?;
         Ok(())
     }
 
@@ -169,7 +171,7 @@ impl Connection {
         if let Some(body_inner) = command.take_body() {
             self.buf.put(body_inner);
         }
-        self.writer.send(self.buf.clone().freeze()).await?;
+        self.writer.send(self.buf.split().freeze()).await?;
         Ok(())
     }
 

@@ -14,31 +14,32 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::sync::Arc;
 
-mod auto_switch;
-pub(crate) mod default_ha_client;
-mod default_ha_connection;
-pub(crate) mod default_ha_service;
-pub(crate) mod flow_monitor;
-pub(crate) mod general_ha_client;
-pub(crate) mod general_ha_connection;
-pub(crate) mod general_ha_service;
-mod group_transfer_service;
-pub(crate) mod ha_client;
-pub(crate) mod ha_connection;
-pub(crate) mod ha_connection_state;
-pub(crate) mod ha_connection_state_notification_request;
-mod ha_connection_state_notification_service;
-pub(crate) mod ha_service;
-pub(crate) mod wait_notify_object;
+use tracing::error;
 
-/// Error types
-#[derive(Debug, thiserror::Error)]
-pub enum HAConnectionError {
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("Connection error: {0}")]
-    Connection(String),
-    #[error("Service error: {0}")]
-    Service(String),
+use crate::config::message_store_config::MessageStoreConfig;
+use crate::ha::general_ha_service::GeneralHAService;
+use crate::store_error::HAResult;
+
+pub struct GroupTransferService {
+    message_store_config: Arc<MessageStoreConfig>,
+    ha_service: GeneralHAService,
+}
+
+impl GroupTransferService {
+    pub fn new(
+        message_store_config: Arc<MessageStoreConfig>,
+        ha_service: GeneralHAService,
+    ) -> Self {
+        GroupTransferService {
+            message_store_config,
+            ha_service,
+        }
+    }
+
+    pub async fn start(&mut self) -> HAResult<()> {
+        error!("GroupTransferService is not implemented yet");
+        Ok(())
+    }
 }

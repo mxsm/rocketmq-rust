@@ -22,15 +22,19 @@ use std::time::Duration;
 use std::time::Instant;
 
 use bytes::BufMut;
-use tokio::io::AsyncReadExt;
-use tokio::io::AsyncWriteExt;
-use tokio::net::tcp::OwnedReadHalf;
-use tokio::net::tcp::OwnedWriteHalf;
+use bytes::Bytes;
+use bytes::BytesMut;
+use futures_util::stream::SplitSink;
+use futures_util::stream::SplitStream;
+use futures_util::SinkExt;
+use futures_util::StreamExt;
+use rocketmq_rust::ArcMut;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
-use tokio::time::timeout;
+use tokio_util::codec::BytesCodec;
+use tokio_util::codec::Framed;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -39,14 +43,16 @@ use crate::base::message_store::MessageStore;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::ha::default_ha_service::DefaultHAService;
 use crate::ha::flow_monitor::FlowMonitor;
+use crate::ha::ha_connection::HAConnection;
 use crate::ha::ha_connection_state::HAConnectionState;
+use crate::ha::HAConnectionError;
 
 /// Transfer Header buffer size. Schema: physic offset and body size.
 /// Format: [physicOffset (8bytes)][bodySize (4bytes)]
 pub const TRANSFER_HEADER_SIZE: usize = 8 + 4;
 
 pub struct DefaultHAConnection {
-    ha_service: Arc<DefaultHAService>,
+    ha_service: ArcMut<DefaultHAService>,
     socket_stream: Option<TcpStream>,
     client_address: String,
     write_socket_service: Option<WriteSocketService>,
@@ -62,7 +68,7 @@ pub struct DefaultHAConnection {
 impl DefaultHAConnection {
     /// Create a new DefaultHAConnection
     pub async fn new(
-        ha_service: Arc<DefaultHAService>,
+        ha_service: ArcMut<DefaultHAService>,
         socket_stream: TcpStream,
         message_store_config: Arc<MessageStoreConfig>,
     ) -> Result<Self, HAConnectionError> {
@@ -81,7 +87,9 @@ impl DefaultHAConnection {
         let flow_monitor = Arc::new(FlowMonitor::new(message_store_config.clone()));
 
         // Increment connection count
-        // ha_service.increment_connection_count();
+        ha_service
+            .get_connection_count()
+            .fetch_add(1, Ordering::SeqCst);
 
         let (shutdown_sender, shutdown_receiver) = mpsc::channel(1);
 
@@ -100,21 +108,31 @@ impl DefaultHAConnection {
         })
     }
 
-    /// Start the HA connection services
-    pub async fn start(&mut self) -> Result<(), HAConnectionError> {
+    /// Change the current state
+    pub async fn change_current_state(&self, new_state: HAConnectionState) {
+        info!("change state to {:?}", new_state);
+        let mut state_guard = self.current_state.write().await;
+        *state_guard = new_state;
+    }
+}
+
+impl HAConnection for DefaultHAConnection {
+    async fn start(&mut self) -> Result<(), HAConnectionError> {
+        const CAPACITY: usize = 1024 * 4;
         self.change_current_state(HAConnectionState::Transfer).await;
 
         // Start flow monitor
         self.flow_monitor.start().await;
 
-        let socket_stream = self.socket_stream.take().unwrap();
-        let (reader, writer) = socket_stream.into_split();
+        let tcp_stream = self.socket_stream.take().unwrap();
+        let framed = Framed::with_capacity(tcp_stream, BytesCodec::new(), CAPACITY);
+        let (writer, reader) = framed.split();
 
         // Create and start read service
         let read_service = ReadSocketService::new(
             reader,
             self.client_address.clone(),
-            Arc::clone(&self.ha_service),
+            ArcMut::clone(&self.ha_service),
             Arc::clone(&self.current_state),
             self.slave_request_offset.clone(),
             self.slave_ack_offset.clone(),
@@ -126,7 +144,7 @@ impl DefaultHAConnection {
         let write_service = WriteSocketService::new(
             writer,
             self.client_address.clone(),
-            Arc::clone(&self.ha_service),
+            ArcMut::clone(&self.ha_service),
             Arc::clone(&self.current_state),
             self.slave_request_offset.clone(),
             Arc::clone(&self.flow_monitor),
@@ -148,8 +166,7 @@ impl DefaultHAConnection {
         Ok(())
     }
 
-    /// Shutdown the HA connection
-    pub async fn shutdown(&mut self) {
+    async fn shutdown(&mut self) {
         self.change_current_state(HAConnectionState::Shutdown).await;
 
         // Shutdown services
@@ -164,56 +181,45 @@ impl DefaultHAConnection {
         self.flow_monitor.shutdown().await;
 
         // Close socket
-        self.close().await;
+        self.close();
 
         // Decrement connection count
-        //self.ha_service.decrement_connection_count();
+        let connection_count = self.ha_service.get_connection_count();
+        if connection_count.load(Ordering::SeqCst) > 0 {
+            connection_count.fetch_sub(1, Ordering::SeqCst);
+        }
     }
 
-    /// Close the socket connection
-    pub async fn close(&self) {
-        /*let mut socket_guard = self.socket_stream.write().await;
-        if let Some(mut socket) = socket_guard.take() {
-            if let Err(e) = socket.shutdown().await {
-                error!("Error closing socket: {}", e);
-            }
-        }*/
+    fn close(&self) {
+        //nothing to do here, the socket will be closed by the services
     }
 
-    /// Change the current state
-    pub async fn change_current_state(&self, new_state: HAConnectionState) {
-        info!("change state to {:?}", new_state);
-        let mut state_guard = self.current_state.write().await;
-        *state_guard = new_state;
+    fn get_socket(&self) -> &TcpStream {
+        todo!()
     }
 
-    /// Get current state
-    pub async fn get_current_state(&self) -> HAConnectionState {
+    async fn get_current_state(&self) -> HAConnectionState {
         *self.current_state.read().await
     }
 
-    /// Get client address
-    pub fn get_client_address(&self) -> &str {
+    fn get_client_address(&self) -> &str {
         &self.client_address
     }
 
-    /// Get slave ack offset
-    pub fn get_slave_ack_offset(&self) -> i64 {
-        self.slave_ack_offset.load(Ordering::SeqCst)
+    fn get_transferred_byte_in_second(&self) -> i64 {
+        self.flow_monitor.get_transferred_byte_in_second()
     }
 
-    /// Get transferred bytes per second
-    pub fn get_transferred_byte_in_second(&self) -> u64 {
-        self.flow_monitor.get_transferred_byte_in_second() as u64
-    }
-
-    /// Get transfer from where
-    pub fn get_transfer_from_where(&self) -> i64 {
+    fn get_transfer_from_where(&self) -> i64 {
         if let Some(ref write_service) = self.write_socket_service {
             write_service.get_next_transfer_from_where()
         } else {
             -1
         }
+    }
+
+    fn get_slave_ack_offset(&self) -> i64 {
+        self.slave_ack_offset.load(Ordering::SeqCst)
     }
 }
 
@@ -224,9 +230,9 @@ const REPORT_HEADER_SIZE: usize = 8;
 /// The main node processes requests from the slave nodes, reads the maximum request offset of the
 /// slave nodes.
 pub struct ReadSocketService {
-    reader: Option<OwnedReadHalf>,
+    reader: Option<SplitStream<Framed<TcpStream, BytesCodec>>>,
     client_address: String,
-    ha_service: Arc<DefaultHAService>,
+    ha_service: ArcMut<DefaultHAService>,
     current_state: Arc<RwLock<HAConnectionState>>,
     slave_request_offset: Arc<AtomicI64>,
     slave_ack_offset: Arc<AtomicI64>,
@@ -237,9 +243,9 @@ pub struct ReadSocketService {
 
 impl ReadSocketService {
     pub async fn new(
-        reader: OwnedReadHalf,
+        reader: SplitStream<Framed<TcpStream, BytesCodec>>,
         client_address: String,
-        ha_service: Arc<DefaultHAService>,
+        ha_service: ArcMut<DefaultHAService>,
         current_state: Arc<RwLock<HAConnectionState>>,
         slave_request_offset: Arc<AtomicI64>,
         slave_ack_offset: Arc<AtomicI64>,
@@ -263,7 +269,7 @@ impl ReadSocketService {
     pub async fn start(&mut self) -> Result<(), HAConnectionError> {
         let socket_stream = self.reader.take();
         let client_address = self.client_address.clone();
-        let ha_service = Arc::clone(&self.ha_service);
+        let ha_service = ArcMut::clone(&self.ha_service);
         let current_state = Arc::clone(&self.current_state);
         let slave_request_offset = self.slave_request_offset.clone();
         let slave_ack_offset = self.slave_ack_offset.clone();
@@ -287,15 +293,15 @@ impl ReadSocketService {
     }
 
     async fn run_service(
-        mut socket_stream: Option<OwnedReadHalf>,
+        socket_stream: Option<SplitStream<Framed<TcpStream, BytesCodec>>>,
         client_address: String,
-        ha_service: Arc<DefaultHAService>,
+        ha_service: ArcMut<DefaultHAService>,
         current_state: Arc<RwLock<HAConnectionState>>,
         slave_request_offset: Arc<AtomicI64>,
         slave_ack_offset: Arc<AtomicI64>,
         message_store_config: Arc<MessageStoreConfig>,
     ) {
-        info!("ReadSocketService started for client: {}", client_address);
+        /* info!("ReadSocketService started for client: {}", client_address);
 
         let mut buffer = vec![0u8; READ_MAX_BUFFER_SIZE];
         let mut process_position = 0usize;
@@ -318,7 +324,7 @@ impl ReadSocketService {
                     }
                     match timeout(
                         Duration::from_secs(1),
-                        socket.read(&mut buffer[process_position..]),
+                        socket.next(),
                     )
                     .await
                     {
@@ -373,6 +379,7 @@ impl ReadSocketService {
                                 break;
                             }
                         }
+                        _ => {}
                     }
                 }
             } else {
@@ -387,10 +394,15 @@ impl ReadSocketService {
         }
 
         // ha_service.remove_connection(&client_address).await;
-        info!("ReadSocketService ended for client: {}", client_address);
+        info!("ReadSocketService ended for client: {}", client_address);*/
+        unimplemented!("ReadSocketService is not implemented yet");
     }
 
     pub async fn shutdown(&mut self) {
+        {
+            let mut state = self.current_state.write().await;
+            *state = HAConnectionState::Shutdown;
+        }
         if let Some(handle) = self.service_handle.take() {
             handle.abort();
             let _ = handle.await;
@@ -400,9 +412,9 @@ impl ReadSocketService {
 
 /// Write Socket Service
 pub struct WriteSocketService {
-    writer: Option<OwnedWriteHalf>,
+    writer: Option<SplitSink<Framed<TcpStream, BytesCodec>, Bytes>>,
     client_address: String,
-    ha_service: Arc<DefaultHAService>,
+    ha_service: ArcMut<DefaultHAService>,
     current_state: Arc<RwLock<HAConnectionState>>,
     slave_request_offset: Arc<AtomicI64>,
     flow_monitor: Arc<FlowMonitor>,
@@ -413,9 +425,9 @@ pub struct WriteSocketService {
 
 impl WriteSocketService {
     pub async fn new(
-        writer: OwnedWriteHalf,
+        writer: SplitSink<Framed<TcpStream, BytesCodec>, Bytes>,
         client_address: String,
-        ha_service: Arc<DefaultHAService>,
+        ha_service: ArcMut<DefaultHAService>,
         current_state: Arc<RwLock<HAConnectionState>>,
         slave_request_offset: Arc<AtomicI64>,
         flow_monitor: Arc<FlowMonitor>,
@@ -437,7 +449,7 @@ impl WriteSocketService {
     pub async fn start(&mut self) -> Result<(), HAConnectionError> {
         let socket_stream = self.writer.take();
         let client_address = self.client_address.clone();
-        let ha_service = Arc::clone(&self.ha_service);
+        let ha_service = ArcMut::clone(&self.ha_service);
         let current_state = Arc::clone(&self.current_state);
         let slave_request_offset = self.slave_request_offset.clone();
         let flow_monitor = Arc::clone(&self.flow_monitor);
@@ -463,9 +475,9 @@ impl WriteSocketService {
     }
 
     async fn run_service(
-        mut socket_stream: Option<OwnedWriteHalf>,
+        mut socket_stream: Option<SplitSink<Framed<TcpStream, BytesCodec>, Bytes>>,
         client_address: String,
-        ha_service: Arc<DefaultHAService>,
+        ha_service: ArcMut<DefaultHAService>,
         current_state: Arc<RwLock<HAConnectionState>>,
         slave_request_offset: Arc<AtomicI64>,
         flow_monitor: Arc<FlowMonitor>,
@@ -476,6 +488,7 @@ impl WriteSocketService {
 
         let mut last_write_over = true;
         let mut last_write_timestamp = Instant::now();
+        let mut byte_buffer_header = BytesMut::with_capacity(TRANSFER_HEADER_SIZE);
 
         loop {
             // Check if we should stop
@@ -496,11 +509,10 @@ impl WriteSocketService {
             if next_transfer_from_where.load(Ordering::SeqCst) == -1 {
                 let slave_offset = slave_request_offset.load(Ordering::SeqCst);
                 let transfer_offset = if slave_offset == 0 {
-                    /*let master_offset = ha_service
-                    .get_message_store()::<MS>()
-                    .get_commit_log()
-                    .get_max_offset();*/
-                    let master_offset = 0;
+                    let master_offset = ha_service
+                        .get_default_message_store()
+                        .get_commit_log()
+                        .get_max_offset();
                     let mapped_file_size = message_store_config.mapped_file_size_commit_log;
                     let aligned_offset = master_offset - (master_offset % mapped_file_size as i64);
                     if aligned_offset < 0 {
@@ -511,7 +523,6 @@ impl WriteSocketService {
                 } else {
                     slave_offset
                 };
-
                 next_transfer_from_where.store(transfer_offset, Ordering::SeqCst);
                 info!(
                     "master transfer data from {} to slave[{}], and slave request {}",
@@ -525,11 +536,13 @@ impl WriteSocketService {
                 let heartbeat_interval = message_store_config.ha_send_heartbeat_interval;
 
                 if interval > Duration::from_millis(heartbeat_interval) {
+                    byte_buffer_header.clear();
                     // Send heartbeat
-                    let header =
-                        Self::build_header(next_transfer_from_where.load(Ordering::SeqCst), 0);
+                    byte_buffer_header.put_i64(next_transfer_from_where.load(Ordering::SeqCst));
+                    byte_buffer_header.put_i32(0);
+                    let header = byte_buffer_header.split().freeze();
                     last_write_over =
-                        Self::transfer_header(&mut socket_stream, &header, &flow_monitor).await;
+                        Self::transfer_data(&mut socket_stream, header, None, &flow_monitor).await;
                     if !last_write_over {
                         continue;
                     }
@@ -542,8 +555,7 @@ impl WriteSocketService {
                 ha_service.get_default_message_store(),
                 next_transfer_from_where.load(Ordering::SeqCst),
             ) {
-                //let mut size = data.len();
-                let mut size = 0_i32;
+                let mut size = data.size;
                 let max_batch_size = message_store_config.ha_transfer_batch_size as i32;
                 if size > max_batch_size {
                     size = max_batch_size;
@@ -554,17 +566,18 @@ impl WriteSocketService {
                     size = can_transfer_max;
                 }
 
-                let this_offset = next_transfer_from_where.load(Ordering::SeqCst);
-                next_transfer_from_where.store(this_offset + size as i64, Ordering::SeqCst);
+                let this_offset = next_transfer_from_where.fetch_add(size as i64, Ordering::SeqCst);
 
-                let header = Self::build_header(this_offset, size);
-
-                // Transfer header and data
-                if Self::transfer_header(&mut socket_stream, &header, &flow_monitor).await {
-                    /*last_write_over =
-                    Self::transfer_data(&socket_stream, &data[..size as usize], &flow_monitor).await;*/
-                    last_write_timestamp = Instant::now();
-                }
+                byte_buffer_header.clear();
+                // Send heartbeat
+                byte_buffer_header.put_i64(next_transfer_from_where.load(Ordering::SeqCst));
+                byte_buffer_header.put_i32(size);
+                let header = byte_buffer_header.split().freeze();
+                let data_buffer = data.bytes.as_ref().map(|bytes| {
+                    // If the data is larger than the size, slice it
+                    bytes.slice(..size as usize)
+                });
+                Self::transfer_data(&mut socket_stream, header, data_buffer, &flow_monitor).await;
             } else {
                 // No data available, wait
                 sleep(Duration::from_millis(100)).await;
@@ -574,50 +587,39 @@ impl WriteSocketService {
         info!("WriteSocketService ended for client: {}", client_address);
     }
 
-    fn build_header(offset: i64, size: i32) -> Vec<u8> {
-        let mut header = Vec::with_capacity(TRANSFER_HEADER_SIZE);
-        header.extend_from_slice(&offset.to_be_bytes());
-        header.extend_from_slice(&size.to_be_bytes());
-        header
-    }
-
-    async fn transfer_header(
-        socket_stream: &mut Option<OwnedWriteHalf>,
-        header: &[u8],
+    async fn transfer_data(
+        socket_stream: &mut Option<SplitSink<Framed<TcpStream, BytesCodec>, Bytes>>,
+        buffer_header: Bytes,
+        select_mapped_buffer: Option<Bytes>,
         flow_monitor: &Arc<FlowMonitor>,
     ) -> bool {
         if let Some(ref mut socket) = socket_stream {
-            match socket.write_all(header).await {
+            let len = buffer_header.len();
+            let result = match socket.send(buffer_header).await {
                 Ok(_) => {
-                    flow_monitor.add_byte_count_transferred(header.len() as i64);
-                    true
-                }
-                Err(e) => {
-                    error!("Failed to write header: {}", e);
-                    false
-                }
-            }
-        } else {
-            false
-        }
-    }
-
-    async fn transfer_data(
-        socket_stream: &Arc<RwLock<Option<TcpStream>>>,
-        data: &[u8],
-        flow_monitor: &Arc<FlowMonitor>,
-    ) -> bool {
-        let mut socket_guard = socket_stream.write().await;
-        if let Some(ref mut socket) = socket_guard.as_mut() {
-            match socket.write_all(data).await {
-                Ok(_) => {
-                    flow_monitor.add_byte_count_transferred(data.len() as i64);
+                    flow_monitor.add_byte_count_transferred(len as i64);
                     true
                 }
                 Err(e) => {
                     error!("Failed to write data: {}", e);
                     false
                 }
+            };
+
+            if let Some(data) = select_mapped_buffer {
+                let len = data.len();
+                match socket.send(data).await {
+                    Ok(_) => {
+                        flow_monitor.add_byte_count_transferred(len as i64);
+                        true
+                    }
+                    Err(e) => {
+                        error!("Failed to write data: {}", e);
+                        false
+                    }
+                }
+            } else {
+                result
             }
         } else {
             false
@@ -629,20 +631,13 @@ impl WriteSocketService {
     }
 
     pub async fn shutdown(&mut self) {
+        {
+            let mut state = self.current_state.write().await;
+            *state = HAConnectionState::Shutdown;
+        }
         if let Some(handle) = self.service_handle.take() {
             handle.abort();
             let _ = handle.await;
         }
     }
-}
-
-/// Error types
-#[derive(Debug, thiserror::Error)]
-pub enum HAConnectionError {
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("Connection error: {0}")]
-    Connection(String),
-    #[error("Service error: {0}")]
-    Service(String),
 }

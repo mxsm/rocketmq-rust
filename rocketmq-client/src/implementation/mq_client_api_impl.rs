@@ -224,14 +224,15 @@ impl MQClientAPIImpl {
         if body.is_empty() {
             return Ok(());
         }
-        let invoke_name_servers;
-        if let Some(name_servers) = special_name_servers
-            && !name_servers.is_empty()
-        {
-            invoke_name_servers = name_servers;
+        let invoke_name_servers = if let Some(name_servers) = special_name_servers {
+            if !name_servers.is_empty() {
+                name_servers
+            } else {
+                Vec::from(self.get_name_server_address_list())
+            }
         } else {
-            invoke_name_servers = Vec::from(self.get_name_server_address_list());
-        }
+            Vec::from(self.get_name_server_address_list())
+        };
         if invoke_name_servers.is_empty() {
             return Ok(());
         }
@@ -906,7 +907,7 @@ impl MQClientAPIImpl {
         client_id: &str,
         subscription_data: &SubscriptionData,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> RocketMQResult<()> {
         let mut request = RemotingCommand::create_remoting_command(RequestCode::CheckClientConfig);
         let body = CheckClientRequestBody::new(
             client_id.to_string(),

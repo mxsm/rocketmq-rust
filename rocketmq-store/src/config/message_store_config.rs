@@ -277,6 +277,9 @@ mod defaults {
     pub fn ha_send_heartbeat_interval() -> u64 {
         1000 * 5
     }
+    pub fn ha_listen_port() -> usize {
+        10912
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -510,7 +513,7 @@ pub struct MessageStoreConfig {
     #[serde(default)]
     pub message_index_safe: bool,
 
-    #[serde(default)]
+    #[serde(default = "defaults::ha_listen_port")]
     pub ha_listen_port: usize,
 
     #[serde(default = "defaults::ha_send_heartbeat_interval")]
@@ -806,6 +809,9 @@ pub struct MessageStoreConfig {
 
     #[serde(default)]
     pub read_uncommitted: bool,
+
+    #[serde(default)]
+    pub enable_controller_mode: bool,
 }
 
 impl Default for MessageStoreConfig {
@@ -896,7 +902,7 @@ impl Default for MessageStoreConfig {
             max_index_num: 5000000 * 4,
             max_msgs_num_batch: 64,
             message_index_safe: false,
-            ha_listen_port: 0,
+            ha_listen_port: 10912,
             ha_send_heartbeat_interval: 1000 * 5,
             ha_housekeeping_interval: 1000 * 20,
             ha_transfer_batch_size: 0,
@@ -996,6 +1002,7 @@ impl Default for MessageStoreConfig {
             enable_dleger_commit_log: false,
             rocksdb_cq_double_write_enable: false,
             read_uncommitted: false,
+            enable_controller_mode: false,
         }
     }
 }
