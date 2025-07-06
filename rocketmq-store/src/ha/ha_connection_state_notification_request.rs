@@ -14,8 +14,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use parking_lot::Mutex;
+
 use tokio::sync::oneshot;
+use tokio::sync::Mutex;
 
 use crate::ha::ha_connection_state::HAConnectionState;
 
@@ -84,8 +85,8 @@ impl HAConnectionStateNotificationRequest {
     ///
     /// # Returns
     /// `true` if the notification was successfully sent, `false` if the receiver was dropped
-    pub fn complete(&self, result: bool) -> bool {
-        let mut sender_guard = self.notification_sender.lock();
+    pub async fn complete(&self, result: bool) -> bool {
+        let mut sender_guard = self.notification_sender.lock().await;
         if let Some(sender) = sender_guard.take() {
             sender.send(result).is_ok()
         } else {
@@ -115,12 +116,12 @@ mod tests {
         assert_eq!(request.notify_when_shutdown(), true);
 
         // Complete the request
-        assert!(request.complete(true));
+        assert!(request.complete(true).await);
 
         // Verify the result was received
         assert_eq!(receiver.await.unwrap(), true);
 
         // Completing again should fail
-        assert!(!request.complete(false));
+        assert!(!request.complete(false).await);
     }
 }
