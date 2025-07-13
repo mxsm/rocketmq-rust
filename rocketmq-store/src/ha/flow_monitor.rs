@@ -64,6 +64,10 @@ impl FlowMonitor {
             .as_ref()
             .add_byte_count_transferred(count);
     }
+
+    pub fn max_transfer_byte_in_second(&self) -> usize {
+        self.server_manager.as_ref().max_transfer_byte_in_second()
+    }
 }
 
 struct FlowMonitorInner {
@@ -116,7 +120,7 @@ impl FlowMonitorInner {
         self.message_store_config.ha_flow_control_enable
     }
 
-    fn max_transfer_byte_in_second(&self) -> usize {
+    pub fn max_transfer_byte_in_second(&self) -> usize {
         self.message_store_config.max_ha_transfer_byte_in_second
     }
 }

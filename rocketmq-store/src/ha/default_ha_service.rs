@@ -68,10 +68,10 @@ use crate::store_error::HAResult;
 
 pub struct DefaultHAService {
     connection_count: Arc<AtomicU64>,
-    connection_list: Arc<Mutex<Vec<GeneralHAConnection>>>,
+    connection_list: Arc<Mutex<Vec<ArcMut<GeneralHAConnection>>>>,
     accept_socket_service: Option<AcceptSocketService>,
     default_message_store: ArcMut<LocalFileMessageStore>,
-    wait_notify_object: Arc<WaitNotifyObject>,
+    wait_notify_object: Arc<Notify>,
     push2_slave_max_offset: Arc<AtomicU64>,
     group_transfer_service: Option<GroupTransferService>,
     ha_client: GeneralHAClient,
@@ -85,7 +85,7 @@ impl DefaultHAService {
             connection_list: Arc::new(Mutex::new(Vec::new())),
             accept_socket_service: None,
             default_message_store: message_store,
-            wait_notify_object: Arc::new(WaitNotifyObject),
+            wait_notify_object: Arc::new(Notify::new()),
             push2_slave_max_offset: Arc::new(AtomicU64::new(0)),
             group_transfer_service: None,
             ha_client: GeneralHAClient::new(),
@@ -133,7 +133,7 @@ impl DefaultHAService {
         Ok(())
     }
 
-    pub async fn add_connection(&self, connection: GeneralHAConnection) {
+    pub async fn add_connection(&self, connection: ArcMut<GeneralHAConnection>) {
         // Add a new connection to the service
         let mut vec = self.connection_list.lock().await;
         vec.push(connection);
@@ -141,6 +141,10 @@ impl DefaultHAService {
 
     pub fn get_connection_count(&self) -> &AtomicU64 {
         &self.connection_count
+    }
+
+    pub async fn remove_connection(&self, connection: ArcMut<GeneralHAConnection>) {
+        unimplemented!("remove_connection method is not implemented");
     }
 }
 
@@ -294,8 +298,9 @@ impl AcceptSocketService {
                                     unimplemented!("Auto-switching is not implemented yet");
                                 }else{
                                     let default_conn = DefaultHAConnection::new(default_ha_service.clone(), stream,message_store_config.clone()).await.expect("Error creating HAConnection");
-                                    let mut general_conn = GeneralHAConnection::new_with_default_ha_connection(default_conn);
-                                    if  let Err(e) =  general_conn.start().await {
+                                    let mut general_conn = ArcMut::new(GeneralHAConnection::new_with_default_ha_connection(default_conn));
+                                    let  conn_weak= ArcMut::downgrade(&general_conn);
+                                    if  let Err(e) =  general_conn.start(conn_weak).await {
                                         error!("Error starting HAService: {}", e);
                                     }else {
                                         info!("HAService accept new connection, {}", addr);
