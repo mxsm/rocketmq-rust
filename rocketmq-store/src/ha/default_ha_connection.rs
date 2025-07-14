@@ -483,10 +483,10 @@ impl WriteSocketService {
                 tokio::select! {
                     _ = shutdown_rx.recv() => {
                         info!("Received shutdown signal");
-                        return false;
+                         false
                     }
                     _ = tokio::task::yield_now() => {
-                        return true;
+                         true
                     }
                 }
             })
