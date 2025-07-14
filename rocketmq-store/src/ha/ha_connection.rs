@@ -15,8 +15,10 @@
  * limitations under the License.
  */
 
+use rocketmq_rust::WeakArcMut;
 use tokio::net::TcpStream;
 
+use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::ha_connection_state::HAConnectionState;
 use crate::ha::HAConnectionError;
 
@@ -25,7 +27,10 @@ pub trait RocketmqHAConnection: Sync {
     /// Start the HA connection
     ///
     /// This initiates the connection threads and begins processing.
-    async fn start(&mut self) -> Result<(), HAConnectionError>;
+    async fn start(
+        &mut self,
+        conn: WeakArcMut<GeneralHAConnection>,
+    ) -> Result<(), HAConnectionError>;
 
     /// Shutdown the HA connection gracefully
     ///
