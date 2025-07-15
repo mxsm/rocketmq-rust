@@ -22,7 +22,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 
-crc32fast = "1.4.2"
+crc32fast = "1.5.0"
 
 #json spupport
 serde.workspace = true
