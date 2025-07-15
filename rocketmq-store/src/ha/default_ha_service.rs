@@ -116,7 +116,7 @@ impl DefaultHAService {
             let default_message_store = self.default_message_store.clone();
             let client = DefaultHAClient::new(default_message_store)
                 .map_err(|e| HAError::Service(format!("Failed to create DefaultHAClient: {e}")))?;
-            self.ha_client.set_default_ha_service(client)
+            self.ha_client.set_default_ha_service(client);
         }
 
         let state_notification_service =
