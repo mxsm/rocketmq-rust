@@ -717,21 +717,23 @@ impl CommitLog {
         need_handle_ha: bool,
     ) -> PutMessageResult {
         let append_message_result = put_message_result.append_message_result().unwrap();
+        let (flush_status, replica_status) = if need_handle_ha {
+            tokio::join!(
+                self.handle_disk_flush(append_message_result, &msg),
+                self.handle_ha(append_message_result, need_ack_nums)
+            )
+        } else {
+            // Only execute disk flush when HA is not needed
+            let flush_status = self.handle_disk_flush(append_message_result, &msg).await;
+            (flush_status, PutMessageStatus::PutOk)
+        };
 
-        let (disk_status, ha_status) = tokio::join!(
-            async { self.handle_disk_flush(append_message_result, &msg).await },
-            async {
-                if need_handle_ha {
-                    self.handle_ha(append_message_result, need_ack_nums).await
-                } else {
-                    PutMessageStatus::PutOk
-                }
-            }
-        );
-        put_message_result.set_put_message_status(disk_status);
+        if flush_status != PutMessageStatus::PutOk {
+            put_message_result.set_put_message_status(flush_status);
+        }
 
-        if disk_status == PutMessageStatus::PutOk {
-            put_message_result.set_put_message_status(ha_status);
+        if replica_status != PutMessageStatus::PutOk {
+            put_message_result.set_put_message_status(replica_status);
         }
         put_message_result
     }
