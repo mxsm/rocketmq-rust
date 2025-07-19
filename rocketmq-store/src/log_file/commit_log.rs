@@ -733,36 +733,6 @@ impl CommitLog {
         if disk_status == PutMessageStatus::PutOk {
             put_message_result.set_put_message_status(ha_status);
         }
-        /*let put_message_result_cloned = put_message_result_clone.clone();
-        let disk_flush_handle = tokio::spawn(async move {
-            commit_log
-                .handle_disk_flush(put_message_result_clone.as_ref(), &msg)
-                .await
-        });
-
-        let replica_result_handle = tokio::spawn(async move {
-            if need_handle_ha {
-                this.handle_ha(put_message_result_cloned.as_ref(), need_ack_nums)
-                    .await
-            } else {
-                PutMessageStatus::PutOk
-            }
-        });
-
-        match disk_flush_handle.await {
-            Ok(status) => {
-                put_message_result.set_put_message_status(status);
-                if status == PutMessageStatus::PutOk {
-                    if let Ok(replica_status) = replica_result_handle.await {
-                        put_message_result.set_put_message_status(replica_status);
-                    }
-                }
-            }
-            Err(error) => {
-                put_message_result.set_put_message_status(PutMessageStatus::FlushDiskTimeout);
-            }
-        }*/
-
         put_message_result
     }
 
