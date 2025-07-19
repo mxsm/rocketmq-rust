@@ -724,8 +724,10 @@ impl CommitLog {
             )
         } else {
             // Only execute disk flush when HA is not needed
-            let flush_status = self.handle_disk_flush(append_message_result, &msg).await;
-            (flush_status, PutMessageStatus::PutOk)
+            tokio::join!(
+                self.handle_disk_flush(append_message_result, &msg),
+                async { PutMessageStatus::PutOk } // Placeholder for HA operation
+            )
         };
 
         if flush_status != PutMessageStatus::PutOk {
