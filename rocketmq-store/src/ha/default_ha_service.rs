@@ -218,7 +218,7 @@ impl HAService for DefaultHAService {
         if let Some(ref group_transfer_service) = self.group_transfer_service {
             group_transfer_service.put_request(request).await;
         } else {
-            error!("No AcceptSocketService initialized to put request");
+            error!("No GroupTransferService initialized to put request");
         }
     }
 
