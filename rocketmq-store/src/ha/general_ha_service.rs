@@ -160,7 +160,7 @@ impl HAService for GeneralHAService {
             (Some(default_ha_service), _) => default_ha_service.get_connection_list().await,
             (_, Some(auto_switch_service)) => auto_switch_service.get_connection_list().await,
             (None, None) => {
-                error!("No HA service initialized to put request");
+                error!("No HA service initialized to get connection list");
                 Vec::new()
             }
         }
