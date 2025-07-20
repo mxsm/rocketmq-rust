@@ -766,10 +766,13 @@ impl CommitLog {
             error!("local file message store is not initialized for HA handling");
             return PutMessageStatus::UnknownError;
         }
-        request
-            .wait_for_result_with_timeout()
-            .await
-            .unwrap_or(PutMessageStatus::UnknownError)
+        match request.wait_for_result_with_timeout().await {
+            Ok(status) => status,
+            Err(e) => {
+                error!("Failed to wait for HA result: {:?}", e);
+                PutMessageStatus::UnknownError
+            }
+        }
     }
 
     async fn handle_disk_flush(
