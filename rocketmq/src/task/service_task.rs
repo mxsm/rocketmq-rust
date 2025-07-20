@@ -187,6 +187,19 @@ impl<T: ServiceTask + 'static> ServiceManager<T> {
         }
     }
 
+    pub fn new_arc(service: Arc<T>) -> Self {
+        Self {
+            service,
+            state: Arc::new(RwLock::new(ServiceLifecycle::NotStarted)),
+            stopped: Arc::new(AtomicBool::new(false)),
+            started: Arc::new(AtomicBool::new(false)),
+            has_notified: Arc::new(AtomicBool::new(false)),
+            wait_point: Arc::new(Notify::new()),
+            task_handle: Arc::new(RwLock::new(None)),
+            is_daemon: AtomicBool::new(false),
+        }
+    }
+
     /// Start the service thread
     pub async fn start(&self) -> RocketMQResult<()> {
         let service_name = self.service.get_service_name();
