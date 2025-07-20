@@ -227,8 +227,7 @@ impl HAService for DefaultHAService {
 
     async fn get_connection_list(&self) -> Vec<ArcMut<GeneralHAConnection>> {
         let connection_list = self.connection_list.lock().await;
-        let result = connection_list.iter().cloned().collect();
-        result
+        connection_list.iter().cloned().collect()
     }
 
     fn get_ha_client<CL: HAClient>(&self) -> Arc<CL> {
