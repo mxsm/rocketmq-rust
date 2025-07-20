@@ -25,6 +25,7 @@ use crate::ha::ha_connection::HAConnection;
 use crate::ha::ha_connection_state::HAConnectionState;
 use crate::ha::HAConnectionError;
 
+#[derive(Default)]
 pub struct GeneralHAConnection {
     default_ha_connection: Option<ArcMut<DefaultHAConnection>>,
     auto_switch_ha_connection: Option<ArcMut<AutoSwitchHAConnection>>,
@@ -32,10 +33,7 @@ pub struct GeneralHAConnection {
 
 impl GeneralHAConnection {
     pub fn new() -> Self {
-        GeneralHAConnection {
-            default_ha_connection: None,
-            auto_switch_ha_connection: None,
-        }
+        Self::default()
     }
 
     pub fn new_with_default_ha_connection(default_ha_connection: DefaultHAConnection) -> Self {

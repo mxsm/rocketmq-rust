@@ -30,12 +30,12 @@ use crate::ha::ha_connection::HAConnection;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use crate::ha::ha_service::HAService;
 use crate::ha::wait_notify_object::WaitNotifyObject;
-use crate::log_file::flush_manager_impl::group_commit_request::GroupCommitRequest;
+use crate::log_file::group_commit_request::GroupCommitRequest;
 use crate::message_store::local_file_message_store::LocalFileMessageStore;
 use crate::store_error::HAError;
 use crate::store_error::HAResult;
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct GeneralHAService {
     default_ha_service: Option<ArcMut<DefaultHAService>>,
     auto_switch_ha_service: Option<ArcMut<AutoSwitchHAService>>,
@@ -43,10 +43,7 @@ pub struct GeneralHAService {
 
 impl GeneralHAService {
     pub fn new() -> Self {
-        GeneralHAService {
-            default_ha_service: None,
-            auto_switch_ha_service: None,
-        }
+        Self::default()
     }
 
     pub fn new_with_default_ha_service(default_ha_service: ArcMut<DefaultHAService>) -> Self {
@@ -136,8 +133,18 @@ impl HAService for GeneralHAService {
         todo!()
     }
 
-    fn put_request(&self, request: GroupCommitRequest) {
-        todo!()
+    async fn put_request(&self, request: ArcMut<GroupCommitRequest>) {
+        match (&self.default_ha_service, &self.auto_switch_ha_service) {
+            (Some(default_ha_service), _) => {
+                default_ha_service.put_request(request).await;
+            }
+            (_, Some(auto_switch_service)) => {
+                auto_switch_service.put_request(request).await;
+            }
+            (None, None) => {
+                error!("No HA service initialized to put request");
+            }
+        }
     }
 
     fn put_group_connection_state_request(&self, request: HAConnectionStateNotificationRequest) {

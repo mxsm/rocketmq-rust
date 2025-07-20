@@ -27,7 +27,7 @@ pub struct GroupCommitRequest {
     next_offset: i64,
     flush_ok_sender: Option<oneshot::Sender<PutMessageStatus>>,
     flush_ok_receiver: Option<oneshot::Receiver<PutMessageStatus>>,
-    ack_nums: i32,
+    ack_nums: u32,
     deadline: Instant,
 }
 
@@ -38,12 +38,12 @@ impl GroupCommitRequest {
     }
 
     /// Create a new GroupCommitRequest with timeout and ack numbers
-    pub fn with_ack_nums(next_offset: i64, timeout_millis: u64, ack_nums: i32) -> Self {
+    pub fn with_ack_nums(next_offset: i64, timeout_millis: u64, ack_nums: u32) -> Self {
         Self::create_request(next_offset, timeout_millis, ack_nums)
     }
 
     #[inline]
-    fn create_request(next_offset: i64, timeout_millis: u64, ack_nums: i32) -> Self {
+    fn create_request(next_offset: i64, timeout_millis: u64, ack_nums: u32) -> Self {
         let (sender, receiver) = oneshot::channel();
         Self {
             next_offset,
@@ -60,7 +60,7 @@ impl GroupCommitRequest {
     }
 
     /// Get the number of acknowledgments needed
-    pub fn get_ack_nums(&self) -> i32 {
+    pub fn get_ack_nums(&self) -> u32 {
         self.ack_nums
     }
 
@@ -101,7 +101,7 @@ impl GroupCommitRequest {
 
     /// Get a future that resolves when the flush operation completes with timeout
     pub async fn wait_for_result_with_timeout(
-        mut self,
+        &mut self,
     ) -> Result<PutMessageStatus, Box<dyn std::error::Error + Send + Sync>> {
         if let Some(receiver) = self.flush_ok_receiver.take() {
             let timeout_duration = if self.deadline > Instant::now() {
@@ -182,7 +182,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_timeout() {
-        let request = GroupCommitRequest::new(12345, 100); // 100ms timeout
+        let mut request = GroupCommitRequest::new(12345, 100); // 100ms timeout
 
         let start = Instant::now();
         let result = request.wait_for_result_with_timeout().await;

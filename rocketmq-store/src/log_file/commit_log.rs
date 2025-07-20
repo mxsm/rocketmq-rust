@@ -71,8 +71,10 @@ use crate::base::swappable::Swappable;
 use crate::base::topic_queue_lock::TopicQueueLock;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::consume_queue::mapped_file_queue::MappedFileQueue;
+use crate::ha::ha_service::HAService;
 use crate::log_file::cold_data_check_service::ColdDataCheckService;
 use crate::log_file::flush_manager_impl::defalut_flush_manager::DefaultFlushManager;
+use crate::log_file::group_commit_request::GroupCommitRequest;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
 use crate::message_encoder::message_ext_encoder::MessageExtEncoder;
@@ -748,10 +750,29 @@ impl CommitLog {
         if need_ack_nums <= 1 {
             return PutMessageStatus::PutOk;
         }
-
+        let next_offset = put_message_result.wrote_offset + put_message_result.wrote_bytes as i64;
         //HA service to do unimplemented
-
-        PutMessageStatus::PutOk
+        let mut request = ArcMut::new(GroupCommitRequest::with_ack_nums(
+            next_offset,
+            self.message_store_config.slave_timeout as u64,
+            need_ack_nums,
+        ));
+        if let Some(local_file_message_store) = &self.local_file_message_store {
+            local_file_message_store
+                .get_ha_service()
+                .put_request(request.clone())
+                .await;
+        } else {
+            error!("local file message store is not initialized for HA handling");
+            return PutMessageStatus::UnknownError;
+        }
+        match request.wait_for_result_with_timeout().await {
+            Ok(status) => status,
+            Err(e) => {
+                error!("Failed to wait for HA result: {:?}", e);
+                PutMessageStatus::UnknownError
+            }
+        }
     }
 
     async fn handle_disk_flush(
