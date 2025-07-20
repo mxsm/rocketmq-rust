@@ -22,8 +22,8 @@ use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_rust::ArcMut;
 use tracing::error;
 
+use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::ha_client::HAClient;
-use crate::ha::ha_connection::HAConnection;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use crate::ha::ha_service::HAService;
 use crate::ha::wait_notify_object::WaitNotifyObject;
@@ -91,7 +91,7 @@ impl HAService for AutoSwitchHAService {
         todo!()
     }
 
-    fn get_connection_list<CN: HAConnection>(&self) -> Vec<Arc<CN>> {
+    async fn get_connection_list(&self) -> Vec<ArcMut<GeneralHAConnection>> {
         todo!()
     }
 

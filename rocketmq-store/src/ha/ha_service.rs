@@ -20,8 +20,8 @@ use std::sync::Arc;
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_rust::ArcMut;
 
+use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::ha_client::HAClient;
-use crate::ha::ha_connection::HAConnection;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use crate::ha::wait_notify_object::WaitNotifyObject;
 use crate::log_file::group_commit_request::GroupCommitRequest;
@@ -134,7 +134,7 @@ pub trait RocketHAService: Sync {
     ///
     /// # Returns
     /// List of HA connections
-    fn get_connection_list<CN: HAConnection>(&self) -> Vec<Arc<CN>>;
+    async fn get_connection_list(&self) -> Vec<ArcMut<GeneralHAConnection>>;
 
     /// Get the HA client
     ///
