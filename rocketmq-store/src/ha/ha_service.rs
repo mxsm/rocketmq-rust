@@ -19,12 +19,13 @@ use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
 
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
+use rocketmq_rust::ArcMut;
 
 use crate::ha::ha_client::HAClient;
 use crate::ha::ha_connection::HAConnection;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use crate::ha::wait_notify_object::WaitNotifyObject;
-use crate::log_file::flush_manager_impl::group_commit_request::GroupCommitRequest;
+use crate::log_file::group_commit_request::GroupCommitRequest;
 use crate::store_error::HAResult;
 
 #[trait_variant::make(HAService: Send)]
@@ -122,7 +123,7 @@ pub trait RocketHAService: Sync {
     ///
     /// # Parameters
     /// * `request` - The commit request
-    fn put_request(&self, request: GroupCommitRequest);
+    async fn put_request(&self, request: ArcMut<GroupCommitRequest>);
 
     /// Put a connection state notification request
     ///

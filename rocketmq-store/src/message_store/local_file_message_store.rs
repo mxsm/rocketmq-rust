@@ -1905,6 +1905,14 @@ impl MessageStore for LocalFileMessageStore {
     fn set_put_message_hook(&mut self, put_message_hook: BoxedPutMessageHook) {
         self.put_message_hook_list.push(put_message_hook);
     }
+
+    fn get_ha_service(&self) -> &GeneralHAService {
+        if let Some(ha_service) = self.ha_service.as_ref() {
+            ha_service.as_ref()
+        } else {
+            panic!("HA service is not initialized");
+        }
+    }
 }
 
 #[derive(Default)]

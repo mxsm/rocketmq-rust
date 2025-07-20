@@ -44,6 +44,7 @@ use crate::base::store_stats_service::StoreStatsService;
 use crate::base::transient_store_pool::TransientStorePool;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::filter::MessageFilter;
+use crate::ha::general_ha_service::GeneralHAService;
 use crate::hook::put_message_hook::BoxedPutMessageHook;
 use crate::hook::put_message_hook::PutMessageHook;
 use crate::hook::send_message_back_hook::SendMessageBackHook;
@@ -610,4 +611,14 @@ pub trait MessageStoreInner: Sync + 'static {
     ///
     /// * `put_message_hook` - The hook to set.
     fn set_put_message_hook(&mut self, put_message_hook: BoxedPutMessageHook);
+
+    /// Get the HA (High Availability) service associated with the message store.
+    ///
+    /// This function provides access to the `GeneralHAService` instance, which is responsible
+    /// for managing high availability features such as replication and synchronization
+    /// between master and slave nodes.
+    ///
+    /// # Returns
+    /// A reference to the `GeneralHAService` instance.
+    fn get_ha_service(&self) -> &GeneralHAService;
 }

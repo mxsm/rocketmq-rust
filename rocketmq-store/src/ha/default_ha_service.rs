@@ -61,7 +61,7 @@ use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotifi
 use crate::ha::ha_connection_state_notification_service::HAConnectionStateNotificationService;
 use crate::ha::ha_service::HAService;
 use crate::ha::wait_notify_object::WaitNotifyObject;
-use crate::log_file::flush_manager_impl::group_commit_request::GroupCommitRequest;
+use crate::log_file::group_commit_request::GroupCommitRequest;
 use crate::message_store::local_file_message_store::LocalFileMessageStore;
 use crate::store_error::HAError;
 use crate::store_error::HAResult;
@@ -214,8 +214,12 @@ impl HAService for DefaultHAService {
         todo!()
     }
 
-    fn put_request(&self, request: GroupCommitRequest) {
-        todo!()
+    async fn put_request(&self, request: ArcMut<GroupCommitRequest>) {
+        if let Some(ref group_transfer_service) = self.group_transfer_service {
+            group_transfer_service.put_request(request).await;
+        } else {
+            error!("No AcceptSocketService initialized to put request");
+        }
     }
 
     fn put_group_connection_state_request(&self, request: HAConnectionStateNotificationRequest) {

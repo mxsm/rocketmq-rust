@@ -16,10 +16,12 @@
  */
 use std::sync::Arc;
 
+use rocketmq_rust::ArcMut;
 use tracing::error;
 
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::ha::general_ha_service::GeneralHAService;
+use crate::log_file::group_commit_request::GroupCommitRequest;
 use crate::store_error::HAResult;
 
 pub struct GroupTransferService {
@@ -41,5 +43,9 @@ impl GroupTransferService {
     pub async fn start(&mut self) -> HAResult<()> {
         error!("GroupTransferService is not implemented yet");
         Ok(())
+    }
+
+    pub async fn put_request(&self, request: ArcMut<GroupCommitRequest>) {
+        unimplemented!("GroupTransferService::put_request is not implemented yet");
     }
 }
