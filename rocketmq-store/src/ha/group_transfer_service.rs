@@ -30,7 +30,6 @@ use tracing::error;
 use tracing::warn;
 
 use crate::base::message_status_enum::PutMessageStatus;
-use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::general_ha_service::GeneralHAService;
 use crate::ha::ha_connection::HAConnection;
 use crate::ha::ha_service::HAService;
@@ -118,7 +117,7 @@ impl GroupTransferServiceInner {
                     unimplemented!("Auto-switching is not implemented yet");
                 } else {
                     let mut ack_nums = 1;
-                    for connection in self.ha_service.get_connection_list::<GeneralHAConnection>() {
+                    for connection in self.ha_service.get_connection_list().await {
                         if connection.get_slave_ack_offset() >= request.get_next_offset() {
                             ack_nums += 1;
                         }

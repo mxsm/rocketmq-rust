@@ -24,8 +24,8 @@ use tracing::error;
 
 use crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService;
 use crate::ha::default_ha_service::DefaultHAService;
+use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::ha_client::HAClient;
-use crate::ha::ha_connection::HAConnection;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use crate::ha::ha_service::HAService;
 use crate::ha::wait_notify_object::WaitNotifyObject;
@@ -155,8 +155,15 @@ impl HAService for GeneralHAService {
         todo!()
     }
 
-    fn get_connection_list<CN: HAConnection>(&self) -> Vec<Arc<CN>> {
-        todo!()
+    async fn get_connection_list(&self) -> Vec<ArcMut<GeneralHAConnection>> {
+        match (&self.default_ha_service, &self.auto_switch_ha_service) {
+            (Some(default_ha_service), _) => default_ha_service.get_connection_list().await,
+            (_, Some(auto_switch_service)) => auto_switch_service.get_connection_list().await,
+            (None, None) => {
+                error!("No HA service initialized to put request");
+                Vec::new()
+            }
+        }
     }
 
     fn get_ha_client<CL: HAClient>(&self) -> Arc<CL> {
