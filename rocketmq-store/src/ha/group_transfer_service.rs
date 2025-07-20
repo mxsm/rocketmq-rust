@@ -27,7 +27,9 @@ use rocketmq_rust::ArcMut;
 use tokio::sync::Mutex;
 use tokio::time::sleep;
 use tracing::error;
+use tracing::warn;
 
+use crate::base::message_status_enum::PutMessageStatus;
 use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::general_ha_service::GeneralHAService;
 use crate::ha::ha_connection::HAConnection;
@@ -127,6 +129,18 @@ impl GroupTransferServiceInner {
                     }
                 }
             }
+            if !transfer_ok {
+                warn!(
+                    "transfer message to slave timeout, offset : {}, request acks: {}",
+                    request.get_next_offset(),
+                    request.get_ack_nums()
+                );
+            }
+            request.mut_from_ref().wakeup_customer(if transfer_ok {
+                PutMessageStatus::PutOk
+            } else {
+                PutMessageStatus::FlushSlaveTimeout
+            });
         }
         read_requests.clear();
     }
