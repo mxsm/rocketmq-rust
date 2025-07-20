@@ -256,7 +256,7 @@ mod defaults {
         1
     }
 
-    pub fn in_sync_replicas() -> u32 {
+    pub fn in_sync_replicas() -> i32 {
         1
     }
 
@@ -709,7 +709,7 @@ pub struct MessageStoreConfig {
     pub total_replicas: usize,
 
     #[serde(default = "defaults::in_sync_replicas")]
-    pub in_sync_replicas: u32,
+    pub in_sync_replicas: i32,
 
     #[serde(default)]
     pub min_in_sync_replicas: usize,

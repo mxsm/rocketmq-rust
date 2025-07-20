@@ -32,7 +32,6 @@
  */
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicI32;
-use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::Duration;
@@ -109,7 +108,7 @@ impl DefaultHAService {
         let config = self.default_message_store.get_message_store_config();
         let service = GeneralHAService::new_with_default_ha_service(this.clone());
 
-        let group_transfer_service = GroupTransferService::new(config.clone(), service.clone());
+        let group_transfer_service = GroupTransferService::new(service.clone());
         self.group_transfer_service = Some(group_transfer_service);
 
         if config.broker_role == BrokerRole::Slave {
@@ -234,7 +233,7 @@ impl HAService for DefaultHAService {
         todo!()
     }
 
-    fn get_push_to_slave_max_offset(&self) -> &AtomicI64 {
+    fn get_push_to_slave_max_offset(&self) -> i64 {
         todo!()
     }
 

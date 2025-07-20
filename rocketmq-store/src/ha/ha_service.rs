@@ -15,7 +15,6 @@
  * limitations under the License.
  */
 use std::sync::atomic::AtomicI32;
-use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
 
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
@@ -147,7 +146,7 @@ pub trait RocketHAService: Sync {
     ///
     /// # Returns
     /// Atomic reference to the maximum slave offset
-    fn get_push_to_slave_max_offset(&self) -> &AtomicI64;
+    fn get_push_to_slave_max_offset(&self) -> i64;
 
     /// Get HA runtime information
     ///

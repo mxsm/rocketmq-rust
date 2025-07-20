@@ -14,40 +14,138 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::collections::LinkedList;
 use std::sync::Arc;
+use std::time::Duration;
+use std::time::Instant;
 
+use rocketmq_common::common::mix_all;
+use rocketmq_rust::task::service_task::ServiceContext;
+use rocketmq_rust::task::service_task::ServiceTask;
+use rocketmq_rust::task::ServiceManager;
 use rocketmq_rust::ArcMut;
+use tokio::sync::Mutex;
+use tokio::time::sleep;
 use tracing::error;
 
-use crate::config::message_store_config::MessageStoreConfig;
+use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::general_ha_service::GeneralHAService;
+use crate::ha::ha_connection::HAConnection;
+use crate::ha::ha_service::HAService;
 use crate::log_file::group_commit_request::GroupCommitRequest;
+use crate::store_error::HAError;
 use crate::store_error::HAResult;
 
 pub struct GroupTransferService {
-    message_store_config: Arc<MessageStoreConfig>,
-    ha_service: GeneralHAService,
+    inner: Arc<GroupTransferServiceInner>,
+    service_manager: ServiceManager<GroupTransferServiceInner>,
 }
 
 impl GroupTransferService {
-    pub fn new(
-        message_store_config: Arc<MessageStoreConfig>,
-        ha_service: GeneralHAService,
-    ) -> Self {
+    pub fn new(ha_service: GeneralHAService) -> Self {
+        let inner = Arc::new(GroupTransferServiceInner::new(ha_service));
         GroupTransferService {
-            message_store_config,
-            ha_service,
+            inner: inner.clone(),
+            service_manager: ServiceManager::new_arc(inner),
         }
     }
 
     pub async fn start(&mut self) -> HAResult<()> {
-        error!("GroupTransferService is not implemented yet");
-        Ok(())
+        self.service_manager.start().await.map_err(|e| {
+            error!("Failed to start GroupTransferService: {:?}", e);
+            HAError::Service(e.to_string())
+        })
     }
 
     pub async fn put_request(&self, request: ArcMut<GroupCommitRequest>) {
-        // Placeholder implementation: log the request and return.
-        error!("Received a GroupCommitRequest: {:?}", request);
-        // TODO: Implement actual handling of the request.
+        self.inner.put_request(request).await
+    }
+}
+
+struct GroupTransferServiceInner {
+    ha_service: GeneralHAService,
+    requests_write: Arc<Mutex<LinkedList<ArcMut<GroupCommitRequest>>>>,
+    requests_read: Arc<Mutex<LinkedList<ArcMut<GroupCommitRequest>>>>,
+}
+
+impl GroupTransferServiceInner {
+    fn new(ha_service: GeneralHAService) -> Self {
+        GroupTransferServiceInner {
+            ha_service,
+            requests_write: Arc::new(Mutex::new(LinkedList::new())),
+            requests_read: Arc::new(Mutex::new(LinkedList::new())),
+        }
+    }
+
+    #[inline]
+    async fn put_request(&self, request: ArcMut<GroupCommitRequest>) {
+        let mut write_requests = self.requests_write.lock().await;
+        write_requests.push_back(request);
+    }
+
+    #[inline]
+    async fn swap_requests(&self) {
+        let mut write_requests = self.requests_write.lock().await;
+        let mut read_requests = self.requests_read.lock().await;
+        std::mem::swap(&mut *read_requests, &mut *write_requests);
+    }
+
+    async fn do_wait_transfer(&self) {
+        let read_requests = self.requests_read.lock().await;
+        if read_requests.is_empty() {
+            return;
+        }
+
+        for request in read_requests.iter() {
+            let mut transfer_ok = false;
+            let deadline = request.get_deadline();
+            let all_ack_in_sync_state_set =
+                request.get_ack_nums() == mix_all::ALL_ACK_IN_SYNC_STATE_SET;
+            let index = 0;
+            while !transfer_ok && deadline - Instant::now() > std::time::Duration::from_millis(0) {
+                if index > 0 {
+                    sleep(Duration::from_millis(1)).await;
+                }
+                if !all_ack_in_sync_state_set && request.get_ack_nums() <= 1 {
+                    transfer_ok =
+                        self.ha_service.get_push_to_slave_max_offset() >= request.get_next_offset();
+                    continue;
+                }
+                if all_ack_in_sync_state_set && self.ha_service.is_auto_switch_enabled() {
+                    unimplemented!("Auto-switching is not implemented yet");
+                } else {
+                    let mut ack_nums = 1;
+                    for connection in self.ha_service.get_connection_list::<GeneralHAConnection>() {
+                        if connection.get_slave_ack_offset() >= request.get_next_offset() {
+                            ack_nums += 1;
+                        }
+                        if ack_nums >= request.get_ack_nums() {
+                            transfer_ok = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl ServiceTask for GroupTransferServiceInner {
+    fn get_service_name(&self) -> String {
+        "GroupTransferService".to_string()
+    }
+
+    async fn run(&self, context: &ServiceContext) {
+        while !context.is_stopped() {
+            context
+                .wait_for_running(std::time::Duration::from_millis(10))
+                .await;
+            self.do_wait_transfer().await;
+            self.on_wait_end().await;
+        }
+    }
+
+    async fn on_wait_end(&self) {
+        self.swap_requests().await;
     }
 }
