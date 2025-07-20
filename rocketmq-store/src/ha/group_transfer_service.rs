@@ -46,6 +46,8 @@ impl GroupTransferService {
     }
 
     pub async fn put_request(&self, request: ArcMut<GroupCommitRequest>) {
-        unimplemented!("GroupTransferService::put_request is not implemented yet");
+        // Placeholder implementation: log the request and return.
+        error!("Received a GroupCommitRequest: {:?}", request);
+        // TODO: Implement actual handling of the request.
     }
 }
