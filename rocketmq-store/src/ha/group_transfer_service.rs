@@ -91,7 +91,7 @@ impl GroupTransferServiceInner {
     }
 
     async fn do_wait_transfer(&self) {
-        let read_requests = self.requests_read.lock().await;
+        let mut read_requests = self.requests_read.lock().await;
         if read_requests.is_empty() {
             return;
         }
@@ -101,11 +101,12 @@ impl GroupTransferServiceInner {
             let deadline = request.get_deadline();
             let all_ack_in_sync_state_set =
                 request.get_ack_nums() == mix_all::ALL_ACK_IN_SYNC_STATE_SET;
-            let index = 0;
-            while !transfer_ok && deadline - Instant::now() > std::time::Duration::from_millis(0) {
+            let mut index = 0;
+            while !transfer_ok && deadline - Instant::now() > Duration::ZERO {
                 if index > 0 {
                     sleep(Duration::from_millis(1)).await;
                 }
+                index += 1;
                 if !all_ack_in_sync_state_set && request.get_ack_nums() <= 1 {
                     transfer_ok =
                         self.ha_service.get_push_to_slave_max_offset() >= request.get_next_offset();
@@ -127,6 +128,7 @@ impl GroupTransferServiceInner {
                 }
             }
         }
+        read_requests.clear();
     }
 }
 
