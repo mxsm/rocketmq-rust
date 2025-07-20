@@ -27,7 +27,7 @@ pub struct GroupCommitRequest {
     next_offset: i64,
     flush_ok_sender: Option<oneshot::Sender<PutMessageStatus>>,
     flush_ok_receiver: Option<oneshot::Receiver<PutMessageStatus>>,
-    ack_nums: u32,
+    ack_nums: i32,
     deadline: Instant,
 }
 
@@ -38,12 +38,12 @@ impl GroupCommitRequest {
     }
 
     /// Create a new GroupCommitRequest with timeout and ack numbers
-    pub fn with_ack_nums(next_offset: i64, timeout_millis: u64, ack_nums: u32) -> Self {
+    pub fn with_ack_nums(next_offset: i64, timeout_millis: u64, ack_nums: i32) -> Self {
         Self::create_request(next_offset, timeout_millis, ack_nums)
     }
 
     #[inline]
-    fn create_request(next_offset: i64, timeout_millis: u64, ack_nums: u32) -> Self {
+    fn create_request(next_offset: i64, timeout_millis: u64, ack_nums: i32) -> Self {
         let (sender, receiver) = oneshot::channel();
         Self {
             next_offset,
@@ -60,7 +60,7 @@ impl GroupCommitRequest {
     }
 
     /// Get the number of acknowledgments needed
-    pub fn get_ack_nums(&self) -> u32 {
+    pub fn get_ack_nums(&self) -> i32 {
         self.ack_nums
     }
 

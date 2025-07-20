@@ -16,7 +16,6 @@
  */
 
 use std::sync::atomic::AtomicI32;
-use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
 
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
@@ -66,6 +65,11 @@ impl GeneralHAService {
             self.default_ha_service = Some(default_ha_service);
         }
         Ok(())
+    }
+
+    #[inline]
+    pub fn is_auto_switch_enabled(&self) -> bool {
+        self.auto_switch_ha_service.is_some()
     }
 }
 
@@ -159,7 +163,7 @@ impl HAService for GeneralHAService {
         todo!()
     }
 
-    fn get_push_to_slave_max_offset(&self) -> &AtomicI64 {
+    fn get_push_to_slave_max_offset(&self) -> i64 {
         todo!()
     }
 

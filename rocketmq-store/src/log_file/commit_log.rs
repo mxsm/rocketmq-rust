@@ -715,7 +715,7 @@ impl CommitLog {
         &self,
         mut put_message_result: PutMessageResult,
         msg: MessageExtBrokerInner,
-        need_ack_nums: u32,
+        need_ack_nums: i32,
         need_handle_ha: bool,
     ) -> PutMessageResult {
         let append_message_result = put_message_result.append_message_result().unwrap();
@@ -745,7 +745,7 @@ impl CommitLog {
     async fn handle_ha(
         &self,
         put_message_result: &AppendMessageResult,
-        need_ack_nums: u32,
+        need_ack_nums: i32,
     ) -> PutMessageStatus {
         if need_ack_nums <= 1 {
             return PutMessageStatus::PutOk;
