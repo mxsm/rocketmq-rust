@@ -153,7 +153,7 @@ pub struct LocalFileMessageStore {
     timer_message_store: Option<Arc<TimerMessageStore>>,
     transient_store_pool: TransientStorePool,
     message_store_arc: Option<ArcMut<LocalFileMessageStore>>,
-    ha_service: Option<ArcMut<GeneralHAService>>,
+    ha_service: Option<GeneralHAService>,
     flush_consume_queue_service: FlushConsumeQueueService,
     delay_level_table: ArcMut<BTreeMap<i32 /* level */, i64 /* delay timeMillis */>>,
     max_delay_level: i32,
@@ -247,7 +247,7 @@ impl LocalFileMessageStore {
             timer_message_store: None,
             transient_store_pool,
             message_store_arc: None,
-            ha_service: None,
+            ha_service: Some(GeneralHAService::new()),
             flush_consume_queue_service: FlushConsumeQueueService,
             delay_level_table: ArcMut::new(delay_level_table),
             max_delay_level,
@@ -1908,7 +1908,7 @@ impl MessageStore for LocalFileMessageStore {
 
     fn get_ha_service(&self) -> &GeneralHAService {
         if let Some(ha_service) = self.ha_service.as_ref() {
-            ha_service.as_ref()
+            ha_service
         } else {
             panic!("HA service is not initialized");
         }

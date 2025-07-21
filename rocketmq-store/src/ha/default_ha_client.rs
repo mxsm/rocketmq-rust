@@ -112,14 +112,14 @@ impl DefaultHAClient {
     /// Create a new DefaultHAClient
     pub fn new(
         default_message_store: ArcMut<LocalFileMessageStore>,
-    ) -> Result<ArcMut<Self>, HAClientError> {
+    ) -> Result<Self, HAClientError> {
         let flow_monitor = Arc::new(FlowMonitor::new(
             default_message_store.message_store_config(),
         ));
 
         let now = get_current_millis() as i64;
 
-        Ok(ArcMut::new(Self {
+        Ok(Self {
             master_ha_address: Arc::new(AtomicPtr::default()),
             master_address: Arc::new(AtomicPtr::default()),
             socket_stream: Arc::new(RwLock::new(None)),
@@ -137,7 +137,7 @@ impl DefaultHAClient {
             flow_monitor,
             shutdown_notify: Arc::new(Notify::new()),
             service_handle: Arc::new(RwLock::new(None)),
-        }))
+        })
     }
 
     /// Get HA master address

@@ -21,6 +21,7 @@ use crate::ha::default_ha_client::DefaultHAClient;
 use crate::ha::ha_client::HAClient;
 use crate::ha::ha_connection_state::HAConnectionState;
 
+#[derive(Clone)]
 pub struct GeneralHAClient {
     default_ha_client: Option<ArcMut<DefaultHAClient>>,
     auto_switch_ha_client: Option<ArcMut<AutoSwitchHAClient>>,
@@ -37,6 +38,20 @@ impl GeneralHAClient {
         GeneralHAClient {
             default_ha_client: None,
             auto_switch_ha_client: None,
+        }
+    }
+
+    pub fn new_with_default_ha_client(default_ha_client: DefaultHAClient) -> Self {
+        GeneralHAClient {
+            default_ha_client: Some(ArcMut::new(default_ha_client)),
+            auto_switch_ha_client: None,
+        }
+    }
+
+    pub fn new_with_auto_switch_ha_client(auto_switch_ha_client: AutoSwitchHAClient) -> Self {
+        GeneralHAClient {
+            default_ha_client: None,
+            auto_switch_ha_client: Some(ArcMut::new(auto_switch_ha_client)),
         }
     }
 

@@ -73,7 +73,7 @@ pub struct DefaultHAService {
     wait_notify_object: Arc<Notify>,
     push2_slave_max_offset: Arc<AtomicU64>,
     group_transfer_service: Option<GroupTransferService>,
-    ha_client: GeneralHAClient,
+    ha_client: Option<GeneralHAClient>,
     ha_connection_state_notification_service: Option<HAConnectionStateNotificationService>,
 }
 
@@ -87,7 +87,7 @@ impl DefaultHAService {
             wait_notify_object: Arc::new(Notify::new()),
             push2_slave_max_offset: Arc::new(AtomicU64::new(0)),
             group_transfer_service: None,
-            ha_client: GeneralHAClient::new(),
+            ha_client: None,
             ha_connection_state_notification_service: None,
         }
     }
@@ -115,7 +115,10 @@ impl DefaultHAService {
             let default_message_store = self.default_message_store.clone();
             let client = DefaultHAClient::new(default_message_store)
                 .map_err(|e| HAError::Service(format!("Failed to create DefaultHAClient: {e}")))?;
-            self.ha_client.set_default_ha_service(client);
+
+            let ha_client = GeneralHAClient::new_with_default_ha_client(client);
+
+            self.ha_client = Some(ha_client);
         }
 
         let state_notification_service =
@@ -164,7 +167,9 @@ impl HAService for DefaultHAService {
             .expect("HAConnectionStateNotificationService not initialized")
             .start()
             .await?;
-        self.ha_client.start().await;
+        if let Some(ref ha_client) = self.ha_client {
+            ha_client.start().await;
+        }
         Ok(())
     }
 
@@ -198,11 +203,19 @@ impl HAService for DefaultHAService {
     }
 
     fn update_master_address(&self, new_addr: &str) {
-        self.ha_client.update_master_address(new_addr);
+        if let Some(ref ha_client) = self.ha_client {
+            ha_client.update_master_address(new_addr);
+        } else {
+            error!("No HAClient initialized to update master address");
+        }
     }
 
     fn update_ha_master_address(&self, new_addr: &str) {
-        self.ha_client.update_ha_master_address(new_addr);
+        if let Some(ref ha_client) = self.ha_client {
+            ha_client.update_ha_master_address(new_addr);
+        } else {
+            error!("No HAClient initialized to update HA master address");
+        }
     }
 
     fn in_sync_replicas_nums(&self, master_put_where: i64) -> i32 {
