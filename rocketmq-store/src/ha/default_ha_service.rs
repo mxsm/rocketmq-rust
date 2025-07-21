@@ -230,7 +230,11 @@ impl HAService for DefaultHAService {
         connection_list.iter().cloned().collect()
     }
 
-    fn get_ha_client<CL: HAClient>(&self) -> Arc<CL> {
+    fn get_ha_client(&self) -> &GeneralHAConnection {
+        todo!()
+    }
+
+    fn get_ha_client_mut(&mut self) -> &mut GeneralHAConnection {
         todo!()
     }
 
