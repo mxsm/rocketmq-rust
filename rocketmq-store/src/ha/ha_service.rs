@@ -21,7 +21,6 @@ use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_rust::ArcMut;
 
 use crate::ha::general_ha_connection::GeneralHAConnection;
-use crate::ha::ha_client::HAClient;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use crate::ha::wait_notify_object::WaitNotifyObject;
 use crate::log_file::group_commit_request::GroupCommitRequest;
@@ -136,11 +135,23 @@ pub trait RocketHAService: Sync {
     /// List of HA connections
     async fn get_connection_list(&self) -> Vec<ArcMut<GeneralHAConnection>>;
 
-    /// Get the HA client
+    /// Get the HA client connection.
+    ///
+    /// This function provides a reference to the `GeneralHAConnection` instance,
+    /// which represents the connection used for high availability communication.
     ///
     /// # Returns
-    /// Reference to the HA client
-    fn get_ha_client<CL: HAClient>(&self) -> Arc<CL>;
+    /// A reference to the `GeneralHAConnection` instance.
+    fn get_ha_client(&self) -> &GeneralHAConnection;
+
+    /// Get a mutable reference to the HA client connection.
+    ///
+    /// This function provides a mutable reference to the `GeneralHAConnection` instance,
+    /// allowing modifications to the high availability connection.
+    ///
+    /// # Returns
+    /// A mutable reference to the `GeneralHAConnection` instance.
+    fn get_ha_client_mut(&mut self) -> &mut GeneralHAConnection;
 
     /// Get the maximum offset across all slaves
     ///
