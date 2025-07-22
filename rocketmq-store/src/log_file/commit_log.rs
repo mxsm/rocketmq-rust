@@ -73,7 +73,7 @@ use crate::config::message_store_config::MessageStoreConfig;
 use crate::consume_queue::mapped_file_queue::MappedFileQueue;
 use crate::ha::ha_service::HAService;
 use crate::log_file::cold_data_check_service::ColdDataCheckService;
-use crate::log_file::flush_manager_impl::defalut_flush_manager::DefaultFlushManager;
+use crate::log_file::flush_manager_impl::default_flush_manager::DefaultFlushManager;
 use crate::log_file::group_commit_request::GroupCommitRequest;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;

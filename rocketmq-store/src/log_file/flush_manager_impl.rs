@@ -14,5 +14,5 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod defalut_flush_manager;
+pub mod default_flush_manager;
 pub mod group_commit_request;
