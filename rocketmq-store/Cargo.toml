@@ -52,8 +52,10 @@ cheetah-string = { workspace = true }
 thiserror = { workspace = true }
 
 futures-util = "0.3.31"
+rand = { workspace = true }
 zerocopy = "0.8.26"
 zerocopy-derive = "0.8.26"
+uuid = { workspace = true }
 
 [target.'cfg(linux)'.dependencies]
 libc = "0.2.174"
