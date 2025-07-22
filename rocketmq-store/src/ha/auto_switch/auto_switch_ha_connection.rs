@@ -20,6 +20,7 @@ use tokio::net::TcpStream;
 
 use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::ha_connection::HAConnection;
+use crate::ha::ha_connection::HAConnectionId;
 use crate::ha::ha_connection_state::HAConnectionState;
 use crate::ha::HAConnectionError;
 
@@ -62,6 +63,10 @@ impl HAConnection for AutoSwitchHAConnection {
     }
 
     fn get_slave_ack_offset(&self) -> i64 {
+        todo!()
+    }
+
+    fn get_ha_connection_id(&self) -> &HAConnectionId {
         todo!()
     }
 }

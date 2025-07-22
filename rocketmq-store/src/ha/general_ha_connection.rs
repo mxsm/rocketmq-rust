@@ -22,6 +22,7 @@ use tokio::net::TcpStream;
 use crate::ha::auto_switch::auto_switch_ha_connection::AutoSwitchHAConnection;
 use crate::ha::default_ha_connection::DefaultHAConnection;
 use crate::ha::ha_connection::HAConnection;
+use crate::ha::ha_connection::HAConnectionId;
 use crate::ha::ha_connection_state::HAConnectionState;
 use crate::ha::HAConnectionError;
 
@@ -162,6 +163,17 @@ impl HAConnection for GeneralHAConnection {
             (_, Some(connection)) => connection.get_slave_ack_offset(),
             (None, None) => {
                 tracing::warn!("No HA connection to get slave ack offset from");
+                panic!("No HA connection available");
+            }
+        }
+    }
+
+    fn get_ha_connection_id(&self) -> &HAConnectionId {
+        match (&self.default_ha_connection, &self.auto_switch_ha_connection) {
+            (Some(connection), _) => connection.get_ha_connection_id(),
+            (_, Some(connection)) => connection.get_ha_connection_id(),
+            (None, None) => {
+                tracing::warn!("No HA connection to get ID from");
                 panic!("No HA connection available");
             }
         }

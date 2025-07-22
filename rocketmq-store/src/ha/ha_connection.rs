@@ -79,10 +79,19 @@ pub trait RocketmqHAConnection: Sync {
     /// # Returns
     /// The latest offset confirmed by the slave
     fn get_slave_ack_offset(&self) -> i64;
+
+    /// Get the unique identifier for the HA connection.
+    ///
+    /// This function returns a reference to the `HAConnectionId` instance,
+    /// which uniquely identifies the high availability connection.
+    ///
+    /// # Returns
+    /// A reference to the `HAConnectionId` instance.
+    fn get_ha_connection_id(&self) -> &HAConnectionId;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct HAConnectionId {
+pub(crate) struct HAConnectionId {
     id: String,
     random: u64,
 }
