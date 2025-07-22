@@ -118,6 +118,8 @@ impl Display for HAConnectionId {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
 
     #[test]
