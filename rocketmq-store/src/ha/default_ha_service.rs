@@ -30,6 +30,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicU64;
@@ -56,6 +57,7 @@ use crate::ha::general_ha_service::GeneralHAService;
 use crate::ha::group_transfer_service::GroupTransferService;
 use crate::ha::ha_client::HAClient;
 use crate::ha::ha_connection::HAConnection;
+use crate::ha::ha_connection::HAConnectionId;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use crate::ha::ha_connection_state_notification_service::HAConnectionStateNotificationService;
 use crate::ha::ha_service::HAService;
@@ -67,7 +69,8 @@ use crate::store_error::HAResult;
 
 pub struct DefaultHAService {
     connection_count: Arc<AtomicU64>,
-    connection_list: Arc<Mutex<Vec<ArcMut<GeneralHAConnection>>>>,
+    //connection_list: Arc<Mutex<Vec<ArcMut<GeneralHAConnection>>>>,
+    connections: Arc<Mutex<HashMap<HAConnectionId, ArcMut<GeneralHAConnection>>>>,
     accept_socket_service: Option<AcceptSocketService>,
     default_message_store: ArcMut<LocalFileMessageStore>,
     wait_notify_object: Arc<Notify>,
@@ -81,7 +84,7 @@ impl DefaultHAService {
     pub fn new(message_store: ArcMut<LocalFileMessageStore>) -> Self {
         DefaultHAService {
             connection_count: Arc::new(AtomicU64::new(0)),
-            connection_list: Arc::new(Mutex::new(Vec::new())),
+            connections: Arc::new(Mutex::new(HashMap::new())),
             accept_socket_service: None,
             default_message_store: message_store,
             wait_notify_object: Arc::new(Notify::new()),
@@ -137,8 +140,8 @@ impl DefaultHAService {
 
     pub async fn add_connection(&self, connection: ArcMut<GeneralHAConnection>) {
         // Add a new connection to the service
-        let mut vec = self.connection_list.lock().await;
-        vec.push(connection);
+        let mut connections = self.connections.lock().await;
+        connections.insert(connection.get_ha_connection_id().clone(), connection);
     }
 
     pub fn get_connection_count(&self) -> &AtomicU64 {
@@ -239,8 +242,8 @@ impl HAService for DefaultHAService {
     }
 
     async fn get_connection_list(&self) -> Vec<ArcMut<GeneralHAConnection>> {
-        let connection_list = self.connection_list.lock().await;
-        connection_list.iter().cloned().collect()
+        let connections = self.connections.lock().await;
+        connections.values().cloned().collect()
     }
 
     fn get_ha_client(&self) -> &GeneralHAConnection {

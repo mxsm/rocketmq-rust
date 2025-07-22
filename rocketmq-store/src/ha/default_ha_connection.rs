@@ -50,6 +50,7 @@ use crate::ha::default_ha_service::DefaultHAService;
 use crate::ha::flow_monitor::FlowMonitor;
 use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::ha_connection::HAConnection;
+use crate::ha::ha_connection::HAConnectionId;
 use crate::ha::ha_connection_state::HAConnectionState;
 use crate::ha::HAConnectionError;
 
@@ -70,6 +71,7 @@ pub struct DefaultHAConnection {
     shutdown_tx: Arc<Mutex<Option<mpsc::Sender<()>>>>,
     message_store_config: Arc<MessageStoreConfig>,
     next_transfer_from_where: Arc<AtomicI64>,
+    id: HAConnectionId,
 }
 
 impl DefaultHAConnection {
@@ -113,6 +115,7 @@ impl DefaultHAConnection {
             shutdown_tx: Arc::new(Mutex::new(None)),
             message_store_config,
             next_transfer_from_where: Arc::new(AtomicI64::new(-1)),
+            id: HAConnectionId::default(),
         })
     }
 
@@ -242,6 +245,10 @@ impl HAConnection for DefaultHAConnection {
 
     fn get_slave_ack_offset(&self) -> i64 {
         self.slave_ack_offset.load(Ordering::SeqCst)
+    }
+
+    fn get_ha_connection_id(&self) -> &HAConnectionId {
+        &self.id
     }
 }
 
