@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-use std::sync::atomic::AtomicI32;
+use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
@@ -78,7 +78,7 @@ impl HAService for AutoSwitchHAService {
         todo!()
     }
 
-    fn get_connection_count(&self) -> &AtomicI32 {
+    fn get_connection_count(&self) -> &AtomicU32 {
         todo!()
     }
 
