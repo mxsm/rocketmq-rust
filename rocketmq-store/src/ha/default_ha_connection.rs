@@ -52,6 +52,7 @@ use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::ha_connection::HAConnection;
 use crate::ha::ha_connection::HAConnectionId;
 use crate::ha::ha_connection_state::HAConnectionState;
+use crate::ha::ha_service::HAService;
 use crate::ha::HAConnectionError;
 
 /// Transfer Header buffer size. Schema: physic offset and body size.

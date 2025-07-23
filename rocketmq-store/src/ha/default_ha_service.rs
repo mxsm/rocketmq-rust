@@ -32,7 +32,7 @@
  */
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::atomic::AtomicI32;
+use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::Duration;
@@ -68,7 +68,7 @@ use crate::store_error::HAError;
 use crate::store_error::HAResult;
 
 pub struct DefaultHAService {
-    connection_count: Arc<AtomicU64>,
+    connection_count: Arc<AtomicU32>,
     //connection_list: Arc<Mutex<Vec<ArcMut<GeneralHAConnection>>>>,
     connections: Arc<Mutex<HashMap<HAConnectionId, ArcMut<GeneralHAConnection>>>>,
     accept_socket_service: Option<AcceptSocketService>,
@@ -83,7 +83,7 @@ pub struct DefaultHAService {
 impl DefaultHAService {
     pub fn new(message_store: ArcMut<LocalFileMessageStore>) -> Self {
         DefaultHAService {
-            connection_count: Arc::new(AtomicU64::new(0)),
+            connection_count: Arc::new(AtomicU32::new(0)),
             connections: Arc::new(Mutex::new(HashMap::new())),
             accept_socket_service: None,
             default_message_store: message_store,
@@ -142,10 +142,6 @@ impl DefaultHAService {
         // Add a new connection to the service
         let mut connections = self.connections.lock().await;
         connections.insert(connection.get_ha_connection_id().clone(), connection);
-    }
-
-    pub fn get_connection_count(&self) -> &AtomicU64 {
-        &self.connection_count
     }
 
     pub async fn remove_connection(&self, connection: ArcMut<GeneralHAConnection>) {
@@ -225,8 +221,8 @@ impl HAService for DefaultHAService {
         todo!()
     }
 
-    fn get_connection_count(&self) -> &AtomicI32 {
-        todo!()
+    fn get_connection_count(&self) -> &AtomicU32 {
+        self.connection_count.as_ref()
     }
 
     async fn put_request(&self, request: ArcMut<GroupCommitRequest>) {

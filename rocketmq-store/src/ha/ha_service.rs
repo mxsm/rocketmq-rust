@@ -14,7 +14,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::sync::atomic::AtomicI32;
+
+use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
@@ -115,7 +116,7 @@ pub trait RocketHAService: Sync {
     ///
     /// # Returns
     /// Atomic reference to connection count
-    fn get_connection_count(&self) -> &AtomicI32;
+    fn get_connection_count(&self) -> &AtomicU32;
 
     /// Put a group commit request to handle HA
     ///
