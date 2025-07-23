@@ -165,7 +165,7 @@ impl HAService for GeneralHAService {
         }
     }
 
-    fn get_ha_client(&self) -> &GeneralHAConnection {
+    fn get_ha_client(&self) -> &Option<GeneralHAConnection> {
         todo!()
     }
 

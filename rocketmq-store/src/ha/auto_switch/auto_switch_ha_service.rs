@@ -94,7 +94,7 @@ impl HAService for AutoSwitchHAService {
         todo!()
     }
 
-    fn get_ha_client(&self) -> &GeneralHAConnection {
+    fn get_ha_client(&self) -> &Option<GeneralHAConnection> {
         todo!()
     }
 
