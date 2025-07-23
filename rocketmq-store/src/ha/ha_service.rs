@@ -143,7 +143,7 @@ pub trait RocketHAService: Sync {
     ///
     /// # Returns
     /// A reference to the `GeneralHAConnection` instance.
-    fn get_ha_client(&self) -> &GeneralHAConnection;
+    fn get_ha_client(&self) -> &Option<GeneralHAConnection>;
 
     /// Get a mutable reference to the HA client connection.
     ///

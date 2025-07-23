@@ -177,11 +177,11 @@ impl HAService for DefaultHAService {
     }
 
     async fn change_to_master(&self, master_epoch: i32) -> HAResult<bool> {
-        todo!()
+        Ok(false)
     }
 
     async fn change_to_master_when_last_role_is_master(&self, master_epoch: i32) -> HAResult<bool> {
-        todo!()
+        Ok(false)
     }
 
     async fn change_to_slave(
@@ -190,7 +190,7 @@ impl HAService for DefaultHAService {
         new_master_epoch: i32,
         slave_id: Option<i64>,
     ) -> HAResult<bool> {
-        todo!()
+        Ok(false)
     }
 
     async fn change_to_slave_when_master_not_change(
@@ -198,7 +198,7 @@ impl HAService for DefaultHAService {
         new_master_addr: &str,
         new_master_epoch: i32,
     ) -> HAResult<bool> {
-        todo!()
+        Ok(false)
     }
 
     fn update_master_address(&self, new_addr: &str) {
@@ -242,7 +242,7 @@ impl HAService for DefaultHAService {
         connections.values().cloned().collect()
     }
 
-    fn get_ha_client(&self) -> &GeneralHAConnection {
+    fn get_ha_client(&self) -> &Option<GeneralHAConnection> {
         todo!()
     }
 
@@ -251,7 +251,8 @@ impl HAService for DefaultHAService {
     }
 
     fn get_push_to_slave_max_offset(&self) -> i64 {
-        todo!()
+        self.push2_slave_max_offset
+            .load(std::sync::atomic::Ordering::Relaxed) as i64
     }
 
     fn get_runtime_info(&self, master_put_where: i64) -> HARuntimeInfo {
