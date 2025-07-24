@@ -83,6 +83,11 @@ impl DefaultHAConnection {
         socket_stream: TcpStream,
         message_store_config: Arc<MessageStoreConfig>,
     ) -> Result<Self, HAConnectionError> {
+        // Configure socket options early
+        socket_stream
+            .set_nodelay(true)
+            .map_err(HAConnectionError::Io)?;
+
         // Get client address
         let client_address = socket_stream
             .peer_addr()
@@ -140,13 +145,20 @@ impl HAConnection for DefaultHAConnection {
         // Start flow monitor
         self.flow_monitor.start().await;
 
-        let tcp_stream = self.socket_stream.take().unwrap();
+        let tcp_stream = self
+            .socket_stream
+            .take()
+            .ok_or_else(|| HAConnectionError::InvalidState("Socket already taken".into()))?;
         let framed = Framed::with_capacity(tcp_stream, BytesCodec::new(), CAPACITY);
         let (writer, reader) = framed.split();
 
         // Create shutdown channel
-        let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
-        let shutdown_receiver = shutdown_tx.subscribe();
+        // Create shutdown channel with bounded capacity
+        let (shutdown_tx, _) = tokio::sync::broadcast::channel(16);
+        let read_shutdown_rx = shutdown_tx.subscribe();
+        let write_shutdown_rx = shutdown_tx.subscribe();
+
+        // Store shutdown sender before spawning tasks
         *self.shutdown_tx.lock().await = Some(shutdown_tx);
 
         // Create and start read service
@@ -162,10 +174,6 @@ impl HAConnection for DefaultHAConnection {
         )
         .await?;
 
-        let read_handle = tokio::spawn(async move {
-            read_service.run(shutdown_receiver).await;
-        });
-
         // Create and start write service
         let write_service = WriteSocketService::new(
             writer,
@@ -180,8 +188,12 @@ impl HAConnection for DefaultHAConnection {
         )
         .await?;
 
+        let read_handle = tokio::spawn(async move {
+            read_service.run(read_shutdown_rx).await;
+        });
+
         let write_handle = tokio::spawn(async move {
-            write_service.run(shutdown_rx).await;
+            write_service.run(write_shutdown_rx).await;
         });
 
         // Start services
