@@ -21,6 +21,7 @@ use std::sync::Arc;
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_rust::ArcMut;
 
+use crate::ha::general_ha_client::GeneralHAClient;
 use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use crate::ha::wait_notify_object::WaitNotifyObject;
@@ -136,23 +137,23 @@ pub trait RocketHAService: Sync {
     /// List of HA connections
     async fn get_connection_list(&self) -> Vec<ArcMut<GeneralHAConnection>>;
 
-    /// Get the HA client connection.
+    /// Get the HA client instance.
     ///
-    /// This function provides a reference to the `GeneralHAConnection` instance,
-    /// which represents the connection used for high availability communication.
+    /// This function returns an optional reference to the `GeneralHAClient` instance,
+    /// which represents the client used for high availability operations.
     ///
     /// # Returns
-    /// A reference to the `GeneralHAConnection` instance.
-    fn get_ha_client(&self) -> &Option<GeneralHAConnection>;
+    /// A reference to an `Option<GeneralHAClient>` instance.
+    fn get_ha_client(&self) -> Option<&GeneralHAClient>;
 
-    /// Get a mutable reference to the HA client connection.
+    /// Get a mutable reference to the HA client instance.
     ///
-    /// This function provides a mutable reference to the `GeneralHAConnection` instance,
-    /// allowing modifications to the high availability connection.
+    /// This function provides a mutable reference to the `GeneralHAClient` instance,
+    /// allowing modifications to the high availability client used for operations.
     ///
     /// # Returns
-    /// A mutable reference to the `GeneralHAConnection` instance.
-    fn get_ha_client_mut(&mut self) -> &mut GeneralHAConnection;
+    /// A mutable reference to an `Option<GeneralHAClient>` instance.
+    fn get_ha_client_mut(&mut self) -> Option<&mut GeneralHAClient>;
 
     /// Get the maximum offset across all slaves
     ///
