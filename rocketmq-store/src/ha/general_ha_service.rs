@@ -24,6 +24,7 @@ use tracing::error;
 
 use crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService;
 use crate::ha::default_ha_service::DefaultHAService;
+use crate::ha::general_ha_client::GeneralHAClient;
 use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use crate::ha::ha_service::HAService;
@@ -165,12 +166,29 @@ impl HAService for GeneralHAService {
         }
     }
 
-    fn get_ha_client(&self) -> &Option<GeneralHAConnection> {
-        todo!()
+    fn get_ha_client(&self) -> Option<&GeneralHAClient> {
+        match (&self.default_ha_service, &self.auto_switch_ha_service) {
+            (Some(default_ha_service), _) => default_ha_service.get_ha_client(),
+            (_, Some(auto_switch_service)) => auto_switch_service.get_ha_client(),
+            (None, None) => {
+                error!("No HA service initialized to get ha client");
+                None
+            }
+        }
     }
 
-    fn get_ha_client_mut(&mut self) -> &mut GeneralHAConnection {
-        todo!()
+    fn get_ha_client_mut(&mut self) -> Option<&mut GeneralHAClient> {
+        match (
+            &mut self.default_ha_service,
+            &mut self.auto_switch_ha_service,
+        ) {
+            (Some(default_ha_service), _) => default_ha_service.get_ha_client_mut(),
+            (_, Some(auto_switch_service)) => auto_switch_service.get_ha_client_mut(),
+            (None, None) => {
+                error!("No HA service initialized to get ha client");
+                None
+            }
+        }
     }
 
     fn get_push_to_slave_max_offset(&self) -> i64 {

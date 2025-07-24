@@ -22,6 +22,7 @@ use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_rust::ArcMut;
 use tracing::error;
 
+use crate::ha::general_ha_client::GeneralHAClient;
 use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use crate::ha::ha_service::HAService;
@@ -94,11 +95,11 @@ impl HAService for AutoSwitchHAService {
         todo!()
     }
 
-    fn get_ha_client(&self) -> &Option<GeneralHAConnection> {
+    fn get_ha_client(&self) -> Option<&GeneralHAClient> {
         todo!()
     }
 
-    fn get_ha_client_mut(&mut self) -> &mut GeneralHAConnection {
+    fn get_ha_client_mut(&mut self) -> Option<&mut GeneralHAClient> {
         todo!()
     }
     fn get_push_to_slave_max_offset(&self) -> i64 {

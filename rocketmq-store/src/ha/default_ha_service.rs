@@ -242,12 +242,12 @@ impl HAService for DefaultHAService {
         connections.values().cloned().collect()
     }
 
-    fn get_ha_client(&self) -> &Option<GeneralHAConnection> {
-        todo!()
+    fn get_ha_client(&self) -> Option<&GeneralHAClient> {
+        self.ha_client.as_ref()
     }
 
-    fn get_ha_client_mut(&mut self) -> &mut GeneralHAConnection {
-        todo!()
+    fn get_ha_client_mut(&mut self) -> Option<&mut GeneralHAClient> {
+        self.ha_client.as_mut()
     }
 
     fn get_push_to_slave_max_offset(&self) -> i64 {
