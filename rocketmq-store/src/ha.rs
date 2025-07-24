@@ -41,4 +41,6 @@ pub enum HAConnectionError {
     Connection(String),
     #[error("Service error: {0}")]
     Service(String),
+    #[error("Invalid state: {0}")]
+    InvalidState(String),
 }
