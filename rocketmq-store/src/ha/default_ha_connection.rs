@@ -33,6 +33,7 @@ use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::WeakArcMut;
 use tokio::net::TcpStream;
+use tokio::select;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
@@ -69,7 +70,7 @@ pub struct DefaultHAConnection {
     slave_request_offset: Arc<AtomicI64>,
     slave_ack_offset: Arc<AtomicI64>,
     flow_monitor: Arc<FlowMonitor>,
-    shutdown_tx: Arc<Mutex<Option<mpsc::Sender<()>>>>,
+    shutdown_tx: Arc<Mutex<Option<tokio::sync::broadcast::Sender<()>>>>,
     message_store_config: Arc<MessageStoreConfig>,
     next_transfer_from_where: Arc<AtomicI64>,
     id: HAConnectionId,
@@ -144,7 +145,8 @@ impl HAConnection for DefaultHAConnection {
         let (writer, reader) = framed.split();
 
         // Create shutdown channel
-        let (shutdown_tx, shutdown_rx) = mpsc::channel(1);
+        let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
+        let shutdown_receiver = shutdown_tx.subscribe();
         *self.shutdown_tx.lock().await = Some(shutdown_tx);
 
         // Create and start read service
@@ -161,7 +163,7 @@ impl HAConnection for DefaultHAConnection {
         .await?;
 
         let read_handle = tokio::spawn(async move {
-            read_service.run().await;
+            read_service.run(shutdown_receiver).await;
         });
 
         // Create and start write service
@@ -195,7 +197,7 @@ impl HAConnection for DefaultHAConnection {
 
         // Send shutdown signal
         if let Some(tx) = self.shutdown_tx.lock().await.take() {
-            let _ = tx.send(()).await;
+            let _ = tx.send(());
         }
 
         // Wait for services to stop
@@ -302,12 +304,21 @@ impl ReadSocketService {
         })
     }
 
-    pub async fn run(mut self) {
+    pub async fn run(mut self, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
         info!("{} service started", self.get_service_name());
 
         loop {
             //let select_result = timeout(SELECT_TIMEOUT, self.reader.next()).await;
-            let select_result = self.reader.next().await;
+
+            let select_result = select! {
+                _ = shutdown_rx.recv() => {
+                    info!("Received shutdown signal");
+                    break;
+                }
+                select_result = self.reader.next() => {
+                    select_result
+                }
+            };
             match select_result {
                 None => {
                     info!("Stream closed by peer");
@@ -483,7 +494,7 @@ impl WriteSocketService {
         })
     }
 
-    pub async fn run(mut self, mut shutdown_rx: mpsc::Receiver<()>) {
+    pub async fn run(mut self, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) {
         info!("{} service started", self.get_service_name());
 
         loop {
