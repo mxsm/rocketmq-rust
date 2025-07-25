@@ -145,7 +145,16 @@ impl DefaultHAService {
     }
 
     pub async fn remove_connection(&self, connection: ArcMut<GeneralHAConnection>) {
-        unimplemented!("remove_connection method is not implemented");
+        if let Some(ha_connection_state_notification_service) =
+            &self.ha_connection_state_notification_service
+        {
+            let _ = ha_connection_state_notification_service
+                .check_connection_state_and_notify(connection.as_ref())
+                .await;
+        }
+
+        let mut connections = self.connections.lock().await;
+        connections.remove(connection.get_ha_connection_id());
     }
 }
 
