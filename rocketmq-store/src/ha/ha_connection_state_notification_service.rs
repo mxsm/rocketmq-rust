@@ -17,6 +17,7 @@
 use rocketmq_rust::ArcMut;
 use tracing::error;
 
+use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::general_ha_service::GeneralHAService;
 use crate::message_store::local_file_message_store::LocalFileMessageStore;
 use crate::store_error::HAResult;
@@ -40,5 +41,12 @@ impl HAConnectionStateNotificationService {
     pub async fn start(&mut self) -> HAResult<()> {
         error!("HAConnectionStateNotificationService is not implemented yet");
         Ok(())
+    }
+
+    pub async fn check_connection_state_and_notify(
+        &self,
+        connection: &GeneralHAConnection,
+    ) -> bool {
+        unimplemented!("check_connection_state_and_notify is not implemented yet");
     }
 }
