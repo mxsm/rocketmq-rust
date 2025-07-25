@@ -39,7 +39,7 @@ impl HAConnectionStateNotificationService {
     }
 
     pub fn shutdown(&self) {
-        error!("HAConnectionStateNotificationService is not implemented yet");
+        error!("HAConnectionStateNotificationService shutdown is not implemented. This is a placeholder method.");
     }
 
     pub async fn start(&mut self) -> HAResult<()> {
