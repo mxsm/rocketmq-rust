@@ -198,6 +198,7 @@ impl HAService for DefaultHAService {
         if let Some(ref accept_socket_service) = self.accept_socket_service {
             accept_socket_service.shutdown();
         }
+        self.destroy_connections().await;
 
         if let Some(ref group_transfer_service) = self.group_transfer_service {
             group_transfer_service.shutdown().await;
