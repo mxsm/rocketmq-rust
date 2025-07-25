@@ -86,8 +86,14 @@ impl HAService for GeneralHAService {
         Ok(())
     }
 
-    fn shutdown(&self) {
-        todo!()
+    async fn shutdown(&self) {
+        if let Some(ref service) = self.default_ha_service {
+            service.shutdown().await;
+        } else if let Some(ref service) = self.auto_switch_ha_service {
+            service.shutdown().await;
+        } else {
+            error!("No HA service initialized to shutdown");
+        }
     }
 
     async fn change_to_master(&self, master_epoch: i32) -> HAResult<bool> {

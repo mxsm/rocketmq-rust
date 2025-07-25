@@ -39,7 +39,7 @@ pub trait RocketHAService: Sync {
     async fn start(&mut self) -> HAResult<()>;
 
     /// Shutdown the HA service
-    fn shutdown(&self);
+    async fn shutdown(&self);
 
     /// Change this node to master state
     ///

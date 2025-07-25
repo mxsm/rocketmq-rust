@@ -38,7 +38,7 @@ impl HAService for AutoSwitchHAService {
         Ok(())
     }
 
-    fn shutdown(&self) {
+    async fn shutdown(&self) {
         todo!()
     }
 

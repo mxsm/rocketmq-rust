@@ -78,7 +78,13 @@ impl HAClient for GeneralHAClient {
     }
 
     async fn shutdown(&self) {
-        todo!()
+        if let Some(ref client) = self.default_ha_client {
+            client.shutdown().await;
+        } else if let Some(ref client) = self.auto_switch_ha_client {
+            client.shutdown().await;
+        } else {
+            panic!("No HA service is set for GeneralHAClient");
+        }
     }
 
     async fn wakeup(&self) {

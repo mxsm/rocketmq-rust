@@ -38,6 +38,10 @@ impl HAConnectionStateNotificationService {
         }
     }
 
+    pub fn shutdown(&self) {
+        error!("HAConnectionStateNotificationService is not implemented yet");
+    }
+
     pub async fn start(&mut self) -> HAResult<()> {
         error!("HAConnectionStateNotificationService is not implemented yet");
         Ok(())

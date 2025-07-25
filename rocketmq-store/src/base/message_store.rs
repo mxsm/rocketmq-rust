@@ -69,7 +69,7 @@ pub trait MessageStoreInner: Sync + 'static {
     async fn start(&mut self) -> Result<(), StoreError>;
 
     /// Shutdown this message store.
-    fn shutdown(&mut self);
+    async fn shutdown(&mut self);
 
     /// Destroy this message store.
     /// Generally, all persistent files should be removed after invocation.

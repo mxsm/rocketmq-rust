@@ -58,6 +58,10 @@ impl GroupTransferService {
         })
     }
 
+    pub async fn shutdown(&self) {
+        let _ = self.service_manager.shutdown().await;
+    }
+
     pub async fn put_request(&self, request: ArcMut<GroupCommitRequest>) {
         self.inner.put_request(request).await
     }
