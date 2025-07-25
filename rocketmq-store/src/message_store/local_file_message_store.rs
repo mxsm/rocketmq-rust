@@ -692,12 +692,12 @@ impl MessageStore for LocalFileMessageStore {
         Ok(())
     }
 
-    fn shutdown(&mut self) {
+    async fn shutdown(&mut self) {
         if !self.shutdown.load(Ordering::Acquire) {
             self.shutdown.store(true, Ordering::Release);
 
             if let Some(ha_service) = self.ha_service.as_ref() {
-                ha_service.shutdown();
+                ha_service.shutdown().await;
             }
 
             self.store_stats_service.shutdown();

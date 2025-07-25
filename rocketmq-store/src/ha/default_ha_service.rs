@@ -156,6 +156,13 @@ impl DefaultHAService {
         let mut connections = self.connections.lock().await;
         connections.remove(connection.get_ha_connection_id());
     }
+
+    pub async fn destroy_connections(&self) {
+        let mut connections = self.connections.lock().await;
+        for (_, mut connection) in connections.drain() {
+            connection.shutdown().await;
+        }
+    }
 }
 
 impl HAService for DefaultHAService {
@@ -181,8 +188,27 @@ impl HAService for DefaultHAService {
         Ok(())
     }
 
-    fn shutdown(&self) {
-        todo!()
+    async fn shutdown(&self) {
+        info!("Shutting down DefaultHAService");
+
+        if let Some(ref ha_client) = self.ha_client {
+            ha_client.shutdown().await;
+        }
+
+        if let Some(ref accept_socket_service) = self.accept_socket_service {
+            accept_socket_service.shutdown();
+        }
+        self.destroy_connections().await;
+
+        if let Some(ref group_transfer_service) = self.group_transfer_service {
+            group_transfer_service.shutdown().await;
+        }
+
+        if let Some(ref ha_connection_state_notification_service) =
+            self.ha_connection_state_notification_service
+        {
+            ha_connection_state_notification_service.shutdown();
+        }
     }
 
     async fn change_to_master(&self, master_epoch: i32) -> HAResult<bool> {

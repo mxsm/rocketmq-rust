@@ -332,7 +332,7 @@ impl BrokerRuntime {
         self.inner.broadcast_offset_manager.shutdown();
 
         if let Some(message_store) = self.inner.message_store.as_mut() {
-            message_store.shutdown();
+            message_store.shutdown().await;
         }
 
         if let Some(replicas_manager) = self.inner.replicas_manager.as_mut() {
