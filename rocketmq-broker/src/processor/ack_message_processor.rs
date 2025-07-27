@@ -14,8 +14,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#![allow(unused_variables)]
-
 use std::cmp::Ordering;
 
 use cheetah_string::CheetahString;
@@ -84,7 +82,6 @@ where
 
         // each PopReviveService handles one revive topic's revive queue
         for i in 0..broker_runtime_inner.broker_config().revive_queue_num {
-            let revive_queue_id = POP_ORDER_REVIVE_QUEUE;
             let mut pop_revive_service =
                 PopReviveService::new(revive_topic.clone(), i as i32, broker_runtime_inner.clone());
             pop_revive_service.set_should_run_pop_revive(is_run_pop_revive);
