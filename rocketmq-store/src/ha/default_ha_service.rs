@@ -298,8 +298,16 @@ impl HAService for DefaultHAService {
         todo!()
     }
 
-    fn is_slave_ok(&self, master_put_where: i64) -> bool {
-        todo!()
+    async fn is_slave_ok(&self, master_put_where: i64) -> bool {
+        !self.connections.lock().await.is_empty()
+            && (master_put_where
+                - self
+                    .push2_slave_max_offset
+                    .load(std::sync::atomic::Ordering::Relaxed) as i64)
+                < (self
+                    .default_message_store
+                    .message_store_config_ref()
+                    .ha_max_gap_not_in_sync as i64)
     }
 }
 

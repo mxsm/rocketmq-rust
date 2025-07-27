@@ -114,7 +114,7 @@ impl HAService for AutoSwitchHAService {
         todo!()
     }
 
-    fn is_slave_ok(&self, master_put_where: i64) -> bool {
+    async fn is_slave_ok(&self, master_put_where: i64) -> bool {
         todo!()
     }
 }

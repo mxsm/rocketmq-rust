@@ -185,5 +185,5 @@ pub trait RocketHAService: Sync {
     ///
     /// # Returns
     /// Whether the slave is keeping up
-    fn is_slave_ok(&self, master_put_where: i64) -> bool;
+    async fn is_slave_ok(&self, master_put_where: i64) -> bool;
 }
