@@ -209,7 +209,16 @@ impl HAService for GeneralHAService {
         todo!()
     }
 
-    fn is_slave_ok(&self, master_put_where: i64) -> bool {
-        todo!()
+    async fn is_slave_ok(&self, master_put_where: i64) -> bool {
+        match (&self.default_ha_service, &self.auto_switch_ha_service) {
+            (Some(default_ha_service), _) => default_ha_service.is_slave_ok(master_put_where).await,
+            (_, Some(auto_switch_service)) => {
+                auto_switch_service.is_slave_ok(master_put_where).await
+            }
+            (None, None) => {
+                error!("No HA service initialized to check if slave is ok");
+                false
+            }
+        }
     }
 }

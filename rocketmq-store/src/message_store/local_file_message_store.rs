@@ -271,6 +271,10 @@ impl LocalFileMessageStore {
         self.message_store_config.clone()
     }
 
+    pub fn message_store_config_ref(&self) -> &MessageStoreConfig {
+        self.message_store_config.as_ref()
+    }
+
     pub fn is_transient_store_pool_enable(&self) -> bool {
         self.message_store_config.transient_store_pool_enable
             && (self.broker_config.enable_controller_mode
