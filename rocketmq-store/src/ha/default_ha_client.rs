@@ -141,12 +141,12 @@ impl DefaultHAClient {
 
     /// Get HA master address
     pub fn get_ha_master_address(&self) -> Option<String> {
-        self.master_address.lock().clone()
+        self.master_ha_address.lock().clone()
     }
 
     /// Get master address
     pub fn get_master_address(&self) -> Option<String> {
-        self.master_ha_address.lock().clone()
+        self.master_address.lock().clone()
     }
 
     /// Check if it's time to report offset
