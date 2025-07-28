@@ -22,6 +22,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
+use bytes::Buf;
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
@@ -32,6 +33,8 @@ use futures_util::StreamExt;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::WeakArcMut;
+use tokio::io::ReadHalf;
+use tokio::io::WriteHalf;
 use tokio::net::TcpStream;
 use tokio::select;
 use tokio::sync::mpsc;
@@ -40,7 +43,10 @@ use tokio::sync::RwLock;
 use tokio::time::sleep;
 use tokio::time::timeout;
 use tokio_util::codec::BytesCodec;
+use tokio_util::codec::Decoder;
 use tokio_util::codec::Framed;
+use tokio_util::codec::FramedRead;
+use tokio_util::codec::FramedWrite;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -149,8 +155,8 @@ impl HAConnection for DefaultHAConnection {
             .socket_stream
             .take()
             .ok_or_else(|| HAConnectionError::InvalidState("Socket already taken".into()))?;
-        let framed = Framed::with_capacity(tcp_stream, BytesCodec::new(), CAPACITY);
-        let (writer, reader) = framed.split();
+        // let framed = Framed::with_capacity(tcp_stream, BytesCodec::new(), CAPACITY);
+        let (reader, write) = tokio::io::split(tcp_stream);
 
         // Create shutdown channel
         // Create shutdown channel with bounded capacity
@@ -163,7 +169,7 @@ impl HAConnection for DefaultHAConnection {
 
         // Create and start read service
         let read_service = ReadSocketService::new(
-            reader,
+            FramedRead::new(reader, OffsetDecoder),
             self.client_address.clone(),
             ArcMut::clone(&self.ha_service),
             Arc::clone(&self.current_state),
@@ -176,7 +182,7 @@ impl HAConnection for DefaultHAConnection {
 
         // Create and start write service
         let write_service = WriteSocketService::new(
-            writer,
+            FramedWrite::new(write, Bytes::new()),
             self.client_address.clone(),
             ArcMut::clone(&self.ha_service),
             Arc::clone(&self.current_state),
@@ -271,11 +277,43 @@ const READ_MAX_BUFFER_SIZE: usize = 1024 * 1024; // 1 MB
 const REPORT_HEADER_SIZE: usize = 8;
 const SELECT_TIMEOUT: Duration = Duration::from_millis(1000);
 
+#[derive(Debug)]
+pub struct OffsetFrame(pub i64);
+
+pub struct OffsetDecoder;
+
+impl Decoder for OffsetDecoder {
+    type Item = OffsetFrame;
+    type Error = std::io::Error;
+
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        if src.len() < REPORT_HEADER_SIZE {
+            return Ok(None); // not enough data yet
+        }
+
+        // ensure we work on 8-byte alignment
+        let aligned_size = src.len() - (src.len() % REPORT_HEADER_SIZE);
+        if aligned_size < 8 {
+            return Ok(None);
+        }
+
+        // read last 8 bytes (offset)
+        let offset_start = aligned_size - 8;
+        let offset_bytes = &src[offset_start..aligned_size];
+        let offset = i64::from_be_bytes(offset_bytes.try_into().unwrap());
+
+        // advance buffer
+        src.advance(aligned_size);
+
+        Ok(Some(OffsetFrame(offset)))
+    }
+}
+
 /// Read Socket Service
 /// The main node processes requests from the slave nodes, reads the maximum request offset of the
 /// slave nodes.
 pub struct ReadSocketService {
-    reader: SplitStream<Framed<TcpStream, BytesCodec>>,
+    reader: FramedRead<ReadHalf<TcpStream>, OffsetDecoder>,
     client_address: String,
     ha_service: ArcMut<DefaultHAService>,
     current_state: Arc<RwLock<HAConnectionState>>,
@@ -290,7 +328,7 @@ pub struct ReadSocketService {
 
 impl ReadSocketService {
     pub async fn new(
-        reader: SplitStream<Framed<TcpStream, BytesCodec>>,
+        reader: FramedRead<ReadHalf<TcpStream>, OffsetDecoder>,
         client_address: String,
         ha_service: ArcMut<DefaultHAService>,
         current_state: Arc<RwLock<HAConnectionState>>,
@@ -321,7 +359,6 @@ impl ReadSocketService {
 
         loop {
             //let select_result = timeout(SELECT_TIMEOUT, self.reader.next()).await;
-
             let select_result = select! {
                 _ = shutdown_rx.recv() => {
                     info!("Received shutdown signal");
@@ -336,13 +373,16 @@ impl ReadSocketService {
                     info!("Stream closed by peer");
                     break;
                 }
-                Some(Ok(bytes)) => {
+                Some(Ok(OffsetFrame(offset))) => {
                     self.last_read_timestamp
                         .store(get_current_millis(), Ordering::Relaxed);
-                    if let Err(e) = self.process_incoming_data(bytes.freeze()).await {
-                        error!("processReadEvent error: {}", e);
-                        break;
+                    self.slave_ack_offset.store(offset, Ordering::Relaxed);
+
+                    if self.slave_request_offset.load(Ordering::Acquire) < 0 {
+                        self.slave_request_offset.store(offset, Ordering::Release);
+                        info!("slave[{}] request offset {}", self.client_address, offset);
                     }
+                    self.ha_service.notify_transfer_some(offset).await;
                 }
                 Some(Err(e)) => {
                     error!("Stream error: {}", e);
@@ -373,7 +413,7 @@ impl ReadSocketService {
 
     async fn process_incoming_data(
         &mut self,
-        data: Bytes,
+        data: BytesMut,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if self.buffer.len() + data.len() > READ_MAX_BUFFER_SIZE {
             self.compact_buffer();
@@ -462,7 +502,8 @@ impl ReadSocketService {
 
 /// Write Socket Service
 pub struct WriteSocketService {
-    writer: SplitSink<Framed<TcpStream, BytesCodec>, Bytes>,
+    //writer: SplitSink<Framed<TcpStream, BytesCodec>, Bytes>,
+    writer: FramedWrite<WriteHalf<TcpStream>, Bytes>,
     client_address: String,
     ha_service: ArcMut<DefaultHAService>,
     current_state: Arc<RwLock<HAConnectionState>>,
@@ -479,7 +520,8 @@ pub struct WriteSocketService {
 
 impl WriteSocketService {
     pub async fn new(
-        writer: SplitSink<Framed<TcpStream, BytesCodec>, Bytes>,
+        // writer: SplitSink<Framed<TcpStream, BytesCodec>, Bytes>,
+        writer: FramedWrite<WriteHalf<TcpStream>, Bytes>,
         client_address: String,
         ha_service: ArcMut<DefaultHAService>,
         current_state: Arc<RwLock<HAConnectionState>>,
