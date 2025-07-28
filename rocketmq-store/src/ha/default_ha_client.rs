@@ -16,7 +16,6 @@
  */
 use std::io::Cursor;
 use std::sync::atomic::AtomicI64;
-use std::sync::atomic::AtomicPtr;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -63,10 +62,10 @@ const TRANSFER_HEADER_SIZE: usize = 12; // 8 bytes offset + 4 bytes body size
 /// Default HA Client implementation using bytes crate
 pub struct DefaultHAClient {
     /// Master HA address (atomic reference)
-    master_ha_address: Arc<AtomicPtr<String>>,
+    master_ha_address: Arc<parking_lot::Mutex<Option<String>>>,
 
     /// Master address (atomic reference)
-    master_address: Arc<AtomicPtr<String>>,
+    master_address: Arc<parking_lot::Mutex<Option<String>>>,
 
     /// TCP connection to master
     socket_stream: Arc<RwLock<Option<TcpStream>>>,
@@ -120,8 +119,8 @@ impl DefaultHAClient {
         let now = get_current_millis() as i64;
 
         Ok(Self {
-            master_ha_address: Arc::new(AtomicPtr::default()),
-            master_address: Arc::new(AtomicPtr::default()),
+            master_ha_address: Arc::new(parking_lot::Mutex::new(None)),
+            master_address: Arc::new(parking_lot::Mutex::new(None)),
             socket_stream: Arc::new(RwLock::new(None)),
             last_read_timestamp: AtomicI64::new(now),
             last_write_timestamp: AtomicI64::new(now),
@@ -141,25 +140,13 @@ impl DefaultHAClient {
     }
 
     /// Get HA master address
-    pub async fn get_ha_master_address(&self) -> Option<String> {
-        let addr_ptr = self.master_ha_address.load(Ordering::SeqCst);
-        if !addr_ptr.is_null() {
-            let address = unsafe { (*addr_ptr).clone() };
-            Some(address)
-        } else {
-            None
-        }
+    pub fn get_ha_master_address(&self) -> Option<String> {
+        self.master_address.lock().clone()
     }
 
     /// Get master address
-    pub async fn get_master_address(&self) -> Option<String> {
-        let addr_ptr = self.master_address.load(Ordering::SeqCst);
-        if !addr_ptr.is_null() {
-            let address = unsafe { (*addr_ptr).clone() };
-            Some(address)
-        } else {
-            None
-        }
+    pub fn get_master_address(&self) -> Option<String> {
+        self.master_ha_address.lock().clone()
     }
 
     /// Check if it's time to report offset
@@ -429,7 +416,7 @@ impl DefaultHAClient {
         let mut socket_guard = self.socket_stream.write().await;
 
         if socket_guard.is_none() {
-            let addr = self.get_ha_master_address().await;
+            let addr = self.get_ha_master_address();
             if let Some(addr_str) = addr {
                 match TcpStream::connect(&addr_str).await {
                     Ok(stream) => {
@@ -473,7 +460,7 @@ impl DefaultHAClient {
                 warn!("closeMaster exception: {}", e);
             }
 
-            let addr = self.get_ha_master_address().await;
+            let addr = self.get_ha_master_address();
             info!("HAClient close connection with master {:?}", addr);
 
             drop(socket_guard);
@@ -521,7 +508,7 @@ impl DefaultHAClient {
                     match self.connect_master().await {
                         Ok(connected) => {
                             if !connected {
-                                let addr = self.get_ha_master_address().await;
+                                let addr = self.get_ha_master_address();
                                 warn!("HAClient connect to master {:?} failed", addr);
                                 sleep(Duration::from_secs(5)).await;
                             }
@@ -552,7 +539,7 @@ impl DefaultHAClient {
                 .ha_housekeeping_interval;
 
             if interval > housekeeping_interval as i64 {
-                let addr = self.get_ha_master_address().await;
+                let addr = self.get_ha_master_address();
                 warn!(
                     "AutoRecoverHAClient, housekeeping, found this connection[{:?}] expired, {}",
                     addr, interval
@@ -668,31 +655,19 @@ impl HAClient for DefaultHAClient {
 
     /// Update master address
     fn update_master_address(&self, new_address: &str) {
-        // Safely free the old pointer before storing the new one
-        let old_address = self.master_address.load(Ordering::SeqCst);
-        if !old_address.is_null() {
-            unsafe {
-                // Convert the old pointer back into a Box to free the memory
-                let _ = Box::from_raw(old_address);
-            }
+        let mut master_address = self.master_address.lock();
+        if master_address.is_none() || master_address.as_ref().unwrap() != new_address {
+            *master_address = Some(new_address.to_string());
+            info!("Updated master address to: {}", new_address);
         }
-        // Store the new address
-        let new_address_ptr = Box::into_raw(Box::new(new_address.to_string()));
-        self.master_address.store(new_address_ptr, Ordering::SeqCst);
     }
 
     fn update_ha_master_address(&self, new_address: &str) {
-        // Safely free the old pointer before storing the new one
-        let old_address = self.master_address.load(Ordering::SeqCst);
-        if !old_address.is_null() {
-            unsafe {
-                // Convert the old pointer back into a Box to free the memory
-                let _ = Box::from_raw(old_address);
-            }
+        let mut master_ha_address = self.master_ha_address.lock();
+        if master_ha_address.is_none() || master_ha_address.as_ref().unwrap() != new_address {
+            *master_ha_address = Some(new_address.to_string());
+            info!("Updated HA master address to: {}", new_address);
         }
-        // Store the new address
-        let new_address_ptr = Box::into_raw(Box::new(new_address.to_string()));
-        self.master_address.store(new_address_ptr, Ordering::SeqCst);
     }
 
     fn get_master_address(&self) -> String {
