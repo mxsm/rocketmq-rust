@@ -275,9 +275,9 @@ const REPORT_HEADER_SIZE: usize = 8;
 const SELECT_TIMEOUT: Duration = Duration::from_millis(1000);
 
 #[derive(Debug)]
-pub struct OffsetFrame(pub i64);
+pub(in crate::ha) struct OffsetFrame(pub i64);
 
-pub struct OffsetDecoder;
+pub(in crate::ha) struct OffsetDecoder;
 
 impl Decoder for OffsetDecoder {
     type Item = OffsetFrame;
