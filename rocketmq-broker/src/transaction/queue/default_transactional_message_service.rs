@@ -906,7 +906,7 @@ where
     ///
     /// * `remove_map` -Half message to be removed, key:halfOffset, value: opOffset.
     /// * `op_queue` - Op message queue.
-    /// * `pull_offset_of_op` -The consume offset of op message queue.
+    /// * `pull_offset_of_op` -The beginning offset of op message queue.
     /// * `mini_offset` - The current consume offset of half message queue.
     /// * `op_msg_map` -Half message offset in op message
     /// * `done_op_offset` - Stored op messages that have been processed.
