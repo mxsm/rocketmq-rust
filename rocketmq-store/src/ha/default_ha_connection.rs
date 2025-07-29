@@ -26,8 +26,6 @@ use bytes::Buf;
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
-use futures_util::stream::SplitSink;
-use futures_util::stream::SplitStream;
 use futures_util::SinkExt;
 use futures_util::StreamExt;
 use rocketmq_common::TimeUtils::get_current_millis;
@@ -44,7 +42,6 @@ use tokio::time::sleep;
 use tokio::time::timeout;
 use tokio_util::codec::BytesCodec;
 use tokio_util::codec::Decoder;
-use tokio_util::codec::Framed;
 use tokio_util::codec::FramedRead;
 use tokio_util::codec::FramedWrite;
 use tracing::error;
@@ -182,7 +179,7 @@ impl HAConnection for DefaultHAConnection {
 
         // Create and start write service
         let write_service = WriteSocketService::new(
-            FramedWrite::new(write, Bytes::new()),
+            FramedWrite::new(write, BytesCodec::new()),
             self.client_address.clone(),
             ArcMut::clone(&self.ha_service),
             Arc::clone(&self.current_state),
@@ -297,13 +294,16 @@ impl Decoder for OffsetDecoder {
             return Ok(None);
         }
 
-        // read last 8 bytes (offset)
-        let offset_start = aligned_size - 8;
-        let offset_bytes = &src[offset_start..aligned_size];
-        let offset = i64::from_be_bytes(offset_bytes.try_into().unwrap());
+        // We have at least 8 bytes, safe to read
+        // Parse the first 8 bytes as big-endian i64
+        // SAFETY: We just checked src.len() >= 8
+        let offset_bytes: [u8; 8] = src[..REPORT_HEADER_SIZE]
+            .try_into()
+            .expect("Slice with incorrect length");
+        let offset = i64::from_be_bytes(offset_bytes);
 
-        // advance buffer
-        src.advance(aligned_size);
+        // Advance the buffer by the size of the consumed frame (8 bytes)
+        src.advance(REPORT_HEADER_SIZE);
 
         Ok(Some(OffsetFrame(offset)))
     }
@@ -503,7 +503,7 @@ impl ReadSocketService {
 /// Write Socket Service
 pub struct WriteSocketService {
     //writer: SplitSink<Framed<TcpStream, BytesCodec>, Bytes>,
-    writer: FramedWrite<WriteHalf<TcpStream>, Bytes>,
+    writer: FramedWrite<WriteHalf<TcpStream>, BytesCodec>,
     client_address: String,
     ha_service: ArcMut<DefaultHAService>,
     current_state: Arc<RwLock<HAConnectionState>>,
@@ -521,7 +521,7 @@ pub struct WriteSocketService {
 impl WriteSocketService {
     pub async fn new(
         // writer: SplitSink<Framed<TcpStream, BytesCodec>, Bytes>,
-        writer: FramedWrite<WriteHalf<TcpStream>, Bytes>,
+        writer: FramedWrite<WriteHalf<TcpStream>, BytesCodec>,
         client_address: String,
         ha_service: ArcMut<DefaultHAService>,
         current_state: Arc<RwLock<HAConnectionState>>,
@@ -747,9 +747,9 @@ impl WriteSocketService {
     async fn cleanup(&mut self) {
         *self.current_state.write().await = HAConnectionState::Shutdown;
 
-        if let Err(e) = self.writer.close().await {
+        /*        if let Err(e) = self.writer.close().await {
             error!("Error closing sink: {}", e);
-        }
+        }*/
 
         if let Some(connection) = self.connection.upgrade() {
             self.ha_service.remove_connection(connection).await;
