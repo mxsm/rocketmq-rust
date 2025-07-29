@@ -464,7 +464,7 @@ impl BrokerRuntime {
 
         if self.inner.broker_config().enable_controller_mode {
             info!("Start controller mode(Support for future versions)");
-            unimplemented!("Start controller mode(Support for future versions")
+            unimplemented!("Start controller mode(Support for future versions)");
         }
         if self.inner.message_store.is_some() {
             self.register_message_store_hook();
