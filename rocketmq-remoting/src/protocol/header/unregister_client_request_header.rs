@@ -15,18 +15,16 @@
  * limitations under the License.
  */
 
-use std::collections::HashMap;
-
 use cheetah_string::CheetahString;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::protocol::command_custom_header::CommandCustomHeader;
-use crate::protocol::command_custom_header::FromMap;
 use crate::rpc::rpc_request_header::RpcRequestHeader;
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodec)]
 pub struct UnregisterClientRequestHeader {
+    #[required]
     #[serde(rename = "clientID")]
     pub client_id: CheetahString,
     pub producer_group: Option<CheetahString>,
@@ -35,62 +33,98 @@ pub struct UnregisterClientRequestHeader {
     pub rpc_request_header: Option<RpcRequestHeader>,
 }
 
-impl UnregisterClientRequestHeader {
-    pub const CLIENT_ID: &'static str = "clientID";
-    pub const CONSUMER_GROUP: &'static str = "consumerGroup";
-    pub const PRODUCER_GROUP: &'static str = "producerGroup";
-}
+#[cfg(test)]
+mod tests {
 
-impl FromMap for UnregisterClientRequestHeader {
-    type Error = rocketmq_error::RocketmqError;
+    use std::collections::HashMap;
 
-    type Target = Self;
+    use cheetah_string::CheetahString;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
-        Ok(UnregisterClientRequestHeader {
-            client_id: map
-                .get(&CheetahString::from_static_str(
-                    UnregisterClientRequestHeader::CLIENT_ID,
-                ))
-                .cloned()
-                .unwrap_or_default(),
-            producer_group: map
-                .get(&CheetahString::from_static_str(
-                    UnregisterClientRequestHeader::PRODUCER_GROUP,
-                ))
-                .cloned(),
-            consumer_group: map
-                .get(&CheetahString::from_static_str(
-                    UnregisterClientRequestHeader::CONSUMER_GROUP,
-                ))
-                .cloned(),
-            rpc_request_header: Some(<RpcRequestHeader as FromMap>::from(map)?),
-        })
+    use super::*;
+    use crate::protocol::command_custom_header::CommandCustomHeader;
+    use crate::protocol::command_custom_header::FromMap;
+
+    #[test]
+    fn un_register_client_request_header_serializes_correctly() {
+        let header: UnregisterClientRequestHeader = UnregisterClientRequestHeader {
+            client_id: CheetahString::from_static_str("test_client_id"),
+            producer_group: Some(CheetahString::from_static_str("test_producer_group")),
+            consumer_group: Some(CheetahString::from_static_str("test_consumer_group")),
+            rpc_request_header: None,
+        };
+        let map = header.to_map().unwrap();
+        assert_eq!(
+            map.get(&CheetahString::from_static_str("consumerGroup"))
+                .unwrap(),
+            "test_consumer_group"
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str("clientId"))
+                .unwrap(),
+            "test_client_id"
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str("producerGroup"))
+                .unwrap(),
+            "test_producer_group"
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str("rpcRequestHeader")),
+            None
+        );
     }
-}
 
-impl CommandCustomHeader for UnregisterClientRequestHeader {
-    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
+    #[test]
+    fn un_register_client_request_header_deserializes_correctly() {
         let mut map = HashMap::new();
         map.insert(
-            CheetahString::from_static_str(UnregisterClientRequestHeader::CLIENT_ID),
-            self.client_id.clone(),
+            CheetahString::from_static_str("consumerGroup"),
+            CheetahString::from_static_str("test_consumer_group"),
         );
-        if let Some(producer_group) = &self.producer_group {
-            map.insert(
-                CheetahString::from_static_str(UnregisterClientRequestHeader::PRODUCER_GROUP),
-                producer_group.clone(),
-            );
-        }
-        if let Some(consumer_group) = &self.consumer_group {
-            map.insert(
-                CheetahString::from_static_str(UnregisterClientRequestHeader::CONSUMER_GROUP),
-                consumer_group.clone(),
-            );
-        }
-        if let Some(rpc_request_header) = &self.rpc_request_header {
-            map.extend(rpc_request_header.to_map()?);
-        }
-        Some(map)
+        map.insert(
+            CheetahString::from_static_str("clientId"),
+            CheetahString::from_static_str("test_client_id"),
+        );
+        map.insert(
+            CheetahString::from_static_str("producerGroup"),
+            CheetahString::from_static_str("test_producer_group"),
+        );
+        let header: UnregisterClientRequestHeader =
+            <UnregisterClientRequestHeader as FromMap>::from(&map).unwrap();
+        assert_eq!(
+            header.consumer_group.as_deref(),
+            Some("test_consumer_group")
+        );
+        assert_eq!(header.client_id, "test_client_id");
+        assert_eq!(
+            header.producer_group.as_deref(),
+            Some("test_producer_group")
+        );
+    }
+
+    #[test]
+    fn un_register_client_request_header_missing_optional_fields() {
+        let mut map = HashMap::new();
+        map.insert(
+            CheetahString::from_static_str("clientId"),
+            CheetahString::from_static_str("test_client_id"),
+        );
+
+        let header: UnregisterClientRequestHeader =
+            <UnregisterClientRequestHeader as FromMap>::from(&map).unwrap();
+        assert_eq!(header.client_id, "test_client_id");
+        assert!(header.rpc_request_header.is_some());
+    }
+
+    #[test]
+    fn un_register_client_request_header_deserialize_from_json() {
+        let data = r#"{"clientID":"test_client_id","consumerGroup":"test_consumer_group"}"#;
+        let header: UnregisterClientRequestHeader = serde_json::from_str(data).unwrap();
+        assert_eq!(
+            header.client_id,
+            CheetahString::from_static_str("test_client_id")
+        );
+        assert_eq!(header.consumer_group.as_deref(), None);
+        assert!(!header.rpc_request_header.is_none());
     }
 }
