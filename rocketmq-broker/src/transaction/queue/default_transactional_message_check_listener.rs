@@ -41,8 +41,6 @@ use crate::transaction::transactional_message_check_listener::TransactionalMessa
 const TCMT_QUEUE_NUMS: i32 = 1;
 
 pub struct DefaultTransactionalMessageCheckListener<MS: MessageStore> {
-    // topic_config_manager: TopicConfigManager,
-    //message_store: ArcMut<MS>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     broker_client: ArcMut<Broker2Client>,
 }
@@ -51,8 +49,6 @@ impl<MS: MessageStore> Clone for DefaultTransactionalMessageCheckListener<MS> {
     fn clone(&self) -> Self {
         Self {
             broker_client: self.broker_client.clone(),
-            // topic_config_manager: self.topic_config_manager.clone(),
-            // message_store: self.message_store.clone(),
             broker_runtime_inner: self.broker_runtime_inner.clone(),
         }
     }
@@ -60,16 +56,10 @@ impl<MS: MessageStore> Clone for DefaultTransactionalMessageCheckListener<MS> {
 
 impl<MS: MessageStore> DefaultTransactionalMessageCheckListener<MS> {
     pub fn new(
-        /* broker_config: Arc<BrokerConfig>,
-        producer_manager: Arc<ProducerManager>,*/
         broker_client: Broker2Client,
-        /*topic_config_manager: TopicConfigManager,
-        message_store: ArcMut<MS>,*/
         broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> Self {
         Self {
-            /*topic_config_manager,
-            message_store,*/
             broker_runtime_inner,
             broker_client: ArcMut::new(broker_client),
         }
