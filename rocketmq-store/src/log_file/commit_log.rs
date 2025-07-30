@@ -984,7 +984,6 @@ impl CommitLog {
     ) {
         let check_crc_on_recover = self.message_store_config.check_crc_on_recover;
         let check_dup_info = self.message_store_config.duplication_enable;
-        //let message_store_config = self.message_store_config.clone();
         let broker_config = self.broker_config.clone();
         // let mut mapped_file_queue = mapped_files.write().await;
         let binding = self.mapped_file_queue.get_mapped_files();
