@@ -15,15 +15,15 @@
  * limitations under the License.
  */
 use cheetah_string::CheetahString;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::protocol::command_custom_header::CommandCustomHeader;
-use crate::protocol::command_custom_header::FromMap;
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, RequestHeaderCodec)]
 pub struct QueryTopicConsumeByWhoRequestHeader {
+    #[required]
     #[serde(rename = "topic")]
     pub topic: CheetahString,
 
@@ -31,40 +31,64 @@ pub struct QueryTopicConsumeByWhoRequestHeader {
     pub topic_request_header: Option<TopicRequestHeader>,
 }
 
-impl QueryTopicConsumeByWhoRequestHeader {
-    pub const TOPIC: &'static str = "topic";
-}
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
 
-impl CommandCustomHeader for QueryTopicConsumeByWhoRequestHeader {
-    fn to_map(&self) -> Option<std::collections::HashMap<CheetahString, CheetahString>> {
-        let mut map = std::collections::HashMap::new();
-        map.insert(
-            CheetahString::from_static_str(Self::TOPIC),
-            self.topic.clone(),
+    use cheetah_string::CheetahString;
+
+    use super::*;
+    use crate::protocol::command_custom_header::CommandCustomHeader;
+    use crate::protocol::command_custom_header::FromMap;
+
+    #[test]
+    fn query_topic_consume_by_who_request_header_serializes_correctly() {
+        let header: QueryTopicConsumeByWhoRequestHeader = QueryTopicConsumeByWhoRequestHeader {
+            topic: CheetahString::from_static_str("test_topic"),
+            topic_request_header: Some(TopicRequestHeader::default()),
+        };
+        let map = header.to_map().unwrap();
+        assert_eq!(
+            map.get(&CheetahString::from_static_str("topic")).unwrap(),
+            "test_topic"
         );
-        if let Some(value) = self.topic_request_header.as_ref() {
-            if let Some(value) = value.to_map() {
-                map.extend(value);
-            }
-        }
-        Some(map)
+        assert_eq!(
+            map.get(&CheetahString::from_static_str("topicRequestHeader")),
+            None
+        );
     }
-}
 
-impl FromMap for QueryTopicConsumeByWhoRequestHeader {
-    type Error = rocketmq_error::RocketmqError;
+    #[test]
+    fn query_topic_consume_by_who_request_header_deserializes_correctly() {
+        let mut map = HashMap::new();
+        map.insert(
+            CheetahString::from_static_str("topic"),
+            CheetahString::from_static_str("test_topic"),
+        );
 
-    type Target = Self;
+        let header: QueryTopicConsumeByWhoRequestHeader =
+            <QueryTopicConsumeByWhoRequestHeader as FromMap>::from(&map).unwrap();
+        assert_eq!(header.topic, "test_topic");
+    }
 
-    fn from(
-        map: &std::collections::HashMap<CheetahString, CheetahString>,
-    ) -> Result<Self::Target, Self::Error> {
-        Ok(QueryTopicConsumeByWhoRequestHeader {
-            topic: map
-                .get(&CheetahString::from_static_str(Self::TOPIC))
-                .cloned()
-                .unwrap_or_default(),
-            topic_request_header: Some(<TopicRequestHeader as FromMap>::from(map)?),
-        })
+    #[test]
+    fn query_topic_consume_by_who_request_header_deserializes_correctly_deserialize_from_json() {
+        // 测试 topic_request_header.lo 为 None 的情况
+        let data = r#"{"topic":"test_topic"}"#;
+        let header: QueryTopicConsumeByWhoRequestHeader = serde_json::from_str(data).unwrap();
+        assert_eq!(header.topic, CheetahString::from_static_str("test_topic"));
+        assert!(header
+            .topic_request_header
+            .as_ref()
+            .map(|h| h.lo.is_none())
+            .unwrap_or(true));
+
+        let data = r#"{"topic":"test_topic","lo":null}"#;
+        let header: QueryTopicConsumeByWhoRequestHeader = serde_json::from_str(data).unwrap();
+        assert!(header
+            .topic_request_header
+            .as_ref()
+            .map(|h| h.lo.is_none())
+            .unwrap_or(true));
     }
 }
