@@ -31,8 +31,8 @@ use futures_util::StreamExt;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::WeakArcMut;
-use tokio::io::ReadHalf;
-use tokio::io::WriteHalf;
+use tokio::net::tcp::OwnedReadHalf;
+use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::TcpStream;
 use tokio::select;
 use tokio::sync::mpsc;
@@ -153,7 +153,7 @@ impl HAConnection for DefaultHAConnection {
             .take()
             .ok_or_else(|| HAConnectionError::InvalidState("Socket already taken".into()))?;
         // let framed = Framed::with_capacity(tcp_stream, BytesCodec::new(), CAPACITY);
-        let (reader, write) = tokio::io::split(tcp_stream);
+        let (reader, write) = tcp_stream.into_split();
 
         // Create shutdown channel
         // Create shutdown channel with bounded capacity
@@ -313,7 +313,7 @@ impl Decoder for OffsetDecoder {
 /// The main node processes requests from the slave nodes, reads the maximum request offset of the
 /// slave nodes.
 pub struct ReadSocketService {
-    reader: FramedRead<ReadHalf<TcpStream>, OffsetDecoder>,
+    reader: FramedRead<OwnedReadHalf, OffsetDecoder>,
     client_address: String,
     ha_service: ArcMut<DefaultHAService>,
     current_state: Arc<RwLock<HAConnectionState>>,
@@ -328,7 +328,7 @@ pub struct ReadSocketService {
 
 impl ReadSocketService {
     pub async fn new(
-        reader: FramedRead<ReadHalf<TcpStream>, OffsetDecoder>,
+        reader: FramedRead<OwnedReadHalf, OffsetDecoder>,
         client_address: String,
         ha_service: ArcMut<DefaultHAService>,
         current_state: Arc<RwLock<HAConnectionState>>,
@@ -503,7 +503,7 @@ impl ReadSocketService {
 /// Write Socket Service
 pub struct WriteSocketService {
     //writer: SplitSink<Framed<TcpStream, BytesCodec>, Bytes>,
-    writer: FramedWrite<WriteHalf<TcpStream>, BytesCodec>,
+    writer: FramedWrite<OwnedWriteHalf, BytesCodec>,
     client_address: String,
     ha_service: ArcMut<DefaultHAService>,
     current_state: Arc<RwLock<HAConnectionState>>,
@@ -521,7 +521,7 @@ pub struct WriteSocketService {
 impl WriteSocketService {
     pub async fn new(
         // writer: SplitSink<Framed<TcpStream, BytesCodec>, Bytes>,
-        writer: FramedWrite<WriteHalf<TcpStream>, BytesCodec>,
+        writer: FramedWrite<OwnedWriteHalf, BytesCodec>,
         client_address: String,
         ha_service: ArcMut<DefaultHAService>,
         current_state: Arc<RwLock<HAConnectionState>>,
