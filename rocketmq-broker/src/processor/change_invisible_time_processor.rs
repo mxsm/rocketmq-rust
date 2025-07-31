@@ -46,29 +46,13 @@ use crate::broker_runtime::BrokerRuntimeInner;
 use crate::processor::pop_message_processor::PopMessageProcessor;
 
 pub struct ChangeInvisibleTimeProcessor<MS: MessageStore> {
-    // broker_config: Arc<BrokerConfig>,
-    // topic_config_manager: TopicConfigManager,
-    //  message_store: ArcMut<MS>,
-    //   consumer_offset_manager: Arc<ConsumerOffsetManager>,
-    //   consumer_order_info_manager: Arc<ConsumerOrderInfoManager<MS>>,
-    //   broker_stats_manager: Arc<BrokerStatsManager>,
-    //   escape_bridge: ArcMut<EscapeBridge<MS>>,
     revive_topic: CheetahString,
-    //   store_host: SocketAddr,
     pop_message_processor: ArcMut<PopMessageProcessor<MS>>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
 impl<MS: MessageStore> ChangeInvisibleTimeProcessor<MS> {
     pub fn new(
-        /*broker_config: Arc<BrokerConfig>,
-        topic_config_manager: TopicConfigManager,
-        message_store: ArcMut<MS>,
-        consumer_offset_manager: Arc<ConsumerOffsetManager>,
-        consumer_order_info_manager: Arc<ConsumerOrderInfoManager<MS>>,
-        broker_stats_manager: Arc<BrokerStatsManager>,
-        escape_bridge: ArcMut<EscapeBridge<MS>>,
-        pop_message_processor: ArcMut<PopMessageProcessor<MS>>,*/
         pop_message_processor: ArcMut<PopMessageProcessor<MS>>,
         broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> Self {
@@ -79,23 +63,8 @@ impl<MS: MessageStore> ChangeInvisibleTimeProcessor<MS> {
                 .broker_cluster_name
                 .as_str(),
         );
-        /*        let store_host = format!(
-            "{}:{}",
-            broker_runtime_inner.broker_config().broker_ip1,
-            broker_runtime_inner.broker_config().listen_port
-        )
-        .parse::<SocketAddr>()
-        .unwrap();*/
         ChangeInvisibleTimeProcessor {
-            /* broker_config,
-            topic_config_manager,
-            message_store,
-            consumer_offset_manager,
-            consumer_order_info_manager,
-            broker_stats_manager,
-            escape_bridge,*/
             revive_topic: CheetahString::from_string(revive_topic),
-            // store_host,
             pop_message_processor,
             broker_runtime_inner,
         }
