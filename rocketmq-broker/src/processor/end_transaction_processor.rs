@@ -44,27 +44,17 @@ use crate::transaction::queue::transactional_message_util::TransactionalMessageU
 use crate::transaction::transactional_message_service::TransactionalMessageService;
 
 pub struct EndTransactionProcessor<TM, MS: MessageStore> {
-    /*  message_store_config: Arc<MessageStoreConfig>,
-    broker_config: Arc<BrokerConfig>,*/
     transactional_message_service: ArcMut<TM>,
-    // message_store: ArcMut<MS>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
 impl<TM, MS: MessageStore> EndTransactionProcessor<TM, MS> {
     pub fn new(
-        /*message_store_config: Arc<MessageStoreConfig>,
-        broker_config: Arc<BrokerConfig>,
-        transactional_message_service: ArcMut<TM>,
-        message_store: ArcMut<MS>,*/
         transactional_message_service: ArcMut<TM>,
         broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> Self {
         Self {
-            /*message_store_config,
-            broker_config,*/
             transactional_message_service,
-            /* message_store, */
             broker_runtime_inner,
         }
     }
