@@ -69,7 +69,6 @@ use crate::store_error::HAResult;
 
 pub struct DefaultHAService {
     connection_count: Arc<AtomicU32>,
-    //connection_list: Arc<Mutex<Vec<ArcMut<GeneralHAConnection>>>>,
     connections: Arc<Mutex<HashMap<HAConnectionId, ArcMut<GeneralHAConnection>>>>,
     accept_socket_service: Option<AcceptSocketService>,
     default_message_store: ArcMut<LocalFileMessageStore>,
