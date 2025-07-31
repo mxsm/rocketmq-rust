@@ -65,6 +65,10 @@ impl GroupTransferService {
     pub async fn put_request(&self, request: ArcMut<GroupCommitRequest>) {
         self.inner.put_request(request).await
     }
+
+    pub fn notify_transfer_some(&self) {
+        unimplemented!("notify_transfer_some is not implemented yet");
+    }
 }
 
 struct GroupTransferServiceInner {

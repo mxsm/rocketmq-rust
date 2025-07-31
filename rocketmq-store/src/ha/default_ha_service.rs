@@ -34,6 +34,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -99,10 +100,29 @@ impl DefaultHAService {
         self.default_message_store.as_ref()
     }
 
-    pub async fn notify_transfer_some(&self, _offset: i64) {
-        // This method is a placeholder for notifying transfer operations.
-        // The actual implementation would depend on the specific requirements of the HA service.
-        unimplemented!(" notify_transfer_some method is not implemented");
+    pub async fn notify_transfer_some(&self, offset: i64) {
+        let mut value = self.push2_slave_max_offset.load(Ordering::Relaxed);
+
+        while (offset as u64) > value {
+            match self.push2_slave_max_offset.compare_exchange_weak(
+                value,
+                offset as u64,
+                Ordering::SeqCst,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    // Successfully updated the value
+                    if let Some(service) = &self.group_transfer_service {
+                        service.notify_transfer_some();
+                    }
+                    break;
+                }
+                Err(current_value) => {
+                    // Update failed, retry with the current value
+                    value = current_value;
+                }
+            }
+        }
     }
 
     pub(crate) fn init(&mut self, this: ArcMut<Self>) -> HAResult<()> {
