@@ -38,8 +38,6 @@ const TOPIC_QUEUE_ID_SEPARATOR: &str = "@";
 pub struct PullRequestHoldService<MS: MessageStore> {
     pull_request_table: Arc<parking_lot::RwLock<HashMap<String, ManyPullRequest>>>,
     pull_message_processor: ArcMut<PullMessageProcessor<MS>>,
-    //message_store: ArcMut<MS>,
-    // broker_config: Arc<BrokerConfig>,
     shutdown: Arc<Notify>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
@@ -49,17 +47,12 @@ where
     MS: MessageStore + Send + Sync,
 {
     pub fn new(
-        /* message_store: ArcMut<MS>,
-        pull_message_processor: ArcMut<PullMessageProcessor<MS>>,
-        broker_config: Arc<BrokerConfig>,*/
         pull_message_processor: ArcMut<PullMessageProcessor<MS>>,
         broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> Self {
         PullRequestHoldService {
             pull_request_table: Arc::new(parking_lot::RwLock::new(HashMap::new())),
             pull_message_processor,
-            /* message_store,
-            broker_config,*/
             shutdown: Arc::new(Default::default()),
             broker_runtime_inner,
         }
