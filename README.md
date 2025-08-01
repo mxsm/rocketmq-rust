@@ -8,8 +8,7 @@
 [![Crates.io](https://img.shields.io/crates/v/rocketmq-rust.svg)](https://crates.io/crates/rocketmq-rust)
 [![Docs.rs](https://docs.rs/rocketmq-rust/badge.svg)](https://docs.rs/rocketmq-rust)
 [![CI](https://github.com/mxsm/rocketmq-rust/workflows/CI/badge.svg)](https://github.com/mxsm/rocketmq-rust/actions)
-[![CodeCov][codecov-image]][codecov-url] ![GitHub contributors](https://img.shields.io/github/contributors/mxsm/rocketmq-rust)
-![Crates.io License](https://img.shields.io/crates/l/rocketmq-rust) 
+[![CodeCov][codecov-image]][codecov-url] [![GitHub contributors](https://img.shields.io/github/contributors/mxsm/rocketmq-rust)](https://github.com/mxsm/rocketmq-rust/graphs/contributors) [![Crates.io License](https://img.shields.io/crates/l/rocketmq-rust)](#license) 
 <br/>
 ![GitHub repo size](https://img.shields.io/github/repo-size/mxsm/rocketmq-rust)
 ![Static Badge](https://img.shields.io/badge/MSRV-1.85.0%2B-25b373)
