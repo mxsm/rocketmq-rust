@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 use std::collections::LinkedList;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -25,7 +26,8 @@ use rocketmq_rust::task::service_task::ServiceTask;
 use rocketmq_rust::task::ServiceManager;
 use rocketmq_rust::ArcMut;
 use tokio::sync::Mutex;
-use tokio::time::sleep;
+use tokio::sync::Notify;
+use tokio::time::timeout;
 use tracing::error;
 use tracing::warn;
 
@@ -63,16 +65,31 @@ impl GroupTransferService {
     }
 
     pub async fn put_request(&self, request: ArcMut<GroupCommitRequest>) {
-        self.inner.put_request(request).await
+        self.inner.put_request(request).await;
+        self.service_manager.wakeup();
     }
 
     pub fn notify_transfer_some(&self) {
-        unimplemented!("notify_transfer_some is not implemented yet");
+        if self
+            .inner
+            .notified
+            .1
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            )
+            .is_ok()
+        {
+            self.inner.notified.0.notify_one();
+        }
     }
 }
 
 struct GroupTransferServiceInner {
     ha_service: GeneralHAService,
+    notified: (Arc<Notify>, AtomicBool),
     requests_write: Arc<Mutex<LinkedList<ArcMut<GroupCommitRequest>>>>,
     requests_read: Arc<Mutex<LinkedList<ArcMut<GroupCommitRequest>>>>,
 }
@@ -81,6 +98,7 @@ impl GroupTransferServiceInner {
     fn new(ha_service: GeneralHAService) -> Self {
         GroupTransferServiceInner {
             ha_service,
+            notified: (Arc::new(Notify::new()), AtomicBool::new(false)),
             requests_write: Arc::new(Mutex::new(LinkedList::new())),
             requests_read: Arc::new(Mutex::new(LinkedList::new())),
         }
@@ -112,8 +130,17 @@ impl GroupTransferServiceInner {
                 request.get_ack_nums() == mix_all::ALL_ACK_IN_SYNC_STATE_SET;
             let mut index = 0;
             while !transfer_ok && deadline - Instant::now() > Duration::ZERO {
-                if index > 0 {
-                    sleep(Duration::from_millis(1)).await;
+                if index > 0
+                    && timeout(Duration::from_millis(1), self.notified.0.notified())
+                        .await
+                        .is_ok()
+                {
+                    let _ = self.notified.1.compare_exchange(
+                        true,
+                        false,
+                        std::sync::atomic::Ordering::SeqCst,
+                        std::sync::atomic::Ordering::SeqCst,
+                    );
                 }
                 index += 1;
                 if !all_ack_in_sync_state_set && request.get_ack_nums() <= 1 {
