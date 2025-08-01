@@ -95,7 +95,6 @@ impl DefaultHAService {
         }
     }
 
-    // Add any necessary fields here
     pub fn get_default_message_store(&self) -> &LocalFileMessageStore {
         self.default_message_store.as_ref()
     }
