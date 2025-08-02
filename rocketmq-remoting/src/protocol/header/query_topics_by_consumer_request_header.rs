@@ -32,7 +32,6 @@ pub struct QueryTopicsByConsumerRequestHeader {
 }
 
 impl QueryTopicsByConsumerRequestHeader {
-    pub const GROUP: &'static str = "group";
 
     pub fn get_group(&self) -> &CheetahString {
         &self.group
