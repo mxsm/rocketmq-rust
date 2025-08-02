@@ -15,15 +15,15 @@
  * limitations under the License.
  */
 use cheetah_string::CheetahString;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::protocol::command_custom_header::CommandCustomHeader;
-use crate::protocol::command_custom_header::FromMap;
 use crate::rpc::rpc_request_header::RpcRequestHeader;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, RequestHeaderCodec)]
 pub struct QueryTopicsByConsumerRequestHeader {
+    #[required]
     #[serde(rename = "group")]
     pub group: CheetahString,
 
@@ -32,46 +32,11 @@ pub struct QueryTopicsByConsumerRequestHeader {
 }
 
 impl QueryTopicsByConsumerRequestHeader {
-    pub const GROUP: &'static str = "group";
-
     pub fn get_group(&self) -> &CheetahString {
         &self.group
     }
+
     pub fn set_group(&mut self, group: CheetahString) {
         self.group = group;
-    }
-}
-
-impl CommandCustomHeader for QueryTopicsByConsumerRequestHeader {
-    fn to_map(&self) -> Option<std::collections::HashMap<CheetahString, CheetahString>> {
-        let mut map = std::collections::HashMap::new();
-        map.insert(
-            CheetahString::from_static_str(Self::GROUP),
-            self.group.clone(),
-        );
-        if let Some(value) = self.rpc_request_header.as_ref() {
-            if let Some(value) = value.to_map() {
-                map.extend(value);
-            }
-        }
-        Some(map)
-    }
-}
-
-impl FromMap for QueryTopicsByConsumerRequestHeader {
-    type Error = rocketmq_error::RocketmqError;
-
-    type Target = Self;
-
-    fn from(
-        map: &std::collections::HashMap<CheetahString, CheetahString>,
-    ) -> Result<Self::Target, Self::Error> {
-        Ok(QueryTopicsByConsumerRequestHeader {
-            group: map
-                .get(&CheetahString::from_static_str(Self::GROUP))
-                .cloned()
-                .unwrap_or_default(),
-            rpc_request_header: Some(<RpcRequestHeader as FromMap>::from(map)?),
-        })
     }
 }
