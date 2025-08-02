@@ -32,10 +32,10 @@ pub struct QueryTopicsByConsumerRequestHeader {
 }
 
 impl QueryTopicsByConsumerRequestHeader {
-
     pub fn get_group(&self) -> &CheetahString {
         &self.group
     }
+
     pub fn set_group(&mut self, group: CheetahString) {
         self.group = group;
     }
