@@ -30,3 +30,14 @@ pub struct QueryTopicsByConsumerRequestHeader {
     #[serde(flatten)]
     pub rpc_request_header: Option<RpcRequestHeader>,
 }
+
+impl QueryTopicsByConsumerRequestHeader {
+    pub const GROUP: &'static str = "group";
+
+    pub fn get_group(&self) -> &CheetahString {
+        &self.group
+    }
+    pub fn set_group(&mut self, group: CheetahString) {
+        self.group = group;
+    }
+}
