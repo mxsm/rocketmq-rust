@@ -67,10 +67,10 @@ impl GeneralHAClient {
 }
 
 impl HAClient for GeneralHAClient {
-    async fn start(&self) {
-        if let Some(ref client) = self.default_ha_client {
+    async fn start(&mut self) {
+        if let Some(ref mut client) = self.default_ha_client {
             client.start().await;
-        } else if let Some(ref client) = self.auto_switch_ha_client {
+        } else if let Some(ref mut client) = self.auto_switch_ha_client {
             client.start().await;
         } else {
             panic!("No HA service is set for GeneralHAClient");

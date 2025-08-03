@@ -641,7 +641,7 @@ impl DefaultHAClient {
 }
 
 impl HAClient for DefaultHAClient {
-    async fn start(&self) {
+    async fn start(&mut self) {
         error!("GeneralHAService does not implement start directly, use specific service");
     }
 
