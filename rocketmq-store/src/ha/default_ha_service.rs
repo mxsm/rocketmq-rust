@@ -200,7 +200,7 @@ impl HAService for DefaultHAService {
             .expect("HAConnectionStateNotificationService not initialized")
             .start()
             .await?;
-        if let Some(ref ha_client) = self.ha_client {
+        if let Some(ref mut ha_client) = self.ha_client {
             ha_client.start().await;
         }
         Ok(())
