@@ -61,6 +61,10 @@ const TRANSFER_HEADER_SIZE: usize = 12; // 8 bytes offset + 4 bytes body size
 
 /// Default HA Client implementation using bytes crate
 pub struct DefaultHAClient {
+    inner: ArcMut<Inner>,
+}
+
+struct Inner {
     /// Master HA address (atomic reference)
     master_ha_address: Arc<parking_lot::Mutex<Option<String>>>,
 
@@ -119,42 +123,47 @@ impl DefaultHAClient {
         let now = get_current_millis() as i64;
 
         Ok(Self {
-            master_ha_address: Arc::new(parking_lot::Mutex::new(None)),
-            master_address: Arc::new(parking_lot::Mutex::new(None)),
-            socket_stream: Arc::new(RwLock::new(None)),
-            last_read_timestamp: AtomicI64::new(now),
-            last_write_timestamp: AtomicI64::new(now),
-            current_reported_offset: AtomicI64::new(0),
-            dispatch_position: AtomicUsize::new(0),
-            byte_buffer_read: Arc::new(RwLock::new(BytesMut::with_capacity(READ_MAX_BUFFER_SIZE))),
-            byte_buffer_backup: Arc::new(RwLock::new(BytesMut::with_capacity(
-                READ_MAX_BUFFER_SIZE,
-            ))),
-            report_offset: Arc::new(RwLock::new(BytesMut::with_capacity(REPORT_HEADER_SIZE))),
-            default_message_store,
-            current_state: Arc::new(RwLock::new(HAConnectionState::Ready)),
-            flow_monitor,
-            shutdown_notify: Arc::new(Notify::new()),
-            service_handle: Arc::new(RwLock::new(None)),
+            inner: ArcMut::new(Inner {
+                master_ha_address: Arc::new(parking_lot::Mutex::new(None)),
+                master_address: Arc::new(parking_lot::Mutex::new(None)),
+                socket_stream: Arc::new(RwLock::new(None)),
+                last_read_timestamp: AtomicI64::new(now),
+                last_write_timestamp: AtomicI64::new(now),
+                current_reported_offset: AtomicI64::new(0),
+                dispatch_position: AtomicUsize::new(0),
+                byte_buffer_read: Arc::new(RwLock::new(BytesMut::with_capacity(
+                    READ_MAX_BUFFER_SIZE,
+                ))),
+                byte_buffer_backup: Arc::new(RwLock::new(BytesMut::with_capacity(
+                    READ_MAX_BUFFER_SIZE,
+                ))),
+                report_offset: Arc::new(RwLock::new(BytesMut::with_capacity(REPORT_HEADER_SIZE))),
+                default_message_store,
+                current_state: Arc::new(RwLock::new(HAConnectionState::Ready)),
+                flow_monitor,
+                shutdown_notify: Arc::new(Notify::new()),
+                service_handle: Arc::new(RwLock::new(None)),
+            }),
         })
     }
 
     /// Get HA master address
     pub fn get_ha_master_address(&self) -> Option<String> {
-        self.master_ha_address.lock().clone()
+        self.inner.master_ha_address.lock().clone()
     }
 
     /// Get master address
     pub fn get_master_address(&self) -> Option<String> {
-        self.master_address.lock().clone()
+        self.inner.master_address.lock().clone()
     }
 
     /// Check if it's time to report offset
     async fn is_time_to_report_offset(&self) -> bool {
-        let now = self.default_message_store.now();
-        let last_write = self.last_write_timestamp.load(Ordering::SeqCst);
+        let now = self.inner.default_message_store.now();
+        let last_write = self.inner.last_write_timestamp.load(Ordering::SeqCst);
         let interval = now as i64 - last_write;
         let heartbeat_interval = self
+            .inner
             .default_message_store
             .get_message_store_config()
             .ha_send_heartbeat_interval;
@@ -164,10 +173,10 @@ impl DefaultHAClient {
 
     /// Report slave max offset to master
     async fn report_slave_max_offset(&self, max_offset: i64) -> bool {
-        let mut socket_guard = self.socket_stream.write().await;
+        let mut socket_guard = self.inner.socket_stream.write().await;
         if let Some(ref mut socket) = socket_guard.as_mut() {
             // Prepare report buffer using bytes
-            let mut report_buffer = self.report_offset.write().await;
+            let mut report_buffer = self.inner.report_offset.write().await;
             report_buffer.clear();
             report_buffer.put_i64(max_offset);
 
@@ -179,8 +188,8 @@ impl DefaultHAClient {
 
                 match socket.write_all(&report_buffer[..]).await {
                     Ok(_) => {
-                        let now = self.default_message_store.now() as i64;
-                        self.last_write_timestamp.store(now, Ordering::SeqCst);
+                        let now = self.inner.default_message_store.now() as i64;
+                        self.inner.last_write_timestamp.store(now, Ordering::SeqCst);
                         report_buffer.clear();
                         return true;
                     }
@@ -203,9 +212,9 @@ impl DefaultHAClient {
 
     /// Reallocate byte buffer when it's full using bytes operations
     async fn reallocate_byte_buffer(&self) {
-        let dispatch_pos = self.dispatch_position.load(Ordering::SeqCst);
-        let mut read_buffer = self.byte_buffer_read.write().await;
-        let mut backup_buffer = self.byte_buffer_backup.write().await;
+        let dispatch_pos = self.inner.dispatch_position.load(Ordering::SeqCst);
+        let mut read_buffer = self.inner.byte_buffer_read.write().await;
+        let mut backup_buffer = self.inner.byte_buffer_backup.write().await;
 
         let remain = read_buffer.len() - dispatch_pos;
 
@@ -226,7 +235,7 @@ impl DefaultHAClient {
             read_buffer.reserve(READ_MAX_BUFFER_SIZE - capacity);
         }
 
-        self.dispatch_position.store(0, Ordering::SeqCst);
+        self.inner.dispatch_position.store(0, Ordering::SeqCst);
     }
 
     /// Process read events from master using bytes buffer
@@ -307,8 +316,8 @@ impl DefaultHAClient {
     }
     /// Dispatch read request and process received data using bytes buffer
     async fn dispatch_read_request(&self) -> bool {
-        let mut _read_buffer = self.byte_buffer_read.write().await;
-        let mut _dispatch_pos = self.dispatch_position.load(Ordering::SeqCst);
+        let mut _read_buffer = self.inner.byte_buffer_read.write().await;
+        let mut _dispatch_pos = self.inner.dispatch_position.load(Ordering::SeqCst);
 
         loop {
             let available_data = _read_buffer.len() - _dispatch_pos;
@@ -321,7 +330,7 @@ impl DefaultHAClient {
                 let master_phy_offset = cursor.get_i64();
                 let body_size = cursor.get_i32() as usize;
 
-                let slave_phy_offset = self.default_message_store.get_max_phy_offset();
+                let slave_phy_offset = self.inner.default_message_store.get_max_phy_offset();
 
                 // Validate offset consistency
                 if slave_phy_offset != 0 && slave_phy_offset != master_phy_offset {
@@ -342,7 +351,7 @@ impl DefaultHAClient {
                     let bytes = _read_buffer.clone().freeze().slice(data_start..data_end);
                     // Append to commit log
                     drop(_read_buffer);
-                    if let Err(e) = self.default_message_store.append_to_commit_log(
+                    if let Err(e) = self.inner.default_message_store.append_to_commit_log(
                         master_phy_offset,
                         bytes.as_ref(),
                         data_start as i32,
@@ -354,7 +363,8 @@ impl DefaultHAClient {
 
                     // Update dispatch position
                     _dispatch_pos += TRANSFER_HEADER_SIZE + body_size;
-                    self.dispatch_position
+                    self.inner
+                        .dispatch_position
                         .store(_dispatch_pos, Ordering::SeqCst);
 
                     // Report slave max offset
@@ -363,7 +373,7 @@ impl DefaultHAClient {
                     }
 
                     // Re-acquire buffer lock and continue
-                    _read_buffer = self.byte_buffer_read.write().await;
+                    _read_buffer = self.inner.byte_buffer_read.write().await;
                     continue;
                 }
             }
@@ -372,8 +382,8 @@ impl DefaultHAClient {
             if _read_buffer.len() >= READ_MAX_BUFFER_SIZE {
                 drop(_read_buffer);
                 self.reallocate_byte_buffer().await;
-                _read_buffer = self.byte_buffer_read.write().await;
-                _dispatch_pos = self.dispatch_position.load(Ordering::SeqCst);
+                _read_buffer = self.inner.byte_buffer_read.write().await;
+                _dispatch_pos = self.inner.dispatch_position.load(Ordering::SeqCst);
             }
 
             break;
@@ -384,11 +394,12 @@ impl DefaultHAClient {
 
     /// Report slave max offset plus
     async fn report_slave_max_offset_plus(&self) -> bool {
-        let current_phy_offset = self.default_message_store.get_max_phy_offset();
-        let current_reported = self.current_reported_offset.load(Ordering::SeqCst);
+        let current_phy_offset = self.inner.default_message_store.get_max_phy_offset();
+        let current_reported = self.inner.current_reported_offset.load(Ordering::SeqCst);
 
         if current_phy_offset > current_reported {
-            self.current_reported_offset
+            self.inner
+                .current_reported_offset
                 .store(current_phy_offset, Ordering::SeqCst);
             let result = self.report_slave_max_offset(current_phy_offset).await;
             if !result {
@@ -407,13 +418,13 @@ impl DefaultHAClient {
     /// Change current connection state
     pub async fn change_current_state(&self, new_state: HAConnectionState) {
         info!("change state to {:?}", new_state);
-        let mut state = self.current_state.write().await;
+        let mut state = self.inner.current_state.write().await;
         *state = new_state;
     }
 
     /// Connect to master
     pub async fn connect_master(&self) -> Result<bool, HAClientError> {
-        let mut socket_guard = self.socket_stream.write().await;
+        let mut socket_guard = self.inner.socket_stream.write().await;
 
         if socket_guard.is_none() {
             let addr = self.get_ha_master_address();
@@ -432,12 +443,13 @@ impl DefaultHAClient {
                         self.change_current_state(HAConnectionState::Transfer).await;
 
                         // Initialize current reported offset
-                        let max_offset = self.default_message_store.get_max_phy_offset();
-                        self.current_reported_offset
+                        let max_offset = self.inner.default_message_store.get_max_phy_offset();
+                        self.inner
+                            .current_reported_offset
                             .store(max_offset, Ordering::SeqCst);
 
                         let now = get_current_millis() as i64;
-                        self.last_read_timestamp.store(now, Ordering::SeqCst);
+                        self.inner.last_read_timestamp.store(now, Ordering::SeqCst);
 
                         return Ok(true);
                     }
@@ -454,7 +466,7 @@ impl DefaultHAClient {
 
     /// Close connection to master
     pub async fn close_master(&self) {
-        let mut socket_guard = self.socket_stream.write().await;
+        let mut socket_guard = self.inner.socket_stream.write().await;
         if let Some(mut socket) = socket_guard.take() {
             if let Err(e) = socket.shutdown().await {
                 warn!("closeMaster exception: {}", e);
@@ -467,12 +479,12 @@ impl DefaultHAClient {
             self.change_current_state(HAConnectionState::Ready).await;
 
             // Reset state
-            self.last_read_timestamp.store(0, Ordering::SeqCst);
-            self.dispatch_position.store(0, Ordering::SeqCst);
+            self.inner.last_read_timestamp.store(0, Ordering::SeqCst);
+            self.inner.dispatch_position.store(0, Ordering::SeqCst);
 
             // Reset buffers using bytes operations
-            let mut read_buffer = self.byte_buffer_read.write().await;
-            let mut backup_buffer = self.byte_buffer_backup.write().await;
+            let mut read_buffer = self.inner.byte_buffer_read.write().await;
+            let mut backup_buffer = self.inner.byte_buffer_backup.write().await;
 
             read_buffer.clear();
             backup_buffer.clear();
@@ -483,13 +495,13 @@ impl DefaultHAClient {
     async fn run_service(self: Arc<Self>) {
         info!("{} service started", self.get_service_name());
 
-        self.flow_monitor.start().await;
+        self.inner.flow_monitor.start().await;
 
         loop {
             // Check for shutdown
             select! {
-                _ = self.shutdown_notify.notified() => {
-                    self.flow_monitor.shutdown_with_interrupt(true).await;
+                _ = self.inner.shutdown_notify.notified() => {
+                    self.inner.flow_monitor.shutdown_with_interrupt(true).await;
                     break;
                 }
                 _ = sleep(Duration::from_millis(100)) => {
@@ -497,11 +509,11 @@ impl DefaultHAClient {
                 }
             }
 
-            let current_state = *self.current_state.read().await;
+            let current_state = *self.inner.current_state.read().await;
 
             match current_state {
                 HAConnectionState::Shutdown => {
-                    self.flow_monitor.shutdown_with_interrupt(true).await;
+                    self.inner.flow_monitor.shutdown_with_interrupt(true).await;
                     break;
                 }
                 HAConnectionState::Ready => {
@@ -530,10 +542,11 @@ impl DefaultHAClient {
             }
 
             // Check for housekeeping
-            let now = self.default_message_store.now();
-            let last_read = self.last_read_timestamp.load(Ordering::SeqCst);
+            let now = self.inner.default_message_store.now();
+            let last_read = self.inner.last_read_timestamp.load(Ordering::SeqCst);
             let interval = now as i64 - last_read;
             let housekeeping_interval = self
+                .inner
                 .default_message_store
                 .get_message_store_config()
                 .ha_housekeeping_interval;
@@ -549,7 +562,7 @@ impl DefaultHAClient {
             }
         }
 
-        self.flow_monitor.shutdown_with_interrupt(true).await;
+        self.inner.flow_monitor.shutdown_with_interrupt(true).await;
         info!("{} service end", self.get_service_name());
     }
 
@@ -557,7 +570,7 @@ impl DefaultHAClient {
     async fn transfer_from_master(&self) -> bool {
         // Check if it's time to report offset
         if self.is_time_to_report_offset().await {
-            let current_offset = self.current_reported_offset.load(Ordering::SeqCst);
+            let current_offset = self.inner.current_reported_offset.load(Ordering::SeqCst);
             info!("Slave report current offset {}", current_offset);
 
             if !self.report_slave_max_offset(current_offset).await {
@@ -602,11 +615,11 @@ impl DefaultHAClient {
     /// Shutdown the HA client
     pub async fn shutdown(self: Arc<Self>) {
         self.change_current_state(HAConnectionState::Shutdown).await;
-        self.flow_monitor.shutdown().await;
-        self.shutdown_notify.notify_waiters();
+        self.inner.flow_monitor.shutdown().await;
+        self.inner.shutdown_notify.notify_waiters();
 
         // Wait for service to stop
-        let mut service_handle = self.service_handle.write().await;
+        let mut service_handle = self.inner.service_handle.write().await;
         if let Some(handle) = service_handle.take() {
             let _ = handle.await;
         }
@@ -621,28 +634,28 @@ impl DefaultHAClient {
 
     /// Get last write timestamp
     pub fn get_last_write_timestamp(&self) -> i64 {
-        self.last_write_timestamp.load(Ordering::SeqCst)
+        self.inner.last_write_timestamp.load(Ordering::SeqCst)
     }
 
     /// Get last read timestamp
     pub fn get_last_read_timestamp(&self) -> i64 {
-        self.last_read_timestamp.load(Ordering::SeqCst)
+        self.inner.last_read_timestamp.load(Ordering::SeqCst)
     }
 
     /// Get current state
     pub async fn get_current_state(&self) -> HAConnectionState {
-        *self.current_state.read().await
+        *self.inner.current_state.read().await
     }
 
     /// Get transferred bytes per second
     pub fn get_transferred_byte_in_second(&self) -> u64 {
-        self.flow_monitor.get_transferred_byte_in_second() as u64
+        self.inner.flow_monitor.get_transferred_byte_in_second() as u64
     }
 }
 
 impl HAClient for DefaultHAClient {
     async fn start(&mut self) {
-        error!("GeneralHAService does not implement start directly, use specific service");
+        self.inner.flow_monitor.start().await;
     }
 
     async fn shutdown(&self) {
@@ -655,7 +668,7 @@ impl HAClient for DefaultHAClient {
 
     /// Update master address
     fn update_master_address(&self, new_address: &str) {
-        let mut master_address = self.master_address.lock();
+        let mut master_address = self.inner.master_address.lock();
         if master_address.is_none() || master_address.as_ref().unwrap() != new_address {
             *master_address = Some(new_address.to_string());
             info!("Updated master address to: {}", new_address);
@@ -663,7 +676,7 @@ impl HAClient for DefaultHAClient {
     }
 
     fn update_ha_master_address(&self, new_address: &str) {
-        let mut master_ha_address = self.master_ha_address.lock();
+        let mut master_ha_address = self.inner.master_ha_address.lock();
         if master_ha_address.is_none() || master_ha_address.as_ref().unwrap() != new_address {
             *master_ha_address = Some(new_address.to_string());
             info!("Updated HA master address to: {}", new_address);
