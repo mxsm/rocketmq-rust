@@ -14,18 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-use std::collections::HashMap;
-
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketmqError;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::protocol::command_custom_header::CommandCustomHeader;
-use crate::protocol::command_custom_header::FromMap;
-
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodec)]
 pub struct RpcRequestHeader {
     // the namespace name
     #[serde(rename = "namespace")]
@@ -42,11 +36,6 @@ pub struct RpcRequestHeader {
 }
 
 impl RpcRequestHeader {
-    pub const BROKER_NAME: &'static str = "brokerName";
-    pub const NAMESPACE: &'static str = "namespace";
-    pub const NAMESPACED: &'static str = "namespaced";
-    pub const ONEWAY: &'static str = "oneway";
-
     pub fn new(
         namespace: Option<CheetahString>,
         namespaced: Option<bool>,
@@ -59,62 +48,5 @@ impl RpcRequestHeader {
             broker_name,
             oneway,
         }
-    }
-}
-
-impl FromMap for RpcRequestHeader {
-    type Error = RocketmqError;
-    type Target = Self;
-
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
-        Ok(RpcRequestHeader {
-            namespace: map
-                .get(&CheetahString::from_static_str(RpcRequestHeader::NAMESPACE))
-                .cloned(),
-            namespaced: map
-                .get(&CheetahString::from_static_str(
-                    RpcRequestHeader::NAMESPACED,
-                ))
-                .and_then(|s| s.parse::<bool>().ok()),
-            broker_name: map
-                .get(&CheetahString::from_static_str(
-                    RpcRequestHeader::BROKER_NAME,
-                ))
-                .cloned(),
-            oneway: map
-                .get(&CheetahString::from_static_str(RpcRequestHeader::ONEWAY))
-                .and_then(|s| s.parse::<bool>().ok()),
-        })
-    }
-}
-
-impl CommandCustomHeader for RpcRequestHeader {
-    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
-        let mut map = HashMap::new();
-        if let Some(ref namespace) = self.namespace {
-            map.insert(
-                CheetahString::from_static_str(Self::NAMESPACE),
-                namespace.clone(),
-            );
-        }
-        if let Some(namespaced) = self.namespaced {
-            map.insert(
-                CheetahString::from_static_str(Self::NAMESPACED),
-                CheetahString::from_string(namespaced.to_string()),
-            );
-        }
-        if let Some(ref broker_name) = self.broker_name {
-            map.insert(
-                CheetahString::from_static_str(Self::BROKER_NAME),
-                broker_name.clone(),
-            );
-        }
-        if let Some(oneway) = self.oneway {
-            map.insert(
-                CheetahString::from_static_str(Self::ONEWAY),
-                CheetahString::from_string(oneway.to_string()),
-            );
-        }
-        Some(map)
     }
 }

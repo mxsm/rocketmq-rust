@@ -21,7 +21,7 @@ use crate::ha::ha_connection_state::HAConnectionState;
 pub struct AutoSwitchHAClient;
 
 impl HAClient for AutoSwitchHAClient {
-    async fn start(&self) {
+    async fn start(&mut self) {
         todo!()
     }
 
