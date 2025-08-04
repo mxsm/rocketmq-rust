@@ -158,7 +158,7 @@ impl DefaultHAClient {
     }
 
     /// Check if it's time to report offset
-    async fn is_time_to_report_offset(&self) -> bool {
+    fn is_time_to_report_offset(&self) -> bool {
         let now = self.inner.default_message_store.now();
         let last_write = self.inner.last_write_timestamp.load(Ordering::SeqCst);
         let interval = now as i64 - last_write;
@@ -569,7 +569,7 @@ impl DefaultHAClient {
     /// Transfer data from master
     async fn transfer_from_master(&self) -> bool {
         // Check if it's time to report offset
-        if self.is_time_to_report_offset().await {
+        if self.is_time_to_report_offset() {
             let current_offset = self.inner.current_reported_offset.load(Ordering::SeqCst);
             info!("Slave report current offset {}", current_offset);
 
