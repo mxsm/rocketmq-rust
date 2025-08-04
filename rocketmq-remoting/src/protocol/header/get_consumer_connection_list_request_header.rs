@@ -15,14 +15,15 @@
  * limitations under the License.
  */
 use cheetah_string::CheetahString;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::protocol::command_custom_header::FromMap;
 use crate::rpc::rpc_request_header::RpcRequestHeader;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, RequestHeaderCodec)]
 pub struct GetConsumerConnectionListRequestHeader {
+    #[required]
     #[serde(rename = "consumerGroup")]
     pub consumer_group: CheetahString,
 
@@ -31,30 +32,10 @@ pub struct GetConsumerConnectionListRequestHeader {
 }
 
 impl GetConsumerConnectionListRequestHeader {
-    pub const CONSUMER_GROUP: &'static str = "consumerGroup";
-
     pub fn get_consumer_group(&self) -> &CheetahString {
         &self.consumer_group
     }
     pub fn set_consumer_group(&mut self, consumer_group: CheetahString) {
         self.consumer_group = consumer_group;
-    }
-}
-
-impl FromMap for GetConsumerConnectionListRequestHeader {
-    type Error = rocketmq_error::RocketmqError;
-
-    type Target = Self;
-
-    fn from(
-        map: &std::collections::HashMap<CheetahString, CheetahString>,
-    ) -> Result<Self::Target, Self::Error> {
-        Ok(GetConsumerConnectionListRequestHeader {
-            consumer_group: map
-                .get(&CheetahString::from_static_str(Self::CONSUMER_GROUP))
-                .cloned()
-                .unwrap_or_default(),
-            rpc_request_header: Some(<RpcRequestHeader as FromMap>::from(map)?),
-        })
     }
 }
