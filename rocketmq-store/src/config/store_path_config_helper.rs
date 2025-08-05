@@ -14,35 +14,42 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+#[inline]
 pub(crate) fn get_store_path_consume_queue(root_dir: &str) -> String {
     format!("{}{}consumequeue", root_dir, std::path::MAIN_SEPARATOR,)
 }
 
+#[inline]
 pub(crate) fn get_store_path_consume_queue_ext(root_dir: &str) -> String {
     format!("{}{}consumequeue_ext", root_dir, std::path::MAIN_SEPARATOR,)
 }
 
+#[inline]
 pub(crate) fn get_store_path_batch_consume_queue(root_dir: &str) -> String {
     format!("{}{}batchconsumequeue", root_dir, std::path::MAIN_SEPARATOR,)
 }
 
+#[inline]
 pub(crate) fn get_store_path_index(root_dir: &str) -> String {
     format!("{}{}index", root_dir, std::path::MAIN_SEPARATOR,)
 }
 
+#[inline]
 pub(crate) fn get_store_checkpoint(root_dir: &str) -> String {
     format!("{}{}checkpoint", root_dir, std::path::MAIN_SEPARATOR,)
 }
 
+#[inline]
 pub(crate) fn get_abort_file(root_dir: &str) -> String {
     format!("{}{}abort", root_dir, std::path::MAIN_SEPARATOR,)
 }
 
+#[inline]
 pub(crate) fn get_lock_file(root_dir: &str) -> String {
     format!("{}{}lock", root_dir, std::path::MAIN_SEPARATOR,)
 }
 
+#[inline]
 pub(crate) fn get_delay_offset_store_path(root_dir: &str) -> String {
     format!(
         "{}{}config{}delayOffset.json",
@@ -52,6 +59,7 @@ pub(crate) fn get_delay_offset_store_path(root_dir: &str) -> String {
     )
 }
 
+#[inline]
 pub(crate) fn get_tran_state_table_store_path(root_dir: &str) -> String {
     format!(
         "{}{}transaction{}statetable",
@@ -61,6 +69,7 @@ pub(crate) fn get_tran_state_table_store_path(root_dir: &str) -> String {
     )
 }
 
+#[inline]
 pub(crate) fn get_tran_redo_log_store_path(root_dir: &str) -> String {
     format!(
         "{}{}transaction{}redolog",
