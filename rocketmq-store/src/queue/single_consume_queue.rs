@@ -231,7 +231,6 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
                 .enable_consume_queue_ext
     }
 
-    #[inline]
     pub fn put_message_position_info(
         &mut self,
         offset: i64,
