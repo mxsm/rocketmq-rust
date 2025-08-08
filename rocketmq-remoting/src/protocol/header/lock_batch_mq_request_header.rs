@@ -14,44 +14,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::collections::HashMap;
 
-use cheetah_string::CheetahString;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::protocol::command_custom_header::CommandCustomHeader;
-use crate::protocol::command_custom_header::FromMap;
 use crate::rpc::rpc_request_header::RpcRequestHeader;
 
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
 pub struct LockBatchMqRequestHeader {
     #[serde(flatten)]
     pub rpc_request_header: Option<RpcRequestHeader>,
-}
-
-impl CommandCustomHeader for LockBatchMqRequestHeader {
-    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
-        let mut map = HashMap::new();
-        if let Some(value) = self.rpc_request_header.as_ref() {
-            if let Some(value) = value.to_map() {
-                map.extend(value);
-            }
-        }
-        Some(map)
-    }
-}
-
-impl FromMap for LockBatchMqRequestHeader {
-    type Error = rocketmq_error::RocketmqError;
-
-    type Target = Self;
-
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
-        let rpc_request_header = <RpcRequestHeader as FromMap>::from(map)?;
-        Ok(LockBatchMqRequestHeader {
-            rpc_request_header: Some(rpc_request_header),
-        })
-    }
 }
