@@ -29,7 +29,7 @@ pub struct QueryConsumerOffsetRequestHeader {
     pub consumer_group: CheetahString,
     pub topic: CheetahString,
     pub queue_id: i32,
-    #[serde(rename = "setZeroIfNotFound")]
+    
     pub set_zero_if_not_found: Option<bool>,
     #[serde(flatten)]
     pub topic_request_header: Option<TopicRequestHeader>,
