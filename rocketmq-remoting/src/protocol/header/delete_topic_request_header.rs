@@ -15,15 +15,15 @@
  * limitations under the License.
  */
 use cheetah_string::CheetahString;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::protocol::command_custom_header::CommandCustomHeader;
-use crate::protocol::command_custom_header::FromMap;
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, RequestHeaderCodec)]
 pub struct DeleteTopicRequestHeader {
+    #[required]
     #[serde(rename = "topic")]
     pub topic: CheetahString,
 
@@ -31,49 +31,13 @@ pub struct DeleteTopicRequestHeader {
     pub topic_request_header: Option<TopicRequestHeader>,
 }
 
-impl DeleteTopicRequestHeader {
-    pub const TOPIC: &'static str = "topic";
-}
-
-impl CommandCustomHeader for DeleteTopicRequestHeader {
-    fn to_map(&self) -> Option<std::collections::HashMap<CheetahString, CheetahString>> {
-        let mut map = std::collections::HashMap::new();
-        map.insert(
-            CheetahString::from_static_str(Self::TOPIC),
-            self.topic.clone(),
-        );
-        if let Some(value) = self.topic_request_header.as_ref() {
-            if let Some(value) = value.to_map() {
-                map.extend(value);
-            }
-        }
-        Some(map)
-    }
-}
-
-impl FromMap for DeleteTopicRequestHeader {
-    type Error = rocketmq_error::RocketmqError;
-
-    type Target = Self;
-
-    fn from(
-        map: &std::collections::HashMap<CheetahString, CheetahString>,
-    ) -> Result<Self::Target, Self::Error> {
-        Ok(DeleteTopicRequestHeader {
-            topic: map
-                .get(&CheetahString::from_static_str(Self::TOPIC))
-                .cloned()
-                .unwrap_or_default(),
-            topic_request_header: Some(<TopicRequestHeader as FromMap>::from(map)?),
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
     use super::*;
+    use crate::protocol::command_custom_header::CommandCustomHeader;
+    use crate::protocol::command_custom_header::FromMap;
 
     #[test]
     fn delete_topic_request_header_to_map() {
@@ -141,14 +105,5 @@ mod tests {
         assert_eq!(header.topic, CheetahString::from("test_topic"));
         assert!(header.topic_request_header.is_some());
         // Add assertions for fields from topic_request_header
-    }
-
-    #[test]
-    fn delete_topic_request_header_from_map_missing_topic() {
-        let map = HashMap::new();
-
-        let header = <DeleteTopicRequestHeader as FromMap>::from(&map).unwrap();
-        assert_eq!(header.topic, CheetahString::default());
-        assert!(!header.topic_request_header.is_none());
     }
 }
