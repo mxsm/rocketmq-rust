@@ -15,58 +15,18 @@
  * limitations under the License.
  */
 use cheetah_string::CheetahString;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::protocol::command_custom_header::CommandCustomHeader;
-use crate::protocol::command_custom_header::FromMap;
 use crate::rpc::rpc_request_header::RpcRequestHeader;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
 pub struct NotifyConsumerIdsChangedRequestHeader {
+    #[required]
     pub consumer_group: CheetahString,
 
     #[serde(flatten)]
     pub rpc_request_header: Option<RpcRequestHeader>,
-}
-
-impl NotifyConsumerIdsChangedRequestHeader {
-    pub const CONSUMER_GROUP: &'static str = "consumerGroup";
-}
-
-impl CommandCustomHeader for NotifyConsumerIdsChangedRequestHeader {
-    fn to_map(&self) -> Option<std::collections::HashMap<CheetahString, CheetahString>> {
-        let mut map = std::collections::HashMap::new();
-        map.insert(
-            CheetahString::from_static_str(Self::CONSUMER_GROUP),
-            self.consumer_group.clone(),
-        );
-        if let Some(value) = self.rpc_request_header.as_ref() {
-            if let Some(value) = value.to_map() {
-                map.extend(value);
-            }
-        }
-        Some(map)
-    }
-}
-
-impl FromMap for NotifyConsumerIdsChangedRequestHeader {
-    type Error = rocketmq_error::RocketmqError;
-
-    type Target = Self;
-
-    fn from(
-        map: &std::collections::HashMap<CheetahString, CheetahString>,
-    ) -> Result<Self::Target, Self::Error> {
-        let consumer_group = map
-            .get(&CheetahString::from_static_str(Self::CONSUMER_GROUP))
-            .cloned()
-            .unwrap_or_default();
-        let rpc_request_header = <RpcRequestHeader as FromMap>::from(map)?;
-        Ok(NotifyConsumerIdsChangedRequestHeader {
-            consumer_group,
-            rpc_request_header: Some(rpc_request_header),
-        })
-    }
 }
