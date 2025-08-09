@@ -33,6 +33,9 @@ pub struct GetMetaDataResponseHeader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::command_custom_header::FromMap;
+    use std::collections::HashMap;
+    use crate::protocol::command_custom_header::CommandCustomHeader;
 
     #[test]
     fn get_meta_data_response_header_serializes_correctly() {
