@@ -14,16 +14,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::collections::HashMap;
-
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::protocol::command_custom_header::CommandCustomHeader;
-use crate::protocol::command_custom_header::FromMap;
 use crate::protocol::CheetahString;
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
 pub struct GetMetaDataResponseHeader {
     pub group: Option<CheetahString>,
@@ -33,85 +30,13 @@ pub struct GetMetaDataResponseHeader {
     pub peers: Option<CheetahString>,
 }
 
-impl GetMetaDataResponseHeader {
-    pub const GROUP: &'static str = "group";
-    pub const CONTROLLER_LEADER_ID: &'static str = "controllerLeaderId";
-    pub const CONTROLLER_LEADER_ADDRESS: &'static str = "controllerLeaderAddress";
-    pub const IS_LEADER: &'static str = "isLeader";
-    pub const PEERS: &'static str = "peers";
-}
-
-impl CommandCustomHeader for GetMetaDataResponseHeader {
-    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
-        let mut map = std::collections::HashMap::new();
-        if let Some(value) = self.group.as_ref() {
-            map.insert(CheetahString::from_static_str(Self::GROUP), value.clone());
-        }
-        if let Some(value) = self.controller_leader_id.as_ref() {
-            map.insert(
-                CheetahString::from_static_str(Self::CONTROLLER_LEADER_ID),
-                value.clone(),
-            );
-        }
-        if let Some(value) = self.controller_leader_address.as_ref() {
-            map.insert(
-                CheetahString::from_static_str(Self::CONTROLLER_LEADER_ADDRESS),
-                value.clone(),
-            );
-        }
-        if let Some(value) = self.is_leader.as_ref() {
-            map.insert(
-                CheetahString::from_static_str(Self::IS_LEADER),
-                CheetahString::from(value.to_string()),
-            );
-        }
-        if let Some(value) = self.peers.as_ref() {
-            map.insert(CheetahString::from_static_str(Self::PEERS), value.clone());
-        }
-        Some(map)
-    }
-}
-
-impl FromMap for GetMetaDataResponseHeader {
-    type Error = rocketmq_error::RocketmqError;
-
-    type Target = Self;
-    fn from(
-        map: &std::collections::HashMap<CheetahString, CheetahString>,
-    ) -> Result<Self::Target, Self::Error> {
-        Ok(GetMetaDataResponseHeader {
-            group: map
-                .get(&CheetahString::from_static_str(
-                    GetMetaDataResponseHeader::GROUP,
-                ))
-                .cloned(),
-            controller_leader_id: map
-                .get(&CheetahString::from_static_str(
-                    GetMetaDataResponseHeader::CONTROLLER_LEADER_ID,
-                ))
-                .cloned(),
-            controller_leader_address: map
-                .get(&CheetahString::from_static_str(
-                    GetMetaDataResponseHeader::CONTROLLER_LEADER_ADDRESS,
-                ))
-                .cloned(),
-            is_leader: map
-                .get(&CheetahString::from_static_str(
-                    GetMetaDataResponseHeader::IS_LEADER,
-                ))
-                .and_then(|s| s.parse::<bool>().ok()),
-            peers: map
-                .get(&CheetahString::from_static_str(
-                    GetMetaDataResponseHeader::PEERS,
-                ))
-                .cloned(),
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
+    use crate::protocol::command_custom_header::CommandCustomHeader;
+    use crate::protocol::command_custom_header::FromMap;
 
     #[test]
     fn get_meta_data_response_header_serializes_correctly() {
