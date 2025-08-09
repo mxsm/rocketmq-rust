@@ -17,6 +17,7 @@
 #![allow(dead_code)]
 #![feature(sync_unsafe_cell)]
 #![feature(duration_constructors)]
+#![feature(duration_constructors_lite)]
 extern crate core;
 
 pub mod clients;

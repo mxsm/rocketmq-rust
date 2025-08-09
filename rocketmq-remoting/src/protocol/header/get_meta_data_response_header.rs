@@ -32,9 +32,6 @@ pub struct GetMetaDataResponseHeader {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    use crate::protocol::command_custom_header::CommandCustomHeader;
-    use crate::protocol::command_custom_header::FromMap;
     use super::*;
 
     #[test]
@@ -50,23 +47,38 @@ mod tests {
         };
         let map = header.to_map().unwrap();
         assert_eq!(
-            map.get(&CheetahString::from_static_str("group")).unwrap(),
+            map.get(&CheetahString::from_static_str(
+                GetMetaDataResponseHeader::GROUP
+            ))
+            .unwrap(),
             "test_group"
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str("controllerLeaderId")).unwrap(),
+            map.get(&CheetahString::from_static_str(
+                GetMetaDataResponseHeader::CONTROLLER_LEADER_ID
+            ))
+            .unwrap(),
             "1"
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str("controllerLeaderAddress")).unwrap(),
+            map.get(&CheetahString::from_static_str(
+                GetMetaDataResponseHeader::CONTROLLER_LEADER_ADDRESS
+            ))
+            .unwrap(),
             "192.168.1.1:9876"
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str("isLeader")).unwrap(),
+            map.get(&CheetahString::from_static_str(
+                GetMetaDataResponseHeader::IS_LEADER
+            ))
+            .unwrap(),
             "true"
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str("peers")).unwrap(),
+            map.get(&CheetahString::from_static_str(
+                GetMetaDataResponseHeader::PEERS
+            ))
+            .unwrap(),
             "192.168.1.1:9876,192.168.1.2:9876"
         );
     }
@@ -75,23 +87,23 @@ mod tests {
     fn get_meta_data_response_header_deserializes_correctly() {
         let mut map = HashMap::new();
         map.insert(
-            CheetahString::from_static_str("group"),
+            CheetahString::from_static_str(GetMetaDataResponseHeader::GROUP),
             CheetahString::from("test_group"),
         );
         map.insert(
-            CheetahString::from_static_str("controllerLeaderId"),
+            CheetahString::from_static_str(GetMetaDataResponseHeader::CONTROLLER_LEADER_ID),
             CheetahString::from("1"),
         );
         map.insert(
-            CheetahString::from_static_str("controllerLeaderAddress"),
+            CheetahString::from_static_str(GetMetaDataResponseHeader::CONTROLLER_LEADER_ADDRESS),
             CheetahString::from("192.168.1.1:9876"),
         );
         map.insert(
-            CheetahString::from_static_str("isLeader"),
+            CheetahString::from_static_str(GetMetaDataResponseHeader::IS_LEADER),
             CheetahString::from("true"),
         );
         map.insert(
-            CheetahString::from_static_str("peers"),
+            CheetahString::from_static_str(GetMetaDataResponseHeader::PEERS),
             CheetahString::from("192.168.1.1:9876,192.168.1.2:9876"),
         );
         let header = <GetMetaDataResponseHeader as FromMap>::from(&map).unwrap();
