@@ -2463,8 +2463,6 @@ dependencies = [
  "trait-variant",
  "uuid",
  "windows",
- "zerocopy",
- "zerocopy-derive",
 ]
 
 [[package]]
