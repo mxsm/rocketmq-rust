@@ -16,10 +16,10 @@
  */
 
 use std::sync::atomic::AtomicU32;
-use std::sync::Arc;
 
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_rust::ArcMut;
+use tokio::sync::Notify;
 use tracing::error;
 
 use crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService;
@@ -28,7 +28,6 @@ use crate::ha::general_ha_client::GeneralHAClient;
 use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use crate::ha::ha_service::HAService;
-use crate::ha::wait_notify_object::WaitNotifyObject;
 use crate::log_file::group_commit_request::GroupCommitRequest;
 use crate::message_store::local_file_message_store::LocalFileMessageStore;
 use crate::store_error::HAError;
@@ -121,17 +120,17 @@ impl HAService for GeneralHAService {
         todo!()
     }
 
-    fn update_master_address(&self, new_addr: &str) {
+    async fn update_master_address(&self, new_addr: &str) {
         if let Some(ref service) = self.default_ha_service {
-            service.update_master_address(new_addr);
+            service.update_master_address(new_addr).await;
         } else if let Some(ref service) = self.auto_switch_ha_service {
-            service.update_master_address(new_addr);
+            service.update_master_address(new_addr).await;
         } else {
             error!("No HA service initialized to update master address");
         }
     }
 
-    fn update_ha_master_address(&self, new_addr: &str) {
+    async fn update_ha_master_address(&self, new_addr: &str) {
         todo!()
     }
 
@@ -205,8 +204,15 @@ impl HAService for GeneralHAService {
         todo!()
     }
 
-    fn get_wait_notify_object(&self) -> Arc<WaitNotifyObject> {
-        todo!()
+    fn get_wait_notify_object(&self) -> &Notify {
+        match (&self.default_ha_service, &self.auto_switch_ha_service) {
+            (Some(default_ha_service), _) => default_ha_service.get_wait_notify_object(),
+            (_, Some(auto_switch_service)) => auto_switch_service.get_wait_notify_object(),
+            (None, None) => {
+                error!("No HA service initialized to get wait notify object");
+                panic!("No HA service initialized to get wait notify object")
+            }
+        }
     }
 
     async fn is_slave_ok(&self, master_put_where: i64) -> bool {

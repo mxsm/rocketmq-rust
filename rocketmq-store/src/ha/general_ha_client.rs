@@ -91,21 +91,21 @@ impl HAClient for GeneralHAClient {
         todo!()
     }
 
-    fn update_master_address(&self, new_address: &str) {
+    async fn update_master_address(&self, new_address: &str) {
         if let Some(ref client) = self.default_ha_client {
-            client.update_master_address(new_address);
+            client.update_master_address(new_address).await;
         } else if let Some(ref client) = self.auto_switch_ha_client {
-            client.update_master_address(new_address);
+            client.update_master_address(new_address).await;
         } else {
             panic!("No HA service is set for GeneralHAClient");
         }
     }
 
-    fn update_ha_master_address(&self, new_address: &str) {
+    async fn update_ha_master_address(&self, new_address: &str) {
         if let Some(ref client) = self.default_ha_client {
-            client.update_ha_master_address(new_address);
+            client.update_ha_master_address(new_address).await;
         } else if let Some(ref client) = self.auto_switch_ha_client {
-            client.update_ha_master_address(new_address);
+            client.update_ha_master_address(new_address).await;
         } else {
             panic!("No HA service is set for GeneralHAClient");
         }

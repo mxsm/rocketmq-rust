@@ -16,15 +16,14 @@
  */
 
 use std::sync::atomic::AtomicU32;
-use std::sync::Arc;
 
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_rust::ArcMut;
+use tokio::sync::Notify;
 
 use crate::ha::general_ha_client::GeneralHAClient;
 use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
-use crate::ha::wait_notify_object::WaitNotifyObject;
 use crate::log_file::group_commit_request::GroupCommitRequest;
 use crate::store_error::HAResult;
 
@@ -93,13 +92,13 @@ pub trait RocketHAService: Sync {
     ///
     /// # Parameters
     /// * `new_addr` - New master address
-    fn update_master_address(&self, new_addr: &str);
+    async fn update_master_address(&self, new_addr: &str);
 
     /// Update the HA master address
     ///
     /// # Parameters
     /// * `new_addr` - New HA master address
-    fn update_ha_master_address(&self, new_addr: &str);
+    async fn update_ha_master_address(&self, new_addr: &str);
 
     /// Get the number of replicas whose commit logs are not far behind the master
     ///
@@ -174,7 +173,7 @@ pub trait RocketHAService: Sync {
     ///
     /// # Returns
     /// Reference to the wait/notify object
-    fn get_wait_notify_object(&self) -> Arc<WaitNotifyObject>;
+    fn get_wait_notify_object(&self) -> &Notify;
 
     /// Check if the slave is keeping up with the master
     ///

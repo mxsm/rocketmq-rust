@@ -14,25 +14,29 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::io::Cursor;
+
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bytes::Buf;
 use bytes::BufMut;
 use bytes::BytesMut;
+use futures_util::SinkExt;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_rust::ArcMut;
-use tokio::io::AsyncWriteExt;
+use tokio::net::tcp::OwnedReadHalf;
+use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::TcpStream;
 use tokio::select;
 use tokio::sync::Notify;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
 use tokio::time::timeout;
+use tokio_util::codec::BytesCodec;
+use tokio_util::codec::FramedRead;
+use tokio_util::codec::FramedWrite;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -66,13 +70,16 @@ pub struct DefaultHAClient {
 
 struct Inner {
     /// Master HA address (atomic reference)
-    master_ha_address: Arc<parking_lot::Mutex<Option<String>>>,
+    master_ha_address: Arc<tokio::sync::Mutex<Option<String>>>,
 
     /// Master address (atomic reference)
-    master_address: Arc<parking_lot::Mutex<Option<String>>>,
+    master_address: Arc<tokio::sync::Mutex<Option<String>>>,
 
     /// TCP connection to master
-    socket_stream: Arc<RwLock<Option<TcpStream>>>,
+    //socket_stream: Arc<RwLock<Option<TcpStream>>>,
+    write_stream: Option<FramedWrite<OwnedWriteHalf, BytesCodec>>,
+
+    read_stream: Option<FramedRead<OwnedReadHalf, BytesCodec>>,
 
     /// Last time slave read data from master
     last_read_timestamp: AtomicI64,
@@ -87,13 +94,13 @@ struct Inner {
     dispatch_position: AtomicUsize,
 
     /// Read buffer using BytesMut for efficient manipulation
-    byte_buffer_read: Arc<RwLock<BytesMut>>,
+    byte_buffer_read: BytesMut,
 
     /// Backup buffer for reallocation
     byte_buffer_backup: Arc<RwLock<BytesMut>>,
 
     /// Report offset buffer
-    report_offset: Arc<RwLock<BytesMut>>,
+    report_offset: BytesMut,
 
     /// Message store reference
     default_message_store: ArcMut<LocalFileMessageStore>,
@@ -111,6 +118,191 @@ struct Inner {
     service_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
 }
 
+impl Inner {
+    async fn close_master(&mut self) {
+        //maybe not need to take, just set to None is ok
+        let write = self.write_stream.take();
+        let read = self.read_stream.take();
+        drop(write);
+        drop(read);
+
+        let addr = self.master_ha_address.lock().await;
+        info!("HAClient close connection with master {:?}", addr.as_ref());
+
+        // Clear streams
+        self.change_current_state(HAConnectionState::Ready).await;
+
+        // Reset state
+        self.last_read_timestamp.store(0, Ordering::SeqCst);
+        self.dispatch_position.store(0, Ordering::SeqCst);
+
+        // Reset buffers using bytes operations
+
+        let mut backup_buffer = self.byte_buffer_backup.write().await;
+
+        self.byte_buffer_read.clear();
+        backup_buffer.clear();
+    }
+    async fn close_master_and_wait(&mut self) {}
+
+    async fn connect_master(&mut self) -> Result<bool, HAClientError> {
+        if self.write_stream.is_none() || self.read_stream.is_none() {
+            let addr = self.master_ha_address.lock().await.clone();
+            if let Some(addr_str) = addr {
+                match TcpStream::connect(&addr_str).await {
+                    Ok(stream) => {
+                        // Configure socket
+                        if let Err(e) = stream.set_nodelay(true) {
+                            warn!("Failed to set TCP_NODELAY: {}", e);
+                        }
+
+                        let (read, write) = stream.into_split();
+                        self.write_stream = Some(FramedWrite::new(write, BytesCodec::new()));
+                        self.read_stream = Some(FramedRead::new(read, BytesCodec::new()));
+                        info!("HAClient connect to master {}", addr_str);
+
+                        self.change_current_state(HAConnectionState::Transfer).await;
+                        // Initialize current reported offset
+                        let max_offset = self.default_message_store.get_max_phy_offset();
+                        self.current_reported_offset
+                            .store(max_offset, Ordering::SeqCst);
+                        let now = get_current_millis() as i64;
+                        self.last_read_timestamp.store(now, Ordering::SeqCst);
+                        return Ok(true);
+                    }
+                    Err(e) => {
+                        error!("Failed to connect to master {}: {}", addr_str, e);
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+        Ok(self.write_stream.is_some() && self.read_stream.is_some())
+    }
+
+    async fn transfer_from_master(&mut self) -> Result<bool, HAClientError> {
+        // Check if it's time to report offset
+        if self.is_time_to_report_offset() {
+            let current_offset = self.current_reported_offset.load(Ordering::SeqCst);
+            info!("Slave report current offset {}", current_offset);
+            if !self.report_slave_max_offset(current_offset).await {
+                return Ok(false);
+            }
+        }
+
+        // Process read events with timeout
+        match timeout(Duration::from_secs(1), self.process_read_event()).await {
+            Ok(result) => {
+                if !result {
+                    return Ok(false);
+                }
+            }
+            Err(_) => {
+                // Timeout is normal, continue
+            }
+        }
+
+        Ok(self.report_slave_max_offset_plus().await)
+    }
+
+    /// Report slave max offset plus
+    async fn report_slave_max_offset_plus(&mut self) -> bool {
+        let current_phy_offset = self.default_message_store.get_max_phy_offset();
+        let current_reported = self.current_reported_offset.load(Ordering::SeqCst);
+
+        if current_phy_offset > current_reported {
+            self.current_reported_offset
+                .store(current_phy_offset, Ordering::SeqCst);
+            let result = self.report_slave_max_offset(current_phy_offset).await;
+            if !result {
+                self.close_master().await;
+                error!(
+                    "HAClient, reportSlaveMaxOffset error, {}",
+                    current_phy_offset
+                );
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Process read events from master using bytes buffer
+    async fn process_read_event(&mut self) -> bool {
+        /*if let Some(read_stream) = self.read_stream.as_mut() {
+            // Read data from master
+            let mut has_next = true;
+            loop {
+                match read_stream.try_next().await {
+                    Ok(Some(data)) => {
+                        has_next = true;
+                        self.flow_monitor
+                            .add_byte_count_transferred(data.len() as i64);
+
+                        self.last_read_timestamp
+                            .store(get_current_millis() as i64, Ordering::Relaxed);
+                    }
+                    Ok(None) => {
+                        has_next = false;
+                    }
+                    Err(e) => {
+                        return false;
+                    }
+                }
+                if !has_next {
+                    return true;
+                }
+            }
+        }*/
+        true
+    }
+
+    /// Dispatch read request and process received data using bytes buffer
+    async fn dispatch_read_request(&mut self) -> bool {
+        true
+    }
+
+    /// Report slave max offset to master
+    async fn report_slave_max_offset(&mut self, max_offset: i64) -> bool {
+        if let Some(write_stream) = self.write_stream.as_mut() {
+            // Prepare report buffer using bytes
+            self.report_offset.clear();
+            self.report_offset.put_i64(max_offset);
+
+            let bytes = self.report_offset.split().freeze();
+            let result = match write_stream.send(bytes).await {
+                Ok(_) => true,
+                Err(e) => {
+                    error!("HAClient, reportSlaveMaxOffset write error: {}", e);
+                    false
+                }
+            };
+            self.last_write_timestamp
+                .store(get_current_millis() as i64, Ordering::Relaxed);
+            return result;
+        }
+        false
+    }
+
+    /// Check if it's time to report offset
+    fn is_time_to_report_offset(&self) -> bool {
+        let now = self.default_message_store.now();
+        let last_write = self.last_write_timestamp.load(Ordering::SeqCst);
+        let interval = now as i64 - last_write;
+        let heartbeat_interval = self
+            .default_message_store
+            .get_message_store_config()
+            .ha_send_heartbeat_interval;
+
+        interval > heartbeat_interval as i64
+    }
+    /// Change current connection state
+    pub async fn change_current_state(&self, new_state: HAConnectionState) {
+        info!("change state to {:?}", new_state);
+        let mut state = self.current_state.write().await;
+        *state = new_state;
+    }
+}
+
 impl DefaultHAClient {
     /// Create a new DefaultHAClient
     pub fn new(
@@ -124,20 +316,20 @@ impl DefaultHAClient {
 
         Ok(Self {
             inner: ArcMut::new(Inner {
-                master_ha_address: Arc::new(parking_lot::Mutex::new(None)),
-                master_address: Arc::new(parking_lot::Mutex::new(None)),
-                socket_stream: Arc::new(RwLock::new(None)),
+                master_ha_address: Arc::new(tokio::sync::Mutex::new(None)),
+                master_address: Arc::new(tokio::sync::Mutex::new(None)),
+                //socket_stream: Arc::new(RwLock::new(None)),
+                write_stream: None,
+                read_stream: None,
                 last_read_timestamp: AtomicI64::new(now),
                 last_write_timestamp: AtomicI64::new(now),
                 current_reported_offset: AtomicI64::new(0),
                 dispatch_position: AtomicUsize::new(0),
-                byte_buffer_read: Arc::new(RwLock::new(BytesMut::with_capacity(
-                    READ_MAX_BUFFER_SIZE,
-                ))),
+                byte_buffer_read: BytesMut::with_capacity(READ_MAX_BUFFER_SIZE),
                 byte_buffer_backup: Arc::new(RwLock::new(BytesMut::with_capacity(
                     READ_MAX_BUFFER_SIZE,
                 ))),
-                report_offset: Arc::new(RwLock::new(BytesMut::with_capacity(REPORT_HEADER_SIZE))),
+                report_offset: BytesMut::with_capacity(REPORT_HEADER_SIZE),
                 default_message_store,
                 current_state: Arc::new(RwLock::new(HAConnectionState::Ready)),
                 flow_monitor,
@@ -148,71 +340,18 @@ impl DefaultHAClient {
     }
 
     /// Get HA master address
-    pub fn get_ha_master_address(&self) -> Option<String> {
-        self.inner.master_ha_address.lock().clone()
+    pub async fn get_ha_master_address(&self) -> Option<String> {
+        self.inner.master_ha_address.lock().await.clone()
     }
 
     /// Get master address
-    pub fn get_master_address(&self) -> Option<String> {
-        self.inner.master_address.lock().clone()
-    }
-
-    /// Check if it's time to report offset
-    fn is_time_to_report_offset(&self) -> bool {
-        let now = self.inner.default_message_store.now();
-        let last_write = self.inner.last_write_timestamp.load(Ordering::SeqCst);
-        let interval = now as i64 - last_write;
-        let heartbeat_interval = self
-            .inner
-            .default_message_store
-            .get_message_store_config()
-            .ha_send_heartbeat_interval;
-
-        interval > heartbeat_interval as i64
-    }
-
-    /// Report slave max offset to master
-    async fn report_slave_max_offset(&self, max_offset: i64) -> bool {
-        let mut socket_guard = self.inner.socket_stream.write().await;
-        if let Some(ref mut socket) = socket_guard.as_mut() {
-            // Prepare report buffer using bytes
-            let mut report_buffer = self.inner.report_offset.write().await;
-            report_buffer.clear();
-            report_buffer.put_i64(max_offset);
-
-            // Try up to 3 times to send the complete offset
-            if (0..3).next().is_some() {
-                if report_buffer.is_empty() {
-                    return false;
-                }
-
-                match socket.write_all(&report_buffer[..]).await {
-                    Ok(_) => {
-                        let now = self.inner.default_message_store.now() as i64;
-                        self.inner.last_write_timestamp.store(now, Ordering::SeqCst);
-                        report_buffer.clear();
-                        return true;
-                    }
-                    Err(e) => {
-                        error!(
-                            "{} reportSlaveMaxOffset write exception: {}",
-                            self.get_service_name(),
-                            e
-                        );
-                        return false;
-                    }
-                }
-            }
-
-            return report_buffer.is_empty();
-        }
-
-        false
+    pub async fn get_master_address(&self) -> Option<String> {
+        self.inner.master_address.lock().await.clone()
     }
 
     /// Reallocate byte buffer when it's full using bytes operations
     async fn reallocate_byte_buffer(&self) {
-        let dispatch_pos = self.inner.dispatch_position.load(Ordering::SeqCst);
+        /*let dispatch_pos = self.inner.dispatch_position.load(Ordering::SeqCst);
         let mut read_buffer = self.inner.byte_buffer_read.write().await;
         let mut backup_buffer = self.inner.byte_buffer_backup.write().await;
 
@@ -235,362 +374,7 @@ impl DefaultHAClient {
             read_buffer.reserve(READ_MAX_BUFFER_SIZE - capacity);
         }
 
-        self.inner.dispatch_position.store(0, Ordering::SeqCst);
-    }
-
-    /// Process read events from master using bytes buffer
-    async fn process_read_event(&self) -> bool {
-        /*  let mut read_size_zero_times = 0;
-        let mut socket_guard = self.socket_stream.write().await;
-
-        if let Some(ref mut socket) = socket_guard.as_mut() {
-            let mut read_buffer = self.byte_buffer_read.write().await;
-
-            loop {
-                // Ensure we have space to read
-                if read_buffer.len() >= READ_MAX_BUFFER_SIZE {
-                    // Buffer is full, need to reallocate
-                    drop(read_buffer);
-                    drop(socket_guard);
-                    self.reallocate_byte_buffer().await;
-                    socket_guard = self.socket_stream.write().await;
-                    read_buffer = self.byte_buffer_read.write().await;
-                    continue;
-                }
-
-                // Reserve space for reading
-                read_buffer.reserve(1024);
-                let current_len = read_buffer.len();
-
-                // Create a temporary buffer for reading
-                let mut temp_buf = vec![0u8; 1024];
-
-                match socket.read(&mut temp_buf).await {
-                    Ok(read_size) => {
-                        if read_size > 0 {
-                            // Add to flow monitor
-                            self.flow_monitor
-                                .add_byte_count_transferred(read_size as i64);
-                            read_size_zero_times = 0;
-
-                            // Append read data to buffer
-                            read_buffer.extend_from_slice(&temp_buf[..read_size]);
-
-                            // Dispatch read request
-                            drop(read_buffer);
-                            drop(socket_guard);
-
-                            if !self.dispatch_read_request().await {
-                                error!("HAClient, dispatchReadRequest error");
-                                return false;
-                            }
-
-                            let now = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap()
-                                .as_millis() as i64;
-                            self.last_read_timestamp.store(now, Ordering::SeqCst);
-
-                            // Re-acquire locks
-                            socket_guard = self.socket_stream.write().await;
-                            read_buffer = self.byte_buffer_read.write().await;
-                        } else {
-                            read_size_zero_times += 1;
-                            if read_size_zero_times >= 3 {
-                                break;
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        info!("HAClient, processReadEvent read socket exception: {}", e);
-                        return false;
-                    }
-                }
-            }
-        }
-
-        true*/
-        unimplemented!(
-            "process_read_event is not implemented yet, please implement it using bytes operations"
-        );
-    }
-    /// Dispatch read request and process received data using bytes buffer
-    async fn dispatch_read_request(&self) -> bool {
-        let mut _read_buffer = self.inner.byte_buffer_read.write().await;
-        let mut _dispatch_pos = self.inner.dispatch_position.load(Ordering::SeqCst);
-
-        loop {
-            let available_data = _read_buffer.len() - _dispatch_pos;
-
-            if available_data >= TRANSFER_HEADER_SIZE {
-                // Create a cursor for reading from the buffer
-                let mut cursor = Cursor::new(&_read_buffer[_dispatch_pos..]);
-
-                // Parse header: [physicOffset (8bytes)][bodySize (4bytes)]
-                let master_phy_offset = cursor.get_i64();
-                let body_size = cursor.get_i32() as usize;
-
-                let slave_phy_offset = self.inner.default_message_store.get_max_phy_offset();
-
-                // Validate offset consistency
-                if slave_phy_offset != 0 && slave_phy_offset != master_phy_offset {
-                    error!(
-                        "master pushed offset not equal the max phy offset in slave, SLAVE: {} \
-                         MASTER: {}",
-                        slave_phy_offset, master_phy_offset
-                    );
-                    return false;
-                }
-
-                // Check if we have the complete message
-                if available_data >= TRANSFER_HEADER_SIZE + body_size {
-                    let data_start = _dispatch_pos + TRANSFER_HEADER_SIZE;
-                    let data_end = data_start + body_size;
-
-                    // Extract body data as Bytes for zero-copy
-                    let bytes = _read_buffer.clone().freeze().slice(data_start..data_end);
-                    // Append to commit log
-                    drop(_read_buffer);
-                    if let Err(e) = self.inner.default_message_store.append_to_commit_log(
-                        master_phy_offset,
-                        bytes.as_ref(),
-                        data_start as i32,
-                        body_size as i32,
-                    ) {
-                        error!("Failed to append to commit log: {}", e);
-                        return false;
-                    }
-
-                    // Update dispatch position
-                    _dispatch_pos += TRANSFER_HEADER_SIZE + body_size;
-                    self.inner
-                        .dispatch_position
-                        .store(_dispatch_pos, Ordering::SeqCst);
-
-                    // Report slave max offset
-                    if !self.report_slave_max_offset_plus().await {
-                        return false;
-                    }
-
-                    // Re-acquire buffer lock and continue
-                    _read_buffer = self.inner.byte_buffer_read.write().await;
-                    continue;
-                }
-            }
-
-            // Check if buffer is full and needs reallocation
-            if _read_buffer.len() >= READ_MAX_BUFFER_SIZE {
-                drop(_read_buffer);
-                self.reallocate_byte_buffer().await;
-                _read_buffer = self.inner.byte_buffer_read.write().await;
-                _dispatch_pos = self.inner.dispatch_position.load(Ordering::SeqCst);
-            }
-
-            break;
-        }
-
-        true
-    }
-
-    /// Report slave max offset plus
-    async fn report_slave_max_offset_plus(&self) -> bool {
-        let current_phy_offset = self.inner.default_message_store.get_max_phy_offset();
-        let current_reported = self.inner.current_reported_offset.load(Ordering::SeqCst);
-
-        if current_phy_offset > current_reported {
-            self.inner
-                .current_reported_offset
-                .store(current_phy_offset, Ordering::SeqCst);
-            let result = self.report_slave_max_offset(current_phy_offset).await;
-            if !result {
-                self.close_master().await;
-                error!(
-                    "HAClient, reportSlaveMaxOffset error, {}",
-                    current_phy_offset
-                );
-                return false;
-            }
-        }
-
-        true
-    }
-
-    /// Change current connection state
-    pub async fn change_current_state(&self, new_state: HAConnectionState) {
-        info!("change state to {:?}", new_state);
-        let mut state = self.inner.current_state.write().await;
-        *state = new_state;
-    }
-
-    /// Connect to master
-    pub async fn connect_master(&self) -> Result<bool, HAClientError> {
-        let mut socket_guard = self.inner.socket_stream.write().await;
-
-        if socket_guard.is_none() {
-            let addr = self.get_ha_master_address();
-            if let Some(addr_str) = addr {
-                match TcpStream::connect(&addr_str).await {
-                    Ok(stream) => {
-                        // Configure socket
-                        if let Err(e) = stream.set_nodelay(true) {
-                            warn!("Failed to set TCP_NODELAY: {}", e);
-                        }
-
-                        *socket_guard = Some(stream);
-                        info!("HAClient connect to master {}", addr_str);
-
-                        drop(socket_guard);
-                        self.change_current_state(HAConnectionState::Transfer).await;
-
-                        // Initialize current reported offset
-                        let max_offset = self.inner.default_message_store.get_max_phy_offset();
-                        self.inner
-                            .current_reported_offset
-                            .store(max_offset, Ordering::SeqCst);
-
-                        let now = get_current_millis() as i64;
-                        self.inner.last_read_timestamp.store(now, Ordering::SeqCst);
-
-                        return Ok(true);
-                    }
-                    Err(e) => {
-                        error!("Failed to connect to master {}: {}", addr_str, e);
-                        return Ok(false);
-                    }
-                }
-            }
-        }
-
-        Ok(socket_guard.is_some())
-    }
-
-    /// Close connection to master
-    pub async fn close_master(&self) {
-        let mut socket_guard = self.inner.socket_stream.write().await;
-        if let Some(mut socket) = socket_guard.take() {
-            if let Err(e) = socket.shutdown().await {
-                warn!("closeMaster exception: {}", e);
-            }
-
-            let addr = self.get_ha_master_address();
-            info!("HAClient close connection with master {:?}", addr);
-
-            drop(socket_guard);
-            self.change_current_state(HAConnectionState::Ready).await;
-
-            // Reset state
-            self.inner.last_read_timestamp.store(0, Ordering::SeqCst);
-            self.inner.dispatch_position.store(0, Ordering::SeqCst);
-
-            // Reset buffers using bytes operations
-            let mut read_buffer = self.inner.byte_buffer_read.write().await;
-            let mut backup_buffer = self.inner.byte_buffer_backup.write().await;
-
-            read_buffer.clear();
-            backup_buffer.clear();
-        }
-    }
-
-    /// Main service loop
-    async fn run_service(self: Arc<Self>) {
-        info!("{} service started", self.get_service_name());
-
-        self.inner.flow_monitor.start().await;
-
-        loop {
-            // Check for shutdown
-            select! {
-                _ = self.inner.shutdown_notify.notified() => {
-                    self.inner.flow_monitor.shutdown_with_interrupt(true).await;
-                    break;
-                }
-                _ = sleep(Duration::from_millis(100)) => {
-                    // Continue with normal processing
-                }
-            }
-
-            let current_state = *self.inner.current_state.read().await;
-
-            match current_state {
-                HAConnectionState::Shutdown => {
-                    self.inner.flow_monitor.shutdown_with_interrupt(true).await;
-                    break;
-                }
-                HAConnectionState::Ready => {
-                    match self.connect_master().await {
-                        Ok(connected) => {
-                            if !connected {
-                                let addr = self.get_ha_master_address();
-                                warn!("HAClient connect to master {:?} failed", addr);
-                                sleep(Duration::from_secs(5)).await;
-                            }
-                        }
-                        Err(e) => {
-                            error!("Connect master error: {}", e);
-                            sleep(Duration::from_secs(5)).await;
-                        }
-                    }
-                    continue;
-                }
-                HAConnectionState::Transfer => {
-                    if !self.transfer_from_master().await {
-                        self.close_master_and_wait().await;
-                        continue;
-                    }
-                }
-                _ => {}
-            }
-
-            // Check for housekeeping
-            let now = self.inner.default_message_store.now();
-            let last_read = self.inner.last_read_timestamp.load(Ordering::SeqCst);
-            let interval = now as i64 - last_read;
-            let housekeeping_interval = self
-                .inner
-                .default_message_store
-                .get_message_store_config()
-                .ha_housekeeping_interval;
-
-            if interval > housekeeping_interval as i64 {
-                let addr = self.get_ha_master_address();
-                warn!(
-                    "AutoRecoverHAClient, housekeeping, found this connection[{:?}] expired, {}",
-                    addr, interval
-                );
-                self.close_master().await;
-                warn!("AutoRecoverHAClient, master not response some time, so close connection");
-            }
-        }
-
-        self.inner.flow_monitor.shutdown_with_interrupt(true).await;
-        info!("{} service end", self.get_service_name());
-    }
-
-    /// Transfer data from master
-    async fn transfer_from_master(&self) -> bool {
-        // Check if it's time to report offset
-        if self.is_time_to_report_offset() {
-            let current_offset = self.inner.current_reported_offset.load(Ordering::SeqCst);
-            info!("Slave report current offset {}", current_offset);
-
-            if !self.report_slave_max_offset(current_offset).await {
-                return false;
-            }
-        }
-
-        // Process read events with timeout
-        match timeout(Duration::from_secs(1), self.process_read_event()).await {
-            Ok(result) => {
-                if !result {
-                    return false;
-                }
-            }
-            Err(_) => {
-                // Timeout is normal, continue
-            }
-        }
-
-        self.report_slave_max_offset_plus().await
+        self.inner.dispatch_position.store(0, Ordering::SeqCst);*/
     }
 
     /// Close master and wait
@@ -614,7 +398,7 @@ impl DefaultHAClient {
 
     /// Shutdown the HA client
     pub async fn shutdown(self: Arc<Self>) {
-        self.change_current_state(HAConnectionState::Shutdown).await;
+        self.change_current_state(HAConnectionState::Shutdown);
         self.inner.flow_monitor.shutdown().await;
         self.inner.shutdown_notify.notify_waiters();
 
@@ -656,10 +440,97 @@ impl DefaultHAClient {
 impl HAClient for DefaultHAClient {
     async fn start(&mut self) {
         self.inner.flow_monitor.start().await;
+        let mut client = ArcMut::clone(&self.inner);
+        let join_handle = tokio::spawn(async move {
+            let client_clone = ArcMut::clone(&client);
+
+            loop {
+                select! {
+                    _ = client_clone.shutdown_notify.notified() => {
+                        info!("HAClient received shutdown notification");
+                        break;
+                    }
+                    _ = async {
+                            loop {
+                                let current_state = *client.current_state.read().await;
+                                match current_state {
+                                    HAConnectionState::Ready => match client.connect_master().await {
+                                        Ok(false) => {
+                                            let ha_address = client
+                                                .master_ha_address
+                                                .lock()
+                                                .await
+                                                .clone()
+                                                .unwrap_or(String::from("127.0.0.1"));
+                                            warn!("HAClient connect to master {} failed", ha_address);
+                                            tokio::time::sleep(Duration::from_secs(5)).await;
+                                            continue;
+                                        }
+                                        Ok(true) => {
+                                            continue;
+                                        }
+                                        Err(e) => {
+                                            warn!("Failed to connect master: {}", e);
+                                            client.close_master_and_wait().await;
+                                            continue;
+                                        }
+                                    },
+
+                                    HAConnectionState::Transfer => match client.transfer_from_master().await {
+                                        Ok(false) => {
+                                            client.close_master_and_wait().await;
+                                            continue;
+                                        }
+                                        Ok(true) => {}
+                                        Err(e) => {
+                                            warn!("Failed to transfer from master: {}", e);
+                                            client.close_master_and_wait().await;
+                                            continue;
+                                        }
+                                    },
+
+                                    HAConnectionState::Shutdown => {
+                                        info!("HAClient service is shutting down");
+                                        client.flow_monitor.shutdown_with_interrupt(true).await;
+                                        return;
+                                    }
+
+                                    HAConnectionState::Handshake | HAConnectionState::Suspend => {
+                                        tokio::time::sleep(Duration::from_secs(2)).await;
+                                        continue;
+                                    }
+                                }
+                                let interval = get_current_millis()
+                                    - (client.last_read_timestamp.load(Ordering::Relaxed) as u64);
+                                if interval
+                                    > client
+                                        .default_message_store
+                                        .get_message_store_config()
+                                        .ha_housekeeping_interval
+                                {
+                                    info!("HAClient housekeeping, current state: {:?}", current_state);
+                                    client.close_master().await;
+                                }
+                            }
+                     } => {}
+                }
+            }
+            client.flow_monitor.shutdown_with_interrupt(true).await;
+        });
     }
 
     async fn shutdown(&self) {
-        todo!()
+        self.inner
+            .change_current_state(HAConnectionState::Shutdown)
+            .await;
+        self.inner.shutdown_notify.notify_waiters();
+
+        // Wait for service to stop
+        let mut service_handle = self.inner.service_handle.write().await;
+        if let Some(handle) = service_handle.take() {
+            let _ = handle.await;
+        }
+        self.close_master().await;
     }
 
     async fn wakeup(&self) {
@@ -667,16 +538,16 @@ impl HAClient for DefaultHAClient {
     }
 
     /// Update master address
-    fn update_master_address(&self, new_address: &str) {
-        let mut master_address = self.inner.master_address.lock();
+    async fn update_master_address(&self, new_address: &str) {
+        let mut master_address = self.inner.master_address.lock().await;
         if master_address.is_none() || master_address.as_ref().unwrap() != new_address {
             *master_address = Some(new_address.to_string());
             info!("Updated master address to: {}", new_address);
         }
     }
 
-    fn update_ha_master_address(&self, new_address: &str) {
-        let mut master_ha_address = self.inner.master_ha_address.lock();
+    async fn update_ha_master_address(&self, new_address: &str) {
+        let mut master_ha_address = self.inner.master_ha_address.lock().await;
         if master_ha_address.is_none() || master_ha_address.as_ref().unwrap() != new_address {
             *master_ha_address = Some(new_address.to_string());
             info!("Updated HA master address to: {}", new_address);

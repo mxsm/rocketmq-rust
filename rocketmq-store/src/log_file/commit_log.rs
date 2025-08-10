@@ -758,10 +758,10 @@ impl CommitLog {
             need_ack_nums,
         ));
         if let Some(local_file_message_store) = &self.local_file_message_store {
-            local_file_message_store
-                .get_ha_service()
-                .put_request(request.clone())
-                .await;
+            let ha_service = local_file_message_store.get_ha_service();
+            ha_service.put_request(request.clone()).await;
+            //Notify the HA service to handle the request
+            ha_service.get_wait_notify_object().notify_waiters();
         } else {
             error!("local file message store is not initialized for HA handling");
             return PutMessageStatus::UnknownError;
