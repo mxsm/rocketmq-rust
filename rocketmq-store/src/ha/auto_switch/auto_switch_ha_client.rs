@@ -33,11 +33,11 @@ impl HAClient for AutoSwitchHAClient {
         todo!()
     }
 
-    fn update_master_address(&self, new_address: &str) {
+    async fn update_master_address(&self, new_address: &str) {
         todo!()
     }
 
-    fn update_ha_master_address(&self, new_address: &str) {
+    async fn update_ha_master_address(&self, new_address: &str) {
         todo!()
     }
 

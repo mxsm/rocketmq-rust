@@ -47,7 +47,6 @@ use crate::ha::ha_connection::HAConnectionId;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use crate::ha::ha_connection_state_notification_service::HAConnectionStateNotificationService;
 use crate::ha::ha_service::HAService;
-use crate::ha::wait_notify_object::WaitNotifyObject;
 use crate::log_file::group_commit_request::GroupCommitRequest;
 use crate::message_store::local_file_message_store::LocalFileMessageStore;
 use crate::store_error::HAError;
@@ -239,17 +238,17 @@ impl HAService for DefaultHAService {
         Ok(false)
     }
 
-    fn update_master_address(&self, new_addr: &str) {
+    async fn update_master_address(&self, new_addr: &str) {
         if let Some(ref ha_client) = self.ha_client {
-            ha_client.update_master_address(new_addr);
+            ha_client.update_master_address(new_addr).await;
         } else {
             error!("No HAClient initialized to update master address");
         }
     }
 
-    fn update_ha_master_address(&self, new_addr: &str) {
+    async fn update_ha_master_address(&self, new_addr: &str) {
         if let Some(ref ha_client) = self.ha_client {
-            ha_client.update_ha_master_address(new_addr);
+            ha_client.update_ha_master_address(new_addr).await;
         } else {
             error!("No HAClient initialized to update HA master address");
         }
@@ -297,8 +296,8 @@ impl HAService for DefaultHAService {
         todo!()
     }
 
-    fn get_wait_notify_object(&self) -> Arc<WaitNotifyObject> {
-        todo!()
+    fn get_wait_notify_object(&self) -> &Notify {
+        self.wait_notify_object.as_ref()
     }
 
     async fn is_slave_ok(&self, master_put_where: i64) -> bool {
